@@ -28,6 +28,7 @@ import { resolveBundledChannelMessageToolDiscoveryAdapter } from "../../channels
 import type {
   ChannelMessageActionDiscoveryContext,
   ChannelMessageToolDiscovery,
+  ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { settlePreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
@@ -80,40 +81,29 @@ describe("session-derived message destinations", () => {
     });
   });
 
-  it.each<{
-    name: string;
-    delivery?: { channel: string; to: string; accountId?: string };
-    direct?: boolean;
-    expected: string;
-  }>([
-    {
-      name: "canonical group",
-      delivery: { channel: "googlechat", to: `googlechat:${canonicalSpace}`, accountId: "default" },
-      expected: canonicalSpace,
-    },
-    { name: "missing delivery", expected: foldedSpace },
-    {
-      name: "another channel",
-      delivery: { channel: "slack", to: canonicalSpace },
-      expected: foldedSpace,
-    },
-    {
-      name: "another peer",
-      delivery: { channel: "googlechat", to: "spaces/Other" },
-      expected: foldedSpace,
-    },
-    {
-      name: "another account",
-      delivery: { channel: "googlechat", to: canonicalSpace, accountId: "other" },
-      expected: foldedSpace,
-    },
-    {
-      name: "direct account and thread",
-      direct: true,
-      delivery: { channel: "googlechat", to: canonicalSpace, accountId: "work" },
-      expected: canonicalSpace,
-    },
-  ])("recovers only the matching route: $name", async ({ delivery, direct, expected }) => {
+  it.each([
+    [
+      "canonical group",
+      { channel: "googlechat", to: `googlechat:${canonicalSpace}`, accountId: "default" },
+      false,
+      canonicalSpace,
+    ],
+    ["missing delivery", undefined, false, foldedSpace],
+    ["another channel", { channel: "slack", to: canonicalSpace }, false, foldedSpace],
+    ["another peer", { channel: "googlechat", to: "spaces/Other" }, false, foldedSpace],
+    [
+      "another account",
+      { channel: "googlechat", to: canonicalSpace, accountId: "other" },
+      false,
+      foldedSpace,
+    ],
+    [
+      "direct account and thread",
+      { channel: "googlechat", to: canonicalSpace, accountId: "work" },
+      true,
+      canonicalSpace,
+    ],
+  ] as const)("recovers only the matching route: %s", async (_name, delivery, direct, expected) => {
     readDeliveryMock.mockReturnValue(delivery);
     expect(
       await resolveEffectiveCurrentChannelContextForRequest(
@@ -394,36 +384,31 @@ describe("scheduled account discovery", () => {
         "Slack public message-tool discovery adapter",
       ),
     };
-    const registry = createTestRegistry([
-      { pluginId: "slack", source: "test", plugin: slack },
-      ...(foreignContexts
-        ? [
-            {
-              pluginId: "telegram",
-              source: "test",
-              plugin: {
-                ...createChannelTestPluginBase({ id: "telegram" }),
-                actions: {
-                  describeMessageTool: (context: ChannelMessageActionDiscoveryContext) => {
-                    foreignContexts.push(context);
-                    return {
-                      actions: context.accountId === "disabled" ? ["send", "poll"] : ["send"],
-                      schema: {
-                        visibility: "all-configured",
-                        properties: {
-                          foreignHint: Type.Optional(
-                            Type.String({ description: `Account: ${String(context.accountId)}` }),
-                          ),
-                        },
-                      },
-                    };
-                  },
+    const plugins: ChannelPlugin[] = [slack];
+    if (foreignContexts) {
+      plugins.push({
+        ...createChannelTestPluginBase({ id: "telegram" }),
+        actions: {
+          describeMessageTool: (context) => {
+            foreignContexts.push(context);
+            return {
+              actions: context.accountId === "disabled" ? ["send", "poll"] : ["send"],
+              schema: {
+                visibility: "all-configured",
+                properties: {
+                  foreignHint: Type.Optional(
+                    Type.String({ description: `Account: ${String(context.accountId)}` }),
+                  ),
                 },
               },
-            },
-          ]
-        : []),
-    ]);
+            };
+          },
+        },
+      });
+    }
+    const registry = createTestRegistry(
+      plugins.map((plugin) => ({ pluginId: plugin.id, source: "test", plugin })),
+    );
     setActivePluginRegistry(registry);
     return expectDefined(settlePreparedMessageToolCatalog(registry), "prepared message catalog");
   }
