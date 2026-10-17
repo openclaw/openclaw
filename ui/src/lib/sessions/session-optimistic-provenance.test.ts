@@ -11,6 +11,13 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
+const sidebarQuery = {
+  archivedFilter: "all" as const,
+  limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+  includeDerivedTitles: true,
+  includeLastMessage: true,
+};
+
 function fixture(request: Parameters<typeof createTestGatewayClient>[0], release: () => void) {
   vi.useFakeTimers();
   const errors: unknown[] = [];
@@ -39,7 +46,14 @@ function fixture(request: Parameters<typeof createTestGatewayClient>[0], release
       vi.useRealTimers();
     }
   });
-  return { client, sessions, emitEvent, track };
+  const patch = (row: GatewaySessionRow, fields: Parameters<typeof sessions.patch>[1]) =>
+    track(
+      sessions.patch(row.key, fields, {
+        agentId: row.agentId,
+        expectedSessionId: row.sessionId,
+      }),
+    );
+  return { client, sessions, emitEvent, track, patch };
 }
 
 describe("optimistic row provenance", () => {
@@ -134,13 +148,7 @@ describe("optimistic row provenance", () => {
       ).session,
     );
     expect(observation.row).toMatchObject(initial);
-    const query = {
-      agentId: "work",
-      archivedFilter: "all" as const,
-      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-      includeDerivedTitles: true,
-      includeLastMessage: true,
-    };
+    const query = { ...sidebarQuery, agentId: "work" };
     const older = h.track(h.sessions.refreshList({ ...query, force: true }));
     expect(h.sessions.listSnapshot(query).loading).toBe(true);
     h.emitEvent({
@@ -150,29 +158,11 @@ describe("optimistic row provenance", () => {
     });
     expect(observation.row?.label).toBe("New event label");
     if (permission) {
-      void h.track(
-        h.sessions.patch(
-          "global",
-          { permissionMode: "workspace" },
-          {
-            agentId: "work",
-            expectedSessionId: initial.sessionId,
-          },
-        ),
-      );
+      void h.patch(initial, { permissionMode: "workspace" });
       await listDispatched.promise;
     }
     if (read) {
-      void h.track(
-        h.sessions.patch(
-          "global",
-          { unread: false },
-          {
-            agentId: "work",
-            expectedSessionId: initial.sessionId,
-          },
-        ),
-      );
+      void h.patch(initial, { unread: false });
       await readDispatched.promise;
       expect(observation.row?.unread).toBe(false);
     }
@@ -262,26 +252,11 @@ describe("optimistic row provenance", () => {
       expect(row()).toHaveProperty("swarmLog", "Work is progressing");
     }
     if (pin) {
-      void h.track(
-        h.sessions.patch(
-          initial.key,
-          { pinned: true },
-          {
-            agentId: "main",
-            expectedSessionId: initial.sessionId,
-          },
-        ),
-      );
+      void h.patch(initial, { pinned: true });
       await pinDispatched.promise;
       expect(row()?.pinned).toBe(true);
     }
-    const query = {
-      agentId: "main",
-      archivedFilter: "all" as const,
-      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-      includeDerivedTitles: true,
-      includeLastMessage: true,
-    };
+    const query = { ...sidebarQuery, agentId: "main" };
     const older = h.track(h.sessions.refreshList({ ...query, force: true }));
     expect(h.sessions.listSnapshot(query).loading).toBe(true);
     current = fresh;

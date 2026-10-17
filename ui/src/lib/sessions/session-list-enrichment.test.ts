@@ -4,7 +4,7 @@ import { Value } from "typebox/value";
 import { expect, it, vi } from "vitest";
 import { SessionsListParamsSchema } from "../../../../packages/gateway-protocol/src/schema/sessions-list.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
   createGatewayHarness,
@@ -14,6 +14,14 @@ import {
 } from "./session-capability.test-support.ts";
 import { requestSessionListParams } from "./session-requests.ts";
 
+const sidebar = { rowMode: "sidebar" as const };
+function makeRow(id: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+  return { key: `agent:main:${id}`, sessionId: id, kind: "direct", ...fields };
+}
+function revised(rows: GatewaySessionRow[], rowsRevision: string, ts = 1) {
+  return { ...sessionsResult(rows, ts), rowsRevision };
+}
+
 it.each([undefined, 1])(
   "expands response-local sidebar facts before reconciliation (page size %s)",
   async (pageSize) => {
@@ -21,18 +29,7 @@ it.each([undefined, 1])(
       const offset = Number(asOptionalRecord(raw)?.offset ?? 0);
       const actor = { type: "human", id: `profile-${offset}`, label: `Teammate ${offset}` };
       return {
-        ...sessionsResult(
-          [
-            {
-              key: `agent:main:thread-${offset}`,
-              sessionId: `thread-${offset}`,
-              kind: "direct",
-              rowMode: "sidebar",
-              sharedFacts: [0],
-            },
-          ],
-          1,
-        ),
+        ...sessionsResult([{ ...makeRow(`thread-${offset}`), ...sidebar, sharedFacts: [0] }], 1),
         sharedFacts: [{ createdActor: actor, owner: { actor } }],
         hasMore: offset === 0,
         nextOffset: offset + 1,
@@ -59,11 +56,7 @@ it.each([undefined, 1])(
 
 it("retains titles and previews throughout a bounded managed window and its refresh", async () => {
   let revision = 1;
-  const rows = Array.from({ length: 350 }, (_, index) => ({
-    key: `agent:main:thread-${index}`,
-    sessionId: `thread-${index}`,
-    kind: "direct" as const,
-  }));
+  const rows = Array.from({ length: 350 }, (_, index) => makeRow(`thread-${index}`));
   const request = vi.fn(async (method: string, raw?: unknown) => {
     if (method !== "sessions.list") {
       return {};
@@ -96,28 +89,20 @@ it("retains titles and previews throughout a bounded managed window and its refr
   const gateway = createGatewayHarness(createTestGatewayClient(request));
   const sessions = createTestSessionCapability(gateway.gateway);
   let held: ReturnType<typeof sessionsResult> | null = null;
-  const observer = sessions.observeList(
-    {
-      limit: 300,
-      pageSize: 100,
-      archivedFilter: "all",
-      includeDerivedTitles: true,
-      includeLastMessage: true,
-    },
-    (snapshot) => {
-      held = snapshot.result;
-    },
-  );
+  const query = {
+    limit: 300,
+    pageSize: 100,
+    archivedFilter: "all" as const,
+    includeDerivedTitles: true,
+    includeLastMessage: true,
+  };
+  const observer = sessions.observeList(query, (snapshot) => {
+    held = snapshot.result;
+  });
   try {
     for (revision of [1, 2]) {
       await observer.refresh();
-      const result = sessions.listSnapshot({
-        limit: 300,
-        pageSize: 100,
-        archivedFilter: "all",
-        includeDerivedTitles: true,
-        includeLastMessage: true,
-      }).result;
+      const result = sessions.listSnapshot(query).result;
       expect(result).toBe(held);
       expect(result?.sessions).toHaveLength(300);
       expect(result).toMatchObject({ hasMore: true, nextOffset: 300 });
@@ -132,34 +117,23 @@ it("retains titles and previews throughout a bounded managed window and its refr
 });
 
 it("reconstructs sidebar delta membership, order and facts before capability publication", async () => {
-  const row = (id: string) => ({
-    key: `agent:main:${id}`,
-    sessionId: id,
-    kind: "direct" as const,
-    label: id,
-    updatedAt: 1,
-  });
-  const a = row("a");
-  const b = row("b");
-  const c = row("c");
-  const d = row("d");
-  const request = vi
-    .fn()
-    .mockResolvedValue({ ...sessionsResult([a, b, c], 1), rowsRevision: "first" });
+  const labelled = (id: string) => makeRow(id, { label: id, updatedAt: 1 });
+  const [a, b, c, d] = [labelled("a"), labelled("b"), labelled("c"), labelled("d")] as const;
+  const request = vi.fn().mockResolvedValue(revised([a, b, c], "first"));
   const { sessions } = createSessionCapabilityHarness(request);
   const query = { agentId: "main", rowMode: "sidebar" as const };
   await sessions.refresh({ ...query, force: true });
   request.mockResolvedValue({
-    ...sessionsResult(
+    ...revised(
       [
         { ...a, label: "Renamed", updatedAt: 2 },
         { ...d, sharedFacts: [0] },
       ],
+      "next",
       2,
     ),
     count: 3,
     totalCount: 19,
-    rowsRevision: "next",
     rowsDelta: { baseRevision: "first", order: [2, 4, 3] },
     sharedFacts: [{ owner: { actor: { type: "human", id: "new-owner", label: "New owner" } } }],
     owners: [{ actor: { type: "human", id: "new-owner" }, label: "Fresh facet" }],
@@ -182,7 +156,7 @@ it("reconstructs sidebar delta membership, order and facts before capability pub
   expect(sessions.state.result).not.toHaveProperty("rowsDelta");
   expect(sessions.state.result).not.toHaveProperty("sharedFacts");
   expect(sessions.state.result?.sessions[1]).not.toHaveProperty("sharedFacts");
-  request.mockResolvedValue({ ...sessionsResult([b], 3), rowsRevision: "restarted" });
+  request.mockResolvedValue(revised([b], "restarted", 3));
   await sessions.refresh({ ...query, force: true });
   expect(sessions.state.result?.sessions.map(({ key }) => key)).toEqual([b.key]);
   expect(request).toHaveBeenLastCalledWith(
@@ -199,25 +173,21 @@ it.each([
 ])(
   "rejects a delta with $message without replacing its wire base",
   async ({ baseRevision, order, message }) => {
-    const row = { key: "agent:main:a", sessionId: "a", kind: "direct" as const };
-    const request = vi
-      .fn()
-      .mockResolvedValue({ ...sessionsResult([row], 1), rowsRevision: "first" });
+    const initial = makeRow("a");
+    const request = vi.fn().mockResolvedValue(revised([initial], "first"));
     const { sessions } = createSessionCapabilityHarness(request);
     const query = { rowMode: "sidebar" as const, agentId: "main" };
     await sessions.list(query);
     request.mockResolvedValue({
-      ...sessionsResult([], 2),
-      rowsRevision: "bad",
+      ...revised([], "bad", 2),
       rowsDelta: { baseRevision, order },
     });
     await expect(sessions.list(query)).rejects.toThrow(message);
     request.mockResolvedValue({
-      ...sessionsResult([], 3),
-      rowsRevision: "first",
+      ...revised([], "first", 3),
       rowsUnchanged: true,
     });
-    expect((await sessions.list(query))?.sessions).toEqual([row]);
+    expect((await sessions.list(query))?.sessions).toEqual([initial]);
     expect(request).toHaveBeenLastCalledWith(
       "sessions.list",
       expect.objectContaining({ ifRowsRevision: "delta:first" }),
@@ -228,14 +198,13 @@ it.each([
 it("applies an empty-row reorder/removal delta without collapsing cross-agent raw keys", async () => {
   const a = { key: "global", agentId: "alpha", sessionId: "a", kind: "global" as const };
   const b = { key: "global", agentId: "beta", sessionId: "b", kind: "global" as const };
-  const removed = { key: "agent:alpha:removed", sessionId: "removed", kind: "direct" as const };
+  const removed = makeRow("removed", { key: "agent:alpha:removed" });
   const request = vi
     .fn()
-    .mockResolvedValueOnce({ ...sessionsResult([a, b, removed], 1), rowsRevision: "first" })
+    .mockResolvedValueOnce(revised([a, b, removed], "first"))
     .mockResolvedValueOnce({
-      ...sessionsResult([], 2),
+      ...revised([], "next", 2),
       count: 2,
-      rowsRevision: "next",
       rowsDelta: { baseRevision: "first", order: [1, 0] },
     });
   const client = createTestGatewayClient(request);
@@ -255,8 +224,7 @@ it("keeps filtered pages independent and accepts full rows from a server that on
     }
     const id = `${raw.ownerId ?? (raw.involvingMe ? "personal" : "all")}-${raw.offset ?? 0}`;
     return {
-      ...sessionsResult([{ key: `agent:main:${id}`, sessionId: id, kind: "direct" as const }], 1),
-      rowsRevision: id,
+      ...revised([makeRow(id)], id),
     };
   });
   const { gateway } = createGatewayHarness(createTestGatewayClient(request));
@@ -278,16 +246,15 @@ it("keeps filtered pages independent and accepts full rows from a server that on
 });
 
 it("reconstructs parallel deltas against each request's captured raw rows", async () => {
-  const a = { key: "agent:main:a", sessionId: "a", kind: "direct" as const, label: "Original" };
-  const b = { key: "agent:main:b", sessionId: "b", kind: "direct" as const };
+  const a = makeRow("a", { label: "Original" });
+  const b = makeRow("b");
   const older = createDeferred<SessionsListResult>();
   const request = vi
     .fn()
-    .mockResolvedValueOnce({ ...sessionsResult([a], 1), rowsRevision: "first" })
+    .mockResolvedValueOnce(revised([a], "first"))
     .mockReturnValueOnce(older.promise)
     .mockResolvedValueOnce({
-      ...sessionsResult([{ ...a, label: "Newer" }], 3),
-      rowsRevision: "newer",
+      ...revised([{ ...a, label: "Newer" }], "newer", 3),
       rowsDelta: { baseRevision: "first", order: [1] },
     });
   const client = createTestGatewayClient(request);
@@ -298,8 +265,7 @@ it("reconstructs parallel deltas against each request's captured raw rows", asyn
     "Newer",
   );
   older.resolve({
-    ...sessionsResult([b], 2),
-    rowsRevision: "older",
+    ...revised([b], "older", 2),
     rowsDelta: { baseRevision: "first", order: [0, 1] },
   });
   const completed = await pending;

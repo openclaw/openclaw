@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   createGatewayHarness,
@@ -11,6 +12,21 @@ import {
 } from "./session-capability.test-support.ts";
 
 type RpcHandler = () => unknown;
+
+function archiveRow<T extends Partial<GatewaySessionRow>>(
+  id: string,
+  updatedAt: number,
+  fields?: T,
+) {
+  return {
+    key: `agent:main:${id}`,
+    sessionId: id,
+    kind: "direct" as const,
+    archived: false,
+    updatedAt,
+    ...fields,
+  };
+}
 
 function createMutationHarness(handlers: Record<string, RpcHandler>) {
   const request = vi.fn(async (method: string) => {
@@ -28,11 +44,18 @@ function createMutationHarness(handlers: Record<string, RpcHandler>) {
   });
   const client = { request } as unknown as GatewayBrowserClient;
   const gatewayHarness = createGatewayHarness(client);
+  const sessions = createTestSessionCapability(gatewayHarness.gateway);
   return {
     ...gatewayHarness,
     client,
     request,
-    sessions: createTestSessionCapability(gatewayHarness.gateway),
+    sessions,
+    expectPreviousConnection() {
+      expect(sessions.state.error).toContain("completed on the previous connection");
+      expect(
+        request.mock.calls.filter(([method]) => method === "sessions.list").length,
+      ).toBeGreaterThan(0);
+    },
   };
 }
 
@@ -43,7 +66,7 @@ function reconnectSameClient(publish: (connected: boolean) => void) {
 
 describe("session mutation reconnect truth", () => {
   it.each(["none", "before acknowledgement"] as const)(
-    "confirms only successful batch archives while pending tokens retain settlement (intervening read: %s)",
+    "settles only accepted archives after an intervening read: %s",
     async (interveningRead) => {
       const rows = ["accepted", "rejected"].map((id) => ({
         key: `agent:main:batch-${id}`,
@@ -77,6 +100,8 @@ describe("session mutation reconnect truth", () => {
       });
       let archive: ReturnType<typeof sessions.patchMany> | undefined;
       let reading: ReturnType<typeof sessions.refresh> | undefined;
+      const archived = () => sessions.state.result?.sessions.map((row) => row.archived);
+      const visibility = () => rows.map((row) => sessions.archiveVisibility(row.key));
       try {
         await sessions.refresh();
         const finishes = rows.map((row) => sessions.beginArchive(row.key, row.sessionId));
@@ -87,10 +112,7 @@ describe("session mutation reconnect truth", () => {
         if (interveningRead !== "none") {
           reading = sessions.refresh({ force: true });
           await reading;
-          expect(sessions.state.result?.sessions.map((row) => row.archived)).toEqual([
-            false,
-            false,
-          ]);
+          expect(archived()).toEqual([false, false]);
         }
         response.resolve(result);
         await expect(archive).resolves.toEqual(result);
@@ -101,24 +123,15 @@ describe("session mutation reconnect truth", () => {
           error: "Archive list refresh unavailable",
         });
         expect(sessions.state.error).toContain("Archive list refresh unavailable");
-        expect(sessions.state.result?.sessions.map((row) => row.archived)).toEqual([true, false]);
+        expect(archived()).toEqual([true, false]);
         expect(sessions.state.result?.sessions[0]?.archivedAt).toBeUndefined();
-        expect(rows.map((row) => sessions.archiveVisibility(row.key))).toEqual([
-          "pending",
-          "pending",
-        ]);
+        expect(visibility()).toEqual(["pending", "pending"]);
         finishes.forEach((finish) => finish?.());
-        expect(rows.map((row) => sessions.archiveVisibility(row.key))).toEqual([
-          "archived",
-          undefined,
-        ]);
+        expect(visibility()).toEqual(["archived", undefined]);
         failReadback = false;
         await sessions.refresh({ force: true });
-        expect(sessions.state.result?.sessions.map((row) => row.archived)).toEqual([false, false]);
-        expect(rows.map((row) => sessions.archiveVisibility(row.key))).toEqual([
-          undefined,
-          undefined,
-        ]);
+        expect(archived()).toEqual([false, false]);
+        expect(visibility()).toEqual([undefined, undefined]);
       } finally {
         sessions.dispose();
         response.resolve(result);
@@ -131,15 +144,9 @@ describe("session mutation reconnect truth", () => {
     { readUpdatedAt: 30, archived: true },
     { readUpdatedAt: 40, archived: false },
   ])(
-    "reconciles a single archive acknowledgement after an intervening read at $readUpdatedAt and failed readback",
+    "reconciles archive ack after read at $readUpdatedAt and failed readback",
     async ({ readUpdatedAt, archived }) => {
-      const row = {
-        key: "agent:main:archive-equal-time",
-        sessionId: "archive-equal-time",
-        kind: "direct" as const,
-        archived: false,
-        updatedAt: 30,
-      };
+      const row = archiveRow("archive-equal-time", 30);
       const result = {
         ok: true,
         path: "(multiple)",
@@ -202,13 +209,7 @@ describe("session mutation reconnect truth", () => {
   );
 
   it("confirms a replacement archive held only by a row observer", async () => {
-    const previous = {
-      key: "agent:main:archive-successor",
-      sessionId: "archive-previous",
-      kind: "direct" as const,
-      archived: false,
-      updatedAt: 10,
-    };
+    const previous = archiveRow("archive-successor", 10, { sessionId: "archive-previous" });
     let rows = [previous];
     const { sessions, client } = createMutationHarness({
       "sessions.list": () => sessionsResult(rows, 1),
@@ -260,16 +261,8 @@ describe("session mutation reconnect truth", () => {
     }
   });
 
-  it("retires a descriptor when a canonical successor follows an archive acknowledgement", async () => {
-    const row = {
-      key: "agent:main:archive-read-fence",
-      sessionId: "archive-read-fence",
-      kind: "direct" as const,
-      archived: false,
-      pinned: true,
-      pinnedAt: 10,
-      updatedAt: 10,
-    };
+  it("retires an archived descriptor on canonical succession", async () => {
+    const row = archiveRow("archive-read-fence", 10, { pinned: true, pinnedAt: 10 });
     const result = { outcomes: [{ ok: true, key: row.key, agentId: "main" }] };
     const response = createDeferred<typeof result>();
     const readResponse = createDeferred<typeof row | null>();
@@ -319,17 +312,9 @@ describe("session mutation reconnect truth", () => {
     }
   });
 
-  it("retains confirmed archive fields in an invalidated descriptor after its refresh fails", async () => {
+  it("retains archive fields when an invalidated descriptor refresh fails", async () => {
     vi.useFakeTimers();
-    const row = {
-      key: "agent:main:invalidated-archive",
-      sessionId: "invalidated-archive",
-      kind: "direct" as const,
-      archived: false,
-      pinned: true,
-      pinnedAt: 10,
-      updatedAt: 10,
-    };
+    const row = archiveRow("invalidated-archive", 10, { pinned: true, pinnedAt: 10 });
     const unrelated = { ...row, key: "agent:main:unrelated", sessionId: "unrelated" };
     const target = { key: row.key, agentId: "main" };
     const result = { outcomes: [{ ok: true, ...target }] };
@@ -372,22 +357,15 @@ describe("session mutation reconnect truth", () => {
 
       response.resolve(result);
       await expect(archive).resolves.toEqual(result);
-      expect(sessions.state.result?.sessions[0]).toMatchObject({
-        sessionId: row.sessionId,
-        archived: true,
-        pinned: false,
-      });
+      const confirmed = { sessionId: row.sessionId, archived: true, pinned: false };
+      expect(sessions.state.result?.sessions[0]).toMatchObject(confirmed);
       expect(sessions.state.result?.sessions[0]?.pinnedAt).toBeUndefined();
       expect(sessions.archiveVisibility(row.key)).toBe("archived");
       readResponse.reject(new Error("Descriptor refresh unavailable"));
       await expect(reading).resolves.toMatchObject({ message: "Descriptor refresh unavailable" });
       expect(otherObserver.row).toMatchObject(unrelated);
       expect(observer.isCurrent()).toBe(true);
-      expect(observer.row).toMatchObject({
-        sessionId: row.sessionId,
-        archived: true,
-        pinned: false,
-      });
+      expect(observer.row).toMatchObject(confirmed);
       expect(observer.row?.pinnedAt).toBeUndefined();
     } finally {
       try {
@@ -403,7 +381,7 @@ describe("session mutation reconnect truth", () => {
     }
   });
 
-  it("retires archive progress on disconnect without letting an old completion clear a retry", async () => {
+  it("retires archive progress without letting old completion clear a retry", async () => {
     const key = "agent:main:archive-retry";
     const sessionId = "archive-retry";
     const { publish, sessions, emitEvent } = createMutationHarness({
@@ -444,14 +422,13 @@ describe("session mutation reconnect truth", () => {
     expect(sessions.archiveVisibility(key)).toBe("archived");
     finishRetry?.();
     expect(sessions.archiveVisibility(key)).toBe("archived");
-    sessions.dispose();
   });
 
   it.each(["before-response", "after-response"] as const)(
-    "retains a confirmed create across a same-client reconnect %s without stale publication",
+    "retains a create without stale publication after reconnect %s",
     async (reconnectOrder) => {
       const createResponse = createDeferred<{ key: string }>();
-      const { publish, request, sessions } = createMutationHarness({
+      const { publish, expectPreviousConnection, sessions } = createMutationHarness({
         "sessions.create": () => createResponse.promise,
       });
       const created = vi.fn();
@@ -469,11 +446,7 @@ describe("session mutation reconnect truth", () => {
 
       await expect(operation).resolves.toBe("agent:main:stale");
       expect(created).not.toHaveBeenCalled();
-      expect(sessions.state.error).toContain("completed on the previous connection");
-      expect(
-        request.mock.calls.filter(([method]) => method === "sessions.list").length,
-      ).toBeGreaterThan(0);
-      sessions.dispose();
+      expectPreviousConnection();
     },
   );
 
@@ -499,7 +472,6 @@ describe("session mutation reconnect truth", () => {
     await expect(operation).resolves.toBe("agent:main:refresh-failed");
     expect(sessions.state.error).toContain("completed on the previous connection");
     expect(sessions.state.error).toContain("replacement roster unavailable");
-    sessions.dispose();
   });
 
   it("revalidates the same-client owner after replacement reconciliation", async () => {
@@ -528,7 +500,6 @@ describe("session mutation reconnect truth", () => {
     await expect(operation).resolves.toBeNull();
     expect(created).not.toHaveBeenCalled();
     expect(sessions.state.error).toBeNull();
-    sessions.dispose();
   });
 
   it("keeps a rejected create uncertain across a same-client reconnect", async () => {
@@ -543,14 +514,13 @@ describe("session mutation reconnect truth", () => {
 
     await expect(operation).resolves.toBeNull();
     expect(sessions.state.error).toBeNull();
-    sessions.dispose();
   });
 
   it.each(["delete", "deleteMany"] as const)(
-    "retains a confirmed %s across a same-client reconnect without stale deletion publication",
+    "retains a confirmed %s without stale publication after reconnect",
     async (operationName) => {
       const deleteResponse = createDeferred<SessionsDeleteResult>();
-      const { publish, request, sessions } = createMutationHarness({
+      const { publish, expectPreviousConnection, sessions } = createMutationHarness({
         "sessions.delete": () => deleteResponse.promise,
       });
       const key = "agent:main:deleted-on-previous-connection";
@@ -578,11 +548,7 @@ describe("session mutation reconnect truth", () => {
           : { deleted: [key], errors: [], preservedWorktrees: [worktreePreserved] },
       );
       expect(sessions.state.deletedSessions).toEqual([]);
-      expect(sessions.state.error).toContain("completed on the previous connection");
-      expect(
-        request.mock.calls.filter(([method]) => method === "sessions.list").length,
-      ).toBeGreaterThan(0);
-      sessions.dispose();
+      expectPreviousConnection();
     },
   );
 
@@ -619,7 +585,6 @@ describe("session mutation reconnect truth", () => {
       });
       expect(sessions.state.deletedSessions).toEqual([]);
       expect(sessions.state.error).toContain("completed on the previous connection");
-      sessions.dispose();
     },
   );
 });
