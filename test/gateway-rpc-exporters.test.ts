@@ -51,6 +51,20 @@ async function sendTraceRequest(ws: WebSocket, id: string, traceparent: string) 
   return await response;
 }
 
+function rpcMetric(name: string, value?: number, method = "test.trace") {
+  return `openclaw_gateway_rpc_${name}{method="${method}"}${value === undefined ? "" : ` ${value}`}`;
+}
+
+function metricValue(body: string, name: string) {
+  return Number(
+    body
+      .split("\n")
+      .find((line) => line.startsWith(`${name} `))
+      ?.split(" ")
+      .at(-1),
+  );
+}
+
 it("exports RPC phases and completed event-loop windows through the same Gateway exporters", async () => {
   await withEnvAsync(
     {
@@ -233,27 +247,17 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         ]);
         await waitForDiagnosticEventsDrained();
         const preparing = await scrape();
-        expect(preparing).toContain('openclaw_gateway_rpc_requests_total{method="test.trace"} 1');
-        expect(preparing).not.toContain(
-          'openclaw_gateway_rpc_first_response_seconds_count{method="test.trace"}',
-        );
-        expect(preparing).not.toContain(
-          'openclaw_gateway_rpc_handler_seconds_count{method="test.trace"}',
-        );
+        expect(preparing).toContain(rpcMetric("requests_total", 1));
+        expect(preparing).not.toContain(rpcMetric("first_response_seconds_count"));
+        expect(preparing).not.toContain(rpcMetric("handler_seconds_count"));
         const familyHeldMs = performance.now() - familyStartedAt;
         releaseFamily.resolve();
         expect(await firstResponse).toMatchObject({ ok: true });
         await waitForDiagnosticEventsDrained();
         const acknowledged = await scrape();
-        expect(acknowledged).toContain(
-          'openclaw_gateway_rpc_requests_total{method="test.trace"} 1',
-        );
-        expect(acknowledged).toContain(
-          'openclaw_gateway_rpc_first_response_seconds_count{method="test.trace"} 1',
-        );
-        expect(acknowledged).not.toContain(
-          'openclaw_gateway_rpc_handler_seconds_count{method="test.trace"}',
-        );
+        expect(acknowledged).toContain(rpcMetric("requests_total", 1));
+        expect(acknowledged).toContain(rpcMetric("first_response_seconds_count", 1));
+        expect(acknowledged).not.toContain(rpcMetric("handler_seconds_count"));
         await vi.waitFor(
           () =>
             expect(
@@ -279,21 +283,11 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         await waitForDiagnosticEventsDrained();
         expect(windows.length).toBeGreaterThan(0);
         expect(windows.every((window) => window.trace === undefined)).toBe(true);
-        const windowMetrics = (body: string) => {
-          const value = (name: string) =>
-            Number(
-              body
-                .split("\n")
-                .find((line) => line.startsWith(`${name} `))
-                ?.split(" ")
-                .at(-1),
-            );
-          return {
-            count: value("openclaw_gateway_event_loop_delay_max_seconds_count"),
-            sum: value("openclaw_gateway_event_loop_delay_max_seconds_sum"),
-            observed: value("openclaw_gateway_event_loop_observed_seconds_total"),
-          };
-        };
+        const windowMetrics = (body: string) => ({
+          count: metricValue(body, "openclaw_gateway_event_loop_delay_max_seconds_count"),
+          sum: metricValue(body, "openclaw_gateway_event_loop_delay_max_seconds_sum"),
+          observed: metricValue(body, "openclaw_gateway_event_loop_observed_seconds_total"),
+        });
         const completedWindow = windowMetrics(await scrape());
         expect(completedWindow.count).toBeGreaterThan(0);
         expect(completedWindow.sum).toBeGreaterThanOrEqual(
@@ -320,14 +314,10 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         await waitForDispatch(firstTraceId);
         const settled = await scrape();
         for (const metric of ["first_response", "handler", "admission", "queue_wait"]) {
-          expect(settled).toContain(
-            `openclaw_gateway_rpc_${metric}_seconds_count{method="test.trace"} 2`,
-          );
+          expect(settled).toContain(rpcMetric(`${metric}_seconds_count`, 2));
         }
         const measured = events.filter((event) => event.method === "test.trace");
-        expect(settled).toContain(
-          'openclaw_gateway_rpc_response_bytes_count{method="test.trace"} 3',
-        );
+        expect(settled).toContain(rpcMetric("response_bytes_count", 3));
         expect(
           measured
             .filter((event) => event.phase === "response")
@@ -346,12 +336,10 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
                 : 0),
             0,
           );
-          const sample = settled
-            .split("\n")
-            .find((line) =>
-              line.startsWith(`openclaw_gateway_rpc_${metric}_seconds_sum{method="test.trace"} `),
-            );
-          expect(Number(sample?.split(" ").at(-1))).toBeCloseTo(totalMs / 1000, 6);
+          expect(metricValue(settled, rpcMetric(`${metric}_seconds_sum`))).toBeCloseTo(
+            totalMs / 1000,
+            6,
+          );
         }
         for (const traceId of [firstTraceId, secondTraceId]) {
           const observations = events.filter((event) => event.trace?.traceId === traceId);
@@ -405,7 +393,7 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
         for (const key of ["count", "sum", "observed"] as const) {
           expect(retainedWindows[key]).toBeGreaterThanOrEqual(completedWindow[key]);
         }
-        expect(flooded).toContain('openclaw_gateway_rpc_requests_total{method="other"} 65');
+        expect(flooded).toContain(rpcMetric("requests_total", 65, "other"));
         expect(unknownSeries(flooded)).toEqual(initialUnknown);
         expect(flooded).not.toMatch(
           /private-rpc-proof|held-rpc-proof|concurrent-rpc-proof|11111111111111111111111111111111|22222222222222222222222222222222/,

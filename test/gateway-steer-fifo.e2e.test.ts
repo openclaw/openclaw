@@ -11,7 +11,10 @@ import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-res
 import { RUNTIME_CONTEXT_HEADER } from "../src/llm/types.js";
 import { GatewayChatClient } from "../src/tui/gateway-chat.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
-import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
+import {
+  writeOpenAiResponsesSse,
+  writeOpenAiResponsesText,
+} from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -81,26 +84,16 @@ async function collectCleanupFailures(
 
 afterEach(async () => {
   const failures: unknown[] = [];
-  await collectCleanupFailures(
-    clients.splice(0).map((client) => client.stop()),
-    failures,
-  );
-  await collectCleanupFailures(
-    diagnosticsClients.splice(0).map((client) => client.stopAndWait()),
-    failures,
-  );
-  await collectCleanupFailures(
-    instances.splice(0).map((instance) => instance.cleanup()),
-    failures,
-  );
-  await collectCleanupFailures(
-    modelServers.splice(0).map((server) => server.stop()),
-    failures,
-  );
-  await collectCleanupFailures(
-    cleanupDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })),
-    failures,
-  );
+  // Finish each ownership layer before closing the resources beneath it.
+  for (const tasks of [
+    () => clients.splice(0).map((client) => client.stop()),
+    () => diagnosticsClients.splice(0).map((client) => client.stopAndWait()),
+    () => instances.splice(0).map((instance) => instance.cleanup()),
+    () => modelServers.splice(0).map((server) => server.stop()),
+    () => cleanupDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })),
+  ]) {
+    await collectCleanupFailures(tasks(), failures);
+  }
   if (failures.length > 0) {
     throw new AggregateError(failures, "Gateway steer FIFO cleanup failed");
   }
@@ -116,101 +109,33 @@ async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unk
 }
 
 function writeTextResponse(res: ServerResponse, requestIndex: number): void {
-  const id = `msg_steer_fifo_${requestIndex}`;
-  const text = `TURN_${requestIndex}_COMPLETE`;
-  const message = {
-    type: "message",
-    id,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  writeOpenAiResponsesSse(res, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...message, status: "in_progress", content: [] },
-    },
-    {
-      type: "response.output_text.delta",
-      item_id: id,
-      output_index: 0,
-      content_index: 0,
-      delta: text,
-    },
-    {
-      type: "response.output_text.done",
-      item_id: id,
-      output_index: 0,
-      content_index: 0,
-      text,
-    },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_steer_fifo_${requestIndex}`,
-        status: "completed",
-        output: [message],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
+  writeOpenAiResponsesText(res, {
+    text: `TURN_${requestIndex}_COMPLETE`,
+    messageId: `msg_steer_fifo_${requestIndex}`,
+    responseId: `resp_steer_fifo_${requestIndex}`,
+  });
 }
 
 function writeToolResponse(res: ServerResponse): void {
-  const item = {
-    type: "function_call",
-    id: "fc_steer_fifo_status",
-    call_id: "call_steer_fifo_status",
-    name: "session_status",
-    arguments: "{}",
-    status: "completed",
-  };
-  writeOpenAiResponsesSse(res, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...item, status: "in_progress", arguments: "" },
-    },
-    {
-      type: "response.function_call_arguments.done",
-      item_id: item.id,
-      output_index: 0,
-      arguments: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_steer_fifo_tool",
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
+  writeToolsResponse(res, "resp_steer_fifo_tool", [["steer_fifo_status", "session_status"]]);
 }
 
 function writeSequentialToolsResponse(res: ServerResponse): void {
-  const items = [
-    {
-      type: "function_call",
-      id: "fc_steering_gate",
-      call_id: "call_steering_gate",
-      name: STEERING_GATE_TOOL,
-      arguments: "{}",
-      status: "completed",
-    },
-    {
-      type: "function_call",
-      id: "fc_steering_tail",
-      call_id: "call_steering_tail",
-      name: STEERING_TAIL_TOOL,
-      arguments: "{}",
-      status: "completed",
-    },
-  ];
+  writeToolsResponse(res, "resp_steer_fifo_sequential_tools", [
+    ["steering_gate", STEERING_GATE_TOOL],
+    ["steering_tail", STEERING_TAIL_TOOL],
+  ]);
+}
+
+function writeToolsResponse(res: ServerResponse, id: string, tools: [string, string][]): void {
+  const items = tools.map(([key, name]) => ({
+    type: "function_call",
+    id: `fc_${key}`,
+    call_id: `call_${key}`,
+    name,
+    arguments: "{}",
+    status: "completed",
+  }));
   writeOpenAiResponsesSse(res, [
     ...items.flatMap((item, outputIndex) => [
       {
@@ -229,7 +154,7 @@ function writeSequentialToolsResponse(res: ServerResponse): void {
     {
       type: "response.completed",
       response: {
-        id: "resp_steer_fifo_sequential_tools",
+        id,
         status: "completed",
         output: items,
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
@@ -864,6 +789,26 @@ function currentUserInput(request: ModelRequest | undefined): string {
   return userInputs(request).findLast((text) => !text.startsWith(RUNTIME_CONTEXT_HEADER)) ?? "";
 }
 
+function assertSteeringOrder(request: ModelRequest | undefined, marker: string) {
+  const items = responseInputItems(request);
+  const outputIndex = (id: string) =>
+    items.findIndex(
+      (item) => item.type === "function_call_output" && item.call_id === `call_steering_${id}`,
+    );
+  const gate = outputIndex("gate");
+  const tail = outputIndex("tail");
+  const steer = items.findIndex(
+    (item) => item.role === "user" && contentText(item.content).includes(marker),
+  );
+  expect(gate).toBeGreaterThanOrEqual(0);
+  expect(tail).toBeGreaterThan(gate);
+  expect(steer).toBeGreaterThan(tail);
+  const gateOutput = contentText(items[gate]?.output);
+  expect(gateOutput).toContain("steering gate completed");
+  expect(contentText(items[tail]?.output)).toContain("Skipped to process an incoming message.");
+  return gateOutput;
+}
+
 describe("Gateway steer FIFO", () => {
   it(
     "dispatches terminal A before a later ordinary B queued during the same turn",
@@ -893,113 +838,55 @@ describe("Gateway steer FIFO", () => {
     TEST_TIMEOUT_MS,
   );
 
-  it(
-    "runs the first sequential tool and skips its tail when a Gateway steer arrives during preflight",
-    async () => {
-      const steerMarker = "STEER_DURING_SEQUENTIAL_GATE";
-      const fixture = await createGatewayFixture("steer-sequential-tail", {
-        withSteeringTools: true,
-        steeringGateMode: "preflight",
-        observeSteering: steerMarker,
-      });
+  it.each(["preflight", "execute"] as const)(
+    "finishes the first tool and skips its sequential tail when steered during %s",
+    async (mode) => {
+      const preflight = mode === "preflight";
+      const steerMarker = preflight ? "STEER_DURING_SEQUENTIAL_GATE" : "STEER_DURING_RUNNING_TOOL";
+      const trace = preflight
+        ? ["preflight-start", "preflight-end", "gate-executed"]
+        : ["gate-execute-start", "gate-execute-end"];
+      const fixture = await createGatewayFixture(
+        preflight ? "steer-sequential-tail" : "steer-running-tool-tail",
+        {
+          withSteeringTools: true,
+          steeringGateMode: mode,
+          observeSteering: preflight ? steerMarker : undefined,
+        },
+      );
       const steeringTools = fixture.steeringTools;
       if (!steeringTools) {
         throw new Error("steering tool fixture was not configured");
       }
-      const first = await sendHeldTurn(fixture);
-
-      try {
-        fixture.modelServer.releaseFirst("sequential-tools");
-        await vi.waitFor(
-          async () => expect(await readTrace(steeringTools.tracePath)).toEqual(["preflight-start"]),
-          WAIT_OPTS,
-        );
-        await queueSteer(fixture, steerMarker);
-      } finally {
-        await writeFile(steeringTools.releasePath, "release\n", "utf8");
-      }
-
-      await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(2), WAIT_OPTS);
-      await waitForRunTerminal(fixture, first.runId);
-      await vi.waitFor(
-        async () =>
-          expect(await readTrace(steeringTools.tracePath)).toEqual([
-            "preflight-start",
-            "preflight-end",
-            "gate-executed",
-          ]),
-        WAIT_OPTS,
-      );
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-
-      const nextRequest = fixture.modelServer.requests[1];
-      const inputItems = responseInputItems(nextRequest);
-      const gateOutputIndex = inputItems.findIndex(
-        (item) => item.type === "function_call_output" && item.call_id === "call_steering_gate",
-      );
-      const tailOutputIndex = inputItems.findIndex(
-        (item) => item.type === "function_call_output" && item.call_id === "call_steering_tail",
-      );
-      const steerIndex = inputItems.findIndex(
-        (item) => item.role === "user" && contentText(item.content).includes(steerMarker),
-      );
-
-      expect(gateOutputIndex).toBeGreaterThanOrEqual(0);
-      expect(tailOutputIndex).toBeGreaterThan(gateOutputIndex);
-      expect(steerIndex).toBeGreaterThan(tailOutputIndex);
-      expect(contentText(inputItems[gateOutputIndex]?.output)).toContain("steering gate completed");
-      expect(contentText(inputItems[tailOutputIndex]?.output)).toContain(
-        "Skipped to process an incoming message.",
-      );
-      expect(await readTrace(steeringTools.tracePath)).toEqual([
-        "preflight-start",
-        "preflight-end",
-        "gate-executed",
-      ]);
-      expect(fixture.modelServer.requests).toHaveLength(2);
-      expect(fixture.chatErrors).toEqual([]);
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "finishes a running tool, skips its sequential tail, and injects a UI steer once",
-    async () => {
-      const fixture = await createGatewayFixture("steer-running-tool-tail", {
-        withSteeringTools: true,
-      });
-      const steeringTools = fixture.steeringTools;
-      if (!steeringTools) {
-        throw new Error("steering tool fixture was not configured");
-      }
-      const first = await sendHeldTurn(fixture, true);
-      const steerMarker = "STEER_DURING_RUNNING_TOOL";
+      const first = await sendHeldTurn(fixture, !preflight);
 
       try {
         fixture.modelServer.releaseFirst("sequential-tools");
         await vi.waitFor(async () => {
-          expect(await readTrace(steeringTools.tracePath)).toEqual(["gate-execute-start"]);
+          expect(await readTrace(steeringTools.tracePath)).toEqual([trace[0]]);
           expect(fixture.modelServer.requests).toHaveLength(1);
         }, WAIT_OPTS);
-        const steerRunId = `run-${steerMarker.toLowerCase()}`;
-        const steerResult = await fixture.diagnosticsClient.request<{
-          runId?: string;
-          status?: string;
-        }>("chat.send", {
-          sessionKey: fixture.sessionKey,
-          message: steerMarker,
-          deliver: false,
-          queueMode: "steer",
-          idempotencyKey: steerRunId,
-        });
-        expect(steerResult).toMatchObject({ runId: steerRunId, status: "started" });
-        expect(fixture.modelServer.requests).toHaveLength(1);
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(fixture.chatFinalRunIds).not.toContain(steerRunId);
+        if (preflight) {
+          await queueSteer(fixture, steerMarker);
+        } else {
+          const steerRunId = `run-${steerMarker.toLowerCase()}`;
+          const steerResult = await fixture.diagnosticsClient.request<{
+            runId?: string;
+            status?: string;
+          }>("chat.send", {
+            sessionKey: fixture.sessionKey,
+            message: steerMarker,
+            deliver: false,
+            queueMode: "steer",
+            idempotencyKey: steerRunId,
+          });
+          expect(steerResult).toMatchObject({ runId: steerRunId, status: "started" });
+          expect(fixture.modelServer.requests).toHaveLength(1);
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(fixture.chatFinalRunIds).not.toContain(steerRunId);
+        }
       } finally {
         await writeFile(steeringTools.releasePath, "release\n", "utf8");
       }
@@ -1007,47 +894,26 @@ describe("Gateway steer FIFO", () => {
       await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(2), WAIT_OPTS);
       await waitForRunTerminal(fixture, first.runId);
       await vi.waitFor(
-        async () =>
-          expect(await readTrace(steeringTools.tracePath)).toEqual([
-            "gate-execute-start",
-            "gate-execute-end",
-          ]),
+        async () => expect(await readTrace(steeringTools.tracePath)).toEqual(trace),
         WAIT_OPTS,
       );
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
 
-      const nextRequest = fixture.modelServer.requests[1];
-      const inputItems = responseInputItems(nextRequest);
-      const gateOutputIndex = inputItems.findIndex(
-        (item) => item.type === "function_call_output" && item.call_id === "call_steering_gate",
-      );
-      const tailOutputIndex = inputItems.findIndex(
-        (item) => item.type === "function_call_output" && item.call_id === "call_steering_tail",
-      );
-      const steerIndex = inputItems.findIndex(
-        (item) => item.role === "user" && contentText(item.content).includes(steerMarker),
-      );
-
-      expect(gateOutputIndex).toBeGreaterThanOrEqual(0);
-      expect(tailOutputIndex).toBeGreaterThan(gateOutputIndex);
-      expect(steerIndex).toBeGreaterThan(tailOutputIndex);
-      expect(contentText(inputItems[gateOutputIndex]?.output)).toContain("steering gate completed");
-      expect(contentText(inputItems[gateOutputIndex]?.output)).not.toContain(
-        "Skipped to process an incoming message.",
-      );
-      expect(contentText(inputItems[tailOutputIndex]?.output)).toContain(
-        "Skipped to process an incoming message.",
-      );
-      expect(
-        fixture.modelServer.requests
-          .flatMap((request) => userInputs(request))
-          .filter((input) => input.includes(steerMarker)),
-      ).toHaveLength(1);
+      const gateOutput = assertSteeringOrder(fixture.modelServer.requests[1], steerMarker);
+      expect(await readTrace(steeringTools.tracePath)).toEqual(trace);
+      if (!preflight) {
+        expect(gateOutput).not.toContain("Skipped to process an incoming message.");
+        expect(
+          fixture.modelServer.requests
+            .flatMap((request) => userInputs(request))
+            .filter((input) => input.includes(steerMarker)),
+        ).toHaveLength(1);
+        expect(redactedFixtureLogs(fixture.instance)).not.toContain("active run changed");
+      }
       expect(fixture.modelServer.requests).toHaveLength(2);
       expect(fixture.chatErrors).toEqual([]);
-      expect(redactedFixtureLogs(fixture.instance)).not.toContain("active run changed");
     },
     TEST_TIMEOUT_MS,
   );

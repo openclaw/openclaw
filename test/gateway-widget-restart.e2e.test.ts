@@ -15,14 +15,16 @@ import type { GatewayClient } from "../src/gateway/client.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
-import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { extractAssistantPhaseText } from "../src/shared/chat-message-content.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
-import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+  readRestartSession,
+  restartModelConfig,
+  writeRestartTitle,
+  writeRestartToolCall,
+} from "./gateway-restart.test-support.js";
+import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
@@ -34,32 +36,7 @@ const PROGRESS_MARKER = "Widget recovery is still working.";
 const FINAL_HTML = "<h1>Recovered chart</h1><p>Recovery completed.</p>";
 
 function writeToolCall(response: ServerResponse, name: string, args: unknown, ordinal: number) {
-  const item = {
-    type: "function_call",
-    id: `fc_widget_${ordinal}`,
-    call_id: `call_widget_${ordinal}`,
-    name,
-    arguments: JSON.stringify(args),
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: item.id,
-      delta: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_widget_${ordinal}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
+  writeRestartToolCall(response, "widget", name, args, ordinal);
 }
 
 async function startWidgetProvider(signal: AbortSignal) {
@@ -91,30 +68,7 @@ async function startWidgetProvider(signal: AbortSignal) {
             : [];
           if (tools.length === 0) {
             if (body.stream === false) {
-              response.writeHead(200, { "content-type": "application/json" });
-              response.end(
-                JSON.stringify({
-                  id: "resp_title",
-                  object: "response",
-                  status: "completed",
-                  output: [
-                    {
-                      type: "message",
-                      id: "msg_title",
-                      role: "assistant",
-                      status: "completed",
-                      content: [
-                        {
-                          type: "output_text",
-                          text: "Synthetic widget recovery session",
-                          annotations: [],
-                        },
-                      ],
-                    },
-                  ],
-                  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-                }),
-              );
+              writeRestartTitle(response, "Synthetic widget recovery session");
               return;
             }
             writeOpenAiResponsesText(response, {
@@ -258,22 +212,7 @@ it.skipIf(process.platform === "win32")(
         });
         let client: GatewayClient | undefined;
         const terminalPublished = createDeferred<Record<string, unknown>>();
-        const persisted = () => {
-          const db = openNodeSqliteDatabase(
-            path.join(instance.state.agentDir(), "openclaw-agent.sqlite"),
-            { readOnly: true },
-          );
-          try {
-            const row = db
-              .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-              .get(SESSION_KEY);
-            return typeof row?.entry_json === "string"
-              ? asRecord(JSON.parse(row.entry_json))
-              : undefined;
-          } finally {
-            db.close();
-          }
-        };
+        const persisted = () => readRestartSession(instance.state.agentDir(), SESSION_KEY);
         await runQaGatewayFixture(
           async () => {
             try {
@@ -282,31 +221,8 @@ it.skipIf(process.platform === "win32")(
                 update: { checkOnStart: false },
                 browser: { enabled: false },
                 discovery: { mdns: { mode: "off" } },
-                models: {
-                  mode: "replace",
-                  providers: {
-                    [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
-                  },
-                },
+                ...restartModelConfig(model, instance.state.workspaceDir),
                 plugins: { enabled: false },
-                agents: {
-                  defaults: {
-                    workspace: instance.state.workspaceDir,
-                    model: { primary: model.modelRef },
-                    modelPolicy: { allow: [model.modelRef] },
-                    models: {
-                      [model.modelRef]: {
-                        agentRuntime: { id: "openclaw" },
-                        params: { transport: "sse", openaiWsWarmup: false },
-                      },
-                    },
-                    heartbeat: { every: "0m" },
-                    skipBootstrap: true,
-                    skills: [],
-                    timeoutSeconds: 120,
-                  },
-                  entries: { main: {} },
-                },
                 tools: {
                   allow: ["exec", "process", "dashboard", "show_widget", "message"],
                   exec: { mode: "full", host: "gateway" },
@@ -490,37 +406,17 @@ it.skipIf(process.platform === "win32")(
               const history = await client.request<{
                 messages: Array<{ role: string; content?: unknown }>;
               }>("chat.history", { sessionKey: SESSION_KEY });
-              expect(
-                history.messages.filter(
-                  (message) =>
-                    message.role === "assistant" &&
-                    extractAssistantPhaseText(message)?.trim() === FINAL_MARKER,
-                ),
-              ).toHaveLength(1);
-              expect(
-                history.messages.filter(
-                  (message) =>
-                    message.role === "assistant" &&
-                    extractAssistantPhaseText(message)?.trim() === PROGRESS_MARKER,
-                ),
-              ).toHaveLength(1);
+              for (const marker of [FINAL_MARKER, PROGRESS_MARKER]) {
+                expect(
+                  history.messages.filter(
+                    (message) =>
+                      message.role === "assistant" &&
+                      extractAssistantPhaseText(message)?.trim() === marker,
+                  ),
+                ).toHaveLength(1);
+              }
               expect(instance.logs()).not.toContain("Session transcript keyed user is outside");
               expect(instance.logs()).toContain("startup-orphaned main session(s)");
-              console.info(
-                JSON.stringify({
-                  proof: "widget-progress-double-restart",
-                  gatewayPids: [original.pid, recoveringProcess.pid, instance.child?.pid],
-                  runtime: process.versions.bun ?? process.version,
-                  durableStatus: durable?.status,
-                  projectedStatus: rows.sessions.find((row) => row.key === SESSION_KEY)?.status,
-                  hasActiveRun: rows.sessions.find((row) => row.key === SESSION_KEY)?.hasActiveRun,
-                  widgetRevision: board.widgets[0]!.revision,
-                  providerCalls: provider.calls.map(({ recovering, tools }) => ({
-                    recovering,
-                    tools,
-                  })),
-                }),
-              );
             } catch (cause) {
               let entry: unknown;
               try {

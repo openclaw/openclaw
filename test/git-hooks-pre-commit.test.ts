@@ -28,6 +28,14 @@ import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp
 
 const tempDirs: string[] = [];
 
+function writeJson(dir: string, value: Record<string, unknown>) {
+  writeFileSync(path.join(dir, "package.json"), JSON.stringify(value));
+}
+
+function patchManifest(dir: string, patch: Record<string, unknown>) {
+  writeJson(dir, { ...JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")), ...patch });
+}
+
 function installRunNodeToolFixture(dir: string): void {
   mkdirSync(path.join(dir, "scripts", "pre-commit"), { recursive: true });
   symlinkSync(
@@ -443,44 +451,32 @@ describe("scripts/pre-commit/run-node-tool.sh", () => {
     run(owner, "git", ["init", "-q", "--initial-branch=main"]);
     for (const root of [dir, owner]) {
       run(root, "git", ["remote", "add", "origin", "https://github.com/example/project.git"]);
-      writeFileSync(
-        path.join(root, "package.json"),
-        JSON.stringify({ devDependencies: { oxfmt: "0.68.0" } }),
-      );
+      writeJson(root, { devDependencies: { oxfmt: "0.68.0" } });
     }
     rmSync(path.join(dir, "node_modules"), { recursive: true });
     const pkg = path.join(owner, "node_modules/oxfmt");
     const bindingName = `@oxfmt/binding-${process.platform}-${process.arch}`;
     const binding = path.join(owner, "node_modules", bindingName);
     const dependency = path.join(owner, "node_modules/tinypool");
-    mkdirSync(pkg, { recursive: true });
-    mkdirSync(binding, { recursive: true });
-    mkdirSync(dependency, { recursive: true });
-    writeFileSync(
-      path.join(dependency, "package.json"),
-      JSON.stringify({ name: "tinypool", version: "2.1.2", main: "index.cjs" }),
-    );
+    for (const packageDir of [pkg, binding, dependency]) {
+      mkdirSync(packageDir, { recursive: true });
+    }
+    writeJson(dependency, { name: "tinypool", version: "2.1.2", main: "index.cjs" });
     writeFileSync(path.join(dependency, "index.cjs"), "module.exports = {};\n");
-    writeFileSync(
-      path.join(pkg, "package.json"),
-      JSON.stringify({
-        name: "oxfmt",
-        version: "0.68.0",
-        bin: { oxfmt: "cli.cjs" },
-        dependencies: { tinypool: "2.1.2" },
-        optionalDependencies: { [bindingName]: "0.68.0" },
-      }),
-    );
-    writeFileSync(
-      path.join(binding, "package.json"),
-      JSON.stringify({
-        name: bindingName,
-        version: "0.68.0",
-        os: [process.platform],
-        cpu: [process.arch],
-        main: "binding.cjs",
-      }),
-    );
+    writeJson(pkg, {
+      name: "oxfmt",
+      version: "0.68.0",
+      bin: { oxfmt: "cli.cjs" },
+      dependencies: { tinypool: "2.1.2" },
+      optionalDependencies: { [bindingName]: "0.68.0" },
+    });
+    writeJson(binding, {
+      name: bindingName,
+      version: "0.68.0",
+      os: [process.platform],
+      cpu: [process.arch],
+      main: "binding.cjs",
+    });
     writeFileSync(path.join(binding, "binding.cjs"), "module.exports = {};\n");
     const cli = path.join(pkg, "cli.cjs");
     const formatter = `const fs = require("node:fs");
@@ -557,13 +553,10 @@ if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdou
   ])("rejects $kind before formatting", ({ kind, override }) => {
     const { dir, owner, pkg, binding, dependency, cli, formatter, env } = toolingFixture();
     if (kind === "wrong pin" || kind === "wrong package") {
-      const manifest = JSON.parse(readFileSync(path.join(pkg, "package.json"), "utf8"));
-      if (kind === "wrong pin") {
-        manifest.version = "0.60.0";
-      } else {
-        manifest.name = "another-formatter";
-      }
-      writeFileSync(path.join(pkg, "package.json"), JSON.stringify(manifest));
+      patchManifest(
+        pkg,
+        kind === "wrong pin" ? { version: "0.60.0" } : { name: "another-formatter" },
+      );
     } else if (kind === "unrelated") {
       run(owner, "git", [
         "remote",
@@ -580,29 +573,21 @@ if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdou
       rmSync(pkg, { recursive: true });
       symlinkSync(outside, pkg);
     } else if (kind === "wrong platform" || kind === "wrong binding pin") {
-      const manifest = JSON.parse(readFileSync(path.join(binding, "package.json"), "utf8"));
-      if (kind === "wrong platform") {
-        manifest.cpu = ["unsupported"];
-      } else {
-        manifest.version = "0.60.0";
-      }
-      writeFileSync(path.join(binding, "package.json"), JSON.stringify(manifest));
+      patchManifest(
+        binding,
+        kind === "wrong platform" ? { cpu: ["unsupported"] } : { version: "0.60.0" },
+      );
     } else if (kind === "broken binding") {
       writeFileSync(
         path.join(binding, "binding.cjs"),
         'throw new Error("unusable native binding");',
       );
     } else if (kind === "wrong dependency pin") {
-      const manifest = JSON.parse(readFileSync(path.join(dependency, "package.json"), "utf8"));
-      manifest.version = "1.0.0";
-      writeFileSync(path.join(dependency, "package.json"), JSON.stringify(manifest));
+      patchManifest(dependency, { version: "1.0.0" });
     } else if (kind === "escaped dependency") {
       const outside = makeTempRepoRoot(tempDirs, "openclaw-outside-dependency-");
       rmSync(dependency, { recursive: true });
-      writeFileSync(
-        path.join(outside, "package.json"),
-        JSON.stringify({ name: "tinypool", version: "2.1.2", main: "index.cjs" }),
-      );
+      writeJson(outside, { name: "tinypool", version: "2.1.2", main: "index.cjs" });
       writeFileSync(path.join(outside, "index.cjs"), "module.exports = {};\n");
       symlinkSync(outside, dependency);
     } else if (kind === "drift") {

@@ -12,12 +12,15 @@ import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
+import {
+  readRestartSession,
+  restartModelConfig,
+  writeRestartTitle,
+  writeRestartToolCall,
+} from "./gateway-restart.test-support.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
@@ -36,32 +39,13 @@ function writeSpawn(response: ServerResponse, name: string, ordinal: number) {
     cleanup: "delete",
     expectsCompletionMessage: false,
   };
-  const item = {
-    type: "function_call",
-    id: `fc_spawn_${ordinal}`,
-    call_id: `call_spawn_${ordinal}`,
+  writeRestartToolCall(
+    response,
+    "spawn",
     name,
-    arguments: JSON.stringify(name === "dispatch_action" ? { id: "sessions_spawn", args } : args),
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: item.id,
-      delta: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_spawn_${ordinal}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
+    name === "dispatch_action" ? { id: "sessions_spawn", args } : args,
+    ordinal,
+  );
 }
 
 async function startProvider(signal: AbortSignal) {
@@ -124,24 +108,7 @@ async function startProvider(signal: AbortSignal) {
           if (tools.length === 0) {
             const title = "Synthetic quiet child restart";
             if (body.stream === false) {
-              response.writeHead(200, { "content-type": "application/json" });
-              response.end(
-                JSON.stringify({
-                  id: "resp_title",
-                  object: "response",
-                  status: "completed",
-                  output: [
-                    {
-                      type: "message",
-                      id: "msg_title",
-                      role: "assistant",
-                      status: "completed",
-                      content: [{ type: "output_text", text: title, annotations: [] }],
-                    },
-                  ],
-                  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-                }),
-              );
+              writeRestartTitle(response, title);
             } else {
               text(title);
             }
@@ -240,22 +207,8 @@ it.skipIf(process.platform === "win32").for([
     let replacementChild: Record<string, unknown> | undefined;
     let phase = "startup";
     const observations: Record<string, unknown> = {};
-    const persisted = (sessionKey: string) => {
-      const database = openNodeSqliteDatabase(
-        path.join(instance.state.agentDir(), "openclaw-agent.sqlite"),
-        { readOnly: true },
-      );
-      try {
-        const row = database
-          .prepare("SELECT entry_json FROM session_nodes WHERE session_key=?")
-          .get(sessionKey);
-        return typeof row?.entry_json === "string"
-          ? asRecord(JSON.parse(row.entry_json))
-          : undefined;
-      } finally {
-        database.close();
-      }
-    };
+    const persisted = (sessionKey: string) =>
+      readRestartSession(instance.state.agentDir(), sessionKey);
     const persistedChild = (
       identity: { runId: string } | { sessionKey: string },
     ): (Record<string, unknown> & { runId: string }) | undefined => {
@@ -415,31 +368,7 @@ it.skipIf(process.platform === "win32").for([
               entries: { [pluginId]: { enabled: true, hooks: { allowConversationAccess: true } } },
               slots: { memory: "none" },
             },
-            models: {
-              mode: "replace",
-              providers: {
-                [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
-              },
-            },
-            agents: {
-              defaults: {
-                workspace: instance.state.workspaceDir,
-                model: { primary: model.modelRef },
-                modelPolicy: { allow: [model.modelRef] },
-                models: {
-                  [model.modelRef]: {
-                    agentRuntime: { id: "openclaw" },
-                    params: { transport: "sse", openaiWsWarmup: false },
-                  },
-                },
-                heartbeat: { every: "0m" },
-                skipBootstrap: true,
-                skills: [],
-                timeoutSeconds: 120,
-                subagents: { runTimeoutSeconds: 120 },
-              },
-              entries: { main: {} },
-            },
+            ...restartModelConfig(model, instance.state.workspaceDir, { runTimeoutSeconds: 120 }),
             tools: {
               allow: ["sessions_spawn", "sessions_send", "sessions_history", "subagents"],
               codeMode: { enabled: false },
@@ -499,7 +428,6 @@ it.skipIf(process.platform === "win32").for([
           ).toContain(PARENT_FINAL);
           observeRecovery = true;
           const parentSessionId = persisted(PARENT_KEY)?.sessionId;
-          const recoveryStartedAt = Date.now();
           await restart(replaceChild);
           phase = "waiting-for-continuation";
           await client!.request("sessions.subscribe", { agentId: "main" });
@@ -507,7 +435,6 @@ it.skipIf(process.platform === "win32").for([
             Promise.race([provider.checkpoint, provider.failed]),
             AbortSignal.any([signal, AbortSignal.timeout(60_000)]),
           );
-          const recoveryMs = Date.now() - recoveryStartedAt;
           expect(checkpoint).toMatchObject({ sessionKey: PARENT_KEY, sessionId: parentSessionId });
           expect(checkpoint.prompt).toContain(child.key);
           expect(checkpoint.prompt).toContain(childRunId);
@@ -639,25 +566,6 @@ it.skipIf(process.platform === "win32").for([
           if (requestsAtRevocation !== undefined) {
             expect(provider.requests.length - requestsAtRevocation).toBe(0);
           }
-          console.log(
-            JSON.stringify({
-              proof: "quiet-subagent-managed-restart",
-              recoveryMs,
-              outcome,
-              replaceChild,
-              recoveryDispatches,
-              originalParentDispatches: 2,
-              ...(dispatchesAtRevocation === undefined
-                ? {}
-                : {
-                    dispatchesAfterRevocation: recoveryDispatches - dispatchesAtRevocation,
-                    providerRequestsAfterRevocation:
-                      provider.requests.length - (requestsAtRevocation ?? 0),
-                  }),
-              childDispatches: 1,
-              subsequentRestarts: 1,
-            }),
-          );
         } catch (cause) {
           throw new Error(
             JSON.stringify({
