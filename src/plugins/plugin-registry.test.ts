@@ -168,7 +168,7 @@ function profileFixture(pluginId = "demo") {
 
 function deriveRegistry(
   candidate: PluginCandidate,
-  options: Omit<Parameters<typeof loadPluginRegistrySnapshot>[0], "candidates"> = {},
+  options: Omit<NonNullable<Parameters<typeof loadPluginRegistrySnapshot>[0]>, "candidates"> = {},
 ) {
   return loadPluginRegistrySnapshot({
     env: hermeticEnv(),
