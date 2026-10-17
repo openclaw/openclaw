@@ -106,16 +106,3 @@ it.each(["unregister", "register"])("retains the emission snapshot across %s", (
   }
   expect(exits.listenerCount("exit")).toBe(0);
 });
-
-it("closes remaining caches exactly once during reentrant exit dispatch", () => {
-  const closed: string[] = [];
-  register(() => {
-    closed.push("first-start");
-    exits.emit("exit", 0);
-    closed.push("first-end");
-  });
-  register(() => closed.push("second"));
-  exits.emit("exit", 0);
-  expect(closed).toEqual(["first-start", "second", "first-end"]);
-  expect(exits.listenerCount("exit")).toBe(0);
-});

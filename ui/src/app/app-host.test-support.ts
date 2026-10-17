@@ -6,8 +6,8 @@ import { createApplicationConfigCapability } from "./config.ts";
 import type { ApplicationContext } from "./context.ts";
 
 export type ShellKeyboardState = {
+  element: HTMLElement;
   runtime: { context: ApplicationContext };
-  handleDocumentKeydown: (event: KeyboardEvent) => void;
 };
 
 export function resetAppHostTestGlobals(): void {

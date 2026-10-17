@@ -20,23 +20,49 @@ describe("plugin manifest model catalog", () => {
     cleanupTrackedTempDirs(tempDirs);
   });
 
-  it.each([true, false])("loads models.dev opt-in only with provider ownership: %s", (owned) => {
-    const dir = makePluginDir();
-    writeManifest(dir, {
-      id: "example-plugin",
-      providers: owned ? [" Example "] : [],
-      modelCatalog: { modelsDev: { " EXAMPLE ": " upstream-id ", other: "other-source" } },
-      configSchema: { type: "object" },
-    });
+  it.each([true, false])(
+    "loads catalog and request policies only for owned providers: %s",
+    (owned) => {
+      const dir = makePluginDir();
+      writeManifest(dir, {
+        id: "example-plugin",
+        providers: owned ? [" Example "] : [],
+        modelCatalog: { modelsDev: { " EXAMPLE ": " upstream-id ", other: "other-source" } },
+        providerRequest: {
+          providers: {
+            " EXAMPLE ": {
+              family: " demo-family ",
+              compatibilityFamily: " moonshot ",
+              openAICompletions: { supportsStreamingUsage: true },
+            },
+            other: { family: "unowned" },
+          },
+        },
+        configSchema: { type: "object" },
+      });
 
-    const result = loadPluginManifest(dir);
-    if (!result.ok) {
-      throw new Error(result.error);
-    }
-    expect(result.manifest.modelCatalog).toEqual(
-      owned ? { modelsDev: { example: "upstream-id" } } : undefined,
-    );
-  });
+      const result = loadPluginManifest(dir);
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      expect(result.manifest.modelCatalog).toEqual(
+        owned ? { modelsDev: { example: "upstream-id" } } : undefined,
+      );
+      expect(result.manifest.providerRequest).toEqual(
+        owned
+          ? {
+              providers: {
+                example: {
+                  family: "demo-family",
+                  compatibilityFamily: "moonshot",
+                  openAICompletions: { supportsStreamingUsage: true },
+                },
+              },
+            }
+          : undefined,
+      );
+    },
+  );
 
   it("allows cli backends to own manifest model catalog rows", () => {
     const dir = makePluginDir();

@@ -35,7 +35,6 @@ let droppedCount = 0;
 let droppedTarget: FileLogQueueEntry | null = null;
 let scheduledFlush: NodeJS.Immediate | null = null;
 let flushPromise: Promise<void> | null = null;
-let drainGeneration = 0;
 let processExiting = false;
 let processHooksInstalled = false;
 const warnedRotationFiles = new Map<string, number>();
@@ -236,10 +235,10 @@ function prepareWrite(
   return { payload: payloads.join(""), payloadBytes, nextIndex };
 }
 
-async function writeEntries(entries: FileLogQueueEntry[], generation: number): Promise<void> {
+async function writeEntries(entries: FileLogQueueEntry[]): Promise<void> {
   const cursors = new Map<string, FileCursor>();
   for (let index = 0; index < entries.length;) {
-    if (generation !== drainGeneration || processExiting) {
+    if (processExiting) {
       return;
     }
     const entry = entries[index];
@@ -249,7 +248,7 @@ async function writeEntries(entries: FileLogQueueEntry[], generation: number): P
     let cursor = cursors.get(entry.file);
     if (!cursor) {
       cursor = { bytes: await getCurrentLogFileBytes(entry.file) };
-      if (generation !== drainGeneration || processExiting) {
+      if (processExiting) {
         return;
       }
       cursors.set(entry.file, cursor);
@@ -301,9 +300,8 @@ function writeEntriesSync(entries: FileLogQueueEntry[]): void {
 }
 
 async function runFlushLoop(): Promise<void> {
-  const generation = drainGeneration;
   for (;;) {
-    if (generation !== drainGeneration || processExiting) {
+    if (processExiting) {
       return;
     }
     const entries = claimQueuedEntries();
@@ -312,10 +310,7 @@ async function runFlushLoop(): Promise<void> {
     }
     activeBatch = entries;
     activeIndex = 0;
-    await writeEntries(entries, generation);
-    if (generation !== drainGeneration) {
-      return;
-    }
+    await writeEntries(entries);
     activeBatch = null;
     activeIndex = 0;
   }
@@ -413,7 +408,6 @@ function drainFileLogQueueSync(): void {
     clearImmediate(scheduledFlush);
     scheduledFlush = null;
   }
-  drainGeneration += 1;
   // An issued append cannot be cancelled or safely replayed. Graceful exits await it; forced
   // exits rescue the still-queued tail without risking duplicate or interleaved JSONL records.
   const entries = activeBatch ? activeBatch.slice(activeIndex) : [];

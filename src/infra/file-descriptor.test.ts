@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   copyFileHandle,
+  flushAndHashFileSync,
   hashFileDescriptorSync,
   hashFileMutationSnapshotSync,
 } from "./file-descriptor.js";
@@ -22,6 +23,19 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("pinned file descriptors", () => {
+  it("closes an owned file when flushing fails", () => {
+    const file = path.join(directory, "flush-failure");
+    fsSync.writeFileSync(file, "fixture");
+    const failure = new Error("flush failed");
+    let descriptor: number | undefined;
+    vi.spyOn(fsSync, "fsyncSync").mockImplementation((fd) => {
+      descriptor = fd;
+      throw failure;
+    });
+    expect(() => flushAndHashFileSync(file)).toThrow(failure);
+    expect(() => fsSync.fstatSync(descriptor!)).toThrow(expect.objectContaining({ code: "EBADF" }));
+  });
+
   it.each(["hard link", "restored-mtime rewrite"] as const)(
     "rechecks a %s between the digest and final path observation",
     async (change) => {

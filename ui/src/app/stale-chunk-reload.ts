@@ -7,7 +7,7 @@
 // including WKWebView and plain-HTTP LAN origins without a service worker.
 // Worker update announcements use this same guarded recovery; unsaved work
 // blocks automatic reloads and leaves the Reload banner available.
-import { raceWithTimeout, sleepWithAbort } from "@openclaw/retry";
+import { sleepWithAbort } from "@openclaw/retry";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
@@ -129,9 +129,7 @@ function probeControlUiDocument(): Promise<boolean> {
     }
   })();
   const settledProbe = probe.finally(() => {
-    if (inFlightDocumentProbe === settledProbe) {
-      inFlightDocumentProbe = null;
-    }
+    inFlightDocumentProbe = null;
   });
   inFlightDocumentProbe = settledProbe;
   return settledProbe;
@@ -306,12 +304,9 @@ async function waitForReachableControlUiDocument(
     if (attempt > 0 && remaining <= 0) {
       return false;
     }
-    // timeoutMs: 0 remains one bounded request.
-    const reachable = await raceWithTimeout(
-      probeControlUiDocument,
-      remaining > 0 ? Math.min(remaining, DOCUMENT_PROBE_TIMEOUT_MS) : DOCUMENT_PROBE_TIMEOUT_MS,
-      () => false,
-    );
+    // The final probe may extend the retry deadline by up to 10s; its fetch abort owns the bound.
+    // timeoutMs: 0 still makes one bounded request.
+    const reachable = await probeControlUiDocument();
     if (signal?.aborted || !isCurrent()) {
       return false;
     }

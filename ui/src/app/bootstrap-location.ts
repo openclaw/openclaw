@@ -1,4 +1,3 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type {
   ModelCatalogTarget,
@@ -19,6 +18,7 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
+import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import { isDefaultChatLanding } from "../pages/model-setup/first-run.ts";
 import { newSessionLocationFromSearch } from "../pages/new-session/location.ts";
@@ -292,9 +292,12 @@ export function subscribeForegroundChatBootstrap({
     if (!match && state.status === "idle") {
       return;
     }
-    const data = asOptionalRecord(match?.data);
-    const key =
-      data?.kind === "session" && typeof data.sessionKey === "string" ? data.sessionKey : null;
+    // SAFETY: Only Chat and Dashboard use the canonical session route loader.
+    const routeData = isSessionRouteId(match?.routeId)
+      ? (match.data as ChatRouteData | undefined)
+      : undefined;
+    const data = routeData?.kind === "session" ? routeData : undefined;
+    const key = data?.sessionKey;
     // Admission previews have no transcript controller and cannot claim its
     // bootstrap priority. Resume ordinary scheduling until the real pane mounts.
     connectionBootstrap.setForegroundRoute(
@@ -313,7 +316,7 @@ export function subscribeForegroundChatBootstrap({
                 },
                 {
                   sessionKey: key,
-                  agentId: typeof data?.agentId === "string" ? data.agentId : undefined,
+                  agentId: data?.agentId,
                 },
               )
             : null,

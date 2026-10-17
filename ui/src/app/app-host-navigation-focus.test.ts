@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createShellOwner } from "./app-host-solid.test-support.ts";
+import { createConnectedShellOwner as createShellOwner } from "./app-host-solid.test-support.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 
 afterEach(resetAppHostTestGlobals);
@@ -30,12 +30,13 @@ describe("navigation drawer focus ownership", () => {
       if (via === "shortcut") {
         vi.stubGlobal("matchMedia", () => ({ matches: true }));
         const mac = navigator.platform.startsWith("Mac");
-        shell.handleDocumentKeydown(
+        composer.dispatchEvent(
           new KeyboardEvent("keydown", {
             key: "b",
             code: "KeyB",
             ctrlKey: !mac,
             metaKey: mac,
+            bubbles: true,
             cancelable: true,
           }),
         );

@@ -61,7 +61,7 @@ function resolvePhysicalPathInsideRootSync(
         return {
           rootPath: physicalRoot,
           targetPath: path.resolve(physicalRoot, path.relative(current, targetPath)),
-          rootIdentity: Object.freeze({ dev: root.dev, ino: root.ino }),
+          rootIdentity: { dev: root.dev, ino: root.ino },
         };
       }
       const parent = path.dirname(current);

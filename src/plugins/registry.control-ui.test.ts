@@ -121,6 +121,27 @@ describe("plugin registry Control UI descriptors", () => {
   });
 
   it.each([
+    {
+      requiredScopes: null,
+      message:
+        "control UI descriptor registration requires id, surface, label, and valid optional fields",
+    },
+    {
+      requiredScopes: ["operator.read", "operator.unknown", "operator.admin"],
+      message:
+        "control UI descriptor requiredScopes contains unknown operator scope: operator.unknown",
+    },
+  ])("rejects invalid scope declarations: $requiredScopes", ({ requiredScopes, message }) => {
+    const { registry, register } = fixture();
+    // SAFETY: Exercise the registration boundary with deliberately invalid scope declarations.
+    register({ ...tab, requiredScopes: requiredScopes as never });
+    expect(registry.registry.controlUiDescriptors).toEqual([]);
+    expect(registry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({ level: "error", pluginId: "reports", message }),
+    );
+  });
+
+  it.each([
     { id: "workboard", origin: "workspace" as const },
     { id: "logbook", origin: "bundled" as const },
   ])("rejects unowned native route placement from $origin plugin $id", ({ id, origin }) => {

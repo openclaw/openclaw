@@ -447,7 +447,7 @@ describe("shell lazy events", () => {
       try {
         await withConnectedShell(shell, async () => {
           if (isDebug) {
-            shell.handleDocumentKeydown(shortcut);
+            document.dispatchEvent(shortcut);
           } else {
             input.focus();
             expect(document.activeElement).toBe(input);
@@ -460,7 +460,6 @@ describe("shell lazy events", () => {
           await vi.dynamicImportSettled();
           if (isDebug) {
             await vi.waitFor(() => expect(toggled).toHaveBeenCalledOnce());
-            input.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
             input.dispatchEvent(keydown("d", "KeyD", true));
             expect(toggled).toHaveBeenCalledOnce();
           } else {
