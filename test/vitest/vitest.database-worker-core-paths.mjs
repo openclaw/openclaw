@@ -229,6 +229,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/cli-backend-dispatch.test.ts",
   "src/agents/embedded-agent-runner/run.harness-auth-failover.test.ts",
   "src/agents/embedded-agent-runner/run.plugin-runtime-refresh.integration.test.ts",
+  "src/agents/embedded-agent-runner/run.plugin-runtime-refresh-delivery.integration.test.ts",
   "src/agents/embedded-agent-runner/run.prepared-harness-credentials.test.ts",
   "src/agents/embedded-agent-runner/run.recovery-deadline.test.ts",
   "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
