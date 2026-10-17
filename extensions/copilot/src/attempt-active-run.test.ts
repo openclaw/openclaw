@@ -106,6 +106,12 @@ function createSteeringRecorder(
   };
 }
 
+function expectNotCalled(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
 describe("registerCopilotActiveRun", () => {
   afterEach(resetGlobalHookRunner);
   afterEach(() => clearRuntimeConfigSnapshot());
@@ -149,10 +155,7 @@ describe("registerCopilotActiveRun", () => {
         },
       });
       expect(result).toMatchObject({ ok: false, reason: "guarded_injection_unsupported" });
-      expect(queue).not.toHaveBeenCalled();
-      expect(claim).not.toHaveBeenCalled();
-      expect(harnessMocks.claimPendingAgentQuestionAnswer).not.toHaveBeenCalled();
-      expect(send).not.toHaveBeenCalled();
+      expectNotCalled(queue, claim, harnessMocks.claimPendingAgentQuestionAnswer, send);
       const sessionKey = "agent:main:session-1";
       const unscopedControl = await controlRealtimeVoiceAgentRun({
         sessionKey,
@@ -164,28 +167,17 @@ describe("registerCopilotActiveRun", () => {
         queued: false,
         reason: "guarded_injection_unsupported",
       });
-      expect(queue).not.toHaveBeenCalled();
-      expect(claim).not.toHaveBeenCalled();
-      expect(send).not.toHaveBeenCalled();
+      expectNotCalled(queue, claim, send);
       await expect(
         controlRealtimeVoiceAgentRun({ sessionKey, text: "status" }),
-      ).resolves.toMatchObject({
-        ok: true,
-        active: true,
-        mode: "status",
-      });
+      ).resolves.toMatchObject({ ok: true, active: true, mode: "status" });
       expect(runtime.queueAgentHarnessMessage("session-1", "unscoped change")).toBe(true);
       await vi.waitFor(() =>
         expect(send).toHaveBeenCalledExactlyOnceWith({ prompt: "unscoped change" }),
       );
       await expect(
         controlRealtimeVoiceAgentRun({ sessionKey, text: "cancel" }),
-      ).resolves.toMatchObject({
-        ok: true,
-        active: true,
-        mode: "cancel",
-        aborted: true,
-      });
+      ).resolves.toMatchObject({ ok: true, active: true, mode: "cancel", aborted: true });
       expect(abort).toHaveBeenCalledOnce();
       expect(send).toHaveBeenCalledOnce();
     } finally {
@@ -207,11 +199,7 @@ describe("registerCopilotActiveRun", () => {
 
       let deliverySettled = false;
       const delivery = handle
-        .queueMessage("change course", {
-          onQueueAccepted,
-          onQueueSettled,
-          waitForTranscriptCommit,
-        })
+        .queueMessage("change course", { onQueueAccepted, onQueueSettled, waitForTranscriptCommit })
         .then(() => {
           deliverySettled = true;
         });
@@ -450,8 +438,7 @@ describe("registerCopilotActiveRun", () => {
       }
       expect(onQueueSettled).toHaveBeenCalledOnce();
       expect(harnessMocks.claimPendingAgentQuestionAnswer).toHaveBeenCalledOnce();
-      expect(send).not.toHaveBeenCalled();
-      expect(waitForSdkUserPersisted).not.toHaveBeenCalled();
+      expectNotCalled(send, waitForSdkUserPersisted);
     },
   );
 
@@ -476,8 +463,7 @@ describe("registerCopilotActiveRun", () => {
         .catch((error: unknown) => error);
 
       await vi.waitFor(() => expect(recorder.resolveMessage).toHaveBeenCalledOnce());
-      expect(send).not.toHaveBeenCalled();
-      expect(onQueueAccepted).not.toHaveBeenCalled();
+      expectNotCalled(send, onQueueAccepted);
       stateChanged = true;
       resolution.resolve(recorder.message);
 
