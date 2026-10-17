@@ -306,6 +306,7 @@
     "!dist/extensions/comfy/**",
     "!dist/extensions/clickclack/**",
     "!dist/extensions/cloudflare-ai-gateway/**",
+    "!dist/extensions/cloudflare-clef/**",
     "!dist/extensions/codex/**",
     "!dist/extensions/copilot/**",
     "!dist/extensions/deepinfra/**",

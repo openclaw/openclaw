@@ -398,7 +398,9 @@ Each entry lists the package, distribution route, and description.
 
 ## Source checkout only
 
-3 plugins
+4 plugins
+
+- **[cloudflare-clef](/plugins/reference/cloudflare-clef)** (`@openclaw/cloudflare-clef`) - source checkout only. Typed text and image decisions through the authenticated Cloudflare CLI.
 
 - **[qa-channel](/plugins/reference/qa-channel)** (`@openclaw/qa-channel`) - source checkout only. OpenClaw QA synthetic channel plugin.
 
