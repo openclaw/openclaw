@@ -20,6 +20,37 @@ function provider(overrides: Partial<SessionCatalogProvider> = {}): SessionCatal
 }
 
 let activeProvider: SessionCatalogProvider;
+let blockedStart = vi.fn();
+const enabled = { gateway: { cliAgents: { enabled: true } } };
+const admin = { connId: "conn-1", connect: { scopes: ["operator.admin"] } };
+const request = (overrides = {}) => ({
+  catalogId: "codex",
+  agentId: "main",
+  cwd: process.cwd(),
+  ...overrides,
+});
+function launchContext(open = vi.fn(), agentId = "main", cwd = "/agent/workspace") {
+  return {
+    isTerminalEnabled: () => true,
+    terminalSessions: { open },
+    resolveTerminalLaunchPolicy: () => ({
+      ok: true,
+      plan: { agentId, cwd, shell: "/bin/zsh", args: [] },
+    }),
+    isConnectionActive: () => true,
+  };
+}
+function expectError(
+  respond: ReturnType<typeof vi.fn>,
+  code: string | undefined,
+  message: unknown,
+) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ ...(code ? { code } : {}), message }),
+  );
+}
 vi.mock("./session-catalog-provider-access.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-catalog-provider-access.js")>()),
   catalogRegistrationSnapshot: () => ({ providers: [activeProvider] }),
@@ -68,84 +99,56 @@ describe("sessions.catalog.startTerminal", () => {
   });
 
   beforeEach(() => {
-    activeProvider = provider();
+    blockedStart = vi.fn();
+    activeProvider = provider({ startTerminalSession: blockedStart });
   });
 
   it("honors the cliAgents opt-out before terminal start", async () => {
-    const startTerminalSession = vi.fn();
-    activeProvider = provider({ startTerminalSession });
+    const respond = await call(request(), { gateway: { cliAgents: { enabled: false } } });
 
-    const respond = await call(
-      {
-        catalogId: "codex",
-        agentId: "main",
-        cwd: process.cwd(),
-      },
-      { gateway: { cliAgents: { enabled: false } } },
-    );
-
-    expect(startTerminalSession).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.UNAVAILABLE,
-        message: "CLI agent terminal start is disabled; enable gateway.cliAgents.enabled and retry",
-      }),
+    expect(blockedStart).not.toHaveBeenCalled();
+    expectError(
+      respond,
+      ErrorCodes.UNAVAILABLE,
+      "CLI agent terminal start is disabled; enable gateway.cliAgents.enabled and retry",
     );
   });
 
   it("refuses terminal start when the terminal is disabled", async () => {
-    const startTerminalSession = vi.fn();
-    activeProvider = provider({ startTerminalSession });
-
     const respond = await call(
-      { catalogId: "codex", agentId: "main", cwd: process.cwd() },
-      { gateway: { cliAgents: { enabled: true } } },
+      request(),
+      enabled,
       { connId: "conn-1" },
       { isTerminalEnabled: () => false },
     );
 
-    expect(startTerminalSession).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.UNAVAILABLE,
-        message: "terminal is disabled; enable gateway.terminal.enabled and retry",
-      }),
+    expect(blockedStart).not.toHaveBeenCalled();
+    expectError(
+      respond,
+      ErrorCodes.UNAVAILABLE,
+      "terminal is disabled; enable gateway.terminal.enabled and retry",
     );
   });
 
   it("refuses missing local cwd instead of falling back to home", async () => {
-    const startTerminalSession = vi.fn();
-    activeProvider = provider({ startTerminalSession });
-
     const respond = await call(
-      { catalogId: "codex", agentId: "main", cwd: "relative/missing" },
-      { gateway: { cliAgents: { enabled: true } } },
+      request({ cwd: "relative/missing" }),
+      enabled,
       { connId: "conn-1" },
       { isTerminalEnabled: () => true, terminalSessions: {} },
     );
 
-    expect(startTerminalSession).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message:
-          "cwd must be an existing absolute directory; create or choose a worktree and retry",
-      }),
+    expect(blockedStart).not.toHaveBeenCalled();
+    expectError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      "cwd must be an existing absolute directory; create or choose a worktree and retry",
     );
   });
 
   it("rejects terminal start before resolving a disallowed agent's provider target", async () => {
-    const startTerminalSession = vi.fn();
-    activeProvider = provider({ startTerminalSession });
-
     const respond = await call(
-      { catalogId: "codex", agentId: "main", cwd: process.cwd() },
+      request(),
       {
         gateway: {
           cliAgents: { enabled: true },
@@ -173,14 +176,11 @@ describe("sessions.catalog.startTerminal", () => {
       { isTerminalEnabled: () => true, terminalSessions: {} },
     );
 
-    expect(startTerminalSession).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.FORBIDDEN,
-        message: expect.stringContaining('cannot create sessions for agent "main"'),
-      }),
+    expect(blockedStart).not.toHaveBeenCalled();
+    expectError(
+      respond,
+      ErrorCodes.FORBIDDEN,
+      expect.stringContaining('cannot create sessions for agent "main"'),
     );
   });
 
@@ -195,35 +195,19 @@ describe("sessions.catalog.startTerminal", () => {
     activeProvider = provider({ startTerminalSession });
 
     try {
-      const pending = startCall(
-        { catalogId: "codex", agentId: "main", cwd },
-        { gateway: { cliAgents: { enabled: true } } },
-        { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
-        {
-          isTerminalEnabled: () => true,
-          terminalSessions: { open },
-          resolveTerminalLaunchPolicy: () => ({
-            ok: true,
-            plan: { agentId: "main", cwd: "/agent/workspace", shell: "/bin/zsh", args: [] },
-          }),
-          isConnectionActive: () => true,
-        },
-      );
+      const pending = startCall(request({ cwd }), enabled, admin, launchContext(open));
       await vi.waitFor(() => expect(startTerminalSession).toHaveBeenCalledOnce());
       await fs.rm(cwd, { recursive: true });
       releasePlan();
       await pending.completion;
 
       expect(open).not.toHaveBeenCalled();
-      expect(pending.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.INVALID_REQUEST,
-          message: expect.stringContaining(
-            "cwd is no longer available; recreate or choose the worktree and retry",
-          ),
-        }),
+      expectError(
+        pending.respond,
+        ErrorCodes.INVALID_REQUEST,
+        expect.stringContaining(
+          "cwd is no longer available; recreate or choose the worktree and retry",
+        ),
       );
     } finally {
       releasePlan();
@@ -233,9 +217,9 @@ describe("sessions.catalog.startTerminal", () => {
 
   it("rejects local terminal start for a named profile before provider fallback", async () => {
     const cwd = process.cwd();
-    const startTerminalSession = vi.fn(async (request: { allowProcessHomeFallback?: boolean }) => {
+    const startTerminalSession = vi.fn(async (options: { allowProcessHomeFallback?: boolean }) => {
       throw new Error(
-        request.allowProcessHomeFallback === false
+        options.allowProcessHomeFallback === false
           ? "local Test sessions are unavailable in isolated state"
           : "unguarded local terminal start",
       );
@@ -253,29 +237,13 @@ describe("sessions.catalog.startTerminal", () => {
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       },
-      async () =>
-        await call(
-          { catalogId: "codex", agentId: "main", cwd },
-          { gateway: { cliAgents: { enabled: true } } },
-          { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
-          {
-            isTerminalEnabled: () => true,
-            terminalSessions: { open: vi.fn() },
-            resolveTerminalLaunchPolicy: () => ({
-              ok: true,
-              plan: { agentId: "main", cwd, shell: "/bin/zsh", args: [] },
-            }),
-            isConnectionActive: () => true,
-          },
-        ),
+      async () => await call(request({ cwd }), enabled, admin, launchContext(vi.fn(), "main", cwd)),
     );
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
+    expectError(
+      respond,
       undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("local Test sessions are unavailable in isolated state"),
-      }),
+      expect.stringContaining("local Test sessions are unavailable in isolated state"),
     );
   });
 
@@ -320,15 +288,9 @@ describe("sessions.catalog.startTerminal", () => {
         initialMessage: "Inspect the failing test",
       },
       config,
-      { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
+      admin,
       {
-        isTerminalEnabled: () => true,
-        terminalSessions: { open },
-        resolveTerminalLaunchPolicy: () => ({
-          ok: true,
-          plan: { agentId: "research", cwd: "/agent/workspace", shell: "/bin/zsh", args: [] },
-        }),
-        isConnectionActive: () => true,
+        ...launchContext(open, "research"),
         logGateway: { info: vi.fn() },
       },
     );
@@ -379,8 +341,8 @@ describe("sessions.catalog.startTerminal", () => {
 
     const respond = await call(
       { catalogId: "codex", hostId: "node:remote", agentId: "main", cwd: "/remote/worktree" },
-      { gateway: { cliAgents: { enabled: true } } },
-      { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
+      enabled,
+      admin,
       {
         isTerminalEnabled: () => true,
         terminalSessions: { open },
@@ -399,42 +361,28 @@ describe("sessions.catalog.startTerminal", () => {
       hostId: "node:remote",
     });
     expect(open).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("cannot start on the selected node"),
-      }),
+    expectError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      expect.stringContaining("cannot start on the selected node"),
     );
   });
 
   it("refuses sandboxed agents before requesting a terminal plan", async () => {
-    const startTerminalSession = vi.fn();
-    activeProvider = provider({ startTerminalSession });
-
-    const respond = await call(
-      { catalogId: "codex", agentId: "locked", cwd: process.cwd() },
-      { gateway: { cliAgents: { enabled: true } } },
-      { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
-      {
-        isTerminalEnabled: () => true,
-        terminalSessions: { open: vi.fn() },
-        resolveTerminalLaunchPolicy: () => ({
-          ok: false,
-          block: { kind: "sandboxed", agentId: "locked", mode: "all" },
-        }),
-      },
-    );
-
-    expect(startTerminalSession).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining('agent "locked" runs in a sandbox'),
+    const respond = await call(request({ agentId: "locked" }), enabled, admin, {
+      isTerminalEnabled: () => true,
+      terminalSessions: { open: vi.fn() },
+      resolveTerminalLaunchPolicy: () => ({
+        ok: false,
+        block: { kind: "sandboxed", agentId: "locked", mode: "all" },
       }),
+    });
+
+    expect(blockedStart).not.toHaveBeenCalled();
+    expectError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      expect.stringContaining('agent "locked" runs in a sandbox'),
     );
   });
 });

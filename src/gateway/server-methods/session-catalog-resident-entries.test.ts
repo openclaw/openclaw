@@ -54,6 +54,11 @@ function hosts(sessions: SessionCatalogSession[]): SessionCatalogHost[] {
   ];
 }
 
+const payload = (respond: ReturnType<typeof vi.fn>) => respond.mock.calls[0]?.[1];
+const firstHost = (respond: ReturnType<typeof vi.fn>) => payload(respond)?.catalogs[0]?.hosts[0];
+const replace = (entry: Partial<typeof original> & { label?: string }) =>
+  replaceSessionEntrySync({ agentId: "main", sessionKey: key }, { ...original, ...entry });
+
 async function withCatalog(
   run: (fixture: {
     list: () => Promise<ReturnType<typeof vi.fn>>;
@@ -130,20 +135,19 @@ it("reads clean local catalog entries from the resident owner without SQLite", a
     const retainedHosts = hosts([session({ pullRequest: { numbers: [1], state: "open" } })]);
     setList(async () => retainedHosts);
     const first = await list();
-    expect(first.mock.calls[0]?.[1]).toMatchObject({
+    expect(payload(first)).toMatchObject({
       catalogs: [{ hosts: [{ sessions: [{ sessionKey: key }] }] }],
     });
     const reads = (["get", "all", "iterate"] as const).map((method) =>
       vi.spyOn(StatementSync.prototype, method),
     );
     const second = await list();
-    expect(second.mock.calls[0]?.[1]).toEqual(first.mock.calls[0]?.[1]);
-    const firstHost = first.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0];
-    const secondHost = second.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0];
-    expect(secondHost).toBe(firstHost);
-    expect(Object.isFrozen(firstHost)).toBe(true);
-    expect(Object.isFrozen(firstHost.sessions)).toBe(true);
-    expect(Object.isFrozen(firstHost.sessions[0])).toBe(true);
+    expect(payload(second)).toEqual(payload(first));
+    const originalHost = firstHost(first);
+    expect(firstHost(second)).toBe(originalHost);
+    for (const value of [originalHost, originalHost.sessions, originalHost.sessions[0]]) {
+      expect(Object.isFrozen(value)).toBe(true);
+    }
     expect(
       reads.flatMap((read) =>
         read.mock.contexts.map((statement) =>
@@ -154,42 +158,33 @@ it("reads clean local catalog entries from the resident owner without SQLite", a
     retainedHosts[0]!.label = "Updated provider label";
     retainedHosts[0]!.sessions[0]!.pullRequest!.numbers.push(2);
     const mutatedSource = await list();
-    const mutatedHost = mutatedSource.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0];
-    expect(mutatedHost).not.toBe(firstHost);
-    expect(mutatedHost.label).toBe("Updated provider label");
-    expect(mutatedHost.sessions[0]?.pullRequest?.numbers).toEqual([1, 2]);
-    expect(firstHost.label).toBe("Fixture");
-    expect(firstHost.sessions[0]?.pullRequest?.numbers).toEqual([1]);
+    const mutatedHost = firstHost(mutatedSource);
+    expect(mutatedHost).not.toBe(originalHost);
+    expect(mutatedHost).toMatchObject({
+      label: "Updated provider label",
+      sessions: [{ pullRequest: { numbers: [1, 2] } }],
+    });
+    expect(originalHost).toMatchObject({
+      label: "Fixture",
+      sessions: [{ pullRequest: { numbers: [1] } }],
+    });
     setList(async () => {
       const freshHosts = hosts([session({ pullRequest: { numbers: [1, 2], state: "open" } })]);
       freshHosts[0]!.label = "Updated provider label";
       return freshHosts;
     });
     const freshSource = await list();
-    expect(freshSource.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).toBe(mutatedHost);
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: key },
-      {
-        ...original,
-        updatedAt: 2,
-        sessionId: "replacement-instance",
-      },
-    );
+    expect(firstHost(freshSource)).toBe(mutatedHost);
+    replace({ updatedAt: 2, sessionId: "replacement-instance" });
     const replaced = await list();
-    expect(replaced.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).not.toBe(mutatedHost);
-    expect(
-      replaced.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0]?.createdActor,
-    ).toMatchObject(original.createdActor);
-    expect(firstHost.sessions[0]?.createdActor).toMatchObject(original.createdActor);
+    expect(firstHost(replaced)).not.toBe(mutatedHost);
+    expect(firstHost(replaced).sessions[0]?.createdActor).toMatchObject(original.createdActor);
+    expect(originalHost.sessions[0]?.createdActor).toMatchObject(original.createdActor);
     setList(async () => hosts([session({ name: "Updated provider title" })]));
     const renamed = await list();
-    expect(renamed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).not.toBe(
-      replaced.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0],
-    );
-    expect(renamed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0]?.name).toBe(
-      "Updated provider title",
-    );
-    expect(firstHost.sessions[0]?.name).toBeUndefined();
+    expect(firstHost(renamed)).not.toBe(firstHost(replaced));
+    expect(firstHost(renamed).sessions[0]?.name).toBe("Updated provider title");
+    expect(originalHost.sessions[0]?.name).toBeUndefined();
   });
 });
 
@@ -215,7 +210,7 @@ it.each(["planning", "delivery"])(
           invalidate();
         }
         const response = await list();
-        expect(response.mock.calls[0]?.[1]).toEqual(warm.mock.calls[0]?.[1]);
+        expect(payload(response)).toEqual(payload(warm));
         expect(projection.materializedCount).toBe(before);
         expect(projection.dirtyRowCount).toBeGreaterThan(0);
       },
@@ -234,30 +229,20 @@ it("reuses unchanged agent selections across catalog polls and refreshes publish
         label: "Work",
         createdActor: { type: "system" as const, id: "work-owner" },
       };
-      replaceSessionEntrySync({ agentId: "main", sessionKey: key }, { ...original, label: "Main" });
+      replace({ label: "Main" });
       replaceSessionEntrySync({ agentId: "work", sessionKey: workKey }, workEntry);
       const planningRevisions: Array<object | undefined> = [];
       setList(async ({ sessionEntries }) => {
         planningRevisions.push(sessionEntries?.revision);
-        return [
-          {
-            hostId: "gateway:fixture",
-            label: "Fixture",
-            kind: "gateway",
-            connected: true,
-            sessions: (sessionEntries?.entriesForCatalog?.() ?? []).map(
-              ({ agentId, sessionKey, entry }) => ({
-                threadId: `${agentId}:${entry.sessionId}`,
-                sessionKey,
-                title: entry.label,
-                status: "stored",
-                archived: false,
-                canContinue: true,
-                canArchive: false,
-              }),
-            ),
-          },
-        ];
+        return hosts(
+          (sessionEntries?.entriesForCatalog?.() ?? []).map(({ agentId, sessionKey, entry }) =>
+            session({
+              threadId: `${agentId}:${entry.sessionId}`,
+              sessionKey,
+              title: entry.label,
+            }),
+          ),
+        );
       });
       const mainSession = {
         threadId: `main:${original.sessionId}`,
@@ -272,7 +257,7 @@ it("reuses unchanged agent selections across catalog polls and refreshes publish
         createdActor: workEntry.createdActor,
       };
       const first = await list();
-      expect(first.mock.calls[0]?.[1]).toMatchObject({
+      expect(payload(first)).toMatchObject({
         catalogs: [{ hosts: [{ sessions: [mainSession, workSession] }] }],
       });
       const selectEntries = projection.selectEntries.bind(projection);
@@ -285,23 +270,20 @@ it("reuses unchanged agent selections across catalog polls and refreshes publish
         return rows;
       });
       const second = await list();
-      expect(second.mock.calls[0]?.[1]).toEqual(first.mock.calls[0]?.[1]);
+      expect(payload(second)).toEqual(payload(first));
       expect(broadRowsRead).toBe(0);
       expect(planningRevisions[0]).toBeDefined();
       expect(planningRevisions[1]).toBe(planningRevisions[0]);
 
       sessionChanges.emit({ all: true, scope: "catalog" });
       const catalogRefresh = await list();
-      expect(catalogRefresh.mock.calls[0]?.[1]).toEqual(first.mock.calls[0]?.[1]);
+      expect(payload(catalogRefresh)).toEqual(payload(first));
       expect(broadRowsRead).toBe(0);
       expect(planningRevisions[2]).toBe(planningRevisions[0]);
 
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: key },
-        { ...original, updatedAt: 2, label: "Updated main" },
-      );
+      replace({ updatedAt: 2, label: "Updated main" });
       const updated = await list();
-      expect(updated.mock.calls[0]?.[1]).toMatchObject({
+      expect(payload(updated)).toMatchObject({
         catalogs: [
           { hosts: [{ sessions: [{ ...mainSession, title: "Updated main" }, workSession] }] },
         ],
@@ -311,7 +293,7 @@ it("reuses unchanged agent selections across catalog polls and refreshes publish
       broadRowsRead = 0;
 
       const repeated = await list();
-      expect(repeated.mock.calls[0]?.[1]).toEqual(updated.mock.calls[0]?.[1]);
+      expect(payload(repeated)).toEqual(payload(updated));
       expect(broadRowsRead).toBe(0);
       expect(planningRevisions[4]).toBe(planningRevisions[3]);
     },
@@ -334,7 +316,7 @@ it("bounds catalog result delivery to returned adoption keys", async () => {
         return hosts([session(), session({ threadId: "blank-key-thread", sessionKey: " " })]);
       });
       const respond = await list();
-      const sessions = respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions;
+      const sessions = firstHost(respond).sessions;
       expect(sessions).toMatchObject([
         { sessionKey: key, createdActor: original.createdActor },
         { threadId: "blank-key-thread" },
@@ -382,7 +364,7 @@ it("bounds roster projections while delivering adopted sessions without an impli
         return hosts(keys.map((sessionKey) => session({ threadId: sessionKey, sessionKey })));
       });
       const respond = await list();
-      const sessions = respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions;
+      const sessions = firstHost(respond).sessions;
       expect(sessions).toHaveLength(sessionCount);
       expect(sessions).toMatchObject(
         keys.map((sessionKey) => ({
@@ -411,18 +393,14 @@ it("does not attach a replacement session identity after provider enumeration yi
     });
     const pending = list();
     await started.promise;
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: key },
-      {
-        ...original,
-        sessionId: "replacement-instance",
-        updatedAt: 2,
-        createdActor: { type: "system", id: "replacement-owner" },
-      },
-    );
+    replace({
+      sessionId: "replacement-instance",
+      updatedAt: 2,
+      createdActor: { type: "system", id: "replacement-owner" },
+    });
     release.resolve();
     const respond = await pending;
-    const returnedSession = respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0];
+    const returnedSession = firstHost(respond).sessions[0];
     expect(returnedSession).toMatchObject({ threadId: "native-thread" });
     expect(returnedSession).not.toHaveProperty("sessionKey");
     expect(returnedSession).not.toHaveProperty("createdActor");
