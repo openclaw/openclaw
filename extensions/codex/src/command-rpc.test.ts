@@ -33,6 +33,7 @@ import {
   prepareCodexControlSessionAuth,
   type CodexControlRequestOptions,
 } from "./command-rpc.js";
+import { createThreadResumeResponse } from "./commands.test-support.js";
 
 const requestCodexAppServerJsonMock = vi.hoisted(() => vi.fn());
 const withCodexAppServerJsonClientMock = vi.hoisted(() => vi.fn());
@@ -50,29 +51,12 @@ describe("Codex command RPC helpers", () => {
   let harness: ReturnType<typeof createClientHarness>;
   let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
   const sessionKey = "agent:main:control";
-  const resumeResponse = {
-    thread: {
-      id: "thread-1",
-      sessionId: "session-1",
-      projectId: null,
-      cliVersion: "0.150.1",
-      createdAt: 1,
-      updatedAt: 1,
-      cwd: "/repo",
-      ephemeral: false,
-      modelProvider: "openai",
-      preview: "",
-      source: "appServer",
-      status: { type: "idle" },
-      turns: [],
-    },
+  const resumeResponse = createThreadResumeResponse({
+    threadId: "thread-1",
+    sessionId: "session-1",
+    cliVersion: "0.150.1",
     model: "gpt-5.5",
-    modelProvider: "openai",
-    cwd: "/repo",
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
-  };
+  });
 
   beforeEach(async () => {
     previousPluginRegistry = getActivePluginRegistry();
@@ -105,11 +89,7 @@ describe("Codex command RPC helpers", () => {
           abort: vi.fn(),
         }),
     );
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionKey,
-      entry: { sessionId: "session-1", updatedAt: Date.now() },
-    });
+    await writeSession({ sessionId: "session-1", updatedAt: Date.now() });
   });
 
   afterEach(async () => {
@@ -124,7 +104,6 @@ describe("Codex command RPC helpers", () => {
     clearRuntimeAuthProfileStoreSnapshots();
     clearRuntimeConfigSnapshot();
     clearSessionStoreCacheForTest();
-    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
@@ -155,6 +134,13 @@ describe("Codex command RPC helpers", () => {
         ...options,
       },
     );
+  }
+
+  function writeSession(
+    entry: Parameters<typeof upsertSessionEntry>[0]["entry"],
+    storePath?: string,
+  ) {
+    return upsertSessionEntry({ agentId: "main", sessionKey, storePath, entry });
   }
 
   function acquiredOptions() {
@@ -304,15 +290,11 @@ describe("Codex command RPC helpers", () => {
         order: { openai: ["openai:old", "openai:ready"] },
         usageStats: { "openai:old": { cooldownUntil: Date.now() + 60_000 } },
       });
-      await upsertSessionEntry({
-        agentId: "main",
-        sessionKey,
-        entry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-          authProfileOverride: "openai:old",
-          authProfileOverrideSource: "auto",
-        },
+      await writeSession({
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        authProfileOverride: "openai:old",
+        authProfileOverrideSource: "auto",
       });
       const onResponse = vi.fn();
 
@@ -350,23 +332,19 @@ describe("Codex command RPC helpers", () => {
       },
       order: { openai: ["openai:first", "openai:pinned"] },
     });
-    await upsertSessionEntry({
-      agentId: "main",
-      storePath: explicitStorePath,
-      sessionKey,
-      entry: {
+    await writeSession(
+      {
         sessionId: "session-1",
         updatedAt: Date.now(),
         authProfileOverride: "openai:pinned",
         authProfileOverrideSource: "user",
       },
-    });
-    await upsertSessionEntry({
-      agentId: "main",
-      storePath: configuredStorePath,
-      sessionKey,
-      entry: { sessionId: "unrelated-session", updatedAt: Date.now() },
-    });
+      explicitStorePath,
+    );
+    await writeSession(
+      { sessionId: "unrelated-session", updatedAt: Date.now() },
+      configuredStorePath,
+    );
 
     await resume({ storePath: explicitStorePath, authProfileId: "openai:first" });
 
@@ -378,12 +356,7 @@ describe("Codex command RPC helpers", () => {
 
   it("rejects a mismatched admitted row before auth or client acquisition", async () => {
     const storePath = path.join(tempDir, "authority-mismatched", "sessions.json");
-    await upsertSessionEntry({
-      agentId: "main",
-      storePath,
-      sessionKey,
-      entry: { sessionId: "another-session", updatedAt: Date.now() },
-    });
+    await writeSession({ sessionId: "another-session", updatedAt: Date.now() }, storePath);
 
     await expect(resume({ storePath })).rejects.toThrow(
       "Codex session generation is no longer current: session-1",

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createEmptyPluginRegistry,
@@ -65,7 +66,6 @@ afterEach(async () => {
   vi.useRealTimers();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
-  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   clearRuntimeAuthProfileStoreSnapshots();
@@ -73,6 +73,14 @@ afterEach(async () => {
   clearSessionStoreCacheForTest();
   await fs.rm(root, { recursive: true, force: true });
 });
+
+function accountToken(accountId: string) {
+  return `e30.${Buffer.from(
+    JSON.stringify({
+      "https://api.openai.com/auth": { chatgpt_account_id: accountId },
+    }),
+  ).toString("base64url")}.test-signature`;
+}
 
 async function fixture(stableAccount = true) {
   const agentDir = path.join(root, "agents", "second", "agent");
@@ -83,13 +91,7 @@ async function fixture(stableAccount = true) {
     credential: {
       type: "oauth",
       provider: "openai",
-      access: stableAccount
-        ? "test-access-token"
-        : `e30.${Buffer.from(
-            JSON.stringify({
-              "https://api.openai.com/auth": { chatgpt_account_id: "test-second-account" },
-            }),
-          ).toString("base64url")}.test-signature`,
+      access: stableAccount ? "test-access-token" : accountToken("test-second-account"),
       refresh: "test-refresh-token",
       expires: Date.now() + 24 * 60 * 60_000,
       ...(stableAccount ? { accountId: "test-second-account" } : {}),
@@ -140,20 +142,21 @@ async function fixture(stableAccount = true) {
     .spyOn(sharedClients, "releaseLeasedSharedCodexAppServerClient")
     .mockReturnValue(true);
   const request = vi.spyOn(harness.client, "request").mockResolvedValue({ apps: [] });
-  return { deps, ctx, harness, acquire, release, request, current, agentDir, workspaceDir };
+  const run = <T>(
+    callback: Parameters<typeof withCodexPluginCommandContext<T>>[1],
+    pluginConfig: Parameters<typeof withCodexPluginCommandContext>[0]["pluginConfig"] = {},
+  ) => withCodexPluginCommandContext({ deps, ctx, pluginConfig }, callback);
+  return { deps, ctx, harness, acquire, release, request, current, agentDir, workspaceDir, run };
 }
 
 describe("Codex plugin command context", () => {
   it("can inspect a runtime without plugin management configuration", async () => {
     const test = await fixture();
     test.deps.codexPluginsManagementIo = undefined;
-    const current = await withCodexPluginCommandContext(
-      { ...test, pluginConfig: {} },
-      async (context) => {
-        await context.validateCurrent();
-        return context.current;
-      },
-    );
+    const current = await test.run(async (context) => {
+      await context.validateCurrent();
+      return context.current;
+    });
     expect(current).toEqual({});
     expect(test.release).toHaveBeenCalledOnce();
   });
@@ -171,11 +174,7 @@ describe("Codex plugin command context", () => {
       if (!store || profile?.type !== "oauth") {
         throw new Error("Expected the prepared fixture profile");
       }
-      profile.access = `e30.${Buffer.from(
-        JSON.stringify({
-          "https://api.openai.com/auth": { chatgpt_account_id: "test-replacement-account" },
-        }),
-      ).toString("base64url")}.test-signature`;
+      profile.access = accountToken("test-replacement-account");
       await upsertAuthProfileAsync({
         agentDir: test.agentDir,
         profileId: "openai:second",
@@ -183,9 +182,9 @@ describe("Codex plugin command context", () => {
       });
       return auth;
     });
-    await expect(
-      withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async () => "stale result"),
-    ).rejects.toThrow("Codex account, conversation, or plugin policy changed");
+    await expect(test.run(async () => "stale result")).rejects.toThrow(
+      "Codex account, conversation, or plugin policy changed",
+    );
     expect(test.acquire).not.toHaveBeenCalled();
   });
 
@@ -220,9 +219,7 @@ describe("Codex plugin command context", () => {
       return { apps: [] };
     });
     await expect(
-      withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) =>
-        context.request("app/installed", { forceRefresh: false }),
-      ),
+      test.run(async (context) => context.request("app/installed", { forceRefresh: false })),
     ).resolves.toEqual({ apps: [] });
     expect(test.request).toHaveBeenCalledWith(
       "account/login/start",
@@ -247,11 +244,14 @@ describe("Codex plugin command context", () => {
       // Install the clock before acquisition can create a deadline; leave filesystem work real.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       let failure: unknown;
-      const pending = withCodexPluginCommandContext({ ...test, pluginConfig }, async (context) =>
-        context.request("app/installed", { forceRefresh: false }),
-      ).catch((error: unknown) => {
-        failure = error;
-      });
+      const pending = test
+        .run(
+          async (context) => context.request("app/installed", { forceRefresh: false }),
+          pluginConfig,
+        )
+        .catch((error: unknown) => {
+          failure = error;
+        });
       try {
         const startup = JSON.parse(await test.harness.waitForWrite(0));
         expect(startup.method).toBe("account/read");
@@ -276,29 +276,21 @@ describe("Codex plugin command context", () => {
     const test = await fixture();
     test.request.mockRestore();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-    let finishAcquisition!: (client: typeof test.harness.client) => void;
-    const acquired = new Promise<typeof test.harness.client>((resolve) => {
-      finishAcquisition = resolve;
-    });
-    let signalAcquiring!: () => void;
-    const acquiring = new Promise<void>((resolve) => {
-      signalAcquiring = resolve;
-    });
+    const acquired = createDeferred<typeof test.harness.client>();
+    const acquiring = createDeferred<void>();
     test.acquire.mockImplementation(() => {
-      signalAcquiring();
-      return acquired;
+      acquiring.resolve();
+      return acquired.promise;
     });
     let failure: unknown;
     const run = vi.fn(async () => "unused");
-    const pending = withCodexPluginCommandContext({ ...test, pluginConfig: {} }, run).catch(
-      (error: unknown) => {
-        failure = error;
-      },
-    );
+    const pending = test.run(run).catch((error: unknown) => {
+      failure = error;
+    });
     try {
-      await acquiring;
+      await acquiring.promise;
       await vi.advanceTimersByTimeAsync(600_001);
-      finishAcquisition(test.harness.client);
+      acquired.resolve(test.harness.client);
       await vi.advanceTimersByTimeAsync(0);
       expect(failure).toBeInstanceOf(Error);
       expect(failure).toMatchObject({ name: "AgentHarnessPreflightError" });
@@ -306,7 +298,7 @@ describe("Codex plugin command context", () => {
       expect(run).not.toHaveBeenCalled();
       expect(test.release).toHaveBeenCalledOnce();
     } finally {
-      finishAcquisition(test.harness.client);
+      acquired.resolve(test.harness.client);
       test.harness.client.close();
       await pending;
     }
@@ -323,12 +315,11 @@ describe("Codex plugin command context", () => {
       test.request.mockRestore();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       let failure: unknown;
-      const pending = withCodexPluginCommandContext(
-        { ...test, pluginConfig: {} },
-        async (context) => context.request("app/installed", { forceRefresh: true }),
-      ).catch((error: unknown) => {
-        failure = error;
-      });
+      const pending = test
+        .run(async (context) => context.request("app/installed", { forceRefresh: true }))
+        .catch((error: unknown) => {
+          failure = error;
+        });
       try {
         const startup = JSON.parse(await test.harness.waitForWrite(0));
         test.harness.send({ id: startup.id, result: {} });
@@ -390,10 +381,7 @@ describe("Codex plugin command context", () => {
           },
         },
       );
-      const threadId = await withCodexPluginCommandContext(
-        { ...test, pluginConfig: {} },
-        async (context) => context.threadId,
-      );
+      const threadId = await test.run(async (context) => context.threadId);
       expect(threadId).toBe(sameClient ? "owned-thread" : undefined);
     },
   );
@@ -444,7 +432,7 @@ describe("Codex plugin command context", () => {
       return { apps: [] };
     });
     await expect(
-      withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) => {
+      test.run(async (context) => {
         appCacheKey = context.appCacheKey;
         await refreshCodexAppRuntimeState({
           request: context.request,

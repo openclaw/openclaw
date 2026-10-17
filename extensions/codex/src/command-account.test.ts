@@ -11,12 +11,19 @@ import {
   createDeps,
   installCodexCommandMocks,
   type SafeCodexControlRequestFn,
+  oauthProfile,
   supervisedTestBinding,
   useCodexCommandTestState,
   writeTestBinding,
 } from "./commands.test-support.js";
 
 type AccountRequest = SafeCodexControlRequestFn;
+function account(safeCodexControlRequest: SafeCodexControlRequestFn, pluginConfig = {}) {
+  return createCodexCommand({
+    pluginConfig,
+    deps: installCodexCommandMocks(createDeps({ safeCodexControlRequest })),
+  }).handler(createContext("account"));
+}
 
 describe("Codex account workspace identity", () => {
   let tempDir: string;
@@ -36,12 +43,10 @@ describe("Codex account workspace identity", () => {
     const profiles: AuthProfileStore["profiles"] = {};
     for (const name of includeWork ? ["personal", "work"] : ["personal"]) {
       profiles[`openai:${name}`] = {
-        type: "oauth",
-        provider: "openai",
+        ...oauthProfile("operator@example.test", Date.now()),
         access: `${name}-access`,
         refresh: `${name}-refresh`,
         expires: Date.now() + 60_000,
-        email: "operator@example.test",
         accountId: `workspace-${name}`,
         displayName: name === "personal" ? "Personal" : "Work",
       };
@@ -95,9 +100,7 @@ describe("Codex account workspace identity", () => {
     );
     const safeCodexControlRequest = accountRequests("operator@example.test");
 
-    const result = await createCodexCommand({
-      deps: installCodexCommandMocks(createDeps({ safeCodexControlRequest })),
-    }).handler(createContext("account"));
+    const result = await account(safeCodexControlRequest);
 
     expect(result.text).toContain("Subscription  Work");
     expect(result.text).toContain("Weekly 100% · Short-term 17%");
@@ -126,10 +129,7 @@ describe("Codex account workspace identity", () => {
     }
     const safeCodexControlRequest = accountRequests(email);
 
-    const result = await createCodexCommand({
-      pluginConfig,
-      deps: installCodexCommandMocks(createDeps({ safeCodexControlRequest })),
-    }).handler(createContext("account"));
+    const result = await account(safeCodexControlRequest, pluginConfig);
 
     expect(result.text).toContain(`Account: ${email}`);
     expect(result.text).toContain("Your weekly Codex usage limit is reached.");
@@ -161,9 +161,7 @@ describe("Codex account workspace identity", () => {
       },
     );
 
-    const result = await createCodexCommand({
-      deps: installCodexCommandMocks(createDeps({ safeCodexControlRequest })),
-    }).handler(createContext("account"));
+    const result = await account(safeCodexControlRequest);
 
     expect(result.text).toBe(`Account: ${selectedError}\n\nRate limits: ${selectedError}`);
     expect(otherAccountRequests).not.toHaveBeenCalled();
@@ -185,12 +183,8 @@ describe("Codex account workspace identity", () => {
           },
         ]),
       ),
-      order: {
-        openai: ["openai:fresh@example.com", "openai:stale@example.com"],
-      },
-      lastGood: {
-        openai: "openai:stale@example.com",
-      },
+      order: { openai: ["openai:fresh@example.com", "openai:stale@example.com"] },
+      lastGood: { openai: "openai:stale@example.com" },
     });
 
     const safeCodexControlRequest = vi
@@ -204,9 +198,7 @@ describe("Codex account workspace identity", () => {
         error: "rate limits unavailable",
       });
 
-    const result = await createCodexCommand({
-      deps: installCodexCommandMocks(createDeps({ safeCodexControlRequest })),
-    }).handler(createContext("account"));
+    const result = await account(safeCodexControlRequest);
 
     expect(result.text).toContain("Rate limits: rate limits unavailable");
     expect(result.text).toContain(

@@ -9,19 +9,13 @@ import { handleCodexSubcommand } from "./command-handlers.js";
 import { createCodexCommandHost } from "./command-host.test-support.js";
 import type { CodexPluginsManagementIO } from "./command-plugin-config.js";
 import { handleCodexPluginsSubcommand } from "./command-plugins-management.js";
+import { fakeCtx } from "./command-plugins-management.test-support.js";
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
 import * as commandRuntime from "./command-plugins-runtime.js";
 
 const ctx: PluginCommandContext = {
-  config: {},
-  channel: "test",
-  isAuthorizedSender: true,
-  senderIsOwner: true,
+  ...fakeCtx,
   commandBody: "/codex plugins status notes@company-tools",
-  args: "",
-  getCurrentConversationBinding: async () => null,
-  requestConversationBinding: async () => ({ status: "error", message: "unused" }),
-  detachConversationBinding: async () => ({ removed: false }),
 };
 
 afterEach(() => {
@@ -107,15 +101,7 @@ function fixture(
           },
         };
       case "experimentalFeature/list":
-        return {
-          data: [
-            {
-              name: "apps",
-              enabled: options.appsFeature ?? true,
-            },
-          ],
-          nextCursor: null,
-        };
+        return { data: [{ name: "apps", enabled: options.appsFeature ?? true }], nextCursor: null };
       case "plugin/installed":
         return {
           marketplaces: options.catalog

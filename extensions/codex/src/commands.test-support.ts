@@ -69,6 +69,8 @@ export function useCodexCommandTestState(options: {
 
 export function createThreadResumeResponse(params: {
   threadId: string;
+  sessionId?: string;
+  cliVersion?: string;
   cwd?: string;
   model?: string;
   modelProvider?: string;
@@ -79,9 +81,9 @@ export function createThreadResumeResponse(params: {
   return {
     thread: {
       id: params.threadId,
-      sessionId: params.threadId,
+      sessionId: params.sessionId ?? params.threadId,
       projectId: null,
-      cliVersion: CODEX_APP_SERVER_VERSION,
+      cliVersion: params.cliVersion ?? CODEX_APP_SERVER_VERSION,
       createdAt: 1,
       updatedAt: 1,
       cwd,
@@ -166,8 +168,13 @@ function restoreCodexCommandMocks(): void {
   defaultCommandFixture = undefined;
 }
 
-function currentCommandFixture(): CodexCommandDeps | undefined {
+function fixture(): CodexCommandDeps | undefined {
   return commandFixture.getStore() ?? defaultCommandFixture;
+}
+
+function trackMock<T extends { mockRestore: () => void }>(mock: T): T {
+  commandMocks.add(mock);
+  return mock;
 }
 
 function ensureCodexCommandMocks(): void {
@@ -175,7 +182,7 @@ function ensureCodexCommandMocks(): void {
     return;
   }
   // Capture before spying so omitted fixture functions still take the real path.
-  const original = {
+  const real = {
     codexControlRequest: commandRpc.codexControlRequest,
     listCodexAppServerModels: models.listAllCodexAppServerModels,
     readCodexStatusProbes: commandRpc.readCodexStatusProbes,
@@ -191,129 +198,53 @@ function ensureCodexCommandMocks(): void {
     steerCodexConversationTurn: conversationControl.steerCodexConversationTurn,
     stopCodexConversationTurn: conversationControl.stopCodexConversationTurn,
   };
-  commandMocks.add(
-    vi
-      .spyOn(commandRpc, "codexControlRequest")
-      .mockImplementation((...args) =>
-        (currentCommandFixture()?.codexControlRequest ?? original.codexControlRequest)(...args),
-      ),
+  trackMock(vi.spyOn(commandRpc, "codexControlRequest")).mockImplementation((...args) =>
+    (fixture()?.codexControlRequest ?? real.codexControlRequest)(...args),
   );
-  commandMocks.add(
-    vi
-      .spyOn(models, "listAllCodexAppServerModels")
-      .mockImplementation((...args) =>
-        (currentCommandFixture()?.listCodexAppServerModels ?? original.listCodexAppServerModels)(
-          ...args,
-        ),
-      ),
+  trackMock(vi.spyOn(models, "listAllCodexAppServerModels")).mockImplementation((...args) =>
+    (fixture()?.listCodexAppServerModels ?? real.listCodexAppServerModels)(...args),
   );
-  commandMocks.add(
-    vi
-      .spyOn(commandRpc, "readCodexStatusProbes")
-      .mockImplementation((...args) =>
-        (currentCommandFixture()?.readCodexStatusProbes ?? original.readCodexStatusProbes)(...args),
-      ),
+  trackMock(vi.spyOn(commandRpc, "readCodexStatusProbes")).mockImplementation((...args) =>
+    (fixture()?.readCodexStatusProbes ?? real.readCodexStatusProbes)(...args),
   );
-  commandMocks.add(
-    vi
-      .spyOn(commandRpc, "requestOptions")
-      .mockImplementation((...args) =>
-        (currentCommandFixture()?.requestOptions ?? original.requestOptions)(...args),
-      ),
+  trackMock(vi.spyOn(commandRpc, "requestOptions")).mockImplementation((...args) =>
+    (fixture()?.requestOptions ?? real.requestOptions)(...args),
   );
-  commandMocks.add(
-    vi
-      .spyOn(commandRpc, "safeCodexControlRequest")
-      .mockImplementation((...args) =>
-        (currentCommandFixture()?.safeCodexControlRequest ?? original.safeCodexControlRequest)(
-          ...args,
-        ),
-      ),
+  trackMock(vi.spyOn(commandRpc, "safeCodexControlRequest")).mockImplementation((...args) =>
+    (fixture()?.safeCodexControlRequest ?? real.safeCodexControlRequest)(...args),
   );
-  commandMocks.add(
-    vi
-      .spyOn(computerUse, "readCodexComputerUseStatus")
-      .mockImplementation((...args) =>
-        (
-          currentCommandFixture()?.readCodexComputerUseStatus ?? original.readCodexComputerUseStatus
-        )(...args),
-      ),
+  trackMock(vi.spyOn(computerUse, "readCodexComputerUseStatus")).mockImplementation((...args) =>
+    (fixture()?.readCodexComputerUseStatus ?? real.readCodexComputerUseStatus)(...args),
   );
-  commandMocks.add(
-    vi
-      .spyOn(computerUse, "installCodexComputerUse")
-      .mockImplementation((...args) =>
-        (currentCommandFixture()?.installCodexComputerUse ?? original.installCodexComputerUse)(
-          ...args,
-        ),
-      ),
+  trackMock(vi.spyOn(computerUse, "installCodexComputerUse")).mockImplementation((...args) =>
+    (fixture()?.installCodexComputerUse ?? real.installCodexComputerUse)(...args),
   );
-  commandMocks.add(
-    vi
-      .spyOn(conversationBindingData, "resolveCodexDefaultWorkspaceDir")
-      .mockImplementation((...args) =>
-        (
-          currentCommandFixture()?.resolveCodexDefaultWorkspaceDir ??
-          original.resolveCodexDefaultWorkspaceDir
-        )(...args),
-      ),
+  trackMock(
+    vi.spyOn(conversationBindingData, "resolveCodexDefaultWorkspaceDir"),
+  ).mockImplementation((...args) =>
+    (fixture()?.resolveCodexDefaultWorkspaceDir ?? real.resolveCodexDefaultWorkspaceDir)(...args),
   );
-  commandMocks.add(
-    vi
-      .spyOn(conversationControl, "readCodexConversationActiveTurn")
-      .mockImplementation((...args) =>
-        (
-          currentCommandFixture()?.readCodexConversationActiveTurn ??
-          original.readCodexConversationActiveTurn
-        )(...args),
-      ),
+  trackMock(vi.spyOn(conversationControl, "readCodexConversationActiveTurn")).mockImplementation(
+    (...args) =>
+      (fixture()?.readCodexConversationActiveTurn ?? real.readCodexConversationActiveTurn)(...args),
   );
-  commandMocks.add(
-    vi
-      .spyOn(conversationControl, "setCodexConversationFastMode")
-      .mockImplementation((...args) =>
-        (
-          currentCommandFixture()?.setCodexConversationFastMode ??
-          original.setCodexConversationFastMode
-        )(...args),
-      ),
+  trackMock(vi.spyOn(conversationControl, "setCodexConversationFastMode")).mockImplementation(
+    (...args) =>
+      (fixture()?.setCodexConversationFastMode ?? real.setCodexConversationFastMode)(...args),
   );
-  commandMocks.add(
-    vi
-      .spyOn(conversationControl, "setCodexConversationModel")
-      .mockImplementation((...args) =>
-        (currentCommandFixture()?.setCodexConversationModel ?? original.setCodexConversationModel)(
-          ...args,
-        ),
-      ),
+  trackMock(vi.spyOn(conversationControl, "setCodexConversationModel")).mockImplementation(
+    (...args) => (fixture()?.setCodexConversationModel ?? real.setCodexConversationModel)(...args),
   );
-  commandMocks.add(
-    vi
-      .spyOn(conversationControl, "setCodexConversationPermissions")
-      .mockImplementation((...args) =>
-        (
-          currentCommandFixture()?.setCodexConversationPermissions ??
-          original.setCodexConversationPermissions
-        )(...args),
-      ),
+  trackMock(vi.spyOn(conversationControl, "setCodexConversationPermissions")).mockImplementation(
+    (...args) =>
+      (fixture()?.setCodexConversationPermissions ?? real.setCodexConversationPermissions)(...args),
   );
-  commandMocks.add(
-    vi
-      .spyOn(conversationControl, "steerCodexConversationTurn")
-      .mockImplementation((...args) =>
-        (
-          currentCommandFixture()?.steerCodexConversationTurn ?? original.steerCodexConversationTurn
-        )(...args),
-      ),
+  trackMock(vi.spyOn(conversationControl, "steerCodexConversationTurn")).mockImplementation(
+    (...args) =>
+      (fixture()?.steerCodexConversationTurn ?? real.steerCodexConversationTurn)(...args),
   );
-  commandMocks.add(
-    vi
-      .spyOn(conversationControl, "stopCodexConversationTurn")
-      .mockImplementation((...args) =>
-        (currentCommandFixture()?.stopCodexConversationTurn ?? original.stopCodexConversationTurn)(
-          ...args,
-        ),
-      ),
+  trackMock(vi.spyOn(conversationControl, "stopCodexConversationTurn")).mockImplementation(
+    (...args) => (fixture()?.stopCodexConversationTurn ?? real.stopCodexConversationTurn)(...args),
   );
 }
 
