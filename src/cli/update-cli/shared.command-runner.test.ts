@@ -406,10 +406,9 @@ describe("update CLI shared helpers", () => {
         } finally {
           allocation.mockRestore();
         }
-        if (existing) {
-          await expect(fs.readdir(checkoutDir)).resolves.toEqual([]);
-        } else {
-          await expect(fs.readdir(base)).resolves.toEqual([]);
+        await expect(fs.readdir(existing ? checkoutDir : base)).resolves.toEqual([]);
+        if (!existing) {
+          await expect(fs.stat(checkoutDir)).rejects.toMatchObject({ code: "ENOENT" });
         }
         await expect(checkout(checkoutDir)).resolves.toMatchObject({
           checkoutDir,
@@ -485,6 +484,9 @@ describe("update CLI shared helpers", () => {
         expect((await fs.lstat(checkoutDir)).isSymbolicLink()).toBe(true);
         expect((await fs.lstat(targetDir)).isSymbolicLink()).toBe(false);
         await expectFile(targetDir, "checkout.marker", "complete\n");
+        if (!retargeted) {
+          await expectFile(checkoutDir, "checkout.marker", "complete\n");
+        }
 
         await expect(fs.readdir(replacementDir)).resolves.toEqual([]);
       });
