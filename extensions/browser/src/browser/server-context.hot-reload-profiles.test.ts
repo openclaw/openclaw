@@ -18,11 +18,11 @@ const mockState = vi.hoisted(
     cfgProfiles: Record<string, TestProfileConfig>;
   } => ({ cfgProfiles: {} }),
 );
-const lifecycleMocks = vi.hoisted(() => ({
-  closeChromeMcpSession: vi.fn(async () => false),
-  closePlaywrightBrowserConnection: vi.fn(async (_opts: { cdpUrl: string }) => {}),
-  retirePlaywrightBrowserConnection: vi.fn((_opts: { cdpUrl: string }) => true),
-  stopOpenClawChrome: vi.fn(async () => {}),
+const { closeMcp, closePlaywright, retirePlaywright, stopChrome } = vi.hoisted(() => ({
+  closeMcp: vi.fn(async () => false),
+  closePlaywright: vi.fn(async (_opts: { cdpUrl: string }) => {}),
+  retirePlaywright: vi.fn((_opts: { cdpUrl: string }) => true),
+  stopChrome: vi.fn(async () => {}),
 }));
 
 function buildConfig(): OpenClawConfig {
@@ -41,15 +41,15 @@ vi.mock("./config-refresh-source.js", () => ({
   loadBrowserConfigForRuntimeRefresh: () => buildConfig(),
 }));
 
-vi.mock("./chrome.js", () => ({ stopOpenClawChrome: lifecycleMocks.stopOpenClawChrome }));
+vi.mock("./chrome.js", () => ({ stopOpenClawChrome: stopChrome }));
 
-vi.mock("./chrome-mcp.js", () => ({ closeChromeMcpSession: lifecycleMocks.closeChromeMcpSession }));
+vi.mock("./chrome-mcp.js", () => ({ closeChromeMcpSession: closeMcp }));
 
 vi.mock("./pw-ai-module.js", () => ({
   getLoadedPwAiModule: () => ({
     retirePlaywrightBrowserConnectionExact: (opts: { cdpUrl: string }) => ({
-      retired: lifecycleMocks.retirePlaywrightBrowserConnection(opts),
-      close: async () => await lifecycleMocks.closePlaywrightBrowserConnection(opts),
+      retired: retirePlaywright(opts),
+      close: async () => await closePlaywright(opts),
     }),
   }),
   getPwAiModule: async () => null,
@@ -80,9 +80,13 @@ function createProfileFixture(
     state,
     profile,
     runtime,
+    lifecycle: getProfileLifecycle(runtime),
     start: (run: (signal: AbortSignal) => Promise<void>) =>
       enqueueProfileStart({ state, runtime, key: "default", run }),
-    update: (next: TestProfileConfig) => updateProfile(state, name, next),
+    update: (next: TestProfileConfig) => {
+      mockState.cfgProfiles[name] = next;
+      refreshProfiles(state);
+    },
   };
 }
 
@@ -117,25 +121,20 @@ function refreshProfiles(state: BrowserServerState) {
   refreshResolvedBrowserConfigFromDisk({ current: state, refreshConfigFromDisk: true });
 }
 
-function updateProfile(state: BrowserServerState, name: string, config: TestProfileConfig) {
-  mockState.cfgProfiles[name] = config;
-  refreshProfiles(state);
-}
-
 describe("server-context hot-reload profiles", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    lifecycleMocks.closeChromeMcpSession.mockResolvedValue(false);
-    lifecycleMocks.closePlaywrightBrowserConnection.mockResolvedValue(undefined);
-    lifecycleMocks.retirePlaywrightBrowserConnection.mockReturnValue(true);
-    lifecycleMocks.stopOpenClawChrome.mockResolvedValue(undefined);
+    closeMcp.mockResolvedValue(false);
+    closePlaywright.mockResolvedValue(undefined);
+    retirePlaywright.mockReturnValue(true);
+    stopChrome.mockResolvedValue(undefined);
     mockState.cfgProfiles = {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
     };
   });
 
   it("preserves live relay credentials across refreshes and retires them on port changes", async () => {
-    const { state, runtime, relay } = createExtensionRelayFixture();
+    const { state, runtime, relay, lifecycle, update } = createExtensionRelayFixture();
     const expectedUrl = runtime.profile.cdpUrl;
     state.resolved = {
       ...state.resolved,
@@ -157,12 +156,12 @@ describe("server-context hot-reload profiles", () => {
       expect(runtime.lastTargetId).toBe("shared-tab");
     }
     expect(relay.close).not.toHaveBeenCalled();
-    updateProfile(state, "chrome", { cdpPort: 18801, driver: "extension" });
+    update({ cdpPort: 18801, driver: "extension" });
 
     expect(state.resolved.extensionRelayInternalTokens).not.toHaveProperty("chrome");
     expect(runtime.profile.cdpPort).toBe(18801);
-    expect(getProfileLifecycle(runtime).transitionReason).toContain("cdpPort");
-    await getProfileLifecycle(runtime).tail;
+    expect(lifecycle.transitionReason).toContain("cdpPort");
+    await lifecycle.tail;
     expect(relay.close).toHaveBeenCalledOnce();
     expect(state.extensionRelays?.has("chrome")).toBe(false);
   });
@@ -206,7 +205,7 @@ describe("server-context hot-reload profiles", () => {
   });
 
   it("never re-adopts a relay credential while an unexposed close is still pending", async () => {
-    const { state, runtime, relay, close } = createExtensionRelayFixture();
+    const { state, relay, close, lifecycle } = createExtensionRelayFixture();
     const closeStarted = createDeferred<void>();
     const closeReleased = createDeferred<void>();
     relay.close.mockImplementationOnce(async () => {
@@ -216,59 +215,56 @@ describe("server-context hot-reload profiles", () => {
 
     const closing = close();
     await closeStarted.promise;
-    expect(getProfileLifecycle(runtime).transitionReason).toBeNull();
+    expect(lifecycle.transitionReason).toBeNull();
 
     refreshProfiles(state);
     expect(state.resolved.extensionRelayInternalTokens).not.toHaveProperty("chrome");
 
     closeReleased.resolve();
     await closing;
-    await getProfileLifecycle(runtime).tail;
+    await lifecycle.tail;
     expect(relay.close).toHaveBeenCalledOnce();
   });
 
   it("retires the adapter and stale selection when switching from Chromium to Lightpanda", async () => {
     const cdpUrl = "ws://127.0.0.1:9222/devtools/browser/engine-fixture";
-    const { runtime, update } = createProfileFixture(
+    const { runtime, lifecycle, update } = createProfileFixture(
       "switchable",
       { engine: "chromium", cdpUrl, attachOnly: true },
       "old-target",
     );
     update({ engine: "lightpanda", cdpUrl, attachOnly: true });
 
-    expect(runtime.profile.engine).toBe("lightpanda");
-    expect(runtime.profile.cdpUrl).toBe(cdpUrl);
-    expect(runtime.lastTargetId).toBeNull();
-    expect(getProfileLifecycle(runtime).transitionReason).toBe(
-      "profile invariants changed: engine",
-    );
-    expect(lifecycleMocks.retirePlaywrightBrowserConnection).toHaveBeenCalledWith({ cdpUrl });
-    await getProfileLifecycle(runtime).tail;
-    expect(lifecycleMocks.closePlaywrightBrowserConnection).toHaveBeenCalledWith({ cdpUrl });
-    expect(lifecycleMocks.stopOpenClawChrome).not.toHaveBeenCalled();
+    expect(runtime).toMatchObject({
+      profile: { engine: "lightpanda", cdpUrl },
+      lastTargetId: null,
+    });
+    expect(lifecycle.transitionReason).toBe("profile invariants changed: engine");
+    expect(retirePlaywright).toHaveBeenCalledWith({ cdpUrl });
+    await lifecycle.tail;
+    expect(closePlaywright).toHaveBeenCalledWith({ cdpUrl });
+    expect(stopChrome).not.toHaveBeenCalled();
   });
 
   it("reconciles existing-session command and structural argument changes", () => {
-    const { runtime, update } = createProfileFixture("work", {
+    const { lifecycle, update } = createProfileFixture("work", {
       cdpUrl: "http://127.0.0.1:9222",
-      color: "#0066CC",
       driver: "existing-session",
       mcpCommand: "/old/mcp",
       mcpArgs: ["--one"],
     });
     update({ ...mockState.cfgProfiles.work, mcpCommand: "/new/mcp", mcpArgs: ["--one", "--two"] });
 
-    expect(getProfileLifecycle(runtime).transitionReason).toContain("mcpCommand");
-    expect(getProfileLifecycle(runtime).transitionReason).toContain("mcpArgs");
+    expect(lifecycle.transitionReason).toContain("mcpCommand");
+    expect(lifecycle.transitionReason).toContain("mcpArgs");
   });
 
   it("rapid A to B to C closes both stale endpoints and adopts only C", async () => {
-    const { state, profile, runtime, start, update } = createProfileFixture("work", {
+    const { state, profile, runtime, lifecycle, start, update } = createProfileFixture("work", {
       cdpPort: 18801,
-      color: "#0066CC",
     });
     const retired = new Set<string>();
-    lifecycleMocks.retirePlaywrightBrowserConnection.mockImplementation(({ cdpUrl }) => {
+    retirePlaywright.mockImplementation(({ cdpUrl }) => {
       if (retired.has(cdpUrl)) {
         return false;
       }
@@ -276,26 +272,26 @@ describe("server-context hot-reload profiles", () => {
       return true;
     });
 
-    update({ cdpPort: 18802, color: "#00AA00" });
+    update({ cdpPort: 18802 });
     const workB = expectDefined(resolveProfile(state.resolved, "work"), "work B missing");
     const adopted: string[] = [];
     const pendingB = start(async () => {
       adopted.push(workB.cdpUrl);
     });
 
-    update({ cdpPort: 18803, color: "#AA00AA" });
+    update({ cdpPort: 18803 });
     const workC = expectDefined(resolveProfile(state.resolved, "work"), "work C missing");
     expect(runtime.profile.cdpUrl).toBe(workC.cdpUrl);
 
     await expect(pendingB).rejects.toThrow(/profile invariants changed/i);
-    await getProfileLifecycle(runtime).tail;
+    await lifecycle.tail;
     await expect(
       start(async () => {
         adopted.push(runtime.profile.cdpUrl);
       }),
     ).resolves.toBeUndefined();
 
-    expect(lifecycleMocks.closePlaywrightBrowserConnection.mock.calls).toEqual([
+    expect(closePlaywright.mock.calls).toEqual([
       [{ cdpUrl: profile.cdpUrl }],
       [{ cdpUrl: workB.cdpUrl }],
     ]);
@@ -307,9 +303,10 @@ describe("server-context hot-reload profiles", () => {
       state,
       profile,
       runtime: oldRuntime,
+      lifecycle,
       start,
       update,
-    } = createProfileFixture("constructor", { cdpPort: 18801, color: "#0066CC" });
+    } = createProfileFixture("constructor", { cdpPort: 18801 });
     expect(oldRuntime.running).toBeNull();
     const lateRunning = { pid: 321 } as RunningChrome;
     const launch = createDeferred<void>();
@@ -317,32 +314,32 @@ describe("server-context hot-reload profiles", () => {
     const pendingStart = start(async () => {
       launchStarted.resolve();
       await launch.promise;
-      getProfileLifecycle(oldRuntime).handles.add(lateRunning);
+      lifecycle.handles.add(lateRunning);
     });
     await launchStarted.promise;
 
     Reflect.deleteProperty(mockState.cfgProfiles, "constructor");
     refreshProfiles(state);
-    expect(getProfileLifecycle(oldRuntime).terminal).toBe("config-removed");
+    expect(lifecycle.terminal).toBe("config-removed");
     expect(state.profiles.get("constructor")).toBe(oldRuntime);
 
-    update({ cdpPort: 18802, color: "#00AA00" });
+    update({ cdpPort: 18802 });
     const workB = expectDefined(resolveProfile(state.resolved, "constructor"), "work B missing");
     expect(getOrCreateProfileRuntime(state, workB)).toBe(oldRuntime);
     expect(() => start(async () => {})).toThrow(/config-removed/);
 
     launch.resolve();
     await expect(pendingStart).rejects.toThrow(/config-removed|lifecycle changed/i);
-    await getProfileLifecycle(oldRuntime).tail;
+    await lifecycle.tail;
     await Promise.resolve();
     expect(state.profiles.has("constructor")).toBe(false);
-    expect(lifecycleMocks.stopOpenClawChrome).toHaveBeenCalledExactlyOnceWith(lateRunning);
+    expect(stopChrome).toHaveBeenCalledExactlyOnceWith(lateRunning);
     const replacement = getOrCreateProfileRuntime(state, workB);
     expect(replacement).not.toBe(oldRuntime);
     await expect(
       enqueueProfileStart({ state, runtime: replacement, key: "default", run: async () => {} }),
     ).resolves.toBeUndefined();
-    expect(lifecycleMocks.closePlaywrightBrowserConnection).toHaveBeenCalledWith({
+    expect(closePlaywright).toHaveBeenCalledWith({
       cdpUrl: profile.cdpUrl,
     });
   });

@@ -1,5 +1,5 @@
-// Session membership and requester authority use the real worker-backed registry.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -24,6 +24,23 @@ import {
 
 const owner = { sessionKey: "agent:main:own", targetId: "NATIVE-OWN", profile: "remote" };
 const main = { sessionKey: "agent:main:main", profile: "remote" };
+const targetRows = (...targetIds: string[]) => targetIds.map((targetId) => ({ targetId }));
+type BoundStore = PluginStateKeyedStore<unknown, 2>;
+type InterceptStore = (store: BoundStore) => Partial<BoundStore>;
+function interceptCurrent(store: PluginStateKeyedStore<unknown>, intercept: InterceptStore) {
+  const bind = store.withCurrent;
+  if (!bind) {
+    throw new Error("Expected the real worker comparison store");
+  }
+  return (authority: Parameters<typeof bind>[0]) => {
+    const bound = bind(authority);
+    return { ...bound, ...intercept(bound) };
+  };
+}
+function observeCurrent(intercept: InterceptStore) {
+  const store = getBrowserStateRuntime().sessionTabs;
+  return vi.spyOn(store, "withCurrent").mockImplementation(interceptCurrent(store, intercept));
+}
 function requester() {
   let current = true;
   return {
@@ -41,8 +58,13 @@ function requester() {
   };
 }
 
-describe("session tab membership", () => {
-  const { openStore, freshRegistry } = installSessionTabRegistrySqliteHarness();
+describe("session tab membership and lifecycle", () => {
+  const { openStore, freshRegistry, installRuntime } = installSessionTabRegistrySqliteHarness();
+  const installIntercepted = (intercept: InterceptStore) =>
+    installRuntime((options) => {
+      const store = createPluginStateKeyedStoreForTests("browser", options);
+      return { ...store, withCurrent: interceptCurrent(store, intercept) };
+    });
 
   it("reads session membership through the worker without changing rows, activity, or aliases", async () => {
     const registry = await freshRegistry("membership");
@@ -86,11 +108,11 @@ describe("session tab membership", () => {
     const durableAlias = { ...identity, targetId: "docs" };
     const volatileAlias = { ...identity, targetId: "alias-volatile-own" };
     const staleAlias = { ...identity, targetId: "alias-volatile-stale" };
-    const aliasesBefore = [
+    const aliases = () => [
       readDurableTabAlias(durableAlias).target,
-      readVolatileTabAlias(volatileAlias).target,
-      readVolatileTabAlias(staleAlias).target,
+      ...[volatileAlias, staleAlias].map((alias) => readVolatileTabAlias(alias).target),
     ];
+    const aliasesBefore = aliases();
     expect(aliasesBefore.every(Boolean)).toBe(true);
     const volatileBefore = structuredClone(volatileTabsBySession());
     openStore().register("invalid-record", { version: 999 });
@@ -109,19 +131,19 @@ describe("session tab membership", () => {
     const before = openStore().entries();
     const ownedTabs = [
       { targetId: "NATIVE-OWN", tabId: "t1" },
-      { targetId: "opaque-own" },
-      { targetId: "docs" },
+      ...targetRows("opaque-own", "docs"),
       { targetId: "opaque-listed", tabId: "t1" },
-      { targetId: "volatile-own" },
-      { targetId: "alias-volatile-own" },
+      ...targetRows("volatile-own", "alias-volatile-own"),
     ];
     const tabs = [
       ...ownedTabs,
-      { targetId: "NATIVE-resolved" },
-      { targetId: "NATIVE-other" },
-      { targetId: "NATIVE-WRONG-KEY" },
-      { targetId: "alias-volatile-stale" },
-      { targetId: "untracked" },
+      ...targetRows(
+        "NATIVE-resolved",
+        "NATIVE-other",
+        "NATIVE-WRONG-KEY",
+        "alias-volatile-stale",
+        "untracked",
+      ),
     ];
     const observation = observeHostDataSql();
     try {
@@ -134,11 +156,7 @@ describe("session tab membership", () => {
         registry.filterTrackedSessionBrowserTabs({ ...identity, profile: "other", tabs }),
       ).resolves.toEqual([]);
       expect(volatileTabsBySession()).toEqual(volatileBefore);
-      expect([
-        readDurableTabAlias(durableAlias).target,
-        readVolatileTabAlias(volatileAlias).target,
-        readVolatileTabAlias(staleAlias).target,
-      ]).toEqual(aliasesBefore);
+      expect(aliases()).toEqual(aliasesBefore);
 
       clearProcessLocalTabState();
       await expect(
@@ -155,27 +173,16 @@ describe("session tab membership", () => {
     const registry = await freshRegistry("membership-authority");
     const identity = owner;
     await registry.trackSessionBrowserTab({ ...identity, ownership: ownership(identity.targetId) });
-    const runtime = getBrowserStateRuntime();
-    const bind = runtime.sessionTabs.withCurrent;
-    if (!bind) {
-      throw new Error("Expected the real worker comparison store");
-    }
     const readCompleted = createDeferred<void>();
     const releaseRead = createDeferred<void>();
-    const observer = vi
-      .spyOn(runtime.sessionTabs, "withCurrent")
-      .mockImplementation((authority) => {
-        const store = bind(authority);
-        return {
-          ...store,
-          entries: async () => {
-            const entries = await store.entries();
-            readCompleted.resolve();
-            await releaseRead.promise;
-            return entries;
-          },
-        };
-      });
+    const observer = observeCurrent((store) => ({
+      entries: async () => {
+        const entries = await store.entries();
+        readCompleted.resolve();
+        await releaseRead.promise;
+        return entries;
+      },
+    }));
     const caller = requester();
     const reading = registry.filterTrackedSessionBrowserTabs({
       ...identity,
@@ -213,29 +220,18 @@ describe("session tab membership", () => {
         });
       }
       const before = openStore().entries();
-      const runtime = getBrowserStateRuntime();
-      const bind = runtime.sessionTabs.withCurrent;
-      if (!bind) {
-        throw new Error("Expected the real worker comparison store");
-      }
       const commitReached = createDeferred<void>();
       const releaseCommit = createDeferred<void>();
-      const observer = vi
-        .spyOn(runtime.sessionTabs, "withCurrent")
-        .mockImplementation((authority) => {
-          const store = bind(authority);
-          return {
-            ...store,
-            compareAndApply: async (key, comparison, intent) => {
-              const result = committed
-                ? await store.compareAndApply(key, comparison, intent)
-                : undefined;
-              commitReached.resolve();
-              await releaseCommit.promise;
-              return result ?? (await store.compareAndApply(key, comparison, intent));
-            },
-          };
-        });
+      const observer = observeCurrent((store) => ({
+        compareAndApply: async (key, comparison, intent) => {
+          const result = committed
+            ? await store.compareAndApply(key, comparison, intent)
+            : undefined;
+          commitReached.resolve();
+          await releaseCommit.promise;
+          return result ?? (await store.compareAndApply(key, comparison, intent));
+        },
+      }));
       const caller = requester();
       const tabs = createBrowserToolSessionTabs({
         sessionKey: identity.sessionKey,
@@ -285,38 +281,23 @@ describe("session tab membership", () => {
       }
     },
   );
-});
-
-describe("session tab lifecycle cleanup", () => {
-  const { freshRegistry, openStore, installRuntime } = installSessionTabRegistrySqliteHarness();
-
   it.each(["lifecycle", "sweep"] as const)(
     "does not adopt a replacement volatile registration while %s cleanup prepares",
     async (kind) => {
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
       let holdRead = false;
-      await installRuntime((options) => {
-        const store = createPluginStateKeyedStoreForTests("browser", options);
-        return {
-          ...store,
-          withCurrent: (authority) => {
-            const bound = store.withCurrent!(authority);
-            return {
-              ...bound,
-              entries: async () => {
-                const rows = await bound.entries();
-                if (holdRead) {
-                  holdRead = false;
-                  entered.resolve();
-                  await release.promise;
-                }
-                return rows;
-              },
-            };
-          },
-        };
-      });
+      await installIntercepted((store) => ({
+        entries: async () => {
+          const rows = await store.entries();
+          if (holdRead) {
+            holdRead = false;
+            entered.resolve();
+            await release.promise;
+          }
+          return rows;
+        },
+      }));
       const registry = await freshRegistry(`replacement-during-${kind}-preparation`);
       const tab = {
         sessionKey: "agent:main:main",
@@ -368,25 +349,15 @@ describe("session tab lifecycle cleanup", () => {
         const error = new Error("initial worker read failed");
         let failed = false;
         await expect(
-          installRuntime((options) => {
-            const store = createPluginStateKeyedStoreForTests("browser", options);
-            return {
-              ...store,
-              withCurrent: (authority) => {
-                const bound = store.withCurrent!(authority);
-                return {
-                  ...bound,
-                  entries: async () => {
-                    if (!failed) {
-                      failed = true;
-                      throw error;
-                    }
-                    return await bound.entries();
-                  },
-                };
-              },
-            };
-          }),
+          installIntercepted((store) => ({
+            entries: async () => {
+              if (!failed) {
+                failed = true;
+                throw error;
+              }
+              return await store.entries();
+            },
+          })),
         ).rejects.toBe(error);
       } else {
         await installRuntime();
@@ -537,25 +508,15 @@ describe("session tab lifecycle cleanup", () => {
 
   it("converges after close succeeds but the first durable delete fails", async () => {
     let failDelete = true;
-    await installRuntime((options) => {
-      const store = createPluginStateKeyedStoreForTests("browser", options);
-      return {
-        ...store,
-        withCurrent: (authority) => {
-          const action = store.withCurrent(authority);
-          return {
-            ...action,
-            compareAndApply: async (key, comparison, intent) => {
-              if (intent.action === "delete" && failDelete) {
-                failDelete = false;
-                throw new Error("delete unavailable");
-              }
-              return await action.compareAndApply(key, comparison, intent);
-            },
-          };
-        },
-      };
-    });
+    await installIntercepted((store) => ({
+      compareAndApply: async (key, comparison, intent) => {
+        if (intent.action === "delete" && failDelete) {
+          failDelete = false;
+          throw new Error("delete unavailable");
+        }
+        return await store.compareAndApply(key, comparison, intent);
+      },
+    }));
     const first = await freshRegistry("delete-failure");
     await first.trackSessionBrowserTab({
       ...main,

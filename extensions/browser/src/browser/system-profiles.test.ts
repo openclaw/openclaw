@@ -82,27 +82,14 @@ function createSystemProfileFixture(): string {
   const root = path.join(homeDir, "Library", "Application Support", "Google", "Chrome");
   const profileDir = path.join(root, "Default", "Network");
   fs.mkdirSync(profileDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(root, "Local State"),
-    JSON.stringify({ profile: { info_cache: { Default: { name: "Personal" } } } }),
-  );
+  writeLocalState(root, { name: "Personal" });
   const database = new DatabaseSync(path.join(profileDir, "Cookies"));
   try {
     database.exec(`
       PRAGMA journal_mode = WAL;
-      CREATE TABLE cookies (
-        host_key TEXT,
-        top_frame_site_key TEXT,
-        name TEXT,
-        value TEXT,
-        encrypted_value BLOB,
-        path TEXT,
-        expires_utc INTEGER,
-        is_secure INTEGER,
-        is_httponly INTEGER,
-        has_expires INTEGER,
-        samesite INTEGER
-      )
+      CREATE TABLE cookies (host_key TEXT, top_frame_site_key TEXT, name TEXT, value TEXT,
+        encrypted_value BLOB, path TEXT, expires_utc INTEGER, is_secure INTEGER,
+        is_httponly INTEGER, has_expires INTEGER, samesite INTEGER)
     `);
     const insert = database.prepare("INSERT INTO cookies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
     for (const [host, name, value] of [
@@ -118,14 +105,16 @@ function createSystemProfileFixture(): string {
   return path.join(profileDir, "Cookies");
 }
 
+function writeLocalState(root: string, info: Record<string, unknown>) {
+  fs.writeFileSync(
+    path.join(root, "Local State"),
+    JSON.stringify({ profile: { info_cache: { Default: info } } }),
+  );
+}
+
 function createManagedProfileFixture() {
   profileMocks.managedUserDataDir = tempDirs.make("openclaw-managed-profile-test-");
-  fs.writeFileSync(
-    path.join(profileMocks.managedUserDataDir, "Local State"),
-    JSON.stringify({
-      profile: { info_cache: { Default: { openclaw_mock_keychain: true } } },
-    }),
-  );
+  writeLocalState(profileMocks.managedUserDataDir, { openclaw_mock_keychain: true });
   const profile = {
     name: "imported",
     driver: "openclaw" as const,
@@ -172,10 +161,8 @@ describe("system profile cookie reader", () => {
       systemProfile: "Default",
       counts,
       domains: [".example.com"],
+      cookies: [{ name: "session", value: "allowed-value", domain: ".example.com" }],
     });
-    expect(result.cookies).toEqual([
-      expect.objectContaining({ name: "session", value: "allowed-value", domain: ".example.com" }),
-    ]);
     expect(readSecret).toHaveBeenCalledOnce();
     expect(fs.readdirSync(profileMocks.tempRoot)).toEqual([]);
   });

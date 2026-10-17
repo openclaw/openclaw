@@ -69,6 +69,10 @@ describe("durable extension session tab cleanup", () => {
         expect(openStore().entries()).toEqual([]);
       } else {
         const unavailable = retirement === "replacement with unavailable retirement";
+        const expected = {
+          profile: unavailable ? "renamed" : "chrome",
+          interactionTargetKind: unavailable ? "native" : "opaque",
+        };
         const store = getBrowserStateRuntime().sessionTabs;
         const bind = store.withCurrent!;
         const reads = vi.fn(async () => {
@@ -88,18 +92,12 @@ describe("durable extension session tab cleanup", () => {
               ownership: lastOwnership,
               now: 3_000,
             }),
-          ).resolves.toMatchObject({
-            profile: unavailable ? "renamed" : "chrome",
-            interactionTargetKind: unavailable ? "native" : "opaque",
-          });
+          ).resolves.toMatchObject(expected);
         } finally {
           observer?.mockRestore();
         }
         expect(openStore().entries()).toHaveLength(1);
-        expect(openStore().entries()[0]?.value).toMatchObject({
-          profile: unavailable ? "renamed" : "chrome",
-          interactionTargetKind: unavailable ? "native" : "opaque",
-        });
+        expect(openStore().entries()[0]?.value).toMatchObject(expected);
         if (unavailable) {
           expect(reads).toHaveBeenCalledOnce();
           expect(readColdNativeActivity(coldIdentity)).toBe(2_000);
