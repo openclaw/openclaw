@@ -39,9 +39,7 @@ afterEach(() => {
 });
 
 async function failBackgroundWrite() {
-  const request = vi.fn(async () => {
-    throw new Error("offline");
-  });
+  const request: RequestMock = vi.fn().mockRejectedValue(new Error("offline"));
   const writer = createWriter(request);
   patchSettings({ background: none });
   pushServerUiPrefs(writer, { background: none }, hooks);
@@ -56,40 +54,34 @@ it.each([
     null,
     new GatewayRequestError({ code: "INVALID_REQUEST", message: "Try again" }),
   ],
-] as const)(
-  "retries %s with the original writer and commit hook",
-  async (_name, background, error) => {
-    let fail = true;
-    const request = vi.fn(async () => {
-      if (fail) {
-        throw error;
-      }
-      return { status: "ok" };
-    });
-    const writer = createWriter(request);
-    const afterCommit = vi.fn();
-    if (background) {
-      patchSettings({ background });
-    }
-    pushServerUiPrefs(writer, { background }, { ...hooks, afterCommit });
-    await waitForFast(() => expect(status()).toBe("error"));
-    if (background) {
-      const before = loadSettings();
-      expect(changedServerUiPrefs(before, patchSettings({ background }))).toBeNull();
-    }
-    fail = false;
-    expect(retry()).toBe(true);
-    expect(status()).toBe("pending");
-    await waitForFast(() => expect(status()).toBe("saved"));
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-      entries: { "ui.background": background },
-      expectedEntries,
-    });
-    expect(afterCommit).toHaveBeenLastCalledWith({ needsRefresh: false });
-    expect(retry()).toBe(false);
-  },
-);
+] as const)("retries %s through its original writer", async (_name, background, error) => {
+  let fail = true;
+  const request: RequestMock = vi.fn(() =>
+    fail ? Promise.reject(error) : Promise.resolve({ status: "ok" }),
+  );
+  const writer = createWriter(request);
+  const afterCommit = vi.fn();
+  if (background) {
+    patchSettings({ background });
+  }
+  pushServerUiPrefs(writer, { background }, { ...hooks, afterCommit });
+  await waitForFast(() => expect(status()).toBe("error"));
+  if (background) {
+    const before = loadSettings();
+    expect(changedServerUiPrefs(before, patchSettings({ background }))).toBeNull();
+  }
+  fail = false;
+  expect(retry()).toBe(true);
+  expect(status()).toBe("pending");
+  await waitForFast(() => expect(status()).toBe("saved"));
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
+    entries: { "ui.background": background },
+    expectedEntries,
+  });
+  expect(afterCommit).toHaveBeenLastCalledWith({ needsRefresh: false });
+  expect(retry()).toBe(false);
+});
 
 it("refuses another Gateway, anonymous target, switched identity, or disconnected writer", async () => {
   const { request, writer } = await failBackgroundWrite();
@@ -114,7 +106,7 @@ it("does not resurrect a failed pending write cancelled by another tab", async (
 });
 
 it("requires current write authority before retrying retained local intent", async () => {
-  const request = vi.fn(async () => ({ status: "ok" }));
+  const request: RequestMock = vi.fn().mockResolvedValue({ status: "ok" });
   const writer = createWriter(request);
   const afterCommit = vi.fn();
   patchSettings({ background: none });
@@ -132,30 +124,23 @@ it("requires current write authority before retrying retained local intent", asy
 });
 
 it.each(["none", "writer", "identity", "disconnect", "commit-hook"] as const)(
-  "settles a conflicted mixed batch with %s retirement",
+  "settles a conflicted batch after %s retirement",
   async (retirement) => {
     vi.useFakeTimers();
     const retireIdentity = () =>
       applyServerUiPrefs({}, { scope, profileId: "another-viewer", onApplied: vi.fn() });
-    const afterCommit = vi.fn(() => {
-      if (retirement === "commit-hook") {
-        retireIdentity();
-      }
-    });
+    const afterCommit = vi.fn(retirement === "commit-hook" ? retireIdentity : undefined);
     const entries =
       retirement === "none" ? { "ui.background": selectBackgroundSource({ kind: "theme" }) } : {};
     const started = createDeferred();
     const refresh = createDeferred();
     const request = vi.fn(async (method: string) => {
-      if (method === "users.prefs.set") {
-        return { status: "conflict" };
-      }
       if (method === "users.prefs.get") {
         started.resolve();
         await refresh.promise;
         return { status: "ok", entries };
       }
-      return { ok: true };
+      return method === "users.prefs.set" ? { status: "conflict" } : { ok: true };
     });
     const writer = createWriter(request, true);
     const prefs = { background: none, locale: "de" };
@@ -165,8 +150,8 @@ it.each(["none", "writer", "identity", "disconnect", "commit-hook"] as const)(
     expect(readPending()).toEqual({ locale: "de" });
     if (retirement === "writer") {
       flushServerUiPrefs(createServerPrefsWriter(vi.fn(), "ws://replacement"), {
+        ...hooks,
         profileId: "another-viewer",
-        canWrite: true,
       });
     } else if (retirement === "identity") {
       retireIdentity();

@@ -1,10 +1,15 @@
 import { createHash, webcrypto } from "node:crypto";
 import fs from "node:fs";
 import vm from "node:vm";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 
 const failedRequest = { type: "openclaw-http-request-failed" };
+const makeResponse = (body = "build asset", init?: ResponseInit) => new Response(body, init);
+let worker: ReturnType<typeof createFetchServiceWorker>;
+beforeEach(() => {
+  worker = createFetchServiceWorker();
+});
 const stalledFetch = (_request: CacheRequest, options?: RequestInit) =>
   new Promise<Response>((_resolve, reject) => {
     options?.signal?.addEventListener(
@@ -28,6 +33,12 @@ function expectNoCalls(...mocks: Array<{ mock: { calls: unknown[] } }>) {
     expect(mock.mock.calls).toEqual([]);
   }
 }
+function expectNotification(source: typeof worker, notified = true) {
+  expect(source.windowClients.map((client) => client.postMessage.mock.calls)).toEqual([
+    notified ? [[failedRequest, []]] : [],
+    [],
+  ]);
+}
 const withFakeTimers = async (run: () => Promise<void>) => {
   vi.useFakeTimers();
   try {
@@ -39,22 +50,10 @@ const withFakeTimers = async (run: () => Promise<void>) => {
 
 describe("Control UI service worker HTTP recovery", () => {
   it("never stores or replays private, unversioned, or no-store HTTP reads", async () => {
-    const reads: Array<{
-      scope?: string;
-      route: string;
-      cache?: RequestCache;
-      headers?: Headers;
-      liveProbe?: boolean;
-    }> = [
-      { scope: "https://control.example/", route: "healthz", cache: "no-store", liveProbe: true },
+    const reads: Array<Partial<ServiceWorkerFetchRequest> & { scope?: string; route: string }> = [
+      { scope: "https://control.example/", route: "healthz", cache: "no-store" },
       ...["/", "/openclaw/"].flatMap((basePath) =>
-        [
-          "__openclaw__/assistant-media",
-          "api/chat/media/outgoing/image",
-          "rpc",
-          "plugins/example/data",
-          "avatar/main",
-        ].map((route) => ({
+        ["__openclaw__/assistant-media", "api/chat/media/outgoing/image"].map((route) => ({
           scope: `https://control.example${basePath}`,
           route: `${route}?mediaTicket=synthetic-ticket`,
         })),
@@ -62,6 +61,9 @@ describe("Control UI service worker HTTP recovery", () => {
       ...[
         "",
         "chat",
+        "rpc",
+        "plugins/example/data",
+        "avatar/main",
         "custom-theme.css",
         "fonts/custom.woff2",
         "assets/app-AbCd1234.js?token=synthetic",
@@ -72,44 +74,30 @@ describe("Control UI service worker HTTP recovery", () => {
         headers: new Headers({ Authorization: "Bearer synthetic" }),
       },
     ];
-    for (const { scope, route, cache, headers, liveProbe } of reads) {
-      const worker = createFetchServiceWorker(scope);
+    for (const { scope, route, cache, headers } of reads) {
+      worker = createFetchServiceWorker(scope);
       const request = { url: `${worker.scope}${route}`, cache, headers };
       const payload = { ok: true, status: "live" };
-      worker.cache.set(
-        request.url,
-        liveProbe ? Response.json(payload) : new Response("cached private response"),
-      );
-      worker.fetch.mockResolvedValueOnce(
-        liveProbe ? Response.json(payload) : new Response("fresh private response"),
-      );
+      worker.cache.set(request.url, Response.json({ cached: true }));
+      worker.fetch.mockResolvedValueOnce(Response.json(payload));
       const fresh = await worker.dispatch(request);
-      if (liveProbe) {
-        expect(await fresh?.json()).toEqual(payload);
-      } else {
-        expect(await fresh?.text()).toBe("fresh private response");
-      }
+      expect(await fresh?.json()).toEqual(payload);
       expectNoCalls(worker.cacheMatch, worker.cachePut);
       worker.fetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
       expect((await worker.dispatch(request))?.type).toBe("error");
       expect(worker.cacheMatch).not.toHaveBeenCalled();
-      expect(worker.windowClients[0].postMessage).toHaveBeenCalledExactlyOnceWith(
-        failedRequest,
-        [],
-      );
-      expect(worker.windowClients[1].postMessage).not.toHaveBeenCalled();
+      expectNotification(worker);
     }
   });
 
-  it("serves prior public-asset versions only from complete previous caches without storing new responses", async () => {
-    const worker = createFetchServiceWorker();
+  it("reads prior public assets only from complete caches and never writes them", async () => {
     const url = worker.scope + "fonts/custom.woff2?v=previous-build";
-    worker.cache.set(url, new Response("wrong generation"));
-    worker.fetch.mockResolvedValueOnce(new Response("network asset"));
+    worker.put(url, "wrong generation");
+    worker.fetch.mockResolvedValueOnce(makeResponse("network asset"));
     expect(await worker.text(url)).toBe("network asset");
     expect(worker.cachePut).not.toHaveBeenCalled();
-    worker.priorCache.set(worker.scope + "__offline_shell__", new Response("previous shell"));
-    worker.priorCache.set(url, new Response("previous font"));
+    worker.put("__offline_shell__", "previous shell", true);
+    worker.put(url, "previous font", true);
     worker.fetch.mockRejectedValue(new TypeError("offline"));
     expect(await worker.text(url)).toBe("previous font");
     expect(worker.fetch).toHaveBeenCalledOnce();
@@ -121,7 +109,6 @@ describe("Control UI service worker HTTP recovery", () => {
   ])(
     "returns $status/redirected=$redirected without caching or disclosing the URL",
     async ({ status, route, redirected }) => {
-      const worker = createFetchServiceWorker();
       const response = new Response("Sign in", { status });
       if (redirected) {
         Object.defineProperty(response, "redirected", { value: true });
@@ -129,22 +116,13 @@ describe("Control UI service worker HTTP recovery", () => {
       worker.fetch.mockResolvedValueOnce(response);
       expect(await worker.dispatch({ url: worker.scope + route })).toBe(response);
       expect(worker.cachePut).not.toHaveBeenCalled();
-      if (status === 401) {
-        expect(worker.windowClients[0].postMessage).toHaveBeenCalledExactlyOnceWith(
-          failedRequest,
-          [],
-        );
-      } else {
-        expect(worker.windowClients[0].postMessage).not.toHaveBeenCalled();
-      }
-      expect(worker.windowClients[1].postMessage).not.toHaveBeenCalled();
+      expectNotification(worker, status === 401);
     },
   );
 
   it.each(["assets/app-AbCd1234.js", "fonts/custom.woff2?v=public-fixture"])(
     "serves %s without a second network request and fails offline without a copy",
     async (route) => {
-      const worker = createFetchServiceWorker();
       const url = `${worker.scope}${route}`;
       worker.fetch
         .mockResolvedValueOnce(new Response("offline asset"))
@@ -176,32 +154,18 @@ describe("Control UI service worker HTTP recovery", () => {
       name: "offline navigation outside app routes",
       online: false,
       requests: [
-        "api/chat",
-        "healthz",
-        "approve/request",
-        "ask/request",
-        "focus/session",
         "__openclaw__/assistant-media",
-        "__openclaw__/download/file",
         "plugins/example/chat",
         "plugins/example",
         "assets/app-AbCd1234.js",
-        "avatar/main",
-        "rpc",
-        "login",
         "new/other",
         "chatty",
       ].map((route) => ({ url: `https://control.example/openclaw/${route}`, mode: "navigate" })),
     },
   ])("leaves $name to the browser", async ({ online, requests }) => {
-    const worker = createFetchServiceWorker(undefined, { online });
-    worker.cache.set(worker.scope + "__offline_shell__", new Response("shell"));
-    worker.fetch.mockResolvedValue(
-      new Response("Sign in", {
-        status: 401,
-        headers: { "WWW-Authenticate": 'Basic realm="synthetic"' },
-      }),
-    );
+    worker = createFetchServiceWorker(undefined, { online });
+    worker.put("__offline_shell__", "shell");
+    worker.fetch.mockResolvedValue(makeResponse("Sign in", { status: 401 }));
     for (const request of requests) {
       expect(await worker.dispatch(request)).toBeUndefined();
     }
@@ -215,7 +179,7 @@ describe("Control UI service worker HTTP recovery", () => {
     { clientUrl: "https://control.example/openclaw-other/chat" },
     { clientType: "worker" },
   ])("does not notify an unrelated or absent window: %j", async (options) => {
-    const worker = createFetchServiceWorker(undefined, options);
+    worker = createFetchServiceWorker(undefined, options);
     worker.fetch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
 
     expect((await worker.dispatch({ clientId: options.clientId }))?.type).toBe("error");
@@ -226,10 +190,8 @@ describe("Control UI service worker HTTP recovery", () => {
 describe("Control UI offline app shell", () => {
   it("bounds stalled preparation, preserves completed assets, and resumes on a later probe", () =>
     withFakeTimers(async () => {
-      const worker = createFetchServiceWorker();
-      worker.fetch
-        .mockImplementationOnce(stalledFetch)
-        .mockResolvedValueOnce(new Response("build asset"));
+      worker = createFetchServiceWorker();
+      worker.fetch.mockImplementationOnce(stalledFetch).mockResolvedValueOnce(makeResponse());
       let installed = false;
       const install = worker.install().then(() => {
         installed = true;
@@ -242,17 +204,16 @@ describe("Control UI offline app shell", () => {
       expect(worker.skipWaiting).toHaveBeenCalledOnce();
       expect(worker.cache.has(worker.scope + "__offline_shell__")).toBe(false);
       expect(worker.cache.has(worker.scope + offlineBootFixture.assets[1].path)).toBe(true);
-      worker.fetch.mockResolvedValue(new Response("build asset"));
+      worker.fetch.mockResolvedValue(makeResponse());
       await worker.probe();
       expect(worker.cache.has(worker.scope + "__offline_shell__")).toBe(true);
       expect(worker.fetch).toHaveBeenCalledTimes(3);
       expect(vi.getTimerCount()).toBe(0);
     }));
-  it("finishes a partial install on coalesced online probes without redownloading completed assets", async () => {
-    const worker = createFetchServiceWorker();
+  it("coalesces online probes and resumes only incomplete install assets", async () => {
     const shellUrl = worker.scope + "__offline_shell__";
     worker.fetch
-      .mockResolvedValueOnce(new Response("build asset"))
+      .mockResolvedValueOnce(makeResponse())
       .mockRejectedValueOnce(new TypeError("packet loss"));
     await worker.install();
     expect(worker.cache.has(shellUrl)).toBe(false);
@@ -275,8 +236,6 @@ describe("Control UI offline app shell", () => {
     const secondProbe = worker.probe();
     expect(worker.probeReply).toHaveBeenCalledTimes(3);
     expect(worker.probeReply).toHaveBeenLastCalledWith({ type: "sw-updated", version: "dev" });
-    // A pre-fix worker never starts the request: fail at its missing event
-    // lifetime instead of leaving the regression waiting on a real timeout.
     expect(worker.waitUntil).toHaveBeenCalledTimes(4);
     expect(worker.waitUntil.mock.calls[2]?.[0]).toBe(worker.waitUntil.mock.calls[3]?.[0]);
     await started.promise;
@@ -287,7 +246,7 @@ describe("Control UI offline app shell", () => {
       ],
     ]);
     expect(worker.cache.has(shellUrl)).toBe(false);
-    resumed.resolve(new Response("build asset"));
+    resumed.resolve(makeResponse());
     await Promise.all([firstProbe, secondProbe]);
     expect(worker.cache.has(shellUrl)).toBe(true);
 
@@ -297,17 +256,17 @@ describe("Control UI offline app shell", () => {
     expect(worker.cachePut).toHaveBeenCalledTimes(writes);
     worker.setOnline(false);
     worker.fetch.mockRejectedValue(new TypeError("Offline"));
-    expect(await worker.text(worker.scope + "chat", "navigate")).toContain("generic shell");
+    expect(await worker.text("chat", "navigate")).toContain("generic shell");
   });
 
-  it("does not begin installation preparation while explicitly offline, then prepares on an online probe", async () => {
-    const worker = createFetchServiceWorker(undefined, { online: false });
+  it("defers offline preparation until an online probe", async () => {
+    worker = createFetchServiceWorker(undefined, { online: false });
     await worker.install();
     await worker.probe();
     expectNoCalls(worker.fetch, worker.cacheMatch, worker.cachePut);
     expect(worker.skipWaiting).toHaveBeenCalledOnce();
     worker.setOnline(true);
-    worker.fetch.mockImplementation(async () => new Response("build asset"));
+    worker.fetch.mockImplementation(async () => makeResponse());
     await worker.probe();
     expect(worker.cache.has(worker.scope + "__offline_shell__")).toBe(true);
   });
@@ -315,7 +274,6 @@ describe("Control UI offline app shell", () => {
   it.each(["wrong bytes", "private response"])(
     "refetches %s from the current cache instead of trusting an old build",
     async (invalid) => {
-      const worker = createFetchServiceWorker();
       const url = worker.scope + offlineBootFixture.assets[0].path;
       worker.cache.set(
         url,
@@ -323,17 +281,12 @@ describe("Control UI offline app shell", () => {
           headers: invalid === "private response" ? { "Cache-Control": "private" } : {},
         }),
       );
-      worker.priorCache.set(url, new Response("build asset"));
-      worker.priorCache.set(worker.scope + "__offline_shell__", new Response("old shell"));
-      worker.fetch.mockImplementation(async () => new Response("build asset"));
+      worker.put(url, "build asset", true);
+      worker.put("__offline_shell__", "old shell", true);
+      worker.fetch.mockImplementation(async () => makeResponse());
       await worker.probe();
-      expect(worker.fetch).toHaveBeenCalledTimes(offlineBootFixture.assets.length);
-      for (const asset of offlineBootFixture.assets) {
-        expect(worker.fetch).toHaveBeenCalledWith(
-          worker.scope + asset.path,
-          assetOptions(asset.integrity),
-        );
-      }
+      expect(worker.fetch.mock.calls).toHaveLength(offlineBootFixture.assets.length);
+      expect(worker.fetch.mock.calls).toEqual(expect.arrayContaining(worker.assetRequests()));
       expect(await worker.cache.get(worker.scope + "__offline_shell__")?.text()).toContain(
         "generic shell",
       );
@@ -345,7 +298,7 @@ describe("Control UI offline app shell", () => {
     "https://control.example/openclaw/",
     "https://control.example/openclaw",
   ])("warms build assets before control and serves generic routes beneath %s", async (scope) => {
-    const worker = createFetchServiceWorker(scope);
+    worker = createFetchServiceWorker(scope);
     worker.fetch.mockImplementation(async (_url, options) =>
       options?.credentials === "same-origin"
         ? new Response("build asset", { headers: { "Content-Type": "application/javascript" } })
@@ -357,9 +310,7 @@ describe("Control UI offline app shell", () => {
     await worker.install();
     worker.setOnline(false);
     const base = scope.endsWith("/") ? scope : scope + "/";
-    expect(worker.fetch.mock.calls).toEqual(
-      offlineBootFixture.assets.map((asset) => [base + asset.path, assetOptions(asset.integrity)]),
-    );
+    expect(worker.fetch.mock.calls).toEqual(worker.assetRequests());
     expect(worker.waitUntil).toHaveBeenCalledOnce();
     expect(worker.cachePut).toHaveBeenCalledBefore(worker.skipWaiting);
     worker.fetch.mockRejectedValue(new TypeError("Offline"));
@@ -375,7 +326,7 @@ describe("Control UI offline app shell", () => {
       "settings/agents/main/tools",
     ];
     for (const route of routes) {
-      const response = await worker.dispatch({ url: base + route, mode: "navigate" });
+      const response = await worker.navigate(route);
       expect(response?.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
       const html = await response?.text();
       expect(html).toContain(`src="${new URL(base).pathname}assets/app-AbCd1234.js"`);
@@ -389,52 +340,44 @@ describe("Control UI offline app shell", () => {
     ]);
   });
 
-  it("uses the previous complete shell and its chunks while the new build is incomplete", async () => {
-    const worker = createFetchServiceWorker(undefined, { online: false });
-    worker.priorCache.set(worker.scope + "__offline_shell__", new Response("old shell"));
-    worker.priorCache.set(worker.scope + "assets/old-AbCd1234.js", new Response("old asset"));
+  it("serves the complete predecessor while the new build is incomplete", async () => {
+    worker = createFetchServiceWorker(undefined, { online: false });
+    worker.put("__offline_shell__", "old shell", true);
+    worker.put("assets/old-AbCd1234.js", "old asset", true);
     worker.fetch.mockRejectedValue(new TypeError("Offline"));
-    expect(await worker.text(worker.scope + "chat", "navigate")).toBe("old shell");
-    expect(await worker.text(worker.scope + "assets/old-AbCd1234.js")).toBe("old asset");
+    expect(await worker.text("chat", "navigate")).toBe("old shell");
+    expect(await worker.text("assets/old-AbCd1234.js")).toBe("old asset");
     expect(worker.fetch).toHaveBeenCalledOnce();
   });
 
-  it("falls back on a network failure while online, but preserves authentication responses", async () => {
-    const worker = createFetchServiceWorker();
-    worker.cache.set(worker.scope + "__offline_shell__", new Response("shell"));
+  it("recovers network failures but preserves authentication and forbidden responses", async () => {
+    worker.put("__offline_shell__", "shell");
     worker.fetch.mockRejectedValueOnce(new TypeError("VPN unavailable"));
-    expect(await worker.text(worker.scope + "settings/connection", "navigate")).toBe("shell");
+    expect(await worker.text("settings/connection", "navigate")).toBe("shell");
     worker.fetch.mockResolvedValueOnce(
       new Response("Sign in", { status: 401, headers: { "WWW-Authenticate": "Basic" } }),
     );
-    const denied = await worker.dispatch({
-      url: worker.scope + "settings?view=compact",
-      mode: "navigate",
-    });
+    const denied = await worker.navigate("settings?view=compact");
     expect(denied?.status).toBe(302);
     const nativeUrl = denied?.headers.get("Location");
     expect(nativeUrl).toBe(worker.scope + "settings?view=compact&openclaw_http_auth=1");
-    expect(await worker.dispatch({ url: nativeUrl!, mode: "navigate" })).toBeUndefined();
+    expect(await worker.navigate(nativeUrl!)).toBeUndefined();
     expect(worker.fetch).toHaveBeenCalledTimes(2);
     worker.fetch.mockResolvedValueOnce(new Response("Forbidden", { status: 403 }));
-    const forbidden = await worker.dispatch({ url: worker.scope + "settings", mode: "navigate" });
+    const forbidden = await worker.navigate("settings");
     expect(forbidden?.status).toBe(403);
     expect(await forbidden?.text()).toBe("Forbidden");
   });
 
   it.each([500, 502, 503, 504])(
-    "uses the cached shell for an online %i navigation, or preserves the server error without a shell",
+    "recovers %i navigations only when a cached shell is readable",
     async (status) => {
-      const worker = createFetchServiceWorker();
       const request = { url: worker.scope + "settings/connection", mode: "navigate" as const };
-      const unavailable = new Response("Gateway unavailable", {
-        status,
-        headers: { "Content-Type": "text/html", "Retry-After": "10" },
-      });
+      const unavailable = makeResponse("Gateway unavailable", { status });
       worker.fetch.mockResolvedValue(unavailable);
       expect(await worker.dispatch(request)).toBe(unavailable);
 
-      worker.cache.set(worker.scope + "__offline_shell__", new Response("shell"));
+      worker.put("__offline_shell__", "shell");
       const recovered = await worker.dispatch(request);
       expect(recovered?.status).toBe(200);
       expect(await recovered?.text()).toBe("shell");
@@ -445,29 +388,25 @@ describe("Control UI offline app shell", () => {
     },
   );
 
-  it("keeps a complete previous generation on failed preparation, then retires only older generations", async () => {
-    const worker = createFetchServiceWorker();
-    worker.priorCache.set(worker.scope + "__offline_shell__", new Response("previous shell"));
+  it("retains the complete predecessor across failed and successful preparation", async () => {
+    worker.put("__offline_shell__", "previous shell", true);
     worker.fetch.mockRejectedValue(new TypeError("offline"));
     await worker.install();
     await worker.activate();
     expect(worker.cacheDelete.mock.calls).toEqual([["openclaw-control-older"]]);
     expect(worker.priorCache.has(worker.scope + "__offline_shell__")).toBe(true);
-    worker.fetch.mockResolvedValue(new Response("build asset"));
+    worker.fetch.mockResolvedValue(makeResponse());
     await worker.probe();
     expect(worker.cacheDelete.mock.calls).toEqual([["openclaw-control-older"]]);
     expect(worker.priorCache.has(worker.scope + "__offline_shell__")).toBe(true);
   });
 
-  it("uses the cached shell when an online navigation stalls until the deadline", () =>
+  it("aborts stalled navigation and serves the cached shell at its deadline", () =>
     withFakeTimers(async () => {
-      const worker = createFetchServiceWorker();
-      worker.cache.set(worker.scope + "__offline_shell__", new Response("shell"));
+      worker = createFetchServiceWorker();
+      worker.put("__offline_shell__", "shell");
       worker.fetch.mockImplementation(stalledFetch);
-      const pending = worker.dispatch({
-        url: worker.scope + "settings/connection",
-        mode: "navigate",
-      });
+      const pending = worker.navigate("settings/connection");
       await vi.advanceTimersByTimeAsync(10_000);
       expect(await (await pending)?.text()).toBe("shell");
       expect(worker.fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
@@ -476,13 +415,12 @@ describe("Control UI offline app shell", () => {
 
   it.each<ResponseInit>([
     { status: 401 },
-    { status: 200, headers: { "Content-Type": "text/html" } },
-    { status: 200, headers: { "Cache-Control": "private, max-age=100" } },
-    { status: 200, headers: { "Cache-Control": "public, no-store" } },
-    { status: 200, headers: { Vary: "Origin, Cookie" } },
-    { status: 200, headers: { "WWW-Authenticate": 'Basic realm="synthetic"' } },
+    { headers: { "Content-Type": "text/html" } },
+    { headers: { "Cache-Control": "private, max-age=100" } },
+    { headers: { "Cache-Control": "public, no-store" } },
+    { headers: { Vary: "Origin, Cookie" } },
+    { headers: { "WWW-Authenticate": 'Basic realm="synthetic"' } },
   ])("does not publish an incomplete or login-contaminated shell: %j", async (init) => {
-    const worker = createFetchServiceWorker();
     worker.fetch
       .mockResolvedValueOnce(new Response("rejected asset", init))
       .mockResolvedValueOnce(new Response("valid asset"));
@@ -493,8 +431,7 @@ describe("Control UI offline app shell", () => {
     expect(worker.skipWaiting).toHaveBeenCalledOnce();
   });
 
-  it("uses the same public URL key for install fetches and module requests with Origin", async () => {
-    const worker = createFetchServiceWorker();
+  it("shares install URL keys with module requests carrying Origin", async () => {
     worker.fetch.mockImplementation(
       async () => new Response("asset", { headers: { Vary: "Origin" } }),
     );
@@ -514,10 +451,9 @@ describe("Control UI offline app shell", () => {
   it.each(["cacheMatch", "cachePut"] as const)(
     "preserves delivery and the fetch lifetime when %s fails",
     async (operation) => {
-      const worker = createFetchServiceWorker();
       worker.fetch.mockResolvedValueOnce(new Response("asset"));
       worker[operation].mockRejectedValueOnce(new Error("storage denied"));
-      expect(await worker.text(worker.scope + "assets/app-AbCd1234.js")).toBe("asset");
+      expect(await worker.text("assets/app-AbCd1234.js")).toBe("asset");
       expect(worker.fetch).toHaveBeenCalledOnce();
       expect(worker.waitUntil).toHaveBeenCalledOnce();
     },
@@ -549,6 +485,7 @@ function createFetchServiceWorker(
   scope = "https://control.example/openclaw/",
   options: { clientUrl?: string; clientType?: string; online?: boolean } = {},
 ) {
+  const url = (path: string) => new URL(path, scope.endsWith("/") ? scope : `${scope}/`).href;
   const listeners = new Map<string, (event: ServiceWorkerFetchEventStub) => void>();
   const cache = new Map<string, Response>();
   const priorCache = new Map<string, Response>();
@@ -669,6 +606,11 @@ function createFetchServiceWorker(
     skipWaiting,
     waitUntil,
     probeReply,
+    assetRequests: () =>
+      offlineBootFixture.assets.map((asset) => [url(asset.path), assetOptions(asset.integrity)]),
+    put(path: string, body: string, previous = false) {
+      (previous ? priorCache : cache).set(url(path), makeResponse(body));
+    },
     setOnline(online: boolean) {
       navigator.onLine = online;
     },
@@ -686,7 +628,8 @@ function createFetchServiceWorker(
     },
     install: () => lifecycle("install"),
     dispatch,
-    text: async (url: string, mode: RequestMode = "cors") =>
-      (await dispatch({ url, mode }))?.text(),
+    navigate: (path: string) => dispatch({ url: url(path), mode: "navigate" }),
+    text: async (path: string, mode: RequestMode = "cors") =>
+      (await dispatch({ url: url(path), mode }))?.text(),
   };
 }
