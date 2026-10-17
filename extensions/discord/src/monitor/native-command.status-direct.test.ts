@@ -2,7 +2,13 @@
 import { ChannelType } from "discord-api-types/v10";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  getSessionEntryAsync,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import * as nativeCommandRoute from "./native-command-route.js";
@@ -13,6 +19,7 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   dispatchReplyWithDispatcher: vi.fn(),
   loadWebMedia: vi.fn(),
   resolveDirectStatusReplyForSession: vi.fn(),
+  useActualStatusResolver: false,
   recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
 }));
 
@@ -27,10 +34,19 @@ vi.mock("openclaw/plugin-sdk/reply-dispatch-runtime", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/command-status-runtime", () => ({
-  resolveDirectStatusReplyForSession: (...args: unknown[]) =>
-    runtimeModuleMocks.resolveDirectStatusReplyForSession(...args),
-}));
+vi.mock("openclaw/plugin-sdk/command-status-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/command-status-runtime")>();
+  return {
+    ...actual,
+    resolveDirectStatusReplyForSession: (
+      ...args: Parameters<typeof actual.resolveDirectStatusReplyForSession>
+    ) =>
+      runtimeModuleMocks.useActualStatusResolver
+        ? actual.resolveDirectStatusReplyForSession(...args)
+        : runtimeModuleMocks.resolveDirectStatusReplyForSession(...args),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof SessionTranscriptRuntime>()),
@@ -181,6 +197,7 @@ describe("discord native /status", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    runtimeModuleMocks.useActualStatusResolver = false;
     runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
       counts: {
         final: 0,
@@ -247,6 +264,87 @@ describe("discord native /status", () => {
       }),
     );
   });
+
+  it.each([
+    { profileCase: "valid", profileId: "openai:fixture", profileAvailable: true },
+    { profileCase: "unavailable", profileId: "openai:missing", profileAvailable: false },
+  ])(
+    "renders native /status with a saved $profileCase automatic auth profile without changing persisted selection",
+    async ({ profileCase, profileId, profileAvailable }) => {
+      runtimeModuleMocks.useActualStatusResolver = true;
+      await withOpenClawTestState(
+        { label: `discord-status-saved-profile-${profileCase}` },
+        async (state) => {
+          const sessionKey = "agent:main:main";
+          const cfg = {
+            ...createConfig(),
+            plugins: { enabled: false },
+            session: { mainKey: "main" },
+            agents: {
+              entries: { main: {} },
+              defaults: { model: "openai/gpt-4o", thinkingDefault: "off", reasoningDefault: "off" },
+            },
+          } as OpenClawConfig;
+          const entry = {
+            sessionId: `discord-status-session-${profileCase}`,
+            updatedAt: Date.now(),
+            modelProvider: "openai",
+            model: "gpt-4o",
+            authProfileOverride: profileId,
+            authProfileOverrideSource: "auto" as const,
+          };
+
+          await state.writeConfig(cfg);
+          setRuntimeConfigSnapshot(cfg, cfg);
+          await state.writeAuthProfiles({
+            version: 1,
+            profiles: profileAvailable
+              ? {
+                  "openai:fixture": {
+                    type: "api_key",
+                    provider: "openai",
+                    key: "fixture-key",
+                  },
+                }
+              : {},
+          });
+          const scope = { agentId: "main", env: state.env, sessionKey };
+          await upsertSessionEntry({ ...scope, entry });
+
+          const command = await createStatusCommand(cfg);
+          const interaction = createInteraction();
+          await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction);
+
+          const payload = firstMockArg(interaction.followUp, "interaction.followUp") as {
+            content?: unknown;
+            embeds?: Array<{ description?: unknown }>;
+          };
+          const renderedText = [
+            payload.content,
+            ...(payload.embeds ?? []).map((embed) => embed.description),
+          ]
+            .filter((value): value is string => typeof value === "string")
+            .join("\n");
+          const persisted = await getSessionEntryAsync(scope);
+
+          expect(renderedText).toContain("gpt-4o");
+          expect(interaction.followUp).toHaveBeenCalledOnce();
+          expect(persisted).toMatchObject(entry);
+          console.log(
+            "DISCORD_NATIVE_STATUS_PROOF",
+            JSON.stringify({
+              command: "/status",
+              profileCase,
+              renderedModelLine: renderedText.split("\n").find((line) => line.includes("gpt-4o")),
+              savedProfile: persisted?.authProfileOverride,
+              persistedSelectionUnchanged: true,
+              transport: "local Discord interaction fixture",
+            }),
+          );
+        },
+      );
+    },
+  );
 
   it.each([false, true])(
     "records the unavailable status only after delivery (failed=%s)",
