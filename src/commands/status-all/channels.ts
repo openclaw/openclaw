@@ -67,6 +67,7 @@ const buildAccountNotes = async (params: {
   for (const [label, source] of [
     ["token", snapshot.tokenSource],
     ["bot", snapshot.botTokenSource],
+    ["user", snapshot.userTokenSource],
     ["app", snapshot.appTokenSource],
     ["signing", snapshot.signingSecretSource],
   ]) {
@@ -241,6 +242,7 @@ export async function buildChannelsTable(
       hasRuntimeCredentialAvailable({ liveAccounts, accountId: entry.accountId })
         ? {
             ...entry,
+            liveCredentialAvailable: true,
             // A live account can establish availability when local resolution failed.
             account: markConfiguredUnavailableCredentialStatusesAvailable(entry.account),
           }
