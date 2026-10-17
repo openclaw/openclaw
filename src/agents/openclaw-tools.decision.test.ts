@@ -1,12 +1,12 @@
 import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { prepareDecisionProviderReload } from "../decisions/runtime.js";
+import { registered } from "../decisions/runtime.test-support.js";
 import type {
   DecisionBatch,
   DecisionProviderV1,
@@ -16,12 +16,8 @@ import {
   clearCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshotState,
 } from "../plugins/current-plugin-metadata-state.js";
-import { runPluginRegisterSyncInRegistry } from "../plugins/loader-module-runtime.js";
-import { createPluginRecord } from "../plugins/loader-records.js";
-import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isDecisionAssistanceEligible } from "./decision-assistance.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -67,30 +63,8 @@ const config: OpenClawConfig = {
 };
 
 function fixture(evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer)) {
-  const builder = createTestPluginRegistry();
-  const record = createPluginRecord({
-    id: "decision-fixture",
-    source: "/synthetic/index.ts",
-    origin: "global",
-    enabled: true,
-    configSchema: false,
-    contracts: { decisionProviders: ["fixture"] },
-  });
-  const api = builder.createApi(record, { config });
-  runPluginRegisterSyncInRegistry(
-    (registration) =>
-      registration.registerDecisionProvider({ id: "fixture", contractVersion: 1, evaluate }),
-    api,
-    builder.registry,
-    record.id,
-  );
-  builder.registry.plugins.push(record);
-  setActivePluginRegistry(builder.registry);
+  registered(evaluate);
   setRuntimeConfigSnapshot(config);
-  onTestFinished(async () => {
-    prepareDecisionProviderReload(builder.registry, new Set([record.id]));
-    await getPluginInstance(record)?.dispose();
-  });
   return evaluate;
 }
 
@@ -116,6 +90,8 @@ afterEach(() => {
 it("keeps the explicit tool independent of automatic eligibility through Labs on/off transitions", async () => {
   const evaluate = fixture();
   const retained = requiredTool("alternate");
+  const expectSelection = (agentId: string, model: string) =>
+    expect(evaluate).toHaveBeenLastCalledWith(batch, expect.objectContaining({ agentId, model }));
   for (const decisionAssistance of [false, true, false]) {
     const current: OpenClawConfig = {
       ...config,
@@ -133,10 +109,7 @@ it("keeps the explicit tool independent of automatic eligibility through Labs on
     const fresh = requiredTool("main", current);
     expect(evaluate).not.toHaveBeenCalled();
     expect((await fresh.execute("fresh", batch)).details).toMatchObject({ status: "ok" });
-    expect(evaluate).toHaveBeenLastCalledWith(
-      batch,
-      expect.objectContaining({ agentId: "main", model: "default" }),
-    );
+    expectSelection("main", "default");
     const result = await retained.execute("retained", batch);
     expect(result.details).toEqual({
       ...answer,
@@ -149,10 +122,7 @@ it("keeps the explicit tool independent of automatic eligibility through Labs on
     expect(JSON.parse(result.content.find((entry) => entry.type === "text")!.text)).toEqual(
       result.details,
     );
-    expect(evaluate).toHaveBeenLastCalledWith(
-      batch,
-      expect.objectContaining({ agentId: "alternate", model: "override" }),
-    );
+    expectSelection("alternate", "override");
     expect(evaluate).toHaveBeenCalledTimes(2);
   }
 });
@@ -173,7 +143,7 @@ it("rejects resource bounds before rubric hashing or provider execution", async 
   const snapshot = createPluginMetadataSnapshotFixture({
     plugins: [
       {
-        id: "decision-fixture",
+        id: "owner",
         contracts: { decisionProviders: ["fixture"] },
         modelCatalog: { providers: { fixture: { models: [model] } } },
       },

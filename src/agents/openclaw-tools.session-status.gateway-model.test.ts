@@ -77,18 +77,22 @@ let state: OpenClawTestState;
 let cfg: OpenClawConfig;
 let nextSession = 0;
 
-function modelConfig(
-  entries: ModelCatalogEntry[],
-  selection: Pick<
-    NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
-    "model" | "models" | "modelPolicy"
-  >,
-): OpenClawConfig {
+function modelConfig(policy = false): OpenClawConfig {
+  const primary = policy ? "blocked" : "default";
+  const fallback = policy ? "allowed" : "chosen";
+  const entries = policy ? [primary, fallback].map(modelEntry) : catalog;
   return {
     agents: {
-      entries: { main: {}, support: {} },
+      entries: policy ? { main: {} } : { main: {}, support: {} },
       defaults: {
-        ...selection,
+        model: { primary: `fixture/${primary}`, fallbacks: [`fixture/${fallback}`] },
+        models: Object.fromEntries(
+          entries.map(({ id }) => [
+            `fixture/${id}`,
+            id === fallback ? { alias: "chosen" } : policy ? { alias: id } : {},
+          ]),
+        ),
+        ...(policy ? { modelPolicy: { allow: ["fixture/*"] } } : {}),
         modelSelectionScope: "global",
         sandbox: { mode: "off", sessionToolsVisibility: "all" },
       },
@@ -117,14 +121,7 @@ beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal" });
 });
 beforeEach(() => {
-  cfg = modelConfig(catalog, {
-    model: { primary: "fixture/default", fallbacks: ["fixture/chosen"] },
-    models: {
-      "fixture/default": {},
-      "fixture/chosen": { alias: "chosen" },
-      "fixture/native": {},
-    },
-  });
+  cfg = modelConfig();
   configRuntime.setRuntimeConfigSnapshot(cfg);
   setActivePluginRegistry(createEmptyPluginRegistry(), "status-model-test", "default");
   registerAgentHarness(nativeHarness);
@@ -363,12 +360,7 @@ it("routes status model changes through the original operator policy and preserv
   const unrestricted = ensureProfileForEmail("unrestricted-model@example.test");
   setUserProfileRole(unrestricted.id, "unrestricted");
   const policyCatalog = ["blocked", "allowed"].map(modelEntry);
-  cfg = modelConfig(policyCatalog, {
-    model: { primary: "fixture/blocked", fallbacks: ["fixture/allowed"] },
-    models: { "fixture/blocked": { alias: "blocked" }, "fixture/allowed": { alias: "chosen" } },
-    modelPolicy: { allow: ["fixture/*"] },
-  });
-  cfg.agents = { ...cfg.agents, entries: { main: {} } };
+  cfg = modelConfig(true);
   cfg.gateway = {
     roles: {
       default: "limited",

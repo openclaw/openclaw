@@ -6,6 +6,7 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelOutboundContext } from "../channels/plugins/outbound.types.js";
+import type { ChannelOutboundAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
@@ -47,10 +48,16 @@ vi.mock("../plugins/tools.js", async (importOriginal) => ({
 }));
 const TEST_AGENT_DIR = path.join(os.tmpdir(), "openclaw-plugin-tool-auth-test");
 const SESSION_KEY = "agent:main:telegram:group:123";
-const deliveryOptions = {
-  agentSessionKey: SESSION_KEY,
+const identity = {
+  agentId: "main",
   runId: "run-1",
   sessionId: "session-1",
+  sessionKey: SESSION_KEY,
+};
+const deliveryOptions = {
+  agentSessionKey: SESSION_KEY,
+  runId: identity.runId,
+  sessionId: identity.sessionId,
   agentChannel: "telegram",
   agentAccountId: "work",
   agentTo: "123",
@@ -62,42 +69,43 @@ const observedGatewayCallerIdentities: unknown[] = [];
 
 function mintTurn(overrides: Partial<Parameters<typeof mintMessageActionTurnCapability>[0]> = {}) {
   const token = mintMessageActionTurnCapability({
-    agentId: "main",
-    runId: "run-1",
-    sessionId: "session-1",
-    sessionKey: SESSION_KEY,
+    ...identity,
     ...overrides,
   });
   capabilities.push(token);
   return token;
 }
 
-function installChannel(plugin: ReturnType<typeof createOutboundTestPlugin>, accounts?: string[]) {
-  const registry = createTestRegistry([
-    {
-      pluginId: plugin.id,
-      source: "test",
-      plugin: accounts
-        ? {
-            ...plugin,
-            config: {
-              ...plugin.config,
-              listAccountIds: () => accounts,
-              resolveAccount: () => ({}),
-            },
-          }
-        : plugin,
-    },
-  ]);
+function installChannel(input: ReturnType<typeof createOutboundTestPlugin>, accounts?: string[]) {
+  let plugin = input;
+  if (accounts) {
+    plugin = {
+      ...plugin,
+      config: { ...plugin.config, listAccountIds: () => accounts, resolveAccount: () => ({}) },
+    };
+  }
+  const registry = createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]);
   setActivePluginRegistry(registry);
   return registry;
 }
 
 function firstResolvePluginToolsParams() {
-  return expectDefined(
-    hoisted.resolvePluginTools.mock.calls[0],
-    "Expected plugin tool resolution",
-  )[0];
+  return expectDefined(hoisted.resolvePluginTools.mock.calls[0], "Expected plugin resolution")[0];
+}
+
+function buildDeliveryTools(options: Parameters<typeof createOpenClawTools>[0]) {
+  return createOpenClawTools({ ...deliveryOptions, ...options });
+}
+
+function telegramPlugin(outbound: Partial<ChannelOutboundAdapter> = {}) {
+  return createOutboundTestPlugin({
+    id: "telegram",
+    outbound: {
+      deliveryMode: "direct",
+      sendText: async () => ({ channel: "telegram", messageId: "sent-1" }),
+      ...outbound,
+    },
+  });
 }
 
 function resolveTools(
@@ -158,23 +166,20 @@ describe("createOpenClawTools browser plugin integration", () => {
         describeMessageToolAsync,
       },
     });
-    let published = false;
+    const publish = vi.fn((tools: Awaited<ReturnType<typeof createOpenClawToolsAsync>>) => tools);
     const pending = createOpenClawToolsAsync({
       config: { tools: { web: { search: { enabled: false }, fetch: { enabled: false } } } },
       agentChannel: "matrix",
       agentAccountId: "work",
       disablePluginTools: true,
       wrapBeforeToolCallHook: false,
-    }).then((tools) => {
-      published = true;
-      return tools;
-    });
+    }).then(publish);
     await awaitGateBeforeSettlement(
       enteredDiscovery.promise,
       pending,
       "Message tool construction skipped asynchronous account discovery",
     );
-    expect(published).toBe(false);
+    expect(publish).not.toHaveBeenCalled();
     releaseDiscovery.resolve();
     const message = (await pending).find((tool) => tool.name === "message");
     expect(message?.description).toContain("react");
@@ -223,32 +228,13 @@ describe("createOpenClawTools browser plugin integration", () => {
       return await platformSendMedia();
     });
     const providerNativeSend = vi.fn(async () => jsonResult({ ok: true, native: true }));
-    const plugin = createOutboundTestPlugin({
-      id: "telegram",
-      outbound: {
-        deliveryMode: "direct",
-        sendText: async () => ({ channel: "telegram", messageId: "text-1" }),
-        sendMedia,
-      },
-      messaging: {
-        normalizeTarget: (raw) => raw,
-        targetResolver: { looksLikeId: () => true, hint: "<chat-id>" },
-      },
-    });
+    const plugin = telegramPlugin({ sendMedia });
+    plugin.messaging = {
+      normalizeTarget: (raw) => raw,
+      targetResolver: { looksLikeId: () => true, hint: "<chat-id>" },
+    };
     plugin.actions = { describeMessageTool: () => null, handleAction: providerNativeSend };
     const activeRegistry = installChannel(plugin, ["work", "attacker-account"]);
-    const turnCapability = mintTurn({
-      sessionKey: key ?? "agent:main:main",
-      sourceReplySessionKey: "agent:main:main",
-      requesterAccountId: "work",
-      requesterSenderId: "sender-1",
-      toolContext: {
-        currentChannelId: "123",
-        currentMessagingTarget: "123",
-        currentChannelProvider: "telegram",
-        currentThreadTs: "7",
-      },
-    });
     const config: OpenClawConfig = {
       agents: { defaults: { workspace: workspaceDir } },
       channels: { telegram: { enabled: true } },
@@ -269,24 +255,40 @@ describe("createOpenClawTools browser plugin integration", () => {
       config.tools = { allow: ["read"], fs: { workspaceOnly: false } };
       return [];
     });
-    const options = {
-      ...deliveryOptions,
-      config,
-      agentSessionKey: key,
-      runSessionKey: "agent:main:main",
-      workspaceDir,
-    };
-    const requireDelivery = () => {
-      return expectDefined(delivery, "expected plugin delivery capability");
+    const bindTurn = (run: number, authority: Parameters<typeof mintTurn>[0] = {}) => {
+      const runId = `run-${run}`;
+      const sessionId = `session-${run}`;
+      const token = mintTurn({
+        runId,
+        sessionId,
+        sessionKey: key ?? "agent:main:main",
+        sourceReplySessionKey: "agent:main:main",
+        ...authority,
+      });
+      buildDeliveryTools({
+        config,
+        workspaceDir,
+        agentSessionKey: key,
+        runSessionKey: "agent:main:main",
+        runId,
+        sessionId,
+        agentThreadId: run === 1 ? "7" : undefined,
+        messageActionTurnCapability: token,
+      });
+      return { token, delivery: expectDefined(delivery, "expected plugin delivery capability") };
     };
     const inactive = "plugin delivery capability is no longer active";
     try {
-      createOpenClawTools({
-        ...options,
-        agentThreadId: "7",
-        messageActionTurnCapability: turnCapability,
+      const { token: turnCapability, delivery: activeDelivery } = bindTurn(1, {
+        requesterAccountId: "work",
+        requesterSenderId: "sender-1",
+        toolContext: {
+          currentChannelId: "123",
+          currentMessagingTarget: "123",
+          currentChannelProvider: "telegram",
+          currentThreadTs: "7",
+        },
       });
-      const activeDelivery = requireDelivery();
       await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
         activeDelivery.send({ text: "bound media", mediaUrl }),
       );
@@ -316,19 +318,7 @@ describe("createOpenClawTools browser plugin integration", () => {
       expect(providerNativeSend).not.toHaveBeenCalled();
       await expect(activeDelivery.send({ text: "too late" })).rejects.toThrow(inactive);
       expect(platformSendMedia).toHaveBeenCalledTimes(1);
-      const nextTurnCapability = mintTurn({
-        runId: "run-2",
-        sessionId: "session-2",
-        sessionKey: key ?? "agent:main:main",
-        sourceReplySessionKey: "agent:main:main",
-      });
-      createOpenClawTools({
-        ...options,
-        runId: "run-2",
-        sessionId: "session-2",
-        messageActionTurnCapability: nextTurnCapability,
-      });
-      const replacementDelivery = requireDelivery();
+      const { delivery: replacementDelivery } = bindTurn(2);
       setActivePluginRegistry(createEmptyPluginRegistry());
       await expect(replacementDelivery.send({ text: "stale registry" })).rejects.toThrow(inactive);
       setActivePluginRegistry(activeRegistry);
@@ -347,14 +337,9 @@ describe("createOpenClawTools browser plugin integration", () => {
   });
 
   it("does not expose CLI message-only authority to plugin delivery", async () => {
-    const identity = {
-      agentId: "main",
-      runId: "cli-message-only",
-      sessionId: "session-cli",
-      sessionKey: SESSION_KEY,
-    };
+    const caller = { ...identity, runId: "cli-message-only", sessionId: "session-cli" };
     const token = mintTurn({
-      ...identity,
+      ...caller,
       requesterAccountId: "work",
       requesterSenderId: "sender-1",
     });
@@ -362,7 +347,7 @@ describe("createOpenClawTools browser plugin integration", () => {
     setRuntimeConfigSnapshot(cfg);
     setActivePluginRegistry(createEmptyPluginRegistry());
     await resolveGatewayScopedTools({
-      ...identity,
+      ...caller,
       cfg,
       surface: "loopback",
       messageProvider: "telegram",
@@ -375,22 +360,13 @@ describe("createOpenClawTools browser plugin integration", () => {
   });
 
   it.each(["scheduled", "delivery-only"] as const)(
-    "does not expose %s message authority to plugin delivery with an announce route",
+    "does not delegate %s announce-route authority to plugins",
     (kind) => {
       const sessionKey = "agent:main:cron:scheduled-plugin-delivery";
-      installChannel(
-        createOutboundTestPlugin({
-          id: "telegram",
-          outbound: {
-            deliveryMode: "direct",
-            sendText: async () => ({ channel: "telegram", messageId: "sent-1" }),
-          },
-        }),
-        ["work"],
-      );
-      const identity = { runId: "scheduled-message-run", sessionId: "session-cron" };
+      installChannel(telegramPlugin(), ["work"]);
+      const scheduledIdentity = { runId: "scheduled-message-run", sessionId: "session-cron" };
       const token = mintTurn({
-        ...identity,
+        ...scheduledIdentity,
         sessionKey,
         ...(kind === "scheduled"
           ? {
@@ -401,9 +377,8 @@ describe("createOpenClawTools browser plugin integration", () => {
             }
           : { deliveryAttempt: { beforeAttempt: async () => {}, assertCurrent: () => {} } }),
       });
-      createOpenClawTools({
-        ...deliveryOptions,
-        ...identity,
+      buildDeliveryTools({
+        ...scheduledIdentity,
         agentSessionKey: sessionKey,
         runSessionKey: `${sessionKey}:run:session-cron`,
         agentThreadId: "7",
@@ -430,8 +405,7 @@ describe("createOpenClawTools browser plugin integration", () => {
     );
     const sessionKey = "agent:main:gatewaychat:direct:123";
     const token = mintTurn({ sessionKey, requesterSenderId: "sender-1" });
-    createOpenClawTools({
-      ...deliveryOptions,
+    buildDeliveryTools({
       agentSessionKey: sessionKey,
       agentChannel: "gatewaychat",
       agentAccountId: undefined,
@@ -489,7 +463,7 @@ describe("createOpenClawTools browser plugin integration", () => {
   });
 
   it.each(["environment", "profile", "plugin"] as const)(
-    "aligns provider availability and resolution for %s auth without borrowing excluded credentials",
+    "resolves %s auth without borrowing excluded credentials",
     async (source) => {
       const envOnly = source === "environment";
       const envName = envOnly ? "OPENCLAW_PLUGIN_TOOL_AUTH_TEST_KEY" : "ACME_API_KEY";
@@ -555,7 +529,6 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(getRuntimeConfig?.()).toBe(firstRuntimeConfig);
     setRuntimeConfigSnapshot(nextRuntimeConfig, nextSourceConfig);
     expect(getRuntimeConfig?.()).toBe(nextRuntimeConfig);
-    expect(getRuntimeConfig?.()?.gateway?.publicOrigin).toBe("https://second.example");
   });
 });
 

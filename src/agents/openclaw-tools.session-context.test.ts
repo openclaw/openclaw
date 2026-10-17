@@ -53,11 +53,11 @@ vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
 }));
 
-function createTools(
+function createToolCaller(
   config: OpenClawToolsOptions["config"],
   options: Omit<OpenClawToolsOptions, "config"> = {},
 ) {
-  return createOpenClawTools({
+  const tools = createOpenClawTools({
     agentSessionKey: "global",
     runSessionKey: "agent:research:main",
     config,
@@ -65,6 +65,8 @@ function createTools(
     wrapBeforeToolCallHook: false,
     ...options,
   });
+  return (name: string, params: Record<string, unknown> = {}) =>
+    requireTool(tools, name).execute(name, params);
 }
 
 function expectGateway(method: string, params: Record<string, unknown>) {
@@ -84,10 +86,11 @@ function requireTool(tools: ReturnType<typeof createOpenClawTools>, name: string
 }
 
 async function expectForbidden(
-  tool: ReturnType<typeof requireTool>,
+  call: ReturnType<typeof createToolCaller>,
+  name: string,
   params: Record<string, unknown>,
 ) {
-  await expect(tool.execute("revoked", params)).resolves.toMatchObject({
+  await expect(call(name, params)).resolves.toMatchObject({
     details: { status: "forbidden" },
   });
 }
@@ -119,6 +122,7 @@ function mockSessionDiscovery(response?: (request: GatewayRequest) => unknown) {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   unregisterAcpRuntimeBackend("session-context-test");
   resetPluginRuntimeStateForTest();
   clearRuntimeConfigSnapshot();
@@ -207,47 +211,42 @@ describe("openclaw session lookup context", () => {
     const gatewayCall = vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockResolvedValue({
       card: null,
     });
-    try {
-      const tools = createTools(
-        {
-          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-          session: { scope: "global", mainKey: "main" },
-        },
-        {
-          agentSessionKey: "agent:research:main",
-          runSessionKey: "global",
-          requesterAgentIdOverride: "research",
-          disableMessageTool: true,
-        },
-      );
+    const call = createToolCaller(
+      {
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+        session: { scope: "global", mainKey: "main" },
+      },
+      {
+        agentSessionKey: "agent:research:main",
+        runSessionKey: "global",
+        requesterAgentIdOverride: "research",
+        disableMessageTool: true,
+      },
+    );
 
-      await requireTool(tools, "progress_card").execute("synthetic-progress", {});
+    await call("progress_card");
 
-      expect(gatewayCall).toHaveBeenCalledWith("progressCard.put", {
-        sessionKey: "global",
-        agentId: "research",
-      });
-    } finally {
-      gatewayCall.mockRestore();
-    }
+    expect(gatewayCall).toHaveBeenCalledWith("progressCard.put", {
+      sessionKey: "global",
+      agentId: "research",
+    });
   });
 
   it("binds nested session lookups to the durable caller", async () => {
-    const runSessionKey = "agent:research:main";
     setEmbeddedMode(true);
-    const tools = createTools(
+    const call = createToolCaller(
       { agents: { entries: { main: {}, research: {} } } },
       { sandboxed: true },
     );
 
-    await requireTool(tools, "sessions_list").execute("list", {});
-    await requireTool(tools, "sessions_search").execute("search", { query: "needle" });
-    await requireTool(tools, "sessions_history").execute("history", { sessionKey: "current" });
+    await call("sessions_list");
+    await call("sessions_search", { query: "needle" });
+    await call("sessions_history", { sessionKey: "current" });
 
     expect(createEmbeddedCallGatewayMock).toHaveBeenCalledWith();
-    expectGateway("sessions.list", { spawnedBy: runSessionKey });
-    expectGateway("sessions.search", { sessionKeys: [runSessionKey] });
-    expectGateway("chat.history", { sessionKey: runSessionKey });
+    expectGateway("sessions.list", { spawnedBy: "agent:research:main" });
+    expectGateway("sessions.search", { sessionKeys: ["agent:research:main"] });
+    expectGateway("chat.history", { sessionKey: "agent:research:main" });
   });
 
   it("preserves implicit all-agent discovery for authorized callers", async () => {
@@ -267,12 +266,10 @@ describe("openclaw session lookup context", () => {
       }
       return undefined;
     });
-    const tools = createTools(sessionPolicyConfig());
+    const call = createToolCaller(sessionPolicyConfig());
 
-    const listed = await requireTool(tools, "sessions_list").execute("list", {});
-    const searched = await requireTool(tools, "sessions_search").execute("search", {
-      query: "hit",
-    });
+    const listed = await call("sessions_list");
+    const searched = await call("sessions_search", { query: "hit" });
 
     expect(listed.details).toMatchObject({ sessions: agentRows("main", "research") });
     expect(searched.details).toMatchObject({
@@ -298,34 +295,31 @@ describe("openclaw session lookup context", () => {
       return undefined;
     });
     setRuntimeConfigSnapshot(accessibleConfig);
-    const tools = createTools(accessibleConfig, { sessionConfigSource: "runtime" });
-    const list = requireTool(tools, "sessions_list");
-    const history = requireTool(tools, "sessions_history");
-    const search = requireTool(tools, "sessions_search");
+    const call = createToolCaller(accessibleConfig, { sessionConfigSource: "runtime" });
     setEmbeddedMode(false);
-    const send = requireTool(
-      createTools(accessibleConfig, { sessionConfigSource: "runtime" }),
-      "sessions_send",
-    );
+    const send = createToolCaller(accessibleConfig, { sessionConfigSource: "runtime" });
     setEmbeddedMode(true);
 
-    const granted = await list.execute("granted", {});
+    const granted = await call("sessions_list");
     expect(granted.details).toMatchObject({ sessions: agentRows("main") });
 
     setRuntimeConfigSnapshot(restrictedConfig);
-    await expectForbidden(send, {
+    await expectForbidden(send, "sessions_send", {
       agentId: "main",
       label: "private",
       message: "should never be delivered",
     });
-    const revoked = await list.execute("revoked", {});
+    const revoked = await call("sessions_list");
     expect(revoked.details).toMatchObject({
       sessions: [expect.objectContaining({ agentId: "research" })],
     });
-    await expectForbidden(history, { sessionKey: "agent:main:main" });
-    await expectForbidden(search, { query: "private", sessionKey: "agent:main:main" });
+    await expectForbidden(call, "sessions_history", { sessionKey: "agent:main:main" });
+    await expectForbidden(call, "sessions_search", {
+      query: "private",
+      sessionKey: "agent:main:main",
+    });
     setRuntimeConfigSnapshot(accessibleConfig);
-    const restored = await list.execute("restored", {});
+    const restored = await call("sessions_list");
     expect(restored.details).toMatchObject({ sessions: agentRows("main") });
   });
 });
