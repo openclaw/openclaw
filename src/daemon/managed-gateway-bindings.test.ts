@@ -24,65 +24,42 @@ import { readGatewayServiceState, resolveGatewayService } from "./service.js";
 // binding selection, physical layout and publication admission are real.
 afterEach(() => vi.restoreAllMocks());
 
-type Install = "system" | "local" | "global";
-type ScenarioOptions = {
-  edited?: boolean;
-  selected?:
-    | "generated"
-    | "native logging"
-    | "authored logging"
-    | "changed logging"
-    | "extra environment"
-    | "wrong native marker"
-    | "changed env file"
-    | "other definition"
-    | "changed argv zero"
-    | "explicit Program";
-  observation?: "stopped" | "mismatch" | "mismatch-stopped" | "uncertain";
-  customLabel?: boolean;
-};
-function makeScenario(
-  loaded: Install,
-  target: Install,
-  refused: boolean,
-  options: ScenarioOptions = {},
-) {
-  return { loaded, target, refused, edited: false, ...options };
-}
-
 it.each([
-  makeScenario("system", "system", true),
-  makeScenario("system", "local", false),
-  makeScenario("system", "system", false, { observation: "stopped" }),
-  makeScenario("system", "system", true, { observation: "mismatch" }),
-  makeScenario("system", "local", false, { observation: "mismatch" }),
-  makeScenario("system", "system", false, { observation: "mismatch-stopped" }),
-  makeScenario("system", "system", true, { observation: "uncertain" }),
-  makeScenario("local", "local", true),
-  makeScenario("local", "global", false),
-  makeScenario("global", "local", false),
-  makeScenario("global", "global", true),
-  makeScenario("local", "local", true, { edited: true }),
-  makeScenario("local", "local", false, { selected: "generated" }),
-  makeScenario("local", "local", true, { selected: "generated", observation: "mismatch" }),
-  makeScenario("local", "local", false, { selected: "native logging" }),
-  makeScenario("local", "local", false, { selected: "authored logging" }),
-  makeScenario("local", "local", true, { selected: "changed logging" }),
-  makeScenario("local", "local", true, { selected: "extra environment" }),
-  makeScenario("local", "local", true, { selected: "wrong native marker" }),
-  makeScenario("local", "local", true, { selected: "changed env file" }),
-  makeScenario("global", "global", true, { selected: "other definition" }),
-  makeScenario("local", "local", true, { selected: "changed argv zero" }),
-  makeScenario("local", "local", false, { selected: "explicit Program" }),
-  makeScenario("global", "global", true, { customLabel: true }),
-])(
-  "uses the loaded launchd definition: loaded=$loaded target=$target edited=$edited selected=$selected custom=$customLabel observation=$observation",
-  async (scenario) =>
+  ["system", "system", true, {}],
+  ["system", "local", false, {}],
+  ["system", "system", false, { observation: "stopped" }],
+  ["system", "system", true, { observation: "mismatch" }],
+  ["system", "local", false, { observation: "mismatch" }],
+  ["system", "system", false, { observation: "mismatch-stopped" }],
+  ["system", "system", true, { observation: "uncertain" }],
+  ["local", "local", true, {}],
+  ["local", "global", false, {}],
+  ["global", "local", false, {}],
+  ["global", "global", true, {}],
+  ["local", "local", true, { edited: true }],
+  ["local", "local", false, { selected: "generated" }],
+  ["local", "local", true, { selected: "generated", observation: "mismatch" }],
+  ["local", "local", false, { selected: "native logging" }],
+  ["local", "local", false, { selected: "authored logging" }],
+  ["local", "local", true, { selected: "changed logging" }],
+  ["local", "local", true, { selected: "extra environment" }],
+  ["local", "local", true, { selected: "wrong native marker" }],
+  ["local", "local", true, { selected: "changed env file" }],
+  ["global", "global", true, { selected: "other definition" }],
+  ["local", "local", true, { selected: "changed argv zero" }],
+  ["local", "local", false, { selected: "explicit Program" }],
+  ["global", "global", true, { customLabel: true }],
+] as const)(
+  "uses loaded launchd definition: loaded=%s target=%s refused=%s options=%j",
+  async (loadedKind, targetKind, refused, scenario) =>
     withTestDir({ prefix: "launchd-loaded-install-" }, async (directory) => {
       mockProcessPlatform("darwin");
       const home = path.join(directory, "home");
-      const customLabel = scenario.customLabel;
+      const hostEnv = { HOME: home };
+      const customLabel = "customLabel" in scenario;
+      const edited = "edited" in scenario;
       const label = customLabel ? "org.example.shared-proof" : "ai.openclaw.shared-proof";
+      const serviceEnv = { ...hostEnv, OPENCLAW_LAUNCHD_LABEL: label };
       const installLocation = (kind: string, base: string) => ({
         root: path.join(directory, `${kind}-install`),
         plist: path.join(base, "Library", "LaunchAgents", `${label}.plist`),
@@ -109,10 +86,10 @@ it.each([
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",
       };
-      const selectedScenario = scenario.selected;
-      const wrapped = selectedScenario && selectedScenario !== "explicit Program";
+      const variant = "selected" in scenario ? scenario.selected : undefined;
+      const wrapped = variant && variant !== "explicit Program";
       const authoredLogging =
-        selectedScenario === "authored logging" || selectedScenario === "changed logging"
+        variant === "authored logging" || variant === "changed logging"
           ? { OSLogRateLimit: "synthetic-authored-value" }
           : {};
       const rawArgv = (root: string) =>
@@ -123,7 +100,7 @@ it.each([
               envFile(root),
               ...argv(root),
             ]
-          : selectedScenario === "explicit Program"
+          : variant === "explicit Program"
             ? [path.join(directory, "argv-zero", "node"), ...argv(root).slice(1)]
             : argv(root);
       for (const [kind, location] of Object.entries(allLocations)) {
@@ -143,13 +120,13 @@ it.each([
         let plist = buildLaunchAgentPlist({
           label,
           programArguments: rawArgv(
-            scenario.edited && kind === "local" ? locations.global.root : location.root,
+            edited && kind === "local" ? locations.global.root : location.root,
           ),
           environment: wrapped ? authoredLogging : environment,
           stdoutPath: path.join(directory, "stdout.log"),
           stderrPath: path.join(directory, "stderr.log"),
         });
-        if (selectedScenario === "explicit Program") {
+        if (variant === "explicit Program") {
           const executable = process.execPath
             .replaceAll("&", "&amp;")
             .replaceAll("<", "&lt;")
@@ -185,40 +162,43 @@ it.each([
         return decodeLaunchAgentPlistFixture(options.input, args[1]);
       });
       const guiDomain = `gui/${process.getuid?.() ?? 501}`;
-      const domain = scenario.loaded === "system" ? "system" : guiDomain;
-      const loaded = allLocations[scenario.loaded];
-      const observation = scenario.observation;
+      const domain = loadedKind === "system" ? "system" : guiDomain;
+      const nativeTarget = `${domain}/${label}`;
+      const targetRoot = allLocations[targetKind].root;
+      const loaded = allLocations[loadedKind];
+      const observation = "observation" in scenario ? scenario.observation : undefined;
       const sourceMismatch = observation?.startsWith("mismatch") ?? false;
       const observedPlist = sourceMismatch
         ? path.join(directory, "loaded-elsewhere.plist")
         : loaded.plist;
       const stopped = observation === "stopped" || observation === "mismatch-stopped";
+      const describeOwner = customLabel || loadedKind === "system" || sourceMismatch;
       const cleanupError = new CommandProcessCleanupError();
       const observedEnv: NodeJS.ProcessEnv = {
-        ...(!selectedScenario || !wrapped ? environment : {}),
+        ...(!variant || !wrapped ? environment : {}),
       };
-      if (selectedScenario) {
+      if (variant) {
         Object.assign(observedEnv, authoredLogging, {
-          XPC_SERVICE_NAME: selectedScenario === "wrong native marker" ? "another.job" : label,
+          XPC_SERVICE_NAME: variant === "wrong native marker" ? "another.job" : label,
         });
-        if (["native logging", "changed logging"].includes(selectedScenario)) {
+        if (["native logging", "changed logging"].includes(variant)) {
           observedEnv.OSLogRateLimit = "synthetic-native-value";
         }
-        if (selectedScenario === "extra environment") {
+        if (variant === "extra environment") {
           observedEnv.NODE_OPTIONS = "--inspect=0";
         }
       }
       const print = [
-        `${domain}/${label} = {`,
+        `${nativeTarget} = {`,
         `\tpath = ${observedPlist}`,
-        `\ttype = ${scenario.loaded === "system" ? "LaunchDaemon" : "LaunchAgent"}`,
+        `\ttype = ${loadedKind === "system" ? "LaunchDaemon" : "LaunchAgent"}`,
         `\tstate = ${stopped ? "exited" : "running"}`,
         ...(stopped ? [] : [`\tpid = ${process.pid}`]),
-        `\tprogram = ${selectedScenario === "explicit Program" ? process.execPath : rawArgv(loaded.root)[0]}`,
+        `\tprogram = ${variant === "explicit Program" ? process.execPath : rawArgv(loaded.root)[0]}`,
         "\targuments = {",
         ...rawArgv(loaded.root).map(
           (arg, index) =>
-            `\t\t${selectedScenario === "changed argv zero" && index === 0 ? "/different/argv-zero" : arg}`,
+            `\t\t${variant === "changed argv zero" && index === 0 ? "/different/argv-zero" : arg}`,
         ),
         "\t}",
         "\tenvironment = {",
@@ -229,17 +209,17 @@ it.each([
       const native = vi.spyOn(launchdExec, "execLaunchctl").mockImplementation(async (args) => {
         expect(args[0]).toBe("print");
         expect([`${guiDomain}/${label}`, `system/${label}`]).toContain(args[1]);
-        if (args[1] === `${domain}/${label}` && observation === "uncertain") {
+        if (args[1] === nativeTarget && observation === "uncertain") {
           throw cleanupError;
         }
-        return args[1] === `${domain}/${label}`
+        return args[1] === nativeTarget
           ? { code: 0, stdout: print, stderr: "", termination: "exit" }
           : { code: 113, stdout: "", stderr: "Could not find service", termination: "exit" };
       });
       let selected: PreManagedServiceStop | undefined;
-      if (selectedScenario) {
+      if (variant) {
         const state = await readGatewayServiceState(resolveGatewayService(), {
-          env: { HOME: home, OPENCLAW_LAUNCHD_LABEL: label },
+          env: serviceEnv,
           requireEffective: true,
         });
         const verdict = await inspectManagedGatewayServiceBeforeUpdate({
@@ -256,7 +236,7 @@ it.each([
           serviceEnv: state.env,
           serviceUpdateVerdict: verdict,
         };
-        if (selectedScenario === "changed env file") {
+        if (variant === "changed env file") {
           await fs.appendFile(
             envFile(locations.local.root),
             "\nexport NODE_OPTIONS='--inspect=0'\n",
@@ -264,8 +244,8 @@ it.each([
         }
       }
       const admission = assertManagedGatewayArtifactPublication({
-        roots: [allLocations[scenario.target].root],
-        env: { HOME: home },
+        roots: [targetRoot],
+        env: hostEnv,
         timeoutMs: 30_000,
         updateInstallKind: "package",
         shouldRestart: !selected,
@@ -275,55 +255,45 @@ it.each([
       if (observation === "uncertain") {
         await expect(admission).rejects.toBe(cleanupError);
         await expect(
-          resolveLiveManagedGatewayDistFence(loaded.root, { env: { HOME: home } }),
+          resolveLiveManagedGatewayDistFence(loaded.root, { env: hostEnv }),
         ).rejects.toBe(cleanupError);
         return;
       }
-      if (scenario.refused) {
+      if (refused) {
         await expect(admission).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
-        if (customLabel || scenario.loaded === "system" || sourceMismatch) {
-          await expect(admission).rejects.toMatchObject({
-            message: expect.stringContaining(observedPlist),
-          });
-          await expect(admission).rejects.toMatchObject({
-            message: expect.stringContaining(`${domain}/${label}`),
-          });
+        if (describeOwner) {
+          for (const detail of [observedPlist, nativeTarget]) {
+            await expect(admission).rejects.toMatchObject({
+              message: expect.stringContaining(detail),
+            });
+          }
         }
       } else {
         await expect(admission).resolves.toBeUndefined();
       }
-      if (
-        ((scenario.loaded === "global" || scenario.loaded === "system") && !selectedScenario) ||
-        sourceMismatch
-      ) {
-        const fence = await resolveLiveManagedGatewayDistFence(allLocations[scenario.target].root, {
-          env: { HOME: home, OPENCLAW_LAUNCHD_LABEL: label },
-        });
-        expect(fence.refuse).toBe(scenario.refused);
-        if ((customLabel || scenario.loaded === "system" || sourceMismatch) && fence.refuse) {
+      if (((loadedKind === "global" || loadedKind === "system") && !variant) || sourceMismatch) {
+        const fence = await resolveLiveManagedGatewayDistFence(targetRoot, { env: serviceEnv });
+        expect(fence.refuse).toBe(refused);
+        if (describeOwner && fence.refuse) {
           expect(fence.message).toContain(observedPlist);
-          expect(fence.message).toContain(`${domain}/${label}`);
+          expect(fence.message).toContain(nativeTarget);
           expect(fence.message).not.toContain("`openclaw gateway stop`");
           expect(fence.message).not.toContain("`openclaw gateway start`");
         }
       }
-      if ((scenario.loaded === "system" && scenario.refused) || sourceMismatch) {
+      if ((loadedKind === "system" && refused) || sourceMismatch) {
         const state = await readManagedGatewayBindingState({
-          env: { HOME: home, OPENCLAW_LAUNCHD_LABEL: label },
+          env: serviceEnv,
           launchAgentPlistPath: loaded.plist,
         });
         expect(state).toMatchObject({
-          launchAgent: { target: `${domain}/${label}`, sourcePath: observedPlist },
+          launchAgent: { target: nativeTarget, sourcePath: observedPlist },
           command: { sourcePath: observedPlist },
         });
         await expect(
-          readCorrespondingLaunchAgentCommand(
-            { HOME: home, OPENCLAW_LAUNCHD_LABEL: label },
-            state.launchAgent!,
-            5_000,
-          ),
+          readCorrespondingLaunchAgentCommand(serviceEnv, state.launchAgent!, 5_000),
         ).resolves.toBeNull();
-        if (scenario.loaded === "system") {
+        if (loadedKind === "system") {
           expect(
             inventory.renderGatewayServiceCleanupHints(
               services.filter((service) => service.sourcePath === systemPlist),
@@ -331,7 +301,7 @@ it.each([
           ).toContain(`sudo launchctl bootout system/${label}`);
         }
       }
-      if (scenario.loaded === "system") {
+      if (loadedKind === "system") {
         expect(native).toHaveBeenCalledWith(["print", `system/${label}`], expect.any(Number));
       }
       expect(native).toHaveBeenCalled();
