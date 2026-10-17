@@ -18,6 +18,13 @@ import {
   resolveGatewayLockPaths,
   resolveGatewayOwnerStatus,
 } from "./gateway-lock.js";
+import { isGatewayStateOwnerDefinitelyStale } from "./gateway-state-owner-record.js";
+import {
+  acquireGatewayStateOwner,
+  acquireStateDatabaseSchemaLease,
+  GatewayStateOwnerContentionError,
+  resolveGatewayStateOwnerPath,
+} from "./gateway-state-owner.js";
 import * as bootReader from "./update-managed-service-handoff-boot.js";
 
 vi.mock("node:timers/promises", async (importOriginal) => ({
@@ -181,6 +188,62 @@ describe("gateway lock namespaces", () => {
       await expect(
         resolveGatewayOwnerStatus(process.pid, payload, platform, undefined, () => 124),
       ).resolves.toBe(comparable ? "dead" : "unknown");
+    }
+  });
+
+  it("preserves a live state owner when same-host boot identity disagrees", () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-owner-boot-mismatch-") };
+    const paths = resolveGatewayLockPaths(env, resolveTestLockDir(env));
+    const databasePath = path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
+    fsSync.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const recordedNamespace = {
+      host: os.hostname(),
+      platform: "win32" as const,
+      identity: "2026-10-17T00:00:00.0000000Z",
+    };
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const boot = vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader");
+    boot.mockReturnValue(() => ({
+      platform: "darwin",
+      identity: "01234567-89ab-cdef-0123-456789abcdef",
+    }));
+    // A successful observation belongs to one platform; discard a prior Windows fixture's cache.
+    readGatewayLockProcessNamespace();
+    platform.mockReturnValue("win32");
+    boot.mockReturnValue(() => ({
+      platform: "win32",
+      identity: "2026-10-17T00:00:01.0000000Z",
+    }));
+    expect(readGatewayLockProcessNamespace()).toEqual({
+      host: os.hostname(),
+      platform: "win32",
+      identity: "2026-10-17T00:00:01.0000000Z",
+    });
+    const ownerPath = resolveGatewayStateOwnerPath(databasePath);
+    fsSync.mkdirSync(path.dirname(ownerPath), { recursive: true });
+    const writeOwner = (pid: number) =>
+      JSON.stringify({
+        pid,
+        ownerId: `boot-mismatch-${pid}`,
+        createdAt: new Date().toISOString(),
+        configPath: paths.configPath,
+        processNamespace: recordedNamespace,
+      });
+
+    const liveRecord = writeOwner(process.pid);
+    fsSync.writeFileSync(ownerPath, liveRecord);
+    expect(isGatewayStateOwnerDefinitelyStale(JSON.parse(liveRecord), ownerPath)).toBe(false);
+    expect(() => acquireStateDatabaseSchemaLease(databasePath, { busyTimeoutMs: 1 })).toThrow(
+      GatewayStateOwnerContentionError,
+    );
+    expect(fsSync.readFileSync(ownerPath, "utf8")).toBe(liveRecord);
+
+    fsSync.writeFileSync(ownerPath, writeOwner(2_147_483_647));
+    const recovered = acquireGatewayStateOwner({ databasePath });
+    try {
+      expect(fsSync.readFileSync(ownerPath, "utf8")).not.toContain("boot-mismatch-2147483647");
+    } finally {
+      recovered.release();
     }
   });
 

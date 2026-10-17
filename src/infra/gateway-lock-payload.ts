@@ -100,6 +100,19 @@ export function classifyGatewayLockProcessNamespace(
   });
 }
 
+/** A live process on this host can outrank a disputed boot observation. */
+export function hasGatewayLockSameHostBootIdentityChanged(value: unknown): boolean {
+  const owner = GatewayProcessNamespaceSchema.safeParse(value).data;
+  const current = readGatewayLockProcessNamespace();
+  return Boolean(
+    owner &&
+    current &&
+    owner.platform === current.platform &&
+    owner.host === current.host &&
+    owner.identity !== current.identity,
+  );
+}
+
 /** File locks and SQLite leases share one boot/namespace and heartbeat policy. */
 export function classifyGatewayOwnerProcessNamespace(
   value: unknown,

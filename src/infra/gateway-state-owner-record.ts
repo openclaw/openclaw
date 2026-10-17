@@ -11,6 +11,7 @@ import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-
 import {
   classifyGatewayLockProcessNamespace,
   GatewayLockNamespaceError,
+  hasGatewayLockSameHostBootIdentityChanged,
   parseGatewayLockPayload,
   readGatewayLockProcessNamespace,
   type LockPayload,
@@ -24,12 +25,18 @@ export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: str
   if (namespace === "unknown") {
     throw new GatewayLockNamespaceError(payload ?? {}, lockPath);
   }
-  return (
-    namespace === "dead" ||
-    isLockOwnerDefinitelyStale({
-      payload: payload ? { pid: payload.pid, starttime: payload.startTime } : null,
-    })
-  );
+  const processIsStale = isLockOwnerDefinitelyStale({
+    payload: payload ? { pid: payload.pid, starttime: payload.startTime } : null,
+  });
+  if (
+    namespace === "dead" &&
+    hasGatewayLockSameHostBootIdentityChanged(payload?.processNamespace)
+  ) {
+    // A Windows boot probe can disagree with itself while the recorded process is
+    // still alive with the same start identity. Only process evidence may reclaim it.
+    return processIsStale;
+  }
+  return namespace === "dead" || processIsStale;
 }
 
 export class StateDatabaseAccessError extends Error {
