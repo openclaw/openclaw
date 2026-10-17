@@ -88,6 +88,36 @@ it("installs the whole committed registry batch before observers and discards sa
       kind: "postimage",
       value: { removed_at: null },
     });
+    installed.clear();
+    const before = database.db.prepare("SELECT total_changes() AS count").get();
+    write(() =>
+      updateRegistryWorktreeInDatabase(database.db, {
+        id: "first",
+        patch: { lastActiveAt: 1, removedAt: undefined, snapshotRef: undefined },
+      }),
+    );
+    expect(database.db.prepare("SELECT total_changes() AS count").get()).toEqual(before);
+    expect(installed.size).toBe(0);
+    write(() =>
+      updateRegistryWorktreeInDatabase(database.db, {
+        id: "first",
+        patch: { snapshotRef: "refs/openclaw/snapshots/first" },
+      }),
+    );
+    expect(installed.get(keys[0]!)).toMatchObject({
+      kind: "postimage",
+      value: { snapshot_ref: "refs/openclaw/snapshots/first" },
+    });
+    write(() =>
+      updateRegistryWorktreeInDatabase(database.db, {
+        id: "first",
+        patch: { snapshotRef: undefined },
+      }),
+    );
+    expect(installed.get(keys[0]!)).toMatchObject({
+      kind: "postimage",
+      value: { snapshot_ref: null },
+    });
   } finally {
     unsubscribeFacts();
   }

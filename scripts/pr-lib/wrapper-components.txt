@@ -1291,6 +1291,7 @@ src/infra/worker-message-metrics.ts
 src/infra/worker-native-error.ts
 src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
+src/infra/worker-native-lifecycle.worker.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-resource.ts
 src/infra/worker-native-task-port.ts
@@ -1680,8 +1681,10 @@ src/process/spawn-broker/ipc.ts
 src/process/spawn-broker/pipe.ts
 src/process/spawn-broker/protocol.ts
 src/process/spawn-broker/resource-authority.ts
+src/process/spawn-broker/resource-client.ts
 src/process/spawn-broker/resource-host.ts
 src/process/spawn-broker/resource-protocol.ts
+src/process/spawn-broker/resource-socket.ts
 src/process/spawn-diagnostics.ts
 src/process/spawn-utils.ts
 src/process/supervisor/cancellation-policy.ts
@@ -1744,6 +1747,8 @@ src/sessions/session-row-changes.ts
 src/sessions/session-state-events.ambient-read.ts
 src/sessions/session-state-events.prune.ts
 src/sessions/session-title-source.ts
+src/sessions/session-upstream-links-publication.ts
+src/sessions/session-upstream-links.kernel.ts
 src/sessions/transcript-events.ts
 src/sessions/transcript-terminal-model.ts
 src/sessions/user-turn-transcript-admission.ts
@@ -2008,11 +2013,13 @@ src/state/schema-migration-backup-tables.ts
 src/state/openclaw-state-ownership-preflight.ts
 src/state/openclaw-state-ownership-worker.ts
 src/state/openclaw-state-read-operation.ts
+src/state/openclaw-state-read-operation-registry.ts
 src/state/openclaw-state-read-pool.ts
 src/state/openclaw-state-read-request.ts
 src/state/openclaw-state-read-scope.ts
 src/state/openclaw-state-read-snapshot.ts
 src/state/openclaw-state-read-worker.ts
+src/state/openclaw-state-read.worker.ts
 src/state/openclaw-state-schema-compatibility.ts
 src/state/openclaw-state-schema-inspection.ts
 src/state/openclaw-state-schema-preflight.ts

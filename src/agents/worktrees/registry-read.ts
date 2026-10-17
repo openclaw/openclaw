@@ -23,7 +23,7 @@ import type {
 
 type RowGuardKind = WorktreeRegistryPredicate["kind"] | "lifecycle" | "publication";
 
-async function readRegistry<
+export async function readRegistry<
   Command extends Extract<RegisteredStateReadCommand, { type: `worktrees.${string}` }>,
 >(
   context: OpenClawStateWorkerContext,
