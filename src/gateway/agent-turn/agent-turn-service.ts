@@ -537,6 +537,7 @@ export function createAgentTurnService(
         };
         const preparedDispatch = await prepareAgentRunDispatch({
           ...runParams,
+          needsImageUnderstanding: content.needsImageUnderstanding,
           lifecycleStorePath: sessionStorePath ?? `agent:${activeSessionAgentId}`,
           assertAdmissionCurrent: assertRequestCurrent,
           hasCurrentClientAuthority,
