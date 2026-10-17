@@ -86,6 +86,7 @@ export type CodexSteeringQueueOptions = Pick<
   | "onQueueAccepted"
   | "onQueueSettled"
   | "userTurnTranscriptRecorder"
+  | "waitForTranscriptCommit"
 >;
 
 type CodexSteeringCommitItem = Pick<
@@ -360,6 +361,11 @@ export function createCodexSteeringQueue(params: {
       });
       for (const item of liveItems) {
         acceptItem(item);
+        // Queue-only callers need the acknowledgement, not the later consumption
+        // receipt. Keep receiver custody until consumption or bounded settlement.
+        if (item.waitForTranscriptCommit === false) {
+          item.resolve();
+        }
       }
       // RPC acceptance is not consumption. A missing user-message echo must not
       // strand the delivery caller until the entire foreground run is cancelled.
