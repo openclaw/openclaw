@@ -161,24 +161,70 @@ struct EmbeddedDashboardContent: View {
 
     var body: some View {
         let storedOperatorToken = AuthenticatedControlUI.storedOperatorToken(config: self.config)
-        VStack(spacing: 0) {
-            self.gatewayUpgradeBanner
-            AuthenticatedControlUIWebView(
-                url: self.url,
-                authScript: AuthenticatedControlUI.authUserScript(
-                    config: self.config,
-                    pageURL: self.url,
-                    storedOperatorToken: storedOperatorToken,
-                    usesNativeNavigationChrome: true),
-                tls: self.config?.tls,
-                deviceSettingsBridge: self.bridge,
-                usesNativeEmbed: true,
-                embedCompatibility: self.embedCompatibility)
-                .id(AuthenticatedControlUI.webContentIdentity(
-                    config: self.config,
-                    storedOperatorToken: storedOperatorToken))
-                .accessibilityIdentifier("SettingsHub.Dashboard")
+        let webContentIdentity = AuthenticatedControlUI.webContentIdentity(
+            config: self.config,
+            storedOperatorToken: storedOperatorToken)
+        Group {
+            if let httpErrorStatus = self.embedCompatibility?.httpErrorStatus {
+                self.httpErrorView(statusCode: httpErrorStatus)
+            } else {
+                VStack(spacing: 0) {
+                    self.gatewayUpgradeBanner
+                    AuthenticatedControlUIWebView(
+                        url: self.url,
+                        authScript: AuthenticatedControlUI.authUserScript(
+                            config: self.config,
+                            pageURL: self.url,
+                            storedOperatorToken: storedOperatorToken,
+                            usesNativeNavigationChrome: true),
+                        tls: self.config?.tls,
+                        deviceSettingsBridge: self.bridge,
+                        usesNativeEmbed: true,
+                        embedCompatibility: self.embedCompatibility)
+                        .id(webContentIdentity)
+                        .accessibilityIdentifier("SettingsHub.Dashboard")
+                }
+            }
         }
+        // The error page has no web view for `.id` to recreate, and the error outlives this view while
+        // a Gateway switch reconnects. Each new view or identity loads once, as the web view did.
+        .onChange(of: webContentIdentity, initial: true) { _, _ in
+            self.embedCompatibility?.reload()
+        }
+    }
+
+    /// Replaces the web view so a Gateway error body never renders raw or reads as an outdated Dashboard;
+    /// Reload recreates the web view for a fresh load.
+    private func httpErrorView(statusCode: Int) -> some View {
+        let message = String(
+            format: String(localized: "The Gateway returned HTTP %ld (%@)."),
+            statusCode,
+            HTTPURLResponse.localizedString(forStatusCode: statusCode).capitalized)
+        return VStack(spacing: 12) {
+            Text("Dashboard unavailable")
+                .font(OpenClawType.subheadSemiBold)
+            Text(message)
+                .font(OpenClawType.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button {
+                self.embedCompatibility?.reload()
+            } label: {
+                Text("Reload")
+                    .font(OpenClawType.subheadSemiBold)
+            }
+            .openClawProminentButton()
+            .accessibilityIdentifier("SettingsHub.DashboardReload")
+            if let openGateway {
+                Button(action: openGateway) {
+                    Text("Open Gateway")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("SettingsHub.DashboardError")
     }
 
     @ViewBuilder private var gatewayUpgradeBanner: some View {

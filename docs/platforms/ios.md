@@ -116,6 +116,12 @@ These pages require the same connected `operator.admin` session as Settings.
 Without that access, they show the native Gateway connection guidance. Instances
 opens **Devices**, the Dashboard owner of paired nodes and connected clients.
 
+If the Gateway answers Settings or one of these pages with a plain-text or JSON
+HTTP error (for example `gateway.controlUi.enabled: false`, or while Control UI
+assets are being prepared), the app shows **Dashboard unavailable** with the
+HTTP status and **Reload** instead of the raw response. HTML error pages, such
+as a proxy's sign-in page, still load in the Dashboard.
+
 The native **New Thread** agent picker shows configured names or agent IDs as
 soon as the roster arrives. Resolved identities update each choice without
 delaying selection; configured names keep precedence and the Gateway's default
