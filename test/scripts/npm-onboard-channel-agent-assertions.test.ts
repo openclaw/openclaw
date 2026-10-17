@@ -119,29 +119,22 @@ function writeLegacyPrimaryAuthProfileStoreSqlite(home: string, store: unknown):
   });
 }
 
-function runAssert(home: string, channel: string, ...tokens: string[]) {
-  return spawnSync(
-    process.execPath,
-    [assertionsPath, "assert-channel-config", channel, ...tokens],
-    {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        HOME: home,
-        NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
-      },
-    },
-  );
-}
-
-function runOnboardAssert(home: string) {
-  return spawnSync(process.execPath, [assertionsPath, "assert-onboard-state", home], {
+function runAssertions(args: string[], home?: string) {
+  return spawnSync(process.execPath, [assertionsPath, ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
+      ...(home ? { HOME: home } : {}),
       NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
     },
   });
+}
+const runAssert = (home: string, channel: string, ...tokens: string[]) =>
+  runAssertions(["assert-channel-config", channel, ...tokens], home);
+const runOnboardAssert = (home: string) => runAssertions(["assert-onboard-state", home]);
+function expectRejected(result: ReturnType<typeof runAssertions>, message: string) {
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain(message);
 }
 
 function runMockModelAssert(home: string, command: string, port: string) {
@@ -301,12 +294,7 @@ describe("npm onboard channel agent assertions", () => {
   it("rejects auth profile stores without a usable OpenAI env ref", () => {
     const cases: unknown[] = [
       "OPENAI_API_KEY",
-      {
-        version: 1,
-        profiles: {
-          "openai:api-key": { note: "OPENAI_API_KEY" },
-        },
-      },
+      { version: 1, profiles: { "openai:api-key": { note: "OPENAI_API_KEY" } } },
     ];
 
     for (const store of cases) {
@@ -314,10 +302,7 @@ describe("npm onboard channel agent assertions", () => {
       writeOnboardConfig(home);
       writeSharedAuthProfileStoreSqlite(home, store);
 
-      const result = runOnboardAssert(home);
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("auth profile did not persist OPENAI_API_KEY env ref");
+      expectRejected(runOnboardAssert(home), "auth profile did not persist OPENAI_API_KEY env ref");
     }
   });
 
@@ -325,10 +310,7 @@ describe("npm onboard channel agent assertions", () => {
     writeOnboardConfig(tempDir);
     writeSharedAuthProfileStoreSqlite(tempDir, authStore({ key: "sk-openclaw-npm-onboard-e2e" }));
 
-    const result = runOnboardAssert(tempDir);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("auth profile persisted the raw OpenAI test key");
+    expectRejected(runOnboardAssert(tempDir), "auth profile persisted the raw OpenAI test key");
   });
 
   it("permits an unrelated main-agent database", () => {
@@ -389,26 +371,28 @@ describe("npm onboard channel agent assertions", () => {
       telegram: { enabled: true, token: storeRef("A") },
     });
 
-    const result = runAssert(tempDir, "telegram", "telegram-token");
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("telegram config did not persist botToken");
+    expectRejected(
+      runAssert(tempDir, "telegram", "telegram-token"),
+      "telegram config did not persist botToken",
+    );
   });
 
   it("rejects plaintext channel tokens in config", () => {
     writeConfig(tempDir, {
       telegram: { enabled: true, botToken: "telegram-token" },
     });
-    const result = runAssert(tempDir, "telegram", "telegram-token");
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("did not persist botToken as a store SecretRef");
+    expectRejected(
+      runAssert(tempDir, "telegram", "telegram-token"),
+      "did not persist botToken as a store SecretRef",
+    );
 
     writeConfig(tempDir, {
       telegram: { enabled: true, botToken: storeRef("A"), note: "telegram-token" },
     });
-    const leaked = runAssert(tempDir, "telegram", "telegram-token");
-    expect(leaked.status).not.toBe(0);
-    expect(leaked.stderr).toContain("telegram config persisted the plaintext botToken");
+    expectRejected(
+      runAssert(tempDir, "telegram", "telegram-token"),
+      "telegram config persisted the plaintext botToken",
+    );
   });
 
   it("validates configured channels in the plain status Channels section", () => {

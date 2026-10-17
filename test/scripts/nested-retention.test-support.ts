@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, expect } from "vitest";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import {
@@ -9,7 +8,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
+import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 
@@ -21,19 +20,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await receipts.close();
 });
-
-// Escaped descendants have no surviving ChildProcess owner. Keep only the
-// foreign-PID extinction check, bounded by the owning test's cancellation.
-async function waitForReaped(pid: number, signal: AbortSignal): Promise<void> {
-  while (isProcessAlive(pid)) {
-    if (signal.aborted) {
-      throw new Error(`process still alive: ${pid}`, { cause: signal.reason });
-    }
-    await delay(5, undefined, { signal }).catch((error: unknown) => {
-      throw new Error(`process still alive: ${pid}`, { cause: error });
-    });
-  }
-}
 
 /** Real escaped writer, inner fixture lifetime, and two non-isolated worker files. */
 export async function proveNestedRetention(
@@ -248,46 +234,47 @@ export default {
   };
   const abort = () => killGroup(child.pid!);
   signal.addEventListener("abort", abort, { once: true });
+  const inspect = (command: string, commandArgs: string[]) =>
+    execFileSync(command, commandArgs, { encoding: "utf8", timeout: 2000 }).trim();
   const taskProcesses = () => {
     let pids: string;
     try {
-      // Select the unique fixture first: unrelated host argv can exceed ps's
-      // capture budget and must never enter test diagnostics or cleanup.
-      pids = execFileSync("pgrep", ["-f", root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")], {
-        encoding: "utf8",
-        timeout: 2000,
-      }).trim();
+      // Filter before ps so unrelated host argv never enters diagnostics or cleanup.
+      pids = inspect("pgrep", ["-f", root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")]);
     } catch (error) {
       if (error && typeof error === "object" && "status" in error && error.status === 1) {
         return [];
       }
       throw error;
     }
-    return execFileSync("ps", ["-p", pids.split(/\s+/).join(","), "-o", "pid=,pgid=,command="], {
-      encoding: "utf8",
-      timeout: 2000,
-    })
+    return inspect("ps", ["-p", pids.split(/\s+/).join(","), "-o", "pid=,pgid=,command="])
       .split("\n")
-      .filter(
-        (line) =>
-          line
-            .trimStart()
-            .replace(/^\d+\s+\d+\s+/, "")
-            .startsWith(process.execPath + " ") &&
-          line.includes(root) &&
-          [
+      .flatMap((line) => {
+        const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+        const command = match?.[3] ?? line.trimStart();
+        if (
+          !command.startsWith(process.execPath + " ") ||
+          !command.includes(root) ||
+          ![
             file("process.mjs"),
             "scripts/run-vitest.mjs",
             "scripts/lib/vitest-worker-bootstrap.mts",
-          ].some((entry) => line.includes(entry)),
-      )
-      .map((line) => {
-        const match = /^\s*(\d+)\s+(\d+)\s/.exec(line);
+          ].some((entry) => command.includes(entry))
+        ) {
+          return [];
+        }
         if (!match) {
           throw new Error("Could not inspect task-owned process");
         }
-        return { pid: Number(match[1]), group: Number(match[2]) };
+        return [{ pid: Number(match[1]), group: Number(match[2]) }];
       });
+  };
+  const killSpawners = () => {
+    const spawners = taskProcesses();
+    for (const { group } of spawners) {
+      killGroup(group);
+    }
+    return spawners;
   };
   try {
     await runQaGatewayFixture(
@@ -345,14 +332,11 @@ export default {
         if (child.exitCode === null && child.signalCode === null) {
           abort();
         }
-        const spawners = taskProcesses();
-        for (const { group } of spawners) {
-          killGroup(group);
-        }
+        const spawners = killSpawners();
         await closed;
         await outcome;
         for (const { pid } of spawners) {
-          await waitForReaped(pid, signal);
+          await waitForDead(pid, signal);
         }
       },
       async () => {
@@ -361,10 +345,7 @@ export default {
           .map((name) => Number(fs.readFileSync(file(name), "utf8")))
           .filter((pid) => Number.isSafeInteger(pid) && pid > 1);
         // Close the spawn-to-PID-publication window using the exact task argv.
-        const remaining = taskProcesses();
-        for (const { group } of remaining) {
-          killGroup(group);
-        }
+        const remaining = killSpawners();
         const pids = [...new Set([...recorded, ...remaining.map(({ pid }) => pid)])];
         await runQaGatewayFixture(
           async () => {},
@@ -373,7 +354,7 @@ export default {
               throw new Error("Invalid owned fixture PID");
             }
             killGroup(pid);
-            await waitForReaped(pid, signal);
+            await waitForDead(pid, signal);
           }),
         );
         expect(taskProcesses()).toEqual([]);

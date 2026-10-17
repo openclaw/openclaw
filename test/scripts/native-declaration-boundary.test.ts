@@ -13,6 +13,9 @@ import {
 } from "./native-boundary-fixture.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+const tempRoot = (name: string) =>
+  fs.realpathSync.native(roots.make(`native-declaration-${name}-`));
+const moduleOptions = { module: "NodeNext", moduleResolution: "NodeNext", target: "ES2023" };
 
 it("keeps test-only ambient augmentation out of declaration roots but in test graphs", () => {
   const root = fs.realpathSync.native(roots.make("native-declaration-production-roots-"));
@@ -108,16 +111,18 @@ it("rechecks a previously missing declaration path after its parent becomes a sy
 function createNativeFixture(root: string, declared = root) {
   fs.mkdirSync(root, { recursive: true });
   const native = materializeNativeCompiler(declared);
-  const write = (file: string, text: string) => writeNativeFixtureFile(root, file, text);
-  const json = (file: string, value: unknown) => write(file, JSON.stringify(value));
+  const write = (files: Record<string, string>, prefix = "") => {
+    for (const [file, text] of Object.entries(files)) {
+      writeNativeFixtureFile(root, prefix ? path.join(prefix, file) : file, text);
+    }
+  };
+  const json = (file: string, value: unknown) => write({ [file]: JSON.stringify(value) });
   const expectInputs = (inputs: string[], ...files: string[]) =>
     expect(inputs).toEqual(expect.arrayContaining(files.map((file) => path.join(root, file))));
-  write("package.json", '{"type":"module"}');
+  write({ "package.json": '{"type":"module"}' });
   json("tsconfig.json", {
     compilerOptions: {
-      module: "NodeNext",
-      moduleResolution: "NodeNext",
-      target: "ES2023",
+      ...moduleOptions,
       types: [],
       skipLibCheck: true,
       rootDir: "src",
@@ -126,10 +131,10 @@ function createNativeFixture(root: string, declared = root) {
     },
     files: ["src/index.ts"],
   });
-  write(
-    "src/index.ts",
-    'import type { Marker } from "synthetic-wrapper";\nexport type { Marker };\nexport const inferredOrigin = declarationOrigin;\n',
-  );
+  write({
+    "src/index.ts":
+      'import type { Marker } from "synthetic-wrapper";\nexport type { Marker };\nexport const inferredOrigin = declarationOrigin;\n',
+  });
   const boundary = createDeclarationInputBoundary(declared);
   const compile = (options: Partial<Parameters<typeof emitNativeDeclarations>[0]> = {}) =>
     emitNativeDeclarations({
@@ -157,28 +162,29 @@ it.each([
     /TS4094: Property 'value' of exported anonymous class type/u,
   ],
 ] as const)("rejects %s diagnostic-mode %s errors", async (diagnostics, _kind, source, error) => {
-  const root = fs.realpathSync.native(roots.make("native-declaration-errors-"));
+  const root = tempRoot("errors");
   const fixture = createNativeFixture(root);
-  fixture.write("src/index.ts", source);
+  fixture.write({ "src/index.ts": source });
   await expect(fixture.compile({ diagnostics, compilerOptions: { lib: ["es5"] } })).rejects.toThrow(
     error,
   );
 });
 
 it("emits identical inferred declarations and maps across fresh compiler processes", async () => {
-  const root = fs.realpathSync.native(roots.make("native-declaration-determinism-"));
+  const root = tempRoot("determinism");
   const fixture = createNativeFixture(root);
   const modules = Array.from({ length: 16 }, (_, index) => `result-${index}`);
-  fixture.write("src/index.ts", modules.map((name) => `export * from "./${name}.js";`).join("\n"));
+  fixture.write({
+    "src/index.ts": modules.map((name) => `export * from "./${name}.js";`).join("\n"),
+  });
   for (const [index, name] of modules.entries()) {
     const result =
       index % 2 ? '{ kind: "value", value } as const' : '{ kind: "value" as const, value }';
-    fixture.write(
-      `src/${name}.ts`,
-      `export function result${index}<T>(ready: boolean, value: T) {
+    fixture.write({
+      [`src/${name}.ts`]: `export function result${index}<T>(ready: boolean, value: T) {
         return ready ? ${result} : { kind: "unavailable" as const };
       }`,
-    );
+    });
   }
   const first = await fixture.compile();
   const second = await fixture.compile();
@@ -188,7 +194,7 @@ it("emits identical inferred declarations and maps across fresh compiler process
 });
 
 it("bounds optional SDK relative imports and manifest probes to the checkout", async () => {
-  const ancestor = fs.realpathSync.native(roots.make("native-declaration-optional-imports-"));
+  const ancestor = tempRoot("optional-imports");
   const root = path.join(ancestor, ".worktrees/validation");
   const fixture = createNativeFixture(root);
   const entry = path.join(root, "src/index.ts");
@@ -196,20 +202,17 @@ it("bounds optional SDK relative imports and manifest probes to the checkout", a
   const requestTypes = (origin: string) => `export interface RequestInit { origin: "${origin}" }\n`;
   const config = JSON.parse(fs.readFileSync(path.join(root, "tsconfig.json"), "utf8"));
   delete config.compilerOptions.types;
-  fixture.write("tsconfig.json", JSON.stringify(config));
-  fixture.write(
-    path.join(ancestor, "node_modules/@types/parent-only/index.d.ts"),
-    'declare const parentOnly: "ancestor";\n',
-  );
-  fixture.write(
-    "node_modules/synthetic-sdk/package.json",
-    '{"name":"synthetic-sdk","type":"module","types":"internal/types.d.ts"}',
-  );
+  fixture.write({
+    "tsconfig.json": JSON.stringify(config),
+    [path.join(ancestor, "node_modules/@types/parent-only/index.d.ts")]:
+      'declare const parentOnly: "ancestor";\n',
+    "node_modules/synthetic-sdk/package.json":
+      '{"name":"synthetic-sdk","type":"module","types":"internal/types.d.ts"}',
+  });
   // SDKs union optional imports at multiple parent depths; a local hit does not
   // prevent another operand from resolving an ancestor's installed declarations.
-  fixture.write(
-    "node_modules/synthetic-sdk/internal/types.d.ts",
-    [
+  fixture.write({
+    "node_modules/synthetic-sdk/internal/types.d.ts": [
       "type NotAny<T> = [0] extends [1 & T] ? never : T;",
       "export type Options =",
       ...Array.from({ length: 7 }, (_, index) => [
@@ -219,24 +222,20 @@ it("bounds optional SDK relative imports and manifest probes to the checkout", a
       ";",
       'export type Fallback = typeof import("synthetic-js");',
     ].join("\n"),
-  );
-  fixture.write(localTypes, requestTypes("local"));
-  fixture.write(
-    path.join(ancestor, "node_modules/synthetic-fetch/index.d.ts"),
-    requestTypes("ancestor"),
-  );
+    [localTypes]: requestTypes("local"),
+    [path.join(ancestor, "node_modules/synthetic-fetch/index.d.ts")]: requestTypes("ancestor"),
+  });
   const manifest = '{"name":"synthetic-js","version":"1.0.0","main":"index.js"}';
   for (const directory of [root, ancestor]) {
-    fixture.write(path.join(directory, "node_modules/synthetic-js/package.json"), manifest);
-    fixture.write(
-      path.join(directory, "node_modules/synthetic-js/index.js"),
-      "exports.value = 1;\n",
-    );
+    fixture.write({
+      [path.join(directory, "node_modules/synthetic-js/package.json")]: manifest,
+      [path.join(directory, "node_modules/synthetic-js/index.js")]: "exports.value = 1;\n",
+    });
   }
-  fixture.write(
-    "src/index.ts",
-    'import type { Options } from "synthetic-sdk";\nexport type { Fallback } from "synthetic-sdk";\nexport function origin(options: Options) { return options.origin; }\n',
-  );
+  fixture.write({
+    "src/index.ts":
+      'import type { Options } from "synthetic-sdk";\nexport type { Fallback } from "synthetic-sdk";\nexport function origin(options: Options) { return options.origin; }\n',
+  });
   const first = await fixture.compile();
   expect(first.declarations.get(entry)?.code).toContain('origin(options: Options): "local"');
   fixture.expectInputs(
@@ -248,19 +247,17 @@ it("bounds optional SDK relative imports and manifest probes to the checkout", a
   );
   expect(first.inputs.every((file) => !path.relative(root, file).startsWith(".."))).toBe(true);
 
-  fixture.write(
-    path.join(ancestor, "node_modules/synthetic-fetch/index.d.ts"),
-    requestTypes("changed-ancestor"),
-  );
-  fixture.write(
-    path.join(ancestor, "node_modules/synthetic-js/package.json"),
-    '{"name":"synthetic-js","version":"2.0.0","main":"missing.js"}',
-  );
+  fixture.write({
+    [path.join(ancestor, "node_modules/synthetic-fetch/index.d.ts")]:
+      requestTypes("changed-ancestor"),
+    [path.join(ancestor, "node_modules/synthetic-js/package.json")]:
+      '{"name":"synthetic-js","version":"2.0.0","main":"missing.js"}',
+  });
   const ancestorChanged = await fixture.compile();
   expect(ancestorChanged.declarations.get(entry)).toEqual(first.declarations.get(entry));
   expect(ancestorChanged.inputs).toEqual(first.inputs);
 
-  fixture.write(localTypes, requestTypes("changed-local"));
+  fixture.write({ [localTypes]: requestTypes("changed-local") });
   const localChanged = await fixture.compile();
   expect(localChanged.declarations.get(entry)?.code).toContain(
     'origin(options: Options): "changed-local"',
@@ -276,7 +273,7 @@ for (const kind of [
   it.skipIf(kind.includes("Windows") && process.platform !== "win32")(
     `emits and captures checkout-local inputs through a ${kind}`,
     async (context) => {
-      const ancestor = fs.realpathSync.native(roots.make("native-declaration-alias-"));
+      const ancestor = tempRoot("alias");
       const longExecutable = kind === "Windows namespaced executable";
       const directory = longExecutable ? "LongNativeCheckout".repeat(10) : "validation";
       const root = path.join(ancestor, ".claude/worktrees", directory);
@@ -323,33 +320,30 @@ for (const kind of [
 }
 
 it("rejects a native reference through an unrelated outside symlink back inside", async () => {
-  const ancestor = fs.realpathSync.native(roots.make("native-declaration-symlink-back-"));
+  const ancestor = tempRoot("symlink-back");
   const root = path.join(ancestor, ".claude/worktrees/validation");
   const f = createNativeFixture(root);
   const outside = path.join(ancestor, "outside-reference");
   fs.symlinkSync(path.join(root, "src"), outside, "junction");
-  f.write("src/referenced.d.ts", 'interface FixtureContract { origin: "local" }\n');
+  f.write({ "src/referenced.d.ts": 'interface FixtureContract { origin: "local" }\n' });
   const reference = path.join(outside, "referenced.d.ts");
-  f.write(
-    "src/index.ts",
-    `/// <reference path="${reference.replaceAll(path.sep, "/")}" />\nexport type Marker = FixtureContract;\n`,
-  );
+  f.write({
+    "src/index.ts": `/// <reference path="${reference.replaceAll(path.sep, "/")}" />\nexport type Marker = FixtureContract;\n`,
+  });
   expect(fs.realpathSync.native(reference)).toBe(path.join(root, "src/referenced.d.ts"));
   await expect(f.compile()).rejects.toThrow(/TS6053/);
 });
 
 it("preserves original nested config paths and explicit override precedence during native emission", async () => {
-  const root = fs.realpathSync.native(roots.make("native-declaration-config-context-"));
+  const root = tempRoot("config-context");
   const fixture = createNativeFixture(root);
   const widget = "packages/widget";
   const entry = path.join(root, widget, "src/entry.ts");
-  const write = (file: string, text: string) => fixture.write(`${widget}/${file}`, text);
+  const write = (files: Record<string, string>) => fixture.write(files, widget);
   const configure = (compilerOptions: Record<string, unknown> = {}) =>
     fixture.json("config/widget-base.json", {
       compilerOptions: {
-        module: "NodeNext",
-        moduleResolution: "NodeNext",
-        target: "ES2023",
+        ...moduleOptions,
         strict: true,
         skipLibCheck: true,
         types: ["*"],
@@ -362,25 +356,25 @@ it("preserves original nested config paths and explicit override precedence duri
       roots: [entry],
       compilerOptions,
     });
-  write("package.json", '{"type":"module"}');
+  write({ "package.json": '{"type":"module"}' });
   fixture.json(`${widget}/tsconfig.json`, {
     extends: "../../config/widget-base.json",
     files: ["src/entry.ts"],
     include: [],
   });
-  write(
-    "node_modules/@types/widget-local/index.d.ts",
-    'declare const widgetTypeOrigin: "widget-local";\n',
-  );
-  fixture.write(
-    "node_modules/@types/root-fallback/index.d.ts",
-    'declare const rootTypeOrigin: "root-fallback";\n',
-  );
+  write({
+    "node_modules/@types/widget-local/index.d.ts":
+      'declare const widgetTypeOrigin: "widget-local";\n',
+  });
+  fixture.write({
+    "node_modules/@types/root-fallback/index.d.ts":
+      'declare const rootTypeOrigin: "root-fallback";\n',
+  });
   configure();
-  write(
-    "src/entry.ts",
-    "export const local = widgetTypeOrigin;\nexport const fallback = rootTypeOrigin;\n",
-  );
+  write({
+    "src/entry.ts":
+      "export const local = widgetTypeOrigin;\nexport const fallback = rootTypeOrigin;\n",
+  });
   const implicit = await emit();
   expect(implicit.declarations.get(entry)?.code).toContain('local: "widget-local"');
   expect(implicit.declarations.get(entry)?.code).toContain('fallback: "root-fallback"');
@@ -401,51 +395,38 @@ it("preserves original nested config paths and explicit override precedence duri
     rootDirs: ["./src", "./override-generated"],
   };
   configure(inheritedOptions);
-  write(
-    "src/entry.ts",
-    'import { contract } from "#contract";\nimport { peer } from "./peer.js";\nexport const resolvedContract = contract;\nexport const resolvedPeer = peer;\nexport const configuredType = configuredTypeOrigin;\n',
-  );
-  for (const phase of [
-    {
-      types: "custom-types",
-      contract: "inherited",
-      generated: "generated",
-      typeOrigin: "config-dir",
-      peer: "root-dir",
-      options: undefined,
-      excluded: "node_modules/@types/widget-local/index.d.ts",
-    },
-    {
-      types: "override-types",
-      contract: "override",
-      generated: "override-generated",
-      typeOrigin: "override-type",
-      peer: "override-root",
-      options: rawOverrides,
-      excluded: "contracts/inherited.ts",
-    },
-  ]) {
-    write(
-      `${phase.types}/marker/index.d.ts`,
-      `declare const configuredTypeOrigin: "${phase.typeOrigin}";\n`,
-    );
-    write(`contracts/${phase.contract}.ts`, `export const contract = "${phase.contract}";\n`);
-    write(`${phase.generated}/peer.ts`, `export const peer = "${phase.peer}";\n`);
-    const emitted = await emit(phase.options);
+  write({
+    "src/entry.ts":
+      'import { contract } from "#contract";\nimport { peer } from "./peer.js";\nexport const resolvedContract = contract;\nexport const resolvedPeer = peer;\nexport const configuredType = configuredTypeOrigin;\n',
+  });
+  for (const [types, contract, generated, typeOrigin, peer] of [
+    ["custom-types", "inherited", "generated", "config-dir", "root-dir"],
+    ["override-types", "override", "override-generated", "override-type", "override-root"],
+  ] as const) {
+    write({
+      [`${types}/marker/index.d.ts`]: `declare const configuredTypeOrigin: "${typeOrigin}";\n`,
+      [`contracts/${contract}.ts`]: `export const contract = "${contract}";\n`,
+      [`${generated}/peer.ts`]: `export const peer = "${peer}";\n`,
+    });
+    const emitted = await emit(contract === "override" ? rawOverrides : undefined);
     const code = emitted.declarations.get(entry)?.code;
-    expect(code).toMatch(new RegExp(`resolvedContract\\s*(?::|=)\\s*"${phase.contract}"`, "u"));
-    expect(code).toMatch(new RegExp(`resolvedPeer\\s*(?::|=)\\s*"${phase.peer}"`, "u"));
-    expect(code).toContain(`configuredType: "${phase.typeOrigin}"`);
+    expect(code).toMatch(new RegExp(`resolvedContract\\s*(?::|=)\\s*"${contract}"`, "u"));
+    expect(code).toMatch(new RegExp(`resolvedPeer\\s*(?::|=)\\s*"${peer}"`, "u"));
+    expect(code).toContain(`configuredType: "${typeOrigin}"`);
     fixture.expectInputs(
       emitted.inputs,
-      `${widget}/${phase.types}/marker/index.d.ts`,
-      `${widget}/contracts/${phase.contract}.ts`,
-      `${widget}/${phase.generated}/peer.ts`,
+      `${widget}/${types}/marker/index.d.ts`,
+      `${widget}/contracts/${contract}.ts`,
+      `${widget}/${generated}/peer.ts`,
     );
-    expect(emitted.inputs).not.toContain(path.join(root, widget, phase.excluded));
+    const excluded =
+      contract === "override"
+        ? "contracts/inherited.ts"
+        : "node_modules/@types/widget-local/index.d.ts";
+    expect(emitted.inputs).not.toContain(path.join(root, widget, excluded));
   }
   // This name exists in an implicit local root, so an accidental fallback would pass.
-  write("src/entry.ts", "export const mustBeMissing = widgetTypeOrigin;\n");
+  write({ "src/entry.ts": "export const mustBeMissing = widgetTypeOrigin;\n" });
   await expect(emit({ ...rawOverrides, typeRoots: [] })).rejects.toThrow(
     /TS2304: Cannot find name 'widgetTypeOrigin'/u,
   );
@@ -455,25 +436,22 @@ it("preserves original nested config paths and explicit override precedence duri
 });
 
 it("preserves default-glob emission with inherited path mappings", async () => {
-  const root = fs.realpathSync.native(roots.make("native-declaration-config-mutation-"));
+  const root = tempRoot("config-mutation");
   const fixture = createNativeFixture(root);
   const entry = path.join(root, "src/index.ts");
   const artifacts = path.join(root, ".artifacts");
   fixture.json("tsconfig.json", {
     compilerOptions: {
-      module: "NodeNext",
-      moduleResolution: "NodeNext",
-      target: "ES2023",
+      ...moduleOptions,
       types: [],
       paths: { "#contract": ["./contracts/before.ts"] },
     },
   });
-  fixture.write("contracts/before.ts", 'export const origin = "before";\n');
-  fixture.write("contracts/after.ts", 'export const origin = "after";\n');
-  fixture.write(
-    "src/index.ts",
-    'import { origin } from "#contract";\nexport const resolvedOrigin = origin;\n',
-  );
+  fixture.write({
+    "contracts/before.ts": 'export const origin = "before";\n',
+    "contracts/after.ts": 'export const origin = "after";\n',
+    "src/index.ts": 'import { origin } from "#contract";\nexport const resolvedOrigin = origin;\n',
+  });
   // No files/include/exclude: the original default glob must not admit its private output.
   const stable = await fixture.compile();
   expect(stable.declarations.get(entry)?.code).toMatch(/resolvedOrigin\s*(?::|=)\s*"before"/u);
@@ -484,12 +462,14 @@ it("preserves default-glob emission with inherited path mappings", async () => {
 it.skipIf(process.platform === "win32")(
   "emits declarations from a checkout path containing a line break",
   async () => {
-    const parent = fs.realpathSync.native(roots.make("native-declaration-trace-framing-"));
+    const parent = tempRoot("trace-framing");
     // Windows does not permit control characters in file names.
     const root = path.join(parent, "split\nname");
     const fixture = createNativeFixture(root);
-    fixture.write("src/index.ts", 'export type { Marker } from "./contract.js";\n');
-    fixture.write("src/contract.ts", "export interface Marker { value: 1 }\n");
+    fixture.write({
+      "src/index.ts": 'export type { Marker } from "./contract.js";\n',
+      "src/contract.ts": "export interface Marker { value: 1 }\n",
+    });
     const emitted = await fixture.compile();
     expect(emitted.declarations.get(path.join(root, "src/index.ts"))?.code).toContain(
       'export type { Marker } from "./contract.js"',
