@@ -66,25 +66,13 @@ describe("AgentSession handoff adoption integration", () => {
     const finalDelivery = vi.fn(async (_text: string) => {});
     const followupRuns: string[] = [];
     const followupOperations: string[] = [];
-    let releaseSteerPromise!: () => void;
-    const steerPromise = new Promise<void>((resolve) => {
-      releaseSteerPromise = resolve;
-    });
-    let reportSteerReturned!: () => void;
-    const steerReturned = new Promise<void>((resolve) => {
-      reportSteerReturned = resolve;
-    });
-    let releaseOwner!: () => void;
-    const ownerReleased = new Promise<void>((resolve) => {
-      releaseOwner = resolve;
-    });
+    const steerGate = createDeferred();
+    const steerReturned = createDeferred();
+    const ownerReleased = createDeferred();
     embeddedRunsTesting.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
     resetRecentQueuedMessageIdDedupe();
-    let resolveSteerEnqueued!: () => void;
-    const steerEnqueued = new Promise<void>((resolve) => {
-      resolveSteerEnqueued = resolve;
-    });
+    const steerEnqueued = createDeferred();
     const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
       ["agent_settled", [async () => settled()]],
     ]);
@@ -98,7 +86,7 @@ describe("AgentSession handoff adoption integration", () => {
         if (!activeSession) {
           throw new Error("session not ready");
         }
-        await steerEnqueued;
+        await steerEnqueued.promise;
         activeSession.agent.steer({
           role: "custom",
           customType: "test.turn-handoff",
@@ -134,7 +122,7 @@ describe("AgentSession handoff adoption integration", () => {
     session.subscribe((event) => {
       lifecycleEvents.push(event.type);
       if (event.type === "queue_update" && event.steering.includes(steerText)) {
-        resolveSteerEnqueued();
+        steerEnqueued.resolve();
       }
     });
     const delayedSteerTarget = {
@@ -142,8 +130,8 @@ describe("AgentSession handoff adoption integration", () => {
       subscribe: session.subscribe.bind(session),
       steer: async (...args: Parameters<AgentSession["steer"]>) => {
         await session.steer(...args);
-        await steerPromise;
-        reportSteerReturned();
+        await steerGate.promise;
+        steerReturned.resolve();
       },
     };
     const queueMessage: EmbeddedAgentQueueHandle["queueMessage"] = async (text, options) =>
@@ -223,7 +211,7 @@ describe("AgentSession handoff adoption integration", () => {
     const typingSignals = createTypingSignaler({ typing, mode: "never", isHeartbeat: false });
     const runState: ReplyOperationRunState = {};
     const runFollowup = async (queued: typeof followupRun) => {
-      await ownerReleased;
+      await ownerReleased.promise;
       const followupOperation = createReplyOperation({
         sessionKey: queueKey,
         sessionId,
@@ -285,8 +273,8 @@ describe("AgentSession handoff adoption integration", () => {
       );
       expect(requests).toHaveLength(1);
       await Promise.all([runActiveReplySteer(steerParams), initialPrompt]);
-      releaseSteerPromise();
-      await steerReturned;
+      steerGate.resolve();
+      await steerReturned.promise;
       await Promise.resolve();
 
       expect(acceptanceEvents).toEqual([false]);
@@ -309,7 +297,7 @@ describe("AgentSession handoff adoption integration", () => {
         }),
       ).resolves.toMatchObject({ queued: false, reason: "transcript_commit_wait_unsupported" });
       activeOperation.complete();
-      releaseOwner();
+      ownerReleased.resolve();
       await vi.waitFor(() => expect(finalDelivery).toHaveBeenCalledExactlyOnceWith(finalText));
 
       expect(adopted).toHaveBeenCalledOnce();
@@ -347,8 +335,8 @@ describe("AgentSession handoff adoption integration", () => {
       expect(finalDelivery).toHaveBeenCalledOnce();
       expect(requests).toHaveLength(2);
     } finally {
-      releaseSteerPromise();
-      releaseOwner();
+      steerGate.resolve();
+      ownerReleased.resolve();
       activeOperation.complete();
       clearActiveEmbeddedRun(sessionId, queueHandle, queueKey);
       clearFollowupQueue(queueKey);

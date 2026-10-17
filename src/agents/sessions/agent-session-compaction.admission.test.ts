@@ -75,18 +75,13 @@ describe("context replacement after write admission", () => {
       sessionKey: "agent:main:rejected-compaction-reopen",
       storePath: path.join(dir, "sessions.json"),
     };
-    await upsertSessionEntryCore(target, {
-      sessionId: target.sessionId,
-      updatedAt: 1,
-    });
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     await appendTranscriptMessage(target, {
       cwd: dir,
       message: { role: "user", content: "authoritative question", timestamp: 1 },
     });
     const sessionManager = SessionManager.open(target, dir);
-    sessionManager.appendMessage(
-      createAssistant(testModel, [{ type: "text", text: "authoritative answer" }]),
-    );
+    sessionManager.appendMessage(createAssistant(testModel, "authoritative answer"));
     const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
       ["session_before_compact", [async () => ({ cancel: true })]],
     ]);
@@ -101,23 +96,13 @@ describe("context replacement after write admission", () => {
 
     sessionManager.flushPendingPersistence();
     const persistedAfterRejection = await loadTranscriptEvents(target);
-    expect(JSON.stringify(persistedAfterRejection)).toBe(JSON.stringify(persistedBefore));
-    expect(
-      persistedAfterRejection.some(
-        (entry) =>
-          typeof entry === "object" &&
-          entry !== null &&
-          "type" in entry &&
-          entry.type === "compaction",
-      ),
-    ).toBe(false);
+    expect(persistedAfterRejection).toEqual(persistedBefore);
 
     const databasePath = resolveSqliteTargetFromSessionStorePath(target.storePath).path;
     expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
     const reopened = SessionManager.open(target, dir);
     try {
       expect(reopened.getBranch()).toEqual(persistedBefore.slice(1));
-      expect(reopened.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
       expect(reopened.buildSessionContext()).toEqual(contextBefore);
     } finally {
       await closeOpenClawAgentDatabaseByPathAsync(databasePath);
@@ -139,41 +124,22 @@ describe("context replacement after write admission", () => {
       const firstUser = seedHistory(manager);
       const summaryReady = createDeferred();
       const published: string[] = [];
+      const beforeCompact = async (event: unknown) => {
+        summaryReady.resolve();
+        return compactionResult(event as BeforeCompactionEvent);
+      };
+      const beforeTree = async () => {
+        summaryReady.resolve();
+        return { summary: { summary: "abandoned branch" } };
+      };
+      const publish = (kind: string) => async () => {
+        published.push(kind);
+      };
       const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-        [
-          "session_before_compact",
-          [
-            async (event) => {
-              summaryReady.resolve();
-              return compactionResult(event as BeforeCompactionEvent);
-            },
-          ],
-        ],
-        [
-          "session_before_tree",
-          [
-            async () => {
-              summaryReady.resolve();
-              return { summary: { summary: "abandoned branch" } };
-            },
-          ],
-        ],
-        [
-          "session_compact",
-          [
-            async () => {
-              published.push("compaction");
-            },
-          ],
-        ],
-        [
-          "session_tree",
-          [
-            async () => {
-              published.push("tree");
-            },
-          ],
-        ],
+        ["session_before_compact", [beforeCompact]],
+        ["session_before_tree", [beforeTree]],
+        ["session_compact", [publish("compaction")]],
+        ["session_tree", [publish("tree")]],
       ]);
       const { session } = await createTestSession({
         sessionManager: manager,

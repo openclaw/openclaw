@@ -24,45 +24,16 @@ import { SettingsManager } from "./settings-manager.js";
 registerAgentSessionLoopTestLifecycle();
 
 describe("AgentSession compaction provider boundary", () => {
-  // A provider throw never cancels on its own: it is caught and retried through the
-  // built-in summarizer. What the session ends up with is decided by that summary --
-  // "recovered" when it passes the quality audit, "degraded" when it is produced but
-  // fails the audit, and "cancelled" only when the caller aborts.
+  // Provider errors fall back to the built-in summarizer; only caller abort cancels.
   it.each([
-    {
-      name: "provider timeout",
-      errorName: "TimeoutError",
-      cancelCaller: false,
-      outcome: "degraded",
-    },
-    {
-      name: "provider timeout recovery",
-      errorName: "TimeoutError",
-      cancelCaller: false,
-      outcome: "recovered",
-    },
-    {
-      name: "ordinary provider failure",
-      errorName: "Error",
-      cancelCaller: false,
-      outcome: "degraded",
-    },
-    {
-      name: "provider-side abort",
-      errorName: "AbortError",
-      cancelCaller: false,
-      outcome: "recovered",
-    },
-    {
-      name: "caller cancellation",
-      errorName: "AbortError",
-      cancelCaller: true,
-      outcome: "cancelled",
-    },
+    ["provider timeout", "TimeoutError", false, "degraded"],
+    ["provider timeout recovery", "TimeoutError", false, "recovered"],
+    ["ordinary provider failure", "Error", false, "degraded"],
+    ["provider-side abort", "AbortError", false, "recovered"],
+    ["caller cancellation", "AbortError", true, "cancelled"],
   ] as const)(
-    "preserves the safeguard boundary after $name",
-    async ({ errorName, cancelCaller, outcome }) => {
-      const recovers = outcome === "recovered";
+    "preserves the safeguard boundary after %s",
+    async (_name, errorName, cancelCaller, outcome) => {
       // A synthetic API plus the registered stream keep both real summarizers offline.
       const model = {
         ...testModel,
@@ -70,19 +41,20 @@ describe("AgentSession compaction provider boundary", () => {
         contextWindow: 4_096,
         maxTokens: 128,
       };
-      const summary = recovers
-        ? [
-            "## Decisions\nThe old prompt was answered.",
-            "## Open TODOs\nNone.",
-            "## Constraints/Rules\nPreserve the session history.",
-            "## Pending user asks\nNone.",
-            "## Exact identifiers\nNone.",
-          ].join("\n\n")
-        : "Core summary without required safeguard headings";
+      const summary =
+        outcome === "recovered"
+          ? [
+              "## Decisions\nThe old prompt was answered.",
+              "## Open TODOs\nNone.",
+              "## Constraints/Rules\nPreserve the session history.",
+              "## Pending user asks\nNone.",
+              "## Exact identifiers\nNone.",
+            ].join("\n\n")
+          : "Core summary without required safeguard headings";
       const sessionManager = SessionManager.inMemory();
       sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
       sessionManager.appendMessage({
-        ...createAssistant(model, [{ type: "text", text: "old answer" }]),
+        ...createAssistant(model, "old answer"),
         timestamp: 2,
       });
       sessionManager.appendMessage({ role: "user", content: "latest prompt", timestamp: 3 });
@@ -123,11 +95,7 @@ describe("AgentSession compaction provider boundary", () => {
         streamMocks.streamSimple.mockImplementation(
           (activeModel: Model, _context: Context, options?: SimpleStreamOptions) =>
             createAssistantResultStream(
-              createAssistant(
-                activeModel,
-                [{ type: "text", text: summary }],
-                options?.signal?.aborted ? "aborted" : "stop",
-              ),
+              createAssistant(activeModel, summary, options?.signal?.aborted ? "aborted" : "stop"),
             ),
         );
         const { session } = await createTestSession({
@@ -171,45 +139,41 @@ describe("AgentSession compaction provider boundary", () => {
             qualityDegraded: (details as { qualityDegraded?: true } | undefined)?.qualityDegraded,
           }));
 
-        const observation = {
-          providerCalls: summarize.mock.calls.length,
-          callerAbortedAtProviderEntry,
-          callerAborted: callerSignal?.aborted,
-          result,
-          outcomes: compactionEnds.map((event) => event.outcome.status),
-          appended,
-        };
+        expect
+          .soft({
+            providerCalls: summarize.mock.calls.length,
+            callerAbortedAtProviderEntry,
+            callerAborted: callerSignal?.aborted,
+            result,
+            outcomes: compactionEnds.map((event) => event.outcome.status),
+            appended,
+          })
+          .toMatchObject({
+            providerCalls: 1,
+            callerAbortedAtProviderEntry: false,
+            callerAborted: cancelCaller,
+            result: !cancelCaller
+              ? { status: "resolved", summary: expect.stringContaining(summary) }
+              : { status: "rejected" },
+            outcomes: [cancelCaller ? "aborted" : "completed"],
+            appended: cancelCaller
+              ? []
+              : [
+                  {
+                    summary: expect.stringContaining(summary),
+                    fromHook: true,
+                    qualityDegraded: outcome === "degraded" ? true : undefined,
+                  },
+                ],
+          });
         expect(subscription.getUsageTotals()?.total ?? 0).toBe(
           streamMocks.streamSimple.mock.calls.length * 2,
         );
         subscription.unsubscribe();
-        const expectedCommit = !cancelCaller ? expect.stringContaining(summary) : undefined;
-        expect.soft(observation).toMatchObject({
-          providerCalls: 1,
-          callerAbortedAtProviderEntry: false,
-          callerAborted: cancelCaller,
-          result: expectedCommit
-            ? { status: "resolved", summary: expectedCommit }
-            : { status: "rejected" },
-          outcomes: [expectedCommit ? "completed" : "aborted"],
-          appended: expectedCommit
-            ? [
-                {
-                  summary: expectedCommit,
-                  fromHook: true,
-                  // The degraded commit records itself on the boundary it produced, so
-                  // "was this degraded?" never has to be read back out of summary prose.
-                  qualityDegraded: outcome === "degraded" ? true : undefined,
-                },
-              ]
-            : [],
-        });
         if (!cancelCaller) {
           expect(streamMocks.streamSimple).toHaveBeenCalled();
           expect(appended[0]?.summary).toContain("old prompt");
         }
-        // Only a cancelled compaction leaves history untouched. A degraded one commits a
-        // boundary on purpose: that is the whole point of degrading instead of cancelling.
         if (outcome === "cancelled") {
           expect.soft(sessionManager.getEntries()).toEqual(entriesBefore);
           expect.soft(session.messages).toEqual(messagesBefore);

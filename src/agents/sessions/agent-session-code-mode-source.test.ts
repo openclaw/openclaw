@@ -45,6 +45,7 @@ import {
   streamMocks,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
+import type { AgentSession } from "./agent-session.js";
 import type { MessageEndEvent, ToolDefinition } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -84,6 +85,47 @@ afterEach(() => {
   resetGlobalHookRunner();
   resetSecretRedactionRegistryForTest();
 });
+
+function mockToolTurn(content: AssistantMessage["content"]) {
+  streamMocks.streamSimple
+    .mockImplementationOnce((model: Model) =>
+      createAssistantResultStream(createAssistant(model, content, "toolUse")),
+    )
+    .mockImplementation((model: Model) =>
+      createAssistantResultStream(createAssistant(model, "Done.")),
+    );
+}
+
+function toolCall(
+  id: string,
+  args: Record<string, unknown>,
+  name = "exec",
+): Extract<AssistantMessage["content"][number], { type: "toolCall" }> {
+  return { type: "toolCall", id, name, arguments: args };
+}
+
+async function openManager(scope: Parameters<typeof SessionManager.open>[0], dir: string) {
+  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  return SessionManager.open(scope, dir);
+}
+
+async function expectReopens(
+  session: AgentSession,
+  manager: SessionManager,
+  scope: Parameters<typeof SessionManager.open>[0],
+  dir: string,
+) {
+  const cached = manager.buildSessionContext();
+  session.dispose();
+  expect(
+    await closeOpenClawAgentDatabaseByPathAsync(
+      resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
+    ),
+  ).toBe(true);
+  const reopened = SessionManager.open(scope, dir);
+  expect(reopened.buildSessionContext()).toEqual(cached);
+  return reopened;
+}
 
 describe("AgentSession runtime and transcript projections", () => {
   const source =
@@ -133,8 +175,7 @@ describe("AgentSession runtime and transcript projections", () => {
       const config = { logging: { redactPatterns: ["fixture-custom-source-value"] } };
       const { dir, scope } = createSessionScope("source-projection", config);
       registerSecretValueForRedaction(registeredLiteral);
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const manager = SessionManager.open(scope, dir);
+      const manager = await openManager(scope, dir);
       guardSessionManager(manager, { config, allowedToolNames: ["exec", "wait"] });
       const originalArgs = {
         ...args,
@@ -145,22 +186,7 @@ describe("AgentSession runtime and transcript projections", () => {
       };
       const { tools, catalogRef } = createCodeModeHarness();
       registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
-      streamMocks.streamSimple
-        .mockImplementationOnce((model: Model) =>
-          createAssistantResultStream(
-            createAssistant(
-              model,
-              [
-                { type: "text", text: source },
-                { type: "toolCall", id: "call_source", name: "exec", arguments: originalArgs },
-              ],
-              "toolUse",
-            ),
-          ),
-        )
-        .mockImplementation((model: Model) =>
-          createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done." }])),
-        );
+      mockToolTurn([{ type: "text", text: source }, toolCall("call_source", originalArgs)]);
       try {
         if (label === "command only") {
           expect(await tools[0]!.execute("direct_alias", { command: source })).toMatchObject({
@@ -206,12 +232,7 @@ describe("AgentSession runtime and transcript projections", () => {
         expect(
           session.state.messages.find((message) => message.role === "assistant"),
         ).toMatchObject({ content: [{ text: source }, { arguments: originalArgs }] });
-        const cached = manager.buildSessionContext();
-        session.dispose();
-        const databasePath = resolveSqliteTargetFromSessionStorePath(scope.storePath).path!;
-        expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
-        const reopened = SessionManager.open(scope, dir);
-        expect(reopened.buildSessionContext()).toEqual(cached);
+        const reopened = await expectReopens(session, manager, scope, dir);
         const { session: nextSession } = await createTestSession({
           sessionManager: reopened,
           customTools: toToolDefinitions(tools),
@@ -321,20 +342,12 @@ describe("AgentSession runtime and transcript projections", () => {
             return { ...message, content: [{ type: "text", text: "Hook preserved call." }, call] };
         }
       };
+      const replaceEndedMessage = async (event: unknown) => ({
+        message: replace((event as MessageEndEvent).message),
+      });
       const resourceLoader =
         hook === "message_end"
-          ? createResourceLoader(
-              new Map([
-                [
-                  "message_end",
-                  [
-                    async (event: unknown) => ({
-                      message: replace((event as MessageEndEvent).message),
-                    }),
-                  ],
-                ],
-              ]),
-            )
+          ? createResourceLoader(new Map([["message_end", [replaceEndedMessage]]]))
           : createResourceLoader();
       if (hook === "before_message_write") {
         initializeGlobalHookRunner(
@@ -348,8 +361,7 @@ describe("AgentSession runtime and transcript projections", () => {
           ]),
         );
       }
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const manager = SessionManager.open(scope, dir);
+      const manager = await openManager(scope, dir);
       guardSessionManager(manager, { config: {}, allowedToolNames: ["exec", "wait", "other"] });
       const { session } = await createTestSession({
         sessionManager: manager,
@@ -364,25 +376,18 @@ describe("AgentSession runtime and transcript projections", () => {
               original = createAssistant(
                 model,
                 [
-                  {
-                    type: "toolCall",
-                    id: `hook_${action}`,
-                    name: "exec",
-                    arguments: {
-                      title: "Compute the harmless number",
-                      code: source,
-                      ...(action === "javascript-to-default" ? { language: "javascript" } : {}),
-                    },
-                  },
+                  toolCall(`hook_${action}`, {
+                    title: "Compute the harmless number",
+                    code: source,
+                    ...(action === "javascript-to-default" ? { language: "javascript" } : {}),
+                  }),
                 ],
                 "toolUse",
               );
               return createAssistantResultStream(original);
             })
             .mockImplementation((model: Model) =>
-              createAssistantResultStream(
-                createAssistant(model, [{ type: "text", text: "Done." }]),
-              ),
+              createAssistantResultStream(createAssistant(model, "Done.")),
             );
           await session.prompt(`Test ${action}.`);
           const stored = manager
@@ -413,26 +418,15 @@ describe("AgentSession runtime and transcript projections", () => {
           }
           // A later ordinary append has the same source fidelity as a live model response.
           const late = structuredClone(original!);
-          late.content = [
-            { type: "toolCall", id: `late_${action}`, name: "exec", arguments: { code: source } },
-          ];
+          late.content = [toolCall(`late_${action}`, { code: source })];
           manager.appendMessage(late);
           guardSessionManager(manager).clearPendingToolResults?.();
           const lateStored = manager.getLeafEntry();
           expect(lateStored).toMatchObject({
-            message: {
-              content: [{ arguments: { code: source } }],
-            },
+            message: { content: [{ arguments: { code: source } }] },
           });
         }
-        const cached = manager.buildSessionContext();
-        session.dispose();
-        expect(
-          await closeOpenClawAgentDatabaseByPathAsync(
-            resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
-          ),
-        ).toBe(true);
-        expect(SessionManager.open(scope, dir).buildSessionContext()).toEqual(cached);
+        await expectReopens(session, manager, scope, dir);
       } finally {
         await resetCodeModeTestState();
         resetGlobalHookRunner();
@@ -463,8 +457,7 @@ describe("AgentSession runtime and transcript projections", () => {
         },
       ]),
     );
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const manager = SessionManager.open(scope, dir);
+    const manager = await openManager(scope, dir);
     guardSessionManager(manager, { config: {}, allowedToolNames: ["exec", "wait", "other"] });
     const otherParameters = Type.Object({ code: Type.String() });
     const other: ToolDefinition<typeof otherParameters> = {
@@ -477,28 +470,11 @@ describe("AgentSession runtime and transcript projections", () => {
         details: { receivedOriginal: args.code === source },
       }),
     };
-    streamMocks.streamSimple
-      .mockImplementationOnce((model: Model) =>
-        createAssistantResultStream(
-          createAssistant(
-            model,
-            [
-              { type: "toolCall", id: "mixed_rejected", name: "unavailable", arguments: {} },
-              {
-                type: "toolCall",
-                id: "mixed_code",
-                name: "exec",
-                arguments: { title: "Compute the harmless number", code: source },
-              },
-              { type: "toolCall", id: "mixed_other", name: "other", arguments: { code: source } },
-            ],
-            "toolUse",
-          ),
-        ),
-      )
-      .mockImplementation((model: Model) =>
-        createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done." }])),
-      );
+    mockToolTurn([
+      toolCall("mixed_rejected", {}, "unavailable"),
+      toolCall("mixed_code", { title: "Compute the harmless number", code: source }),
+      toolCall("mixed_other", { code: source }, "other"),
+    ]);
     try {
       const { session } = await createTestSession({
         sessionManager: manager,
@@ -529,21 +505,11 @@ describe("AgentSession runtime and transcript projections", () => {
         message: {
           content: [
             { id: "mixed_code", arguments: { code: source } },
-            {
-              id: "mixed_other",
-              arguments: { code: source },
-            },
+            { id: "mixed_other", arguments: { code: source } },
           ],
         },
       });
-      const cached = manager.buildSessionContext();
-      session.dispose();
-      expect(
-        await closeOpenClawAgentDatabaseByPathAsync(
-          resolveSqliteTargetFromSessionStorePath(scope.storePath).path!,
-        ),
-      ).toBe(true);
-      expect(SessionManager.open(scope, dir).buildSessionContext()).toEqual(cached);
+      await expectReopens(session, manager, scope, dir);
     } finally {
       resetGlobalHookRunner();
       await resetCodeModeTestState();
@@ -553,8 +519,7 @@ describe("AgentSession runtime and transcript projections", () => {
   it("preserves source across reused managers and ordinary append batches", async () => {
     setRuntimeConfigSnapshot({});
     const { dir, scope } = createSessionScope("source-reuse");
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const manager = SessionManager.open(scope, dir);
+    const manager = await openManager(scope, dir);
     const { tools, catalogRef } = createCodeModeHarness();
     registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
     const shell: ToolDefinition = {
@@ -571,29 +536,14 @@ describe("AgentSession runtime and transcript projections", () => {
           allowedToolNames: ["exec", "wait"],
           runId: mode,
         });
-        streamMocks.streamSimple
-          .mockImplementationOnce((model: Model) =>
-            createAssistantResultStream(
-              createAssistant(
-                model,
-                [
-                  {
-                    type: "toolCall",
-                    id: "reused_id",
-                    name: "exec",
-                    arguments:
-                      mode === "code"
-                        ? { title: "Compute the harmless number", code: source }
-                        : { command: source },
-                  },
-                ],
-                "toolUse",
-              ),
-            ),
-          )
-          .mockImplementation((model: Model) =>
-            createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done." }])),
-          );
+        mockToolTurn([
+          toolCall(
+            "reused_id",
+            mode === "code"
+              ? { title: "Compute the harmless number", code: source }
+              : { command: source },
+          ),
+        ]);
         const { session } = await createTestSession({
           sessionManager: manager,
           customTools: mode === "code" ? toToolDefinitions(tools) : [shell],

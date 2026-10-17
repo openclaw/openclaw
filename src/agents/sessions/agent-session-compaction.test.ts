@@ -15,7 +15,7 @@ import { cleanupSessionStateForTest } from "../../test-utils/session-state-clean
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { compactWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { subscribeEmbeddedAgentSession } from "../embedded-agent-subscribe.js";
-import { estimateContextTokens } from "../runtime/index.js";
+import { estimateContextTokens, type AgentMessage } from "../runtime/index.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import {
   agentSessionAutomaticCompaction,
@@ -40,6 +40,7 @@ import {
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import { createEventBus } from "./event-bus.js";
 import { loadExtensionFromFactory } from "./extensions/loader.js";
+import type { ExtensionEvent } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
@@ -53,6 +54,65 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 registerAgentSessionLoopTestLifecycle();
 
+function appendExchange(
+  manager: SessionManager,
+  prompt = "old prompt",
+  answer = "old answer",
+  timestamp = 1,
+) {
+  const userId = manager.appendMessage(makeUserMessage(prompt, timestamp));
+  manager.appendMessage({ ...createAssistant(testModel, answer), timestamp: timestamp + 1 });
+  return userId;
+}
+
+function expectAbortedCompaction(
+  onAgentEvent: ReturnType<typeof vi.fn>,
+  subscription: ReturnType<typeof subscribeEmbeddedAgentSession>,
+  manager: SessionManager,
+  manual = false,
+) {
+  expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+  const events = onAgentEvent.mock.calls
+    .map(([event]) => event)
+    .filter((event) => event.stream === "compaction");
+  expect(events).toEqual([
+    {
+      stream: "compaction",
+      data: { phase: "start", itemId: expect.any(String) },
+      ...(manual ? { transcriptStart: null } : {}),
+    },
+    {
+      stream: "compaction",
+      data: {
+        phase: "end",
+        itemId: events[0]?.data.itemId,
+        outcome: "aborted",
+        completed: false,
+        willRetry: false,
+      },
+    },
+  ]);
+  expect(subscription.getCompactionCount()).toBe(0);
+  expect(subscription.getLastCompactionTokensAfter()).toBeUndefined();
+  expect(manager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+}
+
+const retainedContent = [
+  { type: "thinking", thinking: "old think" },
+  { type: "thinking", thinking: "old think" },
+  { type: "thinking", thinking: "old think" },
+  { type: "redacted_thinking" },
+  { type: "text", text: "retained answer" },
+];
+
+function retainedAnswer(messages: readonly AgentMessage[]) {
+  return messages.find(
+    (message) =>
+      message.role === "assistant" &&
+      message.content.some((block) => block.type === "text" && block.text === "retained answer"),
+  );
+}
+
 function createStaleThinkingContent(): AssistantMessage["content"] {
   return [
     { type: "thinking", thinking: "old think", thinkingSignature: "stale-thinking" },
@@ -63,24 +123,11 @@ function createStaleThinkingContent(): AssistantMessage["content"] {
   ] as unknown as AssistantMessage["content"];
 }
 
-function createResultHandlers(
-  summary: string,
-  firstKeptEntryId?: string,
-  onPreparation?: (preparation: { latestUnresolvedUserRequest?: string }) => void,
-) {
+function createResultHandlers(summary: string, firstKeptEntryId?: string) {
   const handlers = createCompactionHandlers();
   handlers.set("session_before_compact", [
     async (event: unknown) => {
-      const preparation = (
-        event as {
-          preparation: {
-            firstKeptEntryId: string;
-            latestUnresolvedUserRequest?: string;
-            tokensBefore: number;
-          };
-        }
-      ).preparation;
-      onPreparation?.(preparation);
+      const { preparation } = event as Extract<ExtensionEvent, { type: "session_before_compact" }>;
       return {
         compaction: {
           summary,
@@ -106,16 +153,8 @@ describe("AgentSession compaction", () => {
     "prepares $name for core without changing the extension input",
     async ({ instructions, expectedFocus }) => {
       const sessionManager = SessionManager.inMemory();
-      sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-      sessionManager.appendMessage({
-        ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
-        timestamp: 2,
-      });
-      sessionManager.appendMessage({ role: "user", content: "split prompt", timestamp: 3 });
-      sessionManager.appendMessage({
-        ...createAssistant(testModel, [{ type: "text", text: "retained answer" }]),
-        timestamp: 4,
-      });
+      appendExchange(sessionManager);
+      appendExchange(sessionManager, "split prompt", "retained answer", 3);
       const observedInstructions: Array<string | undefined> = [];
       const prompts: string[] = [];
       const eventBus = createEventBus();
@@ -147,9 +186,7 @@ describe("AgentSession compaction", () => {
               ? message.content
               : message.content.map((block) => (block.type === "text" ? block.text : "")).join(""),
           );
-          return createAssistantResultStream(
-            createAssistant(model, [{ type: "text", text: "compacted summary" }]),
-          );
+          return createAssistantResultStream(createAssistant(model, "compacted summary"));
         });
         const { session } = await createTestSession({
           sessionManager,
@@ -165,13 +202,9 @@ describe("AgentSession compaction", () => {
         expect(observedInstructions).toEqual([instructions]);
         expect(prompts).toHaveLength(2);
         for (const prompt of prompts) {
-          if (expectedFocus) {
-            expect.soft(prompt).toContain(`<untrusted-text>\n${expectedFocus}\n</untrusted-text>`);
-            expect.soft(prompt).not.toContain("\u0000");
-            expect.soft(prompt).not.toContain("\u202E");
-          } else {
-            expect.soft(prompt).not.toContain("Additional focus:");
-          }
+          expect.soft(prompt).toContain(`<untrusted-text>\n${expectedFocus}\n</untrusted-text>`);
+          expect.soft(prompt).not.toContain("\u0000");
+          expect.soft(prompt).not.toContain("\u202E");
         }
         expect(
           sessionManager
@@ -197,12 +230,7 @@ describe("AgentSession compaction", () => {
         error: `No API key found for ${activeModel.provider}`,
       });
       return createAssistantResultStream(
-        createAssistant(
-          activeModel,
-          [{ type: "text", text: "complete answer" }],
-          "stop",
-          activeModel.contextWindow,
-        ),
+        createAssistant(activeModel, "complete answer", "stop", activeModel.contextWindow),
       );
     });
     const compactionEvents = collectCompactionEnds(session);
@@ -232,12 +260,7 @@ describe("AgentSession compaction", () => {
     const sessionManager = SessionManager.open(scope, dir);
     sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
     sessionManager.appendMessage({
-      ...createAssistant(
-        testModel,
-        [{ type: "text", text: "old answer" }],
-        "stop",
-        testModel.contextWindow,
-      ),
+      ...createAssistant(testModel, "old answer", "stop", testModel.contextWindow),
       timestamp: 2,
     });
     const currentUser = {
@@ -251,9 +274,7 @@ describe("AgentSession compaction", () => {
     const requests: Context[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
       requests.push(context);
-      return createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "complete answer" }]),
-      );
+      return createAssistantResultStream(createAssistant(activeModel, "complete answer"));
     });
     const { session } = await createTestSession({
       sessionManager,
@@ -302,11 +323,7 @@ describe("AgentSession compaction", () => {
 
   it("accounts every automatic compaction response before summary validation", async () => {
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-    sessionManager.appendMessage({
-      ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
-      timestamp: 2,
-    });
+    appendExchange(sessionManager);
     sessionManager.appendMessage({ role: "user", content: "latest prompt", timestamp: 3 });
     const requestCount = mockInvalidThenTextSummary("condensed history");
     const { session } = await createTestSession({
@@ -331,14 +348,12 @@ describe("AgentSession compaction", () => {
     const abandonedId = sessionManager.appendMessage(makeUserMessage("abandoned branch", 2));
     sessionManager.branch(rootId);
     const targetId = sessionManager.appendMessage({
-      ...createAssistant(testModel, [{ type: "text", text: "target branch" }]),
+      ...createAssistant(testModel, "target branch"),
       timestamp: 3,
     });
     sessionManager.branch(abandonedId);
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-      createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "branch summary" }], "stop", 7),
-      ),
+      createAssistantResultStream(createAssistant(activeModel, "branch summary", "stop", 7)),
     );
     const { session } = await createTestSession({ sessionManager });
     const subscription = subscribeEmbeddedAgentSession({
@@ -372,12 +387,7 @@ describe("AgentSession compaction", () => {
           throw syntheticError;
         }
         return createAssistantResultStream(
-          createAssistant(
-            activeModel,
-            [{ type: "text", text: "complete answer" }],
-            "stop",
-            activeModel.contextWindow,
-          ),
+          createAssistant(activeModel, "complete answer", "stop", activeModel.contextWindow),
         );
       },
     );
@@ -395,39 +405,14 @@ describe("AgentSession compaction", () => {
 
     await session.prompt("continue");
 
-    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-    const compactionEvents = onAgentEvent.mock.calls
-      .map(([event]) => event)
-      .filter((event) => event.stream === "compaction");
-    expect(compactionEvents).toHaveLength(2);
-    expect(compactionEvents[0]).toEqual({
-      stream: "compaction",
-      data: { phase: "start", itemId: expect.any(String) },
-    });
-    expect(compactionEvents.at(-1)).toEqual({
-      stream: "compaction",
-      data: {
-        phase: "end",
-        itemId: compactionEvents[0].data.itemId,
-        outcome: "aborted",
-        completed: false,
-        willRetry: false,
-      },
-    });
-    expect(subscription.getCompactionCount()).toBe(0);
-    expect(subscription.getLastCompactionTokensAfter()).toBeUndefined();
-    expect(sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+    expectAbortedCompaction(onAgentEvent, subscription, sessionManager);
     expect(thresholdRequestState).toBeUndefined();
     subscription.unsubscribe();
   });
 
   it("projects a rejected manual cancellation as aborted without recording compaction", async () => {
     const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-    sessionManager.appendMessage({
-      ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
-      timestamp: 2,
-    });
+    appendExchange(sessionManager);
     const syntheticError = new Error("synthetic manual cancellation rejection");
     streamMocks.streamSimple.mockImplementation(
       (_activeModel: Model, _context: Context, options?: SimpleStreamOptions) => {
@@ -446,29 +431,7 @@ describe("AgentSession compaction", () => {
 
     await expect(session.compact()).rejects.toBe(syntheticError);
 
-    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-    const compactionEvents = onAgentEvent.mock.calls
-      .map(([event]) => event)
-      .filter((event) => event.stream === "compaction");
-    expect(compactionEvents).toHaveLength(2);
-    expect(compactionEvents[0]).toEqual({
-      stream: "compaction",
-      data: { phase: "start", itemId: expect.any(String) },
-      transcriptStart: null,
-    });
-    expect(compactionEvents.at(-1)).toEqual({
-      stream: "compaction",
-      data: {
-        phase: "end",
-        itemId: compactionEvents[0].data.itemId,
-        outcome: "aborted",
-        completed: false,
-        willRetry: false,
-      },
-    });
-    expect(subscription.getCompactionCount()).toBe(0);
-    expect(subscription.getLastCompactionTokensAfter()).toBeUndefined();
-    expect(sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+    expectAbortedCompaction(onAgentEvent, subscription, sessionManager, true);
     subscription.unsubscribe();
   });
 
@@ -566,17 +529,9 @@ describe("AgentSession compaction", () => {
   it("reports replacement tokens and the exact equal-summary entry before a post-commit hook finishes", async () => {
     const sessionManager = SessionManager.inMemory();
     const summary = "The same bounded summary";
-    const oldUserId = sessionManager.appendMessage(makeUserMessage("old prompt", 1));
-    sessionManager.appendMessage({
-      ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
-      timestamp: 2,
-    });
+    const oldUserId = appendExchange(sessionManager);
     const oldCompactionId = sessionManager.appendCompaction(summary, oldUserId, 100);
-    const recentUserId = sessionManager.appendMessage(makeUserMessage("recent prompt", 3));
-    sessionManager.appendMessage({
-      ...createAssistant(testModel, [{ type: "text", text: "recent answer" }]),
-      timestamp: 4,
-    });
+    const recentUserId = appendExchange(sessionManager, "recent prompt", "recent answer", 3);
     const hookEntered = createDeferred();
     const releaseHook = createDeferred();
     const eventBus = createEventBus();
@@ -664,7 +619,7 @@ describe("AgentSession compaction", () => {
       return createAssistantResultStream(
         agentRequests === 1
           ? createOverflowAssistant(activeModel)
-          : createAssistant(activeModel, [{ type: "text", text: "complete retry" }]),
+          : createAssistant(activeModel, "complete retry"),
       );
     });
     const { session } = await createTestSession({
@@ -724,24 +679,14 @@ describe("AgentSession compaction", () => {
       ...createAssistant(testModel, createStaleThinkingContent()),
       timestamp: Date.now() - 2,
     });
-    const handlers = createCompactionHandlers();
-    handlers.set("session_before_compact", [
-      async (event: unknown) => ({
-        compaction: {
-          summary: "condensed history",
-          firstKeptEntryId: retainedAssistantId,
-          tokensBefore: (event as { preparation: { tokensBefore: number } }).preparation
-            .tokensBefore,
-        },
-      }),
-    ]);
+    const handlers = createResultHandlers("condensed history", retainedAssistantId);
     const requests: Context[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
       requests.push(context);
       return createAssistantResultStream(
         requests.length === 1
           ? createOverflowAssistant(activeModel)
-          : createAssistant(activeModel, [{ type: "text", text: "complete retry" }]),
+          : createAssistant(activeModel, "complete retry"),
       );
     });
     const { session } = await createTestSession({
@@ -753,20 +698,9 @@ describe("AgentSession compaction", () => {
     await session.prompt("long request");
 
     expect(requests).toHaveLength(2);
-    const retained = session.messages.find(
-      (message) =>
-        message.role === "assistant" &&
-        message.content.some((block) => block.type === "text" && block.text === "retained answer"),
-    );
-    expect(retained).toMatchObject({
+    expect(retainedAnswer(session.messages)).toMatchObject({
       role: "assistant",
-      content: [
-        { type: "thinking", thinking: "old think" },
-        { type: "thinking", thinking: "old think" },
-        { type: "thinking", thinking: "old think" },
-        { type: "redacted_thinking" },
-        { type: "text", text: "retained answer" },
-      ],
+      content: retainedContent,
     });
     expect(JSON.stringify(requests[1]?.messages)).not.toContain("stale-");
   });
@@ -806,9 +740,7 @@ describe("AgentSession compaction", () => {
     });
     const compactionEvents: AgentSessionEvent[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-      createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 20),
-      ),
+      createAssistantResultStream(createAssistant(activeModel, "complete answer", "stop", 20)),
     );
     const { session } = await createTestSession({
       model,
@@ -822,21 +754,10 @@ describe("AgentSession compaction", () => {
       }
     });
 
-    const retained = session.messages.find(
-      (message) =>
-        message.role === "assistant" &&
-        message.content.some((block) => block.type === "text" && block.text === "retained answer"),
-    );
-    expect(retained).toMatchObject({
+    expect(retainedAnswer(session.messages)).toMatchObject({
       role: "assistant",
       usage: { input: 0, output: 0, totalTokens: 0 },
-      content: [
-        { type: "thinking", thinking: "old think" },
-        { type: "thinking", thinking: "old think" },
-        { type: "thinking", thinking: "old think" },
-        { type: "redacted_thinking" },
-        { type: "text", text: "retained answer" },
-      ],
+      content: retainedContent,
     });
 
     await session.prompt("continue restored session");

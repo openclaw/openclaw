@@ -14,6 +14,7 @@ import { cleanupSessionStateForTest } from "../../test-utils/session-state-clean
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import {
+  collectCompactionEnds,
   createAssistant,
   createAssistantResultStream,
   createTestSession,
@@ -86,7 +87,7 @@ describe("AgentSession degraded compaction reload", () => {
       // The boundary shape written before this change: no qualityDegraded field.
       sessionManager.appendMessage({ role: "user", content: "earliest prompt", timestamp: 1 });
       const keptId = sessionManager.appendMessage({
-        ...createAssistant(model, [{ type: "text", text: "earliest answer" }]),
+        ...createAssistant(model, "earliest answer"),
         timestamp: 2,
       });
       sessionManager.appendCompaction(
@@ -105,7 +106,7 @@ describe("AgentSession degraded compaction reload", () => {
       timestamp: 3,
     });
     sessionManager.appendMessage({
-      ...createAssistant(model, [{ type: "text", text: "old answer" }]),
+      ...createAssistant(model, "old answer"),
       timestamp: 4,
     });
     sessionManager.appendMessage({ role: "user", content: "latest prompt", timestamp: 5 });
@@ -131,9 +132,7 @@ describe("AgentSession degraded compaction reload", () => {
         ),
       );
       streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-        createAssistantResultStream(
-          createAssistant(activeModel, [{ type: "text", text: "Summary without headings" }]),
-        ),
+        createAssistantResultStream(createAssistant(activeModel, "Summary without headings")),
       );
       const settingsManager = SettingsManager.inMemory({
         compaction: { enabled: false, reserveTokens: 64, keepRecentTokens: 1 },
@@ -147,12 +146,7 @@ describe("AgentSession degraded compaction reload", () => {
       });
       const beforeCompaction = expectDefined(loadSessionEntry(target), "session fixture exists");
       expect(beforeCompaction.compactionQualityDegraded).toBeUndefined();
-      const compactionEvents: unknown[] = [];
-      session.subscribe((event) => {
-        if (event.type === "compaction_end") {
-          compactionEvents.push(event);
-        }
-      });
+      const compactionEvents = collectCompactionEnds(session);
       await session.compact();
       expect(compactionEvents).toEqual([
         expect.objectContaining({
@@ -183,9 +177,7 @@ describe("AgentSession degraded compaction reload", () => {
       const requests: Context[] = [];
       streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
         requests.push(context);
-        return createAssistantResultStream(
-          createAssistant(activeModel, [{ type: "text", text: "continued answer" }]),
-        );
+        return createAssistantResultStream(createAssistant(activeModel, "continued answer"));
       });
       const continued = await createTestSession({
         model,
