@@ -438,53 +438,67 @@ describe("chat page retained sessions", () => {
     },
   );
 
-  it("hands route-owned focus to the final page across pane replacement", async () => {
-    const sourcePage = new ChatPage();
-    setNavigationContext(sourcePage);
-    sourcePage.data = {
-      sessionKey: "main",
-      draft: "What can you do?",
-      focusComposer: true,
-    };
-    const page = new ChatPage();
-    setNavigationContext(page);
-    page.data = { sessionKey: "main" };
+  it.each(["persistent focus", "transient focus", "pointer intent"] as const)(
+    "hands route-owned focus to the final page across pane replacement (%s)",
+    async (intent) => {
+      const sourcePage = new ChatPage();
+      setNavigationContext(sourcePage);
+      sourcePage.data = {
+        sessionKey: "main",
+        draft: "What can you do?",
+        focusComposer: true,
+      };
+      const page = new ChatPage();
+      setNavigationContext(page);
+      page.data = { sessionKey: "main" };
 
-    vi.useFakeTimers();
-    try {
-      document.body.append(sourcePage);
-      await settleChatPage(sourcePage);
-      await Promise.resolve();
+      vi.useFakeTimers();
+      try {
+        document.body.append(sourcePage);
+        await settleChatPage(sourcePage);
+        await Promise.resolve();
 
-      document.body.append(page);
-      await settleChatPage(page);
-      const pane = paneIn(page);
-      expect(pane.focusComposer).toBe(true);
+        document.body.append(page);
+        await settleChatPage(page);
+        const pane = paneIn(page);
+        expect(pane.focusComposer).toBe(true);
 
-      const textarea = composer(pane);
-      vi.advanceTimersByTime(250);
-      expect(document.activeElement).toBe(textarea);
+        const textarea = composer(pane);
+        vi.advanceTimersByTime(250);
+        expect(document.activeElement).toBe(textarea);
 
-      const replacementPane = document.createElement("openclaw-chat-pane") as RenderedPane;
-      replacementPane.active = true;
-      replacementPane.sessionKey = "main";
-      const replacementTextarea = composer(replacementPane);
-      pane.replaceWith(replacementPane);
+        const replacementPane = document.createElement("openclaw-chat-pane") as RenderedPane;
+        replacementPane.active = true;
+        replacementPane.sessionKey = "main";
+        const replacementTextarea = composer(replacementPane);
+        pane.replaceWith(replacementPane);
 
-      vi.advanceTimersByTime(250);
-      expect(document.activeElement).toBe(replacementTextarea);
+        vi.advanceTimersByTime(250);
+        expect(document.activeElement).toBe(replacementTextarea);
 
-      const userTarget = document.createElement("button");
-      document.body.append(userTarget);
-      userTarget.focus();
-      vi.advanceTimersByTime(250);
-      expect(document.activeElement).toBe(userTarget);
-    } finally {
-      sourcePage.remove();
-      page.remove();
-      vi.useRealTimers();
-    }
-  });
+        const userTarget = document.createElement("button");
+        document.body.append(userTarget);
+        if (intent === "pointer intent") {
+          replacementTextarea.blur();
+          userTarget.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+        } else {
+          userTarget.focus();
+          expect(document.activeElement).toBe(userTarget);
+          if (intent === "transient focus") {
+            userTarget.blur();
+          }
+        }
+        vi.advanceTimersByTime(250);
+        expect(document.activeElement).toBe(
+          intent === "persistent focus" ? userTarget : document.body,
+        );
+      } finally {
+        sourcePage.remove();
+        page.remove();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("rejects a pane callback while a newer browser route is loading", async () => {
     const { navigation, page } = await mountRetainedPage("main");

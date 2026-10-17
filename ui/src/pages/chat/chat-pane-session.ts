@@ -294,7 +294,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       scheduleControlUiAfterPaint(state, () => {
         if (isCurrent() && this.presented && document.visibilityState !== "hidden") {
           this.deferredSessionHydration = null;
-          state.requestUpdate?.();
           void this.refreshTaskSuggestions({ automatic: true });
           if (historyCommitted) {
             this.markSessionRead(selectedChatSessionRow(state));
@@ -439,7 +438,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     if (!access.allowed) {
       scope.state.lastError = access.reason;
       scope.state.chatError = access.reason;
-      scope.state.requestUpdate?.();
       return;
     }
     const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? resolveChatAgentId(scope.state);
@@ -460,7 +458,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     if (failure && this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
       scope.state.lastError = failure;
       scope.state.chatError = failure;
-      scope.state.requestUpdate?.();
     }
   }
 

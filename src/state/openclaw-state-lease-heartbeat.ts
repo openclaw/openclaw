@@ -173,7 +173,7 @@ export function startOpenClawStateLeaseHeartbeat(
   const shared =
     params.expiryObservation ??
     new BigInt64Array(
-      new SharedArrayBuffer((state.startupPhase + 1) * BigInt64Array.BYTES_PER_ELEMENT),
+      new SharedArrayBuffer((state.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT),
     );
   let renewalProgress = new BigInt64Array(new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT));
   const completedRequest = new BigInt64Array(
@@ -624,6 +624,24 @@ export function startOpenClawStateLeaseHeartbeat(
     renew: () => request("renew"),
     close,
     stop: lifecycle.stop,
+    holdOwnerFence() {
+      const lastRenewedAt = Atomics.load(shared, state.lastRenewedAt);
+      Atomics.store(shared, state.ownerFence, 1n);
+      return {
+        renewed(expiresAt: number) {
+          Atomics.store(shared, state.lastRenewedAt, BigInt(expiresAt - params.leaseMs));
+        },
+        release(expiresAt?: number) {
+          if (expiresAt === undefined) {
+            Atomics.store(shared, state.lastRenewedAt, lastRenewedAt);
+          } else {
+            Atomics.store(shared, state.expiresAt, BigInt(expiresAt));
+          }
+          Atomics.store(shared, state.ownerFence, 0n);
+          Atomics.notify(shared, state.ownerFence);
+        },
+      };
+    },
     assertResponsive(expiresAt: number) {
       const remainingBudget = responseBudget(() => expiresAt - Date.now(), expiresAt - Date.now());
       const requestNumber = Atomics.add(shared, state.request, 1n) + 1n;

@@ -703,7 +703,9 @@ it.each(["EPERM", "EIO"])(
       );
     } else {
       await expect(adapter.waitForExtinction()).rejects.toMatchObject({
-        cause: { durationMs: GRACEFUL_CANCEL_TIMEOUT_MS, escalationAfterMs: undefined },
+        cause: expect.objectContaining({
+          message: expect.stringContaining(`"durationMs":${GRACEFUL_CANCEL_TIMEOUT_MS}`),
+        }),
       });
     }
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });

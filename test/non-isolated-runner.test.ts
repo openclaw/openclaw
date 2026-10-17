@@ -23,6 +23,21 @@ import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fix
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
+const sequencerSource = `import { BaseSequencer } from "vitest/node";
+class AlphabeticalSequencer extends BaseSequencer {
+  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {
+    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));
+  }
+}`;
+const gatewayProjects = [
+  ["threads", "gateway-worker-lifetimes", "vitest.gateway-core.config.ts", "threads"],
+  [
+    "provenance",
+    "gateway-provenance-lifetimes",
+    "vitest.gateway-database-workers.config.ts",
+    "forks",
+  ],
+] as const;
 
 function childEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
@@ -348,8 +363,7 @@ it("latches console capture and stderr routing", () => {
   const warningListeners = process.listeners("warning");
   routeLogsToStderr();
   enableConsoleCapture();
-  expect(loggingState.forceConsoleToStderr).toBe(true);
-  expect(loggingState.consolePatched).toBe(true);
+  expect(loggingState).toMatchObject({ forceConsoleToStderr: true, consolePatched: true });
   expect(console.error).not.toBe(native);
   expect(process.listeners("warning")).toEqual(warningListeners);
 });
@@ -362,9 +376,7 @@ import { loggingState } from ${sourcePath("logging/state.ts")};
 import { expect, it, vi } from "vitest";
 it("starts from unrouted, unpatched console state", () => {
   const warningListeners = process.listeners("warning");
-  expect(loggingState.forceConsoleToStderr).toBe(false);
-  expect(loggingState.consolePatched).toBe(false);
-  expect(loggingState.rawConsole).toBeNull();
+  expect(loggingState).toMatchObject({ forceConsoleToStderr: false, consolePatched: false, rawConsole: null });
   const spy = vi.spyOn(console, "error").mockImplementation(() => {});
   enableConsoleCapture();
   expect(process.listeners("warning")).toEqual(warningListeners);
@@ -449,26 +461,24 @@ it("releases the previous file automock payload", async () => {
 `,
     "09-redirect-dep.ts": 'export const flavor = "real";\n',
     "__mocks__/09-redirect-dep.ts": 'export const flavor = "redirected";\n',
-    "09-a-redirect.test.ts": `import { expect, it, vi } from "vitest";
-vi.mock("./09-redirect-dep.js");
+    ...Object.fromEntries(
+      (
+        [
+          ["09-a-redirect", "loads the redirected mock", true],
+          ["09-b-redirect-real", "restores the real module after a redirect", false],
+          ["09-c-redirect-remock", "reloads the redirected mock after a real import", true],
+        ] as const
+      ).map(([name, title, mocked]) => [
+        `${name}.test.ts`,
+        `import { expect, it${mocked ? ", vi" : ""} } from "vitest";
+${mocked ? 'vi.mock("./09-redirect-dep.js");' : ""}
 import { flavor } from "./09-redirect-dep.js";
-it("loads the redirected mock", () => {
-  expect(flavor).toBe("redirected");
+it(${JSON.stringify(title)}, () => {
+  expect(flavor).toBe(${JSON.stringify(mocked ? "redirected" : "real")});
 });
 `,
-    "09-b-redirect-real.test.ts": `import { expect, it } from "vitest";
-import { flavor } from "./09-redirect-dep.js";
-it("restores the real module after a redirect", () => {
-  expect(flavor).toBe("real");
-});
-`,
-    "09-c-redirect-remock.test.ts": `import { expect, it, vi } from "vitest";
-vi.mock("./09-redirect-dep.js");
-import { flavor } from "./09-redirect-dep.js";
-it("reloads the redirected mock after a real import", () => {
-  expect(flavor).toBe("redirected");
-});
-`,
+      ]),
+    ),
     ...mockResolutionFixtureFiles,
     ...mcpManagerFixtureFiles(repoRoot),
     ...testApiLifecycleFixtureFiles(repoRoot),
@@ -603,12 +613,7 @@ async function verifyRunnerCleanup(signal: AbortSignal) {
       path.join(root, "vitest.config.ts"),
       `import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"))};
 import { defineConfig } from "vitest/config";
-import { BaseSequencer } from "vitest/node";
-class AlphabeticalSequencer extends BaseSequencer {
-  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {
-    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));
-  }
-}
+${sequencerSource}
 export default defineConfig({
   cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
   plugins: sharedVitestConfig.plugins,
@@ -892,10 +897,7 @@ async function verifyGatewayWorkerLifetimes(signal: AbortSignal) {
     for (const [name, content] of Object.entries(files)) {
       await fs.writeFile(path.join(root, name), content);
     }
-    for (const [mode, name, config] of [
-      ["threads", "gateway-worker-lifetimes", "vitest.gateway-core.config.ts"],
-      ["provenance", "gateway-provenance-lifetimes", "vitest.gateway-database-workers.config.ts"],
-    ] as const) {
+    for (const [mode, name, config] of gatewayProjects) {
       await fs.writeFile(
         path.join(root, `vitest.${mode}.config.ts`),
         `
@@ -924,12 +926,7 @@ export default defineConfig({
     await fs.writeFile(
       path.join(root, "vitest.config.ts"),
       `import { defineConfig } from "vitest/config";
-import { BaseSequencer } from "vitest/node";
-class AlphabeticalSequencer extends BaseSequencer {
-  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {
-    return [...files].sort((left, right) => left.moduleId.localeCompare(right.moduleId));
-  }
-}
+${sequencerSource}
 export default defineConfig({
   test: {
     projects: ["./vitest.threads.config.ts", "./vitest.provenance.config.ts"],
@@ -989,22 +986,13 @@ export default defineConfig({
     });
     expect(capture.modules.map((module) => module.file).toSorted()).toEqual(expected);
     expect(capture.projects.toSorted((left, right) => left.name.localeCompare(right.name))).toEqual(
-      [
-        {
-          name: "gateway-provenance-lifetimes",
-          namePrefix: "",
-          root: canonicalRoot,
-          config: `${canonicalRoot}/vitest.provenance.config.ts`,
-          pool: "forks",
-        },
-        {
-          name: "gateway-worker-lifetimes",
-          namePrefix: "",
-          root: canonicalRoot,
-          config: `${canonicalRoot}/vitest.threads.config.ts`,
-          pool: "threads",
-        },
-      ],
+      gatewayProjects.toReversed().map(([mode, name, _config, pool]) => ({
+        name,
+        namePrefix: "",
+        root: canonicalRoot,
+        config: `${canonicalRoot}/vitest.${mode}.config.ts`,
+        pool,
+      })),
     );
     const report: JsonTestResults = JSON.parse(await fs.readFile(reportPath, "utf8"));
     expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected);
@@ -1016,10 +1004,11 @@ export default defineConfig({
       numTodoTests: 0,
     });
     for (const file of report.testResults) {
-      expect(file.status).toBe("passed");
-      expect(file.message).toBe("");
-      expect(file.assertionResults).toHaveLength(1);
-      expect(file.assertionResults[0]).toMatchObject({ status: "passed", failureMessages: [] });
+      expect(file).toMatchObject({
+        status: "passed",
+        message: "",
+        assertionResults: [{ status: "passed", failureMessages: [] }],
+      });
     }
     await fs.rm(root, { recursive: true, force: true });
   } catch (error) {

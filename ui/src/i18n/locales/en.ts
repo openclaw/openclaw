@@ -571,6 +571,7 @@ export const en: TranslationMap & {
   },
   updates: {
     adminRequired: "Administrator access is required to change update settings or start an update.",
+    refreshFailed: "Could not refresh. Check your connection and try again.",
     campaign: {
       countdown: "Updating in {time}",
       waitingForIdle: "Waiting for active work · forced update in {time}",
@@ -2535,9 +2536,6 @@ export const en: TranslationMap & {
     suspending: "Suspending…",
     suspended: "Suspended",
     retryNow: "Retry now",
-    actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
-    settingsChangesUnavailable:
-      "Changes to settings are disabled while the Gateway is reconnecting.",
     sessionMoveRefreshFailed: "The session move was saved, but refreshing the list failed: {error}",
     sessionMoveUncertain:
       "The session move could not be confirmed. Refresh and check its group before retrying. {error}",

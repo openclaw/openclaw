@@ -656,6 +656,9 @@ describe("Gateway owner lease", () => {
         throw new Error("heartbeat cleanup retained native custody");
       },
       assertResponsive: () => undefined,
+      holdOwnerFence() {
+        throw new Error("heartbeat startup failed");
+      },
     }));
     try {
       await expect(

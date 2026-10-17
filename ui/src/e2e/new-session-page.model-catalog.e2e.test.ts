@@ -584,6 +584,7 @@ suite.define(() => {
         });
       }
 
+      await gateway.waitForRequest("models.list");
       await gateway.resolveDeferred("models.list");
       await expect.poll(() => modelTrigger.textContent()).toContain("GPT-5.6 Luna");
       expect(await modelTrigger.getAttribute("aria-busy")).toBe("false");

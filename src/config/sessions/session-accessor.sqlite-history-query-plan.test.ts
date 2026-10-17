@@ -13,6 +13,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -237,6 +238,18 @@ it("reads only appended metadata for a warm marker-heavy page and quoted message
   });
   const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
   insertSyntheticHistory(database, scope.sessionId, 2_000, true);
+  runOpenClawAgentWriteTransaction(
+    (writeDatabase) => {
+      writeDatabase.db
+        .prepare(`UPDATE transcript_events
+      SET navigation_type = NULL, navigation_custom_type = NULL,
+          navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+          navigation_last_custom_type = NULL, navigation_valid = 1
+      WHERE session_id = ?`)
+        .run(scope.sessionId);
+    },
+    { agentId: database.agentId, path: database.path },
+  );
   const limits = { maxMessages: 3, maxLines: 3, maxBytes: 64 * 1024 };
   const target = {
     transcript: { ...scope, sessionFile: scope.sessionKey, storePath: database.path },

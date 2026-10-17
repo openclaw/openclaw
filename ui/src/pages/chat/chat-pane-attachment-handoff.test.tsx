@@ -131,7 +131,7 @@ describe("cross-region Home composer ownership", () => {
     current.canRestoreComposer = () => persistence.active;
     const notify = vi.fn(() => persistence.persistChangedState());
     const unsubscribeDraft = controller.composerDraft.subscribe(notify);
-    current.requestUpdate = notify;
+    current.composerDraftChanged = notify;
     persistence.start();
     const unsubscribe = chatOutboxOwner(current).subscribe(current);
     const view = { presented: true, owner };
@@ -482,7 +482,7 @@ describe("cross-region Home composer ownership", () => {
 
     // Relinquished persistence cannot overwrite the current presentation's edit.
     page.current.chatMessage = "stale retained draft";
-    page.current.requestUpdate();
+    page.current.composerDraftChanged?.();
     expect(loadChatComposerState(dock.current, sessionKey).snapshot?.draft).toBe(
       "Edited in the dock",
     );

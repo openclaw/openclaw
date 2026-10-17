@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import {
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
@@ -194,11 +194,23 @@ describe("SQLite transcript history events", () => {
         ],
         touchSessionEntry: false,
       });
-      if (legacy) {
-        openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env })
-          .db.prepare("DELETE FROM transcript_event_identities WHERE session_id = ?")
-          .run(scope.sessionId);
-      }
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          database.db
+            .prepare(`UPDATE transcript_events
+          SET navigation_type = NULL, navigation_custom_type = NULL,
+              navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+              navigation_last_custom_type = NULL, navigation_valid = 1
+          WHERE session_id = ?`)
+            .run(scope.sessionId);
+          if (legacy) {
+            database.db
+              .prepare("DELETE FROM transcript_event_identities WHERE session_id = ?")
+              .run(scope.sessionId);
+          }
+        },
+        { agentId: scope.agentId, env: scope.env },
+      );
       const raw = readTranscriptRawDelta(scope);
       const delta = readTranscriptDisplayDelta(scope);
       expect(raw.kind).toBe("page");
@@ -210,6 +222,7 @@ describe("SQLite transcript history events", () => {
       const history = readSessionTranscriptHistoryEvents(scope);
       expect(history.map(historyEventId)).toEqual(["exec", "notice", "wait", "first", "later"]);
       expect(history.map(({ seq }) => seq)).toEqual([1, 2, 3, 4, 5]);
+      expect(readSessionTranscriptHistoryEventCount(scope)).toBe(5);
       expect(delta.events.find((row) => historyEventId(row) === "notice")).toMatchObject({
         messageSeq: 2,
         displayPosition: { rawSeq: rawSeq.get("notice") },
@@ -237,6 +250,7 @@ describe("SQLite transcript history events", () => {
           maxMessages: 1,
         });
         expect(page.events).toHaveLength(1);
+        expect(page.totalMessages).toBe(5);
         expect(page.events[0]).toMatchObject(expected);
         expect(
           readRecentSessionTranscriptHistoryEvents(scope, {
@@ -387,19 +401,7 @@ describe("SQLite transcript history events", () => {
       "compaction",
     ]);
     expect(history.map(({ seq }) => seq)).toEqual([1, 2, 3, 4]);
-    const reads = observeHostDataSql();
-    try {
-      expect(readSessionTranscriptHistoryEventCount(scope)).toBe(4);
-    } finally {
-      reads.restore();
-    }
-    const countQueries = reads.queries.filter((query) =>
-      /count\(\*\) as "event_count"/i.test(query),
-    );
-    expect(countQueries.length).toBeGreaterThan(0);
-    for (const query of countQueries) {
-      expect(query).not.toMatch(/json_(?:extract|type|each|tree)\s*\(/i);
-    }
+    expect(readSessionTranscriptHistoryEventCount(scope)).toBe(4);
 
     const recent = readRecentSessionTranscriptHistoryEvents(scope, {
       maxBytes: 65_536,

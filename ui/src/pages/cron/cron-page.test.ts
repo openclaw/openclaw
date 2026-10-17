@@ -66,6 +66,33 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("allows offline drafting but disables submission without a live connection", async () => {
+  const request = harness.createRequest();
+  const gateway = harness.createGateway({ request } as unknown as GatewayBrowserClient, false);
+  gateway.emitSnapshot({
+    phase: "reconnecting",
+    hello: harness.operatorHello(["operator.admin"]),
+  });
+  const page = harness.createPage(harness.createContext(gateway), { render: true });
+  try {
+    (await dom.waitForElement(page, dom.testId("cron-new-task"))).click();
+    await page.settle();
+    page.patchForm({ name: "Offline draft", payloadText: "Review the garden" });
+    await page.settle();
+    expect(page.cron.cronFieldErrors).toEqual({});
+    expect(page.querySelector<HTMLInputElement>("#cron-name")!.matches(":disabled")).toBe(false);
+    for (const id of ["cron-submit", "cron-submit-run"]) {
+      const button = page.querySelector<HTMLButtonElement>(dom.testId(id))!;
+      expect(button.disabled, id).toBe(true);
+      button.click();
+    }
+    expect(request).not.toHaveBeenCalledWith("cron.add", expect.anything());
+    expect(page.cron.cronForm.name).toBe("Offline draft");
+  } finally {
+    page.remove();
+  }
+});
+
 it("does not treat an accepted edit as completion of a newer clone", async () => {
   const job = createCronViewJob("earlier-edit", { name: "Garden reminder" });
   const saved = createDeferred<CronJob>();

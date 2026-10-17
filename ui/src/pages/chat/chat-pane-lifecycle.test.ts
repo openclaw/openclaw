@@ -1,5 +1,6 @@
 // The non-isolated runner resets modules between files but preserves customElements.
 // A dedicated jsdom context keeps the registered pane class on this file's module graph.
+import { createEffect, createRoot, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-lifecycle.test/"} */
@@ -27,6 +28,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import { enqueueChatMessage } from "./chat-queue.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { createPageState } from "./chat-state-page.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
 import {
   dismissConfirmedActionPopovers,
@@ -147,15 +149,57 @@ it("publishes queued-edit retention changes while its pane is parked", async () 
   const queued = enqueueChatMessage(state, "queued original");
   expect(queued).not.toBeNull();
   expect(beginQueuedMessageEdit(state, queued!.id)).toBe("started");
-  state.requestUpdate();
+  state.composerDraftChanged?.();
   expect(retained).toHaveBeenCalledTimes(1);
   expect(cancelQueuedMessageEdit(state)).toBe(true);
-  state.requestUpdate();
+  state.composerDraftChanged?.();
   expect(retained).toHaveBeenCalledTimes(2);
   await Promise.resolve();
   expect(updates).not.toHaveBeenCalled();
   pane.presented = true;
   await pane.updateComplete;
+});
+
+it("publishes a disconnected gateway snapshot without a redraw callback", () => {
+  const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
+  const redraw = vi.fn();
+  const state = createPageState(
+    pane.context,
+    { invalidate: redraw, afterCommit: () => () => {} },
+    pane,
+  );
+  pane.state = state;
+  state.client = pane.context.gateway.snapshot.client;
+  state.connected = true;
+  const changes: Array<{
+    connected: boolean;
+    canvas: ChatPageHost["canvasPluginSurfaceUrl"];
+  }> = [];
+  const dispose = createRoot((stop) => {
+    createEffect(
+      () => ({ connected: state.connected, canvas: state.canvasPluginSurfaceUrl }),
+      (snapshot) => {
+        changes.push(snapshot);
+      },
+    );
+    return stop;
+  });
+  try {
+    flush();
+    changes.length = 0;
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      phase: "reconnecting",
+      canvasPluginSurfaceUrl: "/canvas/reconnected",
+    });
+    // Transport consumers still observe connection retirement synchronously.
+    expect(state.connected).toBe(false);
+    flush();
+    expect(changes).toEqual([{ connected: false, canvas: "/canvas/reconnected" }]);
+    expect(redraw).not.toHaveBeenCalled();
+  } finally {
+    dispose();
+  }
 });
 
 it("renews the attention cue for repeated draft prefill", () => {

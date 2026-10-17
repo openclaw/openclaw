@@ -1196,7 +1196,7 @@ describe("canonical session message recovery", () => {
     const { state } = createSessionEventState({
       chatMessages: [prompt],
       chatRunId: activeRunId,
-
+      chatStream: replyText,
       client: {
         request: vi.fn().mockResolvedValue({
           messages: [prompt, persistedReply],
@@ -1242,6 +1242,10 @@ describe("canonical session message recovery", () => {
       ? [persistedEvent, terminalEvent]
       : [terminalEvent, persistedEvent]) {
       handlePageGatewayEvent(state, event);
+      expect(renderedTranscript(state)).toEqual([
+        { role: "user", text: "Original prompt" },
+        { role: "assistant", text: replyText },
+      ]);
     }
     await loadChatHistory(state as unknown as Parameters<typeof loadChatHistory>[0]);
 

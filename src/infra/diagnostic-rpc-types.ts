@@ -10,7 +10,7 @@ type DiagnosticSessionsListRetentionFields = {
 };
 
 /** Process totals for per-connection session-event field-hash vectors. */
-export type DiagnosticSessionEventRetentionFields = {
+type DiagnosticSessionEventRetentionFields = {
   type: "sessions.event.retention";
   entries: number;
   estimatedBytes: number;

@@ -552,6 +552,7 @@ function LibraryImport(props: { library: SkillLibraryModel }) {
             type="submit"
             class="btn primary"
             disabled={
+              !props.library.canWrite() ||
               current().busy ||
               (!current().importSource &&
                 (!props.library.uploadsEnabled() || current().importSelection.length === 0))

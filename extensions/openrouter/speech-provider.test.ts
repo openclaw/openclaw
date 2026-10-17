@@ -222,6 +222,7 @@ describe("openrouter speech provider", () => {
 
   it("defaults to a live-proven OpenRouter TTS model", () => {
     const provider = buildOpenRouterSpeechProvider();
+    expect(provider.defaultTimeoutMs).toBe(120_000);
 
     expect(
       provider.resolveConfig?.({ cfg: {} as never, rawConfig: {}, timeoutMs: 30_000 }),

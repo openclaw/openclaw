@@ -52,7 +52,11 @@ import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
-import { transcriptEventNavigationSql, transcriptEventRunIdSql } from "./transcript-payload.js";
+import {
+  transcriptEventNavigationSql,
+  transcriptEventRunIdSql,
+  transcriptPredicateSql,
+} from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 export { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 export {
@@ -147,9 +151,16 @@ export function everySessionTranscriptUserInputFrom(
           "message_json",
         ),
       )
-      .select("event.navigation_valid")
+      .select(
+        transcriptPredicateSql(projection.database.db, "navigation_valid", "event").as(
+          "navigation_valid",
+        ),
+      )
       .where((eb) =>
-        eb.or([eb("event.message_role", "=", "user"), eb("event.navigation_valid", "=", 0)]),
+        eb.or([
+          eb(transcriptPredicateSql(projection.database.db, "message_role", "event"), "=", "user"),
+          eb(transcriptPredicateSql(projection.database.db, "navigation_valid", "event"), "=", 0),
+        ]),
       );
     let seen = false;
     for (const row of iterateSqliteQuerySync(projection.database.db, query)) {

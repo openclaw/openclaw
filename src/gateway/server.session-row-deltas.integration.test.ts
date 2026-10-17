@@ -16,7 +16,7 @@ import { flushPendingSessionsChangedEvents } from "./server-methods/session-chan
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";
 import { drainSessionEventPublications } from "./session-event-prepared-row.js";
-import { readSessionEventRowRetention } from "./session-event-row-retention.js";
+import { observeSessionEventRowRetention } from "./session-event-row-retention.test-support.js";
 import { startSessionRowDeltaSubagents } from "./session-row-delta-run.test-support.js";
 import {
   closeSessionRowSocket,
@@ -63,6 +63,7 @@ function expectFullSessionRowFrame(
 }
 
 test("capable and legacy sockets produce identical session payloads and consumer state", async () => {
+  const readRetention = observeSessionEventRowRetention();
   const capable = await harness.openClient({
     caps: ["session-scoped-events", "session-row-deltas"],
   });
@@ -390,7 +391,7 @@ test("capable and legacy sockets produce identical session payloads and consumer
     }),
   );
   console.log("SESSION_ROW_DELTA_REAL_SOCKET_BYTES", JSON.stringify(measurements));
-  const retainedBeforeUnsubscribe = readSessionEventRowRetention();
+  const retainedBeforeUnsubscribe = await readRetention();
   expect(retainedBeforeUnsubscribe.entries).toBeGreaterThan(0);
   await decoder.request(
     createTestGatewayClient(async (method, params) => {
@@ -404,7 +405,7 @@ test("capable and legacy sockets produce identical session payloads and consumer
     { key },
   );
   expect((await rpcReq(legacy.ws, "sessions.messages.unsubscribe", { key })).ok).toBe(true);
-  expect(readSessionEventRowRetention()).toEqual(retainedBeforeUnsubscribe);
+  expect(await readRetention()).toEqual(retainedBeforeUnsubscribe);
   const summaryTarget = await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" });
   const publishRecap = () =>
     broadcastSessionActivitySummary(
@@ -450,5 +451,7 @@ test("capable and legacy sockets produce identical session payloads and consumer
   expect(reverseOrderDecoded?.payload).toEqual(baseline.at(-1)?.payload);
   expect(reconnect).not.toHaveBeenCalled();
   await Promise.all([closeSessionRowSocket(reopened.ws), closeSessionRowSocket(legacy.ws)]);
-  await vi.waitFor(() => expect(readSessionEventRowRetention()).toEqual({ entries: 0, bytes: 0 }));
+  await vi.waitFor(async () =>
+    expect(await readRetention()).toEqual({ entries: 0, estimatedBytes: 0 }),
+  );
 });

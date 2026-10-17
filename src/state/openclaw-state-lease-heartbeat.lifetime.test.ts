@@ -177,7 +177,7 @@ describe("state lease heartbeat lifetime", () => {
     async (settlement) => {
       const params = options();
       const observation = new BigInt64Array(
-        new SharedArrayBuffer((state.startupPhase + 1) * BigInt64Array.BYTES_PER_ELEMENT),
+        new SharedArrayBuffer((state.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT),
       );
       const renewal = createDeferredCore<number>();
       const renew = vi.fn(() => renewal.promise);

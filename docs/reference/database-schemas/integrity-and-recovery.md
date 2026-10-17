@@ -164,6 +164,13 @@ A separate Doctor invocation continues to inspect current bytes. These are
 candidate-side changes; the installed updater still runs first
 under its own version's behavior.
 
+During a native agent migration commit, SQLite maintenance retains the shared-state
+write lock. Its heartbeat waits for that fence instead of treating the blocked
+renewal as lease loss. Before releasing the lock, maintenance renews the unchanged
+owner and grant for the normal lease duration. A fence lasting longer than that
+duration produces a Doctor warning; a replaced owner still refuses settlement.
+Rollback releases the fence and restores ordinary expiry handling.
+
 | When                                                   | Check                                                                                                                                                                                      |
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Startup with a matching, recent clean-close seal       | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans                                                               |

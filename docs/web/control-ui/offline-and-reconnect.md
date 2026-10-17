@@ -221,6 +221,19 @@ page reload does not persist a widget’s unsaved local interaction state.
 
 ## Connection loss and reconnect
 
+An open Control UI keeps its last accepted Gateway capabilities through a temporary
+disconnect. Navigation, plugin tabs, attachment limits, and the displayed Gateway
+version do not disappear simply because the socket closes. Pages remain interactive
+for reading, copying, filtering, and local drafting; actions that require a live
+Gateway remain unavailable. Some pages still reload their own data on reconnect,
+and unvisited views or external resources may need a connection.
+
+Retained capabilities describe the current client identity; they do not authorize
+requests. A new handshake replaces them. Replacing the client or credentials,
+stopping the connection, authentication or pairing rejection, and protocol/build
+rejection clear that presentation. Canvas capability URLs retain their separate
+live-connection lease and are not kept by this policy.
+
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
 stays visible, and one connection status in its sidebar footer explains whether the Gateway is
 suspending, suspended, restarting, reconnecting, or finishing recovery. Planned transitions and
