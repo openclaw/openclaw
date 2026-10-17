@@ -11,6 +11,23 @@ describe("formatInlineCodeSpan", () => {
     expect(formatInlineCodeSpan("`edge")).toBe("`` `edge ``");
     expect(formatInlineCodeSpan("edge`")).toBe("`` edge` ``");
   });
+
+  it("guards edge spaces against CommonMark one-space stripping", () => {
+    expect(formatInlineCodeSpan(" 1 ")).toBe("`  1  `");
+    expect(formatInlineCodeSpan(" `code` ")).toBe("``  `code`  ``");
+  });
+
+  it("does not pad content whose spaces are safe", () => {
+    expect(formatInlineCodeSpan(" leading")).toBe("` leading`");
+    expect(formatInlineCodeSpan("trailing ")).toBe("`trailing `");
+    expect(formatInlineCodeSpan("   ")).toBe("`   `");
+  });
+
+  it("guards edge spaces held apart by tabs or non-ASCII spaces", () => {
+    expect(formatInlineCodeSpan(" \t ")).toBe("`  \t  `");
+    expect(formatInlineCodeSpan(" a\tb ")).toBe("`  a\tb  `");
+    expect(formatInlineCodeSpan(" \u00a0 ")).toBe("`  \u00a0  `");
+  });
 });
 
 describe("formatFencedCodeBlock", () => {
