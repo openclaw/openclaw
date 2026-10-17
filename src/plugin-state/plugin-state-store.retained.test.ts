@@ -52,6 +52,13 @@ describe("plugin-state-store.retained", () => {
   type Seed = Parameters<typeof seedPluginStateEntriesForTests>[0][number];
   const seed = (rows: Array<Pick<Seed, "key" | "value"> & Partial<Seed>>) =>
     seedPluginStateEntriesForTests(rows.map((row) => ({ pluginId, namespace: "history", ...row })));
+  const canonical = (entryKey: string, value: unknown, createdAt: number, expiresAt?: number) => ({
+    namespace: "@retained.history",
+    key: entryKey,
+    value,
+    createdAt,
+    expiresAt,
+  });
   const snapshot = () =>
     openOpenClawStateDatabase()
       .db.prepare(
@@ -64,9 +71,7 @@ describe("plugin-state-store.retained", () => {
     resetPluginStateStoreForTests();
   });
 
-  it("retains all rows across writes and reopening beyond bounded-store limits", async ({
-    state: _state,
-  }) => {
+  it("persists retained rows beyond the 50k limit", async ({ state: _state }) => {
     seed(
       Array.from({ length: 50_001 }, (_, id) => ({
         namespace: "@retained.history",
@@ -98,21 +103,14 @@ describe("plugin-state-store.retained", () => {
     expect(await reopened.lookup(key(50_004))).toBe(50_004);
   });
 
-  it("moves raw data atomically, preserves canonical targets, and pages lexical keys", async ({
-    state: _state,
-  }) => {
+  it("moves raw rows atomically and pages lexical keys", async ({ state: _state }) => {
     const now = Date.now();
     seed([
       { key: "9", value: { body: "legacy 9" }, createdAt: 9 },
       { key: "10", value: { body: "superseded" }, createdAt: 10 },
       { key: "99", value: { body: "expired" }, expiresAt: now - 1 },
       { key: "100", value: { body: "expiring" }, expiresAt: now + 86_400_000 },
-      {
-        namespace: "@retained.history",
-        key: key(10),
-        value: { body: "canonical" },
-        createdAt: 1,
-      },
+      canonical(key(10), { body: "canonical" }, 1),
       { pluginId: "other-plugin", namespace: "history", key: "9", value: { body: "foreign" } },
     ]);
     const raw = '{ "body": "legacy 9" }';
@@ -168,9 +166,7 @@ describe("plugin-state-store.retained", () => {
     expect(await page({ keyStartInclusive: key(11) })).toEqual([key(99), key(100)]);
   });
 
-  it("rolls back a later move batch and publishes the complete retry to existing readers", async ({
-    state: _state,
-  }) => {
+  it("rolls back late moves and publishes full retries", async ({ state: _state }) => {
     const entries = Array.from({ length: 65 }, (_, id) => ({
       sourceKey: String(id),
       targetKey: key(id),
@@ -181,14 +177,8 @@ describe("plugin-state-store.retained", () => {
         value: { id },
         createdAt: id + 100,
       })),
-      { namespace: "@retained.history", key: key(0), value: { id: -1 }, createdAt: 1 },
-      {
-        namespace: "@retained.history",
-        key: key(64),
-        value: { id: -2 },
-        createdAt: 2,
-        expiresAt: Date.now() - 1_000,
-      },
+      canonical(key(0), { id: -1 }, 1),
+      canonical(key(64), { id: -2 }, 2, Date.now() - 1_000),
     ]);
     const before = snapshot();
     expect(before).toHaveLength(67);
@@ -242,9 +232,7 @@ describe("plugin-state-store.retained", () => {
     }
   });
 
-  it("keeps historical retained.* logical namespaces bounded and separate from retained storage", async ({
-    state: _state,
-  }) => {
+  it("isolates bounded retained.* from retained storage", async ({ state: _state }) => {
     const namespace = "retained.history";
     seed([{ pluginId, namespace, key: "legacy", value: 1, createdAt: 1 }]);
     const options = { namespace, maxEntries: 1 };
@@ -259,9 +247,7 @@ describe("plugin-state-store.retained", () => {
     expect(await retained.lookup("fresh")).toBe(3);
   });
 
-  it("preserves the full 128-byte logical namespace limit in retained mode", async ({
-    state: _state,
-  }) => {
+  it("accepts 128-byte namespaces, not 129-byte", async ({ state: _state }) => {
     const options = { namespace: "n".repeat(128), retention: "retained" as const };
     const retained = open<number>(options);
     await retained.register("last-byte", 128);
@@ -277,9 +263,7 @@ describe("plugin-state-store.retained", () => {
     ).toThrow(expect.objectContaining({ code: "PLUGIN_STATE_INVALID_INPUT" }));
   });
 
-  it("rejects retention collisions, TTLs, and invalid move batches before mutation", async ({
-    state: _state,
-  }) => {
+  it("rejects invalid retained writes before mutation", async ({ state: _state }) => {
     expect(() =>
       Reflect.apply(createPluginStateSyncKeyedStore, undefined, [pluginId, retainedOptions]),
     ).toThrow();
@@ -440,9 +424,7 @@ describe("plugin-state-store.expiry", () => {
 describe("plugin-state-store.namespace-independence", () => {
   afterEach(() => resetPluginStateStoreForTests());
 
-  it("keeps execution and migration writable beyond 50,000 sibling catalog rows", async ({
-    state: _state,
-  }) => {
+  it("isolates writes from 50k sibling catalog rows", async ({ state: _state }) => {
     seedPluginStateEntriesForTests(
       Array.from({ length: 50_000 }, (_, index) => ({
         pluginId: "codex",

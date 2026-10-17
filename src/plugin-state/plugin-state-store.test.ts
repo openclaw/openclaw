@@ -46,19 +46,47 @@ import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
+const defaults = { namespace: "test", maxEntries: 10 };
+function syncStore<T>(options: Partial<OpenKeyedStoreOptions> = {}, pluginId = "discord") {
+  return createPluginStateSyncKeyedStore<T>(pluginId, { ...defaults, ...options });
+}
+function openAsyncStore<T>(options: Partial<OpenKeyedStoreOptions> = {}, pluginId = "discord") {
+  return createPluginStateKeyedStore<T>(pluginId, { ...defaults, ...options });
+}
+function stores<T>(options: Partial<OpenKeyedStoreOptions>, pluginId = "discord") {
+  return { sync: syncStore<T>(options, pluginId), store: openAsyncStore<T>(options, pluginId) };
+}
+function maintenance(namespace: string) {
+  const scope = { pluginId: "codex", namespace };
+  type Row = Parameters<typeof seedPluginStateEntriesForTests>[0][number];
+  return {
+    seed: (
+      rows: Array<
+        Omit<Row, "pluginId" | "namespace"> & Partial<Pick<Row, "pluginId" | "namespace">>
+      >,
+    ) => seedPluginStateEntriesForTests(rows.map((row) => ({ ...scope, ...row }))),
+    page: (limit: number, after?: string) =>
+      pluginStateDoctorEntriesInKeyRange({ ...scope, prefix: "binding:", limit, after }),
+    remove: (
+      entries: Parameters<typeof pluginStateDeleteEntriesIfUnchanged>[0]["entries"],
+      assertOwnedInTransaction = (_database: EngineConnection) => {},
+    ) => pluginStateDeleteEntriesIfUnchanged({ ...scope, entries, assertOwnedInTransaction }),
+    range: () =>
+      pluginStateEntriesInKeyRange({
+        ...scope,
+        keyStartInclusive: "binding:",
+        keyEndExclusive: "binding;",
+        limit: 1,
+      }),
+  };
+}
+
 describe("plugin-state-store", () => {
   const testState = useState("plugin-state-store");
   beforeAll(() => {
     rmSync(dirname(resolveOpenClawStateSqlitePath()), { recursive: true, force: true });
   });
 
-  const defaults = { namespace: "test", maxEntries: 10 };
-  function syncStore<T>(options: Partial<OpenKeyedStoreOptions> = {}, pluginId = "discord") {
-    return createPluginStateSyncKeyedStore<T>(pluginId, { ...defaults, ...options });
-  }
-  function openAsyncStore<T>(options: Partial<OpenKeyedStoreOptions> = {}, pluginId = "discord") {
-    return createPluginStateKeyedStore<T>(pluginId, { ...defaults, ...options });
-  }
   async function expectPluginStateStoreError(
     promise: Promise<unknown>,
     expected: { code: string; operation?: string },
@@ -141,25 +169,21 @@ describe("plugin-state-store", () => {
       operation: "register",
     });
 
-    const nowSpy = vi.spyOn(Date, "now");
-    try {
-      nowSpy.mockReturnValue(MAX_DATE_TIMESTAMP_MS);
-      const sync = syncStore();
-      expect(() => sync.register("overflow", true, { ttlMs: 60_000 })).toThrowError(
-        expect.objectContaining({ code: "PLUGIN_STATE_INVALID_INPUT", operation: "register" }),
-      );
-    } finally {
-      nowSpy.mockRestore();
-    }
+    vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+    const sync = syncStore();
+    expect(() => sync.register("overflow", true, { ttlMs: 60_000 })).toThrowError(
+      expect.objectContaining({ code: "PLUGIN_STATE_INVALID_INPUT", operation: "register" }),
+    );
   });
 
   it("validates namespaces, keys, options, and JSON values before writes", async () => {
-    expect(() => openAsyncStore({ namespace: "../bad", maxEntries: 10 })).toThrow(
-      PluginStateStoreError,
-    );
-    expect(() => openAsyncStore({ namespace: "bad-max", maxEntries: 0 })).toThrow(
-      PluginStateStoreError,
-    );
+    for (const options of [
+      { namespace: "../bad" },
+      { maxEntries: 0 },
+      { namespace: "a".repeat(129) },
+    ]) {
+      expect(() => openAsyncStore(options)).toThrow(PluginStateStoreError);
+    }
 
     const store = openAsyncStore({ namespace: "valid", maxEntries: 10 });
     const circular: Record<string, unknown> = {};
@@ -182,10 +206,6 @@ describe("plugin-state-store", () => {
     }
 
     await expect(store.register("k".repeat(513), { ok: true })).rejects.toThrow(
-      PluginStateStoreError,
-    );
-
-    expect(() => openAsyncStore({ namespace: "a".repeat(129), maxEntries: 10 })).toThrow(
       PluginStateStoreError,
     );
 
@@ -317,8 +337,7 @@ describe("plugin-state-store", () => {
 
   it("bulk reads exact keys positionally with sync/async parity across reopen", async () => {
     const options = { namespace: "bulk", maxEntries: 20 };
-    const sync = syncStore<{ index: number }>(options);
-    const asyncStore = openAsyncStore<{ index: number }>(options);
+    const { sync, store } = stores<{ index: number }>(options);
     const keys = [
       "ten:10",
       "two:2",
@@ -345,10 +364,10 @@ describe("plugin-state-store", () => {
     ];
     for (let connection = 0; connection < 2; connection++) {
       expect(sync.lookupMany(request)).toEqual(expected.map(ok));
-      await expect(asyncStore.lookupMany(request)).resolves.toEqual(expected.map(ok));
+      await expect(store.lookupMany(request)).resolves.toEqual(expected.map(ok));
       for (const duplicates of [
         sync.lookupMany([keys[0], keys[0]]),
-        await asyncStore.lookupMany([keys[0], keys[0]]),
+        await store.lookupMany([keys[0], keys[0]]),
       ]) {
         expect(duplicates[0]?.ok && duplicates[0].value).not.toBe(
           duplicates[1]?.ok && duplicates[1].value,
@@ -363,27 +382,25 @@ describe("plugin-state-store", () => {
   });
 
   it("bounds and validates every bulk key before reading, with one native query", async () => {
-    const store = syncStore<number>({ namespace: "bulk-bounds", maxEntries: 10 });
-    const asyncStore = openAsyncStore<number>({ namespace: "bulk-bounds", maxEntries: 10 });
-    store.register("key", 1);
+    const { sync, store } = stores<number>({ namespace: "bulk-bounds" });
+    sync.register("key", 1);
     const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
     const reads = trackSqliteStatementExecutions(db, ["reads"], (sql) =>
       sql.startsWith("select ") && sql.includes('"plugin_state_entries"') ? "reads" : null,
     );
     try {
-      expect(store.lookupMany([])).toEqual([]);
-      expect(() => store.lookupMany(["key", " "])).toThrowError(
+      expect(sync.lookupMany([])).toEqual([]);
+      expect(() => sync.lookupMany(["key", " "])).toThrowError(
         expect.objectContaining({ code: "PLUGIN_STATE_INVALID_INPUT", operation: "lookup" }),
       );
       await expect(
-        asyncStore.lookupMany(Array.from({ length: 10_001 }, () => "key")),
+        store.lookupMany(Array.from({ length: 10_001 }, () => "key")),
       ).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT", operation: "lookup" });
       expect(reads.counts.reads).toBe(0);
-      expect(store.lookupMany(Array.from({ length: 10_000 }, () => "key"))).toEqual(
+      expect(sync.lookupMany(Array.from({ length: 10_000 }, () => "key"))).toEqual(
         Array.from({ length: 10_000 }, () => ok(1)),
       );
-      expect(reads.counts.reads).toBe(1);
-      expect(reads.rowCounts.reads).toBe(1);
+      expect(reads).toMatchObject({ counts: { reads: 1 }, rowCounts: { reads: 1 } });
     } finally {
       reads.restore();
     }
@@ -391,25 +408,23 @@ describe("plugin-state-store", () => {
 
   it("bulk-deletes only unchanged scoped rows in one bounded transaction", () => {
     const namespace = "bulk-bindings";
-    const scope = { pluginId: "codex", namespace };
-    seedPluginStateEntriesForTests([
+    const { seed, page, remove } = maintenance(namespace);
+    seed([
       ...Array.from({ length: MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES }, (_, index) => ({
-        ...scope,
         key: `binding:${String(index).padStart(4, "0")}`,
         value: { generation: 1 },
       })),
       { pluginId: "codex", namespace: "other", key: "binding:0000", value: { keep: true } },
       { pluginId: "other", namespace, key: "binding:0000", value: { keep: true } },
     ]);
-    const observed = pluginStateDoctorEntriesInKeyRange({
-      ...scope,
-      prefix: "binding:",
-      limit: MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,
-    });
-    const store = createPluginStateSyncKeyedStore<{ generation: number }>("codex", {
-      namespace,
-      maxEntries: MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,
-    });
+    const observed = page(MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES);
+    const store = syncStore<{ generation: number }>(
+      {
+        namespace,
+        maxEntries: MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,
+      },
+      "codex",
+    );
     store.register("binding:0000", { generation: 2 });
     const exec = vi.spyOn(DatabaseSync.prototype, "exec");
     const ownerAssertions: boolean[] = [];
@@ -417,33 +432,26 @@ describe("plugin-state-store", () => {
       ownerAssertions.push(database.isTransaction);
     };
     try {
-      expect(
-        pluginStateDeleteEntriesIfUnchanged({
-          ...scope,
-          entries: observed,
-          assertOwnedInTransaction,
-        }),
-      ).toEqual({ deleted: MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES - 1, changed: 1 });
+      expect(remove(observed, assertOwnedInTransaction)).toEqual({
+        deleted: MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES - 1,
+        changed: 1,
+      });
       expect(ownerAssertions).toEqual([true]);
       expect(exec.mock.calls.filter(([sql]) => sql.trim() === "BEGIN IMMEDIATE")).toHaveLength(1);
       expect(store.lookup("binding:0000")).toEqual({ generation: 2 });
-      expect(
-        createPluginStateSyncKeyedStore("codex", { namespace: "other", maxEntries: 1 }).lookup(
-          "binding:0000",
-        ),
-      ).toEqual({ keep: true });
-      expect(
-        createPluginStateSyncKeyedStore("other", { namespace, maxEntries: 1 }).lookup(
-          "binding:0000",
-        ),
-      ).toEqual({ keep: true });
-      expect(() =>
-        pluginStateDeleteEntriesIfUnchanged({
-          ...scope,
-          entries: [...observed, observed[0]!],
-          assertOwnedInTransaction,
-        }),
-      ).toThrow(/cannot exceed 512 entries/);
+      for (const [pluginId, retainedNamespace] of [
+        ["codex", "other"],
+        ["other", namespace],
+      ]) {
+        expect(
+          syncStore({ namespace: retainedNamespace, maxEntries: 1 }, pluginId).lookup(
+            "binding:0000",
+          ),
+        ).toEqual({ keep: true });
+      }
+      expect(() => remove([...observed, observed[0]!], assertOwnedInTransaction)).toThrow(
+        /cannot exceed 512 entries/,
+      );
     } finally {
       exec.mockRestore();
     }
@@ -451,12 +459,12 @@ describe("plugin-state-store", () => {
 
   it("pages past malformed rows and compares siblings' original JSON bytes", async () => {
     const namespace = "raw-doctor-bindings";
-    const scope = { pluginId: "codex", namespace };
-    seedPluginStateEntriesForTests([
-      { pluginId: "codex", namespace, key: "binding:a", value: { corrupt: true } },
-      { pluginId: "codex", namespace, key: "binding:b", value: { generation: 1 } },
-      { pluginId: "codex", namespace, key: "binding:c", value: { generation: 1 } },
-      { pluginId: "codex", namespace, key: "binding:d", value: { generation: 1 }, createdAt: -1 },
+    const { seed, page, remove, range } = maintenance(namespace);
+    seed([
+      { key: "binding:a", value: { corrupt: true } },
+      { key: "binding:b", value: { generation: 1 } },
+      { key: "binding:c", value: { generation: 1 } },
+      { key: "binding:d", value: { generation: 1 }, createdAt: -1 },
     ]);
     const database = openOpenClawStateDatabase().db;
     const replaceJson = database.prepare(
@@ -466,65 +474,32 @@ describe("plugin-state-store", () => {
     replaceJson.run('{ "generation" : 1 }', "codex", namespace, "binding:b");
     replaceJson.run('{ "generation" : 1 }', "codex", namespace, "binding:c");
 
-    const first = pluginStateDoctorEntriesInKeyRange({
-      ...scope,
-      prefix: "binding:",
-      limit: 1,
-    });
+    const first = page(1);
     expect(first).toEqual([
       expect.objectContaining({ key: "binding:a", valueJson: "{malformed", expiresAt: null }),
     ]);
     expect(first[0]).not.toHaveProperty("value");
-    await expect(
-      pluginStateEntriesInKeyRange({
-        ...scope,
-        keyStartInclusive: "binding:",
-        keyEndExclusive: "binding;",
-        limit: 1,
-      }),
-    ).rejects.toThrow(/corrupt JSON/);
+    await expect(range()).rejects.toThrow(/corrupt JSON/);
 
-    const siblings = pluginStateDoctorEntriesInKeyRange({
-      ...scope,
-      prefix: "binding:",
-      after: first[0]!.key,
-      limit: 2,
-    });
-    expect(siblings).toEqual([
-      expect.objectContaining({
-        key: "binding:b",
-        value: { generation: 1 },
-        valueJson: '{ "generation" : 1 }',
-      }),
-      expect.objectContaining({
-        key: "binding:c",
-        value: { generation: 1 },
-        valueJson: '{ "generation" : 1 }',
-      }),
-    ]);
+    const siblings = page(2, first[0]!.key);
+    expect(siblings).toEqual(
+      ["binding:b", "binding:c"].map((key) =>
+        expect.objectContaining({
+          key,
+          value: { generation: 1 },
+          valueJson: '{ "generation" : 1 }',
+        }),
+      ),
+    );
     replaceJson.run('{"generation":1}', "codex", namespace, "binding:c");
 
     expect(() =>
-      pluginStateDeleteEntriesIfUnchanged({
-        ...scope,
-        entries: siblings,
-        assertOwnedInTransaction: () => {
-          throw new Error("maintenance ownership expired");
-        },
+      remove(siblings, () => {
+        throw new Error("maintenance ownership expired");
       }),
     ).toThrow(/maintenance ownership expired/);
-    expect(
-      pluginStateDeleteEntriesIfUnchanged({
-        ...scope,
-        entries: siblings,
-        assertOwnedInTransaction: () => {},
-      }),
-    ).toEqual({ deleted: 1, changed: 1 });
-    const preserved = pluginStateDoctorEntriesInKeyRange({
-      ...scope,
-      prefix: "binding:",
-      limit: 4,
-    });
+    expect(remove(siblings)).toEqual({ deleted: 1, changed: 1 });
+    const preserved = page(4);
     expect(preserved.map((entry) => entry.key)).toEqual(["binding:a", "binding:c", "binding:d"]);
     expect(preserved[2]).not.toHaveProperty("value");
   });
@@ -552,9 +527,6 @@ describe("plugin-state-store", () => {
 describe("plugin-state-store.errors", () => {
   const testState = useState("plugin-state-errors", false, true);
 
-  function openStore(namespace: string) {
-    return createPluginStateKeyedStore("discord", { namespace, maxEntries: 10 });
-  }
   async function rejects(read: () => unknown, expected: object) {
     await expect(async () => read()).rejects.toMatchObject(expected);
   }
@@ -563,10 +535,7 @@ describe("plugin-state-store.errors", () => {
     "preserves %s failures and releases the listing cursor",
     async (failure) => {
       await withOpenClawTestState({ label: "plugin-state-entry-cursor" }, async () => {
-        const store = createPluginStateSyncKeyedStore("discord", {
-          namespace: "cursor",
-          maxEntries: 10,
-        });
+        const store = syncStore({ namespace: "cursor" });
         store.register("a", 1);
         store.register("b", 2);
         const { db, path } = openOpenClawStateDatabase();
@@ -622,8 +591,7 @@ describe("plugin-state-store.errors", () => {
       { label: "plugin-state-corrupt-env", applyEnv: false },
       async (state) => {
         const options = { namespace: "corrupt", maxEntries: 10, env: state.env };
-        const sync = createPluginStateSyncKeyedStore("discord", options);
-        const store = createPluginStateKeyedStore("discord", options);
+        const { sync, store } = stores(options);
         const database = openOpenClawStateDatabase({ env: state.env });
         expect(database.path).not.toBe(resolveOpenClawStateSqlitePath());
         // Seed corrupt storage before any keyed receipt can cache the row.
@@ -662,27 +630,19 @@ describe("plugin-state-store.errors", () => {
             expected,
           );
         }
-        let callbackCalled = false;
+        const update = vi.fn(() => "changed");
+        const predicate = vi.fn(() => true);
         for (const current of [sync, store]) {
-          await rejects(() => current.consume("key"), { ...expected, operation: "consume" });
-          await rejects(
-            () =>
-              current.update("key", () => {
-                callbackCalled = true;
-                return "changed";
-              }),
-            { ...expected, operation: "lookup" },
-          );
-          await rejects(
-            () =>
-              current.deleteIf("key", () => {
-                callbackCalled = true;
-                return true;
-              }),
-            { ...expected, operation: "delete" },
-          );
+          for (const [operation, read] of [
+            ["consume", () => current.consume("key")],
+            ["lookup", () => current.update("key", update)],
+            ["delete", () => current.deleteIf("key", predicate)],
+          ] as const) {
+            await rejects(read, { ...expected, operation });
+          }
         }
-        expect(callbackCalled).toBe(false);
+        expect(update).not.toHaveBeenCalled();
+        expect(predicate).not.toHaveBeenCalled();
         expect(
           openOpenClawStateDatabase({ env: state.env })
             .db.prepare("SELECT value_json FROM plugin_state_entries")
@@ -695,11 +655,7 @@ describe("plugin-state-store.errors", () => {
   it("keeps warm ownership denials distinct from acquisition failures for the same path", async () => {
     openOpenClawStateDatabase();
     await withOpenClawTestState({ label: "plugin-state-ownership-errors" }, async () => {
-      const store = openStore("ownership");
-      const sync = createPluginStateSyncKeyedStore("discord", {
-        namespace: "ownership",
-        maxEntries: 10,
-      });
+      const { sync, store } = stores({ namespace: "ownership" });
       await store.register("k", 1);
       claimOpenClawStateOwnership("fixture-supervisor", {
         env: { ...process.env, OPENCLAW_SUPERVISOR_MODE: "external" },
@@ -716,7 +672,7 @@ describe("plugin-state-store.errors", () => {
   });
 
   it("fails closed for process-local and persisted database quarantine", async () => {
-    const store = openStore("quarantine");
+    const store = openAsyncStore({ namespace: "quarantine" });
     await store.register("k", true);
     const path = resolveOpenClawStateSqlitePath();
     closePluginStateDatabase();

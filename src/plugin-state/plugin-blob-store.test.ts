@@ -256,6 +256,14 @@ describe("plugin-blob-store", () => {
     state,
   }) => {
     const store = open<{ version: number }>(state.env);
+    const expectStored = (receipt: object, byte: number, version: number) =>
+      expect(store.lookup("stable")).resolves.toEqual({
+        ...receipt,
+        key: "stable",
+        bytes: bytes(byte),
+        sizeBytes: 1,
+        metadata: { version },
+      });
     const startedAt = Date.now();
     const receipt = await store.registerIfAbsentWithReceipt(
       "stable",
@@ -271,13 +279,7 @@ describe("plugin-blob-store", () => {
       store.registerIfAbsentWithReceipt("stable", bytes(2), { version: 2 }),
     ).resolves.toBeUndefined();
     await expect(store.registerIfAbsent("stable", bytes(3), { version: 3 })).resolves.toBe(false);
-    await expect(store.lookup("stable")).resolves.toEqual({
-      ...receipt,
-      key: "stable",
-      bytes: bytes(1),
-      sizeBytes: 1,
-      metadata: { version: 1 },
-    });
+    await expectStored(receipt, 1, 1);
 
     await store.delete("stable");
     const replacement = await store.registerIfAbsentWithReceipt("stable", bytes(4), {
@@ -285,13 +287,7 @@ describe("plugin-blob-store", () => {
     });
     assert.isDefined(replacement);
     expect(replacement).toEqual({ createdAt: expect.any(Number) });
-    await expect(store.lookup("stable")).resolves.toEqual({
-      ...replacement,
-      key: "stable",
-      bytes: bytes(4),
-      sizeBytes: 1,
-      metadata: { version: 4 },
-    });
+    await expectStored(replacement, 4, 4);
   });
 
   it("keeps an expired stable key occupied until the owner claims its metadata", async ({

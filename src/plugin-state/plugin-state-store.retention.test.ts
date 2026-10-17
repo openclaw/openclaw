@@ -38,6 +38,8 @@ describe("plugin state keyed store", () => {
     const sibling = syncStore("sibling", 2);
     const counts = runWriteTransaction("register", (store) => {
       const retention = readPluginStateRetention(store.db, { ...scope, now: Date.now() });
+      const replace = (valueJson: string) =>
+        registerPluginStateEntry(store, { ...params, key: "stable", valueJson }, retention, true);
       const statements = trackSqliteStatementExecutions(
         requireNativeSqliteDatabase(store.db),
         ["expiryProbe", "delete"],
@@ -49,22 +51,12 @@ describe("plugin state keyed store", () => {
               : null,
       );
       try {
-        registerPluginStateEntry(
-          store,
-          { ...params, key: "stable", valueJson: "4" },
-          retention,
-          true,
-        );
+        replace("4");
       } finally {
         statements.restore();
       }
       vi.setSystemTime(2_000);
-      registerPluginStateEntry(
-        store,
-        { ...params, key: "stable", valueJson: "5" },
-        retention,
-        true,
-      );
+      replace("5");
       return statements.counts;
     });
     vi.setSystemTime(500);
@@ -91,7 +83,7 @@ describe("plugin state keyed store", () => {
     expect(counts).toEqual({ expiryProbe: 0, delete: 0 });
   });
 
-  it("evicts oldest live entries over maxEntries with bounded database calls", async () => {
+  it("evicts oldest live entries over maxEntries with bounded database calls", () => {
     vi.useFakeTimers({ now: 1000 });
     seedPluginStateEntriesForTests(
       Array.from({ length: 64 }, (_, index) => ({
@@ -124,7 +116,7 @@ describe("plugin state keyed store", () => {
     ]);
   });
 
-  it("keeps the just-registered key when namespace eviction timestamps tie", async () => {
+  it("keeps the just-registered key when namespace eviction timestamps tie", () => {
     vi.useFakeTimers({ now: 1000 });
     const store = syncStore("evict-tie-register", 1);
 
@@ -171,8 +163,7 @@ describe("plugin state keyed store", () => {
     expect(await store.registerIfAbsent("a", 2)).toBe(true);
     const after = Date.now();
     const entries = await store.entries();
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({ key: "a", value: 2 });
+    expect(entries).toMatchObject([{ key: "a", value: 2 }]);
     expect(entries[0]?.createdAt).toBeGreaterThanOrEqual(before);
     expect(entries[0]?.createdAt).toBeLessThanOrEqual(after);
     expect(await store.lookup("z")).toBeUndefined();

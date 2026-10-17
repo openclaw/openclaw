@@ -63,6 +63,11 @@ describe("plugin state worker operations", () => {
     value: string,
     writeStores = [0, 1],
   ) => operation.execute({ type: "move", input: { value } }, { writeStores });
+  const single = async (namespace: string, value = "original", ttlMs?: number) => {
+    const store = open(namespace);
+    await store.register("key", value, { ttlMs });
+    return { store, operation: store.createOperation<FixtureOperations>([store], handler) };
+  };
   const pair = async (prefix: string, value = "original") => {
     const first = open(`${prefix}-first`);
     const second = open(`${prefix}-second`);
@@ -131,9 +136,7 @@ describe("plugin state worker operations", () => {
   });
 
   it("expires receipts without querying SQLite or waiting for a timer", async () => {
-    const store = open("ttl");
-    await store.register("key", "allowed", { ttlMs: 60_000 });
-    const operation = store.createOperation<FixtureOperations>([store], handler);
+    const { operation } = await single("ttl", "allowed", 60_000);
     const result = await read(operation);
     result.assertCurrent();
     const afterExpiry = Date.now() + 120_000;
@@ -145,15 +148,13 @@ describe("plugin state worker operations", () => {
     "invalidates receipts at async admission and sync commit (alias: %s)",
     async (alias) => {
       const namespace = alias ? "alias-authority" : "receipts";
-      const store = open(namespace);
-      await store.register("key", alias ? "original" : "allowed");
+      const { operation } = await single(namespace, alias ? "original" : "allowed");
       let env = state.env;
       if (alias) {
         const directory = state.path("state-directory-alias");
         symlinkSync(state.stateDir, directory, process.platform === "win32" ? "junction" : "dir");
         env = { ...env, OPENCLAW_STATE_DIR: directory };
       }
-      const operation = store.createOperation<FixtureOperations>([store], handler);
       const native = createPluginStateSyncKeyedStore<string>(
         "operation-test",
         options(namespace, env),
@@ -295,9 +296,7 @@ describe("plugin state worker operations", () => {
   );
 
   it("rejects escaped facades and rolls back a handler that returns a Promise", async () => {
-    const store = open("lifetime");
-    await store.register("key", "original");
-    const operation = store.createOperation<FixtureOperations>([store], handler);
+    const { store, operation } = await single("lifetime");
     await operation.execute({ type: "escape", input: undefined }, { writeStores: [] });
     await invalid(operation.execute({ type: "escape", input: undefined }, { writeStores: [] }));
     const asynchronous = store.createOperation<{ invalid: { input: undefined; output: void } }>(
