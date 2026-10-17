@@ -505,7 +505,7 @@ export type SpeechProviderPlugin = {
     | SpeechProviderPreparedSynthesis
     | undefined
     | Promise<SpeechProviderPreparedSynthesis | undefined>;
-  /** @deprecated Use isConfiguredAsync. Final compatibility day: 2026-12-31. */
+  /** @deprecated Use isConfiguredAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   isConfigured: (ctx: SpeechProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: SpeechProviderConfiguredContext) => Promise<boolean>;
   synthesize: (req: SpeechSynthesisRequest) => Promise<SpeechSynthesisResult>;
@@ -526,7 +526,7 @@ export type RealtimeTranscriptionProviderPlugin = {
   resolveConfig?: (
     ctx: RealtimeTranscriptionProviderResolveConfigContext,
   ) => RealtimeTranscriptionProviderConfig;
-  /** @deprecated Use isConfiguredAsync. Final compatibility day: 2026-12-31. */
+  /** @deprecated Use isConfiguredAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   isConfigured: (ctx: RealtimeTranscriptionProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: RealtimeTranscriptionProviderConfiguredContext) => Promise<boolean>;
   createSession: (req: RealtimeTranscriptionSessionCreateRequest) => RealtimeTranscriptionSession;
@@ -544,12 +544,12 @@ export type RealtimeVoiceProviderPlugin = {
   voices?: readonly string[];
   autoSelectOrder?: number;
   capabilities?: RealtimeVoiceProviderCapabilities;
-  /** @deprecated Use resolveConfigAsync when config resolution needs credentials. Final compatibility day: 2026-12-31. */
+  /** @deprecated Use resolveConfigAsync when config resolution needs credentials. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
   resolveConfigAsync?: (
     ctx: RealtimeVoiceProviderResolveConfigContext,
   ) => Promise<RealtimeVoiceProviderConfig>;
-  /** @deprecated Use isConfiguredAsync. Final compatibility day: 2026-12-31. */
+  /** @deprecated Use isConfiguredAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
   isConfiguredAsync?: (ctx: RealtimeVoiceProviderConfiguredContext) => Promise<boolean>;
   createBridge: (req: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge;

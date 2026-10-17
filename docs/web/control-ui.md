@@ -53,6 +53,8 @@ Inline widgets and MCP Apps reserve their last rendered height when a cached con
 
 Transcript history loads in parallel with the browser cache. An unchanged history response keeps the cached message rows and widget sizes in place. The transcript restores its saved reading position, or opens at the end, before showing its initial measured rows. Measured rows become visible once their selected geometry is committed, without an extra layout frame.
 
+Consecutive informational system, recovery, and model-fallback events appear as a collapsed **system events** row in chat. Expand it with a click, Enter, or Space to read the original events in order. An amber **Updates not delivered** summary stays visible when delivery needs attention; event counts do not imply a count of undelivered updates. Human and assistant messages, actionable notices, and search results remain separate. This changes presentation only, not retry or delivery behavior.
+
 During connection recovery, Send shows its busy state and explains why sending is unavailable without inserting a temporary notice above the composer.
 
 Automatic read acknowledgements and identity refreshes pause while the Gateway reports a restart or suspension. Pending read acknowledgements are shared across repeated session updates. If an acknowledgement is rejected, later updates respect the server's retry delay and use randomized backoff instead of immediately sending another patch.

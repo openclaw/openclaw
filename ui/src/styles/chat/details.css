@@ -387,33 +387,100 @@ openclaw-chat-details-progress {
   color: var(--muted);
   font-size: 10px;
 }
-.chat-details .chat-pr--compact {
-  align-items: start;
-  padding-block: 8px;
+.chat-details__changes {
+  position: relative;
 }
-.chat-details .chat-pr--compact + .chat-pr--compact {
-  border-top: 1px solid var(--border);
-  border-radius: 0;
+.chat-details__changes .chat-details__caption {
+  padding-inline-end: 92px;
+}
+.chat-details__all-changes {
+  position: absolute;
+  inset-block-start: 10px;
+  inset-inline-end: 4px;
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+}
+.chat-details .chat-pr--compact {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+.chat-details .chat-pr__header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.chat-details .chat-pr__header .chat-pr__repo {
+  flex: 0 1 auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.chat-details .chat-pr__header .chat-pr__number {
+  flex: none;
+  overflow-wrap: normal;
+  white-space: nowrap;
+  line-height: 18px;
+}
+.chat-details .chat-pr__header .chat-pr__icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+}
+.chat-details .chat-pr__actions {
+  flex: none;
+  margin-inline-start: auto;
+}
+.chat-details .chat-pr__actions-trigger {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+}
+.chat-details .chat-pr__actions-trigger svg {
+  width: 15px;
+  height: 15px;
 }
 .chat-details .chat-pr--compact .chat-pr__link {
-  grid-template-columns: 16px minmax(0, 1fr);
-  grid-column: 1;
-  grid-row: 1;
-  row-gap: 7px;
+  display: block;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 .chat-details .chat-pr--compact .chat-pr__identity {
-  grid-column: 1 / -1;
+  display: block;
 }
-.chat-details .chat-pr--compact .chat-pr__repo {
-  overflow-wrap: anywhere;
-  white-space: normal;
+.chat-details .chat-pr__title {
+  font-size: 12px;
+  font-weight: 500;
+}
+.chat-details .chat-pr--compact .chat-pr__link:hover {
+  text-decoration: underline;
 }
 .chat-details .chat-pr--compact .chat-pr__meta {
-  grid-column: 2;
-  grid-row: 1;
+  max-width: none;
+  justify-content: start;
+  gap: 5px;
 }
-.chat-details .chat-pr--compact .chat-pr__number {
-  align-self: center;
+.chat-details .chat-pr--compact .chat-pr__diff {
+  order: 1;
+  margin-inline-start: auto;
+  white-space: nowrap;
 }
 .chat-details .chat-pr__checks-pill {
   gap: 3px;

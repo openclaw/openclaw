@@ -139,10 +139,11 @@ before cleanup, so retained child sessions do not leave phantom running activity
 If settlement fails, completion remains available for retry.
 
 Recovery remembers live session ownership without retaining saved prompt snapshots.
-Unchanged owned rows skip session reads; ownership release or a published session
-change requests another sweep within one second. Unavailable recovery reads retry
-per row with exponential backoff from one second to one minute. Registry lifecycle
-changes and session publications clear that backoff. Persisted rows without a live
+Unchanged owned rows skip session reads; release of the run context or its admitted
+session work requests another sweep within one second. If admission releases first,
+recovery still waits for the run context to finish cleanup. Unavailable recovery reads
+retry per row with exponential backoff from one second to one minute; other session
+publications are observed on the next bounded retry. Persisted rows without a live
 owner still require a fresh read before recovery can change their state.
 
 Startup session maintenance reports retained run/task owners in one informational

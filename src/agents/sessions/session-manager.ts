@@ -177,7 +177,7 @@ export class SessionManager extends SessionManagerBranching {
   flushPendingPersistence(): void {}
 
   // Worker rollback instrumentation wraps the method on this public prototype.
-  /** @deprecated Await appendMessageAsync. Supported through 2026-12-31. */
+  /** @deprecated Await appendMessageAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   override appendMessage(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
@@ -185,7 +185,7 @@ export class SessionManager extends SessionManagerBranching {
     return super.appendMessage(message, options);
   }
 
-  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. Supported through 2026-12-31. */
+  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   override appendMessageWithTranscriptAnchor(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
@@ -193,7 +193,7 @@ export class SessionManager extends SessionManagerBranching {
     return super.appendMessageWithTranscriptAnchor(message, options);
   }
 
-  /** @deprecated Await prepareTranscriptRewriteAsync and its commit. Supported through 2026-12-31. */
+  /** @deprecated Await prepareTranscriptRewriteAsync and its commit. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   prepareTranscriptRewrite() {
     prepareSessionManagerSync("prepareTranscriptRewrite", this.persistenceTarget, this);
     this.assertTranscriptWriteActive();
@@ -461,7 +461,7 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /** @deprecated Await openAsync. Supported through 2026-12-31. */
+  /** @deprecated Await openAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   static open(
     target: SessionTranscriptRuntimeTarget,
     cwdOverride?: string,
@@ -489,7 +489,7 @@ export class SessionManager extends SessionManagerBranching {
     );
   }
 
-  /** @deprecated Await openBoundedAsync. Supported through 2026-12-31. */
+  /** @deprecated Await openBoundedAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   static openBounded(
     target: SessionTranscriptRuntimeTarget,
     options: SessionManagerBoundedContextLimits & { cwd?: string; onTruncated?: () => void },
@@ -578,7 +578,7 @@ export class SessionManager extends SessionManagerBranching {
     return SessionManager.detachBounded(await SessionManager.openBoundedAsync(target, options));
   }
 
-  /** @deprecated Await openDetachedBoundedAsync. Supported through 2026-12-31. */
+  /** @deprecated Await openDetachedBoundedAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   static openDetachedBounded(
     target: SessionTranscriptRuntimeTarget,
     options: Parameters<typeof SessionManager.openBounded>[1],
@@ -587,7 +587,7 @@ export class SessionManager extends SessionManagerBranching {
     return SessionManager.detachBounded(SessionManager.openBounded(target, options));
   }
 
-  /** @deprecated Await openModelContextAsync. Supported through 2026-12-31. */
+  /** @deprecated Await openModelContextAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   static openModelContext(
     target: SessionTranscriptRuntimeTarget,
     options: {
@@ -635,7 +635,7 @@ export class SessionManager extends SessionManagerBranching {
     return manager;
   }
 
-  /** @deprecated Await readSessionContextAsync. Supported through 2026-12-31. */
+  /** @deprecated Await readSessionContextAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   static readSessionContext<T>(
     target: SessionTranscriptRuntimeTarget,
     read: (messages: Iterable<AgentMessage>, header: unknown) => T,
@@ -657,7 +657,7 @@ export class SessionManager extends SessionManagerBranching {
   }
 
   /**
-   * @deprecated Await appendMessageToTranscriptAsync. Supported through 2026-12-31.
+   * @deprecated Await appendMessageToTranscriptAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    */
   static appendMessageToTranscript(
     target: SessionTranscriptRuntimeTarget,

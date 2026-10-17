@@ -189,7 +189,7 @@ export function resolveTtsPrefsPath(
   config: ResolvedTtsConfig,
   preparedTtsPreferences: PreparedTtsPreferences,
 ): string;
-/** @deprecated Use resolveTtsPrefsPathAsync or pass awaited prepareTtsPreferences(). Final compatibility day: 2026-12-31. */
+/** @deprecated Use resolveTtsPrefsPathAsync or pass awaited prepareTtsPreferences(). Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveTtsPrefsPath(
   config: ResolvedTtsConfig,
   preparedTtsPreferences?: PreparedTtsPreferences,
@@ -330,7 +330,7 @@ export function buildTtsSystemPromptHint(
   agentId: string | undefined,
   options: { messageToolOnly?: boolean; preparedTtsPreferences: PreparedTtsPreferences },
 ): string | undefined;
-/** @deprecated Await api.runtime.tts.buildSystemPromptHintAsync. Bundled callers can pass awaited prepareTtsPreferences(). Final compatibility day: 2026-12-31. */
+/** @deprecated Await api.runtime.tts.buildSystemPromptHintAsync. Bundled callers can pass awaited prepareTtsPreferences(). Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function buildTtsSystemPromptHint(
   cfg: OpenClawConfig,
   agentId?: string,

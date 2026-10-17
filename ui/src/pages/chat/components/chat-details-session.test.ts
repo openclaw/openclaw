@@ -62,7 +62,10 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
   await element.updateComplete;
   const changes = element.querySelector('[data-details-group="pull-requests"]')!;
   expect(changes.querySelector("summary")?.textContent).toContain("Changes");
-  const allChanges = changes.querySelector<HTMLButtonElement>(".chat-details__navigation")!;
+  const allChanges = changes.parentElement!.querySelector<HTMLButtonElement>(
+    ".chat-details__all-changes",
+  )!;
+  expect(allChanges.closest("summary")).toBeNull();
   expect(allChanges.textContent).toContain("All changes");
   allChanges.click();
   expect(openChanges).toHaveBeenCalledOnce();
@@ -124,7 +127,6 @@ it("shows participant controls only while the session has participants", async (
   expect(element.querySelector(".chat-details__meta-actions")).toBeNull();
 });
 it("uses the current PR renderer and preserves CI session identity and branch dismissal", async () => {
-  const dismiss = vi.fn();
   const element = await mount({
     pullRequestsSessionId: "incarnation-7",
     pullRequests: [
@@ -140,9 +142,8 @@ it("uses the current PR renderer and preserves CI session identity and branch di
         deletions: 41,
       },
     ],
-    onDismissPullRequest: dismiss,
   });
-  expect(element.querySelector(".chat-pr__repo")?.textContent).toBe("A compact PR title");
+  expect(element.querySelector(".chat-pr__title")?.textContent).toBe("A compact PR title");
   const link = element.querySelector(".chat-pr__link")!;
   for (const fact of ["example/project", "feature", "Open", "+84", "−41"]) {
     expect(link.getAttribute("title")).toContain(fact);
@@ -151,8 +152,6 @@ it("uses the current PR renderer and preserves CI session identity and branch di
   const automation = element.querySelector("openclaw-chat-ci-automation");
   expect(automation).toHaveProperty("sessionId", "incarnation-7");
   expect(automation).toHaveProperty("presented", true);
-  element.querySelector<HTMLButtonElement>(".chat-pr__dismiss")!.click();
-  expect(dismiss).toHaveBeenCalledWith(element.props!.pullRequests![0]);
   const branch = {
     owner: "example",
     repo: "project",

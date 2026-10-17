@@ -259,9 +259,6 @@ export abstract class AppSidebarBase {
     }
     const finish = this.finishUpdate;
     this.finishUpdate = undefined;
-    for (const controller of this.controllers) {
-      controller.hostUpdated?.();
-    }
     this.updated();
     finish?.(true);
   }

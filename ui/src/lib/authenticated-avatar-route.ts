@@ -97,6 +97,9 @@ async function fetchAvatarRoute(
         blobUrl = URL.createObjectURL(await response.blob());
         break;
       }
+      // Rejected bodies are never read, including cached misses. Release them
+      // without letting stalled cleanup block credential recovery or fallback.
+      void response.body?.cancel().catch(() => undefined);
       notFound = response.status === 404;
       entry.unavailable = retryUnavailable && response.status === 503;
       retryDelayMs = entry.unavailable ? retryAfterMs(response) : undefined;
