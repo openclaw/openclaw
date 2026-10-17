@@ -48,7 +48,6 @@ const forkableClaudeCliBackend = {
 >[number];
 
 const { createSessionStoreDir } = setupSessionCreateTestHarness();
-
 function createSession(
   params: Parameters<typeof directSessionReq>[1],
   options?: Parameters<typeof directSessionReq>[2],
@@ -63,6 +62,26 @@ function expectAdminRequired(response: Awaited<ReturnType<typeof directSessionRe
   });
 }
 
+function expectCreated(
+  response: Awaited<ReturnType<typeof createSession>>,
+  entry: Partial<SessionEntry>,
+) {
+  expect(response.ok, JSON.stringify(response.error)).toBe(true);
+  expect(response.payload?.entry).toMatchObject(entry);
+}
+
+const selectableWindows = {
+  contextWindows: [
+    { id: "200k", label: "200K", contextWindow: 200_000 },
+    { id: "1m", label: "1M", contextWindow: 1_000_000 },
+  ],
+  contextWindowDefault: "1m",
+};
+
+async function writeParent(sessionId: string, entry: Partial<SessionEntry> = {}, key = "main") {
+  await writeSessionStore({ entries: { [key]: sessionStoreEntry(sessionId, entry) } });
+}
+
 async function readMessages(scope: Parameters<typeof loadTranscriptEvents>[0]) {
   return (await loadTranscriptEvents(scope)).flatMap((entry) =>
     entry &&
@@ -75,30 +94,22 @@ async function readMessages(scope: Parameters<typeof loadTranscriptEvents>[0]) {
   );
 }
 
+function assistantMessage(text: string, stopReason?: "stop" | "toolUse") {
+  return { role: "assistant" as const, content: [{ type: "text" as const, text }], stopReason };
+}
+
 test("sessions.create parents dashboard sessions to agent main by default", async () => {
   const { storePath } = await createSessionStoreDir();
-  testState.sessionConfig = undefined;
   testState.agentConfig = { model: { primary: "openai/current-model" } };
-  await writeSessionStore({
-    entries: {
-      "agent:main:main": {
-        ...sessionStoreEntry("sess-grouping-parent"),
-        providerOverride: "anthropic",
-        modelOverride: "parent-model",
-        modelOverrideSource: "user",
-      },
-    },
-  });
-
+  await writeParent(
+    "sess-grouping-parent",
+    { providerOverride: "anthropic", modelOverride: "parent-model", modelOverrideSource: "user" },
+    "agent:main:main",
+  );
   const created = await createSession({ agentId: "main" });
-
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  // Auto-parented operator sessions remain depth-zero roots.
+  expectCreated(created, { parentSessionKey: "agent:main:main", spawnDepth: 0 });
   expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
-  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-  // Auto-parented operator sessions must stay depth-zero roots. This preserves
-  // their operator identity and makes explicit finite spawn-depth caps apply
-  // from the correct origin.
-  expect(created.payload?.entry?.spawnDepth).toBe(0);
   const key = requireNonEmptyString(created.payload?.key, "created session key");
   const child = expectDefined(loadSessionEntry({ sessionKey: key, storePath }), "created session");
   const parent = expectDefined(
@@ -125,10 +136,7 @@ test("sessions.create parents dashboard sessions to agent main by default", asyn
     modelProvider: "openai",
     model: "current-model",
   });
-  expect({ provider: reply.provider, model: reply.model }).toEqual({
-    provider: "openai",
-    model: "current-model",
-  });
+  expect(reply).toMatchObject({ provider: "openai", model: "current-model" });
 });
 
 test.each([
@@ -157,7 +165,7 @@ test.each([
     await createSessionStoreDir();
     testState.agentsConfig = { ownership: "explicit", entries: { main: {}, ops: {} } };
     testState.agentConfig = { sessionStore: { agentId: "main" } };
-    await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent-task") } });
+    await writeParent("sess-parent-task");
     const created = await directSessionReq("sessions.create", { agentId: "main", ...params });
     expect(created).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST", message } });
   },
@@ -174,30 +182,23 @@ test("sessions.create forks the parent transcript into the new session", async (
   const parent = await createCompactedSessionFixture(dir);
   const projectRoot = path.join(dir, "qa-writer");
   await fs.mkdir(projectRoot);
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry(parent.sessionId, {
-        sessionFile: parent.sessionFile,
-        projectId: "qa-writer",
-        spawnedCwd: projectRoot,
-        sessionRoot: projectRoot,
-        totalTokens: 123,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-        cliSessionBindings: {
-          "claude-cli": { sessionId: "native-parent", resumeCheckpointId: "parent-checkpoint" },
-        },
-      }),
+  await writeParent(parent.sessionId, {
+    sessionFile: parent.sessionFile,
+    projectId: "qa-writer",
+    spawnedCwd: projectRoot,
+    sessionRoot: projectRoot,
+    totalTokens: 123,
+    totalTokensFresh: true,
+    totalTokensVersion: 1,
+    cliSessionBindings: {
+      "claude-cli": { sessionId: "native-parent", resumeCheckpointId: "parent-checkpoint" },
     },
   });
   await seedSessionTranscript({
     sessionId: parent.sessionId,
     sessionKey: "agent:main:main",
     storePath,
-    messages: [
-      { role: "user", content: "before compaction" },
-      { role: "assistant", content: [{ type: "text", text: "working on it" }] },
-    ],
+    messages: [{ role: "user", content: "before compaction" }, assistantMessage("working on it")],
   });
 
   const created = await createSession({
@@ -206,9 +207,7 @@ test("sessions.create forks the parent transcript into the new session", async (
     key: "agent:main:dashboard:fork-publication",
     fork: true,
   });
-
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.entry).toMatchObject({
+  expectCreated(created, {
     parentSessionKey: "agent:main:main",
     forkedFromParent: true,
     totalTokensFresh: false,
@@ -221,21 +220,12 @@ test("sessions.create forks the parent transcript into the new session", async (
   expect(created.payload?.sessionId).not.toBe(parent.sessionId);
   expect(created.payload?.entry).not.toHaveProperty("sessionFile");
   const forkedSessionId = requireNonEmptyString(created.payload?.sessionId, "forked session id");
-  expect(
-    await readMessages({
-      sessionId: forkedSessionId,
-      sessionKey: created.payload?.key ?? "",
-      storePath,
-    }),
-  ).toEqual(
-    await readMessages({
-      sessionId: parent.sessionId,
-      sessionKey: "agent:main:main",
-      storePath,
-    }),
-  );
-
   const key = requireNonEmptyString(created.payload?.key, "forked session key");
+  const transcript = (sessionId: string, sessionKey: string) =>
+    readMessages({ sessionId, sessionKey, storePath });
+  expect(await transcript(forkedSessionId, key)).toEqual(
+    await transcript(parent.sessionId, "agent:main:main"),
+  );
   expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
     projectId: "qa-writer",
     spawnedCwd: projectRoot,
@@ -255,108 +245,49 @@ test("sessions.create forks the parent transcript into the new session", async (
   });
   expect(loadSessionEntry({ sessionKey: key, storePath })).not.toHaveProperty("forkedFromParent");
   const listed = await directSessionReq<{
-    sessions?: Array<{
-      key: string;
-      forkedFromParent?: boolean;
-    }>;
+    sessions?: Array<{ key: string; forkedFromParent?: boolean }>;
   }>("sessions.list", {});
   expect(listed.payload?.sessions?.find((row) => row.key === key)?.forkedFromParent).toBe(true);
-  testState.sessionConfig = undefined;
 });
 
 async function seedSizedForkParent(dir: string, entry: Parameters<typeof sessionStoreEntry>[1]) {
   const parent = await createCompactedSessionFixture(dir);
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry(parent.sessionId, {
-        sessionFile: parent.sessionFile,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-        ...entry,
-      }),
-    },
+  await writeParent(parent.sessionId, {
+    sessionFile: parent.sessionFile,
+    totalTokensFresh: true,
+    totalTokensVersion: 1,
+    ...entry,
   });
 }
 
-test.each<{
-  name: string;
-  model: string;
-  provider: string;
-  tokens: number;
-  window?: number;
-  limit?: string;
-  nativeCatalog?: "missing" | "unknown";
-  configuredTokens?: number;
-}>([
-  {
-    name: "provider-scoped fallback",
-    model: "unresolved-model",
-    provider: "unresolved-provider",
-    tokens: 200_000,
-    window: undefined,
-    limit: "200000/100000 tokens",
-  },
-  {
-    name: "inherited large model",
-    model: "gpt-large",
-    provider: "openai",
-    tokens: 391_869,
-    window: 922_000,
-    limit: undefined,
-  },
-  {
-    name: "explicit small model",
-    model: "gpt-small",
-    provider: "openai",
-    tokens: 150_000,
-    window: 128_000,
-    limit: "150000/128000 tokens",
-  },
-  {
-    name: "selected window clamps configured capacity",
-    model: "gpt-selectable",
-    provider: "openai",
-    tokens: 300_000,
-    window: 200_000,
-    limit: "300000/200000 tokens",
-  },
-  {
-    name: "missing native capacity beside API inventory",
-    model: "gpt-native",
-    provider: "openai",
-    tokens: 150_000,
-    window: 1_000_000,
-    nativeCatalog: "missing",
-    limit: "150000/100000 tokens",
-  },
-  {
-    name: "unknown native capacity beside warm API capacity",
-    model: "gpt-native",
-    provider: "openai",
-    tokens: 150_000,
-    window: 1_000_000,
-    nativeCatalog: "unknown",
-    limit: "150000/100000 tokens",
-  },
-  {
-    name: "authored capacity for a native runtime",
-    model: "gpt-native",
-    provider: "openai",
-    tokens: 150_000,
-    window: 1_000_000,
-    nativeCatalog: "unknown",
-    configuredTokens: 200_000,
-  },
+test.each<
+  [
+    name: string,
+    model: string,
+    tokens: number,
+    window?: number,
+    limit?: string,
+    nativeCatalog?: "missing" | "unknown",
+    configuredTokens?: number,
+  ]
+>([
+  ["provider-scoped fallback", "unresolved-model", 200_000, undefined, "200000/100000 tokens"],
+  ["inherited large model", "gpt-large", 391_869, 922_000],
+  ["explicit small model", "gpt-small", 150_000, 128_000, "150000/128000 tokens"],
+  ["selected window clamp", "gpt-selectable", 300_000, 200_000, "300000/200000 tokens"],
+  ["native absent", "gpt-native", 150_000, 1_000_000, "150000/100000 tokens", "missing"],
+  ["native unknown", "gpt-native", 150_000, 1_000_000, "150000/100000 tokens", "unknown"],
+  ["native authored", "gpt-native", 150_000, 1_000_000, undefined, "unknown", 200_000],
 ])(
-  "sessions.create enforces fork capacity: $name",
-  async ({ model, provider, tokens, window, limit, nativeCatalog, configuredTokens }) => {
+  "sessions.create enforces fork capacity: %s",
+  async (_name, model, tokens, window, limit, nativeCatalog, configuredTokens) => {
+    const provider = model === "unresolved-model" ? "unresolved-provider" : "openai";
     const { dir } = await createSessionStoreDir();
     testState.sessionConfig = { scope: "per-sender" };
     resetContextWindowCacheForTest();
     onTestFinished(() => {
       resetContextWindowCacheForTest();
       agentDiscoveryMock.models = [];
-      testState.sessionConfig = undefined;
     });
     const selectable = model === "gpt-selectable";
     if (!window) {
@@ -373,15 +304,7 @@ test.each<{
           id: model,
           name: model,
           provider,
-          ...(selectable
-            ? {
-                contextWindows: [
-                  { id: "200k", label: "200K", contextWindow: 200_000 },
-                  { id: "1m", label: "1M", contextWindow: 1_000_000 },
-                ],
-                contextWindowDefault: "1m",
-              }
-            : { contextWindow: window }),
+          ...(selectable ? selectableWindows : { contextWindow: window }),
         },
       ];
     }
@@ -439,16 +362,11 @@ test.each([undefined, "last-completed"] as const)(
     const { storePath } = await createSessionStoreDir();
     testState.sessionConfig = { scope: "per-sender" };
     const parentSessionId = "sess-active-completed-fork-parent";
-    await writeSessionStore({
-      entries: {
-        main: sessionStoreEntry(parentSessionId, {
-          // The in-flight tail can make the whole parent exceed the cap; only the
-          // selected completed prefix should govern this fork.
-          totalTokens: 200_000,
-          totalTokensFresh: true,
-          totalTokensVersion: 1,
-        }),
-      },
+    // Capacity uses the completed prefix, not the oversized in-flight tail.
+    await writeParent(parentSessionId, {
+      totalTokens: 200_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
     });
     await seedSessionTranscript({
       sessionId: parentSessionId,
@@ -456,17 +374,9 @@ test.each([undefined, "last-completed"] as const)(
       storePath,
       messages: [
         { role: "user", content: "completed question" },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "completed answer" }],
-          stopReason: "stop",
-        },
+        assistantMessage("completed answer", "stop"),
         { role: "user", content: "active question" },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "active tool call" }],
-          stopReason: "toolUse",
-        },
+        assistantMessage("active tool call", "toolUse"),
       ],
     });
     embeddedRunMock.activeIds.add(parentSessionId);
@@ -499,7 +409,6 @@ test.each([undefined, "last-completed"] as const)(
       ]);
     } finally {
       embeddedRunMock.activeIds.delete(parentSessionId);
-      testState.sessionConfig = undefined;
     }
   },
 );
@@ -575,15 +484,13 @@ test.each(["cli", "enabled", "disabled"] as const)(
     }));
     installSessionCatalog(resolveCreateSession, harness === "cli");
     testState.sessionConfig = { dmScope: "main" };
-    await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent-catalog") } });
-
+    await writeParent("sess-parent-catalog");
     try {
       const created = await createSession({
         agentId: "main",
         catalogId: "claude",
         ...(harness === "cli" ? { parentSessionKey: "main", emitCommandHooks: true } : {}),
       });
-
       if (fixture) {
         expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
       }
@@ -593,8 +500,7 @@ test.each(["cli", "enabled", "disabled"] as const)(
         expect(created.payload).toBeUndefined();
         return;
       }
-      expect(created.ok, JSON.stringify(created.error)).toBe(true);
-      expect(created.payload?.entry).toMatchObject({
+      expectCreated(created, {
         providerOverride: "anthropic",
         modelOverride: "claude-opus-4-8",
         agentRuntimeOverride: agentRuntime,
@@ -606,16 +512,14 @@ test.each(["cli", "enabled", "disabled"] as const)(
       if (harness === "cli") {
         expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
       }
-
       const patched = await directSessionReq("sessions.patch", {
         key: created.payload?.key,
         agentId: "main",
         model: "anthropic/claude-opus-4-8",
       });
-      expect(patched.ok).toBe(false);
-      expect(patched.error).toMatchObject({
-        code: "INVALID_REQUEST",
-        message: "Model selection is locked for this session.",
+      expect(patched).toMatchObject({
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: "Model selection is locked for this session." },
       });
 
       const deleted = await directSessionReq("sessions.delete", {
@@ -632,8 +536,6 @@ test.each(["cli", "enabled", "disabled"] as const)(
         }),
       ).toBeUndefined();
     } finally {
-      testState.agentConfig = undefined;
-      testState.sessionConfig = undefined;
       setActivePluginRegistry(createEmptyPluginRegistry());
     }
   },
@@ -678,28 +580,36 @@ test.each(["caller key", "unauthorized agent"])(
         expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "research" });
       }
     } finally {
-      testState.agentsConfig = undefined;
       setActivePluginRegistry(createEmptyPluginRegistry());
     }
   },
 );
+
+const durableSelection = {
+  providerOverride: "codex",
+  modelOverride: "gpt-5.5",
+  modelOverrideSource: "user",
+  agentRuntimeOverride: "codex",
+  thinkingLevel: "off",
+  fastMode: "auto",
+  traceLevel: "debug",
+  authProfileOverride: "codex-oauth",
+  authProfileOverrideSource: "user",
+} satisfies Partial<SessionEntry>;
 
 test.each<{
   name: string;
   defaults: string;
   parent: Partial<SessionEntry>;
   inherited: Partial<SessionEntry>;
-  absent: (keyof SessionEntry)[];
+  discarded: Partial<SessionEntry>;
   resolved: CreatedSession["resolved"];
 }>([
   {
     name: "explicit selection",
     defaults: "anthropic/current-model",
-    parent: {
-      providerOverride: "codex",
-      modelOverride: "gpt-5.5",
-      modelOverrideSource: "user",
-      agentRuntimeOverride: "codex",
+    parent: {},
+    discarded: {
       modelProvider: "codex",
       model: "gpt-5.5",
       contextTokens: 272000,
@@ -708,67 +618,34 @@ test.each<{
       totalTokens: 12340,
       totalTokensFresh: false,
       contextBudgetStatus: contextBudgetStatusFixture(),
-      thinkingLevel: "off",
-      fastMode: "auto",
-      traceLevel: "debug",
-      authProfileOverride: "codex-oauth",
-      authProfileOverrideSource: "user",
     },
-    inherited: {
-      providerOverride: "codex",
-      modelOverride: "gpt-5.5",
-      modelOverrideSource: "user",
-      agentRuntimeOverride: "codex",
-      thinkingLevel: "off",
-      fastMode: "auto",
-      traceLevel: "debug",
-      authProfileOverride: "codex-oauth",
-      authProfileOverrideSource: "user",
-    },
-    absent: [
-      "modelProvider",
-      "model",
-      "contextTokens",
-      "inputTokens",
-      "outputTokens",
-      "totalTokens",
-      "totalTokensFresh",
-      "contextBudgetStatus",
-    ],
+    inherited: durableSelection,
     resolved: { modelProvider: "codex", model: "gpt-5.5" },
   },
   {
     name: "automatic fallback",
     defaults: "openai/gpt-primary",
     parent: {
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-primary",
+    },
+    discarded: {
       providerOverride: "google-vertex",
       modelOverride: "gemini-fallback",
       modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: "openai",
-      modelOverrideFallbackOriginModel: "gpt-primary",
       agentRuntimeOverride: "vertex-runtime",
-      contextWindow: "1m",
       authProfileOverride: "google-vertex:fallback",
       authProfileOverrideSource: "auto",
-      thinkingLevel: "high",
     },
     inherited: { contextWindow: "1m", thinkingLevel: "high" },
-    absent: [
-      "providerOverride",
-      "modelOverride",
-      "modelOverrideSource",
-      "agentRuntimeOverride",
-      "authProfileOverride",
-      "authProfileOverrideSource",
-    ],
     resolved: { modelProvider: "openai", model: "gpt-primary" },
   },
 ])(
   "sessions.create inherits only durable selection: $name",
-  async ({ name, defaults, parent, inherited, absent, resolved }) => {
+  async ({ name, defaults, parent, inherited, discarded, resolved }) => {
     const { storePath } = await createSessionStoreDir();
     testState.agentConfig = { model: { primary: defaults } };
-    await writeSessionStore({ entries: { main: sessionStoreEntry("sess-parent", parent) } });
+    await writeParent("sess-parent", { ...parent, ...inherited, ...discarded });
     const created = await createSession({
       agentId: "main",
       label: "Fresh Chat",
@@ -780,8 +657,8 @@ test.each<{
     const stored = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
     for (const entry of [created.payload?.entry, stored]) {
       expect(entry).toMatchObject({ parentSessionKey: "agent:main:main", ...inherited });
-      for (const field of absent) {
-        expect(entry?.[field], field).toBeUndefined();
+      for (const field of Object.keys(discarded)) {
+        expect(Reflect.get(entry ?? {}, field), field).toBeUndefined();
       }
     }
     if (name === "explicit selection") {
@@ -790,8 +667,7 @@ test.each<{
         fastMode: false,
         parentSessionKey: "main",
       });
-      expect(overridden.ok, JSON.stringify(overridden.error)).toBe(true);
-      expect(overridden.payload?.entry?.fastMode).toBe(false);
+      expectCreated(overridden, { fastMode: false });
     }
   },
 );
@@ -804,11 +680,7 @@ test("sessions.create preserves write-scoped fresh selection but gates adopted r
       id: "gpt-test-a",
       name: "A",
       provider: "openai",
-      contextWindows: [
-        { id: "200k", label: "200K", contextWindow: 200_000 },
-        { id: "1m", label: "1M", contextWindow: 1_000_000 },
-      ],
-      contextWindowDefault: "1m",
+      ...selectableWindows,
     },
     { id: "gpt-test-b", name: "B", provider: "openai" },
   ];
@@ -820,18 +692,17 @@ test("sessions.create preserves write-scoped fresh selection but gates adopted r
   const existingKey = "agent:main:dashboard:existing-model";
   const existingProfileKey = "agent:main:dashboard:existing-profile-model";
   const existingSubagentKey = "agent:main:subagent:existing-model";
+  const selection = { providerOverride: "openai", modelOverride: "gpt-test-a" };
+  const settings = { thinkingLevel: "low", fastMode: false } as const;
   await writeSessionStore({
     entries: {
       [existingKey]: sessionStoreEntry("sess-existing", {
         contextWindow: "200k",
-        providerOverride: "openai",
-        modelOverride: "gpt-test-a",
-        thinkingLevel: "low",
-        fastMode: false,
+        ...selection,
+        ...settings,
       }),
       [existingProfileKey]: sessionStoreEntry("sess-existing-profile", {
-        providerOverride: "openai",
-        modelOverride: "gpt-test-a",
+        ...selection,
         authProfileOverride: "work",
         authProfileOverrideSource: "user",
       }),
@@ -841,98 +712,49 @@ test("sessions.create preserves write-scoped fresh selection but gates adopted r
 
   const writeSession = (params: Parameters<typeof createSession>[0]) =>
     createSession(params, { client: writeClient });
-  const fresh = await writeSession({ key: freshKey, model: "openai/gpt-test-a", fastMode: true });
-  expect(fresh.ok, JSON.stringify(fresh.error)).toBe(true);
-  expect(fresh.payload?.entry).toMatchObject({
-    providerOverride: "openai",
-    modelOverride: "gpt-test-a",
-    fastMode: true,
-  });
-
-  const sameSelection = await writeSession({
-    key: existingKey,
-    model: "openai/gpt-test-a",
-    thinkingLevel: "low",
-    fastMode: false,
-  });
-  expect(sameSelection.ok, JSON.stringify(sameSelection.error)).toBe(true);
-  expect(sameSelection.payload?.entry).toMatchObject({
-    providerOverride: "openai",
-    modelOverride: "gpt-test-a",
-    thinkingLevel: "low",
-    fastMode: false,
-  });
-
-  const sameSubagentSelection = await writeSession({
-    key: existingSubagentKey,
-    model: "openai/gpt-test-a",
-  });
-  expect(sameSubagentSelection.ok, JSON.stringify(sameSubagentSelection.error)).toBe(true);
-  expect(sameSubagentSelection.payload?.entry).toMatchObject({
-    providerOverride: "openai",
-    modelOverride: "gpt-test-a",
-  });
-
-  const sameSelectionWithProfile = await writeSession({
-    key: existingProfileKey,
-    model: "openai/gpt-test-a",
-  });
-  expect(sameSelectionWithProfile.ok, JSON.stringify(sameSelectionWithProfile.error)).toBe(true);
-  expect(sameSelectionWithProfile.payload?.entry).toMatchObject({
-    providerOverride: "openai",
-    modelOverride: "gpt-test-a",
-    authProfileOverride: "work",
-  });
-
-  const profileDenied = await writeSession({
-    key: existingProfileKey,
-    model: "openai/gpt-test-a@other",
-  });
-  expectAdminRequired(profileDenied);
-
-  const denied = await writeSession({ key: existingKey, model: "openai/gpt-test-b" });
-  expectAdminRequired(denied);
-
-  const unscopedDenied = await directSessionReq(
-    "sessions.create",
-    { key: existingKey, model: "openai/gpt-test-b" },
-    { client: unscopedClient },
+  const select = async (
+    key: string,
+    options: Partial<SessionEntry> = {},
+    expected: Partial<SessionEntry> = options,
+  ) =>
+    expectCreated(await writeSession({ key, model: "openai/gpt-test-a", ...options }), {
+      ...selection,
+      ...expected,
+    });
+  const deny = async (params: Parameters<typeof createSession>[0]) =>
+    expectAdminRequired(await writeSession({ key: existingKey, ...params }));
+  await select(freshKey, { fastMode: true });
+  await select(existingKey, settings);
+  await select(existingSubagentKey);
+  await select(existingProfileKey, {}, { authProfileOverride: "work" });
+  await deny({ key: existingProfileKey, model: "openai/gpt-test-a@other" });
+  await deny({ model: "openai/gpt-test-b" });
+  expectAdminRequired(
+    await createSession(
+      { key: existingKey, model: "openai/gpt-test-b" },
+      { client: unscopedClient },
+    ),
   );
-  expectAdminRequired(unscopedDenied);
-
-  testState.agentConfig = {
-    models: {
-      "openai/gpt-test-b": { alias: "gpt-test-a" },
-    },
-  };
-  const aliasDenied = await writeSession({ key: existingKey, model: "gpt-test-a" });
-  expectAdminRequired(aliasDenied);
-
+  testState.agentConfig = { models: { "openai/gpt-test-b": { alias: "gpt-test-a" } } };
+  await deny({ model: "gpt-test-a" });
   expect(loadSessionEntry({ sessionKey: existingKey, storePath })).toMatchObject({
     sessionId: "sess-existing",
-    providerOverride: "openai",
-    modelOverride: "gpt-test-a",
+    ...selection,
     thinkingLevel: "low",
   });
   expect(loadSessionEntry({ sessionKey: existingProfileKey, storePath })).toMatchObject({
     sessionId: "sess-existing-profile",
-    providerOverride: "openai",
-    modelOverride: "gpt-test-a",
+    ...selection,
     authProfileOverride: "work",
   });
 
-  const thinkingDenied = await writeSession({ key: existingKey, thinkingLevel: "high" });
-  expectAdminRequired(thinkingDenied);
-
-  const fastModeDenied = await writeSession({ key: existingKey, fastMode: true });
-  expectAdminRequired(fastModeDenied);
-
+  await deny({ thinkingLevel: "high" });
+  await deny({ fastMode: true });
   const admin = await createSession(
     { key: existingKey, model: "openai/gpt-test-b", thinkingLevel: "high", fastMode: true },
     { client: adminClient },
   );
-  expect(admin.ok, JSON.stringify(admin.error)).toBe(true);
-  expect(admin.payload?.entry).toMatchObject({
+  expectCreated(admin, {
     providerOverride: "openai",
     modelOverride: "gpt-test-b",
     thinkingLevel: "high",
