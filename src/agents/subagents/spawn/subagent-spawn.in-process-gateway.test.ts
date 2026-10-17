@@ -16,7 +16,6 @@ import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identi
 import { readInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { GatewayRequestOptions } from "../../../gateway/server-methods/types.js";
-import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import type { WorkerSessionTurnClaim } from "../../../gateway/worker-environments/placement-record.js";
 import type {
   WorkerTurnExecutionIdentity,
@@ -104,11 +103,7 @@ function parentAuthority() {
 function captureChildIdentity() {
   let identity: AgentRuntimeIdentity | undefined;
   subagentSpawnTesting.setDepsForTest({
-    dispatchGatewayMethodInProcess: async <T>(
-      _method: string,
-      params: Record<string, unknown>,
-      options?: NonNullable<Parameters<typeof dispatchGatewayMethodInProcess>[2]>,
-    ) => {
+    dispatchGatewayMethodInProcess: async <T>(_method, params, options) => {
       identity = readInProcessAgentRuntimeIdentity(options);
       return { runId: params.idempotencyKey, status: "accepted" } as T;
     },
@@ -141,6 +136,22 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 2_000): Promi
     });
   }
   throw lastError;
+}
+
+async function waitForTerminal(runId: string, signal: AbortSignal) {
+  const terminal = createDeferredCore();
+  const inspect = () => {
+    if (subagentRuns.get(runId)?.execution.status === "terminal") {
+      terminal.resolve();
+    }
+  };
+  const stop = subscribeSubagentRunChanges("projection", inspect);
+  try {
+    inspect();
+    await withinTest(terminal.promise, signal);
+  } finally {
+    stop();
+  }
 }
 
 describe("spawnSubagentDirect in-process Gateway collector launch", () => {
@@ -229,10 +240,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       },
     } satisfies GatewayRecoveryRuntime;
     subagentSpawnTesting.setDepsForTest({
-      dispatchGatewayMethodInProcess: async <T>(
-        method: string,
-        params: Record<string, unknown>,
-      ) => {
+      dispatchGatewayMethodInProcess: async <T>(method, params) => {
         expect(method).toBe("agent");
         subordinateAdmissionStates.push(isGatewaySubordinateWorkAdmissionClosed());
         launchedRunIds.push(String(params.idempotencyKey));
@@ -247,14 +255,6 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
 
     const parentAdmission = tryBeginGatewayRootWorkAdmission();
     const settleRootWork = observeRootWork();
-    const terminalPublications = new Map<string, ReturnType<typeof createDeferredCore<void>>>();
-    const stopObserving = subscribeSubagentRunChanges("projection", () => {
-      for (const [runId, terminal] of terminalPublications) {
-        if (subagentRuns.get(runId)?.execution.status === "terminal") {
-          terminal.resolve();
-        }
-      }
-    });
     let spawnedWork: ReturnType<typeof spawnSubagentDirect>[] = [];
     let spawning: Promise<Awaited<ReturnType<typeof spawnSubagentDirect>>[]> | undefined;
     try {
@@ -307,26 +307,16 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
         const results = await spawning;
         await withinTest(
           Promise.all(
-            (results ?? []).flatMap((result) => {
-              if (result.status !== "accepted" || !result.runId) {
-                return [];
-              }
-              if (subagentRuns.get(result.runId)?.execution.status === "terminal") {
-                return [];
-              }
-              const terminal = createDeferredCore();
-              terminalPublications.set(result.runId, terminal);
-              return [terminal.promise];
-            }),
+            (results ?? []).flatMap((result) =>
+              result.status === "accepted" && result.runId
+                ? [waitForTerminal(result.runId, signal)]
+                : [],
+            ),
           ),
           signal,
         );
       } finally {
-        try {
-          await settleRootWork();
-        } finally {
-          stopObserving();
-        }
+        await settleRootWork();
       }
     }
   });
@@ -351,10 +341,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     const launched: string[] = [];
     const launchGate = createDeferredCore();
     subagentSpawnTesting.setDepsForTest({
-      dispatchGatewayMethodInProcess: async <T>(
-        method: string,
-        params: Record<string, unknown>,
-      ) => {
+      dispatchGatewayMethodInProcess: async <T>(method, params) => {
         if (method === "agent") {
           launched.push(params.sessionKey as string);
           await launchGate.promise;
@@ -448,7 +435,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       }
       const childIdentity = captureChildIdentity();
       const dispatch = (
-        current: Parameters<typeof withGatewayToolCallerIdentity>[0],
+        current: NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]>,
         task: string,
       ) =>
         withGatewayToolCallerIdentity(current, () =>
@@ -466,11 +453,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
             ? capability.run((current) =>
                 dispatch(
                   {
-                    agentId: current.agentId,
-                    sessionKey: current.sessionKey,
-                    operationalRunInstance: current.operationalRunInstance,
-                    executionIdentityToken: current.executionIdentityToken,
-                    receiptAuthority: current.receiptAuthority,
+                    ...current,
                     workerTurnClaim: current.turnClaim,
                     workerTurnExecutionIdentityCapability: capability,
                   },
@@ -531,10 +514,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     });
     subagentSpawnTesting.setDepsForTest({
       callGateway: transport,
-      dispatchGatewayMethodInProcess: async <T>(
-        method: string,
-        params: Record<string, unknown>,
-      ) => {
+      dispatchGatewayMethodInProcess: async <T>(method, params) => {
         requests.push({ method, params });
         if (method === "agent") {
           const launchOrdinal = ++launchCount;
@@ -581,7 +561,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
     expect(await markSubagentRunTerminated({ runId: firstRunId, reason: "manual kill" })).toBe(1);
     const killedEntry = expectDefined(subagentRuns.get(firstRunId!), "killed collector");
     const killedSnapshot = structuredClone(killedEntry);
-    const killedExecution = structuredClone(killedEntry.execution);
+    const killedExecution = killedSnapshot.execution;
     expect(killedSnapshot).toMatchObject({
       endedReason: "subagent-killed",
       execution: {
