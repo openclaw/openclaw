@@ -3,11 +3,50 @@ import { projectSessionDisplayMessage } from "./session-display-projection.js";
 
 const SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS = 240;
 
+const pendingMediaReply = {
+  role: "assistant",
+  content: [{ type: "text", text: "Artifacts ready\nMEDIA:./proof.png" }],
+  openclawDelivery: { mediaUrls: ["./proof.png"] },
+};
+const managedMediaReply = {
+  ...pendingMediaReply,
+  openclawDisplayContent: [
+    { type: "text", text: "Artifacts ready" },
+    { type: "image", url: "/api/chat/media/outgoing/proof.png", mimeType: "image/png" },
+  ],
+};
+
 describe("projectSessionDisplayMessage", () => {
   test("keeps visible user and assistant text while excluding non-display rows", () => {
     const messages = [
       { role: "user", content: "Initial request" },
       { role: "assistant", content: "Visible final answer" },
+      managedMediaReply,
+      { ...managedMediaReply, role: "ASSISTANT" },
+      pendingMediaReply,
+      {
+        ...pendingMediaReply,
+        content: [{ type: "text", text: "MEDIA:./proof.png" }],
+      },
+      {
+        ...pendingMediaReply,
+        content:
+          "Artifacts ready\nMEDIA:./proof.png\nUse `MEDIA:./proof.png` literally.\nMEDIA:./hook-added.png",
+      },
+      { ...pendingMediaReply, content: "    MEDIA:./proof.png" },
+      { ...pendingMediaReply, content: "```\nMEDIA:./proof.png\n```" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "MEDIA:./proof.png" }],
+        openclawDisplayContent: [
+          { type: "image", url: "/api/chat/media/outgoing/proof.png", mimeType: "image/png" },
+        ],
+      },
+      {
+        role: "user",
+        content: "Use MEDIA:./proof.png literally.",
+        openclawDisplayContent: [{ type: "text", text: "Must not replace user text" }],
+      },
       { role: "toolResult", content: [{ type: "text", text: "tool output" }] },
       { role: "system", content: "system event" },
       {
@@ -28,12 +67,35 @@ describe("projectSessionDisplayMessage", () => {
     expect(messages.map((message) => projectSessionDisplayMessage(message))).toEqual([
       { role: "user", text: "Initial request" },
       { role: "assistant", text: "Visible final answer" },
+      { role: "assistant", text: "Artifacts ready" },
+      { role: "assistant", text: "Artifacts ready" },
+      { role: "assistant", text: "Artifacts ready" },
+      null,
+      {
+        role: "assistant",
+        text: "Artifacts ready\nUse `MEDIA:./proof.png` literally.\nMEDIA:./hook-added.png",
+      },
+      { role: "assistant", text: "MEDIA:./proof.png" },
+      { role: "assistant", text: "```\nMEDIA:./proof.png\n```" },
+      null,
+      { role: "user", text: "Use MEDIA:./proof.png literally." },
       null,
       null,
       null,
       null,
       null,
     ]);
+    expect(pendingMediaReply.openclawDelivery).toEqual({ mediaUrls: ["./proof.png"] });
+  });
+
+  test.each([
+    ["pending", pendingMediaReply],
+    ["rewritten", managedMediaReply],
+  ])("keeps authored assistant media text in %s model-context previews", (_state, message) => {
+    expect(projectSessionDisplayMessage(message, { view: "model-context" })).toEqual({
+      role: "assistant",
+      text: "Artifacts ready\nMEDIA:./proof.png",
+    });
   });
 
   test("bounds previews without splitting surrogate pairs", () => {

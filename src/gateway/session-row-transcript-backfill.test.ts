@@ -152,11 +152,27 @@ describe("session row transcript backfill", () => {
     );
   });
 
-  it.each(["current", "unavailable", "absent", "runtime alias"] as const)(
+  it.each([
+    "current",
+    "unavailable",
+    "absent",
+    "runtime alias",
+    "media-only rewrite",
+    "hidden rewrite",
+    "silent rewrite",
+  ] as const)(
     "reads optional terminal fallback fields without writer admission (%s)",
     async (storage) => {
       const alias = storage === "runtime alias";
-      const preview = alias ? "Finished on equivalent runtime" : "Finished with fallback";
+      const mediaRewrite = storage === "media-only rewrite" || storage === "hidden rewrite";
+      const silentRewrite = storage === "silent rewrite";
+      const preview = alias
+        ? "Finished on equivalent runtime"
+        : mediaRewrite
+          ? "MEDIA:./proof.png"
+          : silentRewrite
+            ? "NO_REPLY"
+            : "Finished with fallback";
       await withSession(
         async (seeded) => {
           if (alias) {
@@ -196,14 +212,16 @@ describe("session row transcript backfill", () => {
               const hostSql = observeHostDataSql();
               try {
                 await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual(
-                  storage === "current"
-                    ? {
-                        lastMessagePreview: "Finished with fallback",
-                        fallbackModel: { provider: "unit-test", model: "fallback" },
-                      }
-                    : alias
-                      ? { lastMessagePreview: preview }
-                      : {},
+                  storage === "media-only rewrite"
+                    ? { fallbackModel: { provider: "unit-test", model: "fallback" } }
+                    : storage === "current"
+                      ? {
+                          lastMessagePreview: "Finished with fallback",
+                          fallbackModel: { provider: "unit-test", model: "fallback" },
+                        }
+                      : alias
+                        ? { lastMessagePreview: preview }
+                        : {},
                 );
                 for (const statement of hostSql.calls) {
                   expect(statement).not.toHaveBeenCalled();
@@ -239,6 +257,18 @@ describe("session row transcript backfill", () => {
           {
             role: "assistant",
             content: preview,
+            ...(mediaRewrite || silentRewrite
+              ? {
+                  openclawDisplayContent: [
+                    {
+                      type: "image",
+                      url: "/api/chat/media/outgoing/proof.png",
+                      mimeType: "image/png",
+                    },
+                  ],
+                }
+              : {}),
+            ...(storage === "hidden rewrite" ? { display: false } : {}),
             provider: "unit-test",
             model: alias ? "same" : "fallback",
             stopReason: "stop",

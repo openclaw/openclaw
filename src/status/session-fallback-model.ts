@@ -163,7 +163,8 @@ export function selectSessionTerminalFallbackModel(
   if (
     (message?.stopReason === "stop" || message?.stopReason === "length") &&
     readSessionTranscriptRunId(message) === entry.lastRunId &&
-    projectSessionDisplayMessage(message)?.role === "assistant" &&
+    message.display !== false &&
+    projectSessionDisplayMessage(message, { view: "model-context" })?.role === "assistant" &&
     typeof message.provider === "string" &&
     typeof message.model === "string"
   ) {
