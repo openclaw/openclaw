@@ -542,51 +542,82 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     );
   });
 
-  it("F: frames arriving while the consumer is parked keep the watchdog alive", async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal("WebSocket", ControlledWebSocket);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("", { status: 500 })),
-    );
-    ControlledWebSocket.onSend = (socket) => {
-      queueMicrotask(() =>
-        socket.deliver({ type: "response.created", response: { id: "resp_f" } }),
+  it.each(["bookkeeping", "hidden reasoning"] as const)(
+    "F: parked consumers distinguish provider activity from model progress: %s",
+    async (activity) => {
+      vi.useFakeTimers();
+      vi.stubGlobal("WebSocket", ControlledWebSocket);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("", { status: 500 })),
       );
-    };
-    const onIdleTimeout = vi.fn();
-    const runAbort = new AbortController();
-    const { streamFn } = buildRunnerChain({
-      runId: "run-F",
-      sessionId: "session-F",
-      runSignal: runAbort.signal,
-      onIdleTimeout,
-    });
-    const emitEntered = createDeferredCore();
-    const releaseEmit = createDeferredCore();
-    const consumed = consumeLikeAgentCore(streamFn, runAbort.signal, async (type) => {
-      if (type === "start") {
-        emitEntered.resolve();
-        await releaseEmit.promise;
+      ControlledWebSocket.onSend = (socket) => {
+        queueMicrotask(() => {
+          socket.deliver({ type: "response.created", response: { id: "resp_f" } });
+          if (activity === "hidden reasoning") {
+            socket.deliver({
+              type: "response.output_item.added",
+              output_index: 0,
+              item: { id: "reasoning_f", type: "reasoning", summary: [] },
+            });
+          }
+        });
+      };
+      const onIdleTimeout = vi.fn();
+      const runAbort = new AbortController();
+      const { streamFn } = buildRunnerChain({
+        runId: "run-F",
+        sessionId: "session-F",
+        runSignal: runAbort.signal,
+        onIdleTimeout,
+      });
+      const emitEntered = createDeferredCore();
+      const releaseEmit = createDeferredCore();
+      const consumed = consumeLikeAgentCore(streamFn, runAbort.signal, async (type) => {
+        if (type === "start") {
+          emitEntered.resolve();
+          await releaseEmit.promise;
+        }
+      });
+      await vi.advanceTimersByTimeAsync(10);
+      await emitEntered.promise;
+      const socket = ControlledWebSocket.instances[0];
+      // Both kinds arrive inside the connection's 120s window. Only genuine
+      // reasoning is allowed to extend the independent 240s progress deadline.
+      const progress = setInterval(() => {
+        socket?.deliver(
+          activity === "bookkeeping"
+            ? { type: "response.in_progress", response: { id: "resp_f" } }
+            : {
+                type: "response.reasoning_text.delta",
+                item_id: "reasoning_f",
+                output_index: 0,
+                delta: "Synthetic hidden progress",
+              },
+        );
+      }, 60_000);
+      await vi.advanceTimersByTimeAsync(300_000);
+      clearInterval(progress);
+      if (activity === "bookkeeping") {
+        expect(onIdleTimeout).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ message: "LLM idle timeout (240s): no model progress" }),
+        );
+      } else {
+        expect(onIdleTimeout).not.toHaveBeenCalled();
+        socket?.deliver(completedFrame("resp_f"));
       }
-    });
-    await vi.advanceTimersByTimeAsync(10);
-    await emitEntered.promise;
-    const socket = ControlledWebSocket.instances[0];
-    // The provider keeps streaming bookkeeping frames every 60s (under the 120s budget).
-    const progress = setInterval(() => {
-      socket?.deliver({ type: "response.in_progress", response: { id: "resp_f" } });
-    }, 60_000);
-    await vi.advanceTimersByTimeAsync(300_000);
-    clearInterval(progress);
-    expect(onIdleTimeout).not.toHaveBeenCalled();
-
-    socket?.deliver(completedFrame("resp_f"));
-    releaseEmit.resolve();
-    await vi.advanceTimersByTimeAsync(10);
-    const { result, thrown } = await consumed;
-    expect(thrown).toBeUndefined();
-    expect(result?.stopReason).toBe("stop");
-    expect(onIdleTimeout).not.toHaveBeenCalled();
-  });
+      releaseEmit.resolve();
+      await vi.advanceTimersByTimeAsync(10);
+      const { result, thrown } = await consumed;
+      if (activity === "bookkeeping") {
+        expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
+          /no model progress|aborted/,
+        );
+      } else {
+        expect(thrown).toBeUndefined();
+        expect(result?.stopReason).toBe("stop");
+        expect(onIdleTimeout).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

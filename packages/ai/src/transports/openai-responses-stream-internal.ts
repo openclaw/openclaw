@@ -306,10 +306,35 @@ export async function processResponsesStream<TApi extends Api>(
   try {
     for await (const event of guardedStream) {
       outputs.observeEvent(event);
-      // Bookkeeping-only SSE events (in_progress, *.done echoes) are still
-      // provider progress; keep the idle watchdog alive without exposing them,
-      // matching the completions and anthropic transports.
-      notifyLlmRequestActivity(options?.signal);
+      // Physical activity keeps the connection alive; only advancing model
+      // output resets the separate progress deadline, including hidden deltas.
+      const hasDeltaProgress =
+        event.type.endsWith(".delta") &&
+        "delta" in event &&
+        typeof event.delta === "string" &&
+        event.delta.length > 0;
+      let hasOutputProgress = false;
+      if (
+        (event.type === "response.output_item.added" ||
+          event.type === "response.output_item.done") &&
+        (event.item.type === "reasoning" ||
+          event.item.type === "message" ||
+          event.item.type === "function_call")
+      ) {
+        const previous = outputs.get(event.item, readResponsesOutputIndex(event));
+        hasOutputProgress =
+          event.type === "response.output_item.added"
+            ? previous === undefined && !outputSlots.resolveOutputItem(event, event.item)
+            : previous?.completed !== true;
+      }
+      notifyLlmRequestActivity(
+        options?.signal,
+        hasDeltaProgress ||
+          hasOutputProgress ||
+          event.type === "response.completed" ||
+          event.type === "response.incomplete" ||
+          event.type === "response.failed",
+      );
       if (
         event.type === "response.output_item.done" &&
         event.item.type === "function_call" &&
