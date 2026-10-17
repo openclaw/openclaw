@@ -174,7 +174,8 @@ export function isWindowsPlatform(platform?: string | null): boolean {
   return normalized.startsWith("win");
 }
 
-const WINDOWS_UNSAFE_CMD_META = /[%`]|\$(?=[A-Za-z_{(?$])/;
+// Keep renderer argument policy aligned with Windows shell analysis.
+const WINDOWS_UNSAFE_CMD_META = /[%\n\r`]|\$(?=[A-Za-z_{(?$])/;
 
 export function windowsEscapeArg(value: string): { ok: true; escaped: string } | { ok: false } {
   if (value === "") {

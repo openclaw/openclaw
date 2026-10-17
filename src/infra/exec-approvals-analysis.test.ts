@@ -221,6 +221,13 @@ describe("windowsEscapeArg", () => {
     expect(windowsEscapeArg("$?")).toEqual({ ok: false });
     expect(windowsEscapeArg("$$")).toEqual({ ok: false });
   });
+
+  it("rejects CR/LF to match the Windows analyzer policy", () => {
+    // Keep the renderer consistent with the analyzer, including quoted values.
+    expect(windowsEscapeArg("a\nb")).toEqual({ ok: false });
+    expect(windowsEscapeArg("a\r\nb")).toEqual({ ok: false });
+    expect(windowsEscapeArg("first\nsecond\nthird")).toEqual({ ok: false });
+  });
 });
 
 describe("Windows inline allowlist analysis", () => {
