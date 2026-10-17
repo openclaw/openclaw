@@ -64,6 +64,20 @@ function message(id: string, parentId: string | null, role: string, content: str
     message: { role, content },
   };
 }
+const accounting = {
+  inputTokens: 10,
+  outputTokens: 20,
+  cacheRead: 30,
+  cacheWrite: 40,
+  estimatedCostUsd: 0.5,
+  totalTokens: 100,
+  totalTokensFresh: true,
+  totalTokensVersion: 1,
+  contextBudgetStatus: contextBudgetStatusFixture({ route: "compact_only", shouldCompact: true }),
+  cliSessionIds: { synthetic: "old" },
+  cliSessionBindings: { synthetic: { sessionId: "old" } },
+  claudeCliSessionId: "old",
+};
 const ids = (events: readonly unknown[]) =>
   events.flatMap((event) => (isRecord(event) ? [event.id] : []));
 
@@ -281,24 +295,7 @@ describe("memory transcript read adapters", () => {
 
   it("manually compacts current rows and accounting while preserving a newer entry update", async () => {
     const { scope, owner, patch } = await fixture();
-    await patch({
-      inputTokens: 10,
-      outputTokens: 20,
-      cacheRead: 30,
-      cacheWrite: 40,
-      estimatedCostUsd: 0.5,
-      totalTokens: 100,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 3,
-      contextBudgetStatus: contextBudgetStatusFixture({
-        route: "compact_only",
-        shouldCompact: true,
-      }),
-      cliSessionIds: { synthetic: "old" },
-      cliSessionBindings: { synthetic: { sessionId: "old" } },
-      claudeCliSessionId: "old",
-    });
+    await patch({ ...accounting, compactionCount: 3 });
     const source: SessionSourceAssertion = Object.assign(() => {}, {
       async prepareSessionSource() {
         await patch({ label: "Updated during preparation", model: "synthetic-model" });
@@ -328,21 +325,8 @@ describe("memory transcript read adapters", () => {
       updatedAt: 500,
       compactionCount: 3,
     });
-    for (const field of [
-      "inputTokens",
-      "outputTokens",
-      "cacheRead",
-      "cacheWrite",
-      "estimatedCostUsd",
-      "totalTokens",
-      "totalTokensFresh",
-      "totalTokensVersion",
-      "contextBudgetStatus",
-      "cliSessionIds",
-      "cliSessionBindings",
-      "claudeCliSessionId",
-    ] as const) {
-      expect(entry?.[field], field).toBeUndefined();
+    for (const field of Object.keys(accounting)) {
+      expect(Reflect.get(entry ?? {}, field), field).toBeUndefined();
     }
   });
 
