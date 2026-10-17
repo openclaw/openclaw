@@ -4179,6 +4179,12 @@ transactions invalidate it. The same lifecycle fact records when no active inten
 remain, so matching returns without opening a transaction or querying FTS until
 a mutation invalidates that fact. This absence result has no write or external
 effect to authorize; nonempty matches retain live commit admission.
+The maintenance service retains that committed absence on the Gateway host, so
+later empty matches do not send a worker request. Standing-intent commands and
+receipt publication share one per-database owner queue; a create cannot be hidden
+by an earlier empty result. Executed commands clear the fact before publication,
+and stopping or reloading maintenance discards it. Active matching still runs
+in the worker with its existing scope and live-authority checks.
 A nonempty active set still uses the full matching query and eligibility filters.
 Reopening a connection reloads the deadline and active-intent fact. Expiry
 comparison and fired-row numeric validation retain their existing semantics.
