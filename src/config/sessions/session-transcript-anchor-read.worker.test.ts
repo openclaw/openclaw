@@ -29,10 +29,13 @@ import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-t
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import {
-  readActiveTranscriptEntryAnchorAsync,
-  readSessionTranscriptAnchorsAsync,
+  readActiveTranscriptEntryAnchorAsync as readAnchor,
+  readSessionTranscriptAnchorsAsync as readAnchors,
 } from "./session-transcript-anchor-read.js";
-import * as anchorKernel from "./session-transcript-anchor-read.kernel.js";
+import {
+  prepareSessionTranscriptAnchorMessageReader as prepareMessageReader,
+  readSessionTranscriptAnchorFactsInDatabase as readFacts,
+} from "./session-transcript-anchor-read.kernel.js";
 import { readSessionTranscriptHydrationRequest } from "./session-transcript-hydration-read.worker.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import * as targetWorker from "./session-transcript-read-worker-runtime.js";
@@ -49,18 +52,8 @@ const events = [
     parentId: null,
     message: { role: "user", content: "question", idempotencyKey: "question-key" },
   },
-  {
-    type: "message",
-    id: "answer",
-    parentId: "question",
-    message: { role: "assistant", content: "answer", __openclaw: { runId: "answer-run" } },
-  },
-  {
-    type: "message",
-    id: "alternate",
-    parentId: "question",
-    message: { role: "assistant", content: "other branch" },
-  },
+  message("answer", "question", "answer", "answer-run"),
+  message("alternate", "question", "other branch"),
   { type: "leaf", id: "selected-leaf", parentId: "alternate", targetId: "answer" },
 ];
 
@@ -74,44 +67,101 @@ function transcriptScope(state: OpenClawTestState) {
   };
 }
 
+type Scope = ReturnType<typeof transcriptScope>;
+
+function openDatabase(scope: Scope) {
+  return openOpenClawAgentDatabase({
+    agentId: scope.agentId,
+    env: scope.env,
+    path: scope.storePath,
+  });
+}
+
+function incognitoScope(state: OpenClawTestState): Scope {
+  return {
+    ...transcriptScope(state),
+    sessionKey: "agent:main:dashboard:incognito-anchors",
+    storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+  };
+}
+
+function initializeIncognito(scope: Scope) {
+  return createSessionEntryWithTranscript(scope, () => ({
+    ok: true,
+    entry: { incognito: true, sessionId: scope.sessionId, updatedAt: 1 },
+    transcriptEvents: events,
+  }));
+}
+
+function expectRebuilding(read: Promise<unknown>, scope: Scope) {
+  return expect(read).rejects.toMatchObject({
+    name: "SessionTranscriptProjectionUnavailableError",
+    sessionId: scope.sessionId,
+    reason: "rebuilding",
+  });
+}
+
+function trackProjection(database: ReturnType<typeof openDatabase>) {
+  return trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["projection", "watermark"],
+    (sql) =>
+      sql.includes('"session_transcript_index_state"')
+        ? "projection"
+        : sql.includes('as "max_seq"')
+          ? "watermark"
+          : null,
+  );
+}
+
+function withTranscript(
+  label: string,
+  run: (scope: Scope, state: OpenClawTestState) => Promise<void>,
+) {
+  return withOpenClawTestState({ label }, (state) => run(transcriptScope(state), state));
+}
+
+function message(id: string, parentId: string | null, content: string, runId?: string) {
+  return {
+    type: "message",
+    id,
+    parentId,
+    message: { role: "assistant", content, ...(runId ? { __openclaw: { runId } } : {}) },
+  };
+}
+
+function expectTailMessage(entries: unknown, entryId: string, content: string) {
+  expect(entries).toContainEqual(
+    expect.objectContaining({
+      entryId,
+      message: expect.objectContaining({ content }),
+    }),
+  );
+}
+
 it("keeps replay tails metadata-only unless message payloads are selected", async () => {
-  await withOpenClawTestState({ label: "transcript-tail-payload-selection" }, async (state) => {
-    const scope = transcriptScope(state);
+  await withTranscript("transcript-tail-payload-selection", async (scope) => {
     await createSessionEntryWithTranscript(scope, () => ({
       ok: true,
       entry: { sessionId: scope.sessionId, updatedAt: 1 },
     }));
     await replaceTranscriptEvents(scope, [
       ...events.slice(0, 2),
-      {
-        type: "message",
-        id: "untagged",
-        parentId: "question",
-        message: { role: "assistant", content: "metadata-only answer" },
-      },
-      {
-        type: "message",
-        id: "tagged",
-        parentId: "untagged",
-        message: {
-          role: "assistant",
-          content: "selected answer",
-          __openclaw: { runId: "tail-run" },
-        },
-      },
+      message("untagged", "question", "metadata-only answer"),
+      message("tagged", "untagged", "selected answer", "tail-run"),
     ]);
     const selection = {
       entryIds: ["question"],
       afterSeq: 1,
       replayValidation: { allowInitial: false },
     };
-    const metadata = await readSessionTranscriptAnchorsAsync(scope, selection);
+    const metadata = await readAnchors(scope, selection);
     expect(metadata.replayValidated).toBe("current");
     expect(metadata.tail?.entries).toEqual([
       { entryId: "untagged", role: "assistant" },
       { entryId: "tagged", role: "assistant", runId: "tail-run" },
     ]);
-    const selected = await readSessionTranscriptAnchorsAsync(scope, {
+    const selected = await readAnchors(scope, {
       ...selection,
       includeMessagesForRunId: "tail-run",
     });
@@ -125,8 +175,7 @@ it("keeps replay tails metadata-only unless message payloads are selected", asyn
 });
 
 it("settles callback-owned tail reads while independent history waits on the writer", async () => {
-  await withOpenClawTestState({ label: "writer-owned-transcript-tail" }, async (state) => {
-    const scope = transcriptScope(state);
+  await withTranscript("writer-owned-transcript-tail", async (scope) => {
     await replaceTranscriptEvents(scope, events);
     openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
     const independentRead = createDeferred();
@@ -137,7 +186,7 @@ it("settles callback-owned tail reads while independent history waits on the wri
       return blockedHistory.promise;
     });
     let accepted = false;
-    const reading = readSessionTranscriptAnchorsAsync(
+    const reading = readAnchors(
       scope,
       { entryIds: ["question"], afterSeq: 1, includeMessagesForRunId: "answer-run" },
       undefined,
@@ -168,8 +217,7 @@ it("settles callback-owned tail reads while independent history waits on the wri
 });
 
 it("rejects an async anchor consumer on the selected execution owner", async () => {
-  await withOpenClawTestState({ label: "transcript-anchors-async-consumer" }, async (state) => {
-    const scope = transcriptScope(state);
+  await withTranscript("transcript-anchors-async-consumer", async (scope) => {
     await createSessionEntryWithTranscript(scope, () => ({
       ok: true,
       entry: { sessionId: scope.sessionId, updatedAt: 1 },
@@ -189,7 +237,7 @@ it("rejects an async anchor consumer on the selected execution owner", async () 
         async () => {
           let consumed = false;
           await expect(
-            readSessionTranscriptAnchorsAsync(
+            readAnchors(
               scope,
               { entryIds: ["question"] },
               undefined,
@@ -210,24 +258,26 @@ it("rejects an async anchor consumer on the selected execution owner", async () 
 });
 
 it("reads active anchors and raw tail facts without caller SQL, including cold discovery", async () => {
-  await withOpenClawTestState({ label: "transcript-anchors-worker" }, async (state) => {
-    const scope = transcriptScope(state);
+  await withTranscript("transcript-anchors-worker", async (scope, state) => {
     await replaceTranscriptEvents(scope, events);
     await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
     const absentPath = state.statePath("absent.sqlite");
     const hostSql = observeHostDataSql();
     try {
-      const result = await readSessionTranscriptAnchorsAsync(scope, {
+      const result = await readAnchors(scope, {
         entryIds: ["question", "answer", "alternate", "missing"],
         afterSeq: 1,
       });
+      const anchorBase = {
+        agentId: scope.agentId,
+        sessionId: scope.sessionId,
+        sessionKey: scope.sessionKey,
+        storePath: scope.storePath,
+        generation: expect.any(String),
+      };
       expect(result.anchors).toEqual([
         {
-          agentId: scope.agentId,
-          sessionId: scope.sessionId,
-          sessionKey: scope.sessionKey,
-          storePath: scope.storePath,
-          generation: expect.any(String),
+          ...anchorBase,
           entryId: "question",
           rawSeq: 1,
           effectiveParentId: null,
@@ -235,11 +285,7 @@ it("reads active anchors and raw tail facts without caller SQL, including cold d
           idempotencyKey: "question-key",
         },
         {
-          agentId: scope.agentId,
-          sessionId: scope.sessionId,
-          sessionKey: scope.sessionKey,
-          storePath: scope.storePath,
-          generation: expect.any(String),
+          ...anchorBase,
           entryId: "answer",
           rawSeq: 2,
           effectiveParentId: "question",
@@ -254,17 +300,14 @@ it("reads active anchors and raw tail facts without caller SQL, including cold d
           { entryId: "alternate", role: "assistant" },
         ],
       });
+      await expect(readAnchor({ ...scope, entryId: "question" })).resolves.toEqual(
+        result.anchors[0],
+      );
       await expect(
-        readActiveTranscriptEntryAnchorAsync({ ...scope, entryId: "question" }),
-      ).resolves.toEqual(result.anchors[0]);
-      await expect(
-        readSessionTranscriptAnchorsAsync(
-          { ...scope, sessionId: "missing" },
-          { entryIds: ["question"] },
-        ),
+        readAnchors({ ...scope, sessionId: "missing" }, { entryIds: ["question"] }),
       ).resolves.toEqual({ anchors: [] });
       await expect(
-        readActiveTranscriptEntryAnchorAsync({
+        readAnchor({
           ...scope,
           storePath: absentPath,
           entryId: "question",
@@ -272,7 +315,7 @@ it("reads active anchors and raw tail facts without caller SQL, including cold d
       ).resolves.toBeUndefined();
       const consumeInitial = vi.fn();
       await expect(
-        readSessionTranscriptAnchorsAsync(
+        readAnchors(
           { ...scope, storePath: absentPath },
           { entryIds: [], replayValidation: { allowInitial: true } },
           undefined,
@@ -293,36 +336,28 @@ it.each([
   "UPDATE session_transcript_index_state SET indexed_seq = indexed_seq - 1 WHERE session_id = ?",
   "UPDATE session_transcript_active_events SET context_eligible = NULL WHERE session_id = ?",
 ])("refuses stale projection anchors without rebuilding: %s", async (invalidate) => {
-  await withOpenClawTestState({ label: "transcript-anchors-stale" }, async (state) => {
-    const scope = transcriptScope(state);
+  await withTranscript("transcript-anchors-stale", async (scope) => {
     await replaceTranscriptEvents(scope, events);
-    const database = openOpenClawAgentDatabase({
-      agentId: scope.agentId,
-      env: scope.env,
-      path: scope.storePath,
-    });
+    const database = openDatabase(scope);
     database.db.prepare(invalidate).run(scope.sessionId);
     const version = database.db.prepare("PRAGMA data_version");
     const before = version.get();
     const hostSql = observeHostDataSql();
     try {
-      const result = await readSessionTranscriptAnchorsAsync(scope, {
+      const result = await readAnchors(scope, {
         entryIds: ["question", "answer"],
         afterSeq: 0,
       });
       expect(result.anchors).toEqual([]);
       expect(result.tail?.entries.every((entry) => entry.anchor === undefined)).toBe(true);
-      await expect(
-        readSessionTranscriptAnchorsAsync(scope, {
+      await expectRebuilding(
+        readAnchors(scope, {
           entryIds: ["question", "answer"],
           afterSeq: 0,
           includeMessagesForRunId: "answer-run",
         }),
-      ).rejects.toMatchObject({
-        name: "SessionTranscriptProjectionUnavailableError",
-        sessionId: scope.sessionId,
-        reason: "rebuilding",
-      });
+        scope,
+      );
       const hydrate = prepareSessionTranscriptHydration(scope, { maxBytes: 4096, maxEvents: 10 });
       const retirementEntered = createDeferred();
       const releaseRetirement = createDeferred();
@@ -342,18 +377,15 @@ it.each([
         },
       );
       try {
-        await expect(
+        await expectRebuilding(
           Promise.race([
             reading,
             retirementEntered.promise.then(() => {
               throw new Error("Hydration cleanup waits on the writer queued behind its cohort");
             }),
           ]),
-        ).rejects.toMatchObject({
-          name: "SessionTranscriptProjectionUnavailableError",
-          sessionId: scope.sessionId,
-          reason: "rebuilding",
-        });
+          scope,
+        );
       } finally {
         releaseRetirement.resolve();
         await Promise.allSettled([reading, following]);
@@ -368,14 +400,9 @@ it.each([
 });
 
 it("returns a reply tail and its current watermark from one projection snapshot", async () => {
-  await withOpenClawTestState({ label: "transcript-anchor-watermark" }, async (state) => {
-    const scope = transcriptScope(state);
+  await withTranscript("transcript-anchor-watermark", async (scope) => {
     await replaceTranscriptEvents(scope, events);
-    const database = openOpenClawAgentDatabase({
-      agentId: scope.agentId,
-      env: scope.env,
-      path: scope.storePath,
-    });
+    const database = openDatabase(scope);
     const resolved = { ...scope, path: database.path };
     const selection = {
       entryIds: ["question"],
@@ -383,58 +410,24 @@ it("returns a reply tail and its current watermark from one projection snapshot"
       includeMessagesForRunId: "answer-run",
       includeWatermark: true,
     };
-    const readMessage = await anchorKernel.prepareSessionTranscriptAnchorMessageReader(selection);
-    const statements = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["projection", "watermark"],
-      (sql) =>
-        sql.includes('"session_transcript_index_state"')
-          ? "projection"
-          : sql.includes('as "max_seq"')
-            ? "watermark"
-            : null,
-    );
-    const read = () =>
-      anchorKernel.readSessionTranscriptAnchorFactsInDatabase(
-        database,
-        resolved,
-        selection,
-        readMessage,
-      );
+    const readMessage = await prepareMessageReader(selection);
+    const statements = trackProjection(database);
+    const read = () => readFacts(database, resolved, selection, readMessage);
     try {
       const initial = read();
       expect(initial.watermark?.maxSeq).toBe(4);
-      expect(initial.tail?.entries).toContainEqual(
-        expect.objectContaining({
-          entryId: "answer",
-          message: expect.objectContaining({ content: "answer" }),
-        }),
-      );
+      expectTailMessage(initial.tail?.entries, "answer", "answer");
       expect(statements.counts).toEqual({ projection: 1, watermark: 0 });
 
       runSqliteImmediateTransactionSync(database.db, () =>
         appendTranscriptEventsInTransaction(database, resolved, [
-          {
-            type: "message",
-            id: "new-answer",
-            parentId: "answer",
-            message: {
-              role: "assistant",
-              content: "new answer",
-              __openclaw: { runId: "answer-run" },
-            },
-          },
+          message("new-answer", "answer", "new answer", "answer-run"),
         ]),
       );
       const before = { ...statements.counts };
       const updated = read();
       expect(updated.watermark).toEqual({ ...initial.watermark, maxSeq: 5 });
-      expect(updated.tail?.entries).toContainEqual(
-        expect.objectContaining({
-          entryId: "new-answer",
-          message: expect.objectContaining({ content: "new answer" }),
-        }),
-      );
+      expectTailMessage(updated.tail?.entries, "new-answer", "new answer");
       expect(statements.counts.projection - before.projection).toBe(1);
       expect(statements.counts.watermark - before.watermark).toBe(0);
 
@@ -465,8 +458,7 @@ it("returns a reply tail and its current watermark from one projection snapshot"
 });
 
 it("reuses bounded message payloads for presence without treating an omitted message as absent", async () => {
-  await withOpenClawTestState({ label: "bounded-transcript-message-presence" }, async (state) => {
-    const scope = transcriptScope(state);
+  await withTranscript("bounded-transcript-message-presence", async (scope) => {
     const metadata = {
       type: "custom",
       id: "metadata",
@@ -534,14 +526,9 @@ it("reuses bounded message payloads for presence without treating an omitted mes
 });
 
 it("borrows one ready projection for anchors and payloads without extending its source or snapshot", async () => {
-  await withOpenClawTestState({ label: "transcript-anchor-projection-borrow" }, async (state) => {
-    const scope = transcriptScope(state);
+  await withTranscript("transcript-anchor-projection-borrow", async (scope) => {
     await replaceTranscriptEvents(scope, events);
-    const database = openOpenClawAgentDatabase({
-      agentId: scope.agentId,
-      env: scope.env,
-      path: scope.storePath,
-    });
+    const database = openDatabase(scope);
     const resolved = { ...scope, path: database.path };
     database.db
       .prepare("UPDATE session_windows SET transcript_updated_at = 41 WHERE session_id = ?")
@@ -552,18 +539,9 @@ it("borrows one ready projection for anchors and payloads without extending its 
       includeMessagesForRunId: "answer-run",
       includeWatermark: true,
     };
-    const readMessage = await anchorKernel.prepareSessionTranscriptAnchorMessageReader(selection);
+    const readMessage = await prepareMessageReader(selection);
     const peer = new DatabaseSync(database.path);
-    const statements = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["readiness", "watermark"],
-      (sql) =>
-        sql.includes('"session_transcript_index_state"')
-          ? "readiness"
-          : sql.includes('as "max_seq"')
-            ? "watermark"
-            : null,
-    );
+    const statements = trackProjection(database);
     let borrowed: CurrentTranscriptProjection | undefined;
     try {
       const result = readCurrentProjectionSnapshot(database, resolved, (projection) => {
@@ -582,18 +560,12 @@ it("borrows one ready projection for anchors and payloads without extending its 
           { ...resolved, sessionKey: "agent:main:another-key" },
           { ...resolved, agentId: "another-agent" },
         ]) {
-          expect(() =>
-            anchorKernel.readSessionTranscriptAnchorFactsInDatabase(
-              database,
-              target,
-              selection,
-              readMessage,
-              projection,
-            ),
-          ).toThrow("differs from its selected session snapshot");
+          expect(() => readFacts(database, target, selection, readMessage, projection)).toThrow(
+            "differs from its selected session snapshot",
+          );
         }
         expect(() =>
-          anchorKernel.readSessionTranscriptAnchorFactsInDatabase(
+          readFacts(
             { ...database, path: `${database.path}.replacement` },
             resolved,
             selection,
@@ -601,13 +573,7 @@ it("borrows one ready projection for anchors and payloads without extending its 
             projection,
           ),
         ).toThrow("differs from its selected session snapshot");
-        return anchorKernel.readSessionTranscriptAnchorFactsInDatabase(
-          database,
-          resolved,
-          selection,
-          readMessage,
-          projection,
-        );
+        return readFacts(database, resolved, selection, readMessage, projection);
       });
       expect(result).toMatchObject({
         kind: "value",
@@ -629,20 +595,14 @@ it("borrows one ready projection for anchors and payloads without extending its 
           },
         },
       });
-      expect(statements.counts.readiness).toBe(1);
-      expect(statements.counts.watermark).toBe(0);
+      expect(statements.counts).toEqual({ projection: 1, watermark: 0 });
       expect(borrowed).toBeDefined();
       expect(() => readActiveTranscriptEntryAnchorFromProjection(borrowed!, "question")).toThrow(
         "requires its selected session snapshot",
       );
-      expect(() =>
-        anchorKernel.readSessionTranscriptAnchorFactsInDatabase(
-          database,
-          resolved,
-          selection,
-          readMessage,
-        ),
-      ).toThrow("projection is rebuilding");
+      expect(() => readFacts(database, resolved, selection, readMessage)).toThrow(
+        "projection is rebuilding",
+      );
     } finally {
       statements.restore();
       peer.close();
@@ -651,8 +611,7 @@ it("borrows one ready projection for anchors and payloads without extending its 
 });
 
 it("rejects a physical replacement while target discovery is suspended", async () => {
-  await withOpenClawTestState({ label: "transcript-anchors-replaced" }, async (state) => {
-    const scope = transcriptScope(state);
+  await withTranscript("transcript-anchors-replaced", async (scope, state) => {
     await replaceTranscriptEvents(scope, events);
     await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
     const held = createDeferred();
@@ -666,7 +625,7 @@ it("rejects a physical replacement while target discovery is suspended", async (
         await release.promise;
         return result;
       });
-    const pending = readActiveTranscriptEntryAnchorAsync({ ...scope, entryId: "question" });
+    const pending = readAnchor({ ...scope, entryId: "question" });
     try {
       await awaitGateBeforeSettlement(
         held.promise,
@@ -695,7 +654,7 @@ it("joins the retained anchor reader when closing its original logical store pat
     await replaceTranscriptEvents(scope, events);
     await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
     await expect(
-      readActiveTranscriptEntryAnchorAsync({
+      readAnchor({
         ...scope,
         storePath: requestedPath,
         entryId: "question",
@@ -719,43 +678,23 @@ it("joins the retained anchor reader when closing its original logical store pat
 
 it("keeps incognito anchors with their memory owner without creating durable state", async () => {
   await withOpenClawTestState({ label: "transcript-anchors-incognito" }, async (state) => {
-    const scope = {
-      ...transcriptScope(state),
-      sessionKey: "agent:main:dashboard:incognito-anchors",
-      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-    };
-    await createSessionEntryWithTranscript(scope, () => ({
-      ok: true,
-      entry: { incognito: true, sessionId: scope.sessionId, updatedAt: 1 },
-      transcriptEvents: events,
-    }));
-    await expect(
-      readActiveTranscriptEntryAnchorAsync({ ...scope, entryId: "question" }),
-    ).resolves.toMatchObject({ entryId: "question", rawSeq: 1 });
+    const scope = incognitoScope(state);
+    await initializeIncognito(scope);
+    await expect(readAnchor({ ...scope, entryId: "question" })).resolves.toMatchObject({
+      entryId: "question",
+      rawSeq: 1,
+    });
     await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
     memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
-    await expect(
-      readActiveTranscriptEntryAnchorAsync({ ...scope, entryId: "question" }),
-    ).resolves.toBeUndefined();
+    await expect(readAnchor({ ...scope, entryId: "question" })).resolves.toBeUndefined();
     await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
   });
 });
 
 it("rejects memory owner replacement while acquiring transcript read custody", async () => {
   await withOpenClawTestState({ label: "transcript-memory-anchors-replaced" }, async (state) => {
-    const scope = {
-      ...transcriptScope(state),
-      sessionKey: "agent:main:dashboard:incognito-anchors",
-      storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-    };
-    const initialize = async () => {
-      await createSessionEntryWithTranscript(scope, () => ({
-        ok: true,
-        entry: { incognito: true, sessionId: scope.sessionId, updatedAt: 1 },
-        transcriptEvents: events,
-      }));
-    };
-    await initialize();
+    const scope = incognitoScope(state);
+    await initializeIncognito(scope);
     const held = createDeferred();
     const release = createDeferred();
     const database = { agentId: scope.agentId, path: scope.storePath };
@@ -769,7 +708,7 @@ it("rejects memory owner replacement while acquiring transcript read custody", a
         await release.promise;
         return actor;
       });
-    const pending = readSessionTranscriptAnchorsAsync(scope, {
+    const pending = readAnchors(scope, {
       entryIds: ["question"],
       afterSeq: 1,
       includeMessagesForRunId: "answer-run",
@@ -781,7 +720,7 @@ it("rejects memory owner replacement while acquiring transcript read custody", a
         "Transcript read custody was not acquired",
       );
       memorySessionActorOwners.closeDatabase(database);
-      await initialize();
+      await initializeIncognito(scope);
       release.resolve();
       await expect(pending).rejects.toThrow("closed");
     } finally {

@@ -62,6 +62,26 @@ function observe(sessionKey: string) {
   return values;
 }
 
+const message = (content: string, timestamp = 1) => ({ role: "user" as const, content, timestamp });
+type Fixture = Parameters<Parameters<typeof withTranscriptDatabase>[1]>[0];
+function withSeeded(
+  label: string,
+  run: (fixture: Fixture & { manager: SessionManager; seed: string | undefined }) => Promise<void>,
+  realm: "native" | "worker" = "worker",
+) {
+  return withTranscriptDatabase(`authority-${label}`, async (fixture) => {
+    const { scope } = fixture;
+    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const manager =
+      realm === "native" ? SessionManager.open(scope) : await SessionManager.openAsync(scope);
+    const seed =
+      realm === "native"
+        ? manager.appendMessage(message("seed"))
+        : await manager.appendMessageAsync(message("seed"));
+    return run({ ...fixture, manager, seed });
+  });
+}
+
 it.each(["native", "worker"] as const)(
   "publishes the committed context through SessionManager %s persistence before completion",
   async (realm) => {
@@ -69,17 +89,30 @@ it.each(["native", "worker"] as const)(
       replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const manager =
         realm === "native" ? SessionManager.open(scope) : await SessionManager.openAsync(scope);
+      const writer =
+        realm === "native"
+          ? manager
+          : {
+              appendMessage: manager.appendMessageAsync.bind(manager),
+              appendMessageWithTranscriptAnchor:
+                manager.appendMessageWithTranscriptAnchorAsync.bind(manager),
+              appendCustomEntry: manager.appendCustomEntryAsync.bind(manager),
+              appendSessionInfo: manager.appendSessionInfoAsync.bind(manager),
+              appendCustomMessageEntry: manager.appendCustomMessageEntryAsync.bind(manager),
+              appendLabelChange: manager.appendLabelChangeAsync.bind(manager),
+              appendCompaction: manager.appendCompactionAsync.bind(manager),
+              appendResetBoundary: manager.appendResetBoundaryAsync.bind(manager),
+              appendLeafControl: manager.appendLeafControlAsync.bind(manager),
+              branchWithSummary: manager.branchWithSummaryAsync.bind(manager),
+              removeTrailingEntries: manager.removeTrailingEntriesAsync.bind(manager),
+              persist: manager.persistAsync.bind(manager),
+            };
       const values = observe(scope.sessionKey);
-      const invoke = async (
-        native: () => unknown,
-        worker: () => Promise<unknown>,
-        lastMessagePreview?: string | null,
-      ) => {
+      const invoke = async (write: () => unknown, lastMessagePreview?: string | null) => {
         const count = values.length;
-        if (realm === "native") {
-          native();
-        } else {
-          await worker();
+        const result = write();
+        if (realm === "worker") {
+          await result;
         }
         expect(values.length).toBeGreaterThan(count);
         expect(values.at(-1)).toMatchObject({
@@ -89,58 +122,18 @@ it.each(["native", "worker"] as const)(
         });
         expect(values.at(-1)?.lastMessagePreview).toBe(lastMessagePreview);
       };
-      const message = (content: string, timestamp: number) => ({
-        role: "user" as const,
-        content,
-        timestamp,
-      });
-      await invoke(
-        () => manager.appendMessage(message("seed", 1)),
-        () => manager.appendMessageAsync(message("seed", 1)),
-        "seed",
-      );
+      await invoke(() => writer.appendMessage(message("seed", 1)), "seed");
       const seed = manager.getLeafId()!;
-      await invoke(
-        () => manager.appendMessageWithTranscriptAnchor(message("second", 2)),
-        () => manager.appendMessageWithTranscriptAnchorAsync(message("second", 2)),
-        "second",
-      );
-      await invoke(
-        () => manager.appendCustomEntry("authority", { synthetic: true }),
-        () => manager.appendCustomEntryAsync("authority", { synthetic: true }),
-      );
-      await invoke(
-        () => manager.appendSessionInfo("authority"),
-        () => manager.appendSessionInfoAsync("authority"),
-      );
-      await invoke(
-        () => manager.appendCustomMessageEntry("notice", "synthetic", true),
-        () => manager.appendCustomMessageEntryAsync("notice", "synthetic", true),
-      );
-      await invoke(
-        () => manager.appendLabelChange(seed, "selected"),
-        () => manager.appendLabelChangeAsync(seed, "selected"),
-      );
-      await invoke(
-        () => manager.appendCompaction("summary", seed, 12),
-        () => manager.appendCompactionAsync("summary", seed, 12),
-      );
-      await invoke(
-        () => manager.appendResetBoundary("reset", seed),
-        () => manager.appendResetBoundaryAsync("reset", seed),
-      );
-      await invoke(
-        () => manager.appendLeafControl({ targetId: seed, appendParentId: seed }),
-        () => manager.appendLeafControlAsync({ targetId: seed, appendParentId: seed }),
-      );
-      await invoke(
-        () => manager.branchWithSummary(seed, "branch"),
-        () => manager.branchWithSummaryAsync(seed, "branch"),
-      );
-      await invoke(
-        () => manager.removeTrailingEntries((entry) => entry.type === "branch_summary"),
-        () => manager.removeTrailingEntriesAsync((entry) => entry.type === "branch_summary"),
-      );
+      await invoke(() => writer.appendMessageWithTranscriptAnchor(message("second", 2)), "second");
+      await invoke(() => writer.appendCustomEntry("authority", { synthetic: true }));
+      await invoke(() => writer.appendSessionInfo("authority"));
+      await invoke(() => writer.appendCustomMessageEntry("notice", "synthetic", true));
+      await invoke(() => writer.appendLabelChange(seed, "selected"));
+      await invoke(() => writer.appendCompaction("summary", seed, 12));
+      await invoke(() => writer.appendResetBoundary("reset", seed));
+      await invoke(() => writer.appendLeafControl({ targetId: seed, appendParentId: seed }));
+      await invoke(() => writer.branchWithSummary(seed, "branch"));
+      await invoke(() => writer.removeTrailingEntries((entry) => entry.type === "branch_summary"));
       const raw = {
         type: "custom" as const,
         id: `raw-${realm}`,
@@ -148,13 +141,11 @@ it.each(["native", "worker"] as const)(
         timestamp: new Date(1).toISOString(),
         customType: "raw-authority",
       };
-      await invoke(
-        () => manager.persist(raw),
-        () => manager.persistAsync(raw),
-      );
-      await invoke(
-        () => SessionManager.appendMessageToTranscript(scope, message("static", 3)),
-        () => SessionManager.appendMessageToTranscriptAsync(scope, message("static", 3)),
+      await invoke(() => writer.persist(raw));
+      await invoke(() =>
+        realm === "native"
+          ? SessionManager.appendMessageToTranscript(scope, message("static", 3))
+          : SessionManager.appendMessageToTranscriptAsync(scope, message("static", 3)),
       );
       const refreshed =
         realm === "native" ? SessionManager.open(scope) : await SessionManager.openAsync(scope);
@@ -168,16 +159,15 @@ it.each(["native", "worker"] as const)(
         }
         return ids;
       };
-      await invoke(
-        () => {
+      await invoke(() => {
+        if (realm === "native") {
           const rewrite = refreshed.prepareTranscriptRewrite();
-          rewrite.commit(populateRewrite(rewrite.sessionManager));
-        },
-        async () => {
-          const rewrite = await refreshed.prepareTranscriptRewriteAsync();
-          await rewrite.commit(populateRewrite(rewrite.sessionManager));
-        },
-      );
+          return rewrite.commit(populateRewrite(rewrite.sessionManager));
+        }
+        return refreshed
+          .prepareTranscriptRewriteAsync()
+          .then((rewrite) => rewrite.commit(populateRewrite(rewrite.sessionManager)));
+      });
     });
   },
 );
@@ -231,70 +221,72 @@ it("publishes bounded worker previews and clears them for nonprojectable and sid
 });
 
 it("installs final transcript facts before entry observers and discards nested rollback contributions", async () => {
-  await withTranscriptDatabase("authority-rollback", async ({ database, scope, state }) => {
-    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const manager = SessionManager.open(scope);
-    manager.appendMessage({ role: "user", content: "seed", timestamp: 1 });
-    const before = readVersion(database, scope.sessionId);
-    const values = observe(scope.sessionKey);
-    let observed = false;
-    releases.push(
-      sessionChanges.subscribe((change) => {
-        if (!("sessionKey" in change) || change.sessionKey !== scope.sessionKey) {
-          return;
-        }
-        observed = true;
-        expect(values.at(-1)).toMatchObject(readVersion(database, scope.sessionId));
-        throw new Error("Synthetic public observer failure");
-      }),
-    );
-    const options = { agentId: scope.agentId, path: database.path, env: state.env };
-    writeTransaction(() => {
-      replaceSessionEntrySync(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: 2,
-        label: "changed",
-      });
-      manager.appendCustomEntry("retained");
+  await withSeeded(
+    "rollback",
+    async ({ database, scope, state, manager }) => {
+      const before = readVersion(database, scope.sessionId);
+      const values = observe(scope.sessionKey);
+      let observed = false;
+      releases.push(
+        sessionChanges.subscribe((change) => {
+          if (!("sessionKey" in change) || change.sessionKey !== scope.sessionKey) {
+            return;
+          }
+          observed = true;
+          expect(values.at(-1)).toMatchObject(readVersion(database, scope.sessionId));
+          throw new Error("Synthetic public observer failure");
+        }),
+      );
+      const options = { agentId: scope.agentId, path: database.path, env: state.env };
+      writeTransaction(() => {
+        replaceSessionEntrySync(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: 2,
+          label: "changed",
+        });
+        manager.appendCustomEntry("retained");
+        expect(() =>
+          writeTransaction(() => {
+            manager.appendCustomEntry("rolled-back");
+            throw new Error("Synthetic rollback");
+          }, options),
+        ).toThrow("Synthetic rollback");
+        expect(values).toEqual([]);
+      }, options);
+      expect(observed).toBe(true);
+      expect(values).toHaveLength(1);
+      expect(values[0]?.rawSeq).toBe((before.rawSeq ?? -1) + 1);
+      values.length = 0;
       expect(() =>
         writeTransaction(() => {
-          manager.appendCustomEntry("rolled-back");
-          throw new Error("Synthetic rollback");
+          manager.appendCustomEntry("outer-rollback");
+          throw new Error("Outer rollback");
         }, options),
-      ).toThrow("Synthetic rollback");
+      ).toThrow("Outer rollback");
       expect(values).toEqual([]);
-    }, options);
-    expect(observed).toBe(true);
-    expect(values).toHaveLength(1);
-    expect(values[0]?.rawSeq).toBe((before.rawSeq ?? -1) + 1);
-    values.length = 0;
-    expect(() =>
-      writeTransaction(() => {
-        manager.appendCustomEntry("outer-rollback");
-        throw new Error("Outer rollback");
-      }, options),
-    ).toThrow("Outer rollback");
-    expect(values).toEqual([]);
-  });
+    },
+    "native",
+  );
 });
 
 it("does not publish a tentative typed write inside an unmanaged raw outer transaction", async () => {
-  await withTranscriptDatabase("authority-raw-outer", async ({ database, scope }) => {
-    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const manager = SessionManager.open(scope);
-    manager.appendMessage({ role: "user", content: "seed", timestamp: 1 });
-    const before = readVersion(database, scope.sessionId);
-    const values = observe(scope.sessionKey);
-    database.db.exec("BEGIN IMMEDIATE");
-    try {
-      manager.appendCustomEntry("uncommitted");
+  await withSeeded(
+    "raw-outer",
+    async ({ database, scope, manager }) => {
+      const before = readVersion(database, scope.sessionId);
+      const values = observe(scope.sessionKey);
+      database.db.exec("BEGIN IMMEDIATE");
+      try {
+        manager.appendCustomEntry("uncommitted");
+        expect(values).toEqual([]);
+      } finally {
+        database.db.exec("ROLLBACK");
+      }
       expect(values).toEqual([]);
-    } finally {
-      database.db.exec("ROLLBACK");
-    }
-    expect(values).toEqual([]);
-    expect(readVersion(database, scope.sessionId)).toEqual(before);
-  });
+      expect(readVersion(database, scope.sessionId)).toEqual(before);
+    },
+    "native",
+  );
 });
 
 it("publishes worker initialization and branched entry metadata with the transcript before observers", async () => {
@@ -345,10 +337,7 @@ it("publishes worker initialization and branched entry metadata with the transcr
 });
 
 it("keeps a delayed worker mutation postimage after native content-preserving publication and profile notification", async () => {
-  await withTranscriptDatabase("authority-delayed", async ({ database, scope, state }) => {
-    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const manager = await SessionManager.openAsync(scope);
-    await manager.appendMessageAsync({ role: "user", content: "seed", timestamp: 1 });
+  await withSeeded("delayed", async ({ database, scope, state, manager }) => {
     const values = observe(scope.sessionKey);
     let interposed = false;
     const observeCommit = workerAdmission.observeSqliteWorkerCommittedFacts;
@@ -383,10 +372,7 @@ it("keeps a delayed worker mutation postimage after native content-preserving pu
 });
 
 it("publishes the committed branch identity when its ordinary reply is lost", async () => {
-  await withTranscriptDatabase("authority-lost-reply", async ({ database, scope }) => {
-    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const manager = await SessionManager.openAsync(scope);
-    const seed = await manager.appendMessageAsync({ role: "user", content: "seed", timestamp: 1 });
+  await withSeeded("lost-reply", async ({ database, scope, manager, seed }) => {
     const identities: SessionIdentityMutation[] = [];
     const originalTarget = manager.getSessionTarget();
     const observedManagers: unknown[] = [];
@@ -443,10 +429,7 @@ it("publishes the committed branch identity when its ordinary reply is lost", as
   });
 });
 it("keeps captured context current after a granted worker append rolls back at COMMIT", async () => {
-  await withTranscriptDatabase("authority-commit-rollback", async ({ database, scope }) => {
-    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const manager = await SessionManager.openAsync(scope);
-    await manager.appendMessageAsync({ role: "user", content: "seed", timestamp: 1 });
+  await withSeeded("commit-rollback", async ({ database, scope, manager }) => {
     const before = readVersion(database, scope.sessionId);
     rollbackFault.enable();
     let commitGranted = false;

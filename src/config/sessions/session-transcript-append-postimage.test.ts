@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -37,35 +38,33 @@ function event(eventId: string, parentId?: null) {
   };
 }
 
+function withReads<T>(run: (queries: string[]) => T): T {
+  const reads = observeSqliteReadSql(StatementSync.prototype);
+  try {
+    return run(reads.queries);
+  } finally {
+    reads.restore();
+  }
+}
+
 it.each([false, true])(
   "publishes the final append version after a later mutation: %s",
   async (mutate) => {
-    await withFixture(async (f) => {
+    await withFixture((f) => {
       const reads = observeSqliteReadSql(StatementSync.prototype);
       let checks = 0;
-      const result = appendSnapshot(
-        f.scope,
-        { eventId: "message", message: { role: "assistant", content: "saved" } },
-        undefined,
-        undefined,
-        {
-          assertCurrent() {
-            if (++checks === 2 && mutate) {
-              f.database.db
-                .prepare(
-                  "UPDATE session_windows SET transcript_updated_at = 42 WHERE session_id = ?",
-                )
-                .run(f.scope.sessionId);
-            }
-          },
-          onPendingTransaction() {},
+      const result = appendSnapshot(f.scope, event("message"), undefined, undefined, {
+        assertCurrent() {
+          if (++checks === 2 && mutate) {
+            f.database.db
+              .prepare("UPDATE session_windows SET transcript_updated_at = 42 WHERE session_id = ?")
+              .run(f.scope.sessionId);
+          }
         },
-      );
+        onPendingTransaction() {},
+      });
       reads.restore();
-      expect(result.ok).toBe(true);
-      if (!result.ok) {
-        throw new Error("Append refused");
-      }
+      assert(result.ok, "Append refused");
       expect(result.value.after).toEqual(readVersion(f.database, f.scope.sessionId));
       expect(result.value.after.rawSeq).toBe(1);
       if (mutate) {
@@ -84,10 +83,7 @@ it.each([false, true])(
       } finally {
         foreign.close();
       }
-      const next = appendSnapshot(f.scope, {
-        eventId: "next",
-        message: { role: "assistant", content: "next saved" },
-      });
+      const next = appendSnapshot(f.scope, event("next"));
       expect(next).toMatchObject({
         ok: true,
         value: {
@@ -123,26 +119,25 @@ it("shares committed entry facts with custody while retaining live member and ro
         entry: publication.current.get(f.scope.sessionKey)!,
         revision: getSqliteReadScopeRevision(database.db)!,
       };
-      const reads = observeSqliteReadSql(StatementSync.prototype);
       const exec = vi.spyOn(database.db, "exec");
       try {
-        const facts = readSessionPendingInputAuthorityFacts(
-          database,
-          f.scope.sessionKey,
-          f.scope.agentId,
-          postimage,
-        );
-        expect(facts.entry?.label).toBe("committed");
-        expect(facts.members).toEqual([]);
-        expect(reads.queries.filter((sql) => sql.includes('from "session_nodes"'))).toEqual([]);
-        expect(exec).not.toHaveBeenCalled();
-        if (facts.entry) {
-          facts.entry.label = "caller-owned";
-        }
-        expect(postimage.entry.label).toBe("committed");
+        withReads((queries) => {
+          const facts = readSessionPendingInputAuthorityFacts(
+            database,
+            f.scope.sessionKey,
+            f.scope.agentId,
+            postimage,
+          );
+          expect(facts).toMatchObject({ entry: { label: "committed" }, members: [] });
+          expect(queries.filter((sql) => sql.includes('from "session_nodes"'))).toEqual([]);
+          expect(exec).not.toHaveBeenCalled();
+          if (facts.entry) {
+            facts.entry.label = "caller-owned";
+          }
+          expect(postimage.entry.label).toBe("committed");
+        });
       } finally {
         exec.mockRestore();
-        reads.restore();
       }
       writeSessionEntry(database, f.scope.sessionKey, {
         ...postimage.entry,
@@ -160,8 +155,10 @@ it("shares committed entry facts with custody while retaining live member and ro
         f.scope.agentId,
         postimage,
       );
-      expect(changed.entry?.label).toBe("new writer");
-      expect(changed.members).toMatchObject([{ identityId: "new-member" }]);
+      expect(changed).toMatchObject({
+        entry: { label: "new writer" },
+        members: [{ identityId: "new-member" }],
+      });
     }, f.scope);
   });
 });
@@ -173,15 +170,11 @@ it.each([false, true])(
       const resolved = resolveSqliteTranscriptScope(f.scope);
       writeTransaction((database) => {
         const appended = appendMessage(database, resolved, event("first"));
-        expect(appended).toBeDefined();
-        if (!appended) {
-          throw new Error("Missing append");
-        }
+        assert(appended, "Missing append");
         if (replaceBranch) {
           appendMessage(database, resolved, event("replacement", null));
         }
-        const reads = observeSqliteReadSql(StatementSync.prototype);
-        try {
+        withReads((queries) => {
           rememberSequencesInTransaction(
             database,
             f.scope.sessionId,
@@ -190,11 +183,9 @@ it.each([false, true])(
           );
           expect(readSequence(appended.result)).toBe(replaceBranch ? undefined : 1);
           if (!replaceBranch) {
-            expect(reads.queries).toEqual([]);
+            expect(queries).toEqual([]);
           }
-        } finally {
-          reads.restore();
-        }
+        });
       }, f.scope);
     });
   },
@@ -246,10 +237,7 @@ it("keeps snapshot versions scoped to the requested session when a callback appe
     const result = writeSnapshot(f.scope, (database) =>
       appendMessage(database, resolveSqliteTranscriptScope(other), event("other-message")),
     );
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("Snapshot refused");
-    }
+    assert(result.ok, "Snapshot refused");
     expect(result.value.result?.result).toMatchObject({
       appended: true,
       messageId: "other-message",
