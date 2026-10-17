@@ -188,22 +188,20 @@ describe("presence.query", () => {
         ],
       },
     );
-    expect(result.people).toHaveLength(1);
-    expect(result.people[0]).toMatchObject({
-      id: "profile:alex",
-      deviceCount: 4,
-      activity: { at: 8_000, source: "app-input", deviceId: "device:laptop" },
-    });
-    expect(
-      result.people[0]?.devices?.find((device) => device.id === "device:desktop"),
-    ).toMatchObject({
+    expect(result.people).toMatchObject([
+      {
+        id: "profile:alex",
+        deviceCount: 4,
+        activity: { at: 8_000, source: "app-input", deviceId: "device:laptop" },
+      },
+    ]);
+    const devices = result.people[0]?.devices;
+    expect(devices?.find((device) => device.id === "device:desktop")).toMatchObject({
       activity: { at: 6_000, source: "openclaw-interaction" },
       connections: [{ id: "tab-a" }, { id: "tab-b" }],
     });
-    expect(result.people[0]?.devices?.some((device) => device.id === "connection:no-device")).toBe(
-      true,
-    );
-    expect(result.people[0]?.devices?.some((device) => device.id === "device:shared")).toBe(false);
+    expect(devices?.some((device) => device.id === "connection:no-device")).toBe(true);
+    expect(devices?.some((device) => device.id === "device:shared")).toBe(false);
   });
 
   it("keeps shared nodes inspectable without assigning them to the only online person", async () => {
@@ -250,27 +248,22 @@ describe("presence.query", () => {
         user: { id: "another", identity: { type: "profile", id: "another" }, name: "Alex" },
       }),
     ]);
-    expect(await query({ action: "person", person: "alex" })).toMatchObject({
-      status: "ok",
-      people: [{ id: "profile:alex" }],
-    });
-    expect(await query({ action: "person", person: "ALEX" })).toMatchObject({
-      status: "ambiguous",
-      totalPeople: 2,
-    });
-    expect(await query({ action: "person", person: "nobody" })).toMatchObject({
-      status: "not-found",
-      people: [],
-    });
-    expect(await query({ action: "person", person: "me" }, { client: null })).toMatchObject({
-      status: "identity-unavailable",
-    });
-    expect(
-      await query(
-        { action: "person", person: "me" },
-        { client: { ...caller(), internal: { operatorRoleActor: { kind: "system" } } } },
-      ),
-    ).toMatchObject({ status: "identity-unavailable" });
+    const person = async (
+      name: string,
+      expected: object,
+      options?: Parameters<typeof request>[1],
+    ) => expect(await query({ action: "person", person: name }, options)).toMatchObject(expected);
+    await person("alex", { status: "ok", people: [{ id: "profile:alex" }] });
+    await person("ALEX", { status: "ambiguous", totalPeople: 2 });
+    await person("nobody", { status: "not-found", people: [] });
+    await person("me", { status: "identity-unavailable" }, { client: null });
+    await person(
+      "me",
+      { status: "identity-unavailable" },
+      {
+        client: { ...caller(), internal: { operatorRoleActor: { kind: "system" } } },
+      },
+    );
   });
 
   it.each([

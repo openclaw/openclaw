@@ -23,21 +23,12 @@ function fixture() {
     generation: 1,
   };
   let dedicated = true;
-  let actorCurrent = true;
-  let attachmentCurrent = true;
+  const actor = new AbortController();
+  const attachment = new AbortController();
   const session = new AbortController();
   const qualification = new AbortController();
   const release = vi.fn();
-  const assertActor = () => {
-    if (!actorCurrent) {
-      throw new Error("actor revoked");
-    }
-  };
-  const assertAttachment = () => {
-    if (!attachmentCurrent) {
-      throw new Error("attachment replaced");
-    }
-  };
+  const assertActor = () => actor.signal.throwIfAborted();
   const close = vi.fn(async () => {});
   const touch = vi.fn(async () => {});
   const connect = vi.fn(
@@ -51,7 +42,7 @@ function fixture() {
   const environments = {
     captureSessionAttachment: vi.fn(() => ({
       binding,
-      assertCurrent: assertAttachment,
+      assertCurrent: () => attachment.signal.throwIfAborted(),
       touch,
     })),
     get: () => ({ ...binding, leaseId: "lease-one", nodeDeviceId: "node-one", sharedHost: false }),
@@ -92,7 +83,6 @@ function fixture() {
     service,
     open,
     environments,
-    access,
     session,
     release,
     close,
@@ -100,12 +90,8 @@ function fixture() {
     touch,
     invoke,
     broadcast,
-    revokeActor: () => {
-      actorCurrent = false;
-    },
-    replaceAttachment: () => {
-      attachmentCurrent = false;
-    },
+    revokeActor: () => actor.abort(new Error("actor revoked")),
+    replaceAttachment: () => attachment.abort(new Error("attachment replaced")),
     unqualify: () => {
       dedicated = false;
       qualification.abort();

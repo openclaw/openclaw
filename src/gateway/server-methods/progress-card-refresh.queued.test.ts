@@ -165,6 +165,8 @@ function fixture(options: { parkSteer?: boolean } = {}) {
       admission: { release: releaseAdmission },
       logGateway: context.logGateway,
     });
+    const target = { sessionKey, agentId: "work" };
+    const identity = { ...target, sessionId: "session" };
     cleanups.push(async () => work.release());
     const adoption = createChatSendTurnAdoptionLifecycle({
       accountId: undefined,
@@ -173,20 +175,16 @@ function fixture(options: { parkSteer?: boolean } = {}) {
       runId,
       controller,
       sessionBinding: {
-        sessionId: "session",
-        sessionKey,
-        agentId: "work",
+        ...identity,
         lifecycleGeneration: "test-generation",
       },
-      sessionKey,
-      agentId: "work",
+      ...target,
       originatingChannel: "webchat",
       session: {
-        agentId: "work",
+        ...target,
         backingSessionId: "session",
         cfg: {},
         clientRunId: runId,
-        sessionKey,
         sessionLoadOptions: { agentId: "work" },
       },
       hasCronCreatorAuthority: false,
@@ -209,10 +207,8 @@ function fixture(options: { parkSteer?: boolean } = {}) {
       },
       originatingChannel: "webchat",
       run: {
-        agentId: "work",
+        ...identity,
         agentDir: "/unused-agent",
-        sessionId: "session",
-        sessionKey,
         sessionFile: "/unused-session.jsonl",
         workspaceDir: "/unused-workspace",
         config: {},
@@ -252,14 +248,20 @@ function fixture(options: { parkSteer?: boolean } = {}) {
     );
     return invocation.respond;
   };
-  const first = () => {
+  const start = async () => {
+    expectAccepted(await refresh());
     const item = sources.entries().next().value;
     if (!item) {
       throw new Error("refresh was not queued");
     }
     return { runId: item[0], ...item[1] };
   };
-  return { context, card, sources, sessionKey, releases, refresh, first, runFollowup };
+  return { context, card, sources, sessionKey, releases, refresh, start, runFollowup };
+}
+
+function expectReleased(f: ReturnType<typeof fixture>, runId: string) {
+  expect(f.context.chatQueuedTurns.has(runId)).toBe(false);
+  expect(f.releases.get(runId)).toHaveBeenCalledOnce();
 }
 
 function holdQueuedExecution(f: ReturnType<typeof fixture>) {
@@ -345,8 +347,7 @@ function expectTerminal(respond: ReturnType<typeof vi.fn<RespondFn>>) {
 describe("queued progress refresh settlement", () => {
   it("keeps progress pending, then reconciles the separate followup run before retrying a new intent", async () => {
     const f = fixture();
-    expectAccepted(await f.refresh());
-    const source = f.first();
+    const source = await f.start();
     const execution = holdQueuedExecution(f);
     const turn = await execution.entered;
     expect(turn.runId).not.toBe(source.runId);
@@ -356,8 +357,7 @@ describe("queued progress refresh settlement", () => {
     expect(f.releases.get(source.runId)).not.toHaveBeenCalled();
 
     await execution.finish();
-    expect(f.context.chatQueuedTurns.has(source.runId)).toBe(false);
-    expect(f.releases.get(source.runId)).toHaveBeenCalledOnce();
+    expectReleased(f, source.runId);
     expectTerminal(await f.refresh());
     expect(f.context.dedupe.get(`chat:` + source.runId)?.payload).toMatchObject({
       status: "completed",
@@ -379,13 +379,11 @@ describe("queued progress refresh settlement", () => {
 
   it("does not turn consumed steering custody into terminal completion", async () => {
     const f = fixture({ parkSteer: true });
-    expectAccepted(await f.refresh());
-    const source = f.first();
+    const source = await f.start();
     expect(await source.parked?.admit()).toBe("steer");
     await admitFollowupRunLifecycle(source.queued);
     source.parked?.consume("consumed");
-    expect(f.context.chatQueuedTurns.has(source.runId)).toBe(false);
-    expect(f.releases.get(source.runId)).toHaveBeenCalledOnce();
+    expectReleased(f, source.runId);
     expectAccepted(await f.refresh());
     expect(f.context.dedupe.get(`chat:` + source.runId)?.payload).toMatchObject({ status: "ok" });
     expect(mocks.execute).not.toHaveBeenCalled();
@@ -393,8 +391,7 @@ describe("queued progress refresh settlement", () => {
 
   it("settles an abandoned pending refresh through actual queue overflow", async () => {
     const f = fixture();
-    expectAccepted(await f.refresh());
-    const source = f.first();
+    const source = await f.start();
     const replacement: FollowupRun = {
       ...source.queued,
       turnAdoptionLifecycle: undefined,
@@ -410,8 +407,7 @@ describe("queued progress refresh settlement", () => {
         false,
       ),
     ).toBe(true);
-    expect(f.context.chatQueuedTurns.has(source.runId)).toBe(false);
-    expect(f.releases.get(source.runId)).toHaveBeenCalledOnce();
+    expectReleased(f, source.runId);
     expectTerminal(await f.refresh());
     expect(mocks.execute).not.toHaveBeenCalled();
   });
@@ -420,8 +416,7 @@ describe("queued progress refresh settlement", () => {
     "retires a cancelled queued refresh before %s abort removes its owner",
     async (mode) => {
       const f = fixture();
-      expectAccepted(await f.refresh());
-      const source = f.first();
+      const source = await f.start();
       if (mode === "single") {
         expect(
           abortQueuedChatTurnById(f.context.chatQueuedTurns, {
@@ -441,8 +436,7 @@ describe("queued progress refresh settlement", () => {
       } else {
         source.controller.abort();
       }
-      expect(f.context.chatQueuedTurns.has(source.runId)).toBe(false);
-      expect(f.releases.get(source.runId)).toHaveBeenCalledOnce();
+      expectReleased(f, source.runId);
       expect(source.releaseAdmission).toHaveBeenCalledOnce();
       expectTerminal(await f.refresh());
       expect(f.context.dedupe.get(`chat:${source.runId}`)?.payload).toMatchObject({
@@ -457,8 +451,7 @@ describe("queued progress refresh settlement", () => {
 
   it("does not let a revoked queued controller overwrite its successor receipt", async () => {
     const f = fixture();
-    await f.refresh();
-    const source = f.first();
+    const source = await f.start();
     const execution = holdQueuedExecution(f);
     await execution.entered;
     source.controller.abort();
