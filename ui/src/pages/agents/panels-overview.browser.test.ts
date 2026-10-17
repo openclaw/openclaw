@@ -33,16 +33,22 @@ it("opens agent avatar selection from the keyboard and respects the busy state",
         avatarBounds.top + avatarBounds.height / 2 - (fieldsBounds.top + fieldsBounds.height / 2),
       ),
     ).toBeLessThanOrEqual(1);
-    const popoverBounds = popover!.getBoundingClientRect();
-    expect(popoverBounds.width).toBeLessThanOrEqual(480);
-    const beside =
-      popoverBounds.left >= avatarBounds.right - 1 || popoverBounds.right <= avatarBounds.left + 1;
-    const below =
-      popoverBounds.top >= avatarBounds.bottom - 1 && popoverBounds.top <= avatarBounds.bottom + 20;
-    const above =
-      popoverBounds.bottom <= avatarBounds.top + 1 && popoverBounds.bottom >= avatarBounds.top - 20;
-    expect(beside || below || above).toBe(true);
-    expect(popoverBounds.right).toBeLessThanOrEqual(window.innerWidth + 1);
+    // Opening the native popover can precede its anchor layout on a busy browser.
+    await vi.waitFor(() => {
+      const popoverBounds = popover!.getBoundingClientRect();
+      expect(popoverBounds.width).toBeLessThanOrEqual(480);
+      const beside =
+        popoverBounds.left >= avatarBounds.right - 1 ||
+        popoverBounds.right <= avatarBounds.left + 1;
+      const below =
+        popoverBounds.top >= avatarBounds.bottom - 1 &&
+        popoverBounds.top <= avatarBounds.bottom + 20;
+      const above =
+        popoverBounds.bottom <= avatarBounds.top + 1 &&
+        popoverBounds.bottom >= avatarBounds.top - 20;
+      expect(beside || below || above).toBe(true);
+      expect(popoverBounds.right).toBeLessThanOrEqual(window.innerWidth + 1);
+    });
     expect(
       [...popover!.querySelectorAll("button")].some(
         (button) => button.textContent?.trim() === "Reset",
