@@ -172,7 +172,7 @@ it.each(["current", "pre-migration"] as const)(
   async (location) => {
     await withCaptureHistory(async (captures, root) => {
       const progress: string[] = [];
-      using stderr = vi.spyOn(process.stderr, "write").mockImplementation((text) => {
+      using _stderr = vi.spyOn(process.stderr, "write").mockImplementation((text) => {
         if (!String(text).startsWith("Removing capture ")) {
           return true;
         }
