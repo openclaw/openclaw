@@ -35,8 +35,12 @@ import {
   createOperatorClient,
 } from "./server-plugin-in-process-dispatch.test-support.js";
 
-it("prepares a warm skill library without DDL after the tool caller's initiating request closes", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+function modelRef(model: string) {
+  return { provider: "fixture", model };
+}
+
+it("prepares a warm skill library without DDL after the tool caller's initiating request closes", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const profile = ensureProfileForEmail("warm-library@example.test");
     const database = openOpenClawStateDatabase();
     database.db.exec(getOpenClawStateFeatureSchemaSql("skill_library_entries"));
@@ -85,11 +89,10 @@ it("prepares a warm skill library without DDL after the tool caller's initiating
       releaseTool();
       request.release();
     }
-  });
-});
+  }));
 
-it("preserves the live operator source through principal capture without trusting copied labels", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("preserves the live operator source through principal capture without trusting copied labels", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const profile = ensureProfileForEmail("principal-source@example.test");
     const client = createOperatorClient({ profileId: profile.id, scopes: ["operator.read"] });
     const principal = expectDefined(captureAgentTurnPrincipal(client), "captured principal");
@@ -130,13 +133,12 @@ it("preserves the live operator source through principal capture without trustin
         capture.release();
       }
     }
-  });
-});
+  }));
 
 it.each(["capture", "operator tool"])(
   "prepares %s profile authority without parent data SQL",
-  async (entry) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  (entry) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("operator-sql@example.test");
       setUserProfileRole(profile.id, "reader");
       const sourceScopes: GatewayOperatorRoleDefinition["scopes"] =
@@ -200,35 +202,30 @@ it.each(["capture", "operator tool"])(
             "operator authority",
           );
           const { authority } = retained;
-          try {
-            authority.assertCurrent();
-            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "a" })).toBe(true);
-            cfg = {
-              ...cfg,
-              agents: { defaults: { model: { primary: "fixture/b", fallbacks: ["fixture/a"] } } },
-            };
-            publishOperatorRoleConfigChange(context);
-            expect(authority.modelPolicy?.models).toEqual([
-              { provider: "fixture", model: "b" },
-              { provider: "fixture", model: "a" },
-            ]);
-            cfg = structuredClone(cfg);
-            expectDefined(cfg.gateway?.roles?.definitions.reader, "reader role").modelPolicy = {
-              allow: ["fixture/b", "fixture/c"],
-            };
-            publishOperatorRoleConfigChange(context);
-            expect(authority.signal?.aborted).toBe(false);
-            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "a" })).toBe(false);
-            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "b" })).toBe(true);
-            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "c" })).toBe(false);
-            const release = expectDefined(authority.retain, "operator retention")();
-            retained.release();
-            authority.assertCurrent();
-            release();
-            expect(authority.assertCurrent).toThrow("no longer active");
-          } finally {
-            retained.release();
-          }
+          using _ = { [Symbol.dispose]: retained.release };
+
+          authority.assertCurrent();
+          expect(authority.modelPolicy?.allows(modelRef("a"))).toBe(true);
+          cfg = {
+            ...cfg,
+            agents: { defaults: { model: { primary: "fixture/b", fallbacks: ["fixture/a"] } } },
+          };
+          publishOperatorRoleConfigChange(context);
+          expect(authority.modelPolicy?.models).toEqual([modelRef("b"), modelRef("a")]);
+          cfg = structuredClone(cfg);
+          expectDefined(cfg.gateway?.roles?.definitions.reader, "reader role").modelPolicy = {
+            allow: ["fixture/b", "fixture/c"],
+          };
+          publishOperatorRoleConfigChange(context);
+          expect(authority.signal?.aborted).toBe(false);
+          expect(authority.modelPolicy?.allows(modelRef("a"))).toBe(false);
+          expect(authority.modelPolicy?.allows(modelRef("b"))).toBe(true);
+          expect(authority.modelPolicy?.allows(modelRef("c"))).toBe(false);
+          const release = expectDefined(authority.retain, "operator retention")();
+          retained.release();
+          authority.assertCurrent();
+          release();
+          expect(authority.assertCurrent).toThrow("no longer active");
         } else {
           await withPluginRuntimeGatewayRequestScope(
             { client, context, isWebchatConnect: () => false },
@@ -266,8 +263,7 @@ it.each(["capture", "operator tool"])(
       } finally {
         sql.restore();
       }
-    });
-  },
+    }),
 );
 
 it.each([
@@ -287,8 +283,8 @@ it.each([
   "model policy restored",
 ] as const)(
   "keeps current authority through %s while operator source preparation is pending",
-  async (revocation) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  (revocation) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("preparing-operator@example.test");
       const target = ensureProfileForEmail("preparing-target@example.test");
       setUserProfileRole(profile.id, "reader");
@@ -342,23 +338,21 @@ it.each([
           assertCurrent: () => invocation.signal.throwIfAborted(),
         },
       }).then((captured) => {
-        try {
-          if (revocation.startsWith("model policy")) {
-            const authority = expectDefined(captured, "prepared model authority").authority;
-            expect(authority.signal?.aborted).toBe(false);
-            authority.assertCurrent();
-            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "a" })).toBe(
-              revocation !== "model policy narrowed",
-            );
-            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "b" })).toBe(true);
-            expect(authority.modelPolicy?.allows({ provider: "fixture", model: "c" })).toBe(
-              revocation !== "model policy restored",
-            );
-          }
-          sideEffect();
-        } finally {
-          captured?.release();
+        using _ = captured ? { [Symbol.dispose]: captured.release } : undefined;
+
+        if (revocation.startsWith("model policy")) {
+          const authority = expectDefined(captured, "prepared model authority").authority;
+          expect(authority.signal?.aborted).toBe(false);
+          authority.assertCurrent();
+          expect(authority.modelPolicy?.allows(modelRef("a"))).toBe(
+            revocation !== "model policy narrowed",
+          );
+          expect(authority.modelPolicy?.allows(modelRef("b"))).toBe(true);
+          expect(authority.modelPolicy?.allows(modelRef("c"))).toBe(
+            revocation !== "model policy restored",
+          );
         }
+        sideEffect();
       });
       const allowed =
         revocation === "policy restored" ||
@@ -434,12 +428,11 @@ it.each([
         await pending.catch(() => {});
         spy.mockRestore();
       }
-    });
-  },
+    }),
 );
 
-it("keeps target and unrelated sources live across alias additions, but rejects source merges", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("keeps target and unrelated sources live across alias additions, but rejects source merges", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const source = ensureProfileForEmail("alias-source@example.test");
     const target = ensureProfileForEmail("alias-target@example.test");
     const other = ensureProfileForEmail("alias-other@example.test");
@@ -460,11 +453,10 @@ it("keeps target and unrelated sources live across alias additions, but rejects 
     } finally {
       captures.forEach((captured) => captured?.release());
     }
-  });
-});
+  }));
 
-it("rechecks current role and latched revocation after a source callback mutates and restores it", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("rechecks current role and latched revocation after a source callback mutates and restores it", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const profile = ensureProfileForEmail("callback-operator@example.test");
     const context = createContext();
     const client = createOperatorClient({ profileId: profile.id, scopes: ["operator.read"] });
@@ -485,13 +477,10 @@ it("rechecks current role and latched revocation after a source callback mutates
       }),
       "callback authority",
     );
-    try {
-      change = true;
-      expect(captured.authority.assertCurrent).toThrow("no longer active");
-      expect(captured.authority.signal?.aborted).toBe(true);
-      expect(captured.authority.assertCurrent).toThrow("no longer active");
-    } finally {
-      captured.release();
-    }
-  });
-});
+    using _ = { [Symbol.dispose]: captured.release };
+
+    change = true;
+    expect(captured.authority.assertCurrent).toThrow("no longer active");
+    expect(captured.authority.signal?.aborted).toBe(true);
+    expect(captured.authority.assertCurrent).toThrow("no longer active");
+  }));

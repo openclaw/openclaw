@@ -47,6 +47,10 @@ import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 
+function modelRef(model: string) {
+  return { provider: "fixture", model };
+}
+
 const guestRole = {
   sessions: { others: "view" },
   agents: ["guest-agent"],
@@ -98,11 +102,29 @@ function identifiedClient(profileId: string): GatewayClient {
   };
 }
 
+async function captureRole(
+  profileId: string,
+  context: Parameters<typeof captureGatewayOperatorRunAuthority>[0]["context"],
+) {
+  return expectDefined(
+    await captureGatewayOperatorRunAuthority({ client: identifiedClient(profileId), context }),
+    "operator source",
+  );
+}
+
+function expectRole(
+  profileId: string,
+  cfg: OpenClawConfig,
+  expected: ReturnType<typeof resolveOperatorRolePolicyForProfile>,
+) {
+  expect(resolveOperatorRolePolicyForProfile(profileId, cfg)).toEqual(expected);
+}
+
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
 describe("operator role policy", () => {
-  it("resolves verified GitHub login assignments with explicit precedence and live config", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("resolves verified GitHub login assignments with explicit precedence and live config", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const person = syncGitHubIdentity({
         identity: { accountId: 42, login: "Release-Operator" },
         authenticationAlias: { kind: "github-login", login: "Release-Operator" },
@@ -112,44 +134,35 @@ describe("operator role policy", () => {
       const cfg = roleConfig();
       const roles = expectDefined(cfg.gateway?.roles, "roles");
       roles.assignments = { byGithubLogin: { " release-OPERATOR ": "maintainer" } };
-      try {
-        expect(resolveOperatorRolePolicyForProfile(person.id, cfg)).toEqual(
-          roles.definitions.maintainer,
-        );
-        expect(resolveOperatorRolePolicyForProfile(unverified.id, cfg)).toEqual(guestRole);
-        setUserProfileRole(person.id, "guest");
-        invalidateOperatorRolePolicy(person.id);
-        expect(resolveOperatorRolePolicyForProfile(person.id, cfg)).toEqual(guestRole);
-        setUserProfileRole(person.id, "retired");
-        invalidateOperatorRolePolicy(person.id);
-        expect(resolveOperatorRolePolicyForProfile(person.id, cfg)).toEqual(
-          roles.definitions.maintainer,
-        );
-        roles.assignments.byGithubLogin = {};
-        publishOperatorRoleConfigChange({});
-        expect(resolveOperatorRolePolicyForProfile(person.id, cfg)).toEqual(guestRole);
-        roles.assignments.byGithubLogin = { "release-operator": "maintainer" };
-        publishOperatorRoleConfigChange({});
-        expect(resolveOperatorRolePolicyForProfile(person.id, cfg)).toEqual(
-          roles.definitions.maintainer,
-        );
-        const access = resolveGatewayOperatorAccessAuthority(person.id, cfg);
-        expect(access?.gatewayAccessGrant).toBeNull();
-        expect(hasCurrentGatewayOperatorAccess(access)).toBe(true);
-        setDisplayName(person.id, "Release Operator");
-        expect(hasCurrentGatewayOperatorAccess(access)).toBe(true);
-        syncGitHubIdentity({
-          identity: { accountId: 42, login: "Renamed-Operator" },
-          authenticationAlias: { kind: "github-login", login: "Renamed-Operator" },
-        });
-        expect(resolveOperatorRolePolicyForProfile(person.id, cfg)).toEqual(guestRole);
-        expect(hasCurrentGatewayOperatorAccess(access)).toBe(false);
-        expect(access?.signal.aborted).toBe(true);
-      } finally {
-        catalog.release();
-      }
-    });
-  });
+      using _ = { [Symbol.dispose]: catalog.release };
+
+      expectRole(person.id, cfg, roles.definitions.maintainer);
+      expectRole(unverified.id, cfg, guestRole);
+      setUserProfileRole(person.id, "guest");
+      invalidateOperatorRolePolicy(person.id);
+      expectRole(person.id, cfg, guestRole);
+      setUserProfileRole(person.id, "retired");
+      invalidateOperatorRolePolicy(person.id);
+      expectRole(person.id, cfg, roles.definitions.maintainer);
+      roles.assignments.byGithubLogin = {};
+      publishOperatorRoleConfigChange({});
+      expectRole(person.id, cfg, guestRole);
+      roles.assignments.byGithubLogin = { "release-operator": "maintainer" };
+      publishOperatorRoleConfigChange({});
+      expectRole(person.id, cfg, roles.definitions.maintainer);
+      const access = resolveGatewayOperatorAccessAuthority(person.id, cfg);
+      expect(access?.gatewayAccessGrant).toBeNull();
+      expect(hasCurrentGatewayOperatorAccess(access)).toBe(true);
+      setDisplayName(person.id, "Release Operator");
+      expect(hasCurrentGatewayOperatorAccess(access)).toBe(true);
+      syncGitHubIdentity({
+        identity: { accountId: 42, login: "Renamed-Operator" },
+        authenticationAlias: { kind: "github-login", login: "Renamed-Operator" },
+      });
+      expectRole(person.id, cfg, guestRole);
+      expect(hasCurrentGatewayOperatorAccess(access)).toBe(false);
+      expect(access?.signal.aborted).toBe(true);
+    }));
 
   it.each([
     { route: "Gateway", roleSource: "assigned" },
@@ -158,8 +171,8 @@ describe("operator role policy", () => {
     { route: "CLI", roleSource: "empty mapping" },
   ] as const)(
     "preserves $route $roleSource authority when an irrelevant GitHub login changes",
-    async ({ route, roleSource }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ({ route, roleSource }) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
         const login = route === "Gateway" ? "Explicit-Operator" : "Cli-Operator";
         const person = syncGitHubIdentity({
           identity: { accountId: 43, login },
@@ -200,9 +213,7 @@ describe("operator role policy", () => {
             const authority = expectDefined(source, "explicit operator authority").authority;
             expect(authority.assertCurrent).not.toThrow();
             expect(authority.signal?.aborted).toBe(false);
-            expect(resolveOperatorRolePolicyForProfile(person.id, cfg)).toEqual(
-              roles.definitions.maintainer,
-            );
+            expectRole(person.id, cfg, roles.definitions.maintainer);
           } else {
             expect(expectDefined(cliAuthority, "explicit CLI authority").isCurrent(cfg)).toBe(true);
           }
@@ -210,14 +221,13 @@ describe("operator role policy", () => {
           source?.release();
           catalog?.release();
         }
-      });
-    },
+      }),
   );
 
   it.each(["invocation", "access", "gateway resolver"] as const)(
     "keeps independent %s dependencies separate while retaining inherited authority",
-    async (dependencyKind) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    (dependencyKind) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
         const profile = ensureProfileForEmail("independent-model-custody@example.test");
         const cfg = roleConfig();
         cfg.agents = { defaults: { model: "fixture/a" } };
@@ -283,9 +293,7 @@ describe("operator role policy", () => {
           expect(resolveReplyOperatorAuthorityKey(narrowed)).not.toBe(
             resolveReplyOperatorAuthorityKey(original),
           );
-          expect(() =>
-            assertOperatorModelAllowed(narrowed, { provider: "fixture", model: "b" }),
-          ).not.toThrow();
+          expect(() => assertOperatorModelAllowed(narrowed, modelRef("b"))).not.toThrow();
           expectDefined(controllers[0], "first dependency").abort(new Error("dependency ended"));
           if (dependencyKind === "gateway resolver") {
             expect(original.assertCurrent).toThrow("authority is no longer active");
@@ -301,8 +309,7 @@ describe("operator role policy", () => {
             captured.release();
           }
         }
-      });
-    },
+      }),
   );
 
   it.each([
@@ -311,8 +318,8 @@ describe("operator role policy", () => {
     { ended: "access", independent: true },
   ] as const)(
     "retains request and selected access authority when $ended ends (independent: $independent)",
-    async ({ ended, independent }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    ({ ended, independent }) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
         const profile = ensureProfileForEmail("model-source-composition@example.test");
         const request = new AbortController();
         const access = new AbortController();
@@ -335,37 +342,31 @@ describe("operator role policy", () => {
             assertCurrent: () => request.signal.throwIfAborted(),
           },
         }))!;
-        try {
-          expect(captured.authority.gatewayAccessGrant).toEqual(independent ? null : grant);
+        using _ = { [Symbol.dispose]: captured.release };
+
+        expect(captured.authority.gatewayAccessGrant).toEqual(independent ? null : grant);
+        expect(captured.authority.assertCurrent).not.toThrow();
+        const endedSource = ended === "request" ? request : access;
+        const otherSource = ended === "request" ? access : request;
+        endedSource.abort(new Error(`${ended} source ended`));
+        expect(otherSource.signal.aborted).toBe(false);
+        expect(captured.authority.signal?.aborted).toBe(!independent);
+        if (independent) {
           expect(captured.authority.assertCurrent).not.toThrow();
-          const endedSource = ended === "request" ? request : access;
-          const otherSource = ended === "request" ? access : request;
-          endedSource.abort(new Error(`${ended} source ended`));
-          expect(otherSource.signal.aborted).toBe(false);
-          expect(captured.authority.signal?.aborted).toBe(!independent);
-          if (independent) {
-            expect(captured.authority.assertCurrent).not.toThrow();
-          } else {
-            expect(captured.authority.assertCurrent).toThrow("source ended");
-          }
-        } finally {
-          captured.release();
+        } else {
+          expect(captured.authority.assertCurrent).toThrow("source ended");
         }
-      });
-    },
+      }),
   );
 
-  it("retires the original source on a profile merge while preserving unrelated sources", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("retires the original source on a profile merge while preserving unrelated sources", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const source = ensureProfileForEmail("source-role@example.test");
       const target = ensureProfileForEmail("target-role@example.test");
       const unrelated = ensureProfileForEmail("unrelated-role@example.test");
       const cfg = roleConfig();
-      const capture = async (profileId: string) =>
-        (await captureGatewayOperatorRunAuthority({
-          client: identifiedClient(profileId),
-          context: { getRuntimeConfig: () => cfg },
-        }))!;
+      const capture = (profileId: string) =>
+        captureRole(profileId, { getRuntimeConfig: () => cfg });
       const original = await capture(source.id);
       const unaffected = await capture(unrelated.id);
       try {
@@ -381,22 +382,19 @@ describe("operator role policy", () => {
         expect(unaffected.authority.signal?.aborted).toBe(false);
         expect(() => unaffected.authority.assertCurrent()).not.toThrow();
         const fresh = await capture(target.id);
-        try {
-          expect(() => fresh.authority.assertCurrent()).not.toThrow();
-          expect(() => original.authority.assertCurrent()).toThrow(
-            "operator source identity changed; start a new request",
-          );
-        } finally {
-          fresh.release();
-        }
+        using _ = { [Symbol.dispose]: fresh.release };
+
+        expect(() => fresh.authority.assertCurrent()).not.toThrow();
+        expect(() => original.authority.assertCurrent()).toThrow(
+          "operator source identity changed; start a new request",
+        );
       } finally {
         original.release();
         unaffected.release();
       }
-    });
-  });
-  it("rejects retained admin authority after a role downgrade even when ordinary session work remains allowed", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    }));
+  it("rejects retained admin authority after a role downgrade even when ordinary session work remains allowed", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("retained-admin@example.test");
       const cfg = roleConfig();
       setUserProfileRole(profile.id, "maintainer");
@@ -408,28 +406,25 @@ describe("operator role policy", () => {
         context: { getRuntimeConfig: () => cfg },
       }))!;
       expect(authorizeCurrentOperatorRoleScopes(admin, cfg)).toBeUndefined();
-      try {
-        setUserProfileRole(profile.id, "guest");
-        invalidateOperatorRolePolicy(profile.id);
-        expect(authorizeCurrentOperatorRoleScopes(admin, cfg)).toMatchObject({ code: "FORBIDDEN" });
-        // Session/agent access narrowed even though this source's scopes still fit.
-        expect(authorizeCurrentOperatorRoleScopes(reader, cfg)).toBeUndefined();
-        expect(source.authority.signal?.aborted).toBe(true);
-        expect(() => source.authority.assertCurrent()).toThrow(
-          "Your operator role changed; reconnect before continuing.",
-        );
-        const reconnected = identifiedClient(profile.id);
-        reconnected.connect.scopes = ["operator.write"];
-        expect(authorizeCurrentOperatorRoleScopes(reconnected, cfg)).toBeUndefined();
-      } finally {
-        source.release();
-      }
-    });
-  });
+      using _ = { [Symbol.dispose]: source.release };
+
+      setUserProfileRole(profile.id, "guest");
+      invalidateOperatorRolePolicy(profile.id);
+      expect(authorizeCurrentOperatorRoleScopes(admin, cfg)).toMatchObject({ code: "FORBIDDEN" });
+      // Session/agent access narrowed even though this source's scopes still fit.
+      expect(authorizeCurrentOperatorRoleScopes(reader, cfg)).toBeUndefined();
+      expect(source.authority.signal?.aborted).toBe(true);
+      expect(() => source.authority.assertCurrent()).toThrow(
+        "Your operator role changed; reconnect before continuing.",
+      );
+      const reconnected = identifiedClient(profile.id);
+      reconnected.connect.scopes = ["operator.write"];
+      expect(authorizeCurrentOperatorRoleScopes(reconnected, cfg)).toBeUndefined();
+    }));
   it.each(["agents", "sessions", "sandbox"] as const)(
     "retires only affected sources after a committed %s policy change with unchanged scopes",
-    async (restriction) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    (restriction) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
         const profile = ensureProfileForEmail("committed-role-source@example.test");
         const otherProfile = ensureProfileForEmail("committed-role-unaffected@example.test");
         setUserProfileRole(otherProfile.id, "maintainer");
@@ -440,14 +435,7 @@ describe("operator role policy", () => {
           getRuntimeConfig: () => runtimeConfig,
           getCommittedRuntimeConfig: () => committedConfig,
         };
-        const capture = async (profileId: string) =>
-          expectDefined(
-            await captureGatewayOperatorRunAuthority({
-              client: identifiedClient(profileId),
-              context,
-            }),
-            "operator source",
-          );
+        const capture = (profileId: string) => captureRole(profileId, context);
         const original = await capture(profile.id);
         const unaffected = await capture(otherProfile.id);
         const releaseQueued = expectDefined(original.authority.retain, "source retention")();
@@ -489,12 +477,11 @@ describe("operator role policy", () => {
           original.release();
           unaffected.release();
         }
-      });
-    },
+      }),
   );
 
-  it("intersects current and original model choices without revoking allowed sibling or unrelated work", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("intersects current and original model choices without revoking allowed sibling or unrelated work", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const guest = ensureProfileForEmail("model-guest@example.test");
       const staff = ensureProfileForEmail("model-staff@example.test");
       setUserProfileRole(staff.id, "maintainer");
@@ -504,28 +491,18 @@ describe("operator role policy", () => {
       };
       cfg.gateway!.roles!.definitions.guest!.modelPolicy = { deny: ["fixture/restricted-*"] };
       const context = { getRuntimeConfig: () => cfg };
-      const capture = async (profileId: string) =>
-        expectDefined(
-          await captureGatewayOperatorRunAuthority({
-            client: identifiedClient(profileId),
-            context,
-          }),
-          "operator source",
-        );
+      const capture = (profileId: string) => captureRole(profileId, context);
       const original = await capture(guest.id);
       const unaffected = await capture(staff.id);
-      const primaryExecution = bindOperatorModelExecution(original.authority, {
-        provider: "fixture",
-        model: "primary",
-      })!;
-      const fallbackExecution = bindOperatorModelExecution(original.authority, {
-        provider: "fixture",
-        model: "fallback",
-      })!;
+      const primaryExecution = bindOperatorModelExecution(original.authority, modelRef("primary"))!;
+      const fallbackExecution = bindOperatorModelExecution(
+        original.authority,
+        modelRef("fallback"),
+      )!;
       const releaseQueued = original.authority.retain!();
       original.release();
       try {
-        assertOperatorModelAllowed(original.authority, { provider: "fixture", model: "primary" });
+        assertOperatorModelAllowed(original.authority, modelRef("primary"));
         cfg = { ...cfg, logging: { level: "debug" } };
         publishOperatorRoleConfigChange(context);
         expect(original.authority.signal?.aborted).toBe(false);
@@ -561,39 +538,28 @@ describe("operator role policy", () => {
         expect(fallbackExecution.assertCurrent).not.toThrow();
         expect(original.authority.signal?.aborted).toBe(false);
         expect(original.authority.assertCurrent).not.toThrow();
+        expect(() => assertOperatorModelAllowed(original.authority, modelRef("primary"))).toThrow(
+          "operator role cannot use this model",
+        );
         expect(() =>
-          assertOperatorModelAllowed(original.authority, { provider: "fixture", model: "primary" }),
-        ).toThrow("operator role cannot use this model");
-        expect(() =>
-          assertOperatorModelAllowed(original.authority, {
-            provider: "fixture",
-            model: "fallback",
-          }),
+          assertOperatorModelAllowed(original.authority, modelRef("fallback")),
         ).not.toThrow();
+        expect(() => assertOperatorModelAllowed(original.authority, modelRef("next"))).toThrow(
+          "operator role cannot use this model",
+        );
         expect(() =>
-          assertOperatorModelAllowed(original.authority, { provider: "fixture", model: "next" }),
-        ).toThrow("operator role cannot use this model");
-        expect(() =>
-          assertOperatorModelAllowed(unaffected.authority, {
-            provider: "fixture",
-            model: "restricted-new",
-          }),
+          assertOperatorModelAllowed(unaffected.authority, modelRef("restricted-new")),
         ).not.toThrow();
         const fresh = await capture(guest.id);
-        try {
-          expect(fresh.authority.modelPolicy?.models).toEqual([
-            { provider: "fixture", model: "next" },
-            { provider: "fixture", model: "fallback" },
-          ]);
-          expect(() =>
-            assertOperatorModelAllowed(fresh.authority, {
-              provider: "fixture",
-              model: "restricted-new",
-            }),
-          ).toThrow("operator role cannot use this model");
-        } finally {
-          fresh.release();
-        }
+        using _ = { [Symbol.dispose]: fresh.release };
+
+        expect(fresh.authority.modelPolicy?.models).toEqual([
+          modelRef("next"),
+          modelRef("fallback"),
+        ]);
+        expect(() =>
+          assertOperatorModelAllowed(fresh.authority, modelRef("restricted-new")),
+        ).toThrow("operator role cannot use this model");
       } finally {
         primaryExecution.release();
         fallbackExecution.release();
@@ -601,13 +567,12 @@ describe("operator role policy", () => {
         releaseQueued();
         unaffected.release();
       }
-    });
-  });
+    }));
 
   it.each([false, true])(
     "applies model-only role changes without revoking the source (original ceiling: %s)",
-    async (bounded) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    (bounded) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
         const profile = ensureProfileForEmail("model-field@example.test");
         let cfg = roleConfig();
         cfg.agents = { defaults: { model: "fixture/a" } };
@@ -636,21 +601,16 @@ describe("operator role policy", () => {
           expect(source.authority.signal?.aborted).toBe(false);
           expect(source.authority.assertCurrent).not.toThrow();
           expect(narrowed.authority.scopes).toEqual([]);
-          expect(() =>
-            assertOperatorModelAllowed(narrowed.authority, { provider: "fixture", model: "a" }),
-          ).toThrow("operator role cannot use this model");
-          expect(() =>
-            assertOperatorModelAllowed(narrowed.authority, { provider: "fixture", model: "b" }),
-          ).not.toThrow();
-          expect(narrowed.authority.modelPolicy?.allows({ provider: "fixture", model: "c" })).toBe(
-            !bounded,
+          expect(() => assertOperatorModelAllowed(narrowed.authority, modelRef("a"))).toThrow(
+            "operator role cannot use this model",
           );
+          expect(() => assertOperatorModelAllowed(narrowed.authority, modelRef("b"))).not.toThrow();
+          expect(narrowed.authority.modelPolicy?.allows(modelRef("c"))).toBe(!bounded);
         } finally {
           narrowed.release();
           source.release();
         }
-      });
-    },
+      }),
   );
 
   it.each(["legacy", "prepared", "unknown"] as const)(
@@ -672,7 +632,7 @@ describe("operator role policy", () => {
         } else {
           expect(resolveOperatorRolePolicy(identifiedClient(profile.id), cfg)).toEqual(guestRole);
         }
-        expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(guestRole);
+        expectRole(profile.id, cfg, guestRole);
         if (assignment === "unknown") {
           expect(resolveOperatorRolePolicyForProfile(profile.id, roleConfig(false))).toMatchObject(
             denied,
@@ -680,29 +640,25 @@ describe("operator role policy", () => {
           return;
         }
         setUserProfileRole(profile.id, "maintainer");
-        expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(
-          cfg.gateway?.roles?.definitions.maintainer,
-        );
+        expectRole(profile.id, cfg, cfg.gateway?.roles?.definitions.maintainer);
       });
     },
   );
 
-  it("reads committed role changes and deletion without a role cache or main-thread SQL", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("reads committed role changes and deletion without a role cache or main-thread SQL", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("current-role@example.test");
       setUserProfileRole(profile.id, "maintainer");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg = roleConfig();
       const sql = observeMainThreadSql();
       try {
-        expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(
-          cfg.gateway?.roles?.definitions.maintainer,
-        );
+        expectRole(profile.id, cfg, cfg.gateway?.roles?.definitions.maintainer);
         sql.expectIdle();
 
         setUserProfileRole(profile.id, "guest");
         sql.clear();
-        expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(guestRole);
+        expectRole(profile.id, cfg, guestRole);
         expect(
           authorizeGatewaySessionCreation({ cfg, profileId: profile.id, agentId: "private-agent" }),
         ).toMatchObject({ code: "FORBIDDEN" });
@@ -722,11 +678,10 @@ describe("operator role policy", () => {
       } finally {
         sql.restore();
       }
-    });
-  });
+    }));
 
-  it("keeps human-derived sandbox restrictions separate from profile provenance", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("keeps human-derived sandbox restrictions separate from profile provenance", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("role-sandbox-creator@example.com");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg = roleConfig();
@@ -765,8 +720,7 @@ describe("operator role policy", () => {
       expect(
         resolveCreatorSandbox(cfg, { actor: { type: "human", source: "profile", id: profile.id } }),
       ).toBeUndefined();
-    });
-  });
+    }));
 
   it.each([GATEWAY_OWNER_PROFILE_ID, "profile-first"])(
     "reads current verified and explicit actor identity for %s",
@@ -806,8 +760,8 @@ describe("operator role policy", () => {
     },
   );
 
-  it("authorizes only configured agents and rejects unidentified operators", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("authorizes only configured agents and rejects unidentified operators", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("role-agents@example.com");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg = roleConfig();
@@ -850,6 +804,5 @@ describe("operator role policy", () => {
         authorizeGatewaySessionCreation({ cfg, client: trackedOperator, agentId: "private-agent" }),
       ).toBeUndefined();
       expect(resolveOperatorRolePolicy(trackedOperator, cfg)).toBeUndefined();
-    });
-  });
+    }));
 });
