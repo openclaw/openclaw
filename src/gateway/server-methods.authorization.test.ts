@@ -60,6 +60,34 @@ afterEach(() => {
   setCanonicalUserProfileDisplayName.mockReset();
 });
 
+type Request = Parameters<typeof handleGatewayRequest>[0];
+
+function clientFor(
+  connId: string,
+  scopes: string[],
+  identity: Partial<NonNullable<Request["client"]>> = {},
+): Request["client"] {
+  return {
+    connId,
+    ...identity,
+    connect: {
+      role: "operator",
+      scopes,
+      client: { id: "test", version: "1", platform: "test", mode: "test" },
+      minProtocol: 1,
+      maxProtocol: 1,
+    },
+  } as Request["client"];
+}
+
+function requestContext(overrides: Partial<Request["context"]> = {}): Request["context"] {
+  return {
+    getRuntimeConfig: () => ({}),
+    logGateway: { warn: vi.fn() },
+    ...overrides,
+  } as Request["context"];
+}
+
 describe("gateway method authorization", () => {
   it.each(["operator.read", "operator.write", "operator.admin"])(
     "requires admin authority for installed-runtime setup (%s)",
@@ -79,23 +107,9 @@ describe("gateway method authorization", () => {
           },
         },
         respond,
-        client: {
-          connId: "runtime-operator",
-          connect: {
-            role: "operator",
-            scopes: [scope],
-            client: { id: "test", version: "1", platform: "test", mode: "test" },
-            minProtocol: 1,
-            maxProtocol: 1,
-          },
-          // Authorization only needs the connection's declared identity and scopes.
-        } as Parameters<typeof handleGatewayRequest>[0]["client"],
+        client: clientFor("runtime-operator", [scope]),
         isWebchatConnect: () => false,
-        context: {
-          getRuntimeConfig: () => ({}),
-          logGateway: { warn: vi.fn() },
-          // The probe handler does not consume the remaining runtime services.
-        } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
+        context: requestContext(),
         extraHandlers: { "openclaw.setup.runtime.start": handler },
       });
       if (scope === "operator.admin") {
@@ -126,22 +140,13 @@ describe("gateway method authorization", () => {
         params: { displayName: "Ada", profileId: params.profileId },
       },
       respond,
-      client: {
-        connId: "conn-users-1",
-        ...(params.authenticatedUserId ? { authenticatedUserId: params.authenticatedUserId } : {}),
-        connect: {
-          role: "operator",
-          scopes: params.scopes,
-          client: { id: "test", version: "1", platform: "test", mode: "test" },
-          minProtocol: 1,
-          maxProtocol: 1,
-        },
-      } as Parameters<typeof handleGatewayRequest>[0]["client"],
+      client: clientFor(
+        "conn-users-1",
+        params.scopes,
+        params.authenticatedUserId ? { authenticatedUserId: params.authenticatedUserId } : {},
+      ),
       isWebchatConnect: () => false,
-      context: {
-        getRuntimeConfig: () => ({}),
-        logGateway: { warn: vi.fn() },
-      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
+      context: requestContext(),
     });
     return respond;
   }
@@ -246,8 +251,7 @@ describe("gateway method authorization", () => {
           params: { key: sessionKey, label: "stale mutation" },
         },
         respond,
-        client: {
-          connId: "conn-session-commit-bound",
+        client: clientFor("conn-session-commit-bound", ["operator.write"], {
           authenticatedUserId: "member@example.com",
           authenticatedUserProfile: {
             profileId: "member",
@@ -255,23 +259,14 @@ describe("gateway method authorization", () => {
             hasAvatar: false,
             updatedAt: 1,
           },
-          connect: {
-            role: "operator",
-            scopes: ["operator.write"],
-            client: { id: "test", version: "1", platform: "test", mode: "test" },
-            minProtocol: 1,
-            maxProtocol: 1,
-          },
-        } as Parameters<typeof handleGatewayRequest>[0]["client"],
+        }),
         isWebchatConnect: () => false,
-        context: {
-          getRuntimeConfig: () => ({}),
-          logGateway: { warn: vi.fn() },
+        context: requestContext({
           broadcast: vi.fn(),
           broadcastToConnIds: vi.fn(),
           getSessionEventSubscriberConnIds: () => new Set(),
           chatAbortControllers: new Map(),
-        } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
+        }),
         extraHandlers: {
           "sessions.patch": async (options) => {
             if (phase === "before commit") {
@@ -389,8 +384,7 @@ describe("gateway method authorization", () => {
         await handleGatewayRequest({
           req: { type: "req", id: `${method}-${profileId}`, method, params: requestParams },
           respond,
-          client: {
-            connId: `${method}-${profileId}`,
+          client: clientFor(`${method}-${profileId}`, ["operator.write"], {
             authenticatedUserId: `${profileId}@example.com`,
             authenticatedUserProfile: {
               profileId,
@@ -398,20 +392,9 @@ describe("gateway method authorization", () => {
               hasAvatar: false,
               updatedAt: 1,
             },
-            connect: {
-              role: "operator",
-              scopes: ["operator.write"],
-              client: { id: "test", version: "1", platform: "test", mode: "test" },
-              minProtocol: 1,
-              maxProtocol: 1,
-            },
-          } as Parameters<typeof handleGatewayRequest>[0]["client"],
+          }),
           isWebchatConnect: () => false,
-          context: {
-            chatAbortControllers: new Map(),
-            getRuntimeConfig: () => ({}),
-            logGateway: { warn: vi.fn() },
-          } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
+          context: requestContext({ chatAbortControllers: new Map() }),
           extraHandlers: { [method]: handler },
         });
         return { handler, respond };
