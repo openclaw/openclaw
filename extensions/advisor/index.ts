@@ -3,6 +3,13 @@ import { definePluginEntry, type PluginServiceSchedulerV1 } from "openclaw/plugi
 
 const REVIEW_TIMEOUT_MS = 120_000;
 const RUN_CONTEXT_NAMESPACE = "advisor:admitted-run";
+// Raw Codex call receipts include outer Code Mode calls that stay open after their children.
+const RAW_CODEX_CALL_TYPES = new Set([
+  "function_call",
+  "custom_tool_call",
+  "local_shell_call",
+  "tool_search_call",
+]);
 
 export const DEFAULT_REVIEW_INSTRUCTIONS = `Decide whether the agent is wasting the user's time compared with a clearly better next step it can take now.
 Correct it when it repeats an action whose result has not changed; waits or polls on work that already finished or failed; stops, reports a blocker or asks the user about something it can resolve with the files, tools, credentials or authority it already has; builds a workaround when an installed tool does the job; grows scope beyond the request; claims an outcome the tool results contradict; or ignores an explicit user constraint.
@@ -188,7 +195,7 @@ export default definePluginEntry({
       id: "advisor-runs",
       description: "Counts tool calls in user runs and reviews when a trigger is due.",
       streams: ["tool", "lifecycle", "codex_app_server.item"],
-      phases: ["start", "result", "end", "error", "completed"],
+      phases: ["start", "result", "end", "error", "started", "completed"],
       payload: "metadata",
       handle: (event, ctx) => {
         const run = ctx.getRunContext<AdmittedRun>(RUN_CONTEXT_NAMESPACE);
@@ -220,10 +227,17 @@ export default definePluginEntry({
             session.pending.delete(toolCallId);
           }
           maybeReview(run);
-        } else if (event.stream === "codex_app_server.item" && phase === "completed") {
+        } else if (event.stream === "codex_app_server.item") {
           const session = sessions.get(run.sessionKey);
-          if (session && typeof event.data.itemId === "string") {
-            session.pending.delete(`native:${event.data.itemId}`);
+          const itemId = event.data.itemId;
+          if (!session || typeof itemId !== "string") {
+            return;
+          }
+          if (phase === "started" && RAW_CODEX_CALL_TYPES.has(String(event.data.type))) {
+            session.pending.add(`raw:${itemId}`);
+          } else if (phase === "completed") {
+            session.pending.delete(`native:${itemId}`);
+            session.pending.delete(`raw:${itemId}`);
             maybeReview(run);
           }
         } else if (event.stream === "lifecycle" && (phase === "end" || phase === "error")) {

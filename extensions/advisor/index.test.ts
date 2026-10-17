@@ -162,6 +162,29 @@ describe("advisor", () => {
     expect(run.forkSession).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps an outer Code Mode call pending after its native children finish", async () => {
+    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+    await run.start();
+    await run.startRun();
+    await run.emit("codex_app_server.item", "started", "run-1", {
+      itemId: "outer",
+      type: "custom_tool_call",
+    });
+    await run.emit("tool", "start", "run-1", { toolCallId: "child", itemId: "child" });
+    await run.emit("codex_app_server.item", "completed", "run-1", {
+      itemId: "child",
+      type: "commandExecution",
+    });
+    await run.flush();
+    expect(run.forkSession).not.toHaveBeenCalled();
+    await run.emit("codex_app_server.item", "completed", "run-1", {
+      itemId: "outer",
+      type: "custom_tool_call_output",
+    });
+    await run.flush();
+    expect(run.forkSession).toHaveBeenCalledOnce();
+  });
+
   it.each(["Looks fine to me.", "CORRECTION", "NO_CHANGE"])(
     "does not steer on a reply of %j",
     async (reply) => {
