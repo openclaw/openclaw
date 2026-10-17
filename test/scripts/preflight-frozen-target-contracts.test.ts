@@ -83,6 +83,24 @@ function configureUnavailablePromisor(source: ReturnType<typeof commit>) {
   source.git("config", "protocol.fixture.allow", "always");
 }
 
+function write(root: string, file: string, value: string) {
+  const target = join(root, file);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, value);
+}
+
+function admitted(result: SpawnSyncReturns<string>) {
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout);
+}
+
+function expectCurrentOnly(f: ReturnType<typeof fixture>, lane: string) {
+  expect(
+    admitted(f.run({ docker: { lanes: [lane] } }, { allowFrozenTargetScenarioOmissions: false }))
+      .sources.selected,
+  ).toEqual([]);
+}
+
 function expectRejected(result: SpawnSyncReturns<string>, error?: string) {
   expect(result.status, result.stderr).toBe(1);
   if (error) {
@@ -127,8 +145,7 @@ function fixture(
     "package.json": '{"type":"module","version":"2026.8.35"}',
     ...files,
   })) {
-    mkdirSync(dirname(join(selectedRoot, file)), { recursive: true });
-    writeFileSync(join(selectedRoot, file), value);
+    write(selectedRoot, file, value);
   }
   const selected = commit(selectedRoot, layout === "nested-tooling" ? [".release-harness"] : []);
   const tooling = commit(toolingRoot, layout === "nested-selected" ? ["selected"] : []);
@@ -214,44 +231,27 @@ function survivorFiles(version = "2026.8.35", recipe = "config-recipe.mts") {
 
 describe("frozen admission Docker consumer aliases", () => {
   const pluginAssertions = "scripts/e2e/lib/plugins/assertions.mjs";
-  const aliases = ["mcp-channels", "kitchen-sink-rpc", "plugins-offline"].map((lane) => ({
-    lane,
-    consumer: "plugins",
-    path: pluginAssertions,
-    current: "export function assertPluginUninstallConfigState() {}",
-    legacy: "export function assertPluginTgzRemoved() {}",
-    mode: "OPENCLAW_FROZEN_TARGET_PLUGIN_UNINSTALL_MODE",
-  }));
   const executionSentinel = [
     'import { writeFileSync } from "node:fs";',
     'writeFileSync(`${process.env.HOME}/selected-code-executed`, "executed");',
   ].join("\n");
-  const consumerAliases = aliases.filter(({ lane }) => lane === "mcp-channels");
+  it("rejects a missing committed mcp-channels contract before emitting admission", () => {
+    const lane = "mcp-channels";
+    const source = `${executionSentinel}\nexport function assertPluginUninstallConfigState() {}\n`;
+    const f = fixture({ [pluginAssertions]: source });
+    const tree = f.selected.git("rev-parse", "HEAD^{tree}");
+    configureUnavailablePromisor(f.selected);
+    removeBlob(f.selected, pluginAssertions);
+    expect(f.selected.git("rev-parse", "HEAD^{tree}")).toBe(tree);
+    expect(readFileSync(join(f.selected.root, pluginAssertions), "utf8")).toBe(source);
 
-  it.each(consumerAliases)(
-    "rejects a missing committed $lane contract before emitting admission",
-    ({ lane, path, current }) => {
-      const source = `${executionSentinel}\n${current}\n`;
-      const f = fixture({ [path]: source });
-      const tree = f.selected.git("rev-parse", "HEAD^{tree}");
-      configureUnavailablePromisor(f.selected);
-      removeBlob(f.selected, path);
-      expect(f.selected.git("rev-parse", "HEAD^{tree}")).toBe(tree);
-      expect(readFileSync(join(f.selected.root, path), "utf8")).toBe(source);
+    const result = f.run({ docker: { lanes: [lane] } });
+    expect(existsSync(join(f.root, "selected-code-executed"))).toBe(false);
+    expectRejected(result, "unable to read selected source");
 
-      const result = f.run({ docker: { lanes: [lane] } });
-      expect(existsSync(join(f.root, "selected-code-executed"))).toBe(false);
-      expectRejected(result, "unable to read selected source");
-
-      const currentOnly = f.run(
-        { docker: { lanes: [lane] } },
-        { allowFrozenTargetScenarioOmissions: false },
-      );
-      expect(currentOnly.status, currentOnly.stderr).toBe(0);
-      expect(JSON.parse(currentOnly.stdout).sources.selected).toEqual([]);
-      expect(existsSync(join(f.root, "selected-code-executed"))).toBe(false);
-    },
-  );
+    expectCurrentOnly(f, lane);
+    expect(existsSync(join(f.root, "selected-code-executed"))).toBe(false);
+  });
 });
 
 describe("frozen admission upgrade Docker aliases", () => {
@@ -301,12 +301,7 @@ describe("frozen admission upgrade Docker aliases", () => {
     for (const root of [f.root, f.selected.root, f.tooling.root]) {
       expect(existsSync(join(root, "selected-code-executed"))).toBe(false);
     }
-    const currentOnly = f.run(
-      { docker: { lanes: [lane] } },
-      { allowFrozenTargetScenarioOmissions: false },
-    );
-    expect(currentOnly.status, currentOnly.stderr).toBe(0);
-    expect(JSON.parse(currentOnly.stdout).sources.selected).toEqual([]);
+    expectCurrentOnly(f, lane);
   });
 
   it.each(["plugins-offline", "update-first-hop-compat"])(
@@ -331,9 +326,7 @@ describe("frozen admission upgrade Docker aliases", () => {
         removeBlob(f.selected, path);
       }
       const requestedLanes = expandUpdateFirstHopCompatLanes([lane]);
-      const result = f.run({ docker: { lanes: requestedLanes } });
-      expect(result.status, result.stderr).toBe(0);
-      const record = JSON.parse(result.stdout);
+      const record = admitted(f.run({ docker: { lanes: requestedLanes } }));
       const omitted =
         lane === "update-first-hop-compat" ? [UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE] : [];
       expect(record.docker).toEqual({
@@ -415,9 +408,9 @@ describe("frozen admission entry", () => {
     (layout) => {
       const scenario = "scripts/e2e/lib/release-typed-onboarding/scenario.sh";
       const f = fixture({ [scenario]: "selected scenario; never execute" }, true, layout);
-      const result = f.run({ consumers: ["release-typed-onboarding"] });
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(result.stdout).contracts[0].files).toEqual([
+      expect(
+        admitted(f.run({ consumers: ["release-typed-onboarding"] })).contracts[0].files,
+      ).toEqual([
         { source: "selected", path: scenario },
         { source: "tooling", path: "scripts/e2e/lib/release-scenarios/assertions.mjs" },
         { source: "tooling", path: "scripts/e2e/lib/release-assertion-files.mjs" },
@@ -440,12 +433,8 @@ describe("frozen admission entry", () => {
               [relative]: 'throw new Error("target body executed");',
             },
       );
-      if (shape === "deleted blob") {
-        configureUnavailablePromisor(f.selected);
-        removeBlob(f.selected, relative);
-      } else if (shape === "dirty absent metadata") {
-        mkdirSync(dirname(join(f.selected.root, relative)), { recursive: true });
-        writeFileSync(join(f.selected.root, relative), "dirty supported decoy");
+      if (shape === "dirty absent metadata") {
+        write(f.selected.root, relative, "dirty supported decoy");
       }
       const result = f.run({
         docker: {
@@ -456,70 +445,50 @@ describe("frozen admission entry", () => {
         },
       });
       if (shape === "dirty absent metadata") {
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout).docker).toEqual({
+        expect(admitted(result).docker).toEqual({
           lanes: [],
           omitted: ["update-corrupt-plugin"],
           status: "NOT RUN",
         });
       } else {
-        expectRejected(
-          result,
-          shape === "unknown catalog" ? "inert scenario catalog" : "unable to read selected source",
-        );
+        expectRejected(result, "inert scenario catalog");
       }
     },
   );
 
-  it.each([{ scenarios: "base acpx-openclaw-tools-bridge", allow: false, supported: true }])(
-    "preserves inert-only survivor coverage for $scenarios with omissions $allow",
-    ({ scenarios, allow, supported }) => {
-      const catalog = [
-        "base",
-        "feishu-channel",
-        "bootstrap-persona",
-        "channel-post-core-restore",
-        "plugin-deps-cleanup",
-        "configured-plugin-installs",
-        "stale-source-plugin-shadow",
-        "tilde-log-path",
-        "versioned-runtime-deps",
-      ];
-      const f = fixture({
-        "package.json": '{"version":"2026.9.9"}',
-        "scripts/e2e/lib/upgrade-survivor/assertions.mjs": [
-          "const SCENARIOS = new Set([",
-          ...catalog.map((scenario) => `  "${scenario}",`),
-          "]);",
-          'throw new Error("target catalog executed");',
-        ].join("\n"),
-      });
-      const result = f.run(
-        {
-          docker: {
-            lanes: ["published-upgrade-survivor"],
-            baselines: "2026.6.11",
-            scenarios,
-          },
+  it("requires authorized omissions for inert-only survivor coverage", () => {
+    const catalog = [
+      "base",
+      "feishu-channel",
+      "bootstrap-persona",
+      "channel-post-core-restore",
+      "plugin-deps-cleanup",
+      "configured-plugin-installs",
+      "stale-source-plugin-shadow",
+      "tilde-log-path",
+      "versioned-runtime-deps",
+    ];
+    const f = fixture({
+      "package.json": '{"version":"2026.9.9"}',
+      "scripts/e2e/lib/upgrade-survivor/assertions.mjs": [
+        "const SCENARIOS = new Set([",
+        ...catalog.map((scenario) => `  "${scenario}",`),
+        "]);",
+        'throw new Error("target catalog executed");',
+      ].join("\n"),
+    });
+    const result = f.run(
+      {
+        docker: {
+          lanes: ["published-upgrade-survivor"],
+          baselines: "2026.6.11",
+          scenarios: "base acpx-openclaw-tools-bridge",
         },
-        { allowFrozenTargetScenarioOmissions: allow },
-      );
-      if (!allow) {
-        expectRejected(result, "require authorized scenario omissions");
-        return;
-      }
-      expect(result.status, result.stderr).toBe(0);
-      const record = JSON.parse(result.stdout);
-      expect(record.docker).toEqual({
-        lanes: supported ? ["published-upgrade-survivor-2026.6.11"] : [],
-        omitted: ["published-upgrade-survivor-2026.6.11-acpx-openclaw-tools-bridge"],
-        status: supported ? "ADMITTED" : "NOT RUN",
-      });
-      expect(record.contracts.map((contract: { consumer: string }) => contract.consumer)).toEqual(
-        supported ? ["upgrade-survivor"] : [],
-      );
-    },
-  );
+      },
+      { allowFrozenTargetScenarioOmissions: false },
+    );
+    expectRejected(result, "require authorized scenario omissions");
+  });
 
   it("admits the current JSON catalog through the dependency-free cold entry", () => {
     const catalogPath = "scripts/lib/upgrade-survivor-scenarios.json";
@@ -541,8 +510,7 @@ describe("frozen admission entry", () => {
     const result = f.run({
       docker: { lanes: ["published-upgrade-survivor"], baselines: "2026.9.4", scenarios: "base" },
     });
-    expect(result.status, result.stderr).toBe(0);
-    const record = JSON.parse(result.stdout);
+    const record = admitted(result);
     expect(record.docker).toEqual({
       lanes: ["published-upgrade-survivor-2026.9.4"],
       omitted: [],
