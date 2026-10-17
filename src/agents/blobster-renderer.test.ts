@@ -64,6 +64,16 @@ describe("Blobster renderer", () => {
     expect(() => renderBlobster({ ...plain, bounds: [0, 0, 1, 1] })).toThrow();
   });
 
+  it("rejects invalid XML characters while retaining whitespace and paired Unicode", () => {
+    for (const code of [0x00, 0x08, 0x0b, 0x0c, 0x0e, 0x1f, 0xd800, 0xdfff, 0xfffe, 0xffff]) {
+      expect(() => renderBlobster({ ...plain, name: String.fromCharCode(code) })).toThrow(
+        "Invalid XML text",
+      );
+    }
+    const name = "Whitespace\t\n\r and Unicode \ud7ff\ue000\ufffd🦞";
+    expect(renderBlobster({ ...plain, name }).svg).toContain(`<title>${name}</title>`);
+  });
+
   it("keeps the Blobster silhouette when a small model draws a full-canvas backdrop and outfit", () => {
     const { svg } = renderBlobster({
       ...plain,
