@@ -15,6 +15,7 @@ import {
   expectFile,
   expectMissing,
   expectStep,
+  readText,
 } from "./update-runner-git-candidate.test-support.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import { withGitTargetInspectionRoot } from "./update-runner-git-target.js";
@@ -40,14 +41,12 @@ describe("reference source candidate preparation", () => {
       "operator-input.txt",
       ".fixture-env",
     ]) {
-      inputs[file] = await fs
-        .readFile(path.join(directory, file), "utf8")
-        .catch((error: unknown) => {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return null;
-          }
-          throw error;
-        });
+      inputs[file] = await readText(path.join(directory, file)).catch((error: unknown) => {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return null;
+        }
+        throw error;
+      });
     }
     return inputs;
   };
@@ -177,10 +176,8 @@ describe("reference source candidate preparation", () => {
           await expectMissing(path.dirname(worktree));
           await expectMissing(path.dirname(mirror));
         } else {
-          expect({ commandsAfterFailure, removalsAfterFailure }).toEqual({
-            commandsAfterFailure: [],
-            removalsAfterFailure: [],
-          });
+          expect(commandsAfterFailure).toEqual([]);
+          expect(removalsAfterFailure).toEqual([]);
           expect((await fs.stat(path.dirname(worktree))).isDirectory()).toBe(true);
           expect((await fs.stat(mirror)).isDirectory()).toBe(true);
           if (phase === "candidate-uncertain") {
@@ -350,8 +347,7 @@ describe("reference source candidate preparation", () => {
       );
       const result = await preflight({ branch: "main", beforeSha: base, targetRevision });
       expect(result).toMatchObject({ status: "error", reason: expect.stringContaining("pnpm") });
-      expect(installs).toEqual([]);
-      expect(builtInputs).toEqual([]);
+      expect({ installs, builtInputs }).toEqual({ installs: [], builtInputs: [] });
     },
   );
 });

@@ -17,6 +17,7 @@ import {
 } from "./update-runner-git-candidate.test-support.js";
 
 type TransactionFixture = ReturnType<Parameters<typeof registerGitActivationDoctorOutcomeTests>[0]>;
+const assertCurrent = () => {};
 
 async function activateTransaction({ update }: TransactionFixture) {
   let retained: PackageUpdateTransaction | undefined;
@@ -52,11 +53,17 @@ function commitTree(root: string, parent: string) {
 }
 
 async function expectCleanupWarning(retained: PackageUpdateTransaction, paths: string[]) {
-  const removal = denyRemoval(paths, "cleanup denied");
+  const remove = fs.rm.bind(fs);
+  const removal = vi.spyOn(fs, "rm").mockImplementation(async (entry, options) => {
+    if (paths.some((file) => entry === file)) {
+      throw Object.assign(new Error("cleanup denied"), { code: "EACCES" });
+    }
+    return remove(entry, options);
+  });
   try {
-    const warning = await retained.complete({ activationVerified: true }, () => {});
+    const warning = await retained.complete({ activationVerified: true }, assertCurrent);
     expect(warning).toMatchObject({ advisory: { kind: "recoverable-maintenance" } });
-    expect(await retained.complete({ activationVerified: true }, () => {})).toBe(warning);
+    expect(await retained.complete({ activationVerified: true }, assertCurrent)).toBe(warning);
     return warning;
   } finally {
     removal.mockRestore();
@@ -75,16 +82,6 @@ async function expectRetainedBackup(root: string, beforeSha: string, buildId = f
   expect(
     JSON.parse(await readText(path.join(root, backup, "previous", "build-info.json"))),
   ).toMatchObject({ commit: beforeSha, ...(buildId ? { buildId: beforeSha } : {}) });
-}
-
-function denyRemoval(paths: string[], message: string) {
-  const remove = fs.rm.bind(fs);
-  return vi.spyOn(fs, "rm").mockImplementation(async (entry, options) => {
-    if (paths.some((file) => entry === file)) {
-      throw Object.assign(new Error(message), { code: "EACCES" });
-    }
-    return remove(entry, options);
-  });
 }
 
 const isBranchCheckout = (argv: string[], root: string) =>
@@ -213,18 +210,18 @@ export function registerGitActivationDoctorOutcomeTests(getFixture: () => GitCan
       }
       if (outcome === "source-changed") {
         await fs.writeFile(path.join(root, "operator-edit.txt"), "preserve this edit\n");
-        await expect(retained.rollback(() => {})).rejects.toThrow("changed after activation");
-        await expect(retained.complete({ activationVerified: false }, () => {})).rejects.toThrow(
-          "changed after activation",
-        );
+        await expect(retained.rollback(assertCurrent)).rejects.toThrow("changed after activation");
+        await expect(
+          retained.complete({ activationVerified: false }, assertCurrent),
+        ).rejects.toThrow("changed after activation");
         await expectHead(root, targetSha);
         await expectFile(path.join(root, "operator-edit.txt"), "preserve this edit\n");
         await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
         return;
       }
-      const restored = await retained.rollback(() => {});
+      const restored = await retained.rollback(assertCurrent);
       expect(restored.exitCode).toBe(0);
-      await retained.complete({ activationVerified: false }, () => {});
+      await retained.complete({ activationVerified: false }, assertCurrent);
       await expectGeneration(root, beforeSha);
       await expectNoRuntimeStagingPaths();
     },
@@ -359,12 +356,7 @@ function registerGitRetainedTransactionTests(
     });
     const { retained } = await activateTransaction(fixture);
     rollingBack = true;
-    const failure = await retained
-      .rollback(() => {})
-      .then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+    await expect(retained.rollback(assertCurrent)).rejects.toBeInstanceOf(Error);
     expect(edited).toBe(true);
     expect(await readText(file).catch(() => undefined)).toBe(
       kind === "staged-unrelated" ? `${edit}unstaged content\n` : edit,
@@ -375,8 +367,7 @@ function registerGitRetainedTransactionTests(
     if (kind === "staged-unrelated") {
       expect(await runFixtureGit(root, "status", "--short")).toContain("MM openclaw.mjs");
     }
-    expect(failure).toBeInstanceOf(Error);
-    await expect(retained.complete({ activationVerified: false }, () => {})).rejects.toThrow();
+    await expect(retained.complete({ activationVerified: false }, assertCurrent)).rejects.toThrow();
     await expectHead(
       root,
       phase === "source restore" || kind === "staged-unrelated" ? beforeSha : targetSha,
@@ -404,12 +395,12 @@ function registerGitRetainedTransactionTests(
     });
     const { retained } = await activateTransaction(fixture);
     rollingBack = true;
-    expect((await retained.rollback(() => {})).exitCode).toBe(0);
+    expect((await retained.rollback(assertCurrent)).exitCode).toBe(0);
     expect(attempted).toBe(true);
     await expectGit(root, beforeSha, "rev-parse", "refs/heads/main");
     await expectGit(root, "refs/heads/main", "symbolic-ref", "HEAD");
     await expectRuntime(root, beforeSha);
-    await retained.complete({ activationVerified: false }, () => {});
+    await retained.complete({ activationVerified: false }, assertCurrent);
   });
 
   it.each(["operator-branch", "HEAD"])(
@@ -425,7 +416,7 @@ function registerGitRetainedTransactionTests(
       await runFixtureGit(root, "branch", "-D", "main");
       const targetSha = await advanceRemote();
       const { retained } = await activateTransaction(fixture);
-      const kept = await retained.rollback(() => {});
+      const kept = await retained.rollback(assertCurrent);
       expect(kept.exitCode).toBe(0);
       await expectGit(root, targetSha, "rev-parse", "refs/heads/main");
       await expectHead(root, beforeSha);
@@ -436,7 +427,7 @@ function registerGitRetainedTransactionTests(
       );
       expect(kept.advisory?.message).toMatch(/git branch -d (?:main|'main')/);
       await expectRuntime(root, beforeSha);
-      await retained.complete({ activationVerified: false }, () => {});
+      await retained.complete({ activationVerified: false }, assertCurrent);
       await expectNoRuntimeStagingPaths();
     },
   );
@@ -449,7 +440,7 @@ function registerGitRetainedTransactionTests(
     const { retained } = await activateTransaction(fixture);
     const holder = path.join(path.dirname(root), "holder");
     await runFixtureGit(root, "worktree", "add", holder, "operator-branch");
-    await expect(retained.rollback(() => {})).rejects.toThrow("git-rollback-checkout");
+    await expect(retained.rollback(assertCurrent)).rejects.toThrow("git-rollback-checkout");
     await expectGit(root, beforeSha, "rev-parse", "operator-branch");
     await expectGit(root, "refs/heads/main", "symbolic-ref", "HEAD");
     await expectRuntimeRetained(root, targetSha, retained);
@@ -472,7 +463,7 @@ function registerGitRetainedTransactionTests(
       return runCommand(argv, options);
     });
     const { retained } = await activateTransaction(fixture);
-    await expect(retained.rollback(() => {})).rejects.toThrow("git-rollback-source");
+    await expect(retained.rollback(assertCurrent)).rejects.toThrow("git-rollback-source");
     expect(edited).toBe(true);
     await expectFile(path.join(root, "openclaw.mjs"), "operator content\n");
     await expectHead(root, targetSha);
@@ -490,7 +481,7 @@ function registerGitRetainedTransactionTests(
     const operatorFile = path.join(root, "operator-note.txt");
     await fs.writeFile(operatorFile, "preserve this operator note\n");
 
-    const restored = await retained.rollback(() => {});
+    const restored = await retained.rollback(assertCurrent);
     expect(restored.exitCode).toBe(0);
     await expectHead(root, beforeSha);
     await expect(runFixtureGit(root, "symbolic-ref", "-q", "HEAD")).rejects.toThrow();
@@ -511,7 +502,7 @@ function registerGitRetainedTransactionTests(
     await expectRuntime(root, beforeSha);
     await expectFile(operatorFile, "preserve this operator note\n");
     await expect(
-      retained.complete({ activationVerified: false }, () => {}),
+      retained.complete({ activationVerified: false }, assertCurrent),
     ).resolves.toBeUndefined();
     await expectNoRuntimeStagingPaths();
   });
@@ -541,7 +532,7 @@ function registerGitRetainedTransactionTests(
       });
       const { retained, result } = await activateTransaction(fixture);
       rollingBack = true;
-      const rollback = retained.rollback(() => {});
+      const rollback = retained.rollback(assertCurrent);
       await expect(rollback).rejects.toThrow("git-rollback-source");
       for (const sha of [targetSha, beforeSha, concurrentSha]) {
         await expect(rollback).rejects.toThrow(sha);
@@ -566,7 +557,9 @@ function registerGitRetainedTransactionTests(
         expect(diagnostic).toContain("keep the newest intended commit");
       }
       await expectRuntimeRetained(root, targetSha, retained);
-      await expect(retained.complete({ activationVerified: false }, () => {})).rejects.toThrow();
+      await expect(
+        retained.complete({ activationVerified: false }, assertCurrent),
+      ).rejects.toThrow();
       if (failure === "raw-writer-before") {
         await runFixtureGit(root, "checkout", "--detach", "--no-overwrite-ignore");
         await runFixtureGit(root, "branch", "-f", "main", concurrentSha);

@@ -405,6 +405,7 @@ export function registerGitRuntimeStagingTests(getFixture: () => GitCandidateFix
     const { root, isStopped, advanceRemote, update, expectNoRuntimeStagingPaths } = getFixture();
     const target = await advanceRemote();
     const stagingProgress: string[] = [];
+    const contents = "keep or regenerate";
     const copy = fs.cp.bind(fs);
     vi.spyOn(fs, "cp").mockImplementation(async (...args) => {
       if (String(args[1]).includes(".openclaw-update-")) {
@@ -443,10 +444,7 @@ export function registerGitRuntimeStagingTests(getFixture: () => GitCandidateFix
         await writeFixtureTree(
           candidateRoot,
           Object.fromEntries(
-            [...omitted, ...retained].map((relative) => [
-              `${relative}/content`,
-              "keep or regenerate",
-            ]),
+            [...omitted, ...retained].map((relative) => [`${relative}/content`, contents]),
           ),
         );
         await expectRuntime(candidateRoot, target);
@@ -463,7 +461,7 @@ export function registerGitRuntimeStagingTests(getFixture: () => GitCandidateFix
       await expectMissing(path.join(root, relative));
     }
     for (const relative of retained) {
-      await expectFile(path.join(root, relative, "content"), "keep or regenerate");
+      await expectFile(path.join(root, relative, "content"), contents);
     }
     await expectRuntime(root, target);
     await expectNoRuntimeStagingPaths();

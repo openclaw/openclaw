@@ -269,21 +269,18 @@ describe("Git runtime promotion", () => {
       } else {
         const retained = outcome === "retained-replaced" ? `${previous!}.operator` : previous!;
         expect(await inode(retained)).toBe(original);
-        if (outcome === "retained-replaced") {
-          const foreign = await inode(previous!);
+        if (outcome === "retained-replaced" || outcome === "foreign") {
+          const occupied = outcome === "foreign" ? destination : previous!;
+          const foreign = await inode(occupied);
           await expect(promotion.restore()).rejects.toThrow();
+          expect(await inode(occupied)).toBe(foreign);
           await promotion.cleanup();
           expect(await inode(retained)).toBe(original);
-          expect(await inode(previous!)).toBe(foreign);
-          await fs.rmdir(previous!);
-          await rename(retained, previous!);
-        } else if (outcome === "foreign") {
-          const foreign = await inode(destination);
-          await expect(promotion.restore()).rejects.toThrow();
-          expect(await inode(destination)).toBe(foreign);
-          await promotion.cleanup();
-          expect(await inode(previous!)).toBe(original);
-          await fs.rmdir(destination);
+          expect(await inode(occupied)).toBe(foreign);
+          await fs.rmdir(occupied);
+          if (outcome === "retained-replaced") {
+            await rename(retained, previous!);
+          }
         } else {
           await expect(promotion.restore()).rejects.toThrow("source authority lost");
           await expect(promotion.cleanup()).rejects.toThrow("source authority lost");

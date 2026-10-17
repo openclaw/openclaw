@@ -207,7 +207,6 @@ describe("Git candidate activation", () => {
     expect(result.status).toBe("ok");
     const names = result.steps.map((step) => step.name);
     expect(result.steps).toContainEqual(cleanup);
-    // Candidate checks keep their place between the build and the activation checks.
     expect(names.indexOf("candidate-state-cleanup")).toBeGreaterThanOrEqual(0);
     expect(names.indexOf("candidate-state-cleanup")).toBeLessThan(
       names.indexOf("preflight-update-clean-check"),
@@ -248,8 +247,7 @@ describe("Git candidate activation", () => {
     const result = await update();
 
     expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
-    expect(stopped).toBe(false);
-    expect(events).toEqual([]);
+    expect({ stopped, events }).toEqual({ stopped: false, events: [] });
     await expectMissing(path.join(root, "dist", ".runtime-postbuildstamp"));
     await expectHead(root, beforeSha);
     await expectNoRuntimeStagingPaths();
@@ -290,8 +288,7 @@ describe("Git candidate activation", () => {
       reason: "already-current",
       before: { sha: target, buildId: target },
     });
-    expect(stopped).toBe(false);
-    expect(events).toEqual([]);
+    expect({ stopped, events }).toEqual({ stopped: false, events: [] });
     await expectNoRuntimeStagingPaths();
   });
 
@@ -385,8 +382,7 @@ describe("Git candidate activation", () => {
       expect(output).toContain(nodeRuntime.version);
     }
     expect(packageManagerCommands).toEqual([]);
-    expect(stopped).toBe(false);
-    expect(events).toEqual([]);
+    expect({ stopped, events }).toEqual({ stopped: false, events: [] });
     await expectHead(root, beforeSha);
     await expectRuntime(root, beforeSha);
   });
@@ -656,10 +652,7 @@ describe("Git candidate activation", () => {
     expect(
       result.steps.some((step) => step.name === "preflight-rebase" && step.exitCode !== 0),
     ).toBe(true);
-    expect(abortTimeouts.length).toBeGreaterThan(0);
-    for (const timeoutMs of abortTimeouts) {
-      expect(timeoutMs).toBe(5_000);
-    }
+    expect(new Set(abortTimeouts)).toEqual(new Set([5_000]));
     await expectHead(root, beforeSha);
     await expectRuntime(root, beforeSha);
   });
@@ -785,8 +778,7 @@ describe("Git candidate activation", () => {
         return;
       }
       const result = await execution;
-      expect(recoveryTimeouts.length).toBeGreaterThan(0);
-      expect(recoveryTimeouts.every((deadline) => deadline === 5_000)).toBe(true);
+      expect(new Set(recoveryTimeouts)).toEqual(new Set([5_000]));
       expect(onRollbackOutcome).toHaveBeenLastCalledWith(
         expect.objectContaining({
           status: restoreSource && restoreRuntime ? "succeeded" : "failed",
@@ -813,9 +805,7 @@ describe("Git candidate activation", () => {
         ...(restoreSource ? {} : { stderrTail: `expected ${beforeSha}, found ${candidateSha}` }),
       });
       if (!restoreRuntime) {
-        if (!distBackup) {
-          throw new Error("The original dist backup was not observed.");
-        }
+        assert(distBackup, "The original dist backup was not observed.");
         expect(JSON.parse(await readText(path.join(distBackup, "build-info.json")))).toMatchObject({
           commit: beforeSha,
         });
