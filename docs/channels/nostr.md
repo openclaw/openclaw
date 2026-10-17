@@ -114,6 +114,8 @@ Notes:
 - **open**: public inbound DMs (requires `allowFrom: ["*"]`).
 - **disabled**: ignore inbound DMs.
 
+Pairing approval notifications require a running Nostr account. If the account is stopped, approval still succeeds, but the CLI or Gateway reports that notification failed. Start the account before requesting a notification.
+
 Enforcement notes:
 
 - Inbound event signatures are verified before sender policy and NIP-04 decryption, so forged events are rejected early.
