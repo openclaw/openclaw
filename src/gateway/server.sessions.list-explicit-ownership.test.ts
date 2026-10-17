@@ -14,7 +14,6 @@ import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
-import type { GatewayClient } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
@@ -58,13 +57,33 @@ const preview = {
 type ListedSession = { key: string; agentId: string; sessionId: string };
 const identities = (sessions: ListedSession[] | undefined) =>
   sessions?.map(({ key, agentId, sessionId }) => ({ key, agentId, sessionId }));
+async function list(
+  params: Record<string, unknown>,
+  options?: Parameters<typeof directSessionReq>[2],
+) {
+  const result = await directSessionReq<SessionsListResult>("sessions.list", params, options);
+  expect(result.ok).toBe(true);
+  return result.payload!;
+}
+function remove(scope: { agentId: string; storePath: string; sessionKey: string }) {
+  return deleteSessionEntryLifecycle({
+    ...scope,
+    target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+    archiveTranscript: false,
+    deleteTranscriptWithoutArchive: true,
+  });
+}
 
 test("sessions.list preserves recorded sentinel owners for explicit multi-agent federation", async () => {
   await withSessionState("explicit-ownership-list-regression", async (stateDir) => {
-    const agentsDir = path.join(stateDir, "agents");
-    const storeTemplate = path.join(agentsDir, "{agentId}", "sessions", "sessions.json");
+    const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
     configureExplicitOwner(storeTemplate, { ops: {}, research: {} });
     const linkedSessionKey = "subagent:workboard-default-owned";
+    const linkedIdentity = {
+      key: `agent:research:${linkedSessionKey}`,
+      agentId: "research",
+      sessionId: "sess-linked",
+    };
     await writeSessionStore({
       storePath: storeTemplate.replace("{agentId}", "ops"),
       agentId: "ops",
@@ -83,20 +102,14 @@ test("sessions.list preserves recorded sentinel owners for explicit multi-agent 
       },
     });
 
-    const all = await directSessionReq<{
-      sessions: ListedSession[];
-      count: number;
-      totalCount: number;
-      hasMore: boolean;
-    }>("sessions.list", {
+    const all = await list({
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
     });
-    expect(all.ok).toBe(true);
-    expect(all.payload).toMatchObject({ count: 5, totalCount: 5, hasMore: false });
-    expect(identities(all.payload?.sessions)).toEqual([
-      { key: `agent:research:${linkedSessionKey}`, agentId: "research", sessionId: "sess-linked" },
+    expect(all).toMatchObject({ count: 5, totalCount: 5, hasMore: false });
+    expect(identities(all.sessions)).toEqual([
+      linkedIdentity,
       { key: "agent:research:main", agentId: "research", sessionId: "sess-research" },
       { key: "agent:ops:main", agentId: "ops", sessionId: "sess-ops" },
       { key: "global", agentId: "ops", sessionId: "sess-global" },
@@ -117,34 +130,25 @@ test("sessions.list preserves recorded sentinel owners for explicit multi-agent 
       [true, true],
       [false, false],
     ]) {
-      const linked = await directSessionReq("sessions.list", {
+      const linked = await list({
         ...linkedQuery,
         includeGlobal,
         includeUnknown,
       });
       expect(linked).toMatchObject({
-        ok: true,
-        payload: {
-          sessions: [
-            {
-              key: `agent:research:${linkedSessionKey}`,
-              agentId: "research",
-              sessionId: "sess-linked",
-            },
-          ],
-          count: 1,
-          hasMore: false,
-          totalCount: 1,
-        },
+        sessions: [linkedIdentity],
+        count: 1,
+        hasMore: false,
+        totalCount: 1,
       });
     }
 
-    const configuredOnly = await directSessionReq<{ sessions: Array<{ key: string }> }>(
-      "sessions.list",
-      { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
-    );
-    expect(configuredOnly.ok).toBe(true);
-    expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
+    const configuredOnly = await list({
+      includeGlobal: false,
+      includeUnknown: false,
+      configuredAgentsOnly: true,
+    });
+    expect(configuredOnly.sessions.map((session) => session.key)).toEqual([
       `agent:research:${linkedSessionKey}`,
       "agent:research:main",
       "agent:ops:main",
@@ -166,15 +170,7 @@ test("sessions.list preserves separate registered targets under a fixed store ow
       { sessionId: "separate-main", updatedAt: 2 },
     );
     configureExplicitOwner(storePath, { main: {}, ops: {} });
-    const client: GatewayClient = {
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-        role: "operator",
-        scopes: ["operator.admin"],
-      },
-    };
+    const client = sharingPolicyClient({ scopes: ["operator.admin"] });
     const scoped = await directSessionReq(
       "sessions.get",
       { key: "unknown", agentId: "main" },
@@ -184,15 +180,11 @@ test("sessions.list preserves separate registered targets under a fixed store ow
       ok: false,
       error: { code: "INVALID_REQUEST", message: expect.stringContaining("does not match") },
     });
-    const listed = await directSessionReq<{
-      sessions: ListedSession[];
-    }>(
-      "sessions.list",
+    const listed = await list(
       { configuredAgentsOnly: true, includeGlobal: true, includeUnknown: true },
       { client },
     );
-    expect(listed.ok).toBe(true);
-    expect(identities(listed.payload?.sessions)).toEqual([
+    expect(identities(listed.sessions)).toEqual([
       { key: "unknown", agentId: "main", sessionId: "separate-main" },
       { key: "global", agentId: "main", sessionId: "global-main" },
     ]);
@@ -231,14 +223,16 @@ test.for(
       await seedSessionTranscript({
         ...scope,
         sessionId: entry.sessionId,
-        messages: [{ role: "user", content: "Physical database preview" }],
+        messages: [{ role: "user", content: preview.lastMessagePreview }],
       });
-      if (change === "leave") {
+      const join = () =>
         addSessionMember(scope, {
           identityId: "viewer",
           addedBy: "owner",
           expectedSessionId: entry.sessionId,
         });
+      if (change === "leave") {
+        join();
       }
       const cfg = (await getGatewayConfigModule()).getRuntimeConfig();
       const previewPublished = createDeferred();
@@ -251,39 +245,27 @@ test.for(
           if (
             row.key === key &&
             row.entry.sessionId === entry.sessionId &&
-            row.lastMessagePreview === "Physical database preview"
+            row.lastMessagePreview === preview.lastMessagePreview
           ) {
             previewPublished.resolve();
           }
           return published;
         });
       const projection = await createSessionRowProjection({ cfg });
+      const target = { key, agentId: "ops" };
+      const snapshot = () => projection.snapshot(target, previewOptions).row;
       const prepare = projection.prepareSelection;
       const spy = vi
         .spyOn(projection, "prepareSelection")
         .mockImplementationOnce(async (...args) => {
           await prepare(...args);
-          expect(projection.snapshot({ key, agentId: "ops" }, previewOptions).row).toMatchObject({
-            key,
-            agentId: "ops",
-            ...preview,
-          });
+          expect(snapshot()).toMatchObject({ ...target, ...preview });
           if (change === "delete") {
-            await deleteSessionEntryLifecycle({
-              agentId: scope.agentId,
-              storePath,
-              target: { canonicalKey: key, storeKeys: [key] },
-              archiveTranscript: false,
-              deleteTranscriptWithoutArchive: true,
-            });
+            await remove(scope);
           } else if (change === "draft") {
             replaceSessionEntrySync(scope, { ...entry, visibility: "draft" });
           } else if (change === "join") {
-            addSessionMember(scope, {
-              identityId: "viewer",
-              addedBy: "owner",
-              expectedSessionId: entry.sessionId,
-            });
+            join();
           } else {
             removeSessionMember(scope, "viewer", undefined, entry.sessionId);
           }
@@ -291,31 +273,26 @@ test.for(
         });
       try {
         await projection.ensureMaterialized();
-        projection.describe({ key, agentId: "ops" });
+        projection.describe(target);
         await previewPublished.promise;
         publication.mockRestore();
-        expect(projection.snapshot({ key, agentId: "ops" }, previewOptions).row).toMatchObject(
-          preview,
-        );
-        const result = await directSessionReq<SessionsListResult>(
-          "sessions.list",
+        expect(snapshot()).toMatchObject(preview);
+        const result = await list(
           { configuredAgentsOnly: true, ...previewOptions },
           {
             client: sharingPolicyClient({ user: "viewer" }),
             context: bindSessionRowProjection({}, () => projection),
           },
         );
-        expect(result.ok).toBe(true);
         expect(spy).toHaveBeenCalled();
         if (change === "delete" || change === "draft") {
-          expect(result.payload?.sessions).toEqual([]);
+          expect(result.sessions).toEqual([]);
         } else {
-          expect(result.payload?.sessions).toMatchObject([
+          expect(result.sessions).toMatchObject([
             {
-              key,
-              agentId: "ops",
+              ...target,
               sessionId: entry.sessionId,
-              derivedTitle: "Physical database title",
+              derivedTitle: preview.derivedTitle,
               visibility: "read-only",
               sharingRole: change === "join" ? "member" : "viewer",
             },
@@ -346,26 +323,13 @@ test("captured sentinel rows never substitute a later same-owner session after d
     const client = sharingPolicyClient({ user: "viewer" });
     const options = { client, context: bindSessionRowProjection({}, () => projection) };
     try {
-      const selected = await directSessionReq<SessionsListResult>(
-        "sessions.list",
-        { configuredAgentsOnly: true, includeUnknown: true },
-        options,
-      );
-      expect(selected.ok).toBe(true);
-      expect(selected.payload?.sessions).toMatchObject([
+      const params = { configuredAgentsOnly: true, includeUnknown: true };
+      const selected = await list(params, options);
+      expect(selected.sessions).toMatchObject([
         { key: "unknown", agentId: "main", sessionId: "first-sentinel" },
       ]);
-      const captured = projection.describe({
-        key: "unknown",
-        agentId: "main",
-        storePath: first.storePath,
-      })!;
-      await deleteSessionEntryLifecycle({
-        ...first,
-        target: { canonicalKey: "unknown", storeKeys: ["unknown"] },
-        archiveTranscript: false,
-        deleteTranscriptWithoutArchive: true,
-      });
+      const captured = projection.describe({ key: first.sessionKey, ...first })!;
+      await remove(first);
       await projection.ensureMaterialized();
       expect(prepareProjectedSessionPresentation(projection, client).present(captured)).toBeNull();
       const connection = createGatewayConnectionState({
@@ -391,20 +355,15 @@ test("captured sentinel rows never substitute a later same-owner session after d
         connection.broadcast("sessions.changed", {
           sessionKey: "unknown",
           agentId: "main",
-          session: selected.payload!.sessions[0],
+          session: selected.sessions[0],
         });
         expect(send).not.toHaveBeenCalled();
       } finally {
         detach();
         await connection.mentionInbox.dispose();
       }
-      // A new selection may use the remaining physical row; the captured identity may not.
-      const current = await directSessionReq<SessionsListResult>(
-        "sessions.list",
-        { configuredAgentsOnly: true, includeUnknown: true },
-        options,
-      );
-      expect(current.payload?.sessions).toMatchObject([
+      const current = await list(params, options);
+      expect(current.sessions).toMatchObject([
         { key: "unknown", agentId: "main", sessionId: "later-sentinel" },
       ]);
     } finally {

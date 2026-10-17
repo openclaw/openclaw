@@ -1,4 +1,3 @@
-// Real WebSocket credentials own the full staged install, ledger, and runtime transaction.
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
@@ -25,6 +24,7 @@ import { startGatewayServerCore } from "./server-start.js";
 
 const OLD_TOKEN = "shared-token-old";
 type ConfigSnapshot = { hash: string; config: OpenClawConfig };
+const wait = <T>(promise: Promise<T>, label: string) => withTestTimeout(promise, 10_000, label);
 
 type Phase = "stage" | "index" | "runtime";
 const observation = vi.hoisted(() => ({
@@ -124,24 +124,6 @@ describe("gateway plugin install authority", () => {
       },
     });
     port = await getFreePort();
-    await startGateway();
-  });
-
-  afterEach(async () => {
-    await runQaGatewayFixture(
-      async () => {},
-      ...clients.splice(0).map((client) => () => client.stopAndWait()),
-      async () => {
-        await server?.close();
-        server = undefined;
-      },
-      () => state.cleanup(),
-      () => resetLogger(),
-      () => clearPluginMetadataLifecycleCaches(),
-    );
-  });
-
-  async function startGateway() {
     await state.writeConfig({
       gateway: {
         mode: "local",
@@ -171,7 +153,21 @@ describe("gateway plugin install authority", () => {
     } finally {
       observer.mockRestore();
     }
-  }
+  });
+
+  afterEach(async () => {
+    await runQaGatewayFixture(
+      async () => {},
+      ...clients.splice(0).map((client) => () => client.stopAndWait()),
+      async () => {
+        await server?.close();
+        server = undefined;
+      },
+      () => state.cleanup(),
+      resetLogger,
+      clearPluginMetadataLifecycleCaches,
+    );
+  });
 
   async function connect(
     options: Pick<
@@ -205,7 +201,7 @@ describe("gateway plugin install authority", () => {
     });
     clients.push(client);
     client.start();
-    await withTestTimeout(connected.promise, 10_000, "gateway connect timeout");
+    await wait(connected.promise, "gateway connect timeout");
     return { client, closed: closed.promise };
   }
 
@@ -213,13 +209,12 @@ describe("gateway plugin install authority", () => {
     const identity = loadOrCreateDeviceIdentity({
       path: state.path(`${pluginId}-identity.sqlite`),
     });
-    const clientName = "test";
-    const mode = "test";
+    const client = { clientName: "test", mode: "test" } as const;
     const pending = await requestDevicePairing({
       deviceId: identity.deviceId,
       publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-      clientId: clientName,
-      clientMode: mode,
+      clientId: client.clientName,
+      clientMode: client.mode,
       role: "operator",
       scopes: ["operator.admin"],
     });
@@ -229,17 +224,14 @@ describe("gateway plugin install authority", () => {
       role: "operator",
       scopes: ["operator.admin"],
     });
-    expect(rotated.ok).toBe(true);
-    const issued = rotated.ok ? rotated.entry : undefined;
-    expect(issued?.token).toBeTypeOf("string");
-    if (!issued) {
+    expect(rotated).toMatchObject({ ok: true, entry: { token: expect.any(String) } });
+    if (!rotated.ok) {
       throw new Error("expected issued device token");
     }
     const credentials = {
-      clientName,
-      mode,
+      ...client,
       deviceIdentity: identity,
-      deviceToken: issued.token,
+      deviceToken: rotated.entry.token,
     } satisfies Parameters<typeof connect>[0];
     const connection = await connect(credentials);
     return { ...connection, deviceId: identity.deviceId, reconnect: () => connect(credentials) };
@@ -259,7 +251,7 @@ describe("gateway plugin install authority", () => {
     };
     const request = requester.client.request("health").catch(() => undefined);
     try {
-      await withTestTimeout(reached.promise, 10_000, "retained request did not start");
+      await wait(reached.promise, "retained request did not start");
       await requester.client.stopAndWait();
       const config = structuredClone(getRuntimeConfig());
       for (const token of ["shared-token-replacement", OLD_TOKEN]) {
@@ -275,9 +267,7 @@ describe("gateway plugin install authority", () => {
         await current.client.request("config.get");
       }
       release.resolve();
-      expect(
-        await withTestTimeout(authority.promise, 10_000, "retained authority did not settle"),
-      ).toBe(false);
+      expect(await wait(authority.promise, "retained authority did not settle")).toBe(false);
       await request;
     } finally {
       release.resolve();
@@ -345,7 +335,7 @@ describe("gateway plugin install authority", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        await withTestTimeout(
+        await wait(
           Promise.race([
             reached.promise,
             reply.then((response) => {
@@ -360,7 +350,6 @@ describe("gateway plugin install authority", () => {
                 : new Error("Install settled before boundary", { cause: error });
             }),
           ]),
-          10_000,
           "install boundary not reached",
         );
         if (action === "disconnect-revoke") {
@@ -371,7 +360,7 @@ describe("gateway plugin install authority", () => {
             deviceId: device.deviceId,
             role: "operator",
           });
-          await withTestTimeout(device.closed, 10_000, "revoked socket remained open");
+          await wait(device.closed, "revoked socket remained open");
           await device.client.stopAndWait();
         } else if (action === "disconnect") {
           await device.client.stopAndWait();
@@ -379,7 +368,7 @@ describe("gateway plugin install authority", () => {
           await device.reconnect();
         }
         release.resolve();
-        const settled = await withTestTimeout(finished.promise, 10_000, "install did not settle");
+        const settled = await wait(finished.promise, "install did not settle");
         const response = await reply;
         if (action === "keep") {
           expect(response).toMatchObject({

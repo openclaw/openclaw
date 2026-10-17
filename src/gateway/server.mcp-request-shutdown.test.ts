@@ -50,6 +50,49 @@ async function prepareView(runtime: SessionMcpRuntime, serverName: string, toolN
   );
 }
 
+async function writeMcpServer(
+  root: string,
+  name: string,
+  tool: object,
+  onCall: string,
+  prelude: string,
+  indent = "",
+) {
+  const serverPath = path.join(root, "server.mjs");
+  const source = (parts: TemplateStringsArray, ...values: string[]) =>
+    parts.map((part, i) => part.replaceAll("\n", `\n${indent}`) + (values[i] ?? "")).join("");
+  await fs.writeFile(
+    serverPath,
+    source`import { appendFileSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+${prelude}
+const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
+const input = createInterface({ input: process.stdin });
+input.on("line", (line) => {
+  const request = JSON.parse(line);
+  if (request.method === "initialize") {
+    send(request.id, {
+      protocolVersion: request.params.protocolVersion,
+      capabilities: { tools: {}, resources: {} },
+      serverInfo: { name: ${JSON.stringify(`${name}-fixture`)}, version: "1.0.0" },
+    });
+  } else if (request.method === "tools/list") {
+    send(request.id, { tools: [${JSON.stringify(tool)}] });
+  } else if (request.method === "resources/read") {
+    send(request.id, { contents: [{
+      uri: "ui://${name}/app", mimeType: "text/html;profile=mcp-app",
+      text: "<!doctype html><title>${name.charAt(0).toUpperCase() + name.slice(1)} fixture</title>", _meta: { ui: {} },
+    }] });
+  } else if (request.method === "tools/call") {
+    ${onCall}
+  }
+});
+input.on("close", () => process.exit(0));
+`,
+  );
+  return { command: process.execPath, args: [serverPath] };
+}
+
 describe("MCP App request shutdown", () => {
   let receipts: FixtureReceiptChannel;
   beforeAll(async () => {
@@ -86,47 +129,21 @@ describe("MCP App request shutdown", () => {
         });
         await gateway.server.startupSettled;
         root = await fs.mkdtemp(path.join(resolveStateDir(), "mcp-shutdown-"));
-        const serverPath = path.join(root, "server.mjs");
         const enteredPath = path.join(root, "tool-entered");
-        await fs.writeFile(
-          serverPath,
-          `import { writeFileSync } from "node:fs";
-  import { createInterface } from "node:readline";
-  ${fixtureReceiptClientSource(receipts.endpoint)}
-  const enteredPath = ${JSON.stringify(enteredPath)};
-  const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
-  const input = createInterface({ input: process.stdin });
-  input.on("line", (line) => {
-    const request = JSON.parse(line);
-    if (request.method === "initialize") {
-      send(request.id, {
-        protocolVersion: request.params.protocolVersion,
-        capabilities: { tools: {}, resources: {} },
-        serverInfo: { name: "shutdown-fixture", version: "1.0.0" },
-      });
-    } else if (request.method === "tools/list") {
-      send(request.id, { tools: [{ name: "blocked_tool", inputSchema: { type: "object", properties: {} } }] });
-    } else if (request.method === "resources/read") {
-      send(request.id, { contents: [{
-        uri: "ui://shutdown/app", mimeType: "text/html;profile=mcp-app",
-        text: "<!doctype html><title>Shutdown fixture</title>", _meta: { ui: {} },
-      }] });
-    } else if (request.method === "tools/call") {
-      // A real upstream operation remains pending until its transport is closed.
-      writeFileSync(enteredPath, "entered");
-      sendReceipt(enteredPath, "entered");
-    }
-  });
-  input.on("close", () => process.exit(0));
-  `,
+        const server = await writeMcpServer(
+          root,
+          "shutdown",
+          { name: "blocked_tool", inputSchema: { type: "object", properties: {} } },
+          'writeFileSync(enteredPath, "entered");\n      sendReceipt(enteredPath, "entered");',
+          `${fixtureReceiptClientSource(receipts.endpoint)}\n  const enteredPath = ${JSON.stringify(enteredPath)};`,
+          "  ",
         );
         const cfg: OpenClawConfig = {
           mcp: {
             apps: { enabled: true },
             servers: {
               shutdown: {
-                command: process.execPath,
-                args: [serverPath],
+                ...server,
                 codex: { defaultToolsApprovalMode: "approve" },
                 // Existing supported operator setting; shutdown must cancel before this deadline.
                 requestTimeoutMs: 600_000,
@@ -224,30 +241,32 @@ describe("MCP App request shutdown", () => {
     }));
 });
 
-function ticketFromStandaloneUrl(url: string | undefined): string {
-  const ticket = url?.split("#", 2)[1];
+async function standaloneTicket(ws: WebSocket, params: object): Promise<string> {
+  const view = await rpcReq<{ standaloneUrl?: string }>(ws, "mcp.app.view", params);
+  expect(view, JSON.stringify(view.error)).toMatchObject({ ok: true });
+  const ticket = view.payload?.standaloneUrl?.split("#", 2)[1];
   if (!ticket) {
     throw new Error("expected an MCP App standalone ticket");
   }
   return ticket;
 }
 
-async function connectPairedOperator(params: {
-  gateway: GatewayHarness;
-  scopes: string[];
-}): Promise<WebSocket> {
+async function connectPairedOperator(
+  gateway: GatewayHarness,
+  scopes: string[],
+): Promise<WebSocket> {
   const issued = await issueOperatorToken({
     name: `mcp-app-authority-${randomUUID()}`,
-    approvedScopes: params.scopes,
+    approvedScopes: scopes,
     clientId: GATEWAY_CLIENT_NAMES.TEST,
     clientMode: GATEWAY_CLIENT_MODES.TEST,
   });
-  const ws = await params.gateway.openWs();
+  const ws = await gateway.openWs();
   await connectOk(ws, {
     skipDefaultAuth: true,
     deviceIdentityPath: issued.identityPath,
     deviceToken: issued.token,
-    scopes: params.scopes,
+    scopes,
   });
   return ws;
 }
@@ -281,43 +300,17 @@ describe("MCP App standalone ticket authority", () => {
       await gateway.server.startupSettled;
 
       root = await fs.mkdtemp(path.join(resolveStateDir(), "mcp-app-authority-"));
-      const serverPath = path.join(root, "server.mjs");
       const markerPath = path.join(root, "tool-calls.jsonl");
-      await fs.writeFile(
-        serverPath,
-        `import { appendFileSync } from "node:fs";
-import { createInterface } from "node:readline";
-const markerPath = ${JSON.stringify(markerPath)};
-const send = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\\n");
-const input = createInterface({ input: process.stdin });
-input.on("line", (line) => {
-  const request = JSON.parse(line);
-  if (request.method === "initialize") {
-    send(request.id, {
-      protocolVersion: request.params.protocolVersion,
-      capabilities: { tools: {}, resources: {} },
-      serverInfo: { name: "authority-fixture", version: "1.0.0" },
-    });
-  } else if (request.method === "tools/list") {
-    send(request.id, { tools: [{
-      name: "mutate",
-      inputSchema: { type: "object", properties: { label: { type: "string" } } },
-      _meta: { ui: { resourceUri: "ui://authority/app", visibility: ["app"] } },
-    }] });
-  } else if (request.method === "resources/read") {
-    send(request.id, { contents: [{
-      uri: "ui://authority/app",
-      mimeType: "text/html;profile=mcp-app",
-      text: "<!doctype html><title>Authority fixture</title>",
-      _meta: { ui: {} },
-    }] });
-  } else if (request.method === "tools/call") {
-    appendFileSync(markerPath, JSON.stringify(request.params.arguments) + "\\n");
-    send(request.id, { content: [{ type: "text", text: "mutated" }] });
-  }
-});
-input.on("close", () => process.exit(0));
-`,
+      const server = await writeMcpServer(
+        root,
+        "authority",
+        {
+          name: "mutate",
+          inputSchema: { type: "object", properties: { label: { type: "string" } } },
+          _meta: { ui: { resourceUri: "ui://authority/app", visibility: ["app"] } },
+        },
+        'appendFileSync(markerPath, JSON.stringify(request.params.arguments) + "\\n");\n    send(request.id, { content: [{ type: "text", text: "mutated" }] });',
+        `const markerPath = ${JSON.stringify(markerPath)};`,
       );
 
       const sessionId = `mcp-app-authority-${randomUUID()}`;
@@ -329,41 +322,27 @@ input.on("close", () => process.exit(0));
         cfg: {
           mcp: {
             apps: { enabled: true },
-            servers: {
-              authority: { command: process.execPath, args: [serverPath] },
-            },
+            servers: { authority: server },
           },
         },
       });
       const prepared = await prepareView(runtime, "authority", "mutate");
 
-      writer = await connectPairedOperator({
-        gateway,
-        scopes: ["operator.read", "operator.write"],
-      });
-      reader = await connectPairedOperator({ gateway, scopes: ["operator.read"] });
+      writer = await connectPairedOperator(gateway, ["operator.read", "operator.write"]);
+      reader = await connectPairedOperator(gateway, ["operator.read"]);
       const viewParams = { sessionKey, agentId: "main", viewId: prepared.viewId };
-      const writerView = await rpcReq<{ standaloneUrl?: string }>(
-        writer,
-        "mcp.app.view",
-        viewParams,
-      );
-      const readerView = await rpcReq<{ standaloneUrl?: string }>(
-        reader,
-        "mcp.app.view",
-        viewParams,
-      );
-      if (!writerView.ok) {
-        throw new Error(`writer view failed: ${JSON.stringify(writerView.error)}`);
-      }
-      if (!readerView.ok) {
-        throw new Error(`reader view failed: ${JSON.stringify(readerView.error)}`);
-      }
-      expect(writerView).toMatchObject({ ok: true });
-      expect(readerView).toMatchObject({ ok: true });
-      const writerTicket = ticketFromStandaloneUrl(writerView.payload?.standaloneUrl);
-      const readerTicket = ticketFromStandaloneUrl(readerView.payload?.standaloneUrl);
+      const writerTicket = await standaloneTicket(writer, viewParams);
+      const readerTicket = await standaloneTicket(reader, viewParams);
       expect(readerTicket).not.toBe(writerTicket);
+      const { port } = gateway;
+      const expectCalls = async (expected = "") => {
+        expect(await fs.readFile(markerPath, "utf8").catch(() => "")).toBe(expected);
+      };
+      const standalone = async (ticket: string, label: string, status: number) => {
+        const response = await callStandaloneTool(port, ticket, label);
+        expect(response.status).toBe(status);
+        return response;
+      };
 
       const directReaderCall = await rpcReq(reader, "mcp.app.callTool", {
         ...viewParams,
@@ -371,33 +350,20 @@ input.on("close", () => process.exit(0));
         arguments: { label: "direct-reader" },
       });
       expect(directReaderCall.ok).toBe(false);
-      expect(await fs.readFile(markerPath, "utf8").catch(() => "")).toBe("");
-
-      const readerStandaloneCall = await callStandaloneTool(
-        gateway.port,
-        readerTicket,
-        "standalone-reader",
-      );
-      expect(readerStandaloneCall.status).toBe(403);
-      expect(await fs.readFile(markerPath, "utf8").catch(() => "")).toBe("");
-
-      const writerStandaloneCall = await callStandaloneTool(
-        gateway.port,
-        writerTicket,
-        "standalone-writer",
-      );
-      expect(writerStandaloneCall.status).toBe(200);
+      await expectCalls();
+      await standalone(readerTicket, "standalone-reader", 403);
+      await expectCalls();
+      const writerStandaloneCall = await standalone(writerTicket, "standalone-writer", 200);
       expect(await writerStandaloneCall.json()).toMatchObject({ ok: true });
-      expect(await fs.readFile(markerPath, "utf8")).toBe('{"label":"standalone-writer"}\n');
+      await expectCalls('{"label":"standalone-writer"}\n');
 
       const liveView = expectDefined(
         getMcpAppViewLease(prepared.viewId, runtime),
         "live MCP App view",
       );
       liveView.authorizeAppInteraction = async () => false;
-      const revokedCall = await callStandaloneTool(gateway.port, writerTicket, "revoked-writer");
-      expect(revokedCall.status).toBe(403);
-      expect(await fs.readFile(markerPath, "utf8")).toBe('{"label":"standalone-writer"}\n');
+      await standalone(writerTicket, "revoked-writer", 403);
+      await expectCalls('{"label":"standalone-writer"}\n');
     } finally {
       writer?.terminate();
       reader?.terminate();

@@ -1,7 +1,8 @@
+import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
@@ -107,10 +108,7 @@ function connectFrame(params: WorkerConnectParams | ConnectParams) {
 }
 
 async function waitForOpen(ws: WebSocket): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    ws.once("open", resolve);
-    ws.once("error", reject);
-  });
+  await once(ws, "open");
 }
 
 async function waitForClose(ws: WebSocket): Promise<{ code: number; reason: string }> {
@@ -321,109 +319,102 @@ async function withHarness(
   });
 }
 
-describe("public worker ingress", () => {
-  it("admits the production worker client on the reserved public path without a gateway challenge", async () => {
-    await withHarness({}, async (harness) => {
-      const client = createWorkerConnection({
-        endpoint: { kind: "websocket", url: harness.url() },
-        connectParams: workerConnect(harness.credential),
-        reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-        admissionTimeoutMs: 2_000,
+it("admits the production worker client on the reserved public path without a gateway challenge", () =>
+  withHarness({}, async (harness) => {
+    const client = createWorkerConnection({
+      endpoint: { kind: "websocket", url: harness.url() },
+      connectParams: workerConnect(harness.credential),
+      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
+      admissionTimeoutMs: 2_000,
+    });
+    try {
+      await client.start();
+      expect(client.state).toMatchObject({
+        kind: "ready",
+        hello: { type: "worker-hello-ok", environmentId: "worker-public" },
       });
-      try {
-        await client.start();
-        expect(client.state).toMatchObject({
-          kind: "ready",
-          hello: { type: "worker-hello-ok", environmentId: "worker-public" },
-        });
-        expect(harness.admitWorker).toHaveBeenCalledOnce();
-        expect(harness.handlePluginUpgrade).not.toHaveBeenCalled();
-        expect(harness.publicRateLimiter.size()).toBe(0);
-      } finally {
-        await client.stop();
-      }
-    });
-  });
-
-  it("rejects an admitted worker before hello when the receiver payload limit is unusable", async () => {
-    await withHarness({}, async (harness) => {
-      // The Gateway's own connection listener runs first; freezing the limit
-      // afterwards still precedes the connect frame that admits the worker.
-      harness.wss.on("connection", (socket) => {
-        const receiver = (socket as WebSocket & { _receiver: PayloadLimited })["_receiver"];
-        Object.defineProperty(receiver, "_maxPayload", {
-          value: receiver["_maxPayload"],
-          writable: false,
-        });
-      });
-
-      const rejected = await rejectWorker(harness.url(), workerConnect(harness.credential));
-
-      expect(rejected).toEqual(
-        rejection(
-          "UNAVAILABLE",
-          "unsupported Gateway WebSocket receiver",
-          "gateway-unavailable",
-          1011,
-        ),
-      );
-      expect(harness.logWsControl.warn).toHaveBeenCalledWith(
-        "worker admission rejected reason=unsupported-websocket-receiver",
-      );
-      expect(harness.clients.size).toBe(0);
-    });
-  });
-
-  it("forces connection kind from the route in both directions", async () => {
-    await withHarness({}, async (harness) => {
-      await expectInvalidRoute(harness.url(), {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: { id: "test", version: "1", platform: "test", mode: "cli" },
-        role: "operator",
-        scopes: [],
-      });
-      await expectInvalidRoute(harness.url("/"), workerConnect(harness.credential));
-    });
-  });
-
-  it("rate-limits parallel invalid admissions before repeated store work", async () => {
-    await withHarness({ rateLimitMaxAttempts: 2 }, async (harness) => {
-      const sockets = Array.from({ length: 6 }, () => new WebSocket(harness.url()));
-      await Promise.all(sockets.map((socket) => waitForOpen(socket)));
-      const attempts = await Promise.all(
-        sockets.map((socket, index) =>
-          rejectOpenedWorker(
-            socket,
-            workerConnect(`invalid-worker-credential-${index.toString().padStart(2, "0")}`),
-          ),
-        ),
-      );
-
-      expect(harness.admitWorker).toHaveBeenCalledTimes(2);
-      expect(new Set(attempts.map((attempt) => JSON.stringify(attempt)))).toEqual(
-        new Set([
-          JSON.stringify(
-            rejection("INVALID_REQUEST", "worker admission rejected", "invalid-handshake", 1008),
-          ),
-        ]),
-      );
-    });
-  });
-
-  it("reserves the worker namespace for non-upgrade requests and scoped aliases", async () => {
-    await withHarness({}, async (harness) => {
-      const response = await fetch(`http://127.0.0.1:${harness.port}${WORKER_GATEWAY_PATH}`);
-      expect(response.status).toBe(404);
-      await expect(response.text()).resolves.toBe("Not Found");
-
-      await expect(
-        requestUpgradeRejection(
-          harness.port,
-          `/__openclaw__/cap/${"a".repeat(32)}${WORKER_GATEWAY_PATH}`,
-        ),
-      ).resolves.toEqual({ status: 404, body: "" });
+      expect(harness.admitWorker).toHaveBeenCalledOnce();
       expect(harness.handlePluginUpgrade).not.toHaveBeenCalled();
+      expect(harness.publicRateLimiter.size()).toBe(0);
+    } finally {
+      await client.stop();
+    }
+  }));
+
+it("rejects an admitted worker before hello when the receiver payload limit is unusable", () =>
+  withHarness({}, async (harness) => {
+    // The Gateway's own connection listener runs first; freezing the limit
+    // afterwards still precedes the connect frame that admits the worker.
+    harness.wss.on("connection", (socket) => {
+      const receiver = (socket as WebSocket & { _receiver: PayloadLimited })["_receiver"];
+      Object.defineProperty(receiver, "_maxPayload", {
+        value: receiver["_maxPayload"],
+        writable: false,
+      });
     });
-  });
-});
+
+    const rejected = await rejectWorker(harness.url(), workerConnect(harness.credential));
+
+    expect(rejected).toEqual(
+      rejection(
+        "UNAVAILABLE",
+        "unsupported Gateway WebSocket receiver",
+        "gateway-unavailable",
+        1011,
+      ),
+    );
+    expect(harness.logWsControl.warn).toHaveBeenCalledWith(
+      "worker admission rejected reason=unsupported-websocket-receiver",
+    );
+    expect(harness.clients.size).toBe(0);
+  }));
+
+it("forces connection kind from the route in both directions", () =>
+  withHarness({}, async (harness) => {
+    await expectInvalidRoute(harness.url(), {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: { id: "test", version: "1", platform: "test", mode: "cli" },
+      role: "operator",
+      scopes: [],
+    });
+    await expectInvalidRoute(harness.url("/"), workerConnect(harness.credential));
+  }));
+
+it("rate-limits parallel invalid admissions before repeated store work", () =>
+  withHarness({ rateLimitMaxAttempts: 2 }, async (harness) => {
+    const sockets = Array.from({ length: 6 }, () => new WebSocket(harness.url()));
+    await Promise.all(sockets.map((socket) => waitForOpen(socket)));
+    const attempts = await Promise.all(
+      sockets.map((socket, index) =>
+        rejectOpenedWorker(
+          socket,
+          workerConnect(`invalid-worker-credential-${index.toString().padStart(2, "0")}`),
+        ),
+      ),
+    );
+
+    expect(harness.admitWorker).toHaveBeenCalledTimes(2);
+    expect(new Set(attempts.map((attempt) => JSON.stringify(attempt)))).toEqual(
+      new Set([
+        JSON.stringify(
+          rejection("INVALID_REQUEST", "worker admission rejected", "invalid-handshake", 1008),
+        ),
+      ]),
+    );
+  }));
+
+it("reserves the worker namespace for non-upgrade requests and scoped aliases", () =>
+  withHarness({}, async (harness) => {
+    const response = await fetch(`http://127.0.0.1:${harness.port}${WORKER_GATEWAY_PATH}`);
+    expect(response.status).toBe(404);
+    await expect(response.text()).resolves.toBe("Not Found");
+
+    await expect(
+      requestUpgradeRejection(
+        harness.port,
+        `/__openclaw__/cap/${"a".repeat(32)}${WORKER_GATEWAY_PATH}`,
+      ),
+    ).resolves.toEqual({ status: 404, body: "" });
+    expect(harness.handlePluginUpgrade).not.toHaveBeenCalled();
+  }));
