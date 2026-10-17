@@ -82,15 +82,28 @@ const queuedAccount = {
   authProfileIdSource: "user" as const,
 };
 
-function admissionDefaults(state: OpenClawTestState) {
-  return {
-    typing: createTypingController({}),
-    typingMode: "never" as const,
-    defaultModel: "configured",
-    sessionKey,
-    storePath: path.join(state.sessionsDir(), "sessions.json"),
-    sessionEntry: loadSessionEntry(scope),
-  };
+async function admitQueued(
+  state: OpenClawTestState,
+  queued: FollowupRun,
+  onQueuedFollowupAdmitted?: () => Promise<void>,
+) {
+  const result = await admitFollowupTurn({
+    queued,
+    defaults: {
+      typing: createTypingController({}),
+      typingMode: "never" as const,
+      defaultModel: "configured",
+      sessionKey,
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+      sessionEntry: loadSessionEntry(scope),
+      ...(onQueuedFollowupAdmitted ? { opts: { onQueuedFollowupAdmitted } } : {}),
+    },
+  });
+  expect(result.kind).toBe("admitted");
+  if (result.kind !== "admitted") {
+    throw new Error("Follow-up was not admitted");
+  }
+  return result.turn;
 }
 
 afterEach(() => {
@@ -127,8 +140,6 @@ async function patchSession(patch: Record<string, unknown>, config = cfg) {
       routeVariants: catalog,
     }),
     getSessionEventSubscriberConnIds: () => new Set(),
-    broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
     dedupe: new Map(),
   } satisfies GatewayRequestContext;
@@ -204,15 +215,7 @@ it("keeps admitted A on X, starts queued B on Y, and applies a later Z only to w
       const current = index++;
       let turn: AdmittedFollowupTurn | undefined;
       try {
-        const result = await admitFollowupTurn({
-          queued,
-          defaults: admissionDefaults(state),
-        });
-        expect(result.kind).toBe("admitted");
-        if (result.kind !== "admitted") {
-          throw new Error("Follow-up was not admitted");
-        }
-        turn = result.turn;
+        turn = await admitQueued(state, queued);
         expectDefined(entered[current], "turn gate").resolve(turn);
         await expectDefined(release[current], "turn gate").promise;
       } catch (error) {
@@ -229,27 +232,27 @@ it("keeps admitted A on X, starts queued B on Y, and applies a later Z only to w
       const a = await expectDefined(entered[0], "turn gate").promise;
       expect(a.queued.run).toMatchObject(selectionX);
       expect((await patchSession({ thinkingLevel: "high" }))[0]).toBe(true);
-      expect(a.queued.run).toMatchObject(selectionX);
-      expect(b.run).toMatchObject({ ...selectionX, thinkLevel: "high" });
-      expect(c.run).toMatchObject({ ...selectionX, thinkLevel: "high" });
+      expect([a.queued.run, b.run, c.run]).toMatchObject([
+        selectionX,
+        { ...selectionX, thinkLevel: "high" },
+        { ...selectionX, thinkLevel: "high" },
+      ]);
       expect((await patchSession({ model: "fixture/y", thinkingLevel: "high" }))[0]).toBe(true);
-      expect(a.queued.run).toMatchObject(selectionX);
-      expect(b.run).toMatchObject(selectionY);
-      expect(c.run).toMatchObject(selectionY);
+      expect([a.queued.run, b.run, c.run]).toMatchObject([selectionX, selectionY, selectionY]);
 
       expectDefined(release[0], "turn gate").resolve();
       const admittedB = await expectDefined(entered[1], "turn gate").promise;
-      expect(admittedB.queued.prompt).toBe("B");
-      expect(admittedB.queued.run).toMatchObject(selectionY);
+      expect(admittedB.queued).toMatchObject({ prompt: "B", run: selectionY });
       expect((await patchSession({ model: "fixture/z", thinkingLevel: "off" }))[0]).toBe(true);
-      expect(a.queued.run).toMatchObject(selectionX);
-      expect(admittedB.queued.run).toMatchObject(selectionY);
-      expect(c.run).toMatchObject(selectionZ);
+      expect([a.queued.run, admittedB.queued.run, c.run]).toMatchObject([
+        selectionX,
+        selectionY,
+        selectionZ,
+      ]);
 
       expectDefined(release[1], "turn gate").resolve();
       const admittedC = await expectDefined(entered[2], "turn gate").promise;
-      expect(admittedC.queued.prompt).toBe("C");
-      expect(admittedC.queued.run).toMatchObject(selectionZ);
+      expect(admittedC.queued).toMatchObject({ prompt: "C", run: selectionZ });
     } finally {
       for (const gate of release) {
         gate.resolve();
@@ -519,43 +522,29 @@ it.each([
       });
       const changing = patchSession(patch);
       void changing.catch(committed.reject);
-      let starting: ReturnType<typeof admitFollowupTurn> | undefined;
-      let result: Awaited<ReturnType<typeof admitFollowupTurn>> | undefined;
+      let starting: ReturnType<typeof admitQueued> | undefined;
+      let turn: AdmittedFollowupTurn | undefined;
       try {
         await committed.promise;
         expect(b.run).toMatchObject(selectionX);
-        starting = admitFollowupTurn({
-          queued: b,
-          defaults: {
-            ...admissionDefaults(state),
-            opts: {
-              onQueuedFollowupAdmitted: async () => {
-                // Source adoption is awaited after admission. A newer write here
-                // must affect C without changing the already admitted B snapshot.
-                expect((await patchSession(later))[0]).toBe(true);
-              },
-            },
-          },
+        starting = admitQueued(state, b, async () => {
+          // Source adoption is awaited after admission. A newer write here
+          // must affect C without changing the already admitted B snapshot.
+          expect((await patchSession(later))[0]).toBe(true);
         });
         void starting.catch(enteringAdmission.reject);
         await enteringAdmission.promise;
         releaseRefresh.resolve();
         expect((await changing)[0]).toBe(true);
-        result = await starting;
-        expect(result.kind).toBe("admitted");
-        if (result.kind !== "admitted") {
-          throw new Error("Follow-up was not admitted");
-        }
-        expect(result.turn.queued.run).toMatchObject(selected);
+        turn = await starting;
+        expect(turn.queued.run).toMatchObject(selected);
         expect(c.run).toMatchObject(next);
         expect(getExistingFollowupQueue(sessionKey)?.lastRun).toMatchObject(next);
       } finally {
         releaseRefresh.resolve();
         await changing;
-        result ??= await starting;
-        if (result?.kind === "admitted") {
-          result.turn.operation.complete();
-        }
+        turn ??= await starting;
+        turn?.operation.complete();
       }
     });
   },
