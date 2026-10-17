@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { loadSecretFileSync as loadSecretFileSyncFromCore } from "openclaw/plugin-sdk/core";
+import { loadSecretFileSync as coreSecret } from "openclaw/plugin-sdk/core";
 import {
   fileExists,
   readFileWithinRoot,
@@ -76,55 +76,33 @@ describe("plugin SDK fs-safe compatibility exports", () => {
 
       const result: SecretFileReadResult = loadSecretFileSync(secretPath, "token");
       expect(result).toMatchObject({ ok: true, secret: "secret", resolvedPath: secretPath });
-      expect(loadSecretFileSyncFromCore(secretPath, "token")).toMatchObject({
-        ok: true,
-        secret: "secret",
-      });
+      expect(coreSecret(secretPath, "token")).toMatchObject({ ok: true, secret: "secret" });
     });
   });
 
   it("keeps root-bounded file-access helpers on file-access-runtime", async () => {
-    expectTypeOf(removePathWithinRoot).parameters.toEqualTypeOf<
-      [
-        params: {
-          rootDir: string;
-          relativePath: string;
-          recursive?: boolean;
-          force?: boolean;
-        },
-      ]
+    expectTypeOf(removePathWithinRoot).toEqualTypeOf<
+      (params: {
+        rootDir: string;
+        relativePath: string;
+        recursive?: boolean;
+        force?: boolean;
+      }) => Promise<void>
     >();
-    expectTypeOf<keyof Parameters<typeof removePathWithinRoot>[0]>().toEqualTypeOf<
-      "rootDir" | "relativePath" | "recursive" | "force"
-    >();
-    expectTypeOf(removePathWithinRoot).returns.toEqualTypeOf<Promise<void>>();
 
     await withTestDir({ prefix: "openclaw-sdk-file-access-compat-" }, async (root) => {
-      await writeFileWithinRoot({
-        rootDir: root,
-        relativePath: "nested/file.txt",
-        data: "hello",
-        mkdir: true,
-      });
+      const file = { rootDir: root, relativePath: "nested/file.txt" };
+      const absolutePath = path.join(root, file.relativePath);
+      await writeFileWithinRoot({ ...file, data: "hello", mkdir: true });
 
       for (const nonBlockingRead of [undefined, true, false]) {
-        const result = await readFileWithinRoot({
-          rootDir: root,
-          relativePath: "nested/file.txt",
-          nonBlockingRead,
-        });
-
-        expect(result.buffer.toString("utf8")).toBe("hello");
-        expect(result.realPath).toBe(fs.realpathSync(path.join(root, "nested", "file.txt")));
+        const result = await readFileWithinRoot({ ...file, nonBlockingRead });
+        expect(result.buffer).toEqual(Buffer.from("hello"));
+        expect(result.realPath).toBe(fs.realpathSync(absolutePath));
       }
 
-      await removePathWithinRoot({
-        rootDir: root,
-        relativePath: "nested/file.txt",
-        force: false,
-      });
-
-      expect(fs.existsSync(path.join(root, "nested", "file.txt"))).toBe(false);
+      await removePathWithinRoot({ ...file, force: false });
+      expect(fs.existsSync(absolutePath)).toBe(false);
     });
   });
 
@@ -144,15 +122,8 @@ describe("plugin SDK fs-safe compatibility exports", () => {
       const filePath = workspace.path("data.json");
       for (const nonBlockingRead of [undefined, true, false]) {
         const hints = { nonBlockingRead };
-        expect(
-          (
-            await readLocalFileFromRoots({
-              filePath,
-              roots: [workspace.dir],
-              nonBlockingRead,
-            })
-          )?.buffer.toString(),
-        ).toBe(content);
+        const local = await readLocalFileFromRoots({ filePath, roots: [workspace.dir], ...hints });
+        expect(local?.buffer.toString()).toBe(content);
         const opened = await store.open("data.json", hints);
         await opened.handle.close();
         expect((await store.read("data.json", hints)).buffer.toString()).toBe(content);

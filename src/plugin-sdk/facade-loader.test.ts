@@ -28,32 +28,12 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const trustedBundledPluginFixtureRoots: string[] = [];
 let trustedPluginIdCounter = 0;
 
-function captureThrownError(run: () => unknown): Error {
-  try {
-    run();
-  } catch (error) {
-    if (error instanceof Error) {
-      return error;
-    }
-    throw error;
-  }
-  throw new Error("Expected function to throw");
-}
-
 function nextTrustedPluginId(prefix: string): string {
   return `${prefix}${trustedPluginIdCounter++}`;
 }
 
-function writeFixturePackageJson(pluginRoot: string, pluginId: string): void {
-  fs.writeFileSync(
-    path.join(pluginRoot, "package.json"),
-    JSON.stringify({
-      name: `@openclaw/${pluginId}`,
-      version: "0.0.0",
-      type: "module",
-    }),
-  );
-}
+const writeFixturePackageJson = (pluginRoot: string) =>
+  fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"module"}\n');
 
 function createPluginFixture(files: (pluginId: string) => Record<string, string>, source = false) {
   const bundledPluginsDir = path.join(packageRoot, ...(source ? [] : ["dist"]), "extensions");
@@ -61,7 +41,8 @@ function createPluginFixture(files: (pluginId: string) => Record<string, string>
   const pluginRoot = path.join(bundledPluginsDir, pluginId);
   fs.mkdirSync(pluginRoot, { recursive: true });
   trustedBundledPluginFixtureRoots.push(pluginRoot);
-  writeFixturePackageJson(pluginRoot, pluginId);
+  writeFixturePackageJson(pluginRoot);
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
   for (const [name, content] of Object.entries(files(pluginId))) {
     fs.writeFileSync(path.join(pluginRoot, name), content, "utf8");
   }
@@ -95,7 +76,7 @@ function createBundledChannelConfigFixtures(): string {
   ] as const) {
     const pluginRoot = path.join(bundledPluginsDir, pluginId);
     fs.mkdirSync(pluginRoot, { recursive: true });
-    writeFixturePackageJson(pluginRoot, pluginId);
+    writeFixturePackageJson(pluginRoot);
     fs.writeFileSync(
       path.join(pluginRoot, "config-api.js"),
       [
@@ -113,9 +94,6 @@ function createCircularPluginFixture() {
   return createPluginFixture((pluginId) => ({
     "facade.mjs": [
       `const loadBundledPluginPublicSurfaceModuleSyncCore = globalThis.${FACADE_LOADER_GLOBAL};`,
-      `if (typeof loadBundledPluginPublicSurfaceModuleSyncCore !== "function") {`,
-      '  throw new Error("missing facade loader test loader");',
-      "}",
       `export const marker = loadBundledPluginPublicSurfaceModuleSyncCore({ dirName: ${JSON.stringify(
         pluginId,
       )}, artifactBasename: "api.js" }).marker;`,
@@ -141,10 +119,7 @@ describe("plugin-sdk facade loader", () => {
     const method = function (this: unknown) {
       return this;
     };
-    const original = {
-      value: 1,
-      method,
-    };
+    const original = { value: 1, method };
     const prototype = { inherited: true };
     Object.setPrototypeOf(original, prototype);
     const symbol = Symbol("receiver");
@@ -222,25 +197,24 @@ describe("plugin-sdk facade loader", () => {
     const fixture = createMarkerFixture("source-fallback", true);
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = createTempDirSync("openclaw-facade-loader-empty-");
 
-    const loaded = loadFixture(fixture.pluginId);
-
-    expect(loaded.marker).toBe("source-fallback");
+    expect(loadFixture(fixture.pluginId).marker).toBe("source-fallback");
   });
 
   it("keeps bundled facade loads disabled when bundled plugins are disabled", () => {
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
-    const error = captureThrownError(() =>
+    const load = () =>
       loadBundledPluginPublicSurfaceModuleSyncCore({
         dirName: "browser",
         artifactBasename: "browser-maintenance.js",
-      }),
-    );
+      });
 
-    expect(error).toBeInstanceOf(MissingPublicSurfaceError);
-    expect(error.message).toBe(
-      "Unable to resolve bundled plugin public surface browser/browser-maintenance.js",
+    expect(load).toThrow(MissingPublicSurfaceError);
+    expect(load).toThrow(
+      new MissingPublicSurfaceError(
+        "Unable to resolve bundled plugin public surface browser/browser-maintenance.js",
+      ),
     );
   });
 
@@ -251,23 +225,20 @@ describe("plugin-sdk facade loader", () => {
     fs.mkdirSync(boundaryRoot, { recursive: true });
     fs.writeFileSync(outsidePath, 'export const marker = "outside";\n', "utf8");
 
-    const error = captureThrownError(() =>
+    const load = () =>
       loadFacadeModuleAtLocationSync({
         location: { modulePath: outsidePath, boundaryRoot },
         trackedPluginId: "boundary-failure",
-      }),
-    );
+      });
 
-    expect(error).toBeInstanceOf(Error);
-    expect(error).not.toBeInstanceOf(MissingPublicSurfaceError);
-    expect(error.message).toBe(
-      `Unable to open bundled plugin public surface ${outsidePath}: outside plugin root`,
+    expect(load).toThrow(
+      new Error(`Unable to open bundled plugin public surface ${outsidePath}: outside plugin root`),
     );
+    expect(load).not.toThrow(MissingPublicSurfaceError);
   });
 
   it("shares loaded facade ids with facade-runtime", () => {
     const fixture = createMarkerFixture("identity-check");
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = fixture.bundledPluginsDir;
 
     const first = loadFixture(fixture.pluginId);
     const second = loadFixture(fixture.pluginId);
@@ -308,13 +279,10 @@ describe("plugin-sdk facade loader", () => {
 
   it("breaks circular facade re-entry during module evaluation", () => {
     const fixture = createCircularPluginFixture();
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = fixture.bundledPluginsDir;
     (globalThis as typeof globalThis & Record<string, unknown>)[FACADE_LOADER_GLOBAL] =
       loadBundledPluginPublicSurfaceModuleSyncCore;
 
-    const loaded = loadFixture(fixture.pluginId);
-
-    expect(loaded.marker).toBe("circular-ok");
+    expect(loadFixture(fixture.pluginId).marker).toBe("circular-ok");
   });
 
   it("loads a facade when Windows reports the root and module through physical aliases", () => {

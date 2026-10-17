@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
@@ -43,6 +44,10 @@ describe("memory-host-core helpers", () => {
     await fs.mkdir(workspaceDir);
   });
   const listArtifacts = () => listMemoryHostPublicArtifacts({ cfg });
+  const resolveExpectedExportPath = async (
+    stateDir = fixtureRoot,
+    memoryDir = path.join(workspaceDir, "memory"),
+  ) => path.join(memoryDir, "events", await directoryHash(stateDir), "memory-host-events.jsonl");
   async function requireExportPath() {
     const artifact = (await listArtifacts()).find((entry) => entry.kind === "event-log");
     if (!artifact) {
@@ -146,13 +151,7 @@ describe("memory-host-core helpers", () => {
       const stateDir = path.join(fixtureRoot, "state");
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       await fs.mkdir(stateDir);
-      const stateHash = await directoryHash(stateDir);
-      const externalExport = path.join(
-        externalMemoryDir,
-        "events",
-        stateHash,
-        "memory-host-events.jsonl",
-      );
+      const externalExport = await resolveExpectedExportPath(stateDir, externalMemoryDir);
       const externalOwner = path.join(
         path.dirname(externalExport),
         ".openclaw-memory-host-events-owner.json",
@@ -180,14 +179,7 @@ describe("memory-host-core helpers", () => {
 
   it("does not replace or delete an unowned event export path", async () => {
     await appendMemoryHostEvent(workspaceDir, recallEvent("must not replace user file"));
-    const stateHash = await directoryHash(fixtureRoot);
-    const exportPath = path.join(
-      workspaceDir,
-      "memory",
-      "events",
-      stateHash,
-      "memory-host-events.jsonl",
-    );
+    const exportPath = await resolveExpectedExportPath();
     await fs.mkdir(path.dirname(exportPath), { recursive: true });
     await fs.writeFile(exportPath, '{"owner":"user"}\n', "utf8");
 
@@ -234,31 +226,16 @@ describe("memory-host-core helpers", () => {
     const event = recallEvent("exclusive create");
     const expectedContent = `${JSON.stringify(event)}\n`;
     const originalOpen = fs.open.bind(fs);
-    let exportOpenCount = 0;
     await appendMemoryHostEvent(workspaceDir, event);
-    const stateHash = await directoryHash(fixtureRoot);
-    const exportPath = path.join(
-      workspaceDir,
-      "memory",
-      "events",
-      stateHash,
-      "memory-host-events.jsonl",
-    );
-    vi.spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof fs.open>) => {
-      const target = args[0];
-      if (typeof target === "string" && path.resolve(target) === path.resolve(exportPath)) {
-        exportOpenCount += 1;
-        if (exportOpenCount === 4) {
-          await fs.rename(exportPath, `${exportPath}.openclaw-created`);
-          const replacement = await originalOpen(exportPath, "wx", 0o600);
-          try {
-            await replacement.writeFile(expectedContent, "utf8");
-          } finally {
-            await replacement.close();
-          }
-        }
+    const exportPath = await resolveExpectedExportPath();
+    onExportOpen(exportPath, 4, async () => {
+      await fs.rename(exportPath, `${exportPath}.openclaw-created`);
+      const replacement = await originalOpen(exportPath, "wx", 0o600);
+      try {
+        await replacement.writeFile(expectedContent, "utf8");
+      } finally {
+        await replacement.close();
       }
-      return await originalOpen(...args);
     });
 
     const racedArtifacts = await listArtifacts();
@@ -402,12 +379,9 @@ describe("memory-host-core helpers", () => {
       const workspaceAlias = path.join(fixtureRoot, "workspace-alias");
       const aliasCfg = workspaceConfig(workspaceAlias);
       const originalOpen = fs.open.bind(fs);
-      let releaseFirstRead: (() => void) | undefined;
-      let signalFirstRead: (() => void) | undefined;
+      const firstRead = createDeferred<void>();
+      const releaseFirstRead = createDeferred<void>();
       let shouldBlockFirstRead = true;
-      const firstReadStarted = new Promise<void>((resolve) => {
-        signalFirstRead = resolve;
-      });
       const openSpy = vi
         .spyOn(fs, "open")
         .mockImplementation(async (...args: Parameters<typeof fs.open>) => {
@@ -419,10 +393,8 @@ describe("memory-host-core helpers", () => {
             path.resolve(target).startsWith(`${path.resolve(workspaceDir)}${path.sep}`)
           ) {
             shouldBlockFirstRead = false;
-            signalFirstRead?.();
-            await new Promise<void>((resolve) => {
-              releaseFirstRead = resolve;
-            });
+            firstRead.resolve();
+            await releaseFirstRead.promise;
           }
           return await originalOpen(...args);
         });
@@ -431,7 +403,7 @@ describe("memory-host-core helpers", () => {
         await fs.symlink(workspaceDir, workspaceAlias);
         await appendMemoryHostEvent(workspaceAlias, recallEvent("older"));
         const olderListing = listArtifacts();
-        await firstReadStarted;
+        await firstRead.promise;
 
         await appendMemoryHostEvent(workspaceDir, recallEvent("newer", "2026-05-18T12:01:00.000Z"));
         const newerListing = listMemoryHostPublicArtifacts({ cfg: aliasCfg });
@@ -441,7 +413,7 @@ describe("memory-host-core helpers", () => {
             setTimeout(resolve, 250);
           }),
         ]);
-        releaseFirstRead?.();
+        releaseFirstRead.resolve();
         const [olderArtifacts, newerArtifacts] = await Promise.all([olderListing, newerListing]);
         const olderExport = olderArtifacts.find((artifact) => artifact.kind === "event-log");
         const newerExport = newerArtifacts.find((artifact) => artifact.kind === "event-log");
@@ -457,7 +429,7 @@ describe("memory-host-core helpers", () => {
           .map((line) => JSON.parse(line) as { query: string });
         expect(exported.map((event) => event.query)).toEqual(["older", "newer"]);
       } finally {
-        releaseFirstRead?.();
+        releaseFirstRead.resolve();
         openSpy.mockRestore();
       }
     },

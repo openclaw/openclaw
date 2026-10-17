@@ -34,42 +34,6 @@ function resolveAccess(
   });
 }
 
-function createDirectDmRuntime() {
-  const runInbound = vi.fn(async ({ adapter, raw }) => {
-    const input = await adapter.ingest(raw);
-    const turn = await adapter.resolveTurn(input, {
-      kind: "message",
-      canStartAgentTurn: true,
-    });
-    await turn.delivery.deliver({ text: "reply text" });
-    return { admission: { kind: "dispatch" }, dispatched: true };
-  });
-  return {
-    runInbound,
-    runtime: {
-      channel: {
-        routing: {
-          resolveAgentRoute: vi.fn(({ accountId, peer }) => ({
-            agentId: "agent-main",
-            accountId,
-            sessionKey: `dm:${peer.id}`,
-          })),
-        },
-        session: {
-          resolveStorePath: vi.fn(() => "/tmp/direct-dm-session-store"),
-          readSessionUpdatedAt: vi.fn(() => 1234),
-        },
-        reply: {
-          resolveEnvelopeFormatOptions: vi.fn(() => ({ mode: "agent" })),
-          formatAgentEnvelope: vi.fn(({ body }) => `env:${body}`),
-          finalizeInboundContext: vi.fn((ctx) => ctx),
-        },
-        inbound: { run: runInbound },
-      },
-    } as never,
-  };
-}
-
 describe("channel-inbound direct-message helpers", () => {
   it("resolves inbound DM access and command auth through one helper", async () => {
     const result = await resolveAccess({
@@ -132,22 +96,12 @@ describe("channel-inbound direct-message helpers", () => {
     const issuePairingChallenge = vi.fn(async () => {});
     const onBlocked = vi.fn();
     const authorizer = createPreCryptoDirectDmAuthorizer({
-      resolveAccess: async (senderId) => ({
-        access:
-          senderId === "pair-me"
-            ? {
-                decision: "pairing" as const,
-                reasonCode: "dm_policy_pairing_required",
-                reason: "dmPolicy=pairing (not allowlisted)",
-                effectiveAllowFrom: [],
-              }
-            : {
-                decision: "block" as const,
-                reasonCode: "dm_policy_disabled",
-                reason: "dmPolicy=disabled",
-                effectiveAllowFrom: [],
-              },
-      }),
+      resolveAccess: (senderId) =>
+        resolveAccess({
+          senderId,
+          dmPolicy: senderId === "pair-me" ? "pairing" : "disabled",
+          readStoreAllowFrom: async () => [],
+        }),
       issuePairingChallenge,
       onBlocked,
     });
@@ -195,7 +149,36 @@ describe("channel-inbound direct-message helpers", () => {
   });
 
   it("routes a targetless contextual reply to the inbound Reef peer", async () => {
-    const { runInbound, runtime } = createDirectDmRuntime();
+    const runInbound = vi.fn(async ({ adapter, raw }) => {
+      const input = await adapter.ingest(raw);
+      const turn = await adapter.resolveTurn(input, {
+        kind: "message",
+        canStartAgentTurn: true,
+      });
+      await turn.delivery.deliver({ text: "reply text" });
+      return { admission: { kind: "dispatch" }, dispatched: true };
+    });
+    const runtime = {
+      channel: {
+        routing: {
+          resolveAgentRoute: vi.fn(({ accountId, peer }) => ({
+            agentId: "agent-main",
+            accountId,
+            sessionKey: `dm:${peer.id}`,
+          })),
+        },
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/direct-dm-session-store"),
+          readSessionUpdatedAt: vi.fn(() => 1234),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: vi.fn(() => ({ mode: "agent" })),
+          formatAgentEnvelope: vi.fn(({ body }) => `env:${body}`),
+          finalizeInboundContext: vi.fn((ctx) => ctx),
+        },
+        inbound: { run: runInbound },
+      },
+    } as never;
     const deliver = vi.fn(async () => {});
     const channelIngress = await resolveStableChannelMessageIngress({
       channelId: "reef",

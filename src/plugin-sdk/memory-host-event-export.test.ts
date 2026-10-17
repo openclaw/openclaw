@@ -36,16 +36,24 @@ describe("memory host event export recovery", () => {
     workspaceDir = state.workspaceDir;
     cfg = workspaceConfig(workspaceDir);
   });
-  async function interruptedExport(query: string, inodeOwned: boolean) {
+  const listArtifacts = () => listMemoryHostPublicArtifacts({ cfg });
+  async function initialExport() {
+    await appendMemoryHostEvent(workspaceDir, event);
+    const artifact = (await listArtifacts()).find((entry) => entry.kind === "event-log");
+    if (!artifact) {
+      throw new Error("expected initial event export");
+    }
+    return artifact;
+  }
+  async function interruptedExport(inodeOwned: boolean) {
     const { stateDir } = state;
-    const recalled = recallEvent(query);
-    await appendMemoryHostEvent(workspaceDir, recalled);
+    await appendMemoryHostEvent(workspaceDir, event);
     const stateHash = sha256(await fs.realpath(stateDir)).slice(0, 32);
     const workspaceHash = sha256(await fs.realpath(workspaceDir)).slice(0, 32);
     const exportDir = path.join(workspaceDir, "memory", "events", stateHash);
     const exportPath = path.join(exportDir, "memory-host-events.jsonl");
     const ownerPath = path.join(exportDir, ".openclaw-memory-host-events-owner.json");
-    const expectedContent = `${JSON.stringify(recalled)}\n`;
+    const expectedContent = `${JSON.stringify(event)}\n`;
     await fs.mkdir(exportDir, { recursive: true });
     await fs.writeFile(exportPath, "", { mode: 0o600 });
     const identity = inodeOwned ? await fs.stat(exportPath, { bigint: true }) : undefined;
@@ -115,14 +123,7 @@ describe("memory host event export recovery", () => {
         });
         return root;
       });
-      await appendMemoryHostEvent(workspaceDir, event);
-      const artifact = (await listMemoryHostPublicArtifacts({ cfg })).find(
-        (entry) => entry.kind === "event-log",
-      );
-      expect(artifact).toBeDefined();
-      if (!artifact) {
-        throw new Error("expected initial event export");
-      }
+      const artifact = await initialExport();
       const ownerPath = path.join(
         path.dirname(artifact.absolutePath),
         ".openclaw-memory-host-events-owner.json",
@@ -147,7 +148,7 @@ describe("memory host event export recovery", () => {
       await fs.writeFile(ownerPath, ownerContent);
       if (writable) {
         // Even an unchanged export upgrades the marker to the exact observation.
-        expect(await listMemoryHostPublicArtifacts({ cfg })).toContainEqual(artifact);
+        expect(await listArtifacts()).toContainEqual(artifact);
         expect(JSON.parse(await fs.readFile(ownerPath, "utf8"))).toMatchObject({
           schemaVersion: 4,
           fileDev: String(identity.dev),
@@ -155,7 +156,7 @@ describe("memory host event export recovery", () => {
         });
       }
       await appendMemoryHostEvent(workspaceDir, { ...event, query: "second" });
-      const artifacts = await listMemoryHostPublicArtifacts({ cfg });
+      const artifacts = await listArtifacts();
       if (!writable) {
         expect(artifacts).not.toContainEqual(artifact);
         await expect(fs.readFile(artifact.absolutePath, "utf8")).resolves.toBe(
@@ -176,7 +177,7 @@ describe("memory host event export recovery", () => {
       await fs.rename(artifact.absolutePath, `${artifact.absolutePath}.previous`);
       await fs.writeFile(artifact.absolutePath, "foreign replacement\n");
       await appendMemoryHostEvent(workspaceDir, { ...event, query: "third" });
-      expect(await listMemoryHostPublicArtifacts({ cfg })).not.toContainEqual(artifact);
+      expect(await listArtifacts()).not.toContainEqual(artifact);
       await expect(fs.readFile(artifact.absolutePath, "utf8")).resolves.toBe(
         "foreign replacement\n",
       );
@@ -190,13 +191,7 @@ describe("memory host event export recovery", () => {
       const entered = createDeferred();
       const release = createDeferred();
       try {
-        await appendMemoryHostEvent(workspaceDir, event);
-        const artifact = (await listMemoryHostPublicArtifacts({ cfg })).find(
-          (entry) => entry.kind === "event-log",
-        );
-        if (!artifact) {
-          throw new Error("expected initial event export");
-        }
+        const artifact = await initialExport();
         const before = await fs.readFile(artifact.absolutePath, "utf8");
         await appendMemoryHostEvent(workspaceDir, { ...event, query: "second" });
         const failure = new Error("journal read failed");
@@ -211,7 +206,7 @@ describe("memory host event export recovery", () => {
             return await list(params);
           },
         );
-        const result = listMemoryHostPublicArtifacts({ cfg }).catch((error: unknown) => error);
+        const result = listArtifacts().catch((error: unknown) => error);
         try {
           await entered.promise;
           expect(await fs.readFile(artifact.absolutePath, "utf8")).toBe(before);
@@ -300,11 +295,8 @@ describe("memory host event export recovery", () => {
   });
 
   it("finishes an inode-owned empty event export after interruption", async () => {
-    const { exportPath, ownerPath, expectedContent } = await interruptedExport(
-      "recover inode-owned export",
-      true,
-    );
-    const listed = await listMemoryHostPublicArtifacts({ cfg });
+    const { exportPath, ownerPath, expectedContent } = await interruptedExport(true);
+    const listed = await listArtifacts();
     expect(listed.some((artifact) => artifact.kind === "event-log")).toBe(true);
     await expect(fs.readFile(exportPath, "utf8")).resolves.toBe(expectedContent);
     const owner = JSON.parse(await fs.readFile(ownerPath, "utf8"));
@@ -317,8 +309,8 @@ describe("memory host event export recovery", () => {
   });
 
   it("does not claim an empty export after exclusive-create interruption", async () => {
-    const { exportPath } = await interruptedExport("leave empty export untouched", false);
-    const listed = await listMemoryHostPublicArtifacts({ cfg });
+    const { exportPath } = await interruptedExport(false);
+    const listed = await listArtifacts();
     expect(listed.some((artifact) => artifact.kind === "event-log")).toBe(false);
     await expect(fs.readFile(exportPath, "utf8")).resolves.toBe("");
   });

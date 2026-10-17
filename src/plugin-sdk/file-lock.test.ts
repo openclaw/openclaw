@@ -270,7 +270,6 @@ describe("acquireFileLock", () => {
     await expect(reclaimDefinitelyStaleFileLock(symlinkPath)).resolves.toBe("retained");
     await expect(fs.readFile(livePath, "utf8")).resolves.toContain(`"pid":${process.pid}`);
     await expect(fs.readFile(malformedPath, "utf8")).resolves.toBe("{");
-    await expect(fs.lstat(symlinkPath)).resolves.toMatchObject({ mode: expect.any(Number) });
     expect((await fs.lstat(symlinkPath)).isSymbolicLink()).toBe(true);
     await expect(fs.readFile(staleTargetPath, "utf8")).resolves.toContain(`"pid":${2 ** 30}`);
   });
