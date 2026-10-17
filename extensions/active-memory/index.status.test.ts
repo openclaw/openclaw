@@ -193,6 +193,7 @@ describe("Active Memory policy status", () => {
     } finally {
       finishImport.resolve();
       await pending;
+      // mock-isolation: Restore the import guard for subsequent status-only hooks.
       vi.doMock("./recall.js", unexpectedRecallImport);
       vi.useRealTimers();
     }
