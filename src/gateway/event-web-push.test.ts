@@ -202,13 +202,11 @@ describe("event Web Push classification", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("includes the selected avatar only for identified agent notifications", async () => {
-    const identified = boundSubscription("identified");
-    const privateTarget = boundSubscription("private");
+    const identified = makeSubscription("identified");
+    const privateTarget = makeSubscription("private");
     privateTarget.devicePreferences.detailLevel = "private";
-    listBoundWebPushSubscriptionsMock.mockResolvedValue([identified, privateTarget]);
-    listDevicePairingMock.mockReturnValue({
-      paired: [pairedOperator("identified"), pairedOperator("private")],
-    });
+    setSubscriptions(identified, privateTarget);
+    setPaired(pairedOperator("identified"), pairedOperator("private"));
     const pixels = Buffer.alloc(64 * 64 * 4, Buffer.from([255, 150, 0, 255]));
     const avatar = `data:image/png;base64,${encodePngRgba(pixels, 64, 64).toString("base64")}`;
     const cfg: OpenClawConfig = { agents: { entries: { research: { identity: { avatar } } } } };
@@ -219,13 +217,13 @@ describe("event Web Push classification", () => {
       { agentId: "research", sessionKeys: ["agent:research:thread.1"] },
     );
 
-    await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledTimes(2), {
+    await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(2), {
       timeout: 3_000,
     });
-    const identifiedPayload = preparedWebPushSendMock.mock.calls.find(
+    const identifiedPayload = mocks.send.mock.calls.find(
       ([call]) => call.subscriptions[0] === identified,
     )?.[0].payload;
-    const privatePayload = preparedWebPushSendMock.mock.calls.find(
+    const privatePayload = mocks.send.mock.calls.find(
       ([call]) => call.subscriptions[0] === privateTarget,
     )?.[0].payload;
     expect(identifiedPayload.icon).toMatch(/^data:image\/png;base64,/);
@@ -240,7 +238,7 @@ describe("event Web Push classification", () => {
     const avatar = `data:image/png;base64,${encodePngRgba(Buffer.from([255, 150, 0, 255]), 1, 1).toString("base64")}`;
     const identity = { avatar };
     const cfg: OpenClawConfig = { agents: { entries: { research: { identity } } } };
-    prepareDevicePairingMock.mockImplementationOnce(async () => {
+    mocks.preparePairing.mockImplementationOnce(async () => {
       identity.avatar = "🌱";
     });
 
@@ -250,8 +248,8 @@ describe("event Web Push classification", () => {
       { agentId: "research", sessionKeys: ["agent:research:thread.1"] },
     );
 
-    await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
-    expect(preparedWebPushSendMock.mock.calls[0]?.[0].payload).not.toHaveProperty("icon");
+    await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledOnce());
+    expect(mocks.send.mock.calls[0]?.[0].payload).not.toHaveProperty("icon");
   });
 
   it("waits for final completion after a parent yields to its children", async () => {
