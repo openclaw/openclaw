@@ -1,4 +1,3 @@
-// Database-first legacy-store guard tests cover runtime state-file regressions.
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +14,10 @@ afterAll(() => parser.close());
 
 function parseFixture(content: string, fileName: string) {
   return [content, fileName, parser.parseSourceFile(fileName, content)] as const;
+}
+
+function violations(content: string, fileName: string) {
+  return collectDatabaseFirstLegacyStoreViolations(...parseFixture(content, fileName));
 }
 
 type LegacyStoreViolations = ReturnType<typeof collectDatabaseFirstLegacyStoreViolations>;
@@ -149,81 +152,47 @@ describe("check-database-first-legacy-stores", () => {
   });
 
   it("keeps legacy restart sentinel filesystem access in its sole migration owner", () => {
-    const runtimeViolations = collectDatabaseFirstLegacyStoreViolations(
-      ...parseFixture(
-        `
+    const source = `
         import { readFile } from "node:fs/promises";
         import path from "node:path";
         const legacyFilename = "restart-sentinel.json";
-      `,
-        "src/infra/restart-sentinel.ts",
-      ),
-    );
-    const migrationViolations = collectDatabaseFirstLegacyStoreViolations(
-      ...parseFixture(
-        `
-        import { readFile } from "node:fs/promises";
-        import path from "node:path";
-        const legacyFilename = "restart-sentinel.json";
-      `,
-        "src/infra/state-migrations.restart-sentinel.ts",
-      ),
-    );
-
-    expect(runtimeViolations).toEqual([
+      `;
+    expect(violations(source, "src/infra/restart-sentinel.ts")).toEqual([
       { kind: "legacy restart sentinel filesystem import", line: 2 },
       { kind: "legacy restart sentinel filesystem import", line: 3 },
       { kind: "legacy restart sentinel reference", line: 4 },
     ]);
-    expect(migrationViolations).toEqual([]);
+    expect(violations(source, "src/infra/state-migrations.restart-sentinel.ts")).toEqual([]);
   });
 
   it("keeps exec approvals legacy paths and stable URI identity in their exact owners", () => {
-    const runtimeViolations = collectDatabaseFirstLegacyStoreViolations(
-      ...parseFixture(
-        `
+    const source = `
         import fs from "node:fs";
         const legacyFilename = "exec-approvals.json";
-      `,
-        "src/infra/exec-approvals-store.ts",
-      ),
-    );
-    const migrationViolations = collectDatabaseFirstLegacyStoreViolations(
-      ...parseFixture(
-        `
-        import fs from "node:fs";
-        const legacyFilename = "exec-approvals.json";
-      `,
-        "src/infra/state-migrations.exec-approvals.ts",
-      ),
-    );
-    const configViolations = collectDatabaseFirstLegacyStoreViolations(
-      ...parseFixture(
-        'const EXEC_APPROVALS_FILE = "exec-approvals.json";',
-        "src/infra/exec-approvals-config.ts",
-      ),
-    );
-    const stableUriViolations = collectDatabaseFirstLegacyStoreViolations(
-      ...parseFixture(
-        'export const EXEC_APPROVALS_POLICY_URI = "oc://exec-approvals.json";',
-        "extensions/policy/src/exec-approvals-uri.ts",
-      ),
-    );
-    const copiedUriViolations = collectDatabaseFirstLegacyStoreViolations(
-      ...parseFixture(
-        'const copied = "oc://exec-approvals.json";',
-        "extensions/policy/src/doctor/copied-uri.ts",
-      ),
-    );
-
-    expect(runtimeViolations).toEqual([
+      `;
+    expect(violations(source, "src/infra/exec-approvals-store.ts")).toEqual([
       { kind: "legacy exec approvals filesystem import", line: 2 },
       { kind: "legacy exec approvals reference", line: 3 },
     ]);
-    expect(migrationViolations).toEqual([]);
-    expect(configViolations).toEqual([]);
-    expect(stableUriViolations).toEqual([]);
-    expect(copiedUriViolations).toEqual([{ kind: "legacy exec approvals reference", line: 1 }]);
+    expect(violations(source, "src/infra/state-migrations.exec-approvals.ts")).toEqual([]);
+    expect(
+      violations(
+        'const EXEC_APPROVALS_FILE = "exec-approvals.json";',
+        "src/infra/exec-approvals-config.ts",
+      ),
+    ).toEqual([]);
+    expect(
+      violations(
+        'export const EXEC_APPROVALS_POLICY_URI = "oc://exec-approvals.json";',
+        "extensions/policy/src/exec-approvals-uri.ts",
+      ),
+    ).toEqual([]);
+    expect(
+      violations(
+        'const copied = "oc://exec-approvals.json";',
+        "extensions/policy/src/doctor/copied-uri.ts",
+      ),
+    ).toEqual([{ kind: "legacy exec approvals reference", line: 1 }]);
   });
 
   it("preserves boundary family order and distinct duplicate policies in migration paths", () => {
@@ -801,9 +770,7 @@ describe("check-database-first-legacy-stores", () => {
       `("wrapper-option-path-parent-rewrite-unknown-nested.ts", []),
     }),
   )("$name", ({ source, filename, expected }) => {
-    const violations = collectDatabaseFirstLegacyStoreViolations(...parseFixture(source, filename));
-
-    expect(violations).toEqual(expected);
+    expect(violations(source, filename)).toEqual(expected);
   });
 
   it("keeps legacy PortGuardian filenames inside the native migration owner", () => {
@@ -832,8 +799,6 @@ describe("check-database-first-legacy-stores", () => {
       ]),
     }),
   )("$name", ({ source, filename, expected }) => {
-    const violations = collectDatabaseFirstLegacyStoreViolations(...parseFixture(source, filename));
-
-    expect(violations).toEqual(expected);
+    expect(violations(source, filename)).toEqual(expected);
   });
 });

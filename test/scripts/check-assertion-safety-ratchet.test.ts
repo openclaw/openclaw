@@ -64,6 +64,32 @@ function git(cwd: string, args: string[], input?: string) {
   );
 }
 
+function commitFixture(root: string) {
+  for (const args of [["init"], ["add", "."], ["commit", "-m", "fixture"]]) {
+    git(root, args);
+  }
+}
+
+function ratchetFixture(source = "export const first = value as string;\n") {
+  const root = tempDirs.make("openclaw-assertion-safety-");
+  fs.mkdirSync(path.join(root, "config"));
+  fs.mkdirSync(path.join(root, "src"));
+  const baselinePath = path.join(root, "config/assertion-safety-baseline.txt");
+  const sourcePath = path.join(root, "src/example.ts");
+  fs.writeFileSync(baselinePath, "src/example.ts\t1\n");
+  fs.writeFileSync(sourcePath, source);
+  commitFixture(root);
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  return { root, baselinePath, sourcePath };
+}
+
+function readBaseline(root: string, baselinePath: string) {
+  return parseRatchetCounts(
+    fs.readFileSync(baselinePath, "utf8"),
+    path.relative(root, baselinePath),
+  );
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -155,42 +181,31 @@ describe("check-assertion-safety-ratchet", () => {
     ].join("\n");
 
     expect(countUnsafeAssertions(...parseFixture(source, "src/example.ts"))).toBe(3);
-    expect(
-      countUnsafeAssertions(
-        ...parseFixture("value as unknown as Shape;", "src/agents/agent-model-discovery.ts"),
-      ),
-    ).toBe(1);
-    expect(
-      countUnsafeAssertions(...parseFixture("value as unknown as Shape;", "src/example.ts")),
-    ).toBe(1);
+    for (const file of ["src/agents/agent-model-discovery.ts", "src/example.ts"]) {
+      expect(countUnsafeAssertions(...parseFixture("value as unknown as Shape;", file))).toBe(1);
+    }
     expect(
       countUnsafeAssertions(
         ...parseFixture("declare const value: unknown as Shape;", "src/example.d.ts"),
       ),
     ).toBe(0);
-    expect(isGovernedAssertionSourcePath("src/example.ts")).toBe(true);
-    expect(isGovernedAssertionSourcePath("extensions/example/src/index.tsx")).toBe(true);
-    expect(isGovernedAssertionSourcePath("src/example.test.ts")).toBe(false);
-    expect(isGovernedAssertionSourcePath("packages/example/test-utils/value.ts")).toBe(false);
-    expect(isGovernedAssertionSourcePath("scripts/example.ts")).toBe(false);
+    expect(
+      [
+        "src/example.ts",
+        "extensions/example/src/index.tsx",
+        "src/example.test.ts",
+        "packages/example/test-utils/value.ts",
+        "scripts/example.ts",
+      ].map(isGovernedAssertionSourcePath),
+    ).toEqual([true, true, false, false, false]);
   });
 
   it("blocks new debt, accepts SAFETY comments, and prunes reduced counts", () => {
-    const root = tempDirs.make("openclaw-assertion-safety-");
-    fs.mkdirSync(path.join(root, "config"), { recursive: true });
-    fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    const baselinePath = path.join(root, "config/assertion-safety-baseline.txt");
-    const sourcePath = path.join(root, "src/example.ts");
-    fs.writeFileSync(baselinePath, "src/example.ts\t1\n");
-    fs.writeFileSync(sourcePath, "export const first = value as string;\n");
-    for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) {
-      git(root, args);
-    }
+    const { root, baselinePath, sourcePath } = ratchetFixture();
 
     fs.appendFileSync(sourcePath, "export const second = value as number;\n");
     const errors: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...args) => errors.push(args.join(" ")));
-    vi.spyOn(console, "log").mockImplementation(() => {});
 
     expect(main(root, ["--base", "HEAD"])).toBe(1);
     expect(main(root, ["--base", "HEAD", "--prune"])).toBe(1);
@@ -220,42 +235,19 @@ describe("check-assertion-safety-ratchet", () => {
     );
     expect(main(root, ["--base", "HEAD"])).toBe(1);
     expect(main(root, ["--base", "HEAD", "--prune"])).toBe(0);
-    expect(
-      parseRatchetCounts(fs.readFileSync(baselinePath, "utf8"), path.relative(root, baselinePath)),
-    ).toEqual(new Map());
+    expect(readBaseline(root, baselinePath)).toEqual(new Map());
   });
 
   it("allows rebaselining assertion debt already present in the base tree", () => {
-    const root = tempDirs.make("openclaw-assertion-safety-base-drift-");
-    fs.mkdirSync(path.join(root, "config"), { recursive: true });
-    fs.mkdirSync(path.join(root, "src"), { recursive: true });
-    const baselinePath = path.join(root, "config/assertion-safety-baseline.txt");
-    const sourcePath = path.join(root, "src/example.ts");
-    fs.writeFileSync(baselinePath, "src/example.ts\t1\n");
-    fs.writeFileSync(
-      sourcePath,
-      [
-        "export const first = value as string;",
-        "export const mergedConcurrently = value as number;",
-        "",
-      ].join("\n"),
+    const { root, baselinePath } = ratchetFixture(
+      "export const first = value as string;\nexport const mergedConcurrently = value as number;\n",
     );
-    for (const args of [
-      ["init"],
-      ["add", "."],
-      ["commit", "-m", "base with stale assertion baseline"],
-    ]) {
-      git(root, args);
-    }
 
     vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "log").mockImplementation(() => {});
 
     expect(main(root, ["--base", "HEAD"])).toBe(0);
     expect(main(root, ["--base", "HEAD", "--prune"])).toBe(0);
-    expect(
-      parseRatchetCounts(fs.readFileSync(baselinePath, "utf8"), path.relative(root, baselinePath)),
-    ).toEqual(new Map([["src/example.ts", 2]]));
+    expect(readBaseline(root, baselinePath)).toEqual(new Map([["src/example.ts", 2]]));
   });
 
   it("reports frozen sites, policy exemptions, unused allowances, and ambiguous fingerprints", () => {
@@ -289,15 +281,13 @@ describe("check-assertion-safety-ratchet", () => {
       fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
       fs.writeFileSync(path.join(root, file), source);
     }
-    for (const args of [["init"], ["add", "."], ["commit", "-m", "report fixture"]]) {
-      git(root, args);
-    }
+    commitFixture(root);
     const commit = git(root, ["rev-parse", "HEAD"]).trim();
     // A report ref selects source bytes, unlike the ratchet's comparison-only --base.
     fs.writeFileSync(path.join(root, "src/a.ts"), "const broken = ;");
     fs.rmSync(path.join(root, "src/b.ts"));
     const report = collectAssertionSafetyReport(root, "HEAD");
-    expect(report.complete).toBe(true);
+    expect(report).toMatchObject({ complete: true, matching: "not-performed" });
     expect(report.source).toEqual({
       commit,
       tree: git(root, ["rev-parse", "HEAD^{tree}"]).trim(),
@@ -347,7 +337,6 @@ describe("check-assertion-safety-ratchet", () => {
       column: files["src/a.ts"].indexOf("as Shape") + 1,
       start: files["src/a.ts"].indexOf("value as Shape"),
     });
-    expect(report.matching).toBe("not-performed");
     expect(report.ambiguousFingerprints).toEqual([
       {
         fingerprint: createHash("sha256").update("value as Shape").digest("hex"),
@@ -379,9 +368,7 @@ describe("check-assertion-safety-ratchet", () => {
         index === 0 || index === 33 ? "const broken = ;" : "const value = 1;",
       );
     }
-    for (const args of [["init"], ["add", "."], ["commit", "-m", "malformed fixture"]]) {
-      git(root, args);
-    }
+    commitFixture(root);
     const output = vi.spyOn(console, "log").mockImplementation(() => {});
     expect(main(root, ["--report", "HEAD"])).toBe(1);
     const report = JSON.parse(String(output.mock.calls[0]?.[0]));

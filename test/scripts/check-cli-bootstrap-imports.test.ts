@@ -1,4 +1,3 @@
-// Check Cli Bootstrap Imports tests cover check cli bootstrap imports script behavior.
 import { createHash } from "node:crypto";
 import fs, { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -57,6 +56,14 @@ function writeFixture(root: string, relativePath: string, source: string): void 
   const target = join(root, relativePath);
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, source, "utf8");
+}
+
+function workerFixture() {
+  const root = makeTempRoot();
+  for (const artifact of workerDeployArtifactNames) {
+    writeFixture(root, `dist/worker/${artifact}`, "export {};\n");
+  }
+  return root;
 }
 
 function writeGatewayRunChunk(
@@ -290,10 +297,7 @@ describe("check-cli-bootstrap-imports", () => {
   });
 
   it("validates every split worker chunk and rejects missing or external dependencies", () => {
-    const root = makeTempRoot();
-    for (const artifact of workerDeployArtifactNames) {
-      writeFixture(root, `dist/worker/${artifact}`, "export {};\n");
-    }
+    const root = workerFixture();
     writeFixture(root, "dist/worker/worker.mjs", 'import "./worker-chunk-start.mjs";');
     writeFixture(
       root,
@@ -314,10 +318,7 @@ describe("check-cli-bootstrap-imports", () => {
   });
 
   it("rejects worker package imports and dependency manifests", () => {
-    const root = makeTempRoot();
-    for (const artifact of workerDeployArtifactNames) {
-      writeFixture(root, `dist/worker/${artifact}`, "export {};\n");
-    }
+    const root = workerFixture();
     writeFixture(
       root,
       "dist/worker/worker.mjs",
@@ -379,13 +380,9 @@ describe("check-cli-bootstrap-imports", () => {
   });
 
   it("rejects a missing native lifecycle worker artifact", () => {
-    const root = makeTempRoot();
+    const root = workerFixture();
     const missingArtifact = "worker-native-lifecycle.worker.mjs";
-    for (const artifact of workerDeployArtifactNames) {
-      if (artifact !== missingArtifact) {
-        writeFixture(root, `dist/worker/${artifact}`, "export {};\n");
-      }
-    }
+    rmSync(join(root, "dist/worker", missingArtifact));
     expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([
       `Worker deploy artifact dist/worker/${missingArtifact} is missing. Run pnpm build first.`,
     ]);
