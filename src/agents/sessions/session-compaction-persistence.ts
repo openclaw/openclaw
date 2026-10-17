@@ -21,7 +21,7 @@ export type PreparedCompactionAppend = {
   initializeEntry?: boolean;
 };
 
-export type CommittedCompactionAppend = {
+type CommittedCompactionAppend = {
   result: CompactionEntry;
   before: SessionTranscriptContextVersion;
   after: SessionTranscriptContextVersion;

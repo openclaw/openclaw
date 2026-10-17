@@ -241,7 +241,9 @@ Live AWS acceptance proof remains a gap until a maintainer with Bedrock access r
 
 For `openrouter/anthropic/*` model refs, including `openrouter/~anthropic/*-latest` aliases, both Chat Completions builders apply the [shared marker layout](#chat-completions-cache-markers), but only when the request still targets a verified OpenRouter route (`openrouter` on its default endpoint, or any provider/base URL that resolves to `openrouter.ai`). Repointing the model at an arbitrary OpenAI-compatible proxy URL stops automatic marker injection. `cacheRetention: "long"` requests `ttl: "1h"` on these verified routes; `"none"` disables markers. See [OpenRouter prompt caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching).
 
-`contextPruning.mode: "cache-ttl"` is allowed for `openrouter/anthropic/*`, `openrouter/deepseek/*`, `openrouter/moonshot/*`, `openrouter/moonshotai/*`, `openrouter/x-ai/*`, `openrouter/zai/*`, `openrouter/google/gemini-2.5*`, and `openrouter/google/gemini-3*` model refs, because these routes handle provider-side prompt caching without needing OpenClaw's injected markers. Older Gemini models and other `google/*` models (for example Gemma) are excluded because OpenRouter caches them only with explicit `cache_control` markers, if at all.
+For `openrouter/google/gemini*` refs (including `~google/` aliases and `:variant` suffixes), both builders send one `cache_control: { type: "ephemeral" }` breakpoint on the stable system/developer prefix. Gemini uses only the last breakpoint, so tools and conversation history are not marked: a later marker would supersede the stable-prefix boundary and include the volatile system suffix. Without a split boundary, the complete system prompt is marked. The same verified-route restriction applies; direct Google routes are unchanged. `"none"` disables markers; `"short"` and `"long"` use the provider's default cache window without a TTL override. Gemini's model-specific minimum cacheable size still applies.
+
+`contextPruning.mode: "cache-ttl"` is allowed for `openrouter/anthropic/*`, `openrouter/deepseek/*`, `openrouter/moonshot/*`, `openrouter/moonshotai/*`, `openrouter/x-ai/*`, `openrouter/zai/*`, `openrouter/google/gemini-2.5*`, and `openrouter/google/gemini-3*` model refs. Older Gemini models and other `google/*` models (for example Gemma) remain excluded from cache-TTL pruning eligibility.
 
 Source: `extensions/openrouter/index.ts` (`OPENROUTER_CACHE_TTL_MODEL_FAMILY`).
 
@@ -276,7 +278,10 @@ If a provider does not support any of the above cache modes, `cacheRetention` ha
 ## Chat Completions cache markers
 
 OpenAI-compatible routes with `compat.cacheControlFormat: "anthropic"` share one
-marker policy across the managed transport, SDK builder, and provider wrappers:
+marker policy across the managed transport, SDK builder, and provider wrappers.
+
+OpenRouter Gemini uses only the stable system checkpoint described above; other
+routes use the following layout.
 
 - The last tool definition is marked when the route supports tool markers; tools remain sorted by name.
 - The stable system/developer block is marked, with the volatile suffix in a separate unmarked block.
@@ -293,7 +298,7 @@ With `compat.requiresStringContent: true`, managed requests keep message content
 as strings and omit message-block markers, including through provider wrappers.
 The tool-definition marker remains where supported.
 
-Detected defaults request `ttl: "1h"` only on verified OpenRouter routes. For a
+Detected defaults request `ttl: "1h"` only for Anthropic models on verified OpenRouter routes. For a
 custom endpoint that supports one-hour Anthropic caching, explicitly set
 `compat.cacheControlFormat: "anthropic"`, `compat.supportsLongCacheRetention: true`,
 and `cacheRetention: "long"` to send that TTL. Omitting the capability override

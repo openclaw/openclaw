@@ -190,7 +190,12 @@ describe("handleStopCommand target fallback", () => {
     }
     formatReply.mockReturnValueOnce(text);
     expectStoppedReply(await handleStopCommand(buildStopParams(), true), text);
-    expect(formatReply).toHaveBeenCalledWith(0, failed ? undefined : "finalizing", failed);
+    expect(formatReply).toHaveBeenCalledWith(
+      0,
+      failed ? undefined : "finalizing",
+      failed,
+      undefined,
+    );
     if (!failed) {
       expect(persistAbort).not.toHaveBeenCalled();
     }

@@ -14,10 +14,6 @@ export async function expectAttribute(target: Locator, name: string, value: stri
   await expect.poll(() => target.getAttribute(name)).toBe(value);
 }
 
-export async function expectVisible(target: Locator, visible = true) {
-  await expect.poll(() => target.isVisible()).toBe(visible);
-}
-
 export async function expectFocused(target: Locator) {
   await expect
     .poll(() => target.evaluate((element) => element === document.activeElement))

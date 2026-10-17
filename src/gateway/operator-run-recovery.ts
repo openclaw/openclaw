@@ -22,7 +22,10 @@ import {
   onOperatorRolePolicyChanged,
   resolveOperatorRolePolicyForAssignment,
 } from "./operator-role-policy.js";
-import { sourceRolePolicy } from "./operator-role-source-policy.js";
+import {
+  isOperatorRoleSourcePolicyCurrent,
+  sourceRolePolicy,
+} from "./operator-role-source-policy.js";
 import {
   captureChannelOperatorRunAuthority,
   intersectOperatorRunModelPolicy,
@@ -234,7 +237,11 @@ export async function restoreGatewayOperatorSource(params: {
       );
       if (
         !device.isCurrent() ||
-        !isDeepStrictEqual(sourceRolePolicy(role), snapshot.rolePolicy) ||
+        !isOperatorRoleSourcePolicyCurrent(
+          snapshot.rolePolicy,
+          sourceRolePolicy(role),
+          snapshot.scopes,
+        ) ||
         !isGatewayAuthGrantCurrent(snapshot.authPolicy, cfg) ||
         (snapshot.sharedGeneration !== undefined &&
           context.sharedGatewaySessionGenerationState !== generationOwner)

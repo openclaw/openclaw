@@ -39,7 +39,7 @@ function safePreviewImage(value: string | undefined): string | undefined {
     : undefined;
 }
 
-export function parsePreviewResponse(
+function parsePreviewResponse(
   target: LinkReaderTarget,
   value: unknown,
 ): ControlUiLinkReaderPreview {

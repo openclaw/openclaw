@@ -65,6 +65,7 @@ export type ChatEvent = {
   deltaText?: string;
   replace?: boolean;
   errorMessage?: string;
+  localModelMayStillBeFinishing?: boolean;
 };
 
 export type BtwEvent = {

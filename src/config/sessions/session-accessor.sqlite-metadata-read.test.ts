@@ -66,6 +66,7 @@ it("preserves hot, cold, missing and repeated IDs across metadata batch boundari
           Object.assign({}, expected[index % expected.length], {
             generation: null,
             cold: id === "cold",
+            sessionKey: id === "missing" ? null : `agent:main:${id}`,
           }),
         ),
       );

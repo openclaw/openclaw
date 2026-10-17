@@ -120,6 +120,19 @@ fragment activation/dependencies and the expected catalog for the state owner;
 it does not maintain a separate schema definition. They omit transaction wrappers and fixed schema qualification;
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
 
+The transcript navigation CHECK keeps its JSON validation for present metadata.
+Its PostgreSQL helper is strict, so absent metadata passes the CHECK without
+calling the helper. A fixed `pg_catalog` search path avoids repeatedly parsing
+the helper's CTE during unsuccessful SQL-function inlining attempts.
+Existing experimental PostgreSQL stores can apply the same attributes without
+rewriting rows. With the Gateway stopped and exclusive offline custody, run this
+for each agent schema, replacing `agent_schema` with its actual name:
+
+```sql
+ALTER FUNCTION agent_schema.openclaw_transcript_navigation_check(text)
+  STRICT SET search_path = pg_catalog;
+```
+
 For a manual state-schema check, run `psql` from the generated directory and
 supply the transaction and chosen schema explicitly:
 
@@ -260,7 +273,7 @@ host reader retry and repair; SQLite workers never schedule that maintenance.
 Transcript bytes, session recovery rows, schemas, and update behavior are unchanged.
 
 Global projection preflight and search readiness use the projection maintenance
-owner's connection-local facts. Transactional TEMP triggers queue affected sessions
+owner's published readiness. Transactional TEMP triggers queue affected sessions
 for appends, rewrites, projection publication, deletion, cold-storage moves, and raw
 local SQL. A sibling-writer receipt or schema change restarts bounded admission;
 local changes consume only the queued sessions. A bounded recursive key query
@@ -287,9 +300,12 @@ the workers serving committed history, reactions, and progress-card reads.
 A changed hit snapshot keeps the indexing hint. Read-only
 searches also retain their results with that conservative hint when writable
 maintenance is unavailable.
-Clean status reads reuse these facts without entering a write transaction or
-requesting write grants until a mutation invalidates them; connection close
-discards them. No durable tables or migration are added. Shipped synchronous
+After clean traversal commits, the owner publishes readiness with the physical
+database's committed write token. Search consumes that fact before borrowing a
+writer, without a TEMP-status query or write grants. Committed writes invalidate
+readiness; idle writer retirement preserves it while another native reader retains
+the database admission. Physical admission retirement discards it. No durable tables
+or migration are added. Shipped synchronous
 durable SDK callbacks and operator maintenance retain their native reconciliation
 adapter; moving those callbacks to another thread requires a separate SDK cutover.
 Their one-shot orphan cleanup retains ordered, indexed owner-set differences
@@ -2082,6 +2098,11 @@ without a separate planning read or archive worker. Cron run alias cleanup uses
 that path and keeps the stable session's transcript. Native-session participants,
 pending-delivery protection, and lease-loss refusal remain in the lifecycle owner.
 The transaction passes its validated rows to deletion instead of reading them again.
+Deletion planning uses a read snapshot on the admitted agent worker, including
+historical-generation planning and rechecks. Empty transcript plans use that
+writer for removal without starting a reclamation worker. Nonempty transcripts
+retain archive extraction and reclamation before publication; pending-archive
+recovery, retention, and final authority checks are unchanged.
 
 Prepared session-store updates, entry replacements, and lifecycle upserts use
 the same admission for cold snapshot reads and actual commits, retaining their
@@ -2199,15 +2220,18 @@ adopts newly established integrity verification only after operation cleanup and
 while its database claim remains current. These connection lifetimes are documented in the
 [accepted reclamation design](https://github.com/openclaw/openclaw/pull/140897#issuecomment-5647899202).
 
-Pressure sweeps and explicit deletion reuse one archive worker within their operation
-scope. The shared archive queue admits each materialization or publication separately;
+Pressure sweeps and explicit deletion reuse one archive worker across successful operation
+scopes. The shared archive queue admits each materialization or publication separately;
 every request opens a fresh read-only database and closes its database and file handles
 before acknowledging completion. No archive database connection or lease survives
 between requests. Each victim still commits and publishes before the next victim is
 deleted. A preparation or publication failure retires the worker and joins its native
-exit before returning the existing error. Scope completion and database retirement
-revoke queued requests, drain dispatched work, and join native exit. The process keeps
-at most one reusable archive worker; competing scopes retire the previous idle worker.
+exit before returning the existing error. Scope completion refuses further work under
+that scope while retaining a healthy idle worker. Database retirement revokes queued
+requests, drains dispatched work, and joins native exit. The process keeps at most one
+reusable archive worker; scopes in the same state directory transfer it with fresh
+authority. Different state directories and unhealthy workers require native exit
+before replacement.
 Cold preparation and mutations retain their separate one-shot workers; cold mutations
 join their existing page maintenance and native exit.
 

@@ -6,7 +6,6 @@ import { sha256Base64Url } from "../infra/crypto-digest.js";
 import type { GatewayAuthPolicy } from "./auth-policy.types.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { resolveIdentityOperatorScopes } from "./operator-identity-scopes.js";
-import { sourceRolePolicies } from "./operator-role-source-policy.js";
 import { checkGatewayWsBrowserOrigin } from "./origin-check.js";
 
 const policies = new WeakMap<
@@ -36,7 +35,7 @@ export function captureGatewayAuthPolicy(
     const trustedProxy = gateway?.auth?.trustedProxy;
     cached = {
       global: stableStringify({
-        roles: sourceRolePolicies(gateway?.roles),
+        // Named roles are enforced per profile, independently of transport admission.
         trustedProxies: gateway?.trustedProxies?.toSorted(),
         allowRealIpFallback: gateway?.allowRealIpFallback,
         allowTailscale: gateway?.auth?.allowTailscale,

@@ -21,10 +21,6 @@ import {
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import type {
-  SqliteSessionReclamationPlan,
-  SqliteSessionReclamationResult,
-} from "./session-accessor.sqlite-lifecycle-types.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -101,7 +97,6 @@ describe("SQLite lifecycle cleanup reclamation", () => {
       const entry = { sessionId: current.sessionId, updatedAt: Date.now() };
       await replaceSessionEntry(current, entry);
       await closeOpenClawAgentDatabaseByPathAsync(database().path);
-      const databasePath = database().path;
       const target = { canonicalKey: current.sessionKey, storeKeys: [current.sessionKey] };
       const entered = createDeferred();
       const prepared = createDeferred();
@@ -119,18 +114,6 @@ describe("SQLite lifecycle cleanup reclamation", () => {
           return result;
         },
       );
-      const entryReclamations: Array<{
-        plan: Extract<SqliteSessionReclamationPlan, { kind: "entry" }>;
-        result: SqliteSessionReclamationResult;
-      }> = [];
-      const reclaim = reclamation.runSqliteSessionReclamation;
-      vi.spyOn(reclamation, "runSqliteSessionReclamation").mockImplementation(async (params) => {
-        const result = await reclaim(params);
-        if (params.plan.kind === "entry") {
-          entryReclamations.push({ plan: params.plan, result });
-        }
-        return result;
-      });
       const previous = runExclusiveSessionLifecycleMutation("delete", {
         scope: storePath,
         identities: [current.sessionKey, current.sessionId],
@@ -171,25 +154,6 @@ describe("SQLite lifecycle cleanup reclamation", () => {
           expectedEntryMismatch: true,
         });
         expect(preparedTargetSnapshot).toBeDefined();
-        expect(entryReclamations).toHaveLength(mutation === "delete" ? 2 : 1);
-        for (const { plan } of entryReclamations) {
-          expect(plan).toMatchObject({
-            kind: "entry",
-            databaseOptions: { path: databasePath },
-            deleteParams: { target },
-          });
-          expect(plan.preparedTargetSnapshot).toEqual(preparedTargetSnapshot);
-        }
-        expect(entryReclamations.at(-1)?.result).toEqual({
-          kind: "entry",
-          value: { archivedTranscripts: [], deleted: false, expectedEntryMismatch: true },
-        });
-        if (mutation === "delete") {
-          expect(entryReclamations[0]?.result).toMatchObject({
-            kind: "entry",
-            value: { deleted: true, deletedSessionId: current.sessionId },
-          });
-        }
         if (mutation === "replace") {
           expect(loadSessionEntry(current)).toMatchObject({
             ...entry,

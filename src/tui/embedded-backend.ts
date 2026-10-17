@@ -114,7 +114,6 @@ import {
   normalizeAgentId,
 } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { applyQueueDropPolicy, waitForQueueDebounce } from "../utils/queue-helpers.js";
 import {
@@ -127,6 +126,7 @@ import {
 import { ensureEmbeddedHistoryRuntimePluginsLoaded } from "./embedded-history-runtime.js";
 import {
   buildLocalQueuedPrompt,
+  createLocalRunState,
   timeoutSecondsFromMs,
   waitForLocalRunShutdown,
   waitForQueuedLocalRun,
@@ -384,23 +384,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
         pendingQueue = queued.queue;
       }
     }
-    const controller = new AbortController();
-    const queuedRunReadiness = createDeferredCore();
-    const run: LocalRunState = {
+    const run = createLocalRunState(runId, {
       sessionKey: opts.sessionKey,
       agentId,
-      controller,
-      buffer: "",
-      managedMediaUrls: new Set(),
       question,
-      finishing: false,
-      lifecycleEnded: false,
-      registered: false,
       ...(pendingQueue ? { pendingQueue } : {}),
       ...(queuedAfter ? { queuedAfter } : {}),
-      queuedRunReady: queuedRunReadiness.promise,
-      markQueuedRunReady: queuedRunReadiness.resolve,
-    };
+    });
     this.runs.set(runId, run);
 
     const runPromise = (run.promise = this.runTurn(runId, run, opts));
@@ -1043,6 +1033,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const text = state === "final" && !projected.suppress ? projected.text.trim() : "";
     this.emitRun("chat", runId, run, {
       state,
+      ...(state === "aborted" && run.localModelMayStillBeFinishing
+        ? { localModelMayStillBeFinishing: true }
+        : {}),
       ...(state === "final" && detail ? { stopReason: detail } : {}),
       ...(state === "final" && run.lifecycleYielded ? { yielded: true } : {}),
       ...(text ? { message: assistantChatMessage(text) } : {}),

@@ -221,8 +221,8 @@ runtime proof. A later last writer can certify that verification after a complet
 checkpoint and native close; failed close or uncertain storage errors revoke both.
 The first open in a new process still requires matching clean-close metadata or
 the admission gate. Idle close within the same process preserves admitted facts.
-After native admission of an existing agent file, its initial integrity and schema
-preparation belong to the physical owner. Concurrent callers join that preparation;
+Opening an existing agent file and its initial integrity and schema preparation
+belong to the physical owner. Concurrent callers join that preparation;
 cancelling one caller ends only its wait. Each caller must still pass its own
 authority checks before using the prepared database. First-use creation retains
 its caller's creation claim, and native worker loss still invalidates the old
@@ -464,6 +464,12 @@ seal, startup readiness also performs full integrity and foreign-key checks.
 Doctor also shares one private shared-state snapshot across a synchronous
 workspace-alias check. The next check reads fresh state, so committed repairs are
 visible without taking a separate snapshot for every configured workspace.
+
+Destructive Doctor session migrations refuse when the shared-state database is
+missing but its SQLite sidecars remain. Restore the matching database before
+retrying; keep those sidecars intact. This refusal happens before importing or
+archiving legacy session sources, including stores with canonical agent paths
+that need no registry lookup.
 
 Memory search and maintenance managers retain the per-agent publication worker
 and its admitted schema, physical identity, and index facts. Acquisition does not

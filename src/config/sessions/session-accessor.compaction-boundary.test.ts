@@ -5,7 +5,6 @@ import { afterAll, expect, it, vi } from "vitest";
 import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import {
   withSessionCompactionPersistenceAsync,
-  type CommittedCompactionAppend,
   type CommittedCompactionBoundary,
   type PreparedCompactionAppend,
   type CompactionAppendPersistenceAsync,
@@ -269,7 +268,7 @@ it("retains a committed receipt when accounting retargets the manager before pub
   };
   const { manager, compact, persist } = await seedCompaction(scope);
   await upsertSessionEntryCore(replacement, { sessionId: replacement.sessionId, updatedAt: 1 });
-  let committed: CommittedCompactionAppend | undefined;
+  let committed: CommittedCompactionBoundary | undefined;
   const pending = compact(async (prepared) => {
     committed = await persist(prepared);
     // The independent retarget must not inherit the compaction's physical writer admission.

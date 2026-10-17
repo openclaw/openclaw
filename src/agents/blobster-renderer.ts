@@ -80,10 +80,17 @@ const ENUM_ATTRIBUTES: Record<string, readonly string[]> = {
 };
 
 function escapeXml(value: string) {
-  // XML excludes these controls and lone surrogates; paired Unicode is retained.
-  // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff\ud800-\udfff]/u.test(value)) {
-    throw new Error("Invalid XML text");
+  // Iteration keeps surrogate pairs together; single-unit surrogates are invalid XML.
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (
+      (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) ||
+      (character.length === 1 && code >= 0xd800 && code <= 0xdfff) ||
+      code === 0xfffe ||
+      code === 0xffff
+    ) {
+      throw new Error("Invalid XML text");
+    }
   }
   return value
     .replace(/&/g, "&amp;")

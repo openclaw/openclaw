@@ -251,7 +251,7 @@ function renderRailPin(
         </Show>
       </a>
     ) : entry.type === "route" ? (
-      host.sidebarMenus.renderRoute(entry.route)
+      host.sidebarMenus.renderRoute(entry.route, host)
     ) : (
       <Show
         when={session()}

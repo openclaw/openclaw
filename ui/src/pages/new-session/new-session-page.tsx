@@ -59,6 +59,31 @@ export function NewSessionRoute(props: SolidRouteProps<NewSessionRouteData>) {
 
 const pageOwners = new WeakMap<PageHost, NewSessionPageOwner>();
 
+function DraftAgentSelect(props: { page: () => NewSessionPageOwner }) {
+  const place = () => props.page().place;
+  const submission = () => props.page().submission;
+  return (
+    <Show when={place().agents().length > 1}>
+      <AgentSelect
+        ref={(node) => {
+          props.page().agentPicker = node;
+        }}
+        params={{
+          agents: place().agents(),
+          agentId: place().agentId,
+          agentIdentity: props.page().context?.agentIdentity,
+          disabled: submission().submitting || Boolean(submission().pendingPlacement.sessionKey),
+          onSelect: (agentId) => place().selectAgentId(agentId),
+          onOpenChange: (open) => {
+            props.page().agentPickerOpen = open;
+            props.page().changed();
+          },
+        }}
+      />
+    </Show>
+  );
+}
+
 function DraftBlock(props: {
   page: () => NewSessionPageOwner;
   revision: () => object;
@@ -124,24 +149,8 @@ function DraftBlock(props: {
         }
         onRetry={() => props.page().gateway.handleCatalogRetry()}
         agentSelect={
-          <Show when={place().agents().length > 1}>
-            <AgentSelect
-              ref={(node) => {
-                props.page().agentPicker = node;
-              }}
-              params={{
-                agents: place().agents(),
-                agentId: place().agentId,
-                agentIdentity: props.page().context?.agentIdentity,
-                disabled:
-                  submission().submitting || Boolean(submission().pendingPlacement.sessionKey),
-                onSelect: (agentId) => place().selectAgentId(agentId),
-                onOpenChange: (open) => {
-                  props.page().agentPickerOpen = open;
-                  props.page().changed();
-                },
-              }}
-            />
+          <Show when={Boolean(props.page().submission.completedSubmission)}>
+            <DraftAgentSelect page={props.page} />
           </Show>
         }
         placeSelect={<NewSessionPlaceControls params={placeOptions()} />}
@@ -324,6 +333,11 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
                 <DraftWelcome
                   sessions={page().context?.sessions}
                   options={page().welcomeOptions()}
+                  assistantNameControl={
+                    !catalog.isTarget(page().data) && page().place.agents().length > 1 ? (
+                      <DraftAgentSelect page={page} />
+                    ) : undefined
+                  }
                   composer={<DraftBlock page={page} revision={revision} options={options} />}
                 />
               }

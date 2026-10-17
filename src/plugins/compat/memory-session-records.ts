@@ -2,6 +2,28 @@ import type { PluginCompatRecord } from "./types.js";
 
 export const MEMORY_SESSION_COMPAT_RECORDS = [
   {
+    code: "memory-manager-sync-status",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-01-27",
+    deprecated: "2026-10-13",
+    warningStarts: "2026-10-16",
+    removeAfter: "2026-12-31",
+    replacement:
+      "Implement and await MemorySearchManager.statusAsync. Consumers of legacy manager types can await readMemorySearchManagerStatus, which retains the synchronous fallback through 2026-12-31. Remove the status member and fallback in the first January 2027 stable release.",
+    docsPath: "/plugins/sdk-migration/sqlite-async",
+    surfaces: ["MemorySearchManager.status", "MemoryIndexManager.status"],
+    diagnostics: [
+      "TypeScript @deprecated annotations and a runtime warning once per plugin and method from the built-in MemoryIndexManager",
+    ],
+    tests: [
+      "src/plugins/compat/registry.test.ts",
+      "extensions/memory-core/src/memory/manager-worker-reads.test.ts",
+    ],
+    releaseNote:
+      "The built-in memory manager warns synchronous status callers to await statusAsync; the legacy interface and third-party fallback remain compatible through 2026-12-31.",
+  },
+  {
     code: "memory-session-sync-inventory",
     status: "deprecated",
     owner: "sdk",

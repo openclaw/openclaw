@@ -292,7 +292,6 @@ src/agents/openai-routing.ts
 src/agents/owner-display.ts
 src/agents/plugin-model-catalog-repair.ts
 src/agents/plugin-model-catalog.kernel.ts
-src/agents/plugin-model-catalog.read-operation.ts
 src/agents/provider-auth-aliases.ts
 src/agents/provider-model-auth-source-plan.ts
 src/agents/provider-model-normalization.runtime.ts
@@ -2223,6 +2222,7 @@ src/config/sessions/activity-summary.ts
 src/config/sessions/session-actor.ts
 src/config/sessions/session-entry-cohort-scope.ts
 src/config/sessions/session-transcript-index-maintenance.ts
+src/config/sessions/session-transcript-index-readiness.ts
 src/config/sessions/session-transcript-projection-writer.ts
 src/config/sessions/session-transcript-reconcile-pool.ts
 src/config/sessions/session-transcript-reconcile-readiness.ts

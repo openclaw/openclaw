@@ -68,7 +68,7 @@ not a measurement of native IndexedDB cost alone.
 settles. The stream mixes full presence snapshots, session patches for displayed,
 held-but-hidden, and outside-window rows, open-session messages and assistant
 streaming, changing catalog hosts, and unrelated cron/run-state activity. The live
-phase runs after tracing and CPU sampling stop. The selected session starts with an
+phase runs after reload tracing and CPU sampling stop; `--cpu-profile` starts a separate live CPU capture. The selected session starts with an
 active canonical run; live messages and deltas advance its history receipt before
 publishing the event, so later history reads retain the same messages and stream. Capture ends after all frames
 arrive and the planned 20-second stream plus 750 ms have elapsed; busy sessions
@@ -131,6 +131,31 @@ measure server CPU, HTTP authentication/proxy redirects, real plugin bundle cost
 or a service-worker cache (service workers are blocked). The original real-Gateway
 latency rig remains useful for those boundaries. Synthetic fixture fidelity and
 measured results must be reported separately from private deployment evidence.
+
+## Source-mapped CPU attribution
+
+Use `--cpu-profile --live-events --untraced` to collect separate reload and live
+profiles without the additional timeline trace. CPU mode leaves the legacy
+owner-method and animation-frame wrappers disabled (`ownerProbes: false`,
+`solidChat`/`solidSidebar` absent as `null`); source stacks supply the attribution.
+This also lets live replay run after renderer owners have been replaced by native
+Solid components. `--cpu-profile` also captures
+`--streaming-reply` when selected. Each phase prints self time, inclusive function
+time (application sources first), and inclusive source-file time. Recursion and
+multiple frames from one file count once per sample. All rows are saved in
+`run-N.cpu-profile.json`; `cpu-profile.json` holds per-row medians, treating missing
+functions as zero. Raw phase profiles retain unmapped browser/native frames.
+The mapper reads adjacent `.js.map` files, including hidden release maps, and
+reports missing mappings; keep maps alongside any `--bundle-dir` assets.
+
+`--cpu-profile-compare /path/to/baseline/cpu-profile.json` enables profiling and
+prints candidate-minus-baseline self/inclusive function deltas, also saved in
+`cpu-profile-compare.json`. A per-run report is accepted too. Function identity is
+source path, name, line and column; moving a function appears as a removal/addition.
+Mapped filesystem paths are repository-relative, independent of the build output directory.
+Use the same fixture, phases, sampling and machine for both captures.
+Profiling inflates timing: use these tables to prove the hot path runs, then
+measure improvements in separate unprofiled, interleaved runs.
 
 ## Initial baseline
 

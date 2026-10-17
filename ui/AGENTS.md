@@ -37,6 +37,8 @@ imports inside their route's `component` loader.
 
 ## Reload Performance
 
+- Prove the bench executes the live hot function with `--cpu-profile` before measuring a fix; never mix profiled and unprofiled timings.
+
 - Reload cost is main-thread render/reconcile triggered per Gateway message; JSON parse and transport are negligible. Measured no win or regressions (2026-10-15, Team-scale bench, quiet AWS, ≥7 interleaved pairs): socket worker/SharedWorker, delivery scheduling/chunking, batched boot RPC, V8 compile hints/chunk sizing, cached DOM shell replay. WebSocket permessage-deflate saves bytes on slow links, not render time. Retry only with new evidence.
 - Cut work at its owner: memoize values read per item (`createMemo`), render reused UI as components rather than helper calls, keep row identity through placement/history/live updates, check cheap state before reading layout.
 - Measure with `scripts/bench-control-ui-cold-load.ts` (long-task and render-pass probes) over several untraced runs; single DevTools traces inflate timing.

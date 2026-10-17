@@ -273,7 +273,8 @@ catalogSuite.define(() => {
                 "agents.entries.main.model",
                 "--json",
               ]);
-              return result.code === 0 ? JSON.parse(result.stdout) : null;
+              expect(result.code, result.stderr || result.stdout).toBe(0);
+              return JSON.parse(result.stdout);
             })
             .toEqual({ primary: "fixture/selected", fallbacks: ["fixture/anchor"] });
           const writesBeforePublication = [...mutations];

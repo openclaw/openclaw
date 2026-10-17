@@ -147,7 +147,10 @@ export abstract class AppSidebarBase {
   private attached = false;
   private complete: Promise<boolean> = Promise.resolve(true);
   private finishUpdate: ((value: boolean) => void) | undefined;
-  contextualSidebar: ContextualSidebar | undefined;
+  readContextualSidebar: () => ContextualSidebar | undefined = () => undefined;
+  get contextualSidebar(): ContextualSidebar | undefined {
+    return this.isConnected ? this.readContextualSidebar() : undefined;
+  }
 
   sidebarSnapshot: SidebarSnapshotModel | null = null;
   sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;

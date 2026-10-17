@@ -534,6 +534,10 @@ Git. OpenClaw reports the failure without returning partial history entries.
 
 For SQLite, verification restores the selected snapshot into private scratch space, checks each table's row count and SHA-256, runs `PRAGMA integrity_check` and `PRAGMA foreign_key_check`, and removes the scratch copy. For PostgreSQL, it verifies the matched export hashes and anchor locally, without connecting to the server or creating a namespace. Restore writes only to a fresh target and refuses existing `-wal`, `-shm`, and `-journal` sidecars:
 
+If temporary-file cleanup fails during Git backup creation, verification, or
+restore, OpenClaw warns on stderr without replacing the primary outcome.
+Inspect the named private temporary directory for leftover backup data.
+
 ```bash
 openclaw backup git restore --repository ~/Backups/openclaw-git --ref <commit> --global --target ./restored/openclaw.sqlite
 openclaw backup git restore --repository ~/Backups/openclaw-git --ref <commit> --store workboard --target ./restored/workboard.sqlite

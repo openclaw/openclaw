@@ -31,7 +31,7 @@ vi.mock("../shared/pid-alive.js", () => ({
   getProcessInstanceStartTime: () => 1,
 }));
 vi.mock("./kill-tree.js", () => ({ killProcessTree: vi.fn() }));
-// Synthetic process groups must not leave real reaper work in the shared test worker.
+// mock-isolation: Synthetic process groups must not leave real reaper work in the shared test worker.
 vi.mock("./scoped-child-reaper.js", () => ({ scheduleAdoptedChildZombieReapAfterExit: vi.fn() }));
 vi.mock("./exec-termination.js", () => ({
   createCommandTerminationController: () => ({ terminate: () => false, settle: transport.settle }),

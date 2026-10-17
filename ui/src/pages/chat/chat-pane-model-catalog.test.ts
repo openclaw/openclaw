@@ -280,7 +280,6 @@ describe("chat pane composer controls", () => {
       messages: [],
       metadata: {
         commands: [],
-        models: [{ ...cachedModel, id: "fresh-model", name: "Fresh Model" }],
       },
     });
     catalog.resolve({ models: [{ ...cachedModel, id: "fresh-model", name: "Fresh Model" }] });

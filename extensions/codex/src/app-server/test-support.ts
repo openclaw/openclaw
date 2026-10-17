@@ -331,7 +331,7 @@ export function createClientHarness(
       return stdinDestroyed;
     },
     emitExit,
-    send(message: unknown) {
+    send(this: void, message: unknown) {
       stdout.write(`${JSON.stringify(message)}\n`);
     },
   };

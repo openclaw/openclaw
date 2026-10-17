@@ -4,11 +4,11 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationRouter, RouteId } from "../app-routes.ts";
+import { createSidebarTestRouter } from "../test-helpers/app-sidebar-router.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
-import type { ContextualSidebar } from "./sidebar-context-state.ts";
 
 setupSidebarTest();
 
@@ -42,26 +42,22 @@ it("restores destination offsets and updates fades after content commits", async
   await sidebar.updateComplete;
   expect(scroller.scrollTop).toBe(140);
 
-  const machines: ContextualSidebar = {
-    key: "systems",
-    data: undefined,
-    loaderPending: false,
-    render: () => "machine inventory",
-  };
-  sidebar.contextualSidebar = machines;
+  const router = createSidebarTestRouter(() => "machine inventory");
+  sidebar.router = router;
+  await router.navigate("systems", {});
   await sidebar.updateComplete;
   expect(scroller.scrollTop).toBe(0);
   // Navigation must also capture an offset whose native scroll event has not arrived yet.
   scroller.scrollTop = 35;
-  sidebar.contextualSidebar = undefined;
+  await router.navigate("cron", {});
   await sidebar.updateComplete;
   expect(scroller.scrollTop).toBe(140);
-  sidebar.contextualSidebar = machines;
+  await router.navigate("systems", {});
   await sidebar.updateComplete;
   expect(scroller.scrollTop).toBe(35);
 
   contentHeight = 80;
-  sidebar.contextualSidebar = { ...machines, loaderPending: true };
+  await router.navigate("cron", {});
   await expectFade("none");
 });
 
@@ -108,10 +104,19 @@ it("updates contextual navigation from its router and retires the subscription o
   expect(sidebar.contextualSidebar?.data).toBe(data);
   expect(pending?.loaderPending).toBe(true);
   expect(sidebar.querySelector(".sidebar-shell__body")?.textContent).toContain("machine inventory");
+  const replacement = createSidebarTestRouter(() => "replacement machines");
+  sidebar.router = replacement;
+  await replacement.navigate("systems", {});
+  await sidebar.updateComplete;
+  await router.navigate("cron", {});
+  await sidebar.updateComplete;
+  expect(sidebar.querySelector(".sidebar-shell__body")?.textContent).toContain(
+    "replacement machines",
+  );
   sidebar.remove();
   await waitForSolid(() => expect(getAppSidebarOwner(element)).toBeUndefined());
   expect(sidebar.contextualSidebar).toBeUndefined();
-  await router.navigate("cron", {});
-  await router.navigate("systems", {});
+  await replacement.navigate("cron", {});
+  await replacement.navigate("systems", {});
   expect(sidebar.contextualSidebar).toBeUndefined();
 });

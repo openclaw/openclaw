@@ -276,7 +276,7 @@ export function SessionsAdvancedFilters(props: SessionsAdvancedFiltersProps): JS
   );
 }
 
-export function handleSessionsSearchKeydown(
+function handleSessionsSearchKeydown(
   event: KeyboardEvent,
   props: {
     sessionMenu: { key: string } | null;

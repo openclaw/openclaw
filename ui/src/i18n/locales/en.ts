@@ -3859,6 +3859,7 @@ export const en: TranslationMap & {
       working: "{name} is working...",
       runDone: "Done",
       runInterrupted: "Interrupted",
+      localCancellationCaveat: "Cancellation requested; the local model may still be finishing.",
       runStatus: "Run status: {status}",
       compactingContext: "Compacting context...",
       contextCompacted: "Context compacted",

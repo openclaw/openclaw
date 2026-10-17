@@ -18,23 +18,53 @@ const MOVED_GROUP = "cron-delivery";
 
 type LaneGroupSpec = NonNullable<Parameters<typeof publishLaneConfiguration>[0]["groups"]>[string];
 
-function setCommandLaneGroup(group: string, spec: LaneGroupSpec): void {
-  publishLaneConfiguration({ groups: { [group]: spec } });
+function publish(
+  budget: number,
+  lanes?: Record<string, number>,
+  reservations?: LaneGroupSpec["reservations"],
+  members = [CRON, HOOK],
+) {
+  publishLaneConfiguration({ lanes, groups: { [GROUP]: { budget, members, reservations } } });
 }
 
-function clearCommandLaneGroup(group: string): void {
-  publishLaneConfiguration({ clearGroups: [group] });
+function clearGroups() {
+  for (const group of [GROUP, MOVED_GROUP]) {
+    publishLaneConfiguration({ clearGroups: [group] });
+  }
+}
+
+function park(lane: string, onStart?: () => void, onFinish?: () => void, priority?: "background") {
+  const gate = createDeferred();
+  const run = enqueueCommandInLane(
+    lane,
+    async () => {
+      onStart?.();
+      await gate.promise;
+      onFinish?.();
+    },
+    { priority },
+  );
+  return { run, resolve: gate.resolve };
+}
+
+async function releaseAll(tasks: ReturnType<typeof park>[], clear = false) {
+  for (const task of tasks) {
+    task.resolve();
+  }
+  if (clear) {
+    clearCommandLane(CRON);
+    clearCommandLane(HOOK);
+  }
+  const runs = tasks.map(({ run }) => run);
+  await (clear ? Promise.allSettled(runs) : Promise.all(runs));
 }
 
 beforeEach(() => {
   resetAllLanes();
-  clearCommandLaneGroup(GROUP);
-  clearCommandLaneGroup(MOVED_GROUP);
+  clearGroups();
 });
-
 afterEach(() => {
-  clearCommandLaneGroup(GROUP);
-  clearCommandLaneGroup(MOVED_GROUP);
+  clearGroups();
   resetAllLanes();
 });
 
@@ -43,110 +73,71 @@ describe("publishLaneConfiguration", () => {
     // A per-lane drain before group installation would admit 8 + 4 tasks.
     setCommandLaneConcurrency(CRON, 0);
     setCommandLaneConcurrency(HOOK, 0);
-
     let active = 0;
     let peak = 0;
     const publishedStarts = createDeferred();
-    const gates: Array<{ resolve: () => void }> = [];
-    const runs: Array<Promise<unknown>> = [];
-    const park = (lane: string) => {
-      const g = createDeferred();
-      gates.push(g);
-      runs.push(
-        enqueueCommandInLane(lane, async () => {
-          active += 1;
-          // Sample before any task can retire to catch transient over-admission.
-          peak = Math.max(peak, active);
-          if (active >= 8) {
-            publishedStarts.resolve();
-          }
-          await g.promise;
-          active -= 1;
-        }),
-      );
-    };
-    for (let i = 0; i < 12; i++) {
-      park(CRON);
-    }
-    for (let i = 0; i < 6; i++) {
-      park(HOOK);
-    }
+    const tasks = [CRON, HOOK].flatMap((lane, index) =>
+      Array.from({ length: index === 0 ? 12 : 6 }, () =>
+        park(
+          lane,
+          () => {
+            active += 1;
+            peak = Math.max(peak, active);
+            if (active >= 8) {
+              publishedStarts.resolve();
+            }
+          },
+          () => {
+            active -= 1;
+          },
+        ),
+      ),
+    );
     expect(active).toBe(0); // nothing may run before publication
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(0);
     expect(getCommandLaneSnapshot(HOOK).activeCount).toBe(0);
-
     try {
-      publishLaneConfiguration({
-        lanes: { [CRON]: 8, [HOOK]: 4 },
-        groups: {
-          [GROUP]: {
-            budget: 8,
-            members: [CRON, HOOK],
-            reservations: { [HOOK]: 1 },
-          },
-        },
-      });
-
+      publish(8, { [CRON]: 8, [HOOK]: 4 }, { [HOOK]: 1 });
       await withTestTimeout(
         publishedStarts.promise,
         1_000,
         "publication did not start the shared group budget",
       );
-
       expect(peak).toBe(8);
     } finally {
-      for (const g of gates) {
-        g.resolve();
-      }
-      clearCommandLane(CRON);
-      clearCommandLane(HOOK);
-      await Promise.allSettled(runs);
+      await releaseAll(tasks, true);
     }
   });
 
   test("commit dispatch uses group order rather than publication object order", async () => {
     setCommandLaneConcurrency(CRON, 0);
     setCommandLaneConcurrency(HOOK, 0);
-
     const starts: string[] = [];
     const cronStarted = createDeferred();
     const hookStarted = createDeferred();
-    const cronGate = createDeferred();
-    const hookGate = createDeferred();
-    const olderCron = enqueueCommandInLane(
-      CRON,
-      async () => {
-        starts.push(CRON);
-        cronStarted.resolve();
-        await cronGate.promise;
-      },
-      { priority: "background" },
-    );
-    const newerHook = enqueueCommandInLane(
-      HOOK,
-      async () => {
-        starts.push(HOOK);
-        hookStarted.resolve();
-        await hookGate.promise;
-      },
-      { priority: "background" },
-    );
-
+    const start = (lane: string, signal: { resolve: () => void }) =>
+      park(
+        lane,
+        () => {
+          starts.push(lane);
+          signal.resolve();
+        },
+        undefined,
+        "background",
+      );
+    const cron = start(CRON, cronStarted);
+    const hook = start(HOOK, hookStarted);
     try {
       // HOOK is published first; the older CRON head must still win.
-      publishLaneConfiguration({
-        lanes: { [HOOK]: 1, [CRON]: 1 },
-        groups: { [GROUP]: { budget: 1, members: [HOOK, CRON] } },
-      });
+      publish(1, { [HOOK]: 1, [CRON]: 1 }, undefined, [HOOK, CRON]);
       await withTestTimeout(
         cronStarted.promise,
         1_000,
         "publication did not start the older cron task",
       );
       expect(starts).toEqual([CRON]);
-
-      cronGate.resolve();
-      await olderCron;
+      cron.resolve();
+      await cron.run;
       await withTestTimeout(
         hookStarted.promise,
         1_000,
@@ -154,26 +145,15 @@ describe("publishLaneConfiguration", () => {
       );
       expect(starts).toEqual([CRON, HOOK]);
     } finally {
-      cronGate.resolve();
-      hookGate.resolve();
-      clearCommandLane(CRON);
-      clearCommandLane(HOOK);
-      await Promise.allSettled([olderCron, newerHook]);
+      await releaseAll([cron, hook], true);
     }
   });
 
   test("moving a busy member wakes queued work in its previous group", async () => {
-    publishLaneConfiguration({
-      lanes: { [CRON]: 1, [HOOK]: 1, [DELIVERY]: 1 },
-      groups: { [GROUP]: { budget: 1, members: [CRON, HOOK] } },
-    });
-
-    const cronGate = createDeferred();
-    const cronRun = enqueueCommandInLane(CRON, async () => await cronGate.promise);
-    const hookGate = createDeferred();
-    const hookRun = enqueueCommandInLane(HOOK, async () => await hookGate.promise);
+    publish(1, { [CRON]: 1, [HOOK]: 1, [DELIVERY]: 1 });
+    const cronGate = park(CRON);
+    const hookGate = park(HOOK);
     expect(getCommandLaneSnapshot(HOOK)).toMatchObject({ activeCount: 0, queuedCount: 1 });
-
     // Moving active CRON work must immediately free its old group for HOOK.
     publishLaneConfiguration({
       groups: { [MOVED_GROUP]: { budget: 1, members: [CRON, DELIVERY] } },
@@ -184,45 +164,24 @@ describe("publishLaneConfiguration", () => {
       queuedCount: 0,
     });
     expect(getCommandLaneSnapshot(CRON).group).toBe(MOVED_GROUP);
-
     cronGate.resolve();
     hookGate.resolve();
-    await Promise.all([cronRun, hookRun]);
+    await Promise.all([cronGate.run, hookGate.run]);
   });
 
   test("a rejected configuration does not leave lane maxima mutated", async () => {
     // Reject before mutating: a later enqueue must not dispatch the preserved queue.
     setCommandLaneConcurrency(CRON, 0);
-    const gates = Array.from({ length: 4 }, () => createDeferred());
-    const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
+    const tasks = Array.from({ length: 4 }, () => park(CRON));
     expect(getCommandLaneSnapshot(CRON).maxConcurrent).toBe(0);
-
-    expect(() =>
-      publishLaneConfiguration({
-        lanes: { [CRON]: 8 },
-        groups: {
-          [GROUP]: {
-            budget: 2,
-            members: [CRON, HOOK],
-            reservations: { [CRON]: 2, [HOOK]: 1 },
-          },
-        },
-      }),
-    ).toThrow(/reserves 3 slots but its budget is 2/);
-
+    expect(() => publish(2, { [CRON]: 8 }, { [CRON]: 2, [HOOK]: 1 })).toThrow(
+      /reserves 3 slots but its budget is 2/,
+    );
     expect(getCommandLaneSnapshot(CRON).maxConcurrent).toBe(0);
     expect(getCommandLaneSnapshot(CRON).group).toBeUndefined();
-
-    const extra = createDeferred();
-    const extraRun = enqueueCommandInLane(CRON, async () => await extra.promise);
+    const extra = park(CRON);
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(0);
-
-    for (const g of gates) {
-      g.resolve();
-    }
-    extra.resolve();
-    clearCommandLane(CRON);
-    await Promise.allSettled([...runs, extraRun]);
+    await releaseAll([...tasks, extra], true);
   });
 
   test("a rejected replacement does not tear down the existing group first", async () => {
@@ -259,54 +218,23 @@ describe("publishLaneConfiguration", () => {
     // Budget expansion must wake queued work without another enqueue.
     setCommandLaneConcurrency(CRON, 8);
     setCommandLaneConcurrency(HOOK, 1);
-    setCommandLaneGroup(GROUP, { budget: 2, members: [CRON, HOOK] });
-
-    const gates = Array.from({ length: 5 }, () => createDeferred());
-    const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
-    expect(getCommandLaneSnapshot(CRON).activeCount).toBe(2);
-    expect(getCommandLaneSnapshot(CRON).queuedCount).toBe(3);
-
-    setCommandLaneGroup(GROUP, { budget: 5, members: [CRON, HOOK] });
-
-    expect(getCommandLaneSnapshot(CRON).activeCount).toBe(5);
-    expect(getCommandLaneSnapshot(CRON).queuedCount).toBe(0);
-
-    for (const g of gates) {
-      g.resolve();
-    }
-    await Promise.all(runs);
+    publish(2);
+    const tasks = Array.from({ length: 5 }, () => park(CRON));
+    expect(getCommandLaneSnapshot(CRON)).toMatchObject({ activeCount: 2, queuedCount: 3 });
+    publish(5);
+    expect(getCommandLaneSnapshot(CRON)).toMatchObject({ activeCount: 5, queuedCount: 0 });
+    await releaseAll(tasks);
   });
 
   test("republishing a narrower budget does not admit beyond the new cap", async () => {
-    publishLaneConfiguration({
-      lanes: { [CRON]: 8, [HOOK]: 1 },
-      groups: {
-        [GROUP]: { budget: 8, members: [CRON, HOOK], reservations: { [HOOK]: 1 } },
-      },
-    });
-
-    const gates = Array.from({ length: 3 }, () => createDeferred());
-    const runs = gates.map((g) => enqueueCommandInLane(CRON, async () => await g.promise));
+    publish(8, { [CRON]: 8, [HOOK]: 1 }, { [HOOK]: 1 });
+    const tasks = Array.from({ length: 3 }, () => park(CRON));
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(3);
-
     // Narrowing cannot evict running work or admit more while over budget.
-    publishLaneConfiguration({
-      lanes: { [CRON]: 8, [HOOK]: 1 },
-      groups: {
-        [GROUP]: { budget: 2, members: [CRON, HOOK], reservations: { [HOOK]: 1 } },
-      },
-    });
-    const extra = createDeferred();
-    const blocked = enqueueCommandInLane(CRON, async () => await extra.promise);
-
+    publish(2, { [CRON]: 8, [HOOK]: 1 }, { [HOOK]: 1 });
+    const extra = park(CRON);
     expect(getCommandLaneSnapshot(CRON).activeCount).toBe(3);
     expect(getCommandLaneSnapshot(CRON).blockedBy).toBe("group-budget");
-
-    for (const g of gates) {
-      g.resolve();
-    }
-    extra.resolve();
-    clearCommandLane(CRON);
-    await Promise.allSettled([...runs, blocked]);
+    await releaseAll([...tasks, extra], true);
   });
 });
