@@ -171,53 +171,29 @@ describe("matrix exec approvals", () => {
     expect(isMatrixExecApprovalAuthorizedSender({ cfg, senderId: "@k:example.org" })).toBe(false);
   });
 
-  it("suppresses local prompts only when the native client is enabled", async () => {
-    const payload = {
-      channelData: {
-        execApproval: {
-          approvalId: "req-1",
-          approvalSlug: "req-1",
-          agentId: "ops-agent",
-          sessionKey: "agent:ops-agent:matrix:channel:!ops:example.org",
-        },
-      },
-    };
-
+  const exec = {
+    approvalId: "req-1",
+    approvalSlug: "req-1",
+    agentId: "ops-agent",
+    sessionKey: "agent:ops-agent:matrix:channel:!ops:example.org",
+  };
+  const enabled = { enabled: true, approvers: ["@owner:example.org"] };
+  it.each([
+    { name: "enabled exec", cfg: buildConfig(enabled), metadata: exec, suppressed: true },
+    { name: "disabled exec", cfg: buildConfig(), metadata: exec, suppressed: false },
+    {
+      name: "plugin with DM approvers",
+      cfg: buildConfig(enabled, { dm: { allowFrom: ["@owner:example.org"] } }),
+      metadata: { approvalId: "plugin:req-1", approvalSlug: "plugin:r", approvalKind: "plugin" },
+      suppressed: true,
+    },
+  ])("suppresses local prompts for $name: $suppressed", async ({ cfg, metadata, suppressed }) => {
     expect(
       await shouldSuppressLocalMatrixExecApprovalPrompt({
-        cfg: buildConfig({ enabled: true, approvers: ["@owner:example.org"] }),
-        payload,
+        cfg,
+        payload: { channelData: { execApproval: metadata } },
       }),
-    ).toBe(true);
-
-    expect(
-      await shouldSuppressLocalMatrixExecApprovalPrompt({
-        cfg: buildConfig(),
-        payload,
-      }),
-    ).toBe(false);
-  });
-
-  it("suppresses local prompts for plugin approval payloads when DM approvers are configured", async () => {
-    const payload = {
-      channelData: {
-        execApproval: {
-          approvalId: "plugin:req-1",
-          approvalSlug: "plugin:r",
-          approvalKind: "plugin",
-        },
-      },
-    };
-
-    expect(
-      await shouldSuppressLocalMatrixExecApprovalPrompt({
-        cfg: buildConfig(
-          { enabled: true, approvers: ["@owner:example.org"] },
-          { dm: { allowFrom: ["@owner:example.org"] } },
-        ),
-        payload,
-      }),
-    ).toBe(true);
+    ).toBe(suppressed);
   });
 
   it("normalizes prefixed approver ids", () => {

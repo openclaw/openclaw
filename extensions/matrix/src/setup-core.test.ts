@@ -1,20 +1,20 @@
-// Matrix tests cover setup core plugin behavior.
 import type { ChannelSetupWizardAdapter } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixSetupInput } from "./setup-config.js";
 import { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
+const opsInput = {
+  name: "Ops",
+  homeserver: "https://matrix.example.org",
+  accessToken: "ops-token",
+} satisfies MatrixSetupInput;
+
 function applyOpsAccountConfig(cfg: CoreConfig, input: Partial<MatrixSetupInput> = {}): CoreConfig {
   return matrixSetupAdapter.applyAccountConfig({
     cfg,
     accountId: "ops",
-    input: {
-      name: "Ops",
-      homeserver: "https://matrix.example.org",
-      accessToken: "ops-token",
-      ...input,
-    } as MatrixSetupInput,
+    input: { ...opsInput, ...input },
   }) as CoreConfig;
 }
 
@@ -33,31 +33,8 @@ const withMatrix = (matrix: NonNullable<CoreConfig["channels"]>["matrix"]): Core
 const withDm = (dm: { policy?: "open"; allowFrom: string[] }) =>
   withMatrix({ accounts: { ops: { dm } } });
 
-function expectPromotedDefaultAccount(next: CoreConfig): void {
-  expectFields(next.channels?.matrix?.accounts?.Default, {
-    enabled: true,
-    deviceName: "Legacy raw key",
-    homeserver: "https://matrix.example.org",
-    userId: "@default:example.org",
-    accessToken: "tok-default",
-    avatarUrl: "mxc://example.org/default-avatar",
-  });
-  expect(next.channels?.matrix?.accounts?.default).toBeUndefined();
-}
-
-function expectOpsAccount(next: CoreConfig): void {
-  expectFields(next.channels?.matrix?.accounts?.ops, {
-    name: "Ops",
-    enabled: true,
-    homeserver: "https://matrix.example.org",
-    accessToken: "ops-token",
-  });
-}
-
-function makeFakeSetupWizard(
-  overrides: Partial<ChannelSetupWizardAdapter> = {},
-): ChannelSetupWizardAdapter {
-  return {
+function setupProxy(overrides: Partial<ChannelSetupWizardAdapter> = {}) {
+  const matrixSetupWizard: ChannelSetupWizardAdapter = {
     channel: "matrix",
     getStatus: vi.fn(async () => ({
       channel: "matrix",
@@ -66,7 +43,9 @@ function makeFakeSetupWizard(
     })),
     configure: vi.fn(async ({ cfg }) => ({ cfg })),
     ...overrides,
-  } as ChannelSetupWizardAdapter;
+  };
+  const loader = vi.fn(async () => ({ matrixSetupWizard }));
+  return { loader, proxy: createMatrixSetupWizardProxy(loader) };
 }
 
 describe("createMatrixSetupWizardProxy", () => {
@@ -78,10 +57,7 @@ describe("createMatrixSetupWizardProxy", () => {
     };
     const getStatus = vi.fn(async () => status);
     const configure = vi.fn(async ({ cfg }) => ({ cfg }));
-    const loader = vi.fn(async () => ({
-      matrixSetupWizard: makeFakeSetupWizard({ configure, getStatus }),
-    }));
-    const proxy = createMatrixSetupWizardProxy(loader);
+    const { loader, proxy } = setupProxy({ configure, getStatus });
     const cfg = { channels: { matrix: {} } } as CoreConfig;
 
     const result = await proxy.getStatus({ cfg, accountOverrides: {} });
@@ -103,20 +79,17 @@ describe("createMatrixSetupWizardProxy", () => {
 
   it("keeps sync dmPolicy helpers local and lazy-loads only promptAllowFrom", async () => {
     const promptAllowFrom = vi.fn(async ({ cfg }) => cfg);
-    const loader = vi.fn(async () => ({
-      matrixSetupWizard: makeFakeSetupWizard({
-        dmPolicy: {
-          label: "Matrix",
-          channel: "matrix",
-          policyKey: "unused",
-          allowFromKey: "unused",
-          getCurrent: () => "pairing",
-          setPolicy: (cfg) => cfg,
-          promptAllowFrom,
-        },
-      }),
-    }));
-    const proxy = createMatrixSetupWizardProxy(loader);
+    const { loader, proxy } = setupProxy({
+      dmPolicy: {
+        label: "Matrix",
+        channel: "matrix",
+        policyKey: "unused",
+        allowFromKey: "unused",
+        getCurrent: () => "pairing",
+        setPolicy: (cfg) => cfg,
+        promptAllowFrom,
+      },
+    });
     const cfg = withDm({ allowFrom: ["  @ops:example.org  ", "", "*"] });
 
     expect(proxy.dmPolicy?.getCurrent(cfg, "ops")).toBe("pairing");
@@ -138,8 +111,7 @@ describe("createMatrixSetupWizardProxy", () => {
   });
 
   it("removes wildcard allowFrom when switching from open to a restrictive policy", () => {
-    const loader = vi.fn(async () => ({ matrixSetupWizard: makeFakeSetupWizard() }));
-    const proxy = createMatrixSetupWizardProxy(loader);
+    const { loader, proxy } = setupProxy();
     const cfg = withDm({ policy: "open", allowFrom: ["*", "  @ops:example.org  "] });
 
     const next = proxy.dmPolicy?.setPolicy(cfg, "allowlist", "ops") as CoreConfig;
@@ -163,8 +135,16 @@ describe("matrixSetupAdapter", () => {
 
     const next = applyOpsAccountConfig(cfg);
 
-    expectPromotedDefaultAccount(next);
-    expectOpsAccount(next);
+    expect(next.channels?.matrix?.accounts).toMatchObject({
+      Default: {
+        ...credentials,
+        enabled: true,
+        deviceName: "Legacy raw key",
+        avatarUrl: "mxc://example.org/default-avatar",
+      },
+      ops: { ...opsInput, enabled: true },
+    });
+    expect(next.channels?.matrix?.accounts?.default).toBeUndefined();
   });
 
   it("rejects unsupported avatar URL schemes during setup validation", () => {
@@ -214,11 +194,9 @@ describe("matrixSetupAdapter", () => {
 
     expect(next.channels?.matrix?.streaming).toEqual({ block: { enabled: true } });
     expectFields(next.channels?.matrix?.accounts?.ops, {
-      name: "Ops",
+      ...opsInput,
       enabled: true,
-      homeserver: "https://matrix.example.org",
       userId: "@ops:example.org",
-      accessToken: "ops-token",
     });
     expect(next.channels?.matrix?.accounts?.ops?.streaming).toBeUndefined();
   });

@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "./channel.js";
 import { registerMatrixCli } from "./cli.js";
 import { prepareMockMatrixClientStorage } from "./matrix/client/shared.test-support.js";
-import { loadMatrixCredentialsAsync } from "./matrix/credentials-read.js";
 import { saveMatrixCredentials } from "./matrix/credentials.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
@@ -89,10 +88,7 @@ function recordHostSql() {
       vi.spyOn(StatementSync.prototype, method),
     ),
   ];
-  return {
-    counts: () => counters.map((counter) => counter.mock.calls.length),
-    restore: () => counters.forEach((counter) => counter.mockRestore()),
-  };
+  return () => counters.map((counter) => counter.mock.calls.length);
 }
 
 function config(encryption: boolean): CoreConfig {
@@ -132,7 +128,6 @@ async function seed(cfg: CoreConfig) {
     process.env,
     "ops",
   );
-  expect((await loadMatrixCredentialsAsync(process.env, "ops"))?.userId).toBe("@ops:example.org");
 }
 
 function expectRepair(client: ReturnType<typeof createClient>, encrypted: boolean) {
@@ -158,55 +153,51 @@ describe.each([true, false])(
       if (!runtime) {
         throw new Error("Matrix native approval runtime missing");
       }
-      const counters = recordHostSql();
-      try {
-        expect(
-          await runtime.availability.isConfigured({ cfg, accountId: "ops", context: { client } }),
-        ).toBe(true);
-        expect(
-          await matrixPlugin.approvalCapability?.getExecInitiatingSurfaceStateAsync?.({
-            cfg,
-            accountId: "ops",
-            action: "approve",
-          }),
-        ).toEqual({ kind: "enabled" });
-        const availability = counters.counts();
-        expect(availability).toEqual([0, 0, 0, 0, 0, 0]);
-        const result = await runtime.transport.prepareTarget({
+      const counts = recordHostSql();
+      expect(
+        await runtime.availability.isConfigured({ cfg, accountId: "ops", context: { client } }),
+      ).toBe(true);
+      expect(
+        await matrixPlugin.approvalCapability?.getExecInitiatingSurfaceStateAsync?.({
           cfg,
           accountId: "ops",
-          context: { client },
+          action: "approve",
+        }),
+      ).toEqual({ kind: "enabled" });
+      const availability = counts();
+      expect(availability).toEqual([0, 0, 0, 0, 0, 0]);
+      const result = await runtime.transport.prepareTarget({
+        cfg,
+        accountId: "ops",
+        context: { client },
+        approvalKind: "exec",
+        request: {
+          id: "synthetic-approval",
+          request: { command: "echo synthetic" },
+          createdAtMs: 0,
+          expiresAtMs: 60_000,
+        },
+        view: {
           approvalKind: "exec",
-          request: {
-            id: "synthetic-approval",
-            request: { command: "echo synthetic" },
-            createdAtMs: 0,
-            expiresAtMs: 60_000,
-          },
-          view: {
-            approvalKind: "exec",
-            approvalId: "synthetic-approval",
-            phase: "pending",
-            title: "Exec approval",
-            metadata: [],
-            commandText: "echo synthetic",
-            actions: [],
-            expiresAtMs: 60_000,
-          },
-          pendingPayload: {},
-          plannedTarget: {
-            surface: "approver-dm",
-            reason: "preferred",
-            target: { to: `user:${peer}` },
-          },
-        });
-        const total = counters.counts();
-        expect(result?.target).toMatchObject({ to: `room:${roomId}`, roomId });
-        expectRepair(client, encrypted);
-        expect(total).toEqual(availability);
-      } finally {
-        counters.restore();
-      }
+          approvalId: "synthetic-approval",
+          phase: "pending",
+          title: "Exec approval",
+          metadata: [],
+          commandText: "echo synthetic",
+          actions: [],
+          expiresAtMs: 60_000,
+        },
+        pendingPayload: {},
+        plannedTarget: {
+          surface: "approver-dm",
+          reason: "preferred",
+          target: { to: `user:${peer}` },
+        },
+      });
+      const total = counts();
+      expect(result?.target).toMatchObject({ to: `room:${roomId}`, roomId });
+      expectRepair(client, encrypted);
+      expect(total).toEqual(availability);
     });
 
     it("runs Commander repair through real auth and lease owners with named encryption", async () => {

@@ -59,6 +59,23 @@ function invitePrompter(first: string, next = first) {
   return { prompter, notes, count: () => prompts };
 }
 
+function authPrompter(
+  authMode: string,
+  text: Record<string, string>,
+  confirm: Record<string, boolean> = {},
+) {
+  return createMatrixWizardPrompter({
+    select: { "Matrix auth method": authMode },
+    text: {
+      "Matrix homeserver URL": "https://matrix.example.org",
+      "Matrix device name (optional)": "",
+      ...text,
+    },
+    confirm: { "Enable end-to-end encryption (E2EE)?": false, ...confirm },
+    onConfirm: async () => false,
+  });
+}
+
 describe("matrix onboarding", () => {
   installMatrixOnboardingEnvRestoreHooks();
   beforeEach(() => installMatrixTestRuntime());
@@ -92,13 +109,15 @@ describe("matrix onboarding", () => {
 
     expect(result.accountId).toBe("ops");
     const opsAccount = result.cfg.channels?.matrix?.accounts?.ops;
-    expect(opsAccount?.enabled).toBe(true);
+    expect(opsAccount).toMatchObject({
+      enabled: true,
+      groupPolicy: "allowlist",
+      autoJoin: "allowlist",
+      groups: { "!ops-room:example.org": { enabled: true } },
+      autoJoinAllowlist: ["#ops-invites:example.org"],
+    });
     expect(opsAccount?.homeserver).toBeUndefined();
     expect(opsAccount?.accessToken).toBeUndefined();
-    expect(opsAccount?.groupPolicy).toBe("allowlist");
-    expect(opsAccount?.groups?.["!ops-room:example.org"]?.enabled).toBe(true);
-    expect(opsAccount?.autoJoin).toBe("allowlist");
-    expect(opsAccount?.autoJoinAllowlist).toEqual(["#ops-invites:example.org"]);
     expect(notes.join("\n")).toContain("WARNING: Matrix invite auto-join defaults to off.");
   });
 
@@ -145,60 +164,31 @@ describe("matrix onboarding", () => {
   });
 
   it("prompts for private-network access when onboarding an internal http homeserver", async () => {
-    const prompter = createMatrixWizardPrompter({
-      select: {
-        "Matrix auth method": "token",
-      },
-      text: {
+    const prompter = authPrompter(
+      "token",
+      {
         "Matrix homeserver URL": "http://localhost.localdomain:8008",
         "Matrix access token": "ops-token",
-        "Matrix device name (optional)": "",
       },
-      confirm: {
+      {
         "Allow private/internal Matrix homeserver traffic for this account?": true,
-        "Enable end-to-end encryption (E2EE)?": false,
       },
-      onConfirm: async () => false,
-    });
+    );
 
     const result = await configure({ cfg: {}, configured: false, prompter });
 
-    const matrixConfig = result.cfg.channels?.matrix;
-    expect(matrixConfig?.homeserver).toBe("http://localhost.localdomain:8008");
-    expect(matrixConfig?.network?.dangerouslyAllowPrivateNetwork).toBe(true);
-    expect(matrixConfig?.accessToken).toBe("ops-token");
+    expect(result.cfg.channels?.matrix).toMatchObject({
+      homeserver: "http://localhost.localdomain:8008",
+      accessToken: "ops-token",
+      network: { dangerouslyAllowPrivateNetwork: true },
+    });
   });
 
-  it.each<{
-    authMode: string;
-    secretPrompt: string;
-    text: Record<string, string>;
-  }>([
-    {
-      authMode: "token",
-      secretPrompt: "Matrix access token",
-      text: {
-        "Matrix homeserver URL": "https://matrix.example.org",
-        "Matrix access token": "test-token",
-        "Matrix device name (optional)": "",
-      } satisfies Record<string, string>,
-    },
-    {
-      authMode: "password",
-      secretPrompt: "Matrix password",
-      text: {
-        "Matrix homeserver URL": "https://matrix.example.org",
-        "Matrix user ID": "@test:example.org",
-        "Matrix password": "test-password",
-        "Matrix device name (optional)": "",
-      } satisfies Record<string, string>,
-    },
-  ])("marks the $secretPrompt prompt as sensitive", async ({ authMode, secretPrompt, text }) => {
-    const prompter = createMatrixWizardPrompter({
-      select: { "Matrix auth method": authMode },
-      text,
-      confirm: { "Enable end-to-end encryption (E2EE)?": false },
-      onConfirm: async () => false,
+  it.each(["token", "password"])("marks the %s prompt as sensitive", async (authMode) => {
+    const secretPrompt = authMode === "token" ? "Matrix access token" : "Matrix password";
+    const prompter = authPrompter(authMode, {
+      [secretPrompt]: `test-${authMode}`,
+      ...(authMode === "password" ? { "Matrix user ID": "@test:example.org" } : {}),
     });
 
     await configure({ cfg: {}, configured: false, prompter });
@@ -250,16 +240,16 @@ describe("matrix onboarding", () => {
     assertConfigured(result);
 
     expect(result.accountId).toBe("ops");
-    const opsAccount = result.cfg.channels?.["matrix"]?.accounts?.ops;
-    expect(opsAccount?.homeserver).toBe("https://matrix.ops.example.org");
-    expect(opsAccount?.accessToken).toBe("ops-token");
-    expect(opsAccount?.deviceName).toBe("Ops Gateway");
-    expect(opsAccount?.dm?.policy).toBe("allowlist");
-    expect(opsAccount?.dm?.allowFrom).toEqual(["@alice:example.org"]);
-    expect(opsAccount?.groupPolicy).toBe("allowlist");
-    expect(opsAccount?.autoJoin).toBe("allowlist");
-    expect(opsAccount?.autoJoinAllowlist).toEqual(["#ops-invites:example.org"]);
-    expect(opsAccount?.groups?.["!ops-room:example.org"]?.enabled).toBe(true);
+    expect(result.cfg.channels?.matrix?.accounts?.ops).toMatchObject({
+      homeserver: "https://matrix.ops.example.org",
+      accessToken: "ops-token",
+      deviceName: "Ops Gateway",
+      dm: { policy: "allowlist", allowFrom: ["@alice:example.org"] },
+      groupPolicy: "allowlist",
+      autoJoin: "allowlist",
+      autoJoinAllowlist: ["#ops-invites:example.org"],
+      groups: { "!ops-room:example.org": { enabled: true } },
+    });
     expect(result.cfg.channels?.["matrix"]?.dm).toBeUndefined();
     expect(result.cfg.channels?.["matrix"]?.groups).toBeUndefined();
     expect(notes.join("\n")).toContain("WARNING: Matrix invite auto-join defaults to off.");
@@ -356,46 +346,31 @@ describe("matrix onboarding", () => {
     });
   });
 
-  it("reports configured when only the effective default Matrix account is configured", async () => {
-    const status = await matrixOnboardingAdapter.getStatus({
-      cfg: createMatrixNamedAccountsConfig({
-        defaultAccount: "ops",
-        accounts: {
-          ops: {
-            homeserver: "https://matrix.ops.example.org",
-            accessToken: "ops-token",
-          },
-        },
-      }),
-      accountOverrides: {},
-    });
-
-    expect(status.configured).toBe(true);
-    expect(status.statusLines).toContain("Matrix: configured");
-    expect(status.selectionHint).toBe("configured");
+  const namedAccount = (name: string) => ({
+    homeserver: `https://matrix.${name}.example.org`,
+    accessToken: `${name}-token`,
   });
-
-  it("asks for defaultAccount when multiple named Matrix accounts exist", async () => {
-    const status = await matrixOnboardingAdapter.getStatus({
-      cfg: createMatrixNamedAccountsConfig({
-        accounts: {
-          assistant: {
-            homeserver: "https://matrix.assistant.example.org",
-            accessToken: "assistant-token",
-          },
-          ops: {
-            homeserver: "https://matrix.ops.example.org",
-            accessToken: "ops-token",
-          },
-        },
-      }),
-      accountOverrides: {},
-    });
-
-    expect(status.configured).toBe(false);
-    expect(status.statusLines).toEqual([
-      'Matrix: set "channels.matrix.defaultAccount" to select a named account',
-    ]);
-    expect(status.selectionHint).toBe("set defaultAccount");
-  });
+  it.each([true, false])(
+    "reports named-account status with explicit default=%s",
+    async (selected) => {
+      expect(
+        await matrixOnboardingAdapter.getStatus({
+          cfg: createMatrixNamedAccountsConfig({
+            defaultAccount: selected ? "ops" : undefined,
+            accounts: {
+              ...(!selected ? { assistant: namedAccount("assistant") } : {}),
+              ops: namedAccount("ops"),
+            },
+          }),
+          accountOverrides: {},
+        }),
+      ).toMatchObject({
+        configured: selected,
+        selectionHint: selected ? "configured" : "set defaultAccount",
+        statusLines: selected
+          ? expect.arrayContaining(["Matrix: configured"])
+          : ['Matrix: set "channels.matrix.defaultAccount" to select a named account'],
+      });
+    },
+  );
 });
