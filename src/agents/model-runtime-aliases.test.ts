@@ -1,4 +1,3 @@
-// Verifies CLI runtime alias resolution and runtime model-ref equivalence.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
@@ -19,6 +18,17 @@ import {
 } from "./model-runtime-aliases.js";
 import { prepareOperatorModelPolicy } from "./operator-model-policy.js";
 
+const claudeBackend = {
+  id: "claude-cli",
+  modelProvider: "anthropic",
+  config: { command: "claude" },
+};
+const claudeBinding = { ...claudeBackend, pluginId: "anthropic" };
+const apiProfile = "anthropic:api";
+const cliProfile = "anthropic:claude-cli";
+function unexpectedMetadata() {
+  throw new Error("this path must not load CLI metadata");
+}
 const anthropicAuthAliasMetadata = {
   plugins: [
     {
@@ -37,49 +47,41 @@ const anthropicAuthAliasMetadata = {
   ],
 } as never;
 
-function resolveCliRuntimeExecutionProvider(
-  params: Omit<Parameters<typeof resolveCliRuntimeExecutionProviderBase>[0], "metadataSnapshot">,
-) {
-  return resolveCliRuntimeExecutionProviderBase({
-    ...params,
-    metadataSnapshot: anthropicAuthAliasMetadata,
-  });
-}
-
-function expectExecutionProvider(
-  params: Partial<Parameters<typeof resolveCliRuntimeExecutionProvider>[0]>,
-  expected: string | undefined,
-) {
+type ExecutionRequest = Partial<Parameters<typeof resolveCliRuntimeExecutionProviderBase>[0]>;
+function expectExecutionProvider(params: ExecutionRequest, expected: string | undefined) {
   expect(
-    resolveCliRuntimeExecutionProvider({ provider: "anthropic", modelId: "opus-4.7", ...params }),
+    resolveCliRuntimeExecutionProviderBase({
+      provider: "anthropic",
+      modelId: "opus-4.7",
+      metadataSnapshot: anthropicAuthAliasMetadata,
+      ...params,
+    }),
   ).toBe(expected);
 }
 
 function createAnthropicAuthConfig(params: {
   order?: string[];
-  orderKey?: string;
   onlyCliProfile?: boolean;
   models?: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
 }): OpenClawConfig {
-  // Auth order controls whether Anthropic execution is direct API or Claude
-  // CLI-backed when no explicit runtime policy overrides it.
   return {
     auth: {
-      order: params.order ? { [params.orderKey ?? "anthropic"]: params.order } : undefined,
-      profiles: params.onlyCliProfile
-        ? { "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" } }
-        : {
-            "anthropic:api": { provider: "anthropic", mode: "api_key" },
-            "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
-          },
-    },
-    agents: {
-      defaults: {
-        models: params.models,
+      order: params.order ? { anthropic: params.order } : undefined,
+      profiles: {
+        ...(!params.onlyCliProfile && {
+          [apiProfile]: { provider: "anthropic", mode: "api_key" },
+        }),
+        [cliProfile]: { provider: "claude-cli", mode: "oauth" },
       },
     },
+    agents: { defaults: { models: params.models } },
   } as OpenClawConfig;
 }
+type AuthConfig = Parameters<typeof createAnthropicAuthConfig>[0];
+afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
+  clearRuntimeAuthProfileStoreSnapshots();
+});
 
 describe("resolveCliRuntimeExecutionProvider", () => {
   beforeEach(() => {
@@ -92,20 +94,8 @@ describe("resolveCliRuntimeExecutionProvider", () => {
         autoEnableProbes: [],
         diagnostics: [],
       }),
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
-        },
-      ],
+      resolveRuntimeCliBackends: () => [claudeBinding],
     });
-  });
-
-  afterEach(() => {
-    cliBackendsTesting.resetDepsForTest();
-    clearRuntimeAuthProfileStoreSnapshots();
   });
 
   function seedStoredAuthOrder(
@@ -123,7 +113,7 @@ describe("resolveCliRuntimeExecutionProvider", () => {
 
   it("routes a stored CLI profile selected by pin without config metadata", () => {
     seedStoredAuthOrder([], "anthropic", {
-      "anthropic:claude-cli": {
+      [cliProfile]: {
         type: "oauth",
         provider: "claude-cli",
         access: "test-access",
@@ -131,95 +121,70 @@ describe("resolveCliRuntimeExecutionProvider", () => {
         expires: Date.now() + 60_000,
       },
     });
-    expectExecutionProvider({ authProfileId: "anthropic:claude-cli" }, "claude-cli");
+    expectExecutionProvider({ authProfileId: cliProfile }, "claude-cli");
   });
 
-  it("matches a stored order key that is not already canonically normalized", () => {
-    seedStoredAuthOrder(["anthropic:claude-cli"], "Anthropic");
-    expectExecutionProvider(
-      { cfg: createAnthropicAuthConfig({ order: ["anthropic:api"] }) },
+  it.each<[string, AuthConfig, string | undefined, (() => void)?, ExecutionRequest?]>([
+    [
+      "normalized stored order",
+      { order: [apiProfile] },
       "claude-cli",
-    );
-  });
-
-  it("does not route a provider disabled by an explicitly empty configured order", () => {
-    expectExecutionProvider(
-      { cfg: createAnthropicAuthConfig({ order: [], onlyCliProfile: true }) },
+      () => seedStoredAuthOrder([cliProfile], "Anthropic"),
+    ],
+    ["explicitly disabled order", { order: [], onlyCliProfile: true }, undefined],
+    [
+      "deleted stored profiles",
+      { onlyCliProfile: true },
+      "claude-cli",
+      () => seedStoredAuthOrder(["anthropic:deleted"]),
+    ],
+    [
+      "stored API profile absent from config",
+      { onlyCliProfile: true },
       undefined,
-    );
-  });
-
-  it("repairs a stored order containing only deleted profiles", () => {
-    seedStoredAuthOrder(["anthropic:deleted"]);
-    expectExecutionProvider(
-      { cfg: createAnthropicAuthConfig({ onlyCliProfile: true }) },
-      "claude-cli",
-    );
-  });
-
-  it("keeps a stored profile missing from config authoritative before a configured CLI profile", () => {
-    seedStoredAuthOrder(["anthropic:stored-api", "anthropic:claude-cli"], "anthropic", {
-      "anthropic:stored-api": { type: "api_key", provider: "anthropic", key: "test-key" },
-    });
-    expectExecutionProvider(
-      { cfg: createAnthropicAuthConfig({ onlyCliProfile: true }) },
-      undefined,
-    );
-  });
-
-  it("still picks the sole compatible profile when no stored order was authored", () => {
-    expectExecutionProvider(
-      { cfg: createAnthropicAuthConfig({ onlyCliProfile: true }) },
-      "claude-cli",
-    );
-  });
-
-  it("inherits the main-agent stored order for an agent with no snapshot of its own", () => {
-    seedStoredAuthOrder(["anthropic:claude-cli"]);
-    expectExecutionProvider(
-      { agentId: "secondary", cfg: createAnthropicAuthConfig({}) },
-      "claude-cli",
-    );
-  });
-
-  it("honors an explicit direct Anthropic auth profile over CLI auth order", () => {
-    expectExecutionProvider(
-      {
-        authProfileId: "anthropic:api",
-        cfg: createAnthropicAuthConfig({ order: ["anthropic:claude-cli"] }),
-      },
-      undefined,
-    );
-  });
-
-  it("does not override an explicit OpenClaw model-runtime policy with CLI auth", () => {
-    expectExecutionProvider(
-      {
-        cfg: createAnthropicAuthConfig({
-          order: ["anthropic:claude-cli"],
-          models: {
-            "anthropic/opus-4.7": { agentRuntime: { id: "openclaw" } },
-          },
+      () =>
+        seedStoredAuthOrder(["anthropic:stored-api", cliProfile], "anthropic", {
+          "anthropic:stored-api": { type: "api_key", provider: "anthropic", key: "test-key" },
         }),
+    ],
+    ["sole compatible CLI profile", { onlyCliProfile: true }, "claude-cli"],
+    [
+      "inherited main-agent order",
+      {},
+      "claude-cli",
+      () => seedStoredAuthOrder([cliProfile]),
+      { agentId: "secondary" },
+    ],
+    [
+      "explicit API profile before CLI order",
+      { order: [cliProfile] },
+      undefined,
+      undefined,
+      { authProfileId: apiProfile },
+    ],
+    [
+      "explicit host runtime before CLI order",
+      {
+        order: [cliProfile],
+        models: { "anthropic/opus-4.7": { agentRuntime: { id: "openclaw" } } },
       },
       undefined,
-    );
+    ],
+  ])("respects %s", (_name, auth, expected, seed, request) => {
+    seed?.();
+    expectExecutionProvider({ cfg: createAnthropicAuthConfig(auth), ...request }, expected);
   });
 
   it("matches provider runtime policy from a provider-qualified model when the caller provider is empty", () => {
+    const anthropic = {
+      baseUrl: "https://api.anthropic.example/v1",
+      agentRuntime: { id: "claude-cli" },
+      models: [],
+    };
+    const cfg: OpenClawConfig = { models: { providers: { anthropic } } };
     expectExecutionProvider(
       {
-        cfg: {
-          models: {
-            providers: {
-              anthropic: {
-                baseUrl: "https://api.anthropic.example/v1",
-                agentRuntime: { id: "claude-cli" },
-                models: [],
-              },
-            },
-          },
-        } as OpenClawConfig,
+        cfg,
         provider: "",
         modelId: "anthropic/opus-4.7",
       },
@@ -245,17 +210,8 @@ describe("resolveCliRuntimeExecutionProvider", () => {
   it("keeps standalone CLI backend provider refs visible", () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
-        },
-        {
-          id: "acme-cli",
-          pluginId: "acme",
-          config: { command: "acme" },
-        },
+        claudeBinding,
+        { id: "acme-cli", pluginId: "acme", config: { command: "acme" } },
       ],
     });
 
@@ -268,17 +224,11 @@ describe("resolveCliRuntimeExecutionProvider", () => {
   });
 
   it("collapses CLI runtime rows only into a canonical row config pins to that runtime", () => {
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
-            // Runtime ids are trimmed and lowercased before execution.
-            "anthropic/claude-haiku-5": { agentRuntime: { id: " Claude-CLI " } },
-          },
-        },
-      },
+    const models = {
+      "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
+      "anthropic/claude-haiku-5": { agentRuntime: { id: " Claude-CLI " } },
     };
+    const config: OpenClawConfig = { agents: { defaults: { models } } };
     const rows = [
       { provider: "anthropic", id: "claude-opus-5", agentRuntime: { id: "claude-cli" } },
       { provider: "claude-cli", id: "claude-opus-5" },
@@ -321,12 +271,8 @@ describe("resolveCliRuntimeExecutionProvider", () => {
 
   it("recognizes retired picker providers without loading CLI backend metadata", () => {
     cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupRegistry: () => {
-        throw new Error("retired provider checks should not load setup metadata");
-      },
-      resolveRuntimeCliBackends: () => {
-        throw new Error("retired provider checks should not load runtime metadata");
-      },
+      resolvePluginSetupRegistry: unexpectedMetadata,
+      resolveRuntimeCliBackends: unexpectedMetadata,
     });
 
     expect(isRetiredModelPickerProvider("CODEX-CLI")).toBe(true);
@@ -335,15 +281,9 @@ describe("resolveCliRuntimeExecutionProvider", () => {
 });
 
 describe("areRuntimeModelRefsEquivalent", () => {
-  afterEach(() => {
-    cliBackendsTesting.resetDepsForTest();
-  });
-
   it("does not load setup runtime aliases for already-identical refs", () => {
     cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupRegistry: () => {
-        throw new Error("setup registry should not load for identical refs");
-      },
+      resolvePluginSetupRegistry: unexpectedMetadata,
       resolveRuntimeCliBackends: () => [],
     });
 
@@ -355,24 +295,15 @@ describe("areRuntimeModelRefsEquivalent", () => {
   });
 
   it("resolves one setup runtime alias without loading the full setup registry", () => {
-    // Equivalence checks use targeted setup lookup so hot model comparisons do
-    // not load the full plugin setup registry.
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: ({ backend }) =>
         backend === "claude-cli"
           ? {
               pluginId: "anthropic",
-              backend: {
-                id: "claude-cli",
-                modelProvider: "anthropic",
-                config: { command: "claude" },
-                bundleMcp: false,
-              },
+              backend: { ...claudeBackend, bundleMcp: false },
             }
           : undefined,
-      resolvePluginSetupRegistry: () => {
-        throw new Error("setup registry should not load for a single runtime alias");
-      },
+      resolvePluginSetupRegistry: unexpectedMetadata,
       resolveRuntimeCliBackends: () => [],
     });
 
