@@ -46,7 +46,6 @@ import { waitForApprovalAccepted } from "./approval-request.test-support.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import {
-  type ExecApprovalResolveArgs,
   createApprovalRuntimeClient,
   createExecApprovalClient,
   createExecApprovalFixture,
@@ -108,6 +107,12 @@ function lastMockCallArg(mock: ReturnType<typeof vi.fn>, argIndex = 0) {
   return call[argIndex];
 }
 
+function expectErrorResponse(respond: ReturnType<typeof vi.fn>, error: Record<string, unknown>) {
+  expect(mockCallArg(respond)).toBe(false);
+  expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+  expectRecordFields(mockCallArg(respond, 0, 2), error);
+}
+
 type ChatHistoryTestRole = "assistant" | "custom" | "system" | "toolResult" | "user";
 type ChatHistoryTestMessage = Record<string, unknown>;
 
@@ -131,6 +136,18 @@ function userHistoryMessage(
   fields: ChatHistoryTestMessage = {},
 ): ChatHistoryTestMessage {
   return textHistoryMessage("user", text, fields);
+}
+
+function historyText(text: string, fields: ChatHistoryTestMessage = {}) {
+  return { type: "text", text, ...fields };
+}
+
+function historyContent(content: unknown[], fields: ChatHistoryTestMessage = {}) {
+  return { role: "assistant", content, timestamp: 1, ...fields };
+}
+
+function signedText(text: string, id: string, phase: string) {
+  return historyText(text, { textSignature: JSON.stringify({ v: 1, id, phase }) });
 }
 
 function sessionsSendProvenance(sourceSessionKey = "agent:main:webchat:source") {
@@ -174,10 +191,9 @@ function assistantAudioAttachmentHistoryMessage(
   fields: ChatHistoryTestMessage = {},
   includeLocalUrl = true,
 ): ChatHistoryTestMessage {
-  return {
-    role: "assistant",
-    content: [
-      { type: "text", text },
+  return historyContent(
+    [
+      historyText(text),
       {
         type: "attachment",
         attachment: {
@@ -188,9 +204,8 @@ function assistantAudioAttachmentHistoryMessage(
         },
       },
     ],
-    timestamp,
-    ...fields,
-  };
+    { timestamp, ...fields },
+  );
 }
 
 function ttsSupplementHistoryMessage(
@@ -221,18 +236,18 @@ function deliveryMirrorHistoryMessage(
   sourceMessageId: string,
   timestamp: number,
 ): ChatHistoryTestMessage {
-  return {
-    role: "assistant",
+  return assistantHistoryMessage(text, {
     provider: "openclaw",
     model: "delivery-mirror",
-    content: [{ type: "text", text }],
     idempotencyKey: `channel-final:${sourceMessageId}:0`,
     openclawDeliveryMirror: { kind: "channel-final", sourceMessageId },
     timestamp,
-  };
+  });
 }
 
 describe("waitForAgentJob", () => {
+  const lifecycle = (runId: string, data: Record<string, unknown>) =>
+    emitAgentEvent({ runId, stream: "lifecycle", data });
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => {
     vi.clearAllTimers();
@@ -247,18 +262,14 @@ describe("waitForAgentJob", () => {
     async ({ publishBefore, ...later }) => {
       const runId = `hard-timeout-${later.phase}-${publishBefore}-${later.timeoutPhase}`;
       const wait = waitForAgentJob({ runId, timeoutMs: 20_000 });
-      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 100 } });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          startedAt: 100,
-          endedAt: 200,
-          aborted: true,
-          timeoutPhase: "provider",
-          providerStarted: true,
-        },
+      lifecycle(runId, { phase: "start", startedAt: 100 });
+      lifecycle(runId, {
+        phase: "end",
+        startedAt: 100,
+        endedAt: 200,
+        aborted: true,
+        timeoutPhase: "provider",
+        providerStarted: true,
       });
       const expected = {
         status: "timeout",
@@ -271,11 +282,7 @@ describe("waitForAgentJob", () => {
         await vi.advanceTimersByTimeAsync(15_000);
         expect(await wait).toMatchObject(expected);
       }
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { ...later, startedAt: 100, endedAt: 250 },
-      });
+      lifecycle(runId, { ...later, startedAt: 100, endedAt: 250 });
       await vi.advanceTimersByTimeAsync(15_000);
       expect(await wait).toMatchObject(expected);
       expect(await waitForAgentJob({ runId, timeoutMs: 1_000 })).toMatchObject(expected);
@@ -289,24 +296,16 @@ describe("waitForAgentJob", () => {
       const wait = waitForAgentJob({ runId, timeoutMs: 20_000 });
       const error = { phase: "error", error: "final error" };
       const timeout = { phase: "end", aborted: true };
-      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 100 } });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: {
-          ...(errorLast ? timeout : error),
-          startedAt: 100,
-          endedAt: 200,
-        },
+      lifecycle(runId, { phase: "start", startedAt: 100 });
+      lifecycle(runId, {
+        ...(errorLast ? timeout : error),
+        startedAt: 100,
+        endedAt: 200,
       });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: {
-          ...(errorLast ? error : timeout),
-          startedAt: 100,
-          endedAt: 300,
-        },
+      lifecycle(runId, {
+        ...(errorLast ? error : timeout),
+        startedAt: 100,
+        endedAt: 300,
       });
       await vi.advanceTimersByTimeAsync(15_000);
       expect(await wait).toMatchObject({
@@ -322,56 +321,35 @@ describe("waitForAgentJob", () => {
     // Preserve the retry grace: the caller timeout may carry the pending error
     // reason, but it must not cache a terminal error before a later start can
     // cancel the pending snapshot.
-    vi.useFakeTimers();
-    try {
-      const runId = `run-pending-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+    const runId = `run-pending-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
 
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "error", error: "transient-auth-failure" },
-      });
+    lifecycle(runId, { phase: "error", error: "transient-auth-failure" });
 
-      await vi.advanceTimersByTimeAsync(6_000);
+    await vi.advanceTimersByTimeAsync(6_000);
 
-      const result = await waitPromise;
-      expect(result).not.toBeNull();
-      expect(result?.status).toBe("timeout");
-      expect(result?.error).toBe("transient-auth-failure");
-      expect(result?.pendingError).toBe(true);
+    const result = await waitPromise;
+    expect(result).toMatchObject({
+      status: "timeout",
+      error: "transient-auth-failure",
+      pendingError: true,
+    });
 
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "start", startedAt: 12_000 },
-      });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 12_000, endedAt: 12_100 },
-      });
+    lifecycle(runId, { phase: "start", startedAt: 12_000 });
+    lifecycle(runId, { phase: "end", startedAt: 12_000, endedAt: 12_100 });
 
-      const recovered = await waitForAgentJob({ runId, timeoutMs: 1_000 });
-      expectRecordFields(recovered, {
-        status: "ok",
-        startedAt: 12_000,
-        endedAt: 12_100,
-      });
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
+    const recovered = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+    expectRecordFields(recovered, {
+      status: "ok",
+      startedAt: 12_000,
+      endedAt: 12_100,
+    });
   });
 
   it("retains a lifecycle snapshot while an RPC publication waiter is active", async () => {
     const prefix = `cache-waiter-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waitedRunId = `${prefix}-waited`;
-    emitAgentEvent({
-      runId: waitedRunId,
-      stream: "lifecycle",
-      data: { phase: "end", startedAt: 1_000, endedAt: 1_100 },
-    });
+    lifecycle(waitedRunId, { phase: "end", startedAt: 1_000, endedAt: 1_100 });
     const freshWait = waitForAgentJob({
       runId: waitedRunId,
       timeoutMs: 5_000,
@@ -379,11 +357,7 @@ describe("waitForAgentJob", () => {
     });
 
     for (let index = 0; index < AGENT_RUN_CACHE_ENTRY_LIMIT + 25; index += 1) {
-      emitAgentEvent({
-        runId: `${prefix}-${index}`,
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: index, endedAt: index + 1 },
-      });
+      lifecycle(`${prefix}-${index}`, { phase: "end", startedAt: index, endedAt: index + 1 });
     }
     await expect(waitForAgentJob({ runId: waitedRunId, timeoutMs: 0 })).resolves.toMatchObject({
       status: "ok",
@@ -412,9 +386,7 @@ describe("augmentChatHistoryWithCanvasBlocks", () => {
   it("projects sanitized MCP App detail previews without changing tool content", () => {
     const preview = {
       kind: "canvas",
-      view: {
-        id: "cv_app",
-      },
+      view: { id: "cv_app" },
       presentation: { target: "assistant_message", sandbox: "scripts" },
       mcpApp: { viewId: "cv_app" },
     };
@@ -458,16 +430,8 @@ describe("augmentChatHistoryWithCanvasBlocks", () => {
     });
 
     const messages = [
-      {
-        role: "user",
-        content: previewJson,
-        timestamp: 1,
-      },
-      {
-        role: "assistant",
-        content: "Plain assistant reply",
-        timestamp: 2,
-      },
+      { role: "user", content: previewJson, timestamp: 1 },
+      { role: "assistant", content: "Plain assistant reply", timestamp: 2 },
     ];
 
     expect(augmentChatHistoryWithCanvasBlocks(messages)).toEqual(messages);
@@ -519,6 +483,9 @@ describe("sanitizeChatHistoryMessages", () => {
   const prefix = "a".repeat(7);
   const audio = Buffer.from("voice-bytes");
   const data = audio.toString("base64");
+  const audioSource = { type: "base64", media_type: "audio/mp3" };
+  const audioMessage = (source: Record<string, unknown>) =>
+    historyContent([historyText("Audio reply"), { type: "audio", source }]);
 
   it.each([
     {
@@ -542,87 +509,38 @@ describe("sanitizeChatHistoryMessages", () => {
     },
     {
       name: "reports decoded byte size when omitting base64 audio from chat history",
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            { type: "text", text: "Audio reply" },
-            {
-              type: "audio",
-              source: {
-                type: "base64",
-                media_type: "audio/mp3",
-                data,
-              },
-            },
-          ],
-          timestamp: 1,
-        },
-      ],
+      messages: [audioMessage({ ...audioSource, data })],
       maxChars: undefined,
-      expected: [
-        {
-          role: "assistant",
-          content: [
-            { type: "text", text: "Audio reply" },
-            {
-              type: "audio",
-              source: {
-                type: "base64",
-                media_type: "audio/mp3",
-                omitted: true,
-                bytes: audio.byteLength,
-              },
-            },
-          ],
-          timestamp: 1,
-        },
-      ],
+      expected: [audioMessage({ ...audioSource, omitted: true, bytes: audio.byteLength })],
     },
     {
       name: "strips internal reasoning replay metadata from chat history",
       messages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "thinking",
-              thinking: "Need a tool.",
-              thinkingSignature: "large-provider-payload",
-              openclawReasoningReplay: {
-                v: 1,
-                source: "openai-responses",
-                provider: "openai",
-                api: "openai-chatgpt-responses",
-                model: "gpt-5.5",
-              },
+        historyContent([
+          {
+            type: "thinking",
+            thinking: "Need a tool.",
+            thinkingSignature: "large-provider-payload",
+            openclawReasoningReplay: {
+              v: 1,
+              source: "openai-responses",
+              provider: "openai",
+              api: "openai-chatgpt-responses",
+              model: "gpt-5.5",
             },
-            { type: "text", text: "Checking." },
-          ],
-          timestamp: 1,
-        },
+          },
+          { type: "text", text: "Checking." },
+        ]),
       ],
       maxChars: undefined,
       expected: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "thinking",
-              thinking: "Need a tool.",
-            },
-            { type: "text", text: "Checking." },
-          ],
-          timestamp: 1,
-        },
+        historyContent([{ type: "thinking", thinking: "Need a tool." }, historyText("Checking.")]),
       ],
     },
     {
       name: "preserves OpenAI-compatible assistant usage aliases for display context",
       messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "done" }],
+        assistantHistoryMessage("done", {
           usage: {
             prompt_tokens: 11,
             completion_tokens: 1,
@@ -630,20 +548,18 @@ describe("sanitizeChatHistoryMessages", () => {
             provider_payload: "discard",
           },
           timestamp: 1,
-        },
+        }),
       ],
       maxChars: undefined,
       expected: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "done" }],
+        assistantHistoryMessage("done", {
           usage: {
             prompt_tokens: 11,
             completion_tokens: 1,
             total_tokens: 12,
           },
           timestamp: 1,
-        },
+        }),
       ],
     },
   ])("$name", ({ messages, maxChars, expected }) => {
@@ -653,23 +569,7 @@ describe("sanitizeChatHistoryMessages", () => {
   it("uses one capped text value for commentary content and fallback metadata", () => {
     const fullText = "A long commentary message that must be capped";
     const [fallback] = sanitizeChatHistoryMessages(
-      [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: fullText,
-              textSignature: JSON.stringify({
-                v: 1,
-                id: "msg_commentary",
-                phase: "commentary",
-              }),
-            },
-          ],
-          timestamp: 2,
-        },
-      ],
+      [historyContent([signedText(fullText, "msg_commentary", "commentary")], { timestamp: 2 })],
       12,
       { includeCommentaryFallbacks: true },
     ) as Array<{
@@ -690,44 +590,29 @@ describe("sanitizeChatHistoryMessages", () => {
     };
     const result = sanitizeChatHistoryMessages(
       [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "Checking the file",
-              textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
-            },
+        historyContent(
+          [
+            signedText("Checking the file", "msg_commentary", "commentary"),
             toolCall,
-            {
-              type: "text",
-              text: "Done.",
-              textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
-            },
+            signedText("Done.", "msg_final", "final_answer"),
           ],
-          timestamp: 2,
-        },
+          { timestamp: 2 },
+        ),
       ],
       undefined,
       { includeCommentaryFallbacks: true },
     );
 
     expect(result).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Checking the file" }],
+      assistantHistoryMessage("Checking the file", {
         timestamp: 2,
         openclawStreamFallback: {
           replacementText: "Checking the file",
           source: "segment",
           itemId: "msg_commentary",
         },
-      },
-      {
-        role: "assistant",
-        content: [toolCall, { type: "text", text: "Done." }],
-        timestamp: 2,
-      },
+      }),
+      historyContent([toolCall, historyText("Done.")], { timestamp: 2 }),
     ]);
   });
 });
@@ -787,13 +672,7 @@ describe("projectChatDisplayMessages", () => {
     {
       name: "projects signature-only commentary errors as a visible generic safe failure",
       message: {
-        content: [
-          {
-            type: "text",
-            text: "private upstream details",
-            textSignature: JSON.stringify({ v: 1, id: "msg-commentary", phase: "commentary" }),
-          },
-        ],
+        content: [signedText("private upstream details", "msg-commentary", "commentary")],
         errorMessage: privateError,
         errorCode: "private_error_code",
         errorType: "private_error_type",
@@ -851,14 +730,7 @@ describe("projectChatDisplayMessages", () => {
     const result = projectChatDisplayMessages([
       { role: "assistant", stopReason: "error", timestamp: 1, ...message },
     ]);
-    expect(result).toEqual([
-      {
-        role: "assistant",
-        content,
-        stopReason: "error",
-        timestamp: 1,
-      },
-    ]);
+    expect(result).toEqual([historyContent(content, { stopReason: "error" })]);
     expect(JSON.stringify(result)).not.toContain("secret.internal.example");
     expect(JSON.stringify(result)).not.toContain("private upstream");
     expect(JSON.stringify(result)).not.toContain("private_error");
@@ -880,22 +752,11 @@ describe("projectChatDisplayMessages", () => {
     },
   ])("removes an internal stream-error prefix from same-message $name", ({ content, expected }) => {
     const result = projectChatDisplayMessages([
-      {
-        role: "assistant",
-        content,
-        stopReason: "error",
-        errorMessage: "private upstream at secret.internal.example failed",
-        timestamp: 1,
-      },
+      { role: "assistant", content, stopReason: "error", errorMessage: privateError, timestamp: 1 },
     ]);
 
     expect(result).toEqual([
-      {
-        role: "assistant",
-        content: expected,
-        stopReason: "error",
-        timestamp: 1,
-      },
+      { role: "assistant", content: expected, stopReason: "error", timestamp: 1 },
     ]);
     expect(JSON.stringify(result)).not.toContain(STREAM_ERROR_FALLBACK_TEXT);
     expect(JSON.stringify(result)).not.toContain("secret.internal.example");
@@ -1036,22 +897,10 @@ describe("projectChatDisplayMessages", () => {
         metadata: message["__openclaw"],
       })),
     ).toEqual([
-      {
-        text: "First run started.",
-        metadata: { seq: 2, turnBoundary: true },
-      },
-      {
-        text: "First run finished.",
-        metadata: { seq: 3 },
-      },
-      {
-        text: "Compaction",
-        metadata: { kind: "compaction", seq: 5 },
-      },
-      {
-        text: "Second run finished.",
-        metadata: { seq: 6, turnBoundary: true },
-      },
+      { text: "First run started.", metadata: { seq: 2, turnBoundary: true } },
+      { text: "First run finished.", metadata: { seq: 3 } },
+      { text: "Compaction", metadata: { kind: "compaction", seq: 5 } },
+      { text: "Second run finished.", metadata: { seq: 6, turnBoundary: true } },
     ]);
   });
 
@@ -1121,28 +970,21 @@ describe("projectChatDisplayMessages", () => {
     expect(projectChatDisplayMessages(messages, options)).toEqual(expected);
   });
 
-  it.each([
-    {
-      name: "sparse",
-      message: {
-        __openclaw: {
-          media: [{}, { path: "/tmp/openclaw/sparse.png", contentType: "image/png" }],
-        },
-      },
-      expectedPath: undefined,
-      expectedIndex: 1,
-    },
-  ])("keeps $name media-only users through canonical display projection", (testCase) => {
+  it("keeps sparse media-only users through canonical display projection", () => {
     const result = projectChatDisplayMessages([
-      { role: "user", content: "", timestamp: 1, ...testCase.message },
+      {
+        role: "user",
+        content: "",
+        timestamp: 1,
+        __openclaw: { media: [{}, { path: "/tmp/openclaw/sparse.png", contentType: "image/png" }] },
+      },
       { role: "user", content: "", timestamp: 2 },
     ]);
 
     expect(result).toHaveLength(1);
     expect(result[0]).not.toHaveProperty("MediaPath");
     const media = (result[0]?.["__openclaw"] as { media?: Array<{ path?: string }> })?.media;
-    const expectedIndex = "expectedIndex" in testCase ? (testCase.expectedIndex ?? 0) : 0;
-    expect(media?.[expectedIndex]?.path).toBe(testCase.expectedPath);
+    expect(media?.[1]?.path).toBeUndefined();
   });
 });
 
@@ -1231,33 +1073,21 @@ describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
 });
 
 describe("normalizeRpcAttachmentsToChatAttachments", () => {
+  const fileAttachment = {
+    type: "file",
+    mimeType: "image/png",
+    fileName: "a.png",
+    content: "Zm9v",
+    sizeBytes: 3,
+    durationMs: 10,
+    width: 1,
+    height: 1,
+  };
   it.each([
     {
       name: "passes through string content",
-      attachments: [
-        {
-          type: "file",
-          mimeType: "image/png",
-          fileName: "a.png",
-          content: "Zm9v",
-          sizeBytes: 3,
-          durationMs: 10,
-          width: 1,
-          height: 1,
-        },
-      ],
-      expected: [
-        {
-          type: "file",
-          mimeType: "image/png",
-          fileName: "a.png",
-          content: "Zm9v",
-          sizeBytes: 3,
-          durationMs: 10,
-          width: 1,
-          height: 1,
-        },
-      ],
+      attachments: [{ ...fileAttachment }],
+      expected: [fileAttachment],
     },
     {
       name: "converts Uint8Array content to base64",
@@ -1296,11 +1126,9 @@ describe("exec approval handlers", () => {
   it("rejects approval requests when the command display would be truncated", async (testContext) => {
     const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
-      const { handlers, broadcasts, respond, context } = fixture;
+      const { broadcasts, respond } = fixture;
       await requestExecApproval({
-        handlers,
-        respond,
-        context,
+        ...fixture,
         params: {
           command: `printf visible # ${"A".repeat(18 * 1024)}\nprintf hidden`,
           host: "gateway",
@@ -1309,13 +1137,9 @@ describe("exec approval handlers", () => {
         },
       });
 
-      expect(mockCallArg(respond)).toBe(false);
-      expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-      expectRecordFields(mockCallArg(respond, 0, 2), {
+      expectErrorResponse(respond, {
         message: "command exceeds exec approval display limit",
-      });
-      expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
-        reason: "EXEC_APPROVAL_COMMAND_DISPLAY_LIMIT",
+        details: expect.objectContaining({ reason: "EXEC_APPROVAL_COMMAND_DISPLAY_LIMIT" }),
       });
       expect(broadcasts).toEqual([]);
     });
@@ -1324,13 +1148,11 @@ describe("exec approval handlers", () => {
   it("rejects approval registration after the owning run was aborted", async (testContext) => {
     const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
-      const { manager, handlers, broadcasts, respond, context } = fixture;
+      const { manager, broadcasts, respond, context } = fixture;
       context.chatRunState.getOrCreate("run-aborted").abortMarker = createChatAbortMarker();
 
       await requestExecApproval({
-        handlers,
-        respond,
-        context,
+        ...fixture,
         params: {
           runId: "run-aborted",
           toolCallId: "tool-late",
@@ -1394,20 +1216,16 @@ describe("exec approval handlers", () => {
     const context = {
       broadcast: (_eventValue: string, _payload: unknown) => {},
     };
-    const ownerClient = {
+    const ownerClient = createExecApprovalClient({
       connId: "conn-owner",
-      connect: {
-        client: { id: "client-owner" },
-        device: { id: "device-owner" },
-      },
-    } as unknown as ExecApprovalResolveArgs["client"];
-    const otherClient = {
+      clientId: "client-owner",
+      deviceId: "device-owner",
+    });
+    const otherClient = createExecApprovalClient({
       connId: "conn-other",
-      connect: {
-        client: { id: "client-other" },
-        device: { id: "device-other" },
-      },
-    } as unknown as ExecApprovalResolveArgs["client"];
+      clientId: "client-other",
+      deviceId: "device-other",
+    });
 
     const visible = manager.create({ command: "echo visible" }, 60_000, "approval-abcd-visible");
     visible.requestedByDeviceId = "device-owner";
@@ -1609,9 +1427,7 @@ describe("exec approval handlers", () => {
 
         const getRespond = vi.fn();
         await getExecApproval({ handlers, id, respond: getRespond });
-        expect(mockCallArg(getRespond)).toBe(false);
-        expect(mockCallArg(getRespond, 0, 1)).toBeUndefined();
-        expectRecordFields(mockCallArg(getRespond, 0, 2), {
+        expectErrorResponse(getRespond, {
           code: "INVALID_REQUEST",
           message: "unknown or expired approval id",
         });
@@ -1686,23 +1502,18 @@ describe("exec approval handlers", () => {
   it("returns deterministic unknown/expired message for missing approval ids", async (testContext) => {
     const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
-      const { handlers, respond, context } = fixture;
+      const { respond } = fixture;
 
       await resolveExecApproval({
-        handlers,
+        ...fixture,
         id: "missing-approval-id",
-        respond,
-        context,
       });
 
-      expect(mockCallArg(respond)).toBe(false);
-      expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-      const error = mockCallArg(respond, 0, 2) as Record<string, unknown>;
-      expectRecordFields(error, {
+      expectErrorResponse(respond, {
         code: "INVALID_REQUEST",
         message: "unknown or expired approval id",
+        details: expect.objectContaining({ reason: "APPROVAL_NOT_FOUND" }),
       });
-      expectRecordFields(error.details, { reason: "APPROVAL_NOT_FOUND" });
     });
   });
 
@@ -1731,40 +1542,31 @@ describe("exec approval handlers", () => {
         expect(broadcasts.filter((entry) => entry.event === "exec.approval.resolved")).toHaveLength(
           resolvedBroadcastCount,
         );
-        expect(mockCallArg(conflictingResolveRespond)).toBe(false);
-        expect(mockCallArg(conflictingResolveRespond, 0, 1)).toBeUndefined();
-        const error = mockCallArg(conflictingResolveRespond, 0, 2) as Record<string, unknown>;
-        expect(error.message).toBe("approval already resolved");
-        expectRecordFields(error.details, { reason: "APPROVAL_ALREADY_RESOLVED" });
+        expectErrorResponse(conflictingResolveRespond, {
+          message: "approval already resolved",
+          details: expect.objectContaining({ reason: "APPROVAL_ALREADY_RESOLVED" }),
+        });
       },
     );
   });
 
-  it.for([
-    {
-      name: "keeps deny available when allow-always is unavailable",
-      request: { unavailableDecisions: ["allow-always"] },
-      fallbackDecision: "deny" as const,
-    },
-  ])("$name", async ({ request, fallbackDecision }, testContext) => {
+  it("keeps deny available when allow-always is unavailable", async (testContext) => {
     await withRequestedExecApproval(
       testContext,
-      { request: { twoPhase: true, ...request } },
+      { request: { twoPhase: true, unavailableDecisions: ["allow-always"] } },
       async (approval) => {
         expect(approval.request.allowedDecisions).toEqual(["allow-once", "deny"]);
         const respond = await resolveExecApprovalForTest({ ...approval, decision: "allow-always" });
-        expect(mockCallArg(respond)).toBe(false);
-        expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-        expectRecordFields(mockCallArg(respond, 0, 2), {
+        expectErrorResponse(respond, {
           message: "allow-always is unavailable for this command",
         });
         const fallback = await resolveExecApprovalForTest({
           ...approval,
-          decision: fallbackDecision,
+          decision: "deny",
         });
         await approval.requestPromise;
         expect(fallback).toHaveBeenCalledWith(true, { ok: true }, undefined);
-        expect((await approval.manager.getSnapshot(approval.id))?.decision).toBe(fallbackDecision);
+        expect((await approval.manager.getSnapshot(approval.id))?.decision).toBe("deny");
       },
     );
   });
@@ -1898,12 +1700,10 @@ describe("exec approval handlers", () => {
   ])("rejects an unsafe explicit approval id: $label", async ({ id, error }, testContext) => {
     const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
-      const { manager, handlers, broadcasts, respond, context } = fixture;
+      const { manager, broadcasts, respond } = fixture;
 
       await requestExecApproval({
-        handlers,
-        respond,
-        context,
+        ...fixture,
         params: { id, host: "gateway" },
       });
 
@@ -1939,9 +1739,7 @@ describe("exec approval handlers", () => {
       context,
     });
 
-    expect(mockCallArg(respond)).toBe(false);
-    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-    expectRecordFields(mockCallArg(respond, 0, 2), {
+    expectErrorResponse(respond, {
       message: "ambiguous approval id prefix; use the full id",
     });
   });
@@ -2204,19 +2002,16 @@ describe("gateway healthHandlers.status scope handling", () => {
     return respond;
   }
 
-  it.each([{ scopes: ["operator.read"], includeSensitive: false }])(
-    "requests includeSensitive=$includeSensitive for scopes $scopes",
-    async ({ scopes, includeSensitive }) => {
-      const respond = await runHealthStatus(scopes);
+  it("excludes sensitive status for operator.read", async () => {
+    const respond = await runHealthStatus(["operator.read"]);
 
-      expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
-        includeSensitive,
-        includeChannelSummary: true,
-        includeCliProjection: false,
-      });
-      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
-    },
-  );
+    expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
+      includeSensitive: false,
+      includeChannelSummary: true,
+      includeCliProjection: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+  });
 });
 
 describe("gateway healthHandlers.health cache freshness", () => {
