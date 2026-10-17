@@ -132,6 +132,7 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
     try {
       await reloader.ready;
       await projection.ensureMaterialized();
+      await list();
       for (const [event, update, expected] of [
         ["channel streaming", { channels: { slack: { streaming: { mode: "partial" } } } }, 0],
         ["ui.prefs", { ui: { prefs: { sidebarEntries: ["sessions"] } } }, 0],

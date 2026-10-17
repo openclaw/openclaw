@@ -38,6 +38,11 @@ refreshes retain the existing read-only SQLite fallback.
 These summaries wait for current selection metadata. Display preparation and
 background model catalog discovery can continue independently, so a large fleet's
 catalog warmup does not hold session counts and recent-activity summaries open.
+Startup prepares selection and database facts for the roster; full display rows
+and optional transcript previews are prepared when a page or session recipient
+first requests them. Those rows stay resident for subsequent reads and refresh
+from committed changes. Unrequested rows do not repeat display enrichment when
+the startup model catalog becomes available.
 
 ## Deep diagnostics
 
@@ -101,7 +106,7 @@ The Gateway exposes three unauthenticated `GET`/`HEAD` check pairs:
 The HTTP listener opens before the initial session projection is complete. During
 that build, `/healthz` can return `200`, while `/startupz` and `/readyz` remain
 pending. Other HTTP requests and WebSocket upgrades wait for the complete
-projection before authentication and routing; they never see a partial roster.
+roster metadata before authentication and routing; they never see a partial roster.
 Discovery and remote-skill listeners run alongside projection preparation. The
 initial fleet-wide skills scan runs in tracked maintenance after readiness;
 on-demand skill reads still prepare the requested workspace. Readiness

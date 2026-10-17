@@ -171,7 +171,6 @@ it("keeps duplicate video slots and each sibling message's source authority, but
         assistantAvatar: null,
         sessionKey: "agent:main:video-gallery",
         mediaOwner: rerender,
-        onRequestUpdate: rerender,
         getTurnVideoMessages: () => turn,
         onOpenImage: (item) => {
           opened = item;

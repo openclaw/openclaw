@@ -142,6 +142,7 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
     let resumeBulk: (() => void) | undefined;
     try {
       await projection.ensureMaterialized();
+      projection.describe({ agentId: "main", key: "agent:main:clean" });
       database.db.exec(`UPDATE session_nodes SET entry_json = entry_json || ' '
         WHERE session_key != 'agent:main:clean'; UPDATE session_nodes SET entry_valid = 1`);
       markCanonicalSessionValidationPending(

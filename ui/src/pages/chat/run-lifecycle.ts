@@ -30,6 +30,7 @@ import {
   type PendingChatAbort,
 } from "./chat-abort-request.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
+import { mutateChatRunState, publishChatRunState } from "./chat-state-render.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   getChatSessionProjection,
@@ -120,7 +121,7 @@ type ReconcileOptions = {
   publishRunStatus?: boolean;
   armLocalTerminalReconcile?: boolean;
   yielded?: boolean;
-  requestUpdate?: boolean;
+  publishRunState?: boolean;
 };
 
 type ChatAbortRunState = ChatAbortTargetState & {
@@ -131,6 +132,7 @@ type ChatAbortRunState = ChatAbortTargetState & {
   chatRunError?: ChatRunError | null;
   chatQueue?: readonly ChatQueueItem[];
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
+  /** Retained until the separately owned chatError accessor has a projection. */
   requestUpdate?: () => void;
   /** Reloads history and the authoritative session row. */
   refreshCurrentChat?: () => Promise<void>;
@@ -177,7 +179,7 @@ export function adoptStartedChatRun(
       clearToolStreamForRun: true,
       clearIndicators: Boolean(host.chatRunId),
       clearRunStatus: true,
-      requestUpdate: false,
+      publishRunState: false,
     });
     host.chatRunError = null;
     if (host.providerPolicyNotice?.runId !== runId) {
@@ -198,12 +200,14 @@ export function setChatRunError(
   runId?: string,
   kind?: ChatRunError["kind"],
 ) {
-  setChatRunOwner(state, runId);
-  state.chatRunError = {
-    ...(kind ? { kind } : {}),
-    summary: redactToolDetail(summary.trim()),
-    ...(runId ? { runId } : {}),
-  };
+  mutateChatRunState(state, () => {
+    setChatRunOwner(state, runId);
+    state.chatRunError = {
+      ...(kind ? { kind } : {}),
+      summary: redactToolDetail(summary.trim()),
+      ...(runId ? { runId } : {}),
+    };
+  });
 }
 
 type SessionRunHost = {
@@ -281,13 +285,12 @@ async function settleChatAbortResponse(
         setChatRunError(state, message, intent.runId ?? undefined, result.errorKind);
       } else if (state.chatRunId) {
         setChatError(state, message);
+        state.requestUpdate?.();
       } else {
         setChatRunError(state, message, intent.runId ?? undefined, "stop");
       }
-      state.requestUpdate?.();
     } else if (result.warning) {
       setChatRunError(state, result.warning, intent.runId ?? undefined, "stop");
-      state.requestUpdate?.();
     } else if (result.noActiveRun && state.connected) {
       // Only the refreshed owner may retire a run that is still finalizing.
       await state.refreshCurrentChat?.();
@@ -415,9 +418,7 @@ function scheduleRunStatusClear(host: RunLifecycleHost, status: ChatRunUiStatus)
     host.chatRunStatusClearTimer = null;
     // Terminal status temporarily masks stale active rows from session polling.
     // Reconcile again as the mask expires so the composer cannot revert to Stop.
-    if (!reconcileChatRunAfterSessionStatePublication(host)) {
-      host.requestUpdate?.();
-    }
+    reconcileChatRunAfterSessionStatePublication(host);
   }, CHAT_RUN_STATUS_TOAST_DURATION_MS);
 }
 
@@ -502,6 +503,14 @@ function reconcileSessionRows(
 }
 
 export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions = {}) {
+  return mutateChatRunState(
+    host,
+    () => applyChatRunLifecycle(host, options),
+    options.publishRunState === false ? false : "immediate",
+  );
+}
+
+function applyChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions) {
   const occurredAt = Date.now();
   const runId = options.runId ?? host.chatRunId ?? null;
   const sessionKey = normalizeNullableString(options.sessionKey) ?? host.sessionKey;
@@ -561,8 +570,8 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   } else if (options.clearRunStatus) {
     clearChatRunStatus(host);
   }
-  if (options.requestUpdate !== false) {
-    host.requestUpdate?.();
+  if (options.publishRunState !== false) {
+    publishChatRunState(host);
   }
 }
 
@@ -623,7 +632,7 @@ function reconcileStaleSelectedSessionRunAfterLocalCompletion(host: RunLifecycle
     },
     Date.now(),
   );
-  host.requestUpdate?.();
+  publishChatRunState(host);
   return true;
 }
 

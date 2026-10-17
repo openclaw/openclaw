@@ -215,13 +215,9 @@ function renderReactiveAssistant(
   options: Partial<RenderMessageGroupOptions>,
   container: HTMLElement = view,
 ) {
-  const onRequestUpdate = () =>
-    renderAssistantMessage(
-      message(),
-      { ...options, mediaOwner: onRequestUpdate, onRequestUpdate },
-      container,
-    );
-  onRequestUpdate();
+  const rerender = () =>
+    renderAssistantMessage(message(), { ...options, mediaOwner: rerender }, container);
+  rerender();
 }
 
 function renderAssistantMessages(
@@ -2042,7 +2038,6 @@ describe("grouped chat rendering", () => {
           resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
           mediaOwner: rerender,
-          onRequestUpdate: rerender,
         });
       rerender();
     };
@@ -2114,7 +2109,6 @@ describe("grouped chat rendering", () => {
   it("expires pairing QR images without requesting a pane refresh", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-30T05:45:00Z"));
-    const onRequestUpdate = vi.fn();
 
     renderAssistantMessage(
       createAssistantMessage([
@@ -2125,16 +2119,18 @@ describe("grouped chat rendering", () => {
           expiresAtMs: Date.now() + 1_000,
         },
       ]),
-      { showToolCalls: false, onRequestUpdate },
+      { showToolCalls: false },
     );
 
     const image = view.querySelector<HTMLImageElement>(".chat-message-image");
     expect(image?.getAttribute("src")).toBe("data:image/png;base64,cXJwbmc=");
     expect(image?.getAttribute("alt")).toBe("OpenClaw pairing QR code");
+    const bubble = view.querySelector(".chat-bubble");
+    expect(bubble).not.toBeNull();
     await vi.advanceTimersByTimeAsync(999);
-    expect(onRequestUpdate).not.toHaveBeenCalled();
+    expect(view.querySelector(".chat-message-image")).toBe(image);
     await vi.advanceTimersByTimeAsync(1);
-    expect(onRequestUpdate).not.toHaveBeenCalled();
+    expect(view.querySelector(".chat-bubble")).toBe(bubble);
     expect(view.querySelector(".chat-message-image")).toBeNull();
     expect(view.textContent).toContain("Pairing QR expired");
 

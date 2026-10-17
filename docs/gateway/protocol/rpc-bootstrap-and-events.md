@@ -56,8 +56,10 @@ still counts the complete window, including owner-first rows. Require a matching
 base revision before applying a delta. Revision misses, retired views, and reads
 without a useful delta return the normal full row array. Current authorization
 and selection always precede this comparison. The Gateway retains up to 32 prior
-vectors per bounded query view, including across runtime activity updates.
-Configuration, identity, and selection resets retire the view and its history.
+vectors per bounded query view, including across runtime activity and selection
+revision updates such as membership changes. A selection revision refreshes the
+current selection without discarding previously served comparison rows.
+Configuration, identity, and explicit selection resets retire the view and its history.
 Views are retained in least-recently-used order, with limits of 512 cache slots
 (selection and row presentation use separate slots) and 32 MiB of estimated
 retention per projection. The estimate counts row/history references, selection

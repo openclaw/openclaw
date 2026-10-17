@@ -191,6 +191,9 @@ describe("production lint suppressions", () => {
         "src/infra/sqlite-worker-input.bun.test-support.ts|typescript/unbound-method|1",
         "src/infra/sqlite-worker-shared-state-admission.test-support.ts|typescript/unbound-method|1",
         "src/infra/worker-cpu.ts|typescript/unbound-method|4",
+        // MCP owns callback properties; Node worker messages have no browser target origin.
+        "src/mcp/tools-stdio-server.lifecycle.fixture.mjs|unicorn/prefer-add-event-listener|1",
+        "src/mcp/tools-stdio-server.lifecycle.fixture.mjs|unicorn/require-post-message-target-origin|1",
         "src/node-host/invoke-payload.ts|typescript/no-unnecessary-type-parameters|1",
         "src/node-host/mcp.ts|unicorn/prefer-add-event-listener|1",
         "src/plugin-sdk/channel-config-helpers.ts|typescript/no-unnecessary-type-parameters|1",

@@ -51,7 +51,7 @@ export function prepareUnwrittenWebhookCompletion(
   return { key: webhookCompletionKey(env), value: markerOnly.meta.migrations.webhookListeners };
 }
 
-export function recordUnwrittenWebhookCompletion(
+function recordUnwrittenWebhookCompletion(
   snapshot: Pick<ConfigFileSnapshot, "sourceConfig">,
   mutation: ChannelDoctorConfigMutation,
   env: NodeJS.ProcessEnv,
