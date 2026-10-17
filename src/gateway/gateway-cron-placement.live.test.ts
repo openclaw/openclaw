@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it } from "vitest";
+import { storeLiveApiKeyProfile } from "../../test/helpers/live-api-key-profile.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { isLiveTestEnabled, logLiveProgress } from "../agents/live-test-helpers.js";
@@ -81,7 +82,6 @@ describeLive("cron placement identity through production Gateway routing", () =>
           ...Object.fromEntries(
             listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined]),
           ),
-          OPENAI_API_KEY: process.env.OPENAI_API_KEY,
           OPENAI_BASE_URL: undefined,
           OPENAI_API_BASE: undefined,
           OPENCLAW_AGENT_RUNTIME: undefined,
@@ -125,13 +125,11 @@ describeLive("cron placement identity through production Gateway routing", () =>
             },
             cron: { enabled: true },
             tools: { allow: [] },
-            secrets: { providers: { default: { source: "env" } } },
             models: {
               mode: "merge",
               providers: {
                 openai: {
                   api: "openai-responses",
-                  apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
                   baseUrl: "https://api.openai.com/v1",
                   models: [],
                 },
@@ -140,6 +138,11 @@ describeLive("cron placement identity through production Gateway routing", () =>
           };
           await instance.state.writeConfig(config);
           await instance.startGateway();
+          const profileId = await storeLiveApiKeyProfile(instance, {
+            provider: "openai",
+            apiKey: process.env.OPENAI_API_KEY,
+            agentId: "probe",
+          });
           const connected = await connectGatewayClient({
             url: instance.url,
             token: instance.gatewayToken,
@@ -185,7 +188,12 @@ describeLive("cron placement identity through production Gateway routing", () =>
             sessionTarget: "current",
             sessionKey: SOURCE_KEY,
             wakeMode: "next-heartbeat",
-            payload: { kind: "agentTurn", message: "Reply exactly SCHEDULED_OK.", toolsAllow: [] },
+            payload: {
+              kind: "agentTurn",
+              message: "Reply exactly SCHEDULED_OK.",
+              model: `${MODEL_KEY}@${profileId}`,
+              toolsAllow: [],
+            },
             delivery: { mode: "none" },
           });
           expect(job).toMatchObject({ sessionTarget: "current", sessionKey: SOURCE_KEY });
