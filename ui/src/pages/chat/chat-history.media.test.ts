@@ -44,6 +44,26 @@ it("carries paste origin and the persisted filename into the attachment card", (
   });
 });
 
+it("keeps a persisted attachment when its kind is not a string", () => {
+  const { images, attachments } = projectMessageMedia(
+    userMedia([{ path: "media://inbound/unknown.dat", kind: 123 }]),
+    [],
+  );
+  expect({ images, attachments }).toEqual({
+    images: [],
+    attachments: [
+      {
+        type: "attachment",
+        attachment: {
+          url: "media://inbound/unknown.dat",
+          kind: "document",
+          label: "unknown.dat",
+        },
+      },
+    ],
+  });
+});
+
 it.each([
   {
     path: `media://inbound/report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.backup---${UUID}.pdf`,
