@@ -383,11 +383,15 @@ export class PreparedModelRuntimeAuthPublicationOwner {
 
 export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
   owners: Map<string, PreparedModelRuntimeOwner>,
-  normalizedEvent: PreparedModelRuntimeAuthMutation,
+  event: PreparedModelRuntimeAuthMutation,
 ): {
   invalidatedOwners: PreparedModelRuntimeOwner[];
   invalidatedConfiguredAgentIds: Set<string>;
 } {
+  const normalizedEvent = {
+    ...event,
+    agentDir: normalizeOptionalDir(event.agentDir),
+  };
   const staleError = new Error("prepared model runtime owner is stale after auth mutation");
   const invalidatedOwners: PreparedModelRuntimeOwner[] = [];
   const invalidatedConfiguredAgentIds = new Set<string>();

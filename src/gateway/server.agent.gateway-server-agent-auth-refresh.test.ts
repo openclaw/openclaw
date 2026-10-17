@@ -3,6 +3,7 @@ import type { ResponseFrame } from "../../packages/gateway-protocol/src/schema/f
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { setRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
@@ -11,6 +12,7 @@ import {
   loadPublishedGatewayReplyDispatchRuntime,
   registerPreparedModelRuntimePublicationListener,
 } from "../agents/prepared-model-runtime.js";
+import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import {
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
@@ -155,6 +157,38 @@ afterEach(async () => {
   const outcomes = await Promise.all(rpcDrains.splice(0));
   testState.agentsConfig = undefined;
   expect(outcomes.flat().every((outcome) => outcome.status === "fulfilled")).toBe(true);
+});
+
+test("dispatches after the auth mutation's temporary SQLite readers close", async () => {
+  const affectedAgentId = "auth-recovery";
+  const runId = "idem-agent-auth-recovery";
+  const before = await prepareAuthDispatchAgents(affectedAgentId);
+  // Persist an agent database so refresh uses the real SQLite catalog reader.
+  saveAuthProfileStore({ version: 1, profiles: {} }, before.agentDir);
+  await prepareGatewayReplyRuntimeForTest({ force: true });
+  const readers = createSqliteReadOnlyWorkerScope();
+  const settled = createDeferred<{
+    phase: string;
+    error?: unknown;
+  }>();
+  const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+    if (event.phase === "published" || event.phase === "failed") {
+      settled.resolve(event);
+    }
+  });
+  try {
+    // Database recovery publishes auth from a temporary reader scope. Its
+    // completion must not cancel the independently queued runtime refresh.
+    readers.run(() => refreshAuth(before.agentDir, "synthetic-recovered-key"));
+    await readers.close();
+    expect(await settled.promise).toEqual({ phase: "published" });
+    const recovered = sendAgentRpc(affectedAgentId, runId);
+    await expectCompleted(recovered);
+    expect(agentCommandCallsFor(runId)).toHaveLength(1);
+  } finally {
+    unregister();
+    await readers.close();
+  }
 });
 
 test("keeps an accepted run on its admitted runtime generation", async () => {
