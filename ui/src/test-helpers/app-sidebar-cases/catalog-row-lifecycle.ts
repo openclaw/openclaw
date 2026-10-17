@@ -17,6 +17,13 @@ import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-cl
 import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.tsx";
 
+type Sidebar = Awaited<ReturnType<typeof mountSidebar>>["sidebar"];
+async function setCatalog(sidebar: Sidebar, rows: Parameters<typeof catalogPage>[0]) {
+  sidebar.sessionData.sessionCatalogs = catalogPage(rows).catalogs;
+  sidebar.sessionData.requestSessionDataUpdate();
+  await settleLitElement(sidebar);
+}
+
 describe("AppSidebar catalog row lifecycle", () => {
   it("keeps an adopted catalog row archived after it leaves the active roster", async () => {
     const key = "agent:main:adopted-archive";
@@ -44,11 +51,7 @@ describe("AppSidebar catalog row lifecycle", () => {
     await sessions.refresh({ agentId: "main", force: true });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions);
     sidebar.connected = true;
-    sidebar.sessionData.sessionCatalogs = catalogPage([
-      { threadId: "archived-thread", name: row.label, sessionKey: key },
-    ]).catalogs;
-    sidebar.sessionData.requestSessionDataUpdate();
-    await settleLitElement(sidebar);
+    await setCatalog(sidebar, [{ threadId: "archived-thread", name: row.label, sessionKey: key }]);
 
     const archive = sidebar.querySelector<HTMLButtonElement>(
       `[data-session-key="${key}"] [data-sidebar-session-archive]`,
@@ -83,11 +86,9 @@ describe("AppSidebar catalog row lifecycle", () => {
         createGateway({} as GatewayBrowserClient),
         sessions.sessions,
       );
-      sidebar.sessionData.sessionCatalogs = catalogPage([
+      await setCatalog(sidebar, [
         { threadId: "thread-adopted-title", name: "Renamed upstream", sessionKey: adoptedKey },
-      ]).catalogs;
-      sidebar.sessionData.requestSessionDataUpdate();
-      await settleLitElement(sidebar);
+      ]);
 
       const row = sidebar.querySelector(`[data-session-key="${adoptedKey}"]`);
       expect(row?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(expected);
@@ -111,11 +112,9 @@ describe("AppSidebar catalog row lifecycle", () => {
     const row = () => sidebar.querySelector<HTMLElement>("[data-catalog-session-key]");
     expect(row()?.classList.contains("sidebar-recent-session--colored")).toBe(true);
     expect(row()?.style.getPropertyValue("--session-color")).toBe("var(--session-color-cyan)");
-    sidebar.sessionData.sessionCatalogs = catalogPage([
+    await setCatalog(sidebar, [
       { threadId: "colored", name: "CLI session", color: "cyan", sessionKey: key },
-    ]).catalogs;
-    sidebar.sessionData.requestSessionDataUpdate();
-    await settleLitElement(sidebar);
+    ]);
     expect(row()?.classList.contains("sidebar-recent-session--colored")).toBe(false);
     expect(row()?.style.getPropertyValue("--session-color")).toBe("");
   });
@@ -127,14 +126,9 @@ describe("AppSidebar catalog row lifecycle", () => {
       gateway,
       createSessions("main", ["agent:main:main", adoptedKey]),
     );
-    const setCatalog = async (sessionKey?: string) => {
-      sidebar.sessionData.sessionCatalogs = catalogPage([
-        { threadId: "thread-adopted-menu", name: "Adopted menu", sessionKey },
-      ]).catalogs;
-      sidebar.sessionData.requestSessionDataUpdate();
-      await settleLitElement(sidebar);
-    };
-    await setCatalog();
+    const adopt = (sessionKey?: string) =>
+      setCatalog(sidebar, [{ threadId: "thread-adopted-menu", name: "Adopted menu", sessionKey }]);
+    await adopt();
     const catalogMenuButton = sidebar.querySelector<HTMLButtonElement>(
       "[data-catalog-session-menu]",
     )!;
@@ -144,7 +138,7 @@ describe("AppSidebar catalog row lifecycle", () => {
       catalogMenuButton.click();
     }
     await sidebar.updateComplete;
-    await setCatalog(adoptedKey);
+    await adopt(adoptedKey);
     await Promise.resolve();
     await sidebar.updateComplete;
 
@@ -238,11 +232,7 @@ describe("AppSidebar catalog row lifecycle", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     const setLabel = async (name: string) => {
-      sidebar.sessionData.sessionCatalogs = catalogPage([
-        { threadId: "thread-rename", name },
-      ]).catalogs;
-      sidebar.sessionData.requestSessionDataUpdate();
-      await settleLitElement(sidebar);
+      await setCatalog(sidebar, [{ threadId: "thread-rename", name }]);
     };
     await setLabel("A long catalog session title");
     const labelSelector = "[data-catalog-session-key] .sidebar-recent-session__name";
@@ -263,11 +253,9 @@ describe("AppSidebar catalog row lifecycle", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", ["agent:main:main", adoptedKey]);
     const { sidebar } = await mountSidebar(gateway, sessions.sessions);
-    sidebar.sessionData.sessionCatalogs = catalogPage([
+    await setCatalog(sidebar, [
       { threadId: "thread-adopted-pr", name: "Adopted session", sessionKey: adoptedKey },
-    ]).catalogs;
-    sidebar.sessionData.requestSessionDataUpdate();
-    await settleLitElement(sidebar);
+    ]);
 
     const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${adoptedKey}"]`);
     const oldLabel = row?.querySelector<HTMLElement>(".hover-marquee");

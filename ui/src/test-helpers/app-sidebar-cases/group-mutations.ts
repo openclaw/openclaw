@@ -112,18 +112,20 @@ describe("AppSidebar group mutation collapsed state", () => {
     await vi.dynamicImportSettled();
   }
 
-  async function deleteGroupThroughConfirm(sidebar: SidebarLifecycleState) {
-    const menu = await openGroupMenu(sidebar);
-    await selectGroupMenuAction(menu, "delete-group");
-    const confirm = await waitForFast(() => {
+  function confirmButton() {
+    return waitForFast(() => {
       const button = document.body.querySelector<HTMLButtonElement>(
         "openclaw-modal-dialog .exec-approval-actions .btn.danger",
       );
-      if (!button) {
-        throw new Error("expected the group delete confirm");
-      }
-      return button;
+      expect(button).not.toBeNull();
+      return button!;
     });
+  }
+
+  async function deleteGroupThroughConfirm(sidebar: SidebarLifecycleState) {
+    const menu = await openGroupMenu(sidebar);
+    await selectGroupMenuAction(menu, "delete-group");
+    const confirm = await confirmButton();
     confirm.click();
   }
 
@@ -220,74 +222,54 @@ describe("AppSidebar group mutation collapsed state", () => {
     await vi.dynamicImportSettled();
   });
 
-  it("keeps collapsed keys when group rename is rejected", async () => {
-    const { sidebar, harness } = await mountCollapsedGroup({
-      groupsRename: () => Promise.reject(new Error("rename failed")),
-    });
-    await renameGroupThroughDialog(sidebar, "Beta");
-    await waitForFast(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
-  });
-
-  it("rewrites collapsed keys only after group rename succeeds", async () => {
-    const { sidebar, harness } = await mountCollapsedGroup({
-      groupsRename: () => Promise.resolve("completed"),
-    });
-    await renameGroupThroughDialog(sidebar, "Beta");
-    await waitForFast(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) ?? "[]")).toEqual([
-      "category:Beta",
-    ]);
-  });
+  it.each([
+    { operation: "rename", succeeds: false, expected: ["category:Alpha"] },
+    { operation: "rename", succeeds: true, expected: ["category:Beta"] },
+    { operation: "delete", succeeds: false, expected: ["category:Alpha"] },
+    { operation: "delete", succeeds: true, expected: [] },
+  ] as const)(
+    "updates collapsed keys only after successful $operation (success: $succeeds)",
+    async ({ operation, succeeds, expected }) => {
+      const mutate = () =>
+        succeeds
+          ? Promise.resolve("completed" as const)
+          : Promise.reject(new Error(operation + " failed"));
+      const { sidebar, harness } = await mountCollapsedGroup(
+        operation === "rename" ? { groupsRename: mutate } : { groupsDelete: mutate },
+      );
+      if (operation === "rename") {
+        await renameGroupThroughDialog(sidebar, "Beta");
+        await waitForFast(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
+      } else {
+        await deleteGroupThroughConfirm(sidebar);
+        await waitForFast(() => expect(harness.groupsDelete).toHaveBeenCalledWith("Alpha"));
+      }
+      await Promise.resolve();
+      await Promise.resolve();
+      const stored = localStorage.getItem(COLLAPSED_STORAGE_KEY);
+      if (succeeds) {
+        expect(JSON.parse(stored ?? "[]")).toEqual(expected);
+      } else {
+        expect(stored).toBe(JSON.stringify(expected));
+      }
+    },
+  );
 
   it("ignores a stale group rename after its Gateway reconnects with the same client", async () => {
-    let resolveRename!: (result: SessionGroupMutationResult) => void;
-    const rename = new Promise<SessionGroupMutationResult>((resolve) => {
-      resolveRename = resolve;
-    });
+    const rename = deferred<SessionGroupMutationResult>();
     const { sidebar, harness, gatewayHarness } = await mountCollapsedGroup({
-      groupsRename: () => rename,
+      groupsRename: () => rename.promise,
     });
     await renameGroupThroughDialog(sidebar, "Beta");
     await waitForFast(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
 
     gatewayHarness.publish({ phase: "stopped" });
     gatewayHarness.publish({ phase: "connected" });
-    resolveRename("stale");
+    rename.resolve("stale");
     await Promise.resolve();
     await Promise.resolve();
 
     expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
-  });
-
-  it("keeps collapsed keys when group delete is rejected", async () => {
-    const { sidebar, harness } = await mountCollapsedGroup({
-      groupsDelete: () => Promise.reject(new Error("delete failed")),
-    });
-    await deleteGroupThroughConfirm(sidebar);
-    await waitForFast(() => expect(harness.groupsDelete).toHaveBeenCalledWith("Alpha"));
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
-  });
-
-  it("drops collapsed keys only after group delete succeeds", async () => {
-    const { sidebar, harness } = await mountCollapsedGroup({
-      groupsDelete: () => Promise.resolve("completed"),
-    });
-    await deleteGroupThroughConfirm(sidebar);
-    await waitForFast(() => expect(harness.groupsDelete).toHaveBeenCalledWith("Alpha"));
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) ?? "[]")).toEqual([]);
   });
 
   it("keeps a reconnected group delete retryable after its confirm opened", async () => {
@@ -296,15 +278,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     await toast.updateComplete;
     const menu = await openGroupMenu(sidebar);
     await selectGroupMenuAction(menu, "delete-group");
-    const confirm = await waitForFast(() => {
-      const button = document.body.querySelector<HTMLButtonElement>(
-        "openclaw-modal-dialog .exec-approval-actions .btn.danger",
-      );
-      if (!button) {
-        throw new Error("expected the group delete confirm");
-      }
-      return button;
-    });
+    const confirm = await confirmButton();
 
     gatewayHarness.publish({ phase: "stopped" });
     gatewayHarness.publish({ phase: "connected" });
@@ -325,69 +299,39 @@ describe("AppSidebar group mutation collapsed state", () => {
     toast.remove();
   });
 
-  it("rejects a folder listing from a retired same-client connection", async () => {
-    const listing = deferred<{
-      path: string;
-      home: string;
-      entries: Array<{ name: string; path: string; type: "directory" }>;
-    }>();
-    const client = {
-      request: async (method: string) => {
-        if (method === "fs.listDir") {
-          return await listing.promise;
-        }
-        throw new Error(`Unexpected request: ${method}`);
-      },
-    } as GatewayBrowserClient;
-    const gatewayHarness = createGatewayHarness(client);
-    const harness = createSessionsHarness("main", ["agent:main:main"]);
-    const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
-
-    const pending = sidebar.listSessionGroupFolders("/repos/client");
-    gatewayHarness.publish({ phase: "stopped" });
-    gatewayHarness.publish({ phase: "connected" });
-    listing.resolve({
-      path: "/repos/client",
-      home: "/home/peter",
-      entries: [],
-    });
-
-    await expect(pending).rejects.toThrow(
-      "Gateway connection replaced before the defaults were saved. Try again.",
-    );
-  });
-
-  it("rejects repository inspection from a retired same-client connection", async () => {
-    const inspection = deferred<{
-      branches: Array<{ kind: "local"; name: string }>;
-      defaultBranch: string;
-      repositoryStatus: "git";
-    }>();
-    const client = {
-      request: async (method: string) => {
-        if (method === "worktrees.branches") {
-          return await inspection.promise;
-        }
-        throw new Error(`Unexpected request: ${method}`);
-      },
-    } as GatewayBrowserClient;
-    const gatewayHarness = createGatewayHarness(client);
-    const harness = createSessionsHarness("main", ["agent:main:main"]);
-    const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
-
-    const pending = sidebar.inspectSessionGroupRepository("/repos/client");
-    gatewayHarness.publish({ phase: "stopped" });
-    gatewayHarness.publish({ phase: "connected" });
-    inspection.resolve({
-      branches: [{ kind: "local", name: "main" }],
-      defaultBranch: "main",
-      repositoryStatus: "git",
-    });
-
-    await expect(pending).rejects.toThrow(
-      "Gateway connection replaced before the defaults were saved. Try again.",
-    );
-  });
+  it.each(["folders", "repository"] as const)(
+    "rejects %s inspection from a retired same-client connection",
+    async (kind) => {
+      const folders = { path: "/repos/client", home: "/home/peter", entries: [] };
+      const repository = {
+        branches: [{ kind: "local" as const, name: "main" }],
+        defaultBranch: "main",
+        repositoryStatus: "git" as const,
+      };
+      const result = deferred<typeof folders | typeof repository>();
+      const client = {
+        request: async (method: string) => {
+          if (method === (kind === "folders" ? "fs.listDir" : "worktrees.branches")) {
+            return await result.promise;
+          }
+          throw new Error("Unexpected request: " + method);
+        },
+      } as GatewayBrowserClient;
+      const gatewayHarness = createGatewayHarness(client);
+      const harness = createSessionsHarness("main", ["agent:main:main"]);
+      const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
+      const pending =
+        kind === "folders"
+          ? sidebar.listSessionGroupFolders("/repos/client")
+          : sidebar.inspectSessionGroupRepository("/repos/client");
+      gatewayHarness.publish({ phase: "stopped" });
+      gatewayHarness.publish({ phase: "connected" });
+      result.resolve(kind === "folders" ? folders : repository);
+      await expect(pending).rejects.toThrow(
+        "Gateway connection replaced before the defaults were saved. Try again.",
+      );
+    },
+  );
 
   it("leaves the catalog alone when the delete confirm is cancelled", async () => {
     const { sidebar, harness } = await mountCollapsedGroup({});

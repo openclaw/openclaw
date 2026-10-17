@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -15,9 +15,22 @@ import {
 import { registerCatalogPageHostTests } from "./catalog-page-hosts.ts";
 import "../../components/app-sidebar.tsx";
 
+const catalogHello = () =>
+  ({
+    auth: { role: "operator", scopes: ["operator.read"] },
+    features: { methods: ["sessions.catalog.list"] },
+  }) as ApplicationGatewaySnapshot["hello"];
+
+async function advance(sidebar: Awaited<ReturnType<typeof mountSidebar>>["sidebar"], ms = 0) {
+  await vi.advanceTimersByTimeAsync(ms);
+  await sidebar.updateComplete;
+}
+
 describe("AppSidebar session catalog pagination", () => {
-  it("keeps an in-flight catalog refresh across a stable same-client Gateway notification", async () => {
+  beforeEach(() => {
     vi.useFakeTimers();
+  });
+  it("keeps an in-flight catalog refresh across a stable same-client Gateway notification", async () => {
     let provider: HTMLElement | undefined;
     try {
       // Shared UI workers retain real custom elements despite later module mocks.
@@ -58,19 +71,16 @@ describe("AppSidebar session catalog pagination", () => {
       expect(request).toHaveBeenCalledTimes(1);
 
       pendingPage.resolve(catalogPage([{ threadId: "thread-1", name: "Current session" }]));
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+      await advance(sidebar);
 
       expect(sidebar.textContent).toContain("Current session");
       expect(request).toHaveBeenCalledTimes(1);
     } finally {
       provider?.remove();
-      vi.useRealTimers();
     }
   });
 
   it("releases a pending catalog page across a same-client Gateway reconnect", async () => {
-    vi.useFakeTimers();
     let provider: HTMLElement | undefined;
     try {
       const pendingStalePage = deferred<SessionsCatalogListResult>();
@@ -90,10 +100,7 @@ describe("AppSidebar session catalog pagination", () => {
         return Promise.resolve(firstPage);
       });
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      const hello = {
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["sessions.catalog.list"] },
-      } as ApplicationGatewaySnapshot["hello"];
+      const hello = catalogHello();
       gateway.publish({ hello });
       const mounted = await mountSidebar(
         gateway.gateway,
@@ -122,8 +129,7 @@ describe("AppSidebar session catalog pagination", () => {
 
       gateway.publish({ phase: "connected", hello });
       await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+      await advance(sidebar);
 
       expect(sidebar.textContent).toContain("Expanded");
       const loadMore = sidebar.querySelector<HTMLButtonElement>(
@@ -141,161 +147,99 @@ describe("AppSidebar session catalog pagination", () => {
       expect(sidebar.textContent).not.toContain("Stale page");
 
       pendingFreshPage.resolve(catalogPage([{ threadId: "thread-3", name: "Fresh page" }]));
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+      await advance(sidebar);
       expect(sidebar.sessionData.loadingMoreSessionCatalogIds.has("codex")).toBe(false);
       expect(sidebar.textContent).toContain("Fresh page");
     } finally {
       provider?.remove();
-      vi.useRealTimers();
     }
   });
 
   it("retires visible catalog rows and expanded cursors when the agent changes", async () => {
-    vi.useFakeTimers();
-    try {
-      const pendingResearch = deferred<SessionsCatalogListResult>();
-      const mainFirstPage = catalogPage(
-        [{ threadId: "main-newest", name: "Main newest" }],
-        "main-page-2",
-      );
-      const mainSecondPage = catalogPage([{ threadId: "main-older", name: "Main older" }]);
-      const researchFirstPage = catalogPage(
-        [{ threadId: "research-newest", name: "Research newest" }],
-        "research-page-2",
-      );
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce(mainFirstPage)
-        .mockResolvedValueOnce(mainSecondPage)
-        .mockReturnValueOnce(pendingResearch.promise)
-        .mockResolvedValue(catalogPage([{ threadId: "research-older", name: "Research older" }]));
-      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          auth: { role: "operator", scopes: ["operator.read"] },
-          features: { methods: ["sessions.catalog.list"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
-      const { sidebar, context } = await mountSidebar(
-        gateway.gateway,
-        createSessions("main", ["agent:main:main"]),
-        "panel",
-        TWO_AGENTS,
-      );
-      sidebar.connected = true;
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+    const pendingResearch = deferred<SessionsCatalogListResult>();
+    const mainFirstPage = catalogPage(
+      [{ threadId: "main-newest", name: "Main newest" }],
+      "main-page-2",
+    );
+    const mainSecondPage = catalogPage([{ threadId: "main-older", name: "Main older" }]);
+    const researchFirstPage = catalogPage(
+      [{ threadId: "research-newest", name: "Research newest" }],
+      "research-page-2",
+    );
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(mainFirstPage)
+      .mockResolvedValueOnce(mainSecondPage)
+      .mockReturnValueOnce(pendingResearch.promise)
+      .mockResolvedValue(catalogPage([{ threadId: "research-older", name: "Research older" }]));
+    const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    gateway.publish({
+      hello: catalogHello(),
+    });
+    const { sidebar, context } = await mountSidebar(
+      gateway.gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    await advance(sidebar);
 
-      sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+    sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
+    await advance(sidebar);
 
-      expect(sidebar.textContent).toContain("Main newest");
-      expect(sidebar.textContent).toContain("Main older");
-      expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(1);
+    expect(sidebar.textContent).toContain("Main newest");
+    expect(sidebar.textContent).toContain("Main older");
+    expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(1);
 
-      context.agentSelection.state.selectedId = "research";
-      context.agentSelection.state.scopeId = "research";
-      sidebar.invalidate();
-      await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(200);
-      await sidebar.updateComplete;
+    context.agentSelection.state.selectedId = "research";
+    context.agentSelection.state.scopeId = "research";
+    sidebar.invalidate();
+    await sidebar.updateComplete;
+    await advance(sidebar, 200);
 
-      expect(sidebar.textContent).not.toContain("Main newest");
-      expect(sidebar.textContent).not.toContain("Main older");
-      expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(0);
+    expect(sidebar.textContent).not.toContain("Main newest");
+    expect(sidebar.textContent).not.toContain("Main older");
+    expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(0);
 
-      pendingResearch.resolve(researchFirstPage);
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+    pendingResearch.resolve(researchFirstPage);
+    await advance(sidebar);
 
-      expect(sidebar.textContent).toContain("Research newest");
-      expect(sidebar.textContent).not.toContain("Research older");
-      expect(request).not.toHaveBeenCalledWith(
-        "sessions.catalog.list",
-        expect.objectContaining({
-          agentId: "research",
-          catalogId: "codex",
-          cursors: { "gateway:local": "research-page-2" },
-        }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(sidebar.textContent).toContain("Research newest");
+    expect(sidebar.textContent).not.toContain("Research older");
+    expect(request).not.toHaveBeenCalledWith(
+      "sessions.catalog.list",
+      expect.objectContaining({
+        agentId: "research",
+        catalogId: "codex",
+        cursors: { "gateway:local": "research-page-2" },
+      }),
+    );
   });
 
   it.each(["catalog", "host"] as const)(
     "preserves the current page while exposing a structured %s load-more error",
     async (errorOwner) => {
-      vi.useFakeTimers();
-      try {
-        const structuredError =
-          errorOwner === "catalog"
-            ? {
-                catalogs: [
-                  {
-                    id: "codex",
-                    label: "Codex",
-                    capabilities: { continueSession: true, archive: true },
-                    hosts: [],
-                    error: { code: "catalog_error", message: "Catalog page failed" },
-                  },
-                ],
-              }
-            : catalogErrorPage("Host page failed");
-        const request = vi
-          .fn()
-          .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"))
-          .mockResolvedValueOnce(structuredError)
-          .mockResolvedValueOnce(catalogPage([{ threadId: "thread-2", name: "Older" }]));
-        const { sidebar } = await mountSessionCatalogSidebar({
-          request,
-        } as unknown as GatewayBrowserClient);
-
-        const loadMore = () =>
-          sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
-        loadMore()?.click();
-        await vi.advanceTimersByTimeAsync(0);
-        await sidebar.updateComplete;
-
-        const section = sidebar.querySelector('[data-session-section="catalog:codex"]');
-        expect(section?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
-        expect(
-          section?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
-        ).toContain(errorOwner === "catalog" ? "Catalog page failed" : "Host page failed");
-        expect(sidebar.textContent).toContain("Newest");
-        expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
-
-        loadMore()?.click();
-        await vi.advanceTimersByTimeAsync(0);
-        await sidebar.updateComplete;
-        expect(sidebar.querySelector('[data-session-catalog-error="codex"]')).toBeNull();
-        expect(sidebar.textContent).toContain("Older");
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
-
-  registerCatalogPageHostTests();
-
-  it("discards a load-more response after a catalog refresh replaces its cursor", async () => {
-    vi.useFakeTimers();
-    try {
-      let resolveStalePage!: (value: ReturnType<typeof catalogPage>) => void;
-      const stalePage = new Promise<ReturnType<typeof catalogPage>>((resolve) => {
-        resolveStalePage = resolve;
-      });
+      const structuredError =
+        errorOwner === "catalog"
+          ? {
+              catalogs: [
+                {
+                  id: "codex",
+                  label: "Codex",
+                  capabilities: { continueSession: true, archive: true },
+                  hosts: [],
+                  error: { code: "catalog_error", message: "Catalog page failed" },
+                },
+              ],
+            }
+          : catalogErrorPage("Host page failed");
       const request = vi
         .fn()
-        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Initial" }], "page-2"))
-        .mockReturnValueOnce(stalePage)
-        .mockResolvedValueOnce(
-          catalogPage([{ threadId: "thread-1", name: "Updated" }], "replacement-page"),
-        )
-        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-3", name: "Replacement" }]));
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"))
+        .mockResolvedValueOnce(structuredError)
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-2", name: "Older" }]));
       const { sidebar } = await mountSessionCatalogSidebar({
         request,
       } as unknown as GatewayBrowserClient);
@@ -303,182 +247,170 @@ describe("AppSidebar session catalog pagination", () => {
       const loadMore = () =>
         sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
       loadMore()?.click();
-      document.dispatchEvent(new Event("visibilitychange"));
-      await vi.advanceTimersByTimeAsync(5_000);
-      await sidebar.updateComplete;
-      expect(sidebar.textContent).toContain("Updated");
+      await advance(sidebar);
 
-      resolveStalePage(catalogPage([{ threadId: "thread-2", name: "Stale page" }], "page-3"));
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
-      expect(sidebar.textContent).not.toContain("Stale page");
+      const section = sidebar.querySelector('[data-session-section="catalog:codex"]');
+      expect(section?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
+      expect(
+        section?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
+      ).toContain(errorOwner === "catalog" ? "Catalog page failed" : "Host page failed");
+      expect(sidebar.textContent).toContain("Newest");
+      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
 
       loadMore()?.click();
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
-      expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
-        agentId: "main",
-        catalogId: "codex",
-        hostIds: ["gateway:local"],
-        cursors: { "gateway:local": "replacement-page" },
-      });
-      expect(sidebar.textContent).toContain("Replacement");
-    } finally {
-      vi.useRealTimers();
-    }
+      await advance(sidebar);
+      expect(sidebar.querySelector('[data-session-catalog-error="codex"]')).toBeNull();
+      expect(sidebar.textContent).toContain("Older");
+    },
+  );
+
+  registerCatalogPageHostTests();
+
+  it("discards a load-more response after a catalog refresh replaces its cursor", async () => {
+    const stalePage = deferred<SessionsCatalogListResult>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Initial" }], "page-2"))
+      .mockReturnValueOnce(stalePage.promise)
+      .mockResolvedValueOnce(
+        catalogPage([{ threadId: "thread-1", name: "Updated" }], "replacement-page"),
+      )
+      .mockResolvedValueOnce(catalogPage([{ threadId: "thread-3", name: "Replacement" }]));
+    const { sidebar } = await mountSessionCatalogSidebar({
+      request,
+    } as unknown as GatewayBrowserClient);
+
+    const loadMore = () =>
+      sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
+    loadMore()?.click();
+    document.dispatchEvent(new Event("visibilitychange"));
+    await advance(sidebar, 5_000);
+    expect(sidebar.textContent).toContain("Updated");
+
+    stalePage.resolve(catalogPage([{ threadId: "thread-2", name: "Stale page" }], "page-3"));
+    await advance(sidebar);
+    expect(sidebar.textContent).not.toContain("Stale page");
+
+    loadMore()?.click();
+    await advance(sidebar);
+    expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
+      agentId: "main",
+      catalogId: "codex",
+      hostIds: ["gateway:local"],
+      cursors: { "gateway:local": "replacement-page" },
+    });
+    expect(sidebar.textContent).toContain("Replacement");
   });
 
   it.each(["first page", "expanded page"])(
     "keeps expanded rows while exposing a structured error from the %s refresh",
     async (errorPage) => {
-      vi.useFakeTimers();
-      try {
-        const request = vi
-          .fn()
-          .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"))
-          .mockResolvedValueOnce(catalogPage([{ threadId: "thread-2", name: "Older" }]))
-          .mockResolvedValueOnce(
-            errorPage === "first page"
-              ? catalogErrorPage("Base refresh failed")
-              : catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"),
-          );
-        if (errorPage === "expanded page") {
-          request.mockResolvedValueOnce(catalogErrorPage("Page refresh failed"));
-        }
-        const { sidebar } = await mountSessionCatalogSidebar({
-          request,
-        } as unknown as GatewayBrowserClient);
-
-        sidebar
-          .querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')
-          ?.click();
-        await vi.advanceTimersByTimeAsync(0);
-        await sidebar.updateComplete;
-        expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.sessions).toHaveLength(2);
-
-        document.dispatchEvent(new Event("visibilitychange"));
-        await vi.advanceTimersByTimeAsync(5_000);
-        await sidebar.updateComplete;
-        const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
-        expect(host?.sessions.map((session) => session.threadId)).toEqual(["thread-1", "thread-2"]);
-        expect(host?.connected).toBe(false);
-        expect(host?.label).toBe("Unavailable host");
-        expect(host?.error?.message).toBe(
-          errorPage === "first page" ? "Base refresh failed" : "Page refresh failed",
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"))
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-2", name: "Older" }]))
+        .mockResolvedValueOnce(
+          errorPage === "first page"
+            ? catalogErrorPage("Base refresh failed")
+            : catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"),
         );
-        expect(host?.nextCursor).toBeUndefined();
-        expect(sidebar.querySelector('[data-session-catalog-load-more="codex"]')).toBeNull();
-      } finally {
-        vi.useRealTimers();
+      if (errorPage === "expanded page") {
+        request.mockResolvedValueOnce(catalogErrorPage("Page refresh failed"));
       }
+      const { sidebar } = await mountSessionCatalogSidebar({
+        request,
+      } as unknown as GatewayBrowserClient);
+
+      sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
+      await advance(sidebar);
+      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.sessions).toHaveLength(2);
+
+      document.dispatchEvent(new Event("visibilitychange"));
+      await advance(sidebar, 5_000);
+      const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
+      expect(host?.sessions.map((session) => session.threadId)).toEqual(["thread-1", "thread-2"]);
+      expect(host?.connected).toBe(false);
+      expect(host?.label).toBe("Unavailable host");
+      expect(host?.error?.message).toBe(
+        errorPage === "first page" ? "Base refresh failed" : "Page refresh failed",
+      );
+      expect(host?.nextCursor).toBeUndefined();
+      expect(sidebar.querySelector('[data-session-catalog-load-more="codex"]')).toBeNull();
     },
   );
 
   it("keeps a reappearing host's first page when replaying its saved depth fails", async () => {
-    vi.useFakeTimers();
-    try {
-      const emptyCatalog: SessionsCatalogListResult = {
-        catalogs: [
-          {
-            id: "codex",
-            label: "Codex",
-            capabilities: { continueSession: true, archive: true },
-            hosts: [],
-          },
-        ],
-      };
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Initial" }], "page-2"))
-        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-2", name: "Older" }]))
-        .mockResolvedValueOnce(emptyCatalog)
-        .mockResolvedValueOnce(
-          catalogPage([{ threadId: "thread-3", name: "Reappeared" }], "page-2"),
-        )
-        .mockResolvedValue(catalogErrorPage("Replay failed"));
-      const { sidebar } = await mountSessionCatalogSidebar({
-        request,
-      } as unknown as GatewayBrowserClient);
-      sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+    const emptyCatalog = catalogPage([]);
+    emptyCatalog.catalogs[0]!.hosts = [];
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Initial" }], "page-2"))
+      .mockResolvedValueOnce(catalogPage([{ threadId: "thread-2", name: "Older" }]))
+      .mockResolvedValueOnce(emptyCatalog)
+      .mockResolvedValueOnce(catalogPage([{ threadId: "thread-3", name: "Reappeared" }], "page-2"))
+      .mockResolvedValue(catalogErrorPage("Replay failed"));
+    const { sidebar } = await mountSessionCatalogSidebar({
+      request,
+    } as unknown as GatewayBrowserClient);
+    sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
+    await advance(sidebar);
 
-      document.dispatchEvent(new Event("visibilitychange"));
-      await vi.advanceTimersByTimeAsync(5_000);
-      await sidebar.updateComplete;
-      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts).toEqual([]);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await advance(sidebar, 5_000);
+    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts).toEqual([]);
 
-      document.dispatchEvent(new Event("visibilitychange"));
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts).toEqual([]);
-      await vi.advanceTimersByTimeAsync(1);
-      await sidebar.updateComplete;
-      const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
-      expect(host?.sessions.map((session) => session.threadId)).toEqual(["thread-3"]);
-      expect(host?.nextCursor).toBe("page-2");
-      expect(host?.connected).toBe(false);
-      expect(host?.error?.message).toBe("Replay failed");
-    } finally {
-      vi.useRealTimers();
-    }
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(sidebar.sessionData.sessionCatalogs[0]?.hosts).toEqual([]);
+    await advance(sidebar, 1);
+    const host = sidebar.sessionData.sessionCatalogs[0]?.hosts[0];
+    expect(host?.sessions.map((session) => session.threadId)).toEqual(["thread-3"]);
+    expect(host?.nextCursor).toBe("page-2");
+    expect(host?.connected).toBe(false);
+    expect(host?.error?.message).toBe("Replay failed");
   });
 
   it("applies concurrent load-more responses for different catalogs", async () => {
-    vi.useFakeTimers();
-    try {
-      let resolveCodex!: (value: SessionsCatalogListResult) => void;
-      let resolveClaude!: (value: SessionsCatalogListResult) => void;
-      const codexPage = new Promise<SessionsCatalogListResult>((resolve) => {
-        resolveCodex = resolve;
-      });
-      const claudePage = new Promise<SessionsCatalogListResult>((resolve) => {
-        resolveClaude = resolve;
-      });
-      const initialCodex = catalogPage(
-        [{ threadId: "codex-1", name: "Codex newest" }],
-        "codex-page-2",
-      );
-      const initialClaude = catalogPage(
-        [{ threadId: "claude-1", name: "Claude newest" }],
-        "claude-page-2",
-        "claude",
-      );
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce({
-          catalogs: [...initialCodex.catalogs, ...initialClaude.catalogs],
-        })
-        .mockReturnValueOnce(codexPage)
-        .mockReturnValueOnce(claudePage);
-      const { sidebar } = await mountSessionCatalogSidebar({
-        request,
-      } as unknown as GatewayBrowserClient);
+    const codexPage = deferred<SessionsCatalogListResult>();
+    const claudePage = deferred<SessionsCatalogListResult>();
+    const initialCodex = catalogPage(
+      [{ threadId: "codex-1", name: "Codex newest" }],
+      "codex-page-2",
+    );
+    const initialClaude = catalogPage(
+      [{ threadId: "claude-1", name: "Claude newest" }],
+      "claude-page-2",
+      "claude",
+    );
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        catalogs: [...initialCodex.catalogs, ...initialClaude.catalogs],
+      })
+      .mockReturnValueOnce(codexPage.promise)
+      .mockReturnValueOnce(claudePage.promise);
+    const { sidebar } = await mountSessionCatalogSidebar({
+      request,
+    } as unknown as GatewayBrowserClient);
 
-      sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
-      sidebar
-        .querySelector<HTMLButtonElement>('[data-session-catalog-load-more="claude"]')
-        ?.click();
-      resolveCodex(catalogPage([{ threadId: "codex-2", name: "Codex older" }]));
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
-      resolveClaude(
-        catalogPage([{ threadId: "claude-2", name: "Claude older" }], undefined, "claude"),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-      await sidebar.updateComplete;
+    sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
+    sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="claude"]')?.click();
+    codexPage.resolve(catalogPage([{ threadId: "codex-2", name: "Codex older" }]));
+    await advance(sidebar);
+    claudePage.resolve(
+      catalogPage([{ threadId: "claude-2", name: "Claude older" }], undefined, "claude"),
+    );
+    await advance(sidebar);
 
-      expect(
-        sidebar.sessionData.sessionCatalogs
-          .find((catalog) => catalog.id === "codex")
-          ?.hosts[0]?.sessions.map((session) => session.threadId),
-      ).toEqual(["codex-1", "codex-2"]);
-      expect(
-        sidebar.sessionData.sessionCatalogs
-          .find((catalog) => catalog.id === "claude")
-          ?.hosts[0]?.sessions.map((session) => session.threadId),
-      ).toEqual(["claude-1", "claude-2"]);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(
+      sidebar.sessionData.sessionCatalogs
+        .find((catalog) => catalog.id === "codex")
+        ?.hosts[0]?.sessions.map((session) => session.threadId),
+    ).toEqual(["codex-1", "codex-2"]);
+    expect(
+      sidebar.sessionData.sessionCatalogs
+        .find((catalog) => catalog.id === "claude")
+        ?.hosts[0]?.sessions.map((session) => session.threadId),
+    ).toEqual(["claude-1", "claude-2"]);
   });
 });

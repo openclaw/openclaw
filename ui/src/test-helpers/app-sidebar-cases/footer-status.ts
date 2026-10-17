@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { NativeGateway } from "../../app/native-gateways.runtime.ts";
 import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../../build-info.ts";
 import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
 import { createSidebarTestRouter } from "../app-sidebar-router.ts";
@@ -12,19 +13,14 @@ import {
 } from "../app-sidebar.ts";
 import { settleRoster } from "./roster.test-support.ts";
 
-type SidebarNativeGatewayTestSnapshot = {
-  gateways: Array<{
-    id: string;
-    name: string;
-    isPrimary: boolean;
-    health: "ok" | "error" | "unknown";
-  }>;
+type NativeGatewaysSnapshot = {
+  gateways: Array<Pick<NativeGateway, "id" | "name" | "isPrimary" | "health">>;
   currentId: string;
 };
 
 type SidebarNativeGatewayTestWindow = Window & {
   __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
-  __OPENCLAW_NATIVE_GATEWAYS__?: SidebarNativeGatewayTestSnapshot;
+  __OPENCLAW_NATIVE_GATEWAYS__?: NativeGatewaysSnapshot;
 };
 
 type MutableControlUiBuildInfo = {
@@ -42,10 +38,17 @@ function setControlUiBuildInfo(overrides: Partial<ControlUiBuildInfo>): void {
   );
 }
 
-function setNativeGatewayTestState(snapshot: SidebarNativeGatewayTestSnapshot): void {
+function setNativeGatewayTestState(snapshot: NativeGatewaysSnapshot): void {
   const nativeWindow = window as SidebarNativeGatewayTestWindow;
   nativeWindow["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
   nativeWindow["__OPENCLAW_NATIVE_GATEWAYS__"] = snapshot;
+}
+
+async function mountFooter() {
+  return mountSidebar(
+    createGateway({} as GatewayBrowserClient),
+    createSessions("main", ["agent:main:main"]),
+  );
 }
 
 describe("AppSidebar gateway footer subtitle", () => {
@@ -65,7 +68,7 @@ describe("AppSidebar gateway footer subtitle", () => {
       { id: "remote", name: "Remote Gateway", isPrimary: false, health: "unknown" },
     ],
     currentId: "local",
-  } satisfies SidebarNativeGatewayTestSnapshot;
+  } satisfies NativeGatewaysSnapshot;
 
   it.each(["online", "contextual"] as const)(
     "updates Home activity while the session list is hidden by %s",
@@ -91,13 +94,18 @@ describe("AppSidebar gateway footer subtitle", () => {
       expect(home.querySelector(".session-glyph__ring")).toBeNull();
       const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
       const current = sessions.sessions.state.result!;
-      sessions.publish({
-        result: Object.assign({}, current, {
-          sessions: current.sessions.map((row) =>
-            row.key === otherKey ? Object.assign({}, row, { label: "Quiet latest title" }) : row,
-          ),
-        }),
-      });
+      const publishRow = (key: string, patch: Partial<(typeof current.sessions)[number]>) => {
+        const latest = sessions.sessions.state.result!;
+        sessions.publish({
+          result: {
+            ...latest,
+            sessions: latest.sessions.map((row) =>
+              row.key === key ? Object.assign({}, row, patch) : row,
+            ),
+          },
+        });
+      };
+      publishRow(otherKey, { label: "Quiet latest title" });
       await settleRoster(sidebar);
       expect(prepare).not.toHaveBeenCalled();
 
@@ -107,14 +115,7 @@ describe("AppSidebar gateway footer subtitle", () => {
           { hasActiveRun: false, status: "done", unread: true },
         ] as const
       ).entries()) {
-        const latest = sessions.sessions.state.result!;
-        sessions.publish({
-          result: Object.assign({}, latest, {
-            sessions: latest.sessions.map((row) =>
-              row.key === mainKey ? Object.assign({}, row, activity) : row,
-            ),
-          }),
-        });
+        publishRow(mainKey, activity);
         await settleRoster(sidebar);
         expect(home.querySelector(".session-glyph__ring") !== null).toBe(activity.hasActiveRun);
         expect(home.querySelector('[aria-label="Unread"]') !== null).toBe(activity.unread);
@@ -126,27 +127,20 @@ describe("AppSidebar gateway footer subtitle", () => {
   it("shows custom build provenance and hides official releases", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-07-10T16:00:00.000Z"));
-    setControlUiBuildInfo({
+    const build = {
       commit: CONTROL_UI_TEST_COMMIT,
       commitAt: "2026-07-10T12:00:00.000Z",
       branch: "main",
       dirty: false,
-      release: false,
-    });
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    };
+    setControlUiBuildInfo({ ...build, release: false });
+    const { sidebar } = await mountFooter();
 
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
       "Identity and app menu for Owner: git@e8cbc62 · 4h ago",
     );
 
-    setControlUiBuildInfo({
-      commit: CONTROL_UI_TEST_COMMIT,
-      commitAt: "2026-07-10T12:00:00.000Z",
-      branch: "main",
-      dirty: false,
-      release: true,
-    });
+    setControlUiBuildInfo({ ...build, release: true });
     sidebar.invalidate();
     await sidebar.updateComplete;
 
@@ -159,8 +153,7 @@ describe("AppSidebar gateway footer subtitle", () => {
   it("shows gateway identity without treating aggregate health as this window’s status", async () => {
     setControlUiBuildInfo({ commit: CONTROL_UI_TEST_COMMIT, release: false });
     setNativeGatewayTestState(twoGateways);
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const { sidebar } = await mountFooter();
 
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
       "Identity and app menu for Owner: Local Gateway, primary",
@@ -177,8 +170,7 @@ describe("AppSidebar gateway footer subtitle", () => {
   it("shows one suspended subtitle without delivery counts", async () => {
     const label = "Suspended";
     setNativeGatewayTestState(twoGateways);
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const { sidebar } = await mountFooter();
     sidebar.connectionStatus = "suspended";
     await sidebar.updateComplete;
 
@@ -198,8 +190,7 @@ describe("AppSidebar gateway footer subtitle", () => {
 
   it("keeps gateway identity after reconnect and redacts connection diagnostics", async () => {
     setNativeGatewayTestState(twoGateways);
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const { sidebar } = await mountFooter();
     sidebar.connectionStatus = "reconnecting";
     sidebar.lastError = "connection refused?token=footer-secret";
     await sidebar.updateComplete;
@@ -227,8 +218,7 @@ describe("AppSidebar gateway footer subtitle", () => {
 
   it("updates when the native gateway snapshot changes", async () => {
     setNativeGatewayTestState(twoGateways);
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const { sidebar } = await mountFooter();
     setNativeGatewayTestState({
       gateways: [
         { id: "local", name: "Local Gateway", isPrimary: true, health: "ok" },

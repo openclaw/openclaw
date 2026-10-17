@@ -1,38 +1,32 @@
 import { describe, expect, it } from "vitest";
-import type {
-  SessionCatalog,
-  SessionCatalogSession,
-} from "../../../../packages/gateway-protocol/src/index.ts";
+import type { SessionCatalogSession } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
+import { catalogPage, createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
 import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.tsx";
 
-function projectCatalog(
+async function mountCatalog(
   sessions: Array<Pick<SessionCatalogSession, "threadId"> & Partial<SessionCatalogSession>>,
-): SessionCatalog[] {
-  return [
-    {
-      id: "codex",
-      label: "Codex",
-      capabilities: { continueSession: true, archive: true },
-      hosts: [
-        {
-          hostId: "gateway:local",
-          label: "Local Codex",
-          kind: "gateway",
-          connected: true,
-          sessions: sessions.map((session) => ({
-            status: "idle",
-            archived: false,
-            canContinue: true,
-            canArchive: true,
-            ...session,
-          })),
-        },
-      ],
-    },
-  ];
+) {
+  const { sidebar } = await mountSidebar(
+    createGateway({} as GatewayBrowserClient),
+    createSessions("main", ["agent:main:main"]),
+  );
+  const setCatalog = async (rows = sessions) => {
+    const catalogs = catalogPage([]).catalogs;
+    catalogs[0]!.hosts[0]!.sessions = rows.map((row) => ({
+      status: "idle",
+      archived: false,
+      canContinue: true,
+      canArchive: true,
+      ...row,
+    }));
+    sidebar.sessionData.sessionCatalogs = catalogs;
+    sidebar.sessionData.requestSessionDataUpdate();
+    await settleLitElement(sidebar);
+  };
+  await setCatalog();
+  return { sidebar, setCatalog };
 }
 
 describe("AppSidebar project session activity", () => {
@@ -41,9 +35,7 @@ describe("AppSidebar project session activity", () => {
       "openclaw:sidebar:sessions:collapsed-sections",
       JSON.stringify(["catalog-project:codex:gateway:local:custom:repo"]),
     );
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    sidebar.sessionData.sessionCatalogs = projectCatalog([
+    const { sidebar } = await mountCatalog([
       {
         threadId: "custom-group-thread",
         name: "Custom group session",
@@ -55,8 +47,6 @@ describe("AppSidebar project session activity", () => {
         cwd: "custom:repo",
       },
     ]);
-    sidebar.sessionData.requestSessionDataUpdate();
-    await settleLitElement(sidebar);
 
     const customGroup = sidebar.querySelector<HTMLButtonElement>(
       '[data-session-catalog-project="custom:repo"]',
@@ -97,9 +87,7 @@ describe("AppSidebar project session activity", () => {
       "openclaw:sidebar:sessions:collapsed-sections",
       JSON.stringify([legacySectionId]),
     );
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    sidebar.sessionData.sessionCatalogs = projectCatalog([
+    const { sidebar } = await mountCatalog([
       {
         threadId: "person-thread",
         name: "Ada's session",
@@ -111,8 +99,6 @@ describe("AppSidebar project session activity", () => {
         },
       },
     ]);
-    sidebar.sessionData.requestSessionDataUpdate();
-    await settleLitElement(sidebar);
 
     const person = sidebar.querySelector<HTMLButtonElement>(
       '[data-session-catalog-project="person:profile:profile-ada"]',
@@ -131,18 +117,11 @@ describe("AppSidebar project session activity", () => {
   });
 
   it("preserves catalog menu focus when project groups reorder", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     const sessions = [
       { threadId: "thread-a", name: "Project A", cwd: "/work/a" },
       { threadId: "thread-b", name: "Project B", cwd: "/work/b" },
     ];
-    const setCatalog = async (orderedSessions: typeof sessions) => {
-      sidebar.sessionData.sessionCatalogs = projectCatalog(orderedSessions);
-      sidebar.sessionData.requestSessionDataUpdate();
-      await settleLitElement(sidebar);
-    };
-    await setCatalog(sessions);
+    const { sidebar, setCatalog } = await mountCatalog(sessions);
 
     const menu = sidebar.querySelector<HTMLButtonElement>(
       '[data-session-key*="thread-a"] [data-catalog-session-menu]',
@@ -156,9 +135,7 @@ describe("AppSidebar project session activity", () => {
   });
 
   it("shows thread-style activity indicators", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    sidebar.sessionData.sessionCatalogs = projectCatalog([
+    const { sidebar } = await mountCatalog([
       {
         threadId: "active-thread",
         name: "Active session",
@@ -177,8 +154,6 @@ describe("AppSidebar project session activity", () => {
         name: "Loose session",
       },
     ]);
-    sidebar.sessionData.requestSessionDataUpdate();
-    await settleLitElement(sidebar);
 
     const project = sidebar.querySelector(
       '[data-session-catalog-project="project:/work/openclaw"]',
