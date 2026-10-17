@@ -13,6 +13,9 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
+const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const observer = resolve("scripts/e2e/lib/upgrade-survivor/diagnostics.mjs");
 
@@ -113,9 +116,9 @@ async function publishSuccess(summary: unknown, logs: Record<string, unknown> = 
   const artifacts = join(root, "private");
   const published = join(root, "published");
   mkdirSync(artifacts);
-  writeFileSync(join(artifacts, "summary.json"), JSON.stringify(summary));
+  writeJson(join(artifacts, "summary.json"), summary);
   for (const [name, value] of Object.entries(logs)) {
-    writeFileSync(join(artifacts, name), JSON.stringify(value));
+    writeJson(join(artifacts, name), value);
   }
   const { publishDiagnostics } = await import(observer);
   return {
@@ -162,9 +165,9 @@ describe("upgrade survivor rollback publication", () => {
       rawTranscriptRestoration: "unsupported-by-published-backup",
       omittedRawTranscripts: [{ ...omission, sessionId: "upgrade-restored-index-history" }],
     };
-    writeFileSync(join(artifacts, "backup-rollback.json"), JSON.stringify(rawProof));
-    writeFileSync(join(artifacts, "backup-rollback-create.json"), JSON.stringify(created));
-    writeFileSync(join(artifacts, "backup-rollback-restore.json"), JSON.stringify(restored));
+    writeJson(join(artifacts, "backup-rollback.json"), rawProof);
+    writeJson(join(artifacts, "backup-rollback-create.json"), created);
+    writeJson(join(artifacts, "backup-rollback-restore.json"), restored);
     publish();
     const text = readFileSync(join(published, "summary.json"), "utf8");
     expect(text).not.toMatch(/PRIVATE_|\/private\/host/);
@@ -246,7 +249,7 @@ describe("upgrade survivor rollback publication", () => {
             : undefined,
       });
       publish();
-      const receipt = JSON.parse(readFileSync(join(published, "summary.json"), "utf8"));
+      const receipt = readJson(join(published, "summary.json"));
       expect(receipt.backupRollback).toEqual(
         kind === "not-applicable"
           ? {
@@ -397,7 +400,7 @@ describe("upgrade survivor first-hop process evidence", () => {
       "openclaw-update-doctor-123-00000000-0000-4000-8000-000000000000.json",
     );
     const manifest = join(root, "package.json");
-    writeFileSync(manifest, JSON.stringify({ name: "openclaw", version: "2026.7.1-2" }));
+    writeJson(manifest, { name: "openclaw", version: "2026.7.1-2" });
     const entrypoint = join(root, "openclaw.mjs");
     // Files change under the running parent. Reading package.json at exit would
     // falsely attribute that parent's result to the newly installed updater.
@@ -437,9 +440,7 @@ if (process.argv[2] === 'update') {
     expect(result.stdout).toBe("doctor fixture finished\n");
     expect(result.stderr).toBe("");
     const files = readdirSync(join(artifacts, "diagnostics"));
-    const reports = files.map((name) =>
-      JSON.parse(readFileSync(join(artifacts, "diagnostics", name), "utf8")),
-    );
+    const reports = files.map((name) => readJson(join(artifacts, "diagnostics", name)));
     const started = reports.filter((report) => report.event === "started");
     const parent = started.find((report) => report.role === "update");
     const doctor = started.find((report) => report.role === "doctor");
@@ -474,7 +475,7 @@ if (process.argv[2] === 'update') {
     if (migration) {
       expect(Buffer.byteLength(migration.manifest)).toBeGreaterThan(256 * 1024);
       expect(Buffer.byteLength(migration.failureReport)).toBeGreaterThan(256 * 1024);
-      const raw = JSON.parse(readFileSync(join(artifacts, "diagnostics/raw.json"), "utf8"));
+      const raw = readJson(join(artifacts, "diagnostics/raw.json"));
       expect(raw.sessionMigration).toEqual({
         runId: migration.runId,
         manifest: migration.manifest,
@@ -490,7 +491,7 @@ if (process.argv[2] === 'update') {
         .replaceAll("private-doctor-value", "[REDACTED]")
         .replaceAll("private-agent-value", "main"),
     );
-    const report = JSON.parse(readFileSync(join(published, "failure.json"), "utf8"));
+    const report = readJson(join(published, "failure.json"));
     expect(report.doctorResults).toEqual({
       availability: "captured",
       observations: [
@@ -538,7 +539,7 @@ if (process.argv[2] === 'update') {
       });
     }
     const rawPath = join(artifacts, "diagnostics/raw.json");
-    const raw = JSON.parse(readFileSync(rawPath, "utf8"));
+    const raw = readJson(rawPath);
     raw.doctorResults[0].exited.parentPid++;
     if (migration) {
       raw.sessionMigration.manifest = JSON.stringify({
@@ -546,21 +547,22 @@ if (process.argv[2] === 'update') {
         runId: "session-sqlite-1789528941490-00000000",
       });
     }
-    writeFileSync(rawPath, JSON.stringify(raw));
+    writeJson(rawPath, raw);
     const mismatched = join(root, "mismatched");
     publishDiagnostics(artifacts, mismatched, (text: string) => text);
-    expect(
-      JSON.parse(readFileSync(join(mismatched, "failure.json"), "utf8")).doctorResults,
-    ).toEqual({ availability: "unknown", observations: [] });
+    expect(readJson(join(mismatched, "failure.json")).doctorResults).toEqual({
+      availability: "unknown",
+      observations: [],
+    });
     if (migration) {
-      const changed = JSON.parse(readFileSync(join(mismatched, "failure.json"), "utf8"));
+      const changed = readJson(join(mismatched, "failure.json"));
       expect(changed.sessionMigration.manifest).toBeNull();
       expect(changed.omissions["session migration manifest"]).toBe("invalid observation; omitted");
     }
     const serialized = JSON.stringify(reports);
-    expect(serialized).not.toContain("private-argument-value");
-    expect(serialized).not.toContain("private-environment-value");
-    expect(serialized).not.toContain(root);
+    for (const value of ["private-argument-value", "private-environment-value", root]) {
+      expect(serialized).not.toContain(value);
+    }
     expect(serialized).not.toMatch(/private-ignored-value|private-config-value/);
   });
 
@@ -588,14 +590,14 @@ if (process.argv[2] === 'update') {
       OPENCLAW_CONFIG_PATH: join(root, "absent.json"),
     });
     expect(captured.status, captured.stderr).toBe(0);
-    const raw = JSON.parse(readFileSync(join(artifacts, "diagnostics/raw.json"), "utf8"));
+    const raw = readJson(join(artifacts, "diagnostics/raw.json"));
     expect(raw.sessionMigration.manifest).toBe(migration.manifest);
     expect(raw.sessionMigration.failureReport).toBeNull();
     expect(raw.omissions["session migration failure report"]).toBe(reason);
     const { publishDiagnostics } = await import(observer);
     const published = join(root, "published");
     publishDiagnostics(artifacts, published, (text: string) => text);
-    const report = JSON.parse(readFileSync(join(published, "failure.json"), "utf8"));
+    const report = readJson(join(published, "failure.json"));
     expect(report.sessionMigration).toMatchObject({
       availability: "captured",
       failureReport: null,
@@ -648,22 +650,19 @@ if (process.argv[2] === 'update') {
                   ? null
                   : "Exact companion version is not published on npm (E404).",
             };
-      writeFileSync(
-        join(root, "summary.json"),
-        JSON.stringify({
-          status: "passed",
-          baseline: { spec: "2026.8.1-beta.1", version: "2026.8.1-beta.1" },
-          candidate: { kind: "package", version: "2026.9.4" },
-          scenario: "legacy-operator-state",
-          installedVersion: "2026.9.4",
-          candidateInstallMode: "published",
-          updateRestartMode: "manual",
-          updateOutcome: "success",
-          phases: [],
-          baselineCompanion,
-          missingLoadPath,
-        }),
-      );
+      writeJson(join(root, "summary.json"), {
+        status: "passed",
+        baseline: { spec: "2026.8.1-beta.1", version: "2026.8.1-beta.1" },
+        candidate: { kind: "package", version: "2026.9.4" },
+        scenario: "legacy-operator-state",
+        installedVersion: "2026.9.4",
+        candidateInstallMode: "published",
+        updateRestartMode: "manual",
+        updateOutcome: "success",
+        phases: [],
+        baselineCompanion,
+        missingLoadPath,
+      });
       const { publishDiagnostics } = await import(observer);
       const published = join(root, "published");
       const publish = () =>
@@ -679,7 +678,7 @@ if (process.argv[2] === 'update') {
         return;
       }
       publish();
-      const receipt = JSON.parse(readFileSync(join(published, "summary.json"), "utf8"));
+      const receipt = readJson(join(published, "summary.json"));
       expect(receipt.missingLoadPath).toEqual(missingLoadPath);
       expect(receipt.baselineCompanion).toEqual(
         baselineCompanion
@@ -703,10 +702,7 @@ if (process.argv[2] === 'update') {
     const tmp = join(root, "tmp");
     const ipcRoot = join(tmp, `openclaw${process.getuid ? `-${process.getuid()}` : ""}`);
     mkdirSync(ipcRoot, { recursive: true, mode: 0o700 });
-    writeFileSync(
-      join(root, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
-    );
+    writeJson(join(root, "package.json"), { name: "openclaw", version: "2026.9.4" });
     const entrypoint = join(root, "openclaw.mjs");
     writeFileSync(entrypoint, "process.exitCode = 7;");
     const ipcFilename = "openclaw-update-doctor-123-00000000-0000-4000-8000-000000000000.json";
@@ -741,7 +737,7 @@ if (process.argv[2] === 'update') {
     expect(result.stdout + result.stderr).toBe("");
     expect(readFileSync(target, "utf8")).toBe(payload);
     const reports = readdirSync(join(root, "diagnostics")).map((name) =>
-      JSON.parse(readFileSync(join(root, "diagnostics", name), "utf8")),
+      readJson(join(root, "diagnostics", name)),
     );
     expect(reports).toHaveLength(2);
     expect(reports.find((report) => report.event === "exited")).toEqual({
@@ -754,10 +750,7 @@ if (process.argv[2] === 'update') {
 
   it.skipIf(process.platform === "win32")("does not turn a signal into a successful exit", () => {
     const root = realpathSync(tempDirs.make("survivor-interrupted-hop-"));
-    writeFileSync(
-      join(root, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.7.1-2" }),
-    );
+    writeJson(join(root, "package.json"), { name: "openclaw", version: "2026.7.1-2" });
     const entrypoint = join(root, "openclaw.mjs");
     writeFileSync(entrypoint, 'process.kill(process.pid, "SIGTERM");');
     const result = runNode(["--import", observer, entrypoint, "update"], {
@@ -767,7 +760,7 @@ if (process.argv[2] === 'update') {
     expect(result.signal).toBe("SIGTERM");
     expect(result.stdout + result.stderr).toBe("");
     const reports = readdirSync(join(root, "diagnostics")).map((name) =>
-      JSON.parse(readFileSync(join(root, "diagnostics", name), "utf8")),
+      readJson(join(root, "diagnostics", name)),
     );
     expect(reports).toEqual([
       expect.objectContaining({ role: "update", event: "started", packageVersion: "2026.7.1-2" }),
@@ -837,11 +830,8 @@ it.each([
     logs,
   );
   publication.publish();
-  const result = JSON.parse(readFileSync(join(publication.published, "summary.json"), "utf8"));
+  const result = readJson(join(publication.published, "summary.json"));
   expect(result.logs).toMatchObject(
     Object.fromEntries(Object.entries(logs).map(([name, proof]) => [name, JSON.stringify(proof)])),
   );
-  for (const [name, proof] of Object.entries(logs)) {
-    expect(JSON.parse(result.logs[name])).toEqual(proof);
-  }
 });

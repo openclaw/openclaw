@@ -27,6 +27,9 @@ import {
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
+const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 const runner = resolve("scripts/e2e/lib/upgrade-survivor/run.sh");
@@ -108,24 +111,21 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
     result,
     events: readFileSync(join(home, "events"), "utf8").trim().split("\n"),
     migrated: existsSync(join(home, "migrated")),
-    summary: JSON.parse(readFileSync(summary, "utf8")),
+    summary: readJson(summary),
   };
 }
 
 describe.skipIf(process.platform === "win32")("survivor first-hop observation", () => {
-  it.each(["base"])(
-    "rejects missing automatic migration before manual Doctor can repair %s",
-    (scenario) => {
-      const { result, events, migrated, summary } = runFirstHop(scenario, false);
-      expect(result.status, result.stderr).toBe(42);
-      expect(events).toEqual(["update", "observe"]);
-      expect(migrated).toBe(false);
-      expect(summary).toMatchObject({
-        status: "failed",
-        failure: { phase: "assert-automatic-migration" },
-      });
-    },
-  );
+  it("rejects missing automatic migration before manual Doctor can repair base", () => {
+    const { result, events, migrated, summary } = runFirstHop("base", false);
+    expect(result.status, result.stderr).toBe(42);
+    expect(events).toEqual(["update", "observe"]);
+    expect(migrated).toBe(false);
+    expect(summary).toMatchObject({
+      status: "failed",
+      failure: { phase: "assert-automatic-migration" },
+    });
+  });
 
   it("observes automatic migration before allowing manual Doctor and explicit consent", () => {
     const { result, events, summary } = runFirstHop("base", true);
@@ -230,14 +230,10 @@ function workshopFixture(): WorkshopFixture {
     mkdirSync(directory, { recursive: true });
   }
   for (const directory of [packageRoot, candidateRoot]) {
-    writeFileSync(
-      join(directory, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
-    );
-    writeFileSync(
-      join(directory, "dist", "build-info.json"),
-      JSON.stringify({ buildId: directory === packageRoot ? "baseline" : "candidate" }),
-    );
+    writeJson(join(directory, "package.json"), { name: "openclaw", version: "2026.9.4" });
+    writeJson(join(directory, "dist", "build-info.json"), {
+      buildId: directory === packageRoot ? "baseline" : "candidate",
+    });
   }
   const baseline = captureWorkshopBaseline(packageRoot, artifacts);
   const tarball = join(root, "candidate.tgz");
@@ -249,16 +245,13 @@ function workshopFixture(): WorkshopFixture {
     CREATE TABLE unrelated_records (value TEXT); INSERT INTO unrelated_records VALUES ('preserved');`);
   initial.close();
   const seeded = seedWorkshopIndex(state, artifacts, "baseline");
-  writeFileSync(
-    join(artifacts, "update.json"),
-    JSON.stringify({
-      ok: false,
-      error: {
-        type: "cli_error",
-        message: `SQLite integrity_check failed: Page ${seeded.rootpage}: never used`,
-      },
-    }),
-  );
+  writeJson(join(artifacts, "update.json"), {
+    ok: false,
+    error: {
+      type: "cli_error",
+      message: `SQLite integrity_check failed: Page ${seeded.rootpage}: never used`,
+    },
+  });
   return { state, artifacts, packageRoot, candidateRoot, baseline, candidate, filename };
 }
 
@@ -278,13 +271,21 @@ function recordProcess(
   pid: number,
   role: "update" | "doctor",
   identity: WorkshopIdentity,
-  malformedAtStart: boolean,
-  updateInProgress: boolean,
-  exitCode: number,
-  nativeReceipt = true,
-  legacyAtStart?: WorkshopState,
-  duringProcess?: () => WorkshopState,
-  doctorWarnings?: string[],
+  {
+    malformedAtStart = false,
+    updateInProgress = false,
+    exitCode = 0,
+    legacyAtStart,
+    duringProcess,
+    doctorWarnings,
+  }: {
+    malformedAtStart?: boolean;
+    updateInProgress?: boolean;
+    exitCode?: number;
+    legacyAtStart?: WorkshopState;
+    duringProcess?: () => WorkshopState;
+    doctorWarnings?: string[];
+  } = {},
 ) {
   mkdirSync(join(observations, "diagnostics"), { recursive: true });
   const witness = {
@@ -296,29 +297,21 @@ function recordProcess(
     parentPid: 100,
     ...(legacyAtStart ? { legacyAtStart } : {}),
   };
-  writeFileSync(join(observations, `workshop-process-${pid}.json`), JSON.stringify(witness));
+  writeJson(join(observations, `workshop-process-${pid}.json`), witness);
   const legacyAtExit = duringProcess?.();
-  writeFileSync(
-    join(observations, `workshop-process-${pid}.json`),
-    JSON.stringify({
-      ...witness,
-      exitCode,
-      ...(legacyAtExit ? { legacyAtExit } : {}),
-      ...(doctorWarnings ? { doctorResultAtExit: { status: "ok", warnings: doctorWarnings } } : {}),
-    }),
-  );
-  if (nativeReceipt) {
-    writeFileSync(
-      join(observations, "diagnostics", `process-${pid}-exited.json`),
-      JSON.stringify({
-        role,
-        packageVersion: identity.version,
-        pid,
-        parentPid: witness.parentPid,
-        exitCode,
-      }),
-    );
-  }
+  writeJson(join(observations, `workshop-process-${pid}.json`), {
+    ...witness,
+    exitCode,
+    ...(legacyAtExit ? { legacyAtExit } : {}),
+    ...(doctorWarnings ? { doctorResultAtExit: { status: "ok", warnings: doctorWarnings } } : {}),
+  });
+  writeJson(join(observations, "diagnostics", `process-${pid}-exited.json`), {
+    role,
+    packageVersion: identity.version,
+    pid,
+    parentPid: witness.parentPid,
+    exitCode,
+  });
 }
 
 // Simulate command outcomes to test evidence rejection; real repair belongs to the Docker proof.
@@ -346,17 +339,13 @@ function dropRetiredTables(filename: string) {
 }
 
 /** Simulates the candidate Doctor: export pending/quarantined drafts, drop tables, remove files. */
-function simulateWorkshopRetirement(
-  fixture: WorkshopFixture,
-  seeded: LegacySeed,
-  exportedIds: readonly string[] = seeded.after.exports,
-) {
+function simulateWorkshopRetirement(fixture: WorkshopFixture, seeded: LegacySeed) {
   const proposals = join(fixture.state, "skill-workshop", "proposals");
   const exportRoot = join(
     fixture.state,
     "agents/main/agent/workshop-skills/.archive/.retired-proposals",
   );
-  for (const id of exportedIds) {
+  for (const id of seeded.after.exports) {
     const draft = readdirSync(join(proposals, id), { recursive: true, encoding: "utf8" }).find(
       (entry) => entry.endsWith("PROPOSAL.md"),
     )!;
@@ -378,11 +367,14 @@ describe("Workshop Doctor recovery evidence", () => {
     (outcome) => {
       const fixture = workshopFixture();
       const first = join(fixture.artifacts, "first-update");
-      recordProcess(first, 101, "update", fixture.baseline, true, false, 1);
+      recordProcess(first, 101, "update", fixture.baseline, {
+        malformedAtStart: true,
+        exitCode: 1,
+      });
       assertWorkshopUpdateRefusal(fixture.state, fixture.artifacts, first, fixture.packageRoot, 1);
       simulateWorkshopRepair(fixture.filename);
       const baselineDoctor = join(fixture.artifacts, "baseline-doctor");
-      recordProcess(baselineDoctor, 102, "doctor", fixture.baseline, true, false, 0);
+      recordProcess(baselineDoctor, 102, "doctor", fixture.baseline, { malformedAtStart: true });
       assertWorkshopDoctorRepair(fixture.state, fixture.artifacts, baselineDoctor, "baseline");
       const seeded: LegacySeed = seedWorkshopLegacyProposals(fixture.state, fixture.artifacts);
       expect(seeded.after.exports).toEqual([
@@ -392,61 +384,25 @@ describe("Workshop Doctor recovery evidence", () => {
       ]);
       cpSync(fixture.candidateRoot, fixture.packageRoot, { recursive: true });
       const upgraded = join(fixture.artifacts, "recovered-upgrade");
-      recordProcess(
-        upgraded,
-        103,
-        "update",
-        fixture.baseline,
-        false,
-        false,
-        0,
-        true,
-        seeded.before,
-      );
+      recordProcess(upgraded, 103, "update", fixture.baseline, { legacyAtStart: seeded.before });
       if (outcome === "baseline-consumed") {
         simulateWorkshopRetirement(fixture, seeded);
       }
-      recordProcess(
-        upgraded,
-        104,
-        "doctor",
-        fixture.candidate,
-        false,
-        true,
-        0,
-        true,
-        captureWorkshopLegacyState(fixture.state, seeded),
-        () => {
+      recordProcess(upgraded, 104, "doctor", fixture.candidate, {
+        updateInProgress: true,
+        legacyAtStart: captureWorkshopLegacyState(fixture.state, seeded),
+        duringProcess: () => {
           if (outcome === "baseline-consumed") {
             return captureWorkshopLegacyState(fixture.state, seeded);
           }
-          const exported =
-            outcome === "missing-export"
-              ? seeded.after.exports.slice(1)
-              : outcome === "exported-applied"
-                ? [...seeded.after.exports, "survivor-applied-20260729"]
-                : seeded.after.exports;
-          simulateWorkshopRetirement(fixture, seeded, exported);
-          if (outcome === "tables-kept") {
-            const database = new DatabaseSync(fixture.filename);
-            database.exec("CREATE TABLE skill_workshop_proposals (proposal_id TEXT)");
-            database.close();
-          }
-          if (outcome === "files-kept") {
-            mkdirSync(join(fixture.state, "skill-workshop", "proposals"));
-          }
-          if (outcome === "live-skill-changed") {
-            writeFileSync(
-              join(fixture.state, "agents/main/agent/workshop-skills/survivor-applied/SKILL.md"),
-              "changed",
-            );
-          }
+          simulateWorkshopRetirement(fixture, seeded);
           return captureWorkshopLegacyState(fixture.state, seeded);
         },
-        outcome === "retirement-warning"
-          ? ["Could not export Skill Workshop proposal survivor-pending-20260729: denied"]
-          : [],
-      );
+        doctorWarnings:
+          outcome === "retirement-warning"
+            ? ["Could not export Skill Workshop proposal survivor-pending-20260729: denied"]
+            : [],
+      });
       const verifyUpgrade = () =>
         assertWorkshopRecoveredUpgrade(
           fixture.state,
@@ -454,62 +410,28 @@ describe("Workshop Doctor recovery evidence", () => {
           upgraded,
           fixture.packageRoot,
         );
-      if (!outcome.startsWith("candidate-") && outcome !== "intact") {
+      if (outcome !== "intact") {
         expect(verifyUpgrade).toThrow(
-          {
-            "baseline-consumed": /did not receive the original/,
-            "missing-export": /export exactly the pending and quarantined/,
-            "exported-applied": /export exactly the pending and quarantined/,
-            "live-skill-changed": /live Workshop skill bytes/,
-            "tables-kept": /retired Workshop tables/,
-            "files-kept": /retired proposal files/,
-            "retirement-warning": /retirement warning/,
-          }[outcome],
+          outcome === "baseline-consumed" ? /did not receive the original/ : /retirement warning/,
         );
         return;
       }
       verifyUpgrade();
       seedWorkshopIndex(fixture.state, fixture.artifacts, "candidate");
       const candidateDoctor = join(fixture.artifacts, "candidate-doctor");
-      recordProcess(
-        candidateDoctor,
-        105,
-        "doctor",
-        fixture.candidate,
-        true,
-        false,
-        0,
-        true,
-        undefined,
-        () => {
+      recordProcess(candidateDoctor, 105, "doctor", fixture.candidate, {
+        malformedAtStart: true,
+        duringProcess: () => {
           simulateWorkshopRepair(fixture.filename);
-          if (outcome !== "candidate-table-kept") {
-            dropRetiredTables(fixture.filename);
-          }
+          dropRetiredTables(fixture.filename);
           writeFileSync(
             join(fixture.artifacts, "doctor.log"),
-            outcome === "candidate-not-retired"
-              ? "Doctor complete.\n"
-              : `\u001b[32m│  Retired the Skill Workshop\n│  proposal tables.\n│\u001b[0m\n${
-                  outcome === "candidate-reexported" ? "Exported 1 pending draft.\n" : ""
-                }`,
+            "\u001b[32m│  Retired the Skill Workshop\n│  proposal tables.\n│\u001b[0m\n",
           );
           return captureWorkshopLegacyState(fixture.state, seeded);
         },
-      );
-      const verifyCandidate = () =>
-        assertWorkshopDoctorRepair(fixture.state, fixture.artifacts, candidateDoctor, "candidate");
-      if (outcome !== "intact") {
-        expect(verifyCandidate).toThrow(
-          outcome === "candidate-table-kept"
-            ? /retired Workshop tables/
-            : outcome === "candidate-reexported"
-              ? /re-exported/
-              : /did not retire the restored/,
-        );
-        return;
-      }
-      verifyCandidate();
+      });
+      assertWorkshopDoctorRepair(fixture.state, fixture.artifacts, candidateDoctor, "candidate");
       expect(completeWorkshopRecovery(fixture.state, fixture.artifacts)).toMatchObject({
         firstAttempt: { status: "refused-before-candidate", automaticRepair: false },
         baselineDoctor: { status: "explicit-doctor-repaired" },

@@ -5,27 +5,28 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
+const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
+
 const assertions = resolve("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // Independent persisted output contract: v2026.7.1-2's authored policy, with
 // only historical null usage removed by the frozen candidate's Doctor importer.
 function canonicalPolicy() {
+  const rules = (security: string, ask: string, autoAllowSkills: boolean) => ({
+    security,
+    ask,
+    askFallback: "deny",
+    autoAllowSkills,
+  });
   return {
     version: 1,
     socket: { path: "/synthetic/exec.sock", token: "synthetic-socket-value-must-not-be-logged" },
-    defaults: {
-      security: "allowlist",
-      ask: "on-miss",
-      askFallback: "deny",
-      autoAllowSkills: false,
-    },
+    defaults: rules("allowlist", "on-miss", false),
     agents: {
       main: {
-        security: "allowlist",
-        ask: "always",
-        askFallback: "deny",
-        autoAllowSkills: true,
+        ...rules("allowlist", "always", true),
         allowlist: [
           {
             id: "survivor-unused-command",
@@ -42,10 +43,7 @@ function canonicalPolicy() {
         ],
       },
       auditor: {
-        security: "deny",
-        ask: "off",
-        askFallback: "deny",
-        autoAllowSkills: false,
+        ...rules("deny", "off", false),
         allowlist: [{ id: "survivor-auditor-command", pattern: "/opt/upgrade-survivor/bin/audit" }],
       },
     },
@@ -97,15 +95,13 @@ function fixture() {
     const result = run("assert-exec-approvals");
     expect(readFileSync(legacyPath).equals(legacyBytes)).toBe(true);
     expect(readdirSync(state, { recursive: true })).toEqual(entries);
-    if (before) {
-      expect(readFileSync(dbPath).equals(before)).toBe(true);
-    } else {
-      expect(existsSync(dbPath)).toBe(false);
-    }
-    expect(result.stdout + result.stderr).not.toContain(
+    expect(existsSync(dbPath) ? readFileSync(dbPath) : null).toEqual(before);
+    for (const privateValue of [
       "synthetic-socket-value-must-not-be-logged",
-    );
-    expect(result.stdout + result.stderr).not.toContain("/opt/upgrade-survivor/bin");
+      "/opt/upgrade-survivor/bin",
+    ]) {
+      expect(result.stdout + result.stderr).not.toContain(privateValue);
+    }
     return result;
   }
   return { run, legacyBytes, writeCanonical, observe };
@@ -182,10 +178,10 @@ function approvalFixture() {
   };
   mkdirSync(artifactRoot);
   mkdirSync(join(state, "state"), { recursive: true });
-  writeFileSync(
-    join(artifactRoot, "legacy-operator-baseline.json"),
-    JSON.stringify({ approvals: policy, approvalsJsonEra: true }),
-  );
+  writeJson(join(artifactRoot, "legacy-operator-baseline.json"), {
+    approvals: policy,
+    approvalsJsonEra: true,
+  });
   const dbPath = join(state, "state", "openclaw.sqlite");
   const legacyPath = join(state, "exec-approvals.json");
   const writeCanonical = (value: unknown) => {
@@ -211,11 +207,7 @@ function approvalFixture() {
         OPENCLAW_STATE_DIR: state,
       },
     });
-    if (dbBefore) {
-      expect(readFileSync(dbPath).equals(dbBefore)).toBe(true);
-    } else {
-      expect(existsSync(dbPath)).toBe(false);
-    }
+    expect(existsSync(dbPath) ? readFileSync(dbPath) : null).toEqual(dbBefore);
     expect(result.stdout + result.stderr).not.toContain("private-runtime-socket-token");
     return result;
   };
@@ -225,7 +217,7 @@ function approvalFixture() {
 describe("legacy operator approvals acceptance", () => {
   it("accepts baseline JSON but rejects the retained file after SQLite import", () => {
     const { policy, legacyPath, writeCanonical, run } = approvalFixture();
-    writeFileSync(legacyPath, JSON.stringify(policy));
+    writeJson(legacyPath, policy);
     const baseline = run("baseline");
     expect(baseline.status, baseline.stderr).toBe(0);
     // The real importer owns retirement. This independent fixture supplies its output.
@@ -235,15 +227,9 @@ describe("legacy operator approvals acceptance", () => {
     expect(retainedLegacy.stderr).toContain("legacy exec approvals file was not retired");
   });
 
-  it.each(["mode"])("rejects altered %s without repairing it", (field) => {
+  it("rejects altered mode without repairing it", () => {
     const { policy, writeCanonical, run } = approvalFixture();
-    if (field === "allowlist") {
-      policy.agents.main.allowlist.pop();
-    } else if (field === "mode") {
-      policy.defaults.security = "full";
-    } else {
-      policy.agents.ops.allowlist[0]!.pattern = "/usr/bin/other";
-    }
+    policy.defaults.security = "full";
     writeCanonical(policy);
     const result = run();
     expect(result.status).toBe(1);
@@ -252,10 +238,10 @@ describe("legacy operator approvals acceptance", () => {
 
   it("rejects missing canonical storage instead of importing the legacy specimen", () => {
     const { policy, legacyPath, run } = approvalFixture();
-    writeFileSync(legacyPath, JSON.stringify(policy));
+    writeJson(legacyPath, policy);
     const result = run();
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("legacy operator approvals database missing");
-    expect(JSON.parse(readFileSync(legacyPath, "utf8"))).toEqual(policy);
+    expect(readJson(legacyPath)).toEqual(policy);
   });
 });
