@@ -169,6 +169,7 @@ describe("gateway chat metadata runtime", () => {
     async (surface) => {
       const harness = await preparedHarness();
       await harness.read();
+      const compact = await harness.read({ includeModels: false });
       const coldReads = [
         harness.getPreparedOwner,
         harness.getPreparedAuthStore,
@@ -190,6 +191,7 @@ describe("gateway chat metadata runtime", () => {
         expect(first?.defaultModelCatalog).toBe(first?.sessionModelCatalog);
         expect(first?.metadata).toEqual({
           commands: [{ name: "command-1-1" }],
+          revision: compact.revision,
           swarmEnabled: true,
         });
       }

@@ -54,7 +54,7 @@ type ChatRefreshOptions = {
 };
 
 type ChatStartupMetadataHandler = (
-  metadata: ChatMetadataResult | undefined,
+  metadata: Partial<ChatMetadataResult> | undefined,
 ) => void | Promise<void>;
 
 type ChatMetadataBinding = {

@@ -341,6 +341,7 @@ export async function handleChatHistoryRequest({
       }
       // Hash the authorized wire projection: receipts never skip current-state reads or policy.
       const stateRevision = {
+        commands: startupMetadata?.commands !== undefined ? startupMetadata.revision : undefined,
         pendingInputs: sha256StableValue(projected.pendingInputs).digest,
         sessionInfo: projected.sessionInfo
           ? sha256StableValue({ ...projected.sessionInfo, snapshotAt: undefined }).digest
@@ -349,6 +350,9 @@ export async function handleChatHistoryRequest({
       return {
         ...projected,
         stateRevision,
+        ...(stateRevision.commands && knownState.commands === stateRevision.commands
+          ? { metadata: { ...projected.metadata, commands: undefined } }
+          : {}),
         ...(deltaCursor !== undefined && knownState?.pendingInputs === stateRevision.pendingInputs
           ? { pendingInputs: undefined }
           : {}),
@@ -356,11 +360,6 @@ export async function handleChatHistoryRequest({
           ? { sessionInfo: undefined, sessionInfoSnapshotAt: projected.sessionInfo?.snapshotAt }
           : {}),
       };
-    };
-    const query = {
-      key: canonicalKey,
-      agentId: sessionAgentId,
-      storePath,
     };
     const [unsavedAcpMeta] = entry
       ? []
@@ -376,7 +375,11 @@ export async function handleChatHistoryRequest({
       const sessionInfo = measureDiagnosticsTimelineSpanSync(
         `gateway.${method}.session_info`,
         () =>
-          prepareProjectedSessionPresentation(read, client).snapshot(query).row ??
+          prepareProjectedSessionPresentation(read, client).snapshot({
+            key: canonicalKey,
+            agentId: sessionAgentId,
+            storePath,
+          }).row ??
           (entry
             ? undefined
             : buildGatewaySessionRow({
@@ -404,9 +407,6 @@ export async function handleChatHistoryRequest({
         );
         return undefined;
       }
-      if (sessionInfo) {
-        Object.assign(sessionInfo, currentSharing);
-      }
       const activeRunState = resolveVisibleActiveSessionRunState({
         context,
         requestedKey: sessionKey,
@@ -418,6 +418,7 @@ export async function handleChatHistoryRequest({
         includeTerminalPersistence: true,
       });
       if (sessionInfo) {
+        Object.assign(sessionInfo, currentSharing);
         sessionInfo.hasActiveRun = activeRunState.active;
         if (activeRunState.runIds !== undefined) {
           sessionInfo.activeRunIds = activeRunState.runIds;
@@ -467,8 +468,7 @@ export async function handleChatHistoryRequest({
         if (!projection) {
           continue;
         }
-        const provider = projection.modelProvider;
-        const model = projection.model;
+        const { modelProvider: provider, model } = projection;
         const catalogEntry =
           catalog && provider && model
             ? findModelCatalogEntry(catalog, { provider, modelId: model })

@@ -65,7 +65,7 @@ import type {
   PreparedModelsListRequest,
 } from "./models-list-context.js";
 
-type PreparedAgentMetadata = PreparedChatMetadataProjection["agent"] & { revision: string };
+type PreparedAgentMetadata = PreparedChatMetadataProjection["agent"];
 
 type PreparedProjection<T> = { read: () => T; isCurrent: () => boolean };
 
@@ -588,6 +588,7 @@ export function createGatewayChatMetadataRuntime(params: {
           : {
               metadata: {
                 commands: session.agent.commands,
+                revision: session.agent.revision,
                 swarmEnabled: session.agent.swarmEnabled,
                 requiredWorkerInferenceProfileId: resolveRequiredWorkerInferenceProfileId(
                   readParams,

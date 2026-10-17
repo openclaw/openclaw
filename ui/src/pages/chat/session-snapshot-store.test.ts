@@ -149,7 +149,20 @@ describe("persistent chat session snapshots", () => {
         ...snapshot("history"),
         deltaCursor: "cursor-1",
         historyState: {
-          stateRevision: { pendingInputs: "inputs-1", sessionInfo: "info-1" },
+          stateRevision: {
+            pendingInputs: "inputs-1",
+            sessionInfo: "info-1",
+            commands: "commands-1",
+          },
+          commands: [
+            {
+              name: "skill",
+              description: "Run skill",
+              source: "skill",
+              scope: "text",
+              acceptsArgs: true,
+            },
+          ],
           pendingInputs: {
             items: [
               {
