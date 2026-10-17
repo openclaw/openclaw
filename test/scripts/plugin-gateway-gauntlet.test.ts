@@ -17,26 +17,8 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import {
-  buildObservationGuardFailures,
-  createGauntletPrebuildCommand,
-  hasGauntletWorkRows,
-  parseArgs,
-  parseTimedMetrics,
-  runMeasuredCommand,
-  type GauntletMeasuredCommandParams,
-} from "../../scripts/check-plugin-gateway-gauntlet.mts";
-import {
-  buildGauntletPrebuildEnv,
-  collectGatewayCpuObservations,
-  collectMetricObservations,
-  collectPluginsWithRequiredEntries,
-  collectRequiredPluginEntries,
-  collectQaBaselineRegressionObservations,
-  detectCommandDiagnosticFailure,
-  discoverBundledPluginManifests,
-  selectPluginEntries,
-} from "../../scripts/lib/plugin-gateway-gauntlet.mts";
+import * as runner from "../../scripts/check-plugin-gateway-gauntlet.mts";
+import * as gauntlet from "../../scripts/lib/plugin-gateway-gauntlet.mts";
 import { hasErrnoCode } from "../../src/infra/errno.js";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -52,6 +34,7 @@ import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const tsxImport = import.meta.resolve("tsx");
 const testNodeExecPath = resolveTestNodeExecPath();
+const dryRunArgs = ["--skip-prebuild", "--skip-lifecycle", "--skip-slash-help", "--skip-qa"];
 
 describe("plugin gateway gauntlet helpers", () => {
   let repoRoot: string;
@@ -63,9 +46,7 @@ describe("plugin gateway gauntlet helpers", () => {
     receipts = await openFixtureReceiptChannel();
   });
 
-  afterAll(async () => {
-    await receipts.close();
-  });
+  afterAll(() => receipts.close());
 
   beforeEach(async () => {
     repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-gauntlet-"));
@@ -102,10 +83,10 @@ describe("plugin gateway gauntlet helpers", () => {
   }
 
   function measure(
-    params: Pick<GauntletMeasuredCommandParams, "args" | "label"> &
-      Partial<GauntletMeasuredCommandParams>,
+    params: Pick<runner.GauntletMeasuredCommandParams, "args" | "label"> &
+      Partial<runner.GauntletMeasuredCommandParams>,
   ) {
-    return runMeasuredCommand({
+    return runner.runMeasuredCommand({
       cwd: repoRoot,
       env: process.env,
       logDir: path.join(repoRoot, "logs"),
@@ -134,6 +115,20 @@ describe("plugin gateway gauntlet helpers", () => {
     );
   }
 
+  function runQaGauntlet(scenarios: string[], env?: NodeJS.ProcessEnv) {
+    return runGauntlet(
+      [
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-slash-help",
+        "--plugin",
+        "alpha",
+        ...scenarios.flatMap((id) => ["--qa-scenario", id]),
+      ],
+      env,
+    );
+  }
+
   async function readSummary() {
     return JSON.parse(
       await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
@@ -142,12 +137,13 @@ describe("plugin gateway gauntlet helpers", () => {
 
   async function runQaSummaryFailureScenario(params: {
     qaSummary?: unknown;
-    scenarioIds: string[];
-    diagnosticFailure: string;
+    scenarioIds?: string[];
+    diagnosticFailure?: string;
     diagnosticDetail?: unknown;
     maxBytes?: string;
     rowAssertion?: "metrics" | "missing";
   }) {
+    const diagnosticFailure = params.diagnosticFailure ?? "qa-summary-invalid";
     await writeManifest("alpha");
     await writeFixture("extensions/alpha/index.ts", "export {};\n");
     const summaryAction =
@@ -163,46 +159,41 @@ describe("plugin gateway gauntlet helpers", () => {
       summaryAction,
     ]);
 
-    const result = runGauntlet(
-      [
-        "--skip-prebuild",
-        "--skip-lifecycle",
-        "--skip-slash-help",
-        "--plugin",
-        "alpha",
-        ...params.scenarioIds.flatMap((scenarioId) => ["--qa-scenario", scenarioId]),
-      ],
+    const result = runQaGauntlet(
+      params.scenarioIds ?? ["channel-chat-baseline"],
       params.maxBytes
         ? { ...process.env, OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES: params.maxBytes }
         : undefined,
     );
 
     expect(result.status, result.stdout).toBe(1);
-    expect(result.stdout).toContain(`diagnostic=${params.diagnosticFailure}`);
+    expect(result.stdout).toContain(`diagnostic=${diagnosticFailure}`);
     const summary = await readSummary();
     expect(summary.failures).toEqual([
       expect.objectContaining({
         ...(params.diagnosticDetail === undefined
           ? {}
           : { diagnosticDetail: params.diagnosticDetail }),
-        diagnosticFailure: params.diagnosticFailure,
+        diagnosticFailure,
         phase: "qa:rpc",
         pluginId: "alpha",
         status: 0,
       }),
     ]);
-    if (params.rowAssertion === "metrics") {
+    if (params.rowAssertion) {
       expect(summary.rows[0]).toEqual(
         expect.objectContaining({
-          diagnosticFailure: params.diagnosticFailure,
-          qaMetrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
-        }),
-      );
-    } else if (params.rowAssertion === "missing") {
-      expect(summary.rows[0]).toEqual(
-        expect.objectContaining({
-          diagnosticFailure: params.diagnosticFailure,
-          qaSummaryPath: path.join(outputDir, "qa-suite", "chunk-00", "qa-suite-summary.json"),
+          diagnosticFailure,
+          ...(params.rowAssertion === "metrics"
+            ? { qaMetrics: { gatewayCpuCoreRatio: 0, wallMs: 1 } }
+            : {
+                qaSummaryPath: path.join(
+                  outputDir,
+                  "qa-suite",
+                  "chunk-00",
+                  "qa-suite-summary.json",
+                ),
+              }),
         }),
       );
     }
@@ -210,12 +201,10 @@ describe("plugin gateway gauntlet helpers", () => {
     await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
   }
 
-  function minimalQaSuiteSummary(
-    metrics: Record<string, number> = { gatewayCpuCoreRatio: 0, wallMs: 1 },
-  ) {
+  function minimalQaSuiteSummary() {
     return {
       counts: { failed: 0, passed: 1, total: 1 },
-      metrics,
+      metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
       run: { status: "completed" },
       scenarios: [
         {
@@ -241,8 +230,8 @@ describe("plugin gateway gauntlet helpers", () => {
   function trackFixtureCompletion<T>(fixture: Promise<T>): Promise<T> {
     // The body retains its failure; both teardown paths join its existing cleanup.
     const settled = fixture.then(
-      () => {},
-      () => {},
+      () => undefined,
+      () => undefined,
     );
     fixtureCompletion = settled;
     onTestFinished(() => settled);
@@ -310,15 +299,15 @@ describe("plugin gateway gauntlet helpers", () => {
       },
     },
   ])("$name", ({ args, expected }) => {
-    expect(parseArgs(args)).toMatchObject(expected);
+    expect(runner.parseArgs(args)).toMatchObject(expected);
   });
 
   it("rejects duplicate repeatable selectors", () => {
-    expect(() => parseArgs(["--plugin", "telegram", "--plugin", "telegram"])).toThrow(
+    expect(() => runner.parseArgs(["--plugin", "telegram", "--plugin", "telegram"])).toThrow(
       "Duplicate --plugin value: telegram",
     );
     expect(() =>
-      parseArgs([
+      runner.parseArgs([
         "--qa-scenario",
         "channel-chat-baseline",
         "--qa-scenario",
@@ -327,67 +316,45 @@ describe("plugin gateway gauntlet helpers", () => {
     ).toThrow("Duplicate --qa-scenario value: channel-chat-baseline");
 
     vi.stubEnv("OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS", "telegram,discord");
-    expect(() => parseArgs(["--plugin", "telegram"])).toThrow("Duplicate --plugin value: telegram");
+    expect(() => runner.parseArgs(["--plugin", "telegram"])).toThrow(
+      "Duplicate --plugin value: telegram",
+    );
   });
 
-  it("rejects duplicate single-value controls", () => {
-    expect(() =>
-      parseArgs(["--output-dir", ".artifacts/one", "--output-dir", ".artifacts/two"]),
-    ).toThrow("--output-dir was provided more than once");
-    expect(() => parseArgs(["--shard-total", "2", "--shard-total", "3"])).toThrow(
-      "--shard-total was provided more than once",
+  it.each([
+    ["--output-dir", ".artifacts/one", ".artifacts/two"],
+    ["--shard-total", "2", "3"],
+  ])("rejects duplicate single-value control %s", (flag, first, second) => {
+    expect(() => runner.parseArgs([flag, first, flag, second])).toThrow(
+      `${flag} was provided more than once`,
     );
   });
 
   it("rejects valued flags followed by another option", () => {
-    for (const flag of [
-      "--repo-root",
-      "--output-dir",
-      "--plugin",
-      "--shard-total",
-      "--shard-index",
-      "--limit",
-      "--qa-scenario",
-      "--qa-plugin-chunk-size",
-      "--cpu-core-warn",
-      "--hot-wall-warn-ms",
-      "--max-rss-warn-mb",
-      "--wall-anomaly-multiplier",
-      "--rss-anomaly-multiplier",
-      "--qa-cpu-regression-multiplier",
-      "--qa-wall-regression-multiplier",
-      "--command-timeout-ms",
-      "--build-timeout-ms",
-      "--qa-timeout-ms",
-    ]) {
+    const flags = `--repo-root --output-dir --plugin --shard-total --shard-index --limit
+      --qa-scenario --qa-plugin-chunk-size --cpu-core-warn --hot-wall-warn-ms --max-rss-warn-mb
+      --wall-anomaly-multiplier --rss-anomaly-multiplier --qa-cpu-regression-multiplier
+      --qa-wall-regression-multiplier --command-timeout-ms --build-timeout-ms --qa-timeout-ms`;
+    for (const flag of flags.split(/\s+/u)) {
       for (const value of ["--skip-qa", "-h"]) {
-        expect(() => parseArgs([flag, value])).toThrow(`Missing value for ${flag}`);
+        expect(() => runner.parseArgs([flag, value])).toThrow(`Missing value for ${flag}`);
       }
     }
   });
 
   it("discovers bundled plugin manifests into lifecycle matrix rows", async () => {
     await writeManifest("alpha", {
-      id: "alpha",
       enabledByDefault: true,
       providers: ["openai"],
       commandAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
       auth: [{ method: "oauth", onboardingScopes: ["models"] }],
-      configSchema: {
-        type: "object",
-        properties: {
-          nested: {
-            type: "object",
-            required: ["token"],
-          },
-        },
-      },
+      configSchema: { properties: { nested: { required: ["token"] } } },
     });
     await writeManifest("beta", { commandAliases: ["dreaming"], onboardingScopes: ["memory"] });
     await writeManifest("kimi-coding", { id: "kimi" });
     await writeManifest("qa-lab");
 
-    const matrix = discoverBundledPluginManifests(repoRoot);
+    const matrix = gauntlet.discoverBundledPluginManifests(repoRoot);
 
     expect(matrix.map((entry) => entry.id)).toEqual(["alpha", "beta", "kimi"]);
     expect(matrix[0]).toEqual({
@@ -417,7 +384,7 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(beta.buildId).toBe("beta");
     const kimi = expectDefined(matrix[2], "Kimi bundled plugin manifest");
     expect(kimi).toMatchObject({ buildId: "kimi-coding", id: "kimi" });
-    expect(buildGauntletPrebuildEnv({}, { buildIds: [kimi.buildId] })).toEqual({
+    expect(gauntlet.buildGauntletPrebuildEnv({}, { buildIds: [kimi.buildId] })).toEqual({
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "kimi-coding",
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
@@ -425,27 +392,27 @@ describe("plugin gateway gauntlet helpers", () => {
 
   it("detects plugin load failures in successful command output", () => {
     expect(
-      detectCommandDiagnosticFailure(
+      gauntlet.detectCommandDiagnosticFailure(
         "Installed plugin: qa-lab\n",
         "[plugins] qa-lab failed to load from /repo/extensions/qa-lab/index.ts: Error: nope\n",
       ),
     ).toBe("plugin-load-failure");
     expect(
-      detectCommandDiagnosticFailure(
+      gauntlet.detectCommandDiagnosticFailure(
         "",
         "\u001B[36m[plugins]\u001B[39m qa-lab failed to load from /repo/extensions/qa-lab/index.ts: Error: nope\n",
       ),
     ).toBe("plugin-load-failure");
-    expect(detectCommandDiagnosticFailure("Installed plugin: qa-lab\n", "")).toBeNull();
+    expect(gauntlet.detectCommandDiagnosticFailure("Installed plugin: qa-lab\n", "")).toBeNull();
   });
 
   it("selects plugin shards after explicit id filtering", () => {
     const entries = ["a", "b", "c", "d"].map((id) => ({ id }));
 
-    expect(selectPluginEntries(entries, { ids: ["d", "b"], shardTotal: 2, shardIndex: 0 })).toEqual(
-      [{ id: "b" }],
-    );
-    expect(() => selectPluginEntries(entries, { ids: ["missing"] })).toThrow(
+    expect(
+      gauntlet.selectPluginEntries(entries, { ids: ["d", "b"], shardTotal: 2, shardIndex: 0 }),
+    ).toEqual([{ id: "b" }]);
+    expect(() => gauntlet.selectPluginEntries(entries, { ids: ["missing"] })).toThrow(
       "Unknown bundled plugin id(s): missing",
     );
   });
@@ -457,21 +424,18 @@ describe("plugin gateway gauntlet helpers", () => {
       { id: "gamma" },
       { id: "delta" },
     ];
-    const selected = selectPluginEntries(entries, {
+    const selected = gauntlet.selectPluginEntries(entries, {
       ids: ["alpha"],
       shardTotal: 2,
       shardIndex: 0,
     });
 
-    expect(collectRequiredPluginEntries(entries, selected).map((entry) => entry.id)).toEqual([
-      "gamma",
-      "beta",
-    ]);
-    expect(collectPluginsWithRequiredEntries(entries, selected).map((entry) => entry.id)).toEqual([
-      "gamma",
-      "beta",
-      "alpha",
-    ]);
+    expect(
+      gauntlet.collectRequiredPluginEntries(entries, selected).map((entry) => entry.id),
+    ).toEqual(["gamma", "beta"]);
+    expect(
+      gauntlet.collectPluginsWithRequiredEntries(entries, selected).map((entry) => entry.id),
+    ).toEqual(["gamma", "beta", "alpha"]);
   });
 
   it.each([
@@ -490,62 +454,40 @@ describe("plugin gateway gauntlet helpers", () => {
     },
   ])("rejects bundled plugin $name", ({ entries, error }) => {
     expect(() =>
-      collectRequiredPluginEntries(entries, [expectDefined(entries[0], "alpha plugin entry")]),
+      gauntlet.collectRequiredPluginEntries(entries, [
+        expectDefined(entries[0], "alpha plugin entry"),
+      ]),
     ).toThrow(error);
   });
 
   it("flags gateway startup CPU observations using bench summary keys", () => {
     expect(
-      collectGatewayCpuObservations({
+      gauntlet.collectGatewayCpuObservations({
         startup: {
           results: [
             {
               id: "default",
-              summary: {
-                cpuCoreRatio: { max: 1.1 },
-                readyzMs: { max: 45_000 },
-              },
+              summary: { cpuCoreRatio: { max: 1.1 }, readyzMs: { max: 45_000 } },
             },
           ],
         },
-        qa: {
-          metrics: {
-            gatewayCpuCoreRatio: 1.2,
-            wallMs: 60_000,
-          },
-        },
+        qa: { metrics: { gatewayCpuCoreRatio: 1.2, wallMs: 60_000 } },
         cpuCoreWarn: 0.9,
         hotWallWarnMs: 30_000,
       }),
     ).toEqual([
-      {
-        kind: "startup-cpu-hot",
-        id: "default",
-        cpuCoreRatioMax: 1.1,
-        wallMsMax: 45_000,
-      },
-      {
-        kind: "qa-cpu-hot",
-        id: "qa-suite",
-        cpuCoreRatio: 1.2,
-        wallMs: 60_000,
-      },
+      { kind: "startup-cpu-hot", id: "default", cpuCoreRatioMax: 1.1, wallMsMax: 45_000 },
+      { kind: "qa-cpu-hot", id: "qa-suite", cpuCoreRatio: 1.2, wallMs: 60_000 },
     ]);
   });
 
   it.each([false, true])("flags metric anomalies (cold start=%s)", (coldStart) => {
-    const peak = {
-      pluginId: "peak-plugin",
-      phase: "lifecycle:install",
-      wallMs: 1_000,
-      cpuCoreRatio: 1.2,
-      maxRssMb: 500,
-    };
+    const peak = { phase: "lifecycle:install", wallMs: 1_000, cpuCoreRatio: 1.2, maxRssMb: 500 };
     const ordinary = [
-      { pluginId: "a", phase: "lifecycle:install", wallMs: 100, maxRssMb: 100 },
-      { pluginId: "b", phase: "lifecycle:install", wallMs: 110, maxRssMb: 110 },
+      { phase: "lifecycle:install", wallMs: 100, maxRssMb: 100 },
+      { phase: "lifecycle:install", wallMs: 110, maxRssMb: 110 },
     ];
-    const observations = collectMetricObservations(
+    const observations = gauntlet.collectMetricObservations(
       coldStart
         ? [{ phase: "prebuild", wallMs: 100, maxRssMb: 100 }, peak, ...ordinary]
         : [...ordinary, peak],
@@ -572,17 +514,13 @@ describe("plugin gateway gauntlet helpers", () => {
   });
 
   it("uses QA gateway metrics instead of source CLI wrapper CPU for QA hot observations", () => {
-    const observations = collectMetricObservations(
+    const observations = gauntlet.collectMetricObservations(
       [
         {
-          pluginId: "browser,memory-core",
           phase: "qa:rpc",
           wallMs: 40_000,
           cpuCoreRatio: 1.2,
-          qaMetrics: {
-            wallMs: 25_000,
-            gatewayCpuCoreRatio: 0.42,
-          },
+          qaMetrics: { wallMs: 25_000, gatewayCpuCoreRatio: 0.42 },
         },
       ],
       {
@@ -596,29 +534,33 @@ describe("plugin gateway gauntlet helpers", () => {
 
   it("flags QA gateway regressions relative to an explicit baseline", () => {
     expect(
-      collectQaBaselineRegressionObservations(
-        [
+      gauntlet
+        .collectQaBaselineRegressionObservations(
+          [
+            {
+              pluginId: "<baseline>",
+              phase: "qa:rpc",
+              qaMetrics: { wallMs: 20_000, gatewayCpuCoreRatio: 0.25 },
+            },
+            {
+              pluginId: "plugin",
+              phase: "qa:rpc",
+              qaMetrics: { wallMs: 45_000, gatewayCpuCoreRatio: 0.6 },
+            },
+          ],
           {
-            pluginId: "<baseline>",
-            phase: "qa:rpc",
-            qaMetrics: { wallMs: 20_000, gatewayCpuCoreRatio: 0.25 },
+            cpuRegressionMultiplier: 2,
+            wallRegressionMultiplier: 2,
           },
-          {
-            pluginId: "browser,memory-core",
-            phase: "qa:rpc",
-            qaMetrics: { wallMs: 45_000, gatewayCpuCoreRatio: 0.6 },
-          },
-        ],
-        {
-          cpuRegressionMultiplier: 2,
-          wallRegressionMultiplier: 2,
-        },
-      ).map((observation) => observation.kind),
+        )
+        .map((observation) => observation.kind),
     ).toEqual(["qa-baseline-cpu-regression", "qa-baseline-wall-regression"]);
   });
 
   it("prebuilds private QA dist when QA chunks are enabled", () => {
-    expect(buildGauntletPrebuildEnv({ EXISTING: "1" }, { includePrivateQa: true })).toEqual({
+    expect(
+      gauntlet.buildGauntletPrebuildEnv({ EXISTING: "1" }, { includePrivateQa: true }),
+    ).toEqual({
       EXISTING: "1",
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "qa-channel,qa-lab",
@@ -626,26 +568,28 @@ describe("plugin gateway gauntlet helpers", () => {
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
     const env = { EXISTING: "1" };
-    expect(buildGauntletPrebuildEnv(env, { includePrivateQa: false })).toBe(env);
+    expect(gauntlet.buildGauntletPrebuildEnv(env, { includePrivateQa: false })).toBe(env);
   });
 
   it("prebuilds only the QA runtime needed by the gauntlet", () => {
-    expect(createGauntletPrebuildCommand(repoRoot)).toEqual({
+    expect(runner.createGauntletPrebuildCommand(repoRoot)).toEqual({
       command: process.execPath,
       args: ["--import", "tsx", path.join(repoRoot, "scripts", "build-all.mts"), "qaRuntime"],
     });
   });
 
   it("does not count prebuild setup as gauntlet work", () => {
-    expect(hasGauntletWorkRows([])).toBe(false);
-    expect(hasGauntletWorkRows([{ phase: "prebuild" }])).toBe(false);
-    expect(hasGauntletWorkRows([{ phase: "prebuild" }, { phase: "lifecycle:install" }])).toBe(true);
-    expect(hasGauntletWorkRows([{ phase: "slash:help" }])).toBe(true);
-    expect(hasGauntletWorkRows([{ phase: "qa:rpc" }])).toBe(true);
+    expect(runner.hasGauntletWorkRows([])).toBe(false);
+    expect(runner.hasGauntletWorkRows([{ phase: "prebuild" }])).toBe(false);
+    expect(
+      runner.hasGauntletWorkRows([{ phase: "prebuild" }, { phase: "lifecycle:install" }]),
+    ).toBe(true);
+    expect(runner.hasGauntletWorkRows([{ phase: "slash:help" }])).toBe(true);
+    expect(runner.hasGauntletWorkRows([{ phase: "qa:rpc" }])).toBe(true);
   });
 
   it("parses macOS time -l metrics from strict trailing lines", () => {
-    const metrics = parseTimedMetrics(
+    const metrics = runner.parseTimedMetrics(
       [
         "plugin stderr: 99.00 real 99.00 user 99.00 sys nope",
         "        0.25 real         0.06 user         0.02 sys",
@@ -655,9 +599,8 @@ describe("plugin gateway gauntlet helpers", () => {
       "bsd",
     );
 
-    expect(metrics.cpuMs).toBe(80);
+    expect(metrics).toMatchObject({ cpuMs: 80, maxRssMb: 2 });
     expect(metrics.cpuCoreRatio).toBeCloseTo(0.32);
-    expect(metrics.maxRssMb).toBe(2);
   });
 
   it("marks spawn errors as failed measured rows", async () => {
@@ -667,8 +610,7 @@ describe("plugin gateway gauntlet helpers", () => {
       label: "missing",
     });
 
-    expect(row.status).toBe(1);
-    expect(row.spawnError?.code).toBe("ENOENT");
+    expect(row).toMatchObject({ status: 1, spawnError: { code: "ENOENT" } });
     await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("[spawn error] ENOENT");
   });
 
@@ -680,8 +622,7 @@ describe("plugin gateway gauntlet helpers", () => {
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
 
-    expect(row.status).toBe(0);
-    expect(row.timedOut).toBe(false);
+    expect(row).toMatchObject({ status: 0, timedOut: false });
     await expect(fs.readFile(row.logPath!, "utf8")).resolves.not.toContain("ETIMEDOUT");
   });
 
@@ -693,31 +634,7 @@ describe("plugin gateway gauntlet helpers", () => {
     const grandchildPidPath = path.join(repoRoot, "grandchild.pid");
     const readyPath = path.join(repoRoot, "grandchild.ready");
     let grandchildPid = 0;
-    await writeFixture(
-      scriptPath,
-      `
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-
-${fixtureReceiptClientSource(receipts.endpoint)}
-
-const normalExit = process.argv[4] === "normal";
-const grandchild = spawn(process.execPath, [
-  "-e",
-  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.send('ready');",
-], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
-// Publish the PID atomically so failed startup still has an owned rescue target.
-fs.writeFileSync(process.argv[2] + ".tmp", String(grandchild.pid));
-fs.renameSync(process.argv[2] + ".tmp", process.argv[2]);
-grandchild.once("message", () => {
-  fs.writeFileSync(process.argv[3], "ready");
-  sendReceipt(process.argv[3], "ready");
-  if (normalExit) process.exit(0);
-});
-process.on("SIGTERM", () => process.exit(0));
-if (!normalExit) setInterval(() => {}, 1000);
-`,
-    );
+    await writeMeasuredLeader(scriptPath, "exit");
 
     const rowPromise = measure({
       args: [scriptPath, grandchildPidPath, readyPath, normalExit ? "normal" : "timeout"],
@@ -759,17 +676,7 @@ if (!normalExit) setInterval(() => {}, 1000);
               throw error;
             }
           }
-          expect(Number.isSafeInteger(grandchildPid) && grandchildPid > 1).toBe(true);
-          if (isProcessAlive(grandchildPid)) {
-            try {
-              process.kill(grandchildPid, "SIGKILL");
-            } catch (error) {
-              if (!hasErrnoCode(error, "ESRCH")) {
-                throw error;
-              }
-            }
-          }
-          await waitForDead(grandchildPid, signal);
+          await reapFixturePid(grandchildPid, signal, { onlyIfAlive: true });
         },
         async () => {
           await rowPromise;
@@ -784,36 +691,7 @@ if (!normalExit) setInterval(() => {}, 1000);
       const scriptPath = path.join(repoRoot, "leader-exits-drain.mjs");
       const readyPath = path.join(repoRoot, "grandchild.ready");
       const drainedPath = path.join(repoRoot, "grandchild.drained");
-      await writeFixture(
-        scriptPath,
-        `
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-
-${fixtureReceiptClientSource(receipts.endpoint)}
-
-const grandchildScript = [
-  "const fs = require('node:fs');",
-  "process.on('SIGTERM', () => {",
-  "  setTimeout(() => {",
-  "    fs.writeFileSync(process.argv[3], 'drained');",
-  "    process.exit(0);",
-  "  }, 20);",
-  "});",
-  "process.send('ready');",
-  "setInterval(() => {}, 1000);",
-].join("\\n");
-const grandchild = spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[2], process.argv[3]], {
-  stdio: ["ignore", "ignore", "ignore", "ipc"],
-});
-grandchild.once("message", () => {
-  fs.writeFileSync(process.argv[2], "ready");
-  sendReceipt(process.argv[2], "ready");
-});
-process.on("SIGTERM", () => process.exit(0));
-setInterval(() => {}, 1000);
-`,
-      );
+      await writeMeasuredLeader(scriptPath, "drain");
 
       const rowPromise = measure({
         args: [scriptPath, readyPath, drainedPath],
@@ -828,8 +706,7 @@ setInterval(() => {}, 1000);
             await withinTest(fixtureReadyBeforeSettlement(readyPath, rowPromise), signal);
             const row = await withinTest(rowPromise, signal);
 
-            expect(row.timedOut).toBe(true);
-            expect(row.spawnError?.code).toBe("ETIMEDOUT");
+            expect(row).toMatchObject({ timedOut: true, spawnError: { code: "ETIMEDOUT" } });
             await expect(fs.readFile(drainedPath, "utf8")).resolves.toBe("drained");
           },
           () => rowPromise,
@@ -848,48 +725,134 @@ setInterval(() => {}, 1000);
       label: "live-log-failure",
     });
 
-    expect(row.status).toBe(1);
-    expect(row.diagnosticFailure).toBe("command-log-write-failure");
-    expect(row.logPath).toBeNull();
-    expect(row.logWriteError).toMatch(/EEXIST|ENOTDIR|not a directory/u);
+    expect(row).toMatchObject({
+      status: 1,
+      diagnosticFailure: "command-log-write-failure",
+      logPath: null,
+      logWriteError: expect.stringMatching(/EEXIST|ENOTDIR|not a directory/u),
+    });
   });
+
+  async function writeMeasuredLeader(
+    scriptPath: string,
+    mode: "exit" | "drain" | "parent" | "timeout",
+  ) {
+    const ipcReady = mode === "timeout";
+    const childScript =
+      mode === "drain"
+        ? `
+const fs = require('node:fs');
+process.on('SIGTERM', () => {
+  setTimeout(() => {
+    fs.writeFileSync(process.argv[3], 'drained');
+    process.exit(0);
+  }, 20);
+});
+process.send('ready');
+setInterval(() => {}, 1000);
+`
+        : mode === "exit"
+          ? "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.send('ready');"
+          : `process.on('SIGTERM', () => {});
+process.on('SIGHUP', () => {});
+process.send('ready');
+setInterval(() => {}, 1000);`;
+    await writeFixture(
+      scriptPath,
+      `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+${ipcReady ? "" : fixtureReceiptClientSource(receipts.endpoint)}
+const mode = ${JSON.stringify(mode)};
+const normalExit = mode === "exit" && process.argv[4] === "normal";
+const childArgs = mode === "drain" ? ["child", process.argv[2], process.argv[3]]
+  : mode === "parent" ? ["child", process.argv[3]] : [];
+const grandchild = spawn(process.execPath, ["-e", ${JSON.stringify(childScript)}, ...childArgs], {
+  stdio: ["ignore", "ignore", "ignore", "ipc"],
+});
+if (mode === "exit") {
+  // Publish atomically so failed startup still has an owned rescue target.
+  fs.writeFileSync(process.argv[2] + ".tmp", String(grandchild.pid));
+  fs.renameSync(process.argv[2] + ".tmp", process.argv[2]);
+} else if (mode !== "drain") {
+  fs.writeFileSync(process.argv[2], String(grandchild.pid));
+}
+const exitOnTerm = () => process.exit(0);
+if (mode === "timeout") process.on("SIGTERM", exitOnTerm);
+grandchild.once("message", () => {
+  if (mode === "timeout") return process.send("ready", () => process.disconnect());
+  const readyPath = mode === "drain" ? process.argv[2] : process.argv[3];
+  fs.writeFileSync(readyPath, "ready");
+  sendReceipt(readyPath, "ready");
+  if (normalExit) process.exit(0);
+});
+if (mode !== "timeout") process.on("SIGTERM", exitOnTerm);
+if (!normalExit) setInterval(() => {}, 1000);
+`,
+    );
+  }
+
+  function measuredHarnessSource(params: Partial<runner.GauntletMeasuredCommandParams>) {
+    return `runMeasuredCommand({ ...${JSON.stringify({
+      cwd: repoRoot,
+      logDir: path.join(repoRoot, "logs"),
+      phase: "probe",
+      timeMode: "none",
+      ...params,
+    })}, command: process.execPath, env: process.env })`;
+  }
+
+  function spawnTerminationHarness(harnessPath: string) {
+    const harness = spawn(testNodeExecPath, ["--import", tsxImport, harnessPath], {
+      cwd: repoRoot,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const closed = once(harness, "close");
+    void closed.catch(() => undefined);
+    return { harness, closed };
+  }
+
+  async function readOptionalPid(pidPath: string) {
+    return fs
+      .readFile(pidPath, "utf8")
+      .then(Number)
+      .catch((error: unknown) => {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return undefined;
+        }
+        throw error;
+      });
+  }
+
+  async function reapFixturePid(
+    pid: number,
+    signal: AbortSignal,
+    { group = false, onlyIfAlive = false } = {},
+  ) {
+    expect(Number.isSafeInteger(pid) && pid > 1).toBe(true);
+    try {
+      if (!onlyIfAlive || isProcessAlive(pid)) {
+        process.kill(group ? -pid : pid, "SIGKILL");
+      }
+    } catch (error) {
+      if (!hasErrnoCode(error, "ESRCH")) {
+        throw error;
+      }
+    }
+    await waitForDead(pid, signal);
+  }
 
   it.runIf(process.platform !== "win32")(
     "cleans parent-terminated measured process groups when the leader exits first",
     async ({ signal }) => {
-      const logDir = path.join(repoRoot, "logs");
       const harnessPath = path.join(repoRoot, "parent-termination-harness.mjs");
       const scriptPath = path.join(repoRoot, "parent-termination-leader.mjs");
       const grandchildPidPath = path.join(repoRoot, "grandchild.pid");
       const grandchildReadyPath = path.join(repoRoot, "grandchild.ready");
       let grandchildPid = 0;
 
-      await writeFixture(
-        scriptPath,
-        `
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-
-${fixtureReceiptClientSource(receipts.endpoint)}
-
-const grandchildScript = [
-  "process.on('SIGTERM', () => {});",
-  "process.on('SIGHUP', () => {});",
-  "process.send('ready');",
-  "setInterval(() => {}, 1000);",
-].join("\\n");
-const grandchild = spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[3]], {
-  stdio: ["ignore", "ignore", "ignore", "ipc"],
-});
-fs.writeFileSync(process.argv[2], String(grandchild.pid));
-grandchild.once("message", () => {
-  fs.writeFileSync(process.argv[3], "ready");
-  sendReceipt(process.argv[3], "ready");
-});
-process.on("SIGTERM", () => process.exit(0));
-setInterval(() => {}, 1000);
-`,
-      );
+      await writeMeasuredLeader(scriptPath, "parent");
       await writeFixture(
         harnessPath,
         `
@@ -897,29 +860,16 @@ import { runMeasuredCommand } from ${JSON.stringify(
           resolveRuntimeWorkerUrl(toolingMtsEntrypoints.pluginGatewayGauntlet).href,
         )};
 
-await runMeasuredCommand({
-  cwd: ${JSON.stringify(repoRoot)},
-  env: process.env,
-  logDir: ${JSON.stringify(logDir)},
-  command: process.execPath,
-  args: [${JSON.stringify(scriptPath)}, ${JSON.stringify(grandchildPidPath)}, ${JSON.stringify(
-    grandchildReadyPath,
-  )}],
-  label: "parent-termination-leader-exits",
-  phase: "probe",
-  timeoutKillGraceMs: 25,
-  timeoutMs: 60_000,
-  timeMode: "none",
-});
+await ${measuredHarnessSource({
+          args: [scriptPath, grandchildPidPath, grandchildReadyPath],
+          label: "parent-termination-leader-exits",
+          timeoutKillGraceMs: 25,
+          timeoutMs: 60_000,
+        })};
 `,
       );
 
-      const harness = spawn(testNodeExecPath, ["--import", tsxImport, harnessPath], {
-        cwd: repoRoot,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      const closed = once(harness, "close");
-      void closed.catch(() => undefined);
+      const { harness, closed } = spawnTerminationHarness(harnessPath);
       await trackFixtureCompletion(
         (async () => {
           try {
@@ -936,14 +886,7 @@ await runMeasuredCommand({
             }
             await closed;
             if (!grandchildPid) {
-              grandchildPid = Number(
-                await fs.readFile(grandchildPidPath, "utf8").catch((error: unknown) => {
-                  if (hasErrnoCode(error, "ENOENT")) {
-                    return "0";
-                  }
-                  throw error;
-                }),
-              );
+              grandchildPid = (await readOptionalPid(grandchildPidPath)) ?? 0;
             }
             if (grandchildPid && isProcessAlive(grandchildPid)) {
               process.kill(grandchildPid, "SIGKILL");
@@ -960,7 +903,6 @@ await runMeasuredCommand({
   it.runIf(process.platform !== "win32")(
     "rethrows parent termination received during timeout cleanup",
     async ({ signal }) => {
-      const logDir = path.join(repoRoot, "logs");
       const harnessPath = path.join(repoRoot, "timeout-parent-termination-harness.mjs");
       const scriptPath = path.join(repoRoot, "timeout-parent-termination-leader.mjs");
       const grandchildPidPath = path.join(repoRoot, "timeout-grandchild.pid");
@@ -968,27 +910,7 @@ await runMeasuredCommand({
       const leaderPidPath = path.join(repoRoot, "timeout-leader.pid");
       let grandchildPid = 0;
 
-      await writeFixture(
-        scriptPath,
-        `
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-
-const grandchildScript = [
-  "process.on('SIGTERM', () => {});",
-  "process.on('SIGHUP', () => {});",
-  "process.send('ready');",
-  "setInterval(() => {}, 1000);",
-].join("\\n");
-const grandchild = spawn(process.execPath, ["-e", grandchildScript], {
-  stdio: ["ignore", "ignore", "ignore", "ipc"],
-});
-fs.writeFileSync(process.argv[2], String(grandchild.pid));
-process.on("SIGTERM", () => process.exit(0));
-grandchild.once("message", () => process.send("ready", () => process.disconnect()));
-setInterval(() => {}, 1000);
-`,
-      );
+      await writeMeasuredLeader(scriptPath, "timeout");
       await writeFixture(
         harnessPath,
         `
@@ -1021,19 +943,13 @@ const observeChild = ({ process: owned }) => {
 // Only the controller's policy clock is mocked; readiness, exit, and signals are native.
 mock.timers.enable({ apis: ["Date", "setTimeout"] });
 children.subscribe(observeChild);
-const promise = runMeasuredCommand({
-  cwd: ${JSON.stringify(repoRoot)},
-  env: process.env,
-  logDir: ${JSON.stringify(logDir)},
-  command: process.execPath,
-  args: [${JSON.stringify(scriptPath)}, ${JSON.stringify(grandchildPidPath)}],
-  label: "timeout-parent-termination",
-  phase: "probe",
-  timeoutKillGraceMs: 150,
-  timeoutMs: 200,
-  timeMode: "none",
-  spawnOptions: { stdio: ["ignore", "pipe", "pipe", "ipc"] },
-});
+const promise = ${measuredHarnessSource({
+          args: [scriptPath, grandchildPidPath],
+          label: "timeout-parent-termination",
+          timeoutKillGraceMs: 150,
+          timeoutMs: 200,
+          spawnOptions: { stdio: ["ignore", "pipe", "pipe", "ipc"] },
+        })};
 children.unsubscribe(observeChild);
 fs.writeFileSync(${JSON.stringify(leaderPidPath)}, String(child.pid));
 try {
@@ -1065,36 +981,18 @@ try {
 `,
       );
 
-      const harness = spawn(testNodeExecPath, ["--import", tsxImport, harnessPath], {
-        cwd: repoRoot,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      const closed = once(harness, "close");
-      void closed.catch(() => undefined);
+      const { harness, closed } = spawnTerminationHarness(harnessPath);
       let stderr = "";
       harness.stdout.resume();
       harness.stderr.on("data", (chunk) => {
         stderr += String(chunk);
       });
       const reapPidFile = async (pidPath: string, group = false) => {
-        let pid: number;
-        try {
-          pid = Number(await fs.readFile(pidPath, "utf8"));
-        } catch (error) {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return;
-          }
-          throw error;
+        const pid = await readOptionalPid(pidPath);
+        if (pid === undefined) {
+          return;
         }
-        expect(Number.isSafeInteger(pid) && pid > 1).toBe(true);
-        try {
-          process.kill(group ? -pid : pid, "SIGKILL");
-        } catch (error) {
-          if (!hasErrnoCode(error, "ESRCH")) {
-            throw error;
-          }
-        }
-        await waitForDead(pid, signal);
+        await reapFixturePid(pid, signal, { group });
       };
       await trackFixtureCompletion(
         runQaGatewayFixture(
@@ -1232,24 +1130,15 @@ try {
       })(),
     );
 
-    expect(row.status).toBe(1);
-    expect(row.timedOut).toBe(true);
-    expect(row.spawnError?.code).toBe("ETIMEDOUT");
+    expect(row).toMatchObject({ status: 1, timedOut: true, spawnError: { code: "ETIMEDOUT" } });
     expect(row.wallMs).toBeLessThan(5_000);
     const afterReturn = await fs.readFile(markerPath, "utf8");
-    await new Promise((resolve) => {
-      setTimeout(resolve, 30);
-    });
+    await delay(30);
     await expect(fs.readFile(markerPath, "utf8")).resolves.toBe(afterReturn);
   });
 
   it("fails dry runs that do not execute any gauntlet commands", async () => {
-    const result = runGauntlet([
-      "--skip-prebuild",
-      "--skip-lifecycle",
-      "--skip-slash-help",
-      "--skip-qa",
-    ]);
+    const result = runGauntlet(dryRunArgs);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("No lifecycle, slash-help, or QA gauntlet commands ran");
@@ -1274,15 +1163,7 @@ try {
   });
 
   it("rejects non-decimal gauntlet numeric options", () => {
-    const result = runGauntlet([
-      "--skip-prebuild",
-      "--skip-lifecycle",
-      "--skip-slash-help",
-      "--skip-qa",
-      "--allow-empty",
-      "--limit",
-      "1e3",
-    ]);
+    const result = runGauntlet([...dryRunArgs, "--allow-empty", "--limit", "1e3"]);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("--limit must be a positive integer");
@@ -1299,15 +1180,17 @@ try {
     expect(result.stdout).toContain("failure missing-built-entry");
 
     const summary = await readSummary();
-    expect(summary.rows).toEqual([]);
-    expect(summary.failures).toEqual([]);
-    expect(summary.guardFailures).toEqual([
-      {
-        kind: "missing-built-entry",
-        message:
-          "dist/entry.js is missing; run without --skip-prebuild or build the gauntlet runtime first.",
-      },
-    ]);
+    expect(summary).toMatchObject({
+      rows: [],
+      failures: [],
+      guardFailures: [
+        {
+          kind: "missing-built-entry",
+          message:
+            "dist/entry.js is missing; run without --skip-prebuild or build the gauntlet runtime first.",
+        },
+      ],
+    });
   });
 
   it("allows skip-prebuild slash-only dry runs when selected plugins have no slash probes", async () => {
@@ -1326,18 +1209,17 @@ try {
     expect(result.stdout).not.toContain("missing-built-entry");
 
     const summary = await readSummary();
-    expect(summary.rows).toEqual([]);
-    expect(summary.guardFailures).toEqual([]);
+    expect(summary).toMatchObject({ rows: [], guardFailures: [] });
   });
 
   it("parses observation failure mode from CLI and env", () => {
-    expect(parseArgs(["--fail-on-observation", "--allow-empty"])).toMatchObject({
+    expect(runner.parseArgs(["--fail-on-observation", "--allow-empty"])).toMatchObject({
       allowEmpty: true,
       failOnObservation: true,
     });
 
     vi.stubEnv("OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_FAIL_ON_OBSERVATION", "1");
-    expect(parseArgs(["--allow-empty"])).toMatchObject({
+    expect(runner.parseArgs(["--allow-empty"])).toMatchObject({
       allowEmpty: true,
       failOnObservation: true,
     });
@@ -1345,23 +1227,12 @@ try {
 
   it("does not promote setup and first cold-start observations to guard failures", () => {
     const observations = [
-      { kind: "phase-rss-high", phase: "prebuild", maxRssMb: 2214 },
-      {
-        kind: "phase-wall-anomaly",
-        phase: "lifecycle:install",
-        pluginId: "acpx",
-        wallMs: 17_148,
-        coldStart: true,
-      },
-      {
-        kind: "phase-wall-anomaly",
-        phase: "lifecycle:install",
-        pluginId: "steady-plugin",
-        wallMs: 17_148,
-      },
+      { kind: "phase-rss-high", phase: "prebuild" },
+      { kind: "phase-wall-anomaly", phase: "lifecycle:install", coldStart: true },
+      { kind: "phase-wall-anomaly", phase: "lifecycle:install" },
     ];
 
-    expect(buildObservationGuardFailures(observations, true)).toEqual([
+    expect(runner.buildObservationGuardFailures(observations, true)).toEqual([
       {
         kind: "observation:phase-wall-anomaly",
         message: "Gauntlet observation threshold exceeded: phase-wall-anomaly",
@@ -1371,18 +1242,11 @@ try {
   });
 
   it("cleans the isolated run root after an explicitly empty dry run", async () => {
-    const result = runGauntlet([
-      "--skip-prebuild",
-      "--skip-lifecycle",
-      "--skip-slash-help",
-      "--skip-qa",
-      "--allow-empty",
-    ]);
+    const result = runGauntlet([...dryRunArgs, "--allow-empty"]);
 
     expect(result.status, result.stderr).toBe(0);
     const summary = await readSummary();
-    expect(summary.guardFailures).toEqual([]);
-    expect(summary.isolatedRunRootPreserved).toBe(false);
+    expect(summary).toMatchObject({ guardFailures: [], isolatedRunRootPreserved: false });
     await expect(fs.stat(summary.isolatedRunRoot)).rejects.toHaveProperty("code", "ENOENT");
   });
 
@@ -1422,16 +1286,12 @@ try {
     const slashHelpRow = summary.rows.find(
       (row: { label?: string; logPath?: string }) => row.label === "workboard-slash-help:workboard",
     );
-    expect(summary.rows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          label: "workboard-slash-help:workboard",
-          phase: "slash:help",
-          pluginId: "workboard",
-          status: 0,
-        }),
-      ]),
-    );
+    expect(slashHelpRow).toMatchObject({
+      label: "workboard-slash-help:workboard",
+      phase: "slash:help",
+      pluginId: "workboard",
+      status: 0,
+    });
     const slashHelpLogPath = slashHelpRow?.logPath;
     expect(slashHelpLogPath).toEqual(expect.any(String));
     await expect(fs.readFile(slashHelpLogPath as string, "utf8")).resolves.toContain(
@@ -1453,15 +1313,7 @@ try {
       `fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), ${JSON.stringify(qaSummaryJson)}, "utf8");`,
     ]);
 
-    const result = runGauntlet([
-      "--skip-prebuild",
-      "--skip-lifecycle",
-      "--skip-slash-help",
-      "--plugin",
-      "alpha",
-      "--qa-scenario",
-      "channel-chat-baseline",
-    ]);
+    const result = runQaGauntlet(["channel-chat-baseline"]);
 
     expect(result.status, result.stderr).toBe(0);
     await expect(
@@ -1513,8 +1365,6 @@ try {
         ...minimalQaSuiteSummary(),
         run: { status: "running" },
       },
-      scenarioIds: ["channel-chat-baseline"],
-      diagnosticFailure: "qa-summary-invalid",
       diagnosticDetail: "QA suite summary run.status must be completed, got running",
     },
     {
@@ -1523,8 +1373,6 @@ try {
         ...minimalQaSuiteSummary(),
         scenarios: [{ name: "channel-chat-baseline", status: "pass", steps: [] }],
       },
-      scenarioIds: ["channel-chat-baseline"],
-      diagnosticFailure: "qa-summary-invalid",
       diagnosticDetail:
         "QA suite summary passed scenario has no step evidence: channel-chat-baseline",
     },
@@ -1532,28 +1380,22 @@ try {
       name: "has statuses disagreeing with counts",
       qaSummary: failedQaSummary(0),
       scenarioIds: ["channel-chat-baseline", "gateway-restart-inflight-run"],
-      diagnosticFailure: "qa-summary-invalid",
       diagnosticDetail:
         "QA suite summary failed count mismatch: counts.failed=0, failed scenarios=1",
     },
     {
       name: "is missing",
-      scenarioIds: ["channel-chat-baseline"],
       diagnosticFailure: "qa-summary-missing",
       rowAssertion: "missing",
     },
     {
       name: "is oversized",
       qaSummary: { filler: "x".repeat(128) },
-      scenarioIds: ["channel-chat-baseline"],
-      diagnosticFailure: "qa-summary-invalid",
       diagnosticDetail: expect.stringContaining("QA suite summary exceeded 64 bytes"),
       maxBytes: "64",
     },
   ] satisfies Array<Parameters<typeof runQaSummaryFailureScenario>[0] & { name: string }>)(
     "fails successful QA chunks whose summary $name",
-    async (scenario) => {
-      await runQaSummaryFailureScenario(scenario);
-    },
+    runQaSummaryFailureScenario,
   );
 });
