@@ -117,6 +117,7 @@ function expectStopped(result: UpdateRepairValidation, ...fragments: string[]) {
 let failedRun: UpdateRunRecord;
 let latestRun: UpdateRunRecord;
 const validateDoctor = vi.fn<() => Promise<UpdateRepairValidation>>();
+const healthy = { ok: true, score: 0, summary: "Doctor passed." };
 const gitHead = (sha: string) => ({
   code: 0,
   stdout: `${sha}\n`,
@@ -174,21 +175,14 @@ const successfulTurn = {
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue([]);
-  validateDoctor.mockResolvedValue({
-    ok: true,
-    score: 0,
-    summary: "Doctor lint reports no errors.",
-  });
+  validateDoctor.mockResolvedValue(healthy);
   failedRun = run();
   latestRun = run({
     runId: SUCCEEDED_RUN_ID,
     createdAtMs: 30,
-    updatedAtMs: 40,
     status: "succeeded",
-    reason: null,
     after: { version: TARGET_VERSION },
     steps: [{ step: "gateway verification", status: "completed", exitCode: 0 }],
-    confirmedAtMs: 40,
     finishedAtMs: 40,
   });
   vi.mocked(getUpdateRun).mockImplementation((runId) =>
@@ -208,15 +202,7 @@ beforeEach(() => {
   vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(gitHead(TARGET_SHA));
   repairRuntime.prepareUpdateRepairInference.mockResolvedValue({
     ok: true,
-    route: {
-      runner: "embedded",
-      agentId: "owner",
-      provider: "fixture",
-      model: "repair",
-      modelLabel: "fixture/repair",
-      agentDir: "/fixture/agent",
-      runConfig: {},
-    },
+    route: { provider: "fixture", model: "repair" },
     modelFallbacks: [],
   });
   repairRuntime.runUpdateRepairTurn.mockResolvedValue(successfulTurn);
@@ -233,7 +219,7 @@ it.each(["during Doctor", "during verification"])(
     if (when === "during Doctor") {
       validateDoctor.mockImplementationOnce(async () => {
         blockAdmission();
-        return { ok: true, score: 0, summary: "Doctor passed." };
+        return healthy;
       });
     } else {
       vi.mocked(verifyPreviousGatewayForUpdate).mockImplementationOnce(async () => {
@@ -254,16 +240,15 @@ it.each(["during Doctor", "during verification"])(
 it("rejects migrations appearing during verification", async () => {
   vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
   vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", undefined);
-  const pending = [
-    {
-      pluginId: "codex",
-      reason: "The plugin has not reported completion of its retained state migration.",
-      command: "openclaw doctor --fix",
-      requiresStateMigration: true as const,
-    },
-  ];
   vi.mocked(verifyPreviousGatewayForUpdate).mockImplementationOnce(async () => {
-    vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue(pending);
+    vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue([
+      {
+        pluginId: "codex",
+        reason: "Retained state migration incomplete.",
+        command: "openclaw doctor --fix",
+        requiresStateMigration: true,
+      },
+    ]);
     return true;
   });
   const result = await validate(failure(), {
@@ -314,7 +299,6 @@ it("keeps plugin failures unresolved after Doctor", async () => {
     postUpdate: {
       plugins: {
         status: "error",
-        reason: "post-plugin-doctor-invalid-config",
         changed: false,
         sync: {
           changed: false,
@@ -325,7 +309,7 @@ it("keeps plugin failures unresolved after Doctor", async () => {
         },
         npm: {
           changed: false,
-          outcomes: [{ pluginId: "sample", status: "error", message: "Package install failed" }],
+          outcomes: [],
         },
         integrityDrifts: [],
       },
@@ -337,7 +321,7 @@ it("keeps plugin failures unresolved after Doctor", async () => {
 it("verifies a SHA-only Git target", async () => {
   useGitTarget();
   failedRun.target = { kind: "git", sha: TARGET_SHA };
-  await expectResolution(true, failure("checkout-failed", { mode: "git" }));
+  await expectResolution(true);
 });
 it.each([
   "restart-unhealthy",
@@ -368,9 +352,8 @@ it("does not invent a target for an error-only artifact", async () => {
 });
 
 it("does not resolve revoked authority from healthy state", async () => {
-  const reason = "requester-revoked";
-  failedRun.reason = reason;
-  expect(await validate(failure(reason))).toMatchObject({
+  failedRun.reason = "requester-revoked";
+  expect(await validate()).toMatchObject({
     ok: false,
     summary: expect.stringContaining("`openclaw update repair`"),
     stopReason: expect.stringContaining(
@@ -407,11 +390,7 @@ it("rejects Doctor errors after recorded success", async () => {
     score: -1,
     summary: "Plugin configuration invalid.",
   });
-  await expectResolution(
-    false,
-    failure("finalize:doctor"),
-    "Plugin configuration invalid. Next step:",
-  );
+  await expectResolution(false, failure(), "Plugin configuration invalid. Next step:");
 });
 
 it.each(["installed version", "checkout HEAD"])("rejects mismatched Git %s", async (identity) => {
@@ -421,7 +400,7 @@ it.each(["installed version", "checkout HEAD"])("rejects mismatched Git %s", asy
   } else {
     vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(gitHead(BEFORE_SHA));
   }
-  await expectResolution(false, failure("checkout-failed", { mode: "git" }));
+  await expectResolution(false);
 });
 
 it("requires a verified runtime and rollback receipt", async () => {
@@ -431,15 +410,13 @@ it("requires a verified runtime and rollback receipt", async () => {
   latestRun.after = { ...failedRun.before };
   latestRun.steps.push({ step: "package rollback", status: "completed", exitCode: 0 });
   vi.mocked(readPackageVersion).mockResolvedValue(BEFORE_VERSION);
-  const savedFailure = failure("checkout-failed", { mode: "git" });
-  await expectResolution(true, savedFailure, `Rollback to ${BEFORE_VERSION}`);
+  await expectResolution(true, failure(), `Rollback to ${BEFORE_VERSION}`);
   latestRun.steps = [];
-  await expectResolution(false, savedFailure);
+  await expectResolution(false);
 });
 
 it("skips repair after verified resolution", async () => {
-  const result = await repair();
-  expect(result).toMatchObject({
+  expect(await repair()).toMatchObject({
     status: "repaired",
     attempts: [],
     finalValidation: {
@@ -458,8 +435,7 @@ it("revalidates runtime after a repair turn", async () => {
     runtimeErrors = [];
     return successfulTurn;
   });
-  const result = await repair();
-  expect(result).toMatchObject({
+  expect(await repair()).toMatchObject({
     status: "repaired",
     finalValidation: { ok: true },
     attempts: [{ turn: 1, toolCalls: 1, validation: { ok: true } }],
