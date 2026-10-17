@@ -29,9 +29,7 @@ import {
 import { ircSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
-const hoisted = vi.hoisted(() => ({
-  monitorIrcProvider: vi.fn(),
-}));
+const hoisted = vi.hoisted(() => ({ monitorIrcProvider: vi.fn() }));
 
 vi.mock("./channel-runtime.js", () => ({ monitorIrcProvider: hoisted.monitorIrcProvider }));
 
@@ -61,28 +59,38 @@ function expectIrcConfig(actual: CoreConfig, irc: Parameters<typeof ircConfig>[0
   expect(actual).toStrictEqual(ircConfig(irc));
 }
 
-function buildAccount(): ResolvedIrcAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    name: "default",
-    configured: true,
-    host: "irc.example.com",
-    port: 6697,
-    tls: true,
-    nick: "openclaw",
-    username: "openclaw",
-    realname: "OpenClaw",
-    password: "",
-    passwordSource: "none",
-    config: {} as ResolvedIrcAccount["config"],
-  };
+function makePrompter(answers: Record<string, string>, yes: string[] = []) {
+  return createTestWizardPrompter({
+    text: vi.fn(async ({ message }: { message: string }) => {
+      const answer = Object.entries(answers).find(([key]) =>
+        key.endsWith("*") ? message.startsWith(key.slice(0, -1)) : message === key,
+      )?.[1];
+      if (answer === undefined) {
+        throw new Error(`Unexpected prompt: ${message}`);
+      }
+      return answer;
+    }) as WizardPrompter["text"],
+    confirm: vi.fn(async ({ message }: { message: string }) => yes.includes(message)),
+  });
 }
 
+const account: ResolvedIrcAccount = {
+  accountId: "default",
+  enabled: true,
+  configured: true,
+  host: "irc.example.com",
+  port: 6697,
+  tls: true,
+  nick: "openclaw",
+  username: "openclaw",
+  realname: "OpenClaw",
+  password: "",
+  passwordSource: "none",
+  config: {},
+};
+
 describe("irc setup", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
+  afterEach(() => vi.clearAllMocks());
 
   it("updates top-level dm policy and allowlist", () => {
     const cfg: CoreConfig = ircConfig({});
@@ -103,8 +111,7 @@ describe("irc setup", () => {
       accountOverrides: {},
     });
 
-    expect(status.configured).toBe(false);
-    expect(status.statusLines).toEqual(["IRC: needs host + nick"]);
+    expect(status).toMatchObject({ configured: false, statusLines: ["IRC: needs host + nick"] });
   });
 
   it("stores nickserv and account config patches on the scoped account", () => {
@@ -132,13 +139,7 @@ describe("irc setup", () => {
         "default",
         "allowlist",
         ["openclaw", "#ops", "openclaw", "*"],
-        (raw) => {
-          const trimmed = raw.trim();
-          if (!trimmed || trimmed === "*") {
-            return trimmed || null;
-          }
-          return trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
-        },
+        (raw) => (raw === "*" || raw.startsWith("#") ? raw : `#${raw}`),
       ),
       {
         enabled: true,
@@ -167,16 +168,13 @@ describe("irc setup", () => {
 
     const validate = (host: string, nick: string, port?: string) =>
       validateInput({ input: { host, nick, port } } as never);
+    const portError = "IRC port must be between 1 and 65535.";
     expect(validate("", "openclaw")).toBe("IRC requires host.");
     expect(validate("irc.libera.chat", "")).toBe("IRC requires nick.");
     expect(validate("irc.libera.chat", "openclaw")).toBeNull();
     expect(validate("irc.libera.chat", "openclaw", "+07000")).toBeNull();
-    expect(validate("irc.libera.chat", "openclaw", "7000x")).toBe(
-      "IRC port must be between 1 and 65535.",
-    );
-    expect(validate("irc.libera.chat", "openclaw", "70000")).toBe(
-      "IRC port must be between 1 and 65535.",
-    );
+    expect(validate("irc.libera.chat", "openclaw", "7000x")).toBe(portError);
+    expect(validate("irc.libera.chat", "openclaw", "70000")).toBe(portError);
 
     expect(
       applyAccountConfig({
@@ -211,31 +209,18 @@ describe("irc setup", () => {
   });
 
   it("configures host and nick via setup prompts", async () => {
-    const answers: Record<string, string> = {
-      "IRC server host": "irc.libera.chat",
-      "IRC server port": "6697",
-      "IRC nick": "openclaw-bot",
-      "IRC username": "openclaw",
-      "IRC real name": "OpenClaw Bot",
-    };
-    const prompter = createTestWizardPrompter({
-      text: vi.fn(async ({ message }: { message: string }) => {
-        if (Object.hasOwn(answers, message)) {
-          return answers[message];
-        }
-        if (
-          message.startsWith("Auto-join IRC channels") ||
-          message.startsWith("IRC channels allowlist")
-        ) {
-          return "#openclaw, #ops";
-        }
-        throw new Error(`Unexpected prompt: ${message}`);
-      }) as WizardPrompter["text"],
-      confirm: vi.fn(
-        async ({ message }: { message: string }) =>
-          message === "Use TLS for IRC?" || message === "Configure IRC channels access?",
-      ),
-    });
+    const prompter = makePrompter(
+      {
+        "IRC server host": "irc.libera.chat",
+        "IRC server port": "6697",
+        "IRC nick": "openclaw-bot",
+        "IRC username": "openclaw",
+        "IRC real name": "OpenClaw Bot",
+        "Auto-join IRC channels*": "#openclaw, #ops",
+        "IRC channels allowlist*": "#openclaw, #ops",
+      },
+      ["Use TLS for IRC?", "Configure IRC channels access?"],
+    );
 
     const result = await runSetupWizardConfigure({
       configure: ircConfigureAdapter.configure,
@@ -268,14 +253,8 @@ describe("irc setup", () => {
   });
 
   it("writes DM allowFrom to top-level config for non-default account prompts", async () => {
-    const prompter = createTestWizardPrompter({
-      text: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "IRC allowFrom (nick or nick!user@host)") {
-          return "Alice, Bob!ident@example.org";
-        }
-        throw new Error(`Unexpected prompt: ${message}`);
-      }) as WizardPrompter["text"],
-      confirm: vi.fn(async () => false),
+    const prompter = makePrompter({
+      "IRC allowFrom (nick or nick!user@host)": "Alice, Bob!ident@example.org",
     });
 
     const promptAllowFrom = ircConfigureAdapter.dmPolicy?.promptAllowFrom;
@@ -311,7 +290,7 @@ describe("irc setup", () => {
           ...ctx,
           cfg: ctx.cfg as CoreConfig,
         }),
-      account: buildAccount(),
+      account,
     });
 
     await expectStopPendingUntilAbort({
