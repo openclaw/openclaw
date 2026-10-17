@@ -49,6 +49,23 @@ describe("ManagedWorktreeService capacity", () => {
     getConfig: () => ({ worktreeAcceleration: false }),
   });
   let availableBytes: number;
+  const records = () => f.service.listRegistryRecords();
+  const listBranch = (name: string) => git(f.repo, "branch", "--list", `openclaw/${name}`);
+  const worktrees = () => git(f.repo, "worktree", "list", "--porcelain");
+
+  function pauseCommand(matches: (argv: readonly string[]) => boolean) {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const run = commandExec.runCommandWithTimeout;
+    vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+      if (matches(argv)) {
+        entered.resolve();
+        await release.promise;
+      }
+      return await run(argv, options);
+    });
+    return { entered: entered.promise, release: () => release.resolve() };
+  }
 
   function onHydrated(effect: (destination: string) => Promise<void> | void) {
     return afterCommand(commandExec, async (argv, result) => {
@@ -64,10 +81,10 @@ describe("ManagedWorktreeService capacity", () => {
   }
 
   async function expectRolledBack(name: string, destination?: string) {
-    expect(await f.service.listRegistryRecords()).toEqual([]);
-    expect(await git(f.repo, "branch", "--list", `openclaw/${name}`)).toBe("");
+    expect(await records()).toEqual([]);
+    expect(await listBranch(name)).toBe("");
     if (destination) {
-      expect(await git(f.repo, "worktree", "list", "--porcelain")).not.toContain(destination);
+      expect(await worktrees()).not.toContain(destination);
       await expectMissing(destination);
     }
   }
@@ -88,30 +105,23 @@ describe("ManagedWorktreeService capacity", () => {
     "admits an unrelated create during retirement only with %s disk space",
     async (space, { signal }) => {
       const retiring = await f.create("retiring");
-      await fs.writeFile(path.join(retiring.path, "draft.bin"), Buffer.alloc(8 * 1024 ** 2, 7));
+      await writeFile(retiring.path, "draft.bin", Buffer.alloc(8 * 1024 ** 2, 7));
       availableBytes = space === "ample" ? 100 * GiB : 4 * GiB + 10 * 1024 ** 2;
-      const deleting = createDeferred();
-      const release = createDeferred();
+      const deletion = pauseCommand((argv) => {
+        const command = argv.indexOf("worktree");
+        return command >= 0 && argv[command + 1] === "remove" && argv.includes(retiring.path);
+      });
       const waiting = createDeferred();
       const waitCapacity = allocation.waitForWorktreeCapacity;
       vi.spyOn(allocation, "waitForWorktreeCapacity").mockImplementation(async (...args) => {
         waiting.resolve();
         return await waitCapacity(...args);
       });
-      const runCommand = commandExec.runCommandWithTimeout;
-      vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-        const command = argv.indexOf("worktree");
-        if (command >= 0 && argv[command + 1] === "remove" && argv.includes(retiring.path)) {
-          deleting.resolve();
-          await release.promise;
-        }
-        return await runCommand(argv, options);
-      });
       const removal = f.service.remove({ id: retiring.id, reason: "owner-gc" });
       const create = () => f.create("parallel");
       let creation: ReturnType<typeof create> | undefined;
       try {
-        await atGate(deleting.promise, removal, "retirement never reached deletion", signal);
+        await atGate(deletion.entered, removal, "retirement never reached deletion", signal);
         creation = create();
         if (space === "constrained") {
           await atGate(
@@ -120,7 +130,7 @@ describe("ManagedWorktreeService capacity", () => {
             "creation did not wait for disk admission",
             signal,
           );
-          expect(await git(f.repo, "branch", "--list", "openclaw/parallel")).toBe("");
+          expect(await listBranch("parallel")).toBe("");
         } else {
           const created = await withinTest(creation, signal);
           await expectFile(created.path, "README.md", "base\n");
@@ -128,7 +138,7 @@ describe("ManagedWorktreeService capacity", () => {
         expect(getRegistryWorktree(f.env, retiring.id)?.removedAt).toBeUndefined();
         expect(await fs.stat(retiring.path)).toBeDefined();
       } finally {
-        release.resolve();
+        deletion.release();
         await Promise.allSettled([removal, creation]);
       }
       expect(getRegistryWorktree(f.env, retiring.id)?.removedAt).toEqual(expect.any(Number));
@@ -164,32 +174,22 @@ describe("ManagedWorktreeService capacity", () => {
           ).trim(),
         ).toBe(path.join(donor, ".git/objects"));
       }
-      const consumer = { repoRoot: consumerRoot, name: "consumer", baseRef: "HEAD" };
-      const retired =
-        operation === "borrowed restore" ? await f.service.create(consumer) : undefined;
+      const create = () => f.create("consumer", { repoRoot: consumerRoot });
+      const retired = operation === "borrowed restore" ? await create() : undefined;
       if (retired) {
         await writeFile(retired.path, "saved.txt", "saved edits\n");
-        await f.service.remove({ id: retired.id, reason: "owner-gc" });
+        await f.remove(retired, { reason: "owner-gc" });
       }
-      const adding = createDeferred();
-      const release = createDeferred();
-      const runCommand = commandExec.runCommandWithTimeout;
-      vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-        if (isWorktreeAdd(argv)) {
-          adding.resolve();
-          await release.promise;
-        }
-        return await runCommand(argv, options);
-      });
-      const creation = retired ? f.service.restore({ id: retired.id }) : f.service.create(consumer);
+      const addition = pauseCommand(isWorktreeAdd);
+      const creation = retired ? f.service.restore({ id: retired.id }) : create();
       let removal: ReturnType<typeof f.service.remove> | undefined;
       try {
-        await atGate(adding.promise, creation, "creation never admitted its checkout", signal);
+        await atGate(addition.entered, creation, "creation never admitted its checkout", signal);
         removal = f.service.remove({ id: source.id, reason: "owner-gc", allowSnapshotLoss: true });
         await expect(withinTest(removal, signal)).rejects.toThrow(/busy|locked/);
         expect(getRegistryWorktree(f.env, source.id)?.removedAt).toBeUndefined();
       } finally {
-        release.resolve();
+        addition.release();
         await Promise.allSettled([creation, removal]);
       }
       const created = await creation;
@@ -232,22 +232,17 @@ describe("ManagedWorktreeService capacity", () => {
       });
 
       await expect(f.create("split-volumes")).rejects.toThrow(/disk space/i);
-      expect(await f.service.listRegistryRecords()).toEqual([]);
-      expect(await git(f.repo, "branch", "--list", "openclaw/split-volumes")).toBe("");
-      expect(await git(f.repo, "worktree", "list", "--porcelain")).not.toContain("split-volumes");
+      await expectRolledBack("split-volumes");
+      expect(await worktrees()).not.toContain("split-volumes");
 
       recovered = true;
       const requestedHead = await git(f.repo, "rev-parse", "HEAD");
-      const created = await f.service.create({
-        repoRoot: f.repo,
-        name: "split-volumes",
-        baseRef: requestedHead,
-      });
+      const created = await f.create("split-volumes", { baseRef: requestedHead });
       expect(created.path.startsWith(dataRoot + path.sep)).toBe(true);
       expect(await git(created.path, "rev-parse", "HEAD")).toBe(requestedHead);
       await expectFile(created.path, "README.md", "base\n");
       expect(await git(created.path, "status", "--porcelain")).toBe("");
-      expect(await f.service.listRegistryRecords()).toEqual([created]);
+      expect(await records()).toEqual([created]);
     },
   );
 
@@ -305,21 +300,16 @@ describe("ManagedWorktreeService capacity", () => {
       let destination: string | undefined;
       const params = { repoRoot: f.repo, name: "cancelled-registration", baseRef: "HEAD" };
       const branch = `openclaw/${params.name}`;
-      const realRun = commandExec.runCommandWithTimeout;
-      const commands = vi
-        .spyOn(commandExec, "runCommandWithTimeout")
-        .mockImplementation(async (argv, options) => {
-          const result = await realRun(argv, options);
-          if (isWorktreeAdd(argv) && argv.includes(branch) && result.code === 0) {
-            destination = argv.at(-2);
-            if (ending === "aborted") {
-              controller.abort(cancelled);
-            } else {
-              closed = true;
-            }
+      const commands = afterCommand(commandExec, async (argv, result) => {
+        if (isWorktreeAdd(argv) && argv.includes(branch) && result.code === 0) {
+          destination = argv.at(-2);
+          if (ending === "aborted") {
+            controller.abort(cancelled);
+          } else {
+            closed = true;
           }
-          return result;
-        });
+        }
+      });
       const creation = f.service.create({
         ...params,
         signal: controller.signal,
@@ -356,9 +346,9 @@ describe("ManagedWorktreeService capacity", () => {
       const archived = operation === "restore" ? await f.service.create(params) : undefined;
       if (archived) {
         await writeFile(archived.path, "README.md", "saved restore state\n");
-        await f.service.remove({ id: archived.id, reason: "test" });
+        await f.remove(archived);
       }
-      const before = await f.service.listRegistryRecords();
+      const before = await records();
       const revokeCheckout = captureWorktreeMutationHeartbeat();
       let destination: string | undefined;
       onHydrated(async (checkoutPath) => {
@@ -375,30 +365,26 @@ describe("ManagedWorktreeService capacity", () => {
         archived ? f.service.restore({ id: archived.id }) : f.service.create(params),
       ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
       expect(destination).toBeDefined();
-      expect(await f.service.listRegistryRecords()).toEqual(before);
+      expect(await records()).toEqual(before);
       expect(await git(f.repo, "rev-parse", branch)).toBe(originalHead);
-      expect(await git(f.repo, "worktree", "list", "--porcelain")).toContain(destination);
-      expect(await fs.readFile(path.join(destination!, "README.md"), "utf8")).toBe(
-        archived ? "saved restore state\n" : "base\n",
-      );
+      expect(await worktrees()).toContain(destination);
+      await expectFile(destination!, "README.md", archived ? "saved restore state\n" : "base\n");
     },
   );
 
   it("preserves an unprepared checkout when native hydration settlement is unknown", async () => {
-    const params = {
-      repoRoot: f.repo,
-      name: "retry-hydration",
-      baseRef: "HEAD",
-      ownerKind: "session" as const,
-      ownerId: "agent:main:retry-hydration",
-    };
+    const create = () =>
+      f.create("retry-hydration", {
+        ownerKind: "session",
+        ownerId: "agent:main:retry-hydration",
+      });
     let destination: string | undefined;
     const revokeCheckout = captureWorktreeMutationHeartbeat();
     const nativeOutcomeUnknown = Object.assign(new Error("native hydration outcome unknown"), {
       code: "outcome-unknown",
     });
     vi.spyOn(capacity, "estimateWorktreeGitBytes").mockImplementationOnce(async () => {
-      const listing = await git(f.repo, "worktree", "list", "--porcelain");
+      const listing = await worktrees();
       destination = listing
         .split("\n")
         .find((line) => line.startsWith("worktree ") && line.endsWith("retry-hydration"))
@@ -411,7 +397,7 @@ describe("ManagedWorktreeService capacity", () => {
       throw nativeOutcomeUnknown;
     });
 
-    const failure = await f.service.create(params).then(
+    const failure = await create().then(
       () => undefined,
       (error: unknown) => error,
     );
@@ -419,10 +405,10 @@ describe("ManagedWorktreeService capacity", () => {
     const causes = collectNestedErrorCandidates(failure);
     expect(causes).toContain(nativeOutcomeUnknown);
     expect(causes).toContainEqual(expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_LOST" }));
-    expect(await f.service.listRegistryRecords()).toEqual([]);
+    expect(await records()).toEqual([]);
     expect(destination).toBeDefined();
     expect(await fs.stat(destination!)).toBeDefined();
-    expect(await git(f.repo, "branch", "--list", "openclaw/retry-hydration")).not.toBe("");
+    expect(await listBranch("retry-hydration")).not.toBe("");
   });
 
   it("requires a readable capacity sample before creating a checkout", async () => {
@@ -461,10 +447,8 @@ describe("ManagedWorktreeService capacity", () => {
         }),
       }),
     ]);
-    expect(
-      (await f.service.listRegistryRecords()).filter((record) => record.removedAt === undefined),
-    ).toHaveLength(1);
-    const created = (await f.service.listRegistryRecords())[0]!;
+    expect((await records()).filter((record) => record.removedAt === undefined)).toHaveLength(1);
+    const created = (await records())[0]!;
     await expectFile(created.path, "README.md", "base\n");
     const rejectedRepo = created.repoRoot === f.repo ? otherRepo : f.repo;
     expect(await git(rejectedRepo, "branch", "--list", "openclaw/*")).toBe("");
@@ -501,11 +485,9 @@ describe("ManagedWorktreeService capacity", () => {
         await sleepWithAbort(...args);
       });
       let settled = false;
-      const pending = f.service
-        .create({ repoRoot: f.repo, name: "waiting", baseRef: "HEAD", signal: controller.signal })
-        .finally(() => {
-          settled = true;
-        });
+      const pending = f.create("waiting", { signal: controller.signal }).finally(() => {
+        settled = true;
+      });
       const result = pending.catch((error: unknown) => error);
       try {
         await atGate(
@@ -526,7 +508,7 @@ describe("ManagedWorktreeService capacity", () => {
         expect(settled, "allocation must remain pending while another owner holds the lease").toBe(
           false,
         );
-        expect(await f.service.listRegistryRecords()).toEqual([]);
+        expect(await records()).toEqual([]);
         if (ending === "abort") {
           controller.abort(new Error("cancel queued worktree"));
           await withinTest(result, signal);
@@ -534,14 +516,13 @@ describe("ManagedWorktreeService capacity", () => {
           await expect(result).resolves.toMatchObject({
             code: "OPENCLAW_STATE_LEASE_ABORTED",
           });
-          expect(await f.service.listRegistryRecords()).toEqual([]);
-          expect(await git(f.repo, "branch", "--list", "openclaw/waiting")).toBe("");
+          await expectRolledBack("waiting");
         } else {
           release.resolve();
           await holder;
           const created = await pending;
           await expectFile(created.path, "README.md", "base\n");
-          expect(await f.service.listRegistryRecords()).toEqual([created]);
+          expect(await records()).toEqual([created]);
         }
       } finally {
         controller.abort();
@@ -554,32 +535,31 @@ describe("ManagedWorktreeService capacity", () => {
   );
 
   it("reconciles a missing owned checkout only after any removal claim has settled", async () => {
-    const params = {
-      repoRoot: f.repo,
-      suggestedName: "missing-owned",
-      baseRef: "HEAD",
-      ownerKind: "session" as const,
-      ownerId: "agent:main:missing-owned",
-    };
-    const original = await f.service.create(params);
+    const create = () =>
+      f.create(undefined, {
+        suggestedName: "missing-owned",
+        ownerKind: "session",
+        ownerId: "agent:main:missing-owned",
+      });
+    const original = await create();
     await git(f.repo, "worktree", "remove", "--force", original.path);
     const token = "pending-removal";
     await claimWorktreeRemoval(f.env, { worktreeId: original.id, token });
     try {
-      await expect(f.service.create(params)).rejects.toThrow(/removed|removal|busy/);
+      await expect(create()).rejects.toThrow(/removed|removal|busy/);
       expect(getRegistryWorktree(f.env, original.id)?.removedAt).toBeUndefined();
     } finally {
       await abortWorktreeRemoval(f.env, original.id, token);
     }
 
-    const replacement = await f.service.create(params);
+    const replacement = await create();
     expect(replacement.id).not.toBe(original.id);
     expect(replacement.name).toBe("missing-owned-2");
     await expectFile(replacement.path, "README.md", "base\n");
     expect(getRegistryWorktree(f.env, original.id)?.removedAt).toEqual(expect.any(Number));
-    expect(
-      (await f.service.listRegistryRecords()).filter((record) => record.removedAt === undefined),
-    ).toEqual([replacement]);
+    expect((await records()).filter((record) => record.removedAt === undefined)).toEqual([
+      replacement,
+    ]);
   });
 
   it("checks space again before repository setup and rolls back its unbound checkout", async () => {
@@ -610,7 +590,7 @@ describe("ManagedWorktreeService capacity", () => {
     await writeFile(created.path, "uncommitted.txt", "preserved delta\n");
     availableBytes = 144 * 1024 ** 2;
 
-    await f.service.remove({ id: created.id, reason: "archive" });
+    await f.remove(created, { reason: "archive" });
 
     const removed = getRegistryWorktree(f.env, created.id)!;
     await expectMissing(created.path);
@@ -630,12 +610,10 @@ describe("ManagedWorktreeService capacity", () => {
     async (flag) => {
       const created = await f.create("hidden-delta");
       await git(created.path, "update-index", flag, "README.md");
-      await fs.writeFile(path.join(created.path, "README.md"), Buffer.alloc(16 * 1024 ** 2, 8));
+      await writeFile(created.path, "README.md", Buffer.alloc(16 * 1024 ** 2, 8));
       availableBytes = 144 * 1024 ** 2;
 
-      await expect(f.service.remove({ id: created.id, reason: "archive" })).rejects.toThrow(
-        /disk space/i,
-      );
+      await expect(f.remove(created, { reason: "archive" })).rejects.toThrow(/disk space/i);
 
       expect(getRegistryWorktree(f.env, created.id)?.removedAt).toBeUndefined();
       expect((await fs.stat(path.join(created.path, "README.md"))).size).toBe(16 * 1024 ** 2);
@@ -646,20 +624,16 @@ describe("ManagedWorktreeService capacity", () => {
   );
 
   it("rejects reuse of a broken Git link without destroying its work", async () => {
-    const params = {
-      repoRoot: f.repo,
-      name: "broken-link",
-      baseRef: "HEAD",
-      ownerKind: "session" as const,
-      ownerId: "agent:main:broken",
-    };
-    const created = await f.service.create(params);
+    const create = () =>
+      f.create("broken-link", {
+        ownerKind: "session",
+        ownerId: "agent:main:broken",
+      });
+    const created = await create();
     await writeFile(created.path, "uncommitted.txt", "only copy\n");
     const marker = await fs.readFile(path.join(created.path, ".git"), "utf8");
     await fs.rm(marker.trim().slice("gitdir: ".length), { recursive: true });
-    await expect(f.service.create(params)).rejects.toThrow(
-      /Git metadata.*preserved|preserved.*Git metadata/i,
-    );
+    await expect(create()).rejects.toThrow(/Git metadata.*preserved|preserved.*Git metadata/i);
     expect(getRegistryWorktree(f.env, created.id)?.removedAt).toBeUndefined();
     await expectFile(created.path, "uncommitted.txt", "only copy\n");
   });

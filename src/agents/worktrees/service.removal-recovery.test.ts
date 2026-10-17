@@ -57,15 +57,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
   let fixtureSnapshot: string;
   const initialize = useManagedWorktreeTestRepository(async (repo) => {
     fixtureHead = await git(repo, "rev-parse", "HEAD");
-    fixtureSnapshot = await git(
-      repo,
-      "commit-tree",
-      `${fixtureHead}^{tree}`,
-      "-p",
-      fixtureHead,
-      "-m",
-      "original completed capture",
-    );
+    fixtureSnapshot = await captureTree(repo, fixtureHead, "original completed capture");
   });
   let root: string;
   let repo: string;
@@ -75,11 +67,50 @@ describe("interrupted ordinary worktree removal recovery", () => {
   let head: string;
   let admin: string;
   const file = (...parts: string[]) => path.join(record.path, ...parts);
+  const ref = (kind: "snapshots" | "removals") => `refs/openclaw/${kind}/${record.id}`;
+  const registry = () => getRegistryWorktree(env, record.id);
+  const attach = () => fs.writeFile(file(".git"), `gitdir: ${admin}\n`);
+  const detach = () => fs.unlink(file(".git"));
+  const removeReadme = () => fs.unlink(file("README.md"));
+  const expectReadme = () => expectFile(record.path, "README.md", "base\n");
+  const expectGit = async (expected: string, ...args: string[]) =>
+    expect(await git(repo, ...args)).toBe(expected);
+  const expectRemoved = () => expect(recover()).resolves.toMatchObject({ removed: true });
+  const captureTree = (repository: string, parent: string, message: string) =>
+    git(repository, "commit-tree", `${parent}^{tree}`, "-p", parent, "-m", message);
+  const changeRegistry = async (token: string) => {
+    const patch = { lastActiveAt: record.lastActiveAt + 1 };
+    await updateRegistryWorktree(env, record.id, patch, { removalToken: token });
+  };
+  const intercept = (effect: (argv: readonly string[], after: boolean) => Promise<void>) => {
+    const run = commandExec.runCommandWithTimeout;
+    return vi
+      .spyOn(commandExec, "runCommandWithTimeout")
+      .mockImplementation(async (argv, options) => {
+        await effect(argv, false);
+        const result = await run(argv, options);
+        await effect(argv, true);
+        return result;
+      });
+  };
+  const injectOnce = (
+    matches: (argv: readonly string[]) => boolean | Promise<boolean>,
+    effect: () => Promise<void>,
+  ) => {
+    let injected = false;
+    const fault = afterCommand(commandExec, async (argv) => {
+      if (!injected && (await matches(argv))) {
+        injected = true;
+        await effect();
+      }
+    });
+    return { fault, expectInjected: () => expect(injected).toBe(true) };
+  };
 
   const pinSnapshot = async () => {
     const update = execFileAsync("git", ["-C", repo, "update-ref", "--stdin"]);
     update.child.stdin?.end(
-      `update refs/openclaw/snapshots/${record.id} ${snapshot}\nupdate refs/openclaw/removals/${record.id} ${snapshot}\n`,
+      `update ${ref("snapshots")} ${snapshot}\nupdate ${ref("removals")} ${snapshot}\n`,
     );
     await update;
   };
@@ -87,7 +118,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
     await git(record.path, "add", ".");
     await git(record.path, "commit", "-m", message);
     head = await git(record.path, "rev-parse", "HEAD");
-    snapshot = await git(repo, "commit-tree", `${head}^{tree}`, "-p", head, "-m", "clean capture");
+    snapshot = await captureTree(repo, head, "clean capture");
     await pinSnapshot();
   };
 
@@ -108,14 +139,16 @@ describe("interrupted ordinary worktree removal recovery", () => {
     await updateRegistryWorktree(env, record.id, {
       repositoryIdentity: { repoRoot: repo, repoFingerprint: repository.fingerprint },
     });
-    record = getRegistryWorktree(env, record.id)!;
+    record = registry()!;
     head = fixtureHead;
     admin = (await fs.readFile(file(".git"), "utf8")).trim().slice("gitdir: ".length);
     snapshot = fixtureSnapshot;
-    const snapshotRef = `refs/openclaw/snapshots/${record.id}`;
     await pinSnapshot();
-    await updateRegistryWorktree(env, record.id, { snapshotRef, provisionedState: [] });
-    await fs.unlink(file(".git"));
+    await updateRegistryWorktree(env, record.id, {
+      snapshotRef: ref("snapshots"),
+      provisionedState: [],
+    });
+    await detach();
   });
   const recover = () => service.recoverRemoval({ id: record.id, snapshot });
   const observeRemovalClaim = () => {
@@ -133,37 +166,33 @@ describe("interrupted ordinary worktree removal recovery", () => {
     };
   };
   const pinsPreserved = async () => {
-    expect(await git(repo, "rev-parse", `refs/openclaw/snapshots/${record.id}`)).toBe(snapshot);
-    expect(await git(repo, "rev-parse", `refs/openclaw/removals/${record.id}`)).toBe(snapshot);
-    expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
+    await expectGit(snapshot, "rev-parse", ref("snapshots"));
+    await expectGit(snapshot, "rev-parse", ref("removals"));
+    expect(registry()?.removedAt).toBeUndefined();
   };
 
   it("reconstructs missing files without force, retires only its registration and retains the original capture", async () => {
     const sibling = path.join(root, "sibling");
     await git(repo, "worktree", "add", "--detach", sibling);
     await fs.rename(sibling, `${sibling}-parked`);
-    await fs.unlink(file("README.md"));
-    const run = commandExec.runCommandWithTimeout;
-    vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+    await removeReadme();
+    afterCommand(commandExec, async (argv) => {
       if (argv.includes("worktree") && argv.includes("remove")) {
         expect(argv).not.toContain("--force");
       }
-      return await run(argv, options);
     });
     await expect(recover()).resolves.toMatchObject({
       removed: true,
-      snapshotRef: record.snapshotRef ?? `refs/openclaw/snapshots/${record.id}`,
+      snapshotRef: record.snapshotRef ?? ref("snapshots"),
     });
     await expectMissing(record.path);
     await expectMissing(admin);
-    expect(await git(repo, "branch", "--list", record.branch)).toBe("");
+    await expectGit("", "branch", "--list", record.branch);
     expect(await git(repo, "worktree", "list", "--porcelain")).toContain(sibling);
-    expect(await git(repo, "show", `${snapshot}:README.md`)).toBe("base");
-    expect(
-      await git(repo, "for-each-ref", "--format=%(refname)", `refs/openclaw/removals/${record.id}`),
-    ).toBe("");
-    expect(getRegistryWorktree(env, record.id)?.removedAt).toEqual(expect.any(Number));
-    await expect(recover()).resolves.toMatchObject({ removed: true });
+    await expectGit("base", "show", `${snapshot}:README.md`);
+    await expectGit("", "for-each-ref", "--format=%(refname)", ref("removals"));
+    expect(registry()?.removedAt).toEqual(expect.any(Number));
+    await expectRemoved();
   });
 
   it.each(["changed", "symlink", "directory"])(
@@ -190,26 +219,24 @@ describe("interrupted ordinary worktree removal recovery", () => {
       if (kind === "directory") {
         expect((await fs.stat(file("foreign"))).isDirectory()).toBe(true);
       }
-      await expect(fs.lstat(file(".git"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expect(fs.lstat(file(".git"))).rejects.toMatchObject({ code: "ENOENT" });
       await pinsPreserved();
     },
   );
 
   it("rejects a replaced branch ref", async () => {
-    const ref = `refs/heads/${record.branch}`;
-    const newer = await git(repo, "commit-tree", `${head}^{tree}`, "-p", head, "-m", "new history");
-    await git(repo, "update-ref", ref, newer);
+    const branchRef = `refs/heads/${record.branch}`;
+    const newer = await captureTree(repo, head, "new history");
+    await git(repo, "update-ref", branchRef, newer);
     await expect(recover()).rejects.toThrow(/ref changed|branch changed/);
-    expect(await git(repo, "rev-parse", ref)).toBe(newer);
-    await expectFile(record.path, "README.md", "base\n");
+    await expectGit(newer, "rev-parse", branchRef);
+    await expectReadme();
   });
 
   it("refuses a live managed consumer before touching the partial checkout", async () => {
-    await fs.writeFile(file(".git"), `gitdir: ${admin}\n`);
+    await attach();
     // Model a pre-existing consumer; new admission correctly refuses a pending removal.
-    await git(repo, "update-ref", "-d", `refs/openclaw/removals/${record.id}`, snapshot);
+    await git(repo, "update-ref", "-d", ref("removals"), snapshot);
     const lease = await runLease.acquireWorktreeRunLease(record.id, { env });
     try {
       await pinSnapshot();
@@ -221,13 +248,11 @@ describe("interrupted ordinary worktree removal recovery", () => {
   });
 
   it("retains newer writes arriving during reconstruction", async () => {
-    await fs.unlink(file("README.md"));
-    const run = commandExec.runCommandWithTimeout;
-    vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-      if (argv.includes("checkout-index")) {
+    await removeReadme();
+    intercept(async (argv, after) => {
+      if (!after && argv.includes("checkout-index")) {
         await writeFile(record.path, "README.md", "raced write\n");
       }
-      return await run(argv, options);
     });
     await expect(recover()).rejects.toThrow(/already exists/);
     await expectFile(record.path, "README.md", "raced write\n");
@@ -240,41 +265,33 @@ describe("interrupted ordinary worktree removal recovery", () => {
       const removalToken = observeRemovalClaim();
       const early = kind === "early-identity";
       const foreignText = early ? "new owner\n" : "new owner's work\n";
-      await fs.unlink(file("README.md"));
-      let injected = false;
-      afterCommand(commandExec, async (argv) => {
-        if (
-          !injected &&
-          (early
+      await removeReadme();
+      const injection = injectOnce(
+        (argv) =>
+          early
             ? argv.includes(record.path) && argv.includes("--get-regexp")
-            : argv.includes("checkout-index"))
-        ) {
-          injected = true;
+            : argv.includes("checkout-index"),
+        async () => {
           if (kind === "identity" || early) {
             await fs.rename(record.path, `${record.path}-original`);
             await fs.mkdir(record.path);
             await fs.writeFile(file("foreign.txt"), foreignText);
           } else if (kind === "pending") {
-            await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, head);
+            await git(repo, "update-ref", ref("removals"), head);
           } else {
-            await updateRegistryWorktree(
-              env,
-              record.id,
-              { lastActiveAt: record.lastActiveAt + 1 },
-              { removalToken: removalToken() },
-            );
+            await changeRegistry(removalToken());
           }
-        }
-      });
+        },
+      );
       await expect(recover()).rejects.toThrow(
         early ? "Checkout or original index changed" : undefined,
       );
-      expect(injected).toBe(true);
+      injection.expectInjected();
       if (kind === "registry") {
-        expect(getRegistryWorktree(env, record.id)?.lastActiveAt).toBe(record.lastActiveAt + 1);
+        expect(registry()?.lastActiveAt).toBe(record.lastActiveAt + 1);
       }
-      expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
-      expect(await git(repo, "rev-parse", `refs/openclaw/snapshots/${record.id}`)).toBe(snapshot);
+      expect(registry()?.removedAt).toBeUndefined();
+      await expectGit(snapshot, "rev-parse", ref("snapshots"));
       if (kind === "identity" || early) {
         const originalReadme = path.join(`${record.path}-original`, "README.md");
         await expectFile(record.path, "foreign.txt", foreignText);
@@ -286,7 +303,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
           expect(await fs.readFile(originalReadme, "utf8")).toBe("base\n");
         }
       } else {
-        await expectFile(record.path, "README.md", "base\n");
+        await expectReadme();
       }
     },
   );
@@ -294,134 +311,115 @@ describe("interrupted ordinary worktree removal recovery", () => {
   it("preserves an ignored file arriving after the last awaited inventory", async () => {
     const ignored = file("late-output");
     await fs.writeFile(path.join(repo, ".git", "info", "exclude"), "late-output\n");
-    let injected = false;
-    afterCommand(commandExec, async (argv) => {
-      if (
-        !injected &&
+    const injection = injectOnce(
+      async (argv) =>
         argv.includes("rev-parse") &&
         argv.includes(`refs/heads/${record.branch}`) &&
         (await fs.stat(path.join(admin, "index.lock")).then(
           () => true,
           () => false,
-        ))
-      ) {
-        injected = true;
-        await fs.writeFile(ignored, "late owner bytes\n");
-      }
-    });
+        )),
+      () => fs.writeFile(ignored, "late owner bytes\n"),
+    );
     await expect(recover()).rejects.toThrow("Changed or foreign file: late-output");
-    expect(injected).toBe(true);
+    injection.expectInjected();
     expect(await fs.readFile(ignored, "utf8")).toBe("late owner bytes\n");
-    await expectFile(record.path, "README.md", "base\n");
+    await expectReadme();
     await pinsPreserved();
   });
 
   it("preserves the pending pin when registry custody changes after removal publication", async () => {
     const removalToken = observeRemovalClaim();
-    let injected = false;
-    afterCommand(commandExec, async (argv) => {
-      if (
-        !injected &&
-        argv.includes("--git-common-dir") &&
-        getRegistryWorktree(env, record.id)?.removedAt !== undefined
-      ) {
-        injected = true;
-        await updateRegistryWorktree(
-          env,
-          record.id,
-          { lastActiveAt: record.lastActiveAt + 1 },
-          { removalToken: removalToken() },
-        );
-      }
-    });
+    const injection = injectOnce(
+      (argv) => argv.includes("--git-common-dir") && registry()?.removedAt !== undefined,
+      () => changeRegistry(removalToken()),
+    );
     await expect(recover()).rejects.toThrow("Worktree registry changed during recovery");
-    expect(injected).toBe(true);
-    expect(await git(repo, "rev-parse", `refs/openclaw/removals/${record.id}`)).toBe(snapshot);
-    expect(await git(repo, "rev-parse", `refs/openclaw/snapshots/${record.id}`)).toBe(snapshot);
-    expect(getRegistryWorktree(env, record.id)?.lastActiveAt).toBe(record.lastActiveAt + 1);
+    injection.expectInjected();
+    await expectGit(snapshot, "rev-parse", ref("removals"));
+    await expectGit(snapshot, "rev-parse", ref("snapshots"));
+    expect(registry()?.lastActiveAt).toBe(record.lastActiveAt + 1);
     await expectMissing(record.path);
   });
 
   it.each(["admission", "native"])(
     "preserves a foreign target when the pin becomes symbolic during %s finalization",
     async (stage) => {
-      const pending = `refs/openclaw/removals/${record.id}`;
+      const pending = ref("removals");
       const foreign = "refs/tags/foreign-finalization";
       await git(repo, "update-ref", foreign, snapshot);
-      const run = commandExec.runCommandWithTimeout;
       let injected = false;
-      const fault = vi
-        .spyOn(commandExec, "runCommandWithTimeout")
-        .mockImplementation(async (argv, options) => {
-          if (stage === "native" && argv.includes("update-ref") && argv.includes("--stdin")) {
-            injected = true;
-            await git(repo, "symbolic-ref", pending, foreign);
-          }
-          const result = await run(argv, options);
-          if (
-            stage === "admission" &&
-            argv.includes("--git-common-dir") &&
-            getRegistryWorktree(env, record.id)?.removedAt !== undefined
-          ) {
-            await git(repo, "symbolic-ref", pending, foreign);
-          }
-          return result;
-        });
+      const fault = intercept(async (argv, after) => {
+        if (
+          !after &&
+          stage === "native" &&
+          argv.includes("update-ref") &&
+          argv.includes("--stdin")
+        ) {
+          injected = true;
+          await git(repo, "symbolic-ref", pending, foreign);
+        }
+        if (
+          after &&
+          stage === "admission" &&
+          argv.includes("--git-common-dir") &&
+          registry()?.removedAt !== undefined
+        ) {
+          await git(repo, "symbolic-ref", pending, foreign);
+        }
+      });
       if (stage === "admission") {
         await expect(recover()).rejects.toThrow("must remain direct refs");
       } else {
-        // Git CAS compares the resolved old OID; no-deref owns only the pending
-        // ref itself even for an external writer racing after command admission.
-        await expect(recover()).resolves.toMatchObject({ removed: true });
+        // no-deref owns the pending ref, not its raced symbolic target.
+        await expectRemoved();
         expect(injected).toBe(true);
       }
       fault.mockRestore();
-      expect(await git(repo, "rev-parse", foreign)).toBe(snapshot);
-      expect(await git(repo, "rev-parse", `refs/openclaw/snapshots/${record.id}`)).toBe(snapshot);
+      await expectGit(snapshot, "rev-parse", foreign);
+      await expectGit(snapshot, "rev-parse", ref("snapshots"));
       if (stage === "admission") {
-        expect(await git(repo, "symbolic-ref", pending)).toBe(foreign);
-        expect(getRegistryWorktree(env, record.id)?.removedAt).toEqual(expect.any(Number));
+        await expectGit(foreign, "symbolic-ref", pending);
+        expect(registry()?.removedAt).toEqual(expect.any(Number));
         await git(repo, "update-ref", "--no-deref", pending, snapshot);
-        await expect(recover()).resolves.toMatchObject({ removed: true });
-        expect(await git(repo, "rev-parse", foreign)).toBe(snapshot);
+        await expectRemoved();
+        await expectGit(snapshot, "rev-parse", foreign);
       } else {
-        expect(await git(repo, "for-each-ref", "--format=%(refname)", pending)).toBe("");
+        await expectGit("", "for-each-ref", "--format=%(refname)", pending);
       }
     },
   );
 
   it("preserves a checkout that reappears after its original path was absent", async () => {
-    await fs.unlink(file("README.md"));
+    await removeReadme();
     await fs.rmdir(record.path);
     await fs.writeFile(path.join(repo, ".git", "info", "exclude"), "new-owner\n");
     let checkedIndex = false;
-    let injected = false;
-    afterCommand(commandExec, async (argv) => {
-      if (argv.includes("diff-index")) {
-        checkedIndex = true;
-      }
-      if (
-        !injected &&
-        checkedIndex &&
-        argv.includes("rev-parse") &&
-        argv.includes(`refs/heads/${record.branch}`)
-      ) {
-        injected = true;
+    const injection = injectOnce(
+      (argv) => {
+        if (argv.includes("diff-index")) {
+          checkedIndex = true;
+        }
+        return (
+          checkedIndex && argv.includes("rev-parse") && argv.includes(`refs/heads/${record.branch}`)
+        );
+      },
+      async () => {
         await fs.mkdir(record.path);
-        await fs.writeFile(file(".git"), `gitdir: ${admin}\n`);
+        await attach();
         await writeFile(record.path, "README.md", "base\n");
         await writeFile(record.path, "new-owner", "newer owner's bytes\n");
-      }
-    });
+      },
+    );
     await expect(recover()).rejects.toThrow("Missing checkout reappeared");
-    expect(injected).toBe(true);
+    injection.expectInjected();
     await expectFile(record.path, "new-owner", "newer owner's bytes\n");
-    await expectFile(record.path, "README.md", "base\n");
+    await expectReadme();
     await pinsPreserved();
   });
 
   it("never executes a repository clean filter while deleting reconstructed source", async () => {
-    await fs.writeFile(file(".git"), `gitdir: ${admin}\n`);
+    await attach();
     await writeFile(record.path, ".gitattributes", "README.md filter=recovery-probe\n");
     await captureCheckout("capture filter attribute");
     const marker = path.join(root, "filter-executed");
@@ -438,52 +436,52 @@ describe("interrupted ordinary worktree removal recovery", () => {
       `${quote(process.execPath)} ${quote(script)}`,
     );
     // Prove this repository program really runs through untrusted native status.
-    await fs.unlink(file("README.md"));
+    await removeReadme();
     await writeFile(record.path, "README.md", "base\n");
     expect(await git(record.path, "status", "--porcelain")).toBe("");
     expect(await fs.readFile(marker, "utf8")).toBe("ran");
     await fs.unlink(marker);
-    await fs.unlink(file("README.md"));
-    await fs.unlink(file(".git"));
-    await expect(recover()).resolves.toMatchObject({ removed: true });
+    await removeReadme();
+    await detach();
+    await expectRemoved();
     await expectMissing(marker);
     await expectMissing(record.path);
-    expect(await git(repo, "show", `${snapshot}:README.md`)).toBe("base");
+    await expectGit("base", "show", `${snapshot}:README.md`);
   });
 
   it.each([false, true])(
     "recovers a retired missing checkout only if its path stays absent, reappeared=%s",
     async (reappeared) => {
-      await fs.unlink(file("README.md"));
+      await removeReadme();
       await fs.rmdir(record.path);
       await service.list();
-      const retiredAt = getRegistryWorktree(env, record.id)?.removedAt;
-      const pending = `refs/openclaw/removals/${record.id}`;
+      const retiredAt = registry()?.removedAt;
+      const pending = ref("removals");
       if (reappeared) {
         await fs.mkdir(record.path);
         await writeFile(record.path, "foreign.txt", "new owner\n");
         await expect(recover()).rejects.toThrow("Retired checkout path reappeared");
         expect(await fs.readdir(record.path)).toEqual(["foreign.txt"]);
         await expectFile(record.path, "foreign.txt", "new owner\n");
-        expect(await git(repo, "rev-parse", pending)).toBe(snapshot);
+        await expectGit(snapshot, "rev-parse", pending);
         expect((await fs.stat(path.join(admin, "index"))).isFile()).toBe(true);
       } else {
         expect(retiredAt).toEqual(expect.any(Number));
         expect((await fs.stat(path.join(admin, "index"))).isFile()).toBe(true);
-        await expect(recover()).resolves.toMatchObject({ removed: true });
+        await expectRemoved();
         await expectMissing(admin);
-        expect(await git(repo, "branch", "--list", record.branch)).toBe("");
-        expect(await git(repo, "for-each-ref", "--format=%(refname)", pending)).toBe("");
-        expect(await git(repo, "rev-parse", `refs/openclaw/snapshots/${record.id}`)).toBe(snapshot);
+        await expectGit("", "branch", "--list", record.branch);
+        await expectGit("", "for-each-ref", "--format=%(refname)", pending);
+        await expectGit(snapshot, "rev-parse", ref("snapshots"));
       }
-      expect(getRegistryWorktree(env, record.id)?.removedAt).toBe(retiredAt);
+      expect(registry()?.removedAt).toBe(retiredAt);
     },
   );
 
   it.each(["split-base", "worktree-config", "metadata-mode"])(
     "preserves a newer retained %s before native deletion",
     async (kind) => {
-      await fs.writeFile(file(".git"), `gitdir: ${admin}\n`);
+      await attach();
       let target = path.join(admin, "index");
       if (kind === "split-base") {
         await git(record.path, "update-index", "--split-index");
@@ -497,27 +495,24 @@ describe("interrupted ordinary worktree removal recovery", () => {
         target = path.join(admin, "config.worktree");
       }
       const prior = await fs.readFile(target);
-      await fs.unlink(file("README.md"));
-      await fs.unlink(file(".git"));
-      let injected = false;
-      afterCommand(commandExec, async (argv) => {
-        if (argv.includes("checkout-index")) {
-          injected = true;
-          await fs.appendFile(target, "\n# newer owner bytes\n");
-        }
-      });
+      await removeReadme();
+      await detach();
+      const injection = injectOnce(
+        (argv) => argv.includes("checkout-index"),
+        () => fs.appendFile(target, "\n# newer owner bytes\n"),
+      );
       await expect(recover()).rejects.toThrow("Original Git metadata changed");
-      expect(injected).toBe(true);
+      injection.expectInjected();
       expect(await fs.readFile(target)).toEqual(
         Buffer.concat([prior, Buffer.from("\n# newer owner bytes\n")]),
       );
-      await expectFile(record.path, "README.md", "base\n");
+      await expectReadme();
       await pinsPreserved();
     },
   );
 
   it("reconstructs clean symlink-file checkout representation", async () => {
-    await fs.writeFile(file(".git"), `gitdir: ${admin}\n`);
+    await attach();
     const filename = file("representation");
     await fs.symlink("README.md", filename);
     await captureCheckout("capture checkout representation");
@@ -528,14 +523,14 @@ describe("interrupted ordinary worktree removal recovery", () => {
     expect((await fs.lstat(filename)).isFile()).toBe(true);
     expect(await fs.readFile(filename, "utf8")).toBe("README.md");
     await fs.unlink(filename);
-    await fs.unlink(file(".git"));
-    await expect(recover()).resolves.toMatchObject({ removed: true });
+    await detach();
+    await expectRemoved();
     await expectMissing(record.path);
-    expect(await git(repo, "show", `${snapshot}:representation`)).toBe("README.md");
+    await expectGit("README.md", "show", `${snapshot}:representation`);
   });
 
   it("reconstructs native Unicode filename representation", async () => {
-    await fs.writeFile(file(".git"), `gitdir: ${admin}\n`);
+    await attach();
     await git(repo, "config", "core.precomposeunicode", "true");
     const directory = "é-directory";
     const filename = "é-file.txt";
@@ -559,16 +554,14 @@ describe("interrupted ordinary worktree removal recovery", () => {
     expect(await git(record.path, "status", "--porcelain")).toBe("");
     const target = file(physicalDirectory, physicalFilename);
     await fs.unlink(target);
-    await fs.unlink(file(".git"));
-    await expect(recover()).resolves.toMatchObject({ removed: true });
+    await detach();
+    await expectRemoved();
     await expectMissing(record.path);
-    expect(await git(repo, "show", `${snapshot}:${directory}/${filename}`)).toBe(
-      "captured Unicode",
-    );
+    await expectGit("captured Unicode", "show", `${snapshot}:${directory}/${filename}`);
   });
 
   it("preserves a newer administrative index after the checkout has already disappeared", async () => {
-    await fs.unlink(file("README.md"));
+    await removeReadme();
     await fs.rmdir(record.path);
     const blob = await git(repo, "hash-object", "README.md");
     await execFileAsync(
@@ -585,20 +578,15 @@ describe("interrupted ordinary worktree removal recovery", () => {
   it.each(["listed-checkout", "branch", "pin"])(
     "retries an interruption after %s finalization without recapturing source",
     async (stage) => {
-      const run = commandExec.runCommandWithTimeout;
-      const fault = vi
-        .spyOn(commandExec, "runCommandWithTimeout")
-        .mockImplementation(async (argv, options) => {
-          const result = await run(argv, options);
-          if (
-            (stage === "listed-checkout" && argv.includes("worktree") && argv.includes("remove")) ||
-            (stage === "branch" && argv.includes("branch") && argv.includes("-d")) ||
-            (stage === "pin" && argv.includes("update-ref") && argv.includes("--stdin"))
-          ) {
-            throw new Error("interrupted after finalization effect");
-          }
-          return result;
-        });
+      const fault = afterCommand(commandExec, async (argv) => {
+        if (
+          (stage === "listed-checkout" && argv.includes("worktree") && argv.includes("remove")) ||
+          (stage === "branch" && argv.includes("branch") && argv.includes("-d")) ||
+          (stage === "pin" && argv.includes("update-ref") && argv.includes("--stdin"))
+        ) {
+          throw new Error("interrupted after finalization effect");
+        }
+      });
       await expect(recover()).rejects.toThrow("interrupted after finalization effect");
       fault.mockRestore();
       if (stage !== "pin") {
@@ -606,10 +594,10 @@ describe("interrupted ordinary worktree removal recovery", () => {
       }
       if (stage === "listed-checkout") {
         await service.list();
-        expect(getRegistryWorktree(env, record.id)?.removedAt).toEqual(expect.any(Number));
+        expect(registry()?.removedAt).toEqual(expect.any(Number));
       }
-      await expect(recover()).resolves.toMatchObject({ removed: true });
-      expect(await git(repo, "rev-parse", `refs/openclaw/snapshots/${record.id}`)).toBe(snapshot);
+      await expectRemoved();
+      await expectGit(snapshot, "rev-parse", ref("snapshots"));
     },
   );
 });

@@ -15,6 +15,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { ManagedWorktreeService } from "./service.js";
+import type { CreateManagedWorktreeParams } from "./types.js";
 
 export function useServiceFixture(
   initialize: (root: string) => Promise<string>,
@@ -34,8 +35,19 @@ export function useServiceFixture(
     repo: "",
     stateDir: "",
     env: process.env,
-    create(name: string): ReturnType<ManagedWorktreeService["create"]> {
-      return service.create({ repoRoot: fixture.repo, name, baseRef: "HEAD" });
+    create(name?: string, overrides: Partial<CreateManagedWorktreeParams> = {}) {
+      return service.create({ repoRoot: fixture.repo, name, baseRef: "HEAD", ...overrides });
+    },
+    remove(
+      record: { id: string },
+      overrides: Partial<Parameters<ManagedWorktreeService["remove"]>[0]> = {},
+    ) {
+      return service.remove({ id: record.id, reason: "test", ...overrides });
+    },
+    async commit(files: Record<string, string>, message = "fixture") {
+      await writeFiles(fixture.repo, files);
+      await git(fixture.repo, "add", ...Object.keys(files));
+      await git(fixture.repo, "commit", "-m", message);
     },
     get service() {
       return service;
@@ -96,6 +108,8 @@ export async function initializeLocalRepository(root: string, template?: string)
 }
 export const writeFile = (root: string, name: string, contents: string | Uint8Array) =>
   fs.writeFile(path.join(root, name), contents);
+export const writeFiles = (root: string, files: Record<string, string>) =>
+  Promise.all(Object.entries(files).map(([name, contents]) => writeFile(root, name, contents)));
 
 export async function expectFile(root: string, name: string, contents: string) {
   expect(await fs.readFile(path.join(root, name), "utf8")).toBe(contents);
