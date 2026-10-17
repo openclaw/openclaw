@@ -20,13 +20,12 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withEnvAsync } from "../test-utils/env.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import {
-  completeCanaryCommand,
-  createCanarySnapshotResult,
-  FakeChild,
+  type FakeChild,
   renderSteps,
   stubHealthyGateway,
   canaryOutcomeStep,
 } from "./update-candidate-canary.test-support.js";
+import { createCanaryHarness } from "./update-candidate-harness.test-support.js";
 import { writeUpdateRunReportArtifact } from "./update-failure-report-artifact.js";
 import { createUpdateRun, finishUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
@@ -39,14 +38,12 @@ vi.mock("node:child_process", async (importOriginal) =>
     mocks.spawn,
   ),
 );
-vi.mock("../process/exec.js", async (importOriginal) => {
-  const { mockCanarySnapshotCommands } =
-    await import("./update-candidate-canary-mocks.test-support.js");
-  return mockCanarySnapshotCommands(
+vi.mock("../process/exec.js", async (importOriginal) =>
+  (await import("./update-candidate-canary-mocks.test-support.js")).mockCanarySnapshotCommands(
     await importOriginal<typeof import("../process/exec.js")>(),
     mocks.snapshot,
-  );
-});
+  ),
+);
 vi.mock("../process/kill-tree.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/kill-tree.js")>()),
   signalProcessTree: mocks.signal,
@@ -59,77 +56,73 @@ vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
-let nextPid = 41_000;
-const children = new Map<number, FakeChild>();
 let lintReport: { ok: boolean; checksRun: number; findings: unknown[]; warnings: unknown[] };
+const harness = createCanaryHarness(mocks, { readFixture: () => ({ lintReport }) });
+const canaryStateOptions = harness.options;
 
-function canaryStateOptions(timeoutMs?: number) {
-  return { root, stateDir: root, config: {}, env: {}, timeoutMs };
+function report(
+  findings: unknown[] = [],
+  options: { warnings?: unknown[]; checksRun?: number } = {},
+) {
+  return { ok: findings.length === 0, checksRun: 1, findings, warnings: [], ...options };
+}
+
+function mockLint(complete: (child: FakeChild) => void, { killed = false, tracked = true } = {}) {
+  const spawnNormally = mocks.spawn.getMockImplementation();
+  assert(spawnNormally);
+  mocks.spawn.mockImplementation((command, args: string[], options) => {
+    if (!args.includes("--lint")) {
+      return spawnNormally(command, args, options);
+    }
+    const child = harness.child(tracked);
+    child.killed = killed;
+    queueMicrotask(() => complete(child));
+    return child;
+  });
+}
+
+async function recordReport(
+  result: Awaited<ReturnType<typeof validateUpdateCandidateCanary>>,
+  env: NodeJS.ProcessEnv,
+) {
+  const run = createUpdateRun({ trigger: "cli" }, { env });
+  for (const row of result.steps.flatMap(updateRunStepsFromResultStep)) {
+    recordUpdateRunStep(run.runId, row, { env });
+  }
+  const recorded = finishUpdateRun(
+    run.runId,
+    result.status === "ok" ? { status: "succeeded" } : { status: "failed", reason: result.reason },
+    { env },
+  );
+  const failure = { ...result, mode: "npm" as const, root, runId: run.runId };
+  const reportPath = await writeUpdateRunReportArtifact({
+    result: failure,
+    report: renderUpdateRunReport(recorded),
+    env,
+  });
+  return { recorded, failure, markdown: await fs.readFile(reportPath, "utf8") };
 }
 
 beforeEach(async () => {
-  vi.clearAllMocks();
-  lintReport = { ok: true, checksRun: 1, findings: [], warnings: [] };
-  root = path.join(await fs.realpath(tempDirs.make("canary-lint-")), "candidate");
-  await fs.mkdir(path.join(root, "dist", "infra"), { recursive: true });
-  await fs.writeFile(path.join(root, "dist", "index.js"), "");
-  await fs.writeFile(path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"), "");
-  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.1" }));
-  mocks.snapshot.mockImplementation(async (_command, options: { input: string }) =>
-    createCanarySnapshotResult(options.input),
-  );
-  mocks.spawn.mockImplementation((_command: string, args: string[]) => {
-    const child = new FakeChild(nextPid++);
-    children.set(child.pid, child);
-    if (!args.includes("gateway")) {
-      completeCanaryCommand(child, args, () => ({
-        pluginInventory: undefined,
-        pluginErrors: false,
-        runtimeContract: { state: 2, agent: 3 },
-        runtimeError: false,
-        lintReport,
-      }));
-    }
-    return child;
-  });
-  mocks.signal.mockImplementation(
-    (pid: number, _signal: string, options: { onComplete?: () => void }) => {
-      children.get(pid)?.emit("close", 0);
-      options.onComplete?.();
-    },
-  );
+  lintReport = report();
+  root = await harness.reset(tempDirs.make("canary-lint-"));
 });
 
 afterEach(() => {
-  vi.unstubAllGlobals();
+  harness.dispose();
   closeAuthProfileReadPool();
   closeOpenClawStateDatabaseForTest();
-  for (const child of children.values()) {
-    child.stdout.destroy();
-    child.stderr.destroy();
-  }
-  children.clear();
 });
 
 describe("update candidate Doctor lint", () => {
   it("preserves the supervisor refusal after a warning and successful readiness envelope", async () => {
     const reason =
       "Doctor lint settlement refused: cleanup-uncertain; disposal-requested,kill-issued-by-abort,termination=signal.";
-    const spawnNormally = mocks.spawn.getMockImplementation();
-    assert(spawnNormally);
-    mocks.spawn.mockImplementation((command, args: string[], options) => {
-      if (!args.includes("--lint")) {
-        return spawnNormally(command, args, options);
-      }
-      const child = new FakeChild(nextPid++);
-      children.set(child.pid, child);
-      queueMicrotask(() => {
-        child.stderr.write("[warning] Earlier inspection warning.\n");
-        child.stdout.write(`${JSON.stringify(lintReport)}\n`);
-        child.stderr.write(`[openclaw] Reason: ${reason}\n`);
-        child.emit("close", 2);
-      });
-      return child;
+    mockLint((child) => {
+      child.stderr.write("[warning] Earlier inspection warning.\n");
+      child.stdout.write(`${JSON.stringify(lintReport)}\n`);
+      child.stderr.write(`[openclaw] Reason: ${reason}\n`);
+      child.emit("close", 2);
     });
     const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
     const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(), env });
@@ -141,26 +134,12 @@ describe("update candidate Doctor lint", () => {
       failureFacts: [{ check: "lint", code: "doctor-failed", message: reason }],
     });
     expect(step.advisory).toBeUndefined();
-    const run = createUpdateRun({ trigger: "cli" }, { env });
-    for (const row of result.steps.flatMap(updateRunStepsFromResultStep)) {
-      recordUpdateRunStep(run.runId, row, { env });
-    }
-    const recorded = finishUpdateRun(
-      run.runId,
-      { status: "failed", reason: "doctor-failed" },
-      { env },
-    );
-    const failure = { ...result, mode: "npm" as const, root, runId: run.runId };
-    const reportPath = await writeUpdateRunReportArtifact({
-      result: failure,
-      report: renderUpdateRunReport(recorded),
-      env,
-    });
+    const { recorded, failure, markdown } = await recordReport(result, env);
     for (const output of [
       JSON.stringify(failure),
       JSON.stringify(recorded.steps),
       renderSteps([step]),
-      await fs.readFile(reportPath, "utf8"),
+      markdown,
     ]) {
       expect(output).toContain(reason);
     }
@@ -174,18 +153,19 @@ describe("update candidate Doctor lint", () => {
       stateDir,
       "agents/main/agent/auth-profiles.json.sqlite-import.123.bak",
     );
+    const provider = {
+      baseUrl: "https://example.invalid/v1",
+      api: "openai-completions" as const,
+      apiKey: "synthetic-config-credential",
+      models: [],
+    };
     const config: OpenClawConfig = {
       gateway: { mode: "local" },
       models: {
         providers: Object.fromEntries(
           Array.from({ length: 4 }, (_, index) => [
             `fixture_${"x".repeat(140)}_${index}`,
-            {
-              baseUrl: "https://example.invalid/v1",
-              api: "openai-completions",
-              apiKey: "synthetic-config-credential",
-              models: [],
-            },
+            { ...provider },
           ]),
         ),
       },
@@ -202,53 +182,29 @@ describe("update candidate Doctor lint", () => {
       },
       async () => {
         const env = { ...process.env };
-        const auth = {
-          version: 1,
-          profiles: {
-            "fixture:default": {
-              type: "api_key",
-              provider: "fixture",
-              key: "synthetic-auth-credential",
-            },
-          },
-        };
+        const profile = { type: "api_key", provider: "fixture", key: "synthetic-auth-credential" };
+        const auth = { version: 1, profiles: { "fixture:default": profile } };
         writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" }, { env });
         noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, env);
         writePersistedAuthProfileStoreRaw(auth);
         const audit = await runSecretsAudit({ env });
         const finding = audit.findings.find((entry) => entry.code === code);
-        expect(finding).toMatchObject({
-          code,
-          severity: "warn",
-          file: archive,
-        });
+        expect(finding).toMatchObject({ code, severity: "warn", file: archive });
         const guidance = (await collectSecurityWarnings(config, env)).find(
           (entry) => entry.checkId === "config.plaintext_secrets",
         )!.remediation;
-        // Released Doctor does not run secrets audit. Model a candidate reporting
-        // its audit code through the existing security-finding contract, including
-        // a stricter policy severity; this is wire compatibility, not release attribution.
-        lintReport = {
-          ok: false,
-          checksRun: 1,
-          findings: [
-            securityAuditFindingToHealthFinding({
-              checkId: code,
-              severity: "critical",
-              title: "Secret policy",
-              detail: finding!.message,
-              remediation: guidance,
-            }),
-          ],
-          warnings: [],
-        };
+        // Candidate wire compatibility, not attribution to the released Doctor.
+        lintReport = report([
+          securityAuditFindingToHealthFinding({
+            checkId: code,
+            severity: "critical",
+            title: "Secret policy",
+            detail: finding!.message,
+            remediation: guidance,
+          }),
+        ]);
         stubHealthyGateway();
-        const result = await validateUpdateCandidateCanary({
-          root,
-          stateDir,
-          config,
-          env,
-        });
+        const result = await validateUpdateCandidateCanary({ root, stateDir, config, env });
         expect(result.status).toBe("ok");
         const step = result.steps.find((entry) => entry.name === "candidate-doctor-lint")!;
         expect(step).toMatchObject({
@@ -256,26 +212,14 @@ describe("update candidate Doctor lint", () => {
           advisory: { kind: "recoverable-maintenance" },
           doctorLintFindings: [expect.objectContaining({ severity: "warning" })],
         });
-        const run = createUpdateRun({ trigger: "cli" }, { env });
-        for (const row of result.steps.flatMap(updateRunStepsFromResultStep)) {
-          recordUpdateRunStep(run.runId, row, { env });
-        }
-        const recorded = finishUpdateRun(run.runId, { status: "succeeded" }, { env });
-        const reportPath = await writeUpdateRunReportArtifact({
-          result: { ...result, status: "ok", mode: "npm", root, runId: run.runId },
-          report: renderUpdateRunReport(recorded),
-          env,
-        });
-        const markdown = await fs.readFile(reportPath, "utf8");
+        const { recorded, markdown } = await recordReport(result, env);
         const printed = renderSteps(result.steps);
         const warnings = updateRunWarningMessages(recorded.steps).join("\n");
         for (const output of [markdown, printed, warnings]) {
-          expect({
-            code: output.includes(code),
-            configure: output.includes("openclaw secrets configure"),
-            apply: output.includes("openclaw secrets apply"),
-          }).toEqual({ code: true, configure: true, apply: true });
-          expect(output).not.toContain(auth.profiles["fixture:default"].key);
+          for (const text of [code, "openclaw secrets configure", "openclaw secrets apply"]) {
+            expect(output).toContain(text);
+          }
+          expect(output).not.toContain(profile.key);
         }
         const receipt = recorded.steps.find((row) => row.step.startsWith("finalize:doctor-lint:"))!;
         expect(JSON.parse(receipt.detail!)).toMatchObject({
@@ -294,22 +238,17 @@ describe("update candidate Doctor lint", () => {
   it.each([0, 3])(
     "shows a passing lint with budget-deferred inspections as advisory after %i checks",
     async (checksRun) => {
-      lintReport = {
-        ok: true,
+      lintReport = report([], {
         checksRun,
-        findings: [],
         warnings: [
           {
             checkId: "core/doctor/agent-scopes",
-            source: "doctor",
             severity: "warning",
             errorCode: "update-inspection-deferred",
-            requirement: "update-validation-budget",
             message: "Agent scopes deferred until after activation.",
-            fixHint: "Run `openclaw doctor --fix` after activation.",
           },
         ],
-      };
+      });
       stubHealthyGateway();
       const result = await validateUpdateCandidateCanary(canaryStateOptions());
       expect(result.status).toBe("ok");
@@ -333,30 +272,21 @@ describe("update candidate Doctor lint", () => {
     { name: "signal", exitCode: null, signal: "SIGTERM", outputLimitExceeded: false },
     { name: "output limit after exit zero", exitCode: 0, signal: null, outputLimitExceeded: true },
   ])("retains physical $name facts without accepting policy output", async (physical) => {
-    const spawnNormally = mocks.spawn.getMockImplementation()!;
-    mocks.spawn.mockImplementation((command, args: string[], options) => {
-      if (!args.includes("--lint")) {
-        return spawnNormally(command, args, options);
-      }
-      const child = Object.assign(new FakeChild(nextPid++), { killed: physical.signal !== null });
-      children.set(child.pid, child);
-      queueMicrotask(() => {
+    lintReport = report([
+      { checkId: "core/doctor/security", severity: "error", message: "DMs are open." },
+    ]);
+    mockLint(
+      (child) => {
         child.stdout.write(
-          JSON.stringify({
-            ok: false,
-            checksRun: 1,
-            findings: [
-              { checkId: "core/doctor/security", severity: "error", message: "DMs are open." },
-            ],
-          }),
+          JSON.stringify({ ok: false, checksRun: 1, findings: lintReport.findings }),
         );
         if (physical.outputLimitExceeded) {
           child.stdout.write("x".repeat(1024 * 1024));
         }
         child.emit("close", physical.exitCode, physical.signal);
-      });
-      return child;
-    });
+      },
+      { killed: physical.signal !== null },
+    );
     const result = await validateUpdateCandidateCanary(canaryStateOptions());
     expect(result).toMatchObject({ status: "error", phase: "lint", reason: "doctor-failed" });
     const step = result.steps.find((entry) => entry.name === "candidate-doctor-lint")!;
@@ -376,11 +306,9 @@ describe("update candidate Doctor lint", () => {
       failureFacts: step.failureFacts,
     });
     expect(renderSteps([step])).toContain(
-      physical.outputLimitExceeded && physical.exitCode === 0
+      physical.outputLimitExceeded
         ? "Update health check output exceeded the inspection limit"
-        : physical.signal
-          ? `terminated by ${physical.signal}`
-          : "Update health check failed",
+        : `terminated by ${physical.signal}`,
     );
     expect(renderUpdateRunReport(updateRunReportInputFromResult(failure)).markdown).toContain(
       "Failed: candidate-doctor-lint",
@@ -394,39 +322,31 @@ describe("update candidate Doctor lint", () => {
     });
   });
   it("preserves bounded Doctor findings before the diagnostic log tail", async () => {
-    const spawnNormally = mocks.spawn.getMockImplementation()!;
-    mocks.spawn.mockImplementation((command, args: string[], options) => {
-      if (!args.includes("--lint")) {
-        return spawnNormally(command, args, options);
-      }
-      const child = new FakeChild(nextPid++);
-      queueMicrotask(() => {
+    lintReport = report([
+      ...Array.from({ length: 40 }, (_, index) => ({
+        checkId: `optional.warning.${index}`,
+        severity: "warning",
+        message: "Optional check was skipped.",
+      })),
+      ...Array.from({ length: 8 }, (_, index) => ({
+        checkId: `config.invalid.${index}`,
+        severity: "error",
+        path: "mcp.servers.example",
+        message:
+          "Invalid server at /Users/synthetic/private/config.json token=synthetic-canary-secret",
+        requirement: "connect ECONNREFUSED private-host.example:8443",
+      })),
+    ]);
+    mockLint(
+      (child) => {
         child.stdout.write(
-          `${JSON.stringify({
-            ok: false,
-            checksRun: 1,
-            findings: [
-              ...Array.from({ length: 40 }, (_, index) => ({
-                checkId: `optional.warning.${index}`,
-                severity: "warning",
-                message: "Optional check was skipped.",
-              })),
-              ...Array.from({ length: 8 }, (_, index) => ({
-                checkId: `config.invalid.${index}`,
-                severity: "error",
-                path: "mcp.servers.example",
-                message:
-                  "Invalid server at /Users/synthetic/private/config.json token=synthetic-canary-secret",
-                requirement: "connect ECONNREFUSED private-host.example:8443",
-              })),
-            ],
-          })}\n`,
+          `${JSON.stringify({ ok: false, checksRun: 1, findings: lintReport.findings })}\n`,
         );
         child.stderr.write(Array.from({ length: 60 }, (_, index) => `cleanup ${index}\n`).join(""));
         child.emit("close", 1);
-      });
-      return child;
-    });
+      },
+      { tracked: false },
+    );
     const onStep = vi.fn();
     const env = { API_TOKEN: "synthetic-canary-secret" };
     const options = { ...canaryStateOptions(3_000), env, onStep };
