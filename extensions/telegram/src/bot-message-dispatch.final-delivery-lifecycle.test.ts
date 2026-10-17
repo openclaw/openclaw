@@ -114,6 +114,23 @@ const progressConfig = {
   streaming: { mode: "progress", progress: { toolProgress: true } },
 } as const;
 
+function createLoggedRuntime() {
+  const log = vi.fn<(...args: unknown[]) => void>();
+  return {
+    runtime: {
+      log,
+      error: vi.fn(),
+      exit: () => {
+        throw new Error("exit");
+      },
+    },
+    outcomeLines: () =>
+      log.mock.calls
+        .map((args) => args.join(" "))
+        .filter((line) => line.startsWith("telegram final delivery outcome=")),
+  };
+}
+
 describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -254,8 +271,108 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     },
   );
 
+  it("logs a final answer finalized in the preview as one outcome line", async () => {
+    const { bot, messages, sendMessage, editMessageText } = await setupObservedProgressTransport();
+    const { runtime, outcomeLines } = createLoggedRuntime();
+    const preview = "Answer in progress while the model keeps writing";
+    const final = "Complete answer edited into the preview";
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+      await params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onPartialReply?.({ text: preview });
+      await createTelegramDraftStream.mock.results[0]?.value?.flush();
+      expect([...messages.values()]).toEqual([preview]);
+      return dispatchThroughSharedOwner({
+        ...params,
+        replyResolver: async () => ({ text: final }),
+      });
+    });
+
+    const result = await dispatchWithContext({
+      bot,
+      context: progressContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial" } },
+      runtime,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(result).toEqual({ kind: "completed" });
+    expect([...messages.values()]).toEqual([final]);
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(editMessageText).toHaveBeenCalled();
+    expect(outcomeLines()).toEqual([
+      `telegram final delivery outcome=preview-finalized chat=123 message=${[...messages.keys()][0]}`,
+    ]);
+  });
+
+  it("logs a final cancelled by a sending hook as a skipped outcome", async () => {
+    const { bot, messages } = await setupObservedProgressTransport();
+    const { runtime, outcomeLines } = createLoggedRuntime();
+    deliverInboundReplyWithMessageSendContext.mockResolvedValueOnce({
+      status: "handled_no_send",
+      reason: "no_visible_result",
+      delivery: { suppression: { reason: "cancelled_by_message_sending_hook" } },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) =>
+      dispatchThroughSharedOwner({
+        ...params,
+        replyResolver: async () => ({ text: "A final the sending hook cancels" }),
+      }),
+    );
+
+    await dispatchWithContext({
+      bot,
+      context: progressContext(),
+      streamMode: "progress",
+      telegramCfg: progressConfig,
+      runtime,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    // The cancelled final sends nothing; the no-reply notice that follows is its own final.
+    const [[noticeId, notice] = []] = [...messages.entries()];
+    expect(notice).toContain("couldn't produce or deliver a reply");
+    expect(outcomeLines()).toEqual([
+      "telegram final delivery outcome=skipped chat=123 reason=cancelled_by_message_sending_hook",
+      `telegram final delivery outcome=sent chat=123 message=${noticeId}`,
+    ]);
+  });
+
+  it("logs a preview send that may have landed as a retained outcome", async () => {
+    const { bot, sendMessage } = await setupObservedProgressTransport();
+    const { runtime, outcomeLines } = createLoggedRuntime();
+    sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("fetch failed"), {
+        cause: Object.assign(new Error("socket closed"), { code: "ECONNRESET" }),
+      }),
+    );
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) =>
+      dispatchThroughSharedOwner({
+        ...params,
+        replyResolver: async () => ({ text: "A final whose preview send is unconfirmed" }),
+      }),
+    );
+
+    await dispatchWithContext({
+      bot,
+      context: progressContext(),
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial" } },
+      runtime,
+      retryDispatchErrors: true,
+      suppressFailureFallback: true,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(outcomeLines()).toEqual([
+      "telegram final delivery outcome=preview-retained chat=123 reason=adapter_returned_no_identity",
+    ]);
+  });
+
   it("keeps a confirmed streamed answer when prompt-context recording fails", async () => {
     const { bot, messages, sendMessage } = await setupObservedProgressTransport();
+    const { runtime, outcomeLines } = createLoggedRuntime();
     const status = createStatusReactionController();
     const preview = "Answer in progress while checking the completed result";
     const final = "Complete answer already accepted by Telegram";
@@ -286,6 +403,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       },
       retryDispatchErrors: true,
       suppressFailureFallback: true,
+      runtime,
     });
     await vi.advanceTimersByTimeAsync(5_000);
 
@@ -295,10 +413,14 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     expect(recordContext).toHaveBeenCalledWith(
       expect.objectContaining({ text: final, messageId: [...messages.keys()][0] }),
     );
+    expect(outcomeLines()).toEqual([
+      `telegram final delivery outcome=preview-finalized-partial chat=123 message=${[...messages.keys()][0]}`,
+    ]);
   });
 
   it("retires a repositioned preview after a rejected replacement once the final lands", async () => {
     const { bot, messages, sendMessage } = await setupObservedProgressTransport();
+    const { runtime, outcomeLines } = createLoggedRuntime();
     const preTool = "Let me check the workspace first";
     const final = "The workspace has three projects";
     dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
@@ -321,6 +443,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       context: progressContext(),
       streamMode: "partial",
       telegramCfg: { streaming: { mode: "partial" } },
+      runtime,
     });
     await vi.advanceTimersByTimeAsync(10_000);
 
@@ -331,6 +454,9 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     ]);
     expect(result).toEqual({ kind: "completed" });
     expect([...messages.values()]).toEqual([final]);
+    expect(outcomeLines()).toEqual([
+      `telegram final delivery outcome=sent chat=123 message=${[...messages.keys()][0]}`,
+    ]);
   });
 
   it("does not retry or erase an accepted final after late cancellation", async () => {
@@ -383,6 +509,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
 
   it("uses the second assistant preview as the current final when delivery is rejected", async () => {
     const { bot, messages, sendMessage, editMessageText } = await setupObservedProgressTransport();
+    const { runtime, outcomeLines } = createLoggedRuntime();
     const status = createStatusReactionController();
     const first = "First accepted answer";
     const partial = "Second answer in progress while inspecting the result";
@@ -408,11 +535,19 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       telegramCfg: { streaming: { mode: "partial" } },
       retryDispatchErrors: true,
       suppressFailureFallback: true,
+      runtime,
     });
     await vi.advanceTimersByTimeAsync(5_000);
 
     const visible = [...messages.entries()];
     expect(visible[0]?.[1]).toBe(first);
+    // A final whose delivery throws logs its failure at error level, not an outcome.
+    expect(outcomeLines()).toEqual([
+      `telegram final delivery outcome=preview-finalized chat=123 message=${visible[0]?.[0]}`,
+    ]);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("telegram final reply failed"),
+    );
     expect(sendMessage.mock.calls.filter(([, text]) => text === first)).toHaveLength(1);
     expect(visible.some(([, text]) => text === second)).toBe(false);
     expect(
