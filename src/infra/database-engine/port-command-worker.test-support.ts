@@ -22,12 +22,17 @@ vi.mock("../worker-task-server.js", async (importOriginal) => ({
 vi.mock("../worker-task-pool.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../worker-task-pool.js")>();
   const native = await import("@openclaw/worker-runtime/worker");
+  const { resolveBackupNativeWorkerTestUrl } =
+    await import("./backup-native-worker.test-support.js");
   return {
     ...actual,
     WorkerTaskPool: new Proxy(actual.WorkerTaskPool, {
       construct(Target, args: ConstructorParameters<typeof actual.WorkerTaskPool>) {
         if (!/\/port-command\.worker\.[jt]s$/.test(args[0].workerUrl.pathname)) {
-          return new Target(...args);
+          return new Target({
+            ...args[0],
+            workerUrl: resolveBackupNativeWorkerTestUrl(args[0].workerUrl),
+          });
         }
         let pending: Promise<unknown> | undefined;
         return {
