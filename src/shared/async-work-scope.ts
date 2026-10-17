@@ -42,10 +42,6 @@ export class AsyncWorkScope {
       return run();
     }
     const ancestry = currentWorkScopeAncestry.getStore();
-    if (owner === this && ancestry?.scope === this) {
-      // Re-entering the active owner would only repeat it in the ancestry chain.
-      return run();
-    }
     const parent = owner ? (ancestry?.scope === owner ? ancestry : { scope: owner }) : undefined;
     return currentWorkScopeAncestry.run({ scope: this, parent }, () =>
       currentWorkScope.run(this, run),
