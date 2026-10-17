@@ -24,6 +24,15 @@ function createClientHarness(options?: Parameters<typeof createHarness>[0]) {
   return harness;
 }
 
+async function observe(
+  options: CodexAppServerStartOptions,
+  ...clients: ReturnType<typeof createHarness>[]
+) {
+  for (const { client } of clients) {
+    await observeCodexCatalogClient(client, { startOptions: options });
+  }
+}
+
 async function subscribe(
   options: CodexAppServerStartOptions,
   listener: Parameters<typeof subscribeCodexCatalogEvents>[1] = () => {},
@@ -38,7 +47,7 @@ async function subscribe(
   return stop;
 }
 
-function startOptions(home: string): CodexAppServerStartOptions {
+function startOptions(home = tempDirs.make("codex-catalog-events-")): CodexAppServerStartOptions {
   return {
     transport: "stdio",
     homeScope: "user",
@@ -46,6 +55,18 @@ function startOptions(home: string): CodexAppServerStartOptions {
     args: ["app-server"],
     headers: {},
     env: { CODEX_HOME: home },
+  };
+}
+
+function remoteOptions(
+  options: CodexAppServerStartOptions,
+  name: string,
+): CodexAppServerStartOptions {
+  return {
+    ...options,
+    transport: "websocket",
+    url: `wss://${name}.example.test/codex`,
+    authToken: `synthetic-${name}-credential`,
   };
 }
 
@@ -58,7 +79,7 @@ afterEach(async () => {
 
 describe("Codex catalog events", () => {
   it("publishes ephemeral thread/fork acknowledgements before resolving the request", async () => {
-    const options = startOptions(tempDirs.make("codex-catalog-ephemeral-ack-"));
+    const options = startOptions();
     const excluded = vi.fn();
     const otherHome = vi.fn();
     const stop = await subscribe(options, undefined, { onEphemeralThread: excluded });
@@ -72,7 +93,7 @@ describe("Codex catalog events", () => {
         send({ id: request.id, result: { thread: { id: "helper-thread", ephemeral } } });
       },
     });
-    await observeCodexCatalogClient(harness.client, { startOptions: options });
+    await observe(options, harness);
 
     await expect(harness.client.request("thread/fork", {})).resolves.toEqual({
       thread: { id: "helper-thread", ephemeral: true },
@@ -89,57 +110,41 @@ describe("Codex catalog events", () => {
     expect(excluded).toHaveBeenCalledOnce();
   });
 
-  it("reports physical local closure once and removes close callbacks with their subscription", async () => {
-    const options = startOptions(tempDirs.make("codex-catalog-close-"));
-    const closed = vi.fn();
-    const stop = await subscribe(options, undefined, { onClose: closed });
-    const first = createClientHarness();
-    const unsubscribed = createClientHarness();
-    await observeCodexCatalogClient(first.client, { startOptions: options });
-    await observeCodexCatalogClient(first.client, { startOptions: options });
-    expect(closed).not.toHaveBeenCalled();
-    first.client.close();
-    first.client.close();
-    expect(closed).toHaveBeenCalledOnce();
-    stop();
-    await observeCodexCatalogClient(unsubscribed.client, { startOptions: options });
-    unsubscribed.client.close();
-    expect(closed).toHaveBeenCalledOnce();
-    expect([...first.writes, ...unsubscribed.writes]).toEqual([]);
-  });
-
-  it("reports each remote client readiness once without native requests or local readiness events", async () => {
-    const options = startOptions(tempDirs.make("codex-catalog-ready-"));
-    const remoteOptions: CodexAppServerStartOptions = {
-      ...options,
-      transport: "websocket",
-      url: "wss://ready.example.test/codex",
-      authToken: "synthetic-ready-credential",
-    };
-    const remoteReady = vi.fn();
-    const localReady = vi.fn();
-    const stop = await subscribe(remoteOptions, undefined, { onRemoteReady: remoteReady });
-    await subscribe(options, undefined, { onRemoteReady: localReady });
-    const local = createClientHarness();
-    const first = createClientHarness();
-    const replacement = createClientHarness();
-    const unsubscribed = createClientHarness();
-    await observeCodexCatalogClient(local.client, { startOptions: options });
-    await observeCodexCatalogClient(first.client, { startOptions: remoteOptions });
-    await observeCodexCatalogClient(first.client, { startOptions: remoteOptions });
-    expect(remoteReady).toHaveBeenCalledOnce();
-    expect(localReady).not.toHaveBeenCalled();
-    first.client.close();
-    await observeCodexCatalogClient(replacement.client, { startOptions: remoteOptions });
-    await observeCodexCatalogClient(replacement.client, { startOptions: remoteOptions });
-    expect(remoteReady).toHaveBeenCalledTimes(2);
-    stop();
-    await observeCodexCatalogClient(unsubscribed.client, { startOptions: remoteOptions });
-    expect(remoteReady).toHaveBeenCalledTimes(2);
-    expect([local, first, replacement, unsubscribed].flatMap((harness) => harness.writes)).toEqual(
-      [],
-    );
-  });
+  it.each(["onClose", "onRemoteReady"] as const)(
+    "reports %s once per client until unsubscribe",
+    async (callback) => {
+      const options = startOptions();
+      const isRemote = callback === "onRemoteReady";
+      const target = isRemote ? remoteOptions(options, "ready") : options;
+      const received = vi.fn();
+      const localReady = vi.fn();
+      const stop = await subscribe(target, undefined, { [callback]: received });
+      await subscribe(options, undefined, { onRemoteReady: localReady });
+      const local = createClientHarness();
+      const first = createClientHarness();
+      const replacement = createClientHarness();
+      const unsubscribed = createClientHarness();
+      await observe(options, local);
+      await observe(target, first, first);
+      if (!isRemote) {
+        expect(received).not.toHaveBeenCalled();
+        first.client.close();
+        first.client.close();
+      }
+      expect(received).toHaveBeenCalledOnce();
+      expect(localReady).not.toHaveBeenCalled();
+      if (isRemote) {
+        first.client.close();
+        await observe(target, replacement, replacement);
+        expect(received).toHaveBeenCalledTimes(2);
+      }
+      stop();
+      await observe(target, unsubscribed);
+      unsubscribed.client.close();
+      expect(received).toHaveBeenCalledTimes(isRemote ? 2 : 1);
+      expect([local, first, replacement, unsubscribed].flatMap(({ writes }) => writes)).toEqual([]);
+    },
+  );
 
   it("shares canonical local homes and keeps remote endpoints and credentials separate", async () => {
     const directory = tempDirs.make("codex-catalog-events-");
@@ -153,14 +158,9 @@ describe("Codex catalog events", () => {
     await expect(codexCatalogResidentHomeKey({ startOptions: startOptions(alias) })).resolves.toBe(
       localKey,
     );
-    const remoteOptions: CodexAppServerStartOptions = {
-      ...options,
-      transport: "websocket",
-      url: "wss://first.example.test/codex",
-      authToken: "synthetic-first-credential",
-    };
+    const remote = remoteOptions(options, "first");
     const remoteKey = await codexCatalogResidentHomeKey({
-      startOptions: remoteOptions,
+      startOptions: remote,
       sourceHomeId: localKey,
     });
     expect(remoteKey).not.toBe(localKey);
@@ -169,31 +169,27 @@ describe("Codex catalog events", () => {
       { authToken: "synthetic-second-credential" },
     ]) {
       await expect(
-        codexCatalogResidentHomeKey({ startOptions: { ...remoteOptions, ...overrides } }),
+        codexCatalogResidentHomeKey({ startOptions: { ...remote, ...overrides } }),
       ).resolves.not.toBe(remoteKey);
     }
   });
 
   it("forwards catalog lifecycle changes once without performing a native request", async () => {
-    const options = startOptions(tempDirs.make("codex-catalog-events-"));
+    const options = startOptions();
     const harness = createClientHarness();
     const receive = vi.fn();
     const otherHome = vi.fn();
     const stop = await subscribe(options, receive);
     disposers.push(subscribeCodexCatalogEvents("unrelated-home", otherHome));
-    await observeCodexCatalogClient(harness.client, { startOptions: options });
-    await observeCodexCatalogClient(harness.client, { startOptions: options });
+    await observe(options, harness, harness);
     const events: CodexServerNotification[] = [
       { method: "thread/started", params: { thread: { id: "thread-1" } } },
       { method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1" } } },
-      { method: "thread/archived", params: { threadId: "thread-1" } },
-      { method: "thread/deleted", params: { threadId: "thread-1" } },
-      { method: "thread/unarchived", params: { threadId: "thread-1" } },
-      { method: "thread/reverted", params: { threadId: "thread-1" } },
-      {
-        method: "thread/name/updated",
-        params: { threadId: "thread-1", threadName: "New title" },
-      },
+      ...["archived", "deleted", "unarchived", "reverted"].map((action) => ({
+        method: `thread/${action}`,
+        params: { threadId: "thread-1" },
+      })),
+      { method: "thread/name/updated", params: { threadId: "thread-1", threadName: "New title" } },
       { method: "thread/status/changed", params: { threadId: "thread-1", status: "idle" } },
     ];
     for (const event of events) {
@@ -209,7 +205,7 @@ describe("Codex catalog events", () => {
   });
 
   it("reads only the requested thread metadata when a catalog listener needs it", async () => {
-    const options = startOptions(tempDirs.make("codex-catalog-events-"));
+    const options = startOptions();
     const thread = {
       id: "thread-1",
       name: "Updated title",
@@ -221,7 +217,7 @@ describe("Codex catalog events", () => {
     await subscribe(options, (_event, readThread) => {
       reading = readThread(thread.id);
     });
-    await observeCodexCatalogClient(harness.client, { startOptions: options });
+    await observe(options, harness);
     expect(harness.writes).toEqual([]);
     harness.send({ method: "turn/completed", params: { threadId: thread.id, turn: {} } });
     const request = JSON.parse(await harness.waitForWrite(0));

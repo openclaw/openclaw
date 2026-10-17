@@ -1,6 +1,9 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { catalogFactory, nativeCatalogFixture } from "./session-catalog-resident.test-support.js";
+import { afterEach, expect, it, vi } from "vitest";
+import {
+  nativeCatalogFixture,
+  remoteCatalogFactory,
+} from "./session-catalog-resident.test-support.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 import { CodexCatalogVisiblePage, listVisiblePage } from "./session-catalog-visible-page.js";
 import {
@@ -11,6 +14,14 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 const nativeRequest = commandRpcMocks.codexControlRequest;
+const expectCalls = (count: number) => expect(nativeRequest).toHaveBeenCalledTimes(count);
+const sequence = (count: number) => Array.from({ length: count }, (_, index) => index + 1);
+const thread = (id: string, name = "Wanted") =>
+  idleThread({ id, source: "cli", originator: "codex_cli_rs", name });
+const searchParams = (
+  control: CodexSessionCatalogControl,
+  excludedThreadIds: ReadonlySet<string>,
+) => ({ control, limit: 1, searchTerm: "Wanted", excludedThreadIds });
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -21,20 +32,11 @@ async function saturatedHome() {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const native = nativeCatalogFixture(20_001);
   for (const [index, row] of native.rows.entries()) {
-    row.name = `Other investigation ${index}`;
-    row.updatedAt = 1_700_000_000 - index;
-    row.recencyAt = row.updatedAt;
+    row.name = "Other";
+    row.recencyAt = row.updatedAt = 1_700_000_000 - index;
   }
   let now = 0;
-  const factory = catalogFactory({
-    getPluginConfig: () => ({
-      supervision: { enabled: true },
-      appServer: {
-        transport: "websocket",
-        url: "wss://fallback.example.test/codex",
-        authToken: "synthetic-fallback-token",
-      },
-    }),
+  const factory = remoteCatalogFactory("fallback", {
     getRuntimeConfig: () => config,
     now: () => now,
   });
@@ -46,9 +48,7 @@ async function saturatedHome() {
   return {
     control,
     now: () => now,
-    advance: (milliseconds: number) => {
-      now += milliseconds;
-    },
+    advance: (milliseconds: number) => (now += milliseconds),
   };
 }
 
@@ -67,12 +67,7 @@ async function failingFallback() {
       nextCursor: params.cursor ? undefined : "page-two",
     };
   });
-  const params = {
-    control: fixture.control,
-    limit: 1,
-    searchTerm: "Wanted",
-    excludedThreadIds: new Set(["head"]),
-  };
+  const params = searchParams(fixture.control, new Set(["head"]));
   const search = () => listVisiblePage(params);
   return {
     ...fixture,
@@ -81,20 +76,13 @@ async function failingFallback() {
     search,
     async expectFailure(calls: number) {
       await expect(search()).rejects.toBe(failure);
-      expect(nativeRequest).toHaveBeenCalledTimes(calls);
+      expectCalls(calls);
     },
-    recover: () => {
-      recovered = true;
-    },
+    recover: () => (recovered = true),
   };
 }
 
-async function visibleSearch(
-  control: CodexSessionCatalogControl,
-  excludedThreadIds: ReadonlySet<string>,
-  cursor?: string,
-) {
-  const params = { control, limit: 1, searchTerm: "Wanted", excludedThreadIds, cursor };
+async function visibleSearch(params: ConstructorParameters<typeof CodexCatalogVisiblePage>[0]) {
   const operation = new CodexCatalogVisiblePage(params);
   for (;;) {
     const step = await operation.next();
@@ -105,65 +93,54 @@ async function visibleSearch(
   }
 }
 
-describe("overflow catalog request budgets", () => {
-  it("shares 20 native reads across title search and stepped exclusion filling", async () => {
-    const { control } = await saturatedHome();
-    const positions: number[] = [];
-    let visibleAt = 0;
-    nativeRequest.mockImplementation(async (_plugin, method, params) => {
-      expect(method).toBe("thread/list");
-      expect(params.useStateDbOnly).toBe(true);
-      const position = params.cursor ? Number(params.cursor.slice("native-after:".length)) + 1 : 1;
-      positions.push(position);
-      const wanted = position % 20 === 0 || position === visibleAt;
-      return {
-        data: [
-          idleThread({
-            id: `fallback-${position}`,
-            name: wanted ? "Wanted investigation" : "Other investigation",
-            source: "cli",
-            originator: "codex_cli_rs",
-            preview: `Please inspect fallback task ${position} and verify the result.`,
-          }),
-        ],
-        nextCursor: `native-after:${position}`,
-      };
-    });
-    const excluded = new Set(
-      Array.from({ length: 20 }, (_, index) => `fallback-${(index + 1) * 20}`),
-    );
-
-    const first = await visibleSearch(control, excluded);
-
-    expect(positions.length).toBeLessThanOrEqual(20);
-    expect(first.sessions).toEqual([]);
-    expect(first.nextCursor).toEqual(expect.any(String));
-    expect(first.nextCursor).not.toBe("native-after:20");
-    expect(positions).toEqual(Array.from({ length: 20 }, (_, index) => index + 1));
-
-    visibleAt = 21;
-    const second = await visibleSearch(control, excluded, first.nextCursor);
-
-    expect(second.sessions.map((session) => session.threadId)).toEqual(["fallback-21"]);
-    expect(positions).toEqual(Array.from({ length: 21 }, (_, index) => index + 1));
+it("shares 20 native reads across title search and stepped exclusion filling", async () => {
+  const { control } = await saturatedHome();
+  const positions: number[] = [];
+  let visibleAt = 0;
+  nativeRequest.mockImplementation(async (_plugin, method, params) => {
+    expect(method).toBe("thread/list");
+    expect(params.useStateDbOnly).toBe(true);
+    const position = params.cursor ? Number(params.cursor.slice("native-after:".length)) + 1 : 1;
+    positions.push(position);
+    const wanted = position % 20 === 0 || position === visibleAt;
+    return {
+      data: [
+        thread(`fallback-${position}`, wanted ? "Wanted investigation" : "Other investigation"),
+      ],
+      nextCursor: `native-after:${position}`,
+    };
   });
+  const excluded = new Set(sequence(20).map((index) => `fallback-${index * 20}`));
+  const params = searchParams(control, excluded);
+  const first = await visibleSearch(params);
 
-  it("backs off the complete visible fallback request when a later native page fails", async () => {
-    const fixture = await failingFallback();
-    await fixture.expectFailure(2);
-    await fixture.expectFailure(4);
-    await fixture.expectFailure(4);
+  expect(positions.length).toBeLessThanOrEqual(20);
+  expect(first).toMatchObject({ sessions: [], nextCursor: expect.any(String) });
+  expect(first.nextCursor).not.toBe("native-after:20");
+  expect(positions).toEqual(sequence(20));
 
-    fixture.advance(5_000);
-    await fixture.expectFailure(6);
-    fixture.advance(9_999);
-    await fixture.expectFailure(6);
+  visibleAt = 21;
+  const second = await visibleSearch({ ...params, cursor: first.nextCursor });
 
-    fixture.advance(1);
-    fixture.recover();
-    expect((await fixture.search()).sessions.map((session) => session.threadId)).toEqual(["match"]);
-    expect(nativeRequest).toHaveBeenCalledTimes(8);
-  });
+  expect(second.sessions.map((session) => session.threadId)).toEqual(["fallback-21"]);
+  expect(positions).toEqual(sequence(21));
+});
+
+it("backs off the complete visible fallback request when a later native page fails", async () => {
+  const fixture = await failingFallback();
+  await fixture.expectFailure(2);
+  await fixture.expectFailure(4);
+  await fixture.expectFailure(4);
+
+  fixture.advance(5_000);
+  await fixture.expectFailure(6);
+  fixture.advance(9_999);
+  await fixture.expectFailure(6);
+
+  fixture.advance(1);
+  fixture.recover();
+  expect((await fixture.search()).sessions.map((session) => session.threadId)).toEqual(["match"]);
+  expectCalls(8);
 });
 
 it.each(["read count", "deadline"] as const)(
@@ -176,8 +153,6 @@ it.each(["read count", "deadline"] as const)(
     let reads = 0;
     let completedCallbacks = 0;
     let latestThreadId = "";
-    const thread = (id: string) =>
-      idleThread({ id, source: "cli", originator: "codex_cli_rs", name: "Wanted" });
     const dispatch = async (
       method: string,
       params: {
@@ -215,12 +190,7 @@ it.each(["read count", "deadline"] as const)(
 
     const [result] = await Promise.allSettled([
       listVisiblePage({
-        control: fixture.control,
-        limit: 1,
-        searchTerm: "Wanted",
-        excludedThreadIds: new Set(
-          Array.from({ length: 20 }, (_, index) => `excluded-${index + 1}`),
-        ),
+        ...searchParams(fixture.control, new Set(sequence(20).map((index) => `excluded-${index}`))),
         onExcludedThread: async ({ threadId }) => {
           await fixture.control.requireEligibleThread(threadId);
           await fixture.control.readThread(threadId);
@@ -238,8 +208,7 @@ it.each(["read count", "deadline"] as const)(
     } else {
       expect(completedCallbacks).toBeGreaterThan(0);
       if (result.status === "fulfilled") {
-        expect(result.value.sessions).toEqual([]);
-        expect(result.value.nextCursor).toEqual(expect.any(String));
+        expect(result.value).toMatchObject({ sessions: [], nextCursor: expect.any(String) });
       } else {
         expect(result.reason).toBeInstanceOf(Error);
       }
@@ -256,10 +225,10 @@ it("releases an abandoned exclusion-fill probe for the next catalog request", as
 
   const abandoned = new CodexCatalogVisiblePage(params);
   await expect(abandoned.next()).resolves.toEqual({ done: false });
-  expect(nativeRequest).toHaveBeenCalledTimes(5);
+  expectCalls(5);
   abandoned.close();
 
   fixture.recover();
   expect((await search()).sessions.map((session) => session.threadId)).toEqual(["match"]);
-  expect(nativeRequest).toHaveBeenCalledTimes(7);
+  expectCalls(7);
 });
