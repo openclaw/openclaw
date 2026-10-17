@@ -29,7 +29,6 @@ const sourceImportArgs = resolveRuntimeWorkerUrl(
   : [];
 
 const lifetime = createFixtureLifetime();
-const dirs = { make: lifetime.createTempDir };
 afterEach(() => lifetime.cleanup());
 it.skipIf(process.platform === "win32").for([
   { signal: "SIGINT", mode: "fresh" },
@@ -57,10 +56,13 @@ it.skipIf(process.platform === "win32").for([
     lifetime.run(async () => {
       let service: Awaited<ReturnType<typeof createMutableInterruptionService>> | undefined;
       try {
-        const root = dirs.make("update-owned-signal-");
+        const root = lifetime.createTempDir("update-owned-signal-");
         const exists = (name: string) => fs.existsSync(path.join(root, name));
+        const read = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
+        const receiptMode = mode.endsWith("-progress");
         const publicationMode =
           mode === "publishing-compensation" || mode === "rollback-compensation";
+        const compensationMode = mode.endsWith("-compensation") && !publicationMode;
         const installRoot = publicationMode
           ? path.join(root, "pair", "live", "lib", "node_modules", "openclaw")
           : root;
@@ -132,6 +134,7 @@ it.skipIf(process.platform === "win32").for([
     };
     const operate = async () => {
       const sibling = createUpdateRun({trigger:'cli'});
+      const ready = expected => process.send({runId:run.runId,expected,sibling,databasePath,executorDatabasePath});
       const hold = async () => {
         recordUpdateRunPhase(run.runId, 'validating');
         if (mode === 'handoff') process.env.OPENCLAW_UPDATE_RUN_HANDOFF = '1';
@@ -149,10 +152,10 @@ it.skipIf(process.platform === "win32").for([
         }
         process.channel.ref();
         if (compensationFixture) {
-          await compensationFixture({run,currentOptions,ready:()=>process.send({runId:run.runId,expected,sibling,databasePath,executorDatabasePath})});
+          await compensationFixture({run,currentOptions,ready:()=>ready(expected)});
           return;
         }
-        if (['queued-progress', 'refused-progress', 'uncertain-progress'].includes(mode)) {
+        if (${receiptMode}) {
           const guards = createUpdateCommandExecutionGuards(currentOptions, root);
           await recordUpdateRunStepAsync(run.runId, {step:'warm-worker',status:'completed'}, guards.captureWriteOptions());
           const locked = new NativeDatabase(root + '/state/openclaw.sqlite');
@@ -161,8 +164,7 @@ it.skipIf(process.platform === "win32").for([
           let receiptWorker;
           process.once('message', () => {
             if (mode === 'uncertain-progress') {
-              // Exercise the broker's real failure/retirement path after native dispatch.
-              // Missing outcome evidence stays unknown even after this worker exits.
+              // Native dispatch without outcome evidence remains unknown after worker exit.
               receiptWorker.emit('error', new Error('fixture SQLite worker transport failure'));
             } else if (mode === 'refused-progress') {
               receiptAbort.abort(new Error('fixture-step-refused'));
@@ -178,7 +180,7 @@ it.skipIf(process.platform === "win32").for([
             if (commandType === 'updateRuns.recordStep') {
               Worker.prototype.postMessage = post;
               receiptWorker = this;
-              process.send({runId:run.runId,expected,sibling,databasePath,executorDatabasePath});
+              ready(expected);
             }
             return result;
           };
@@ -216,7 +218,7 @@ it.skipIf(process.platform === "win32").for([
           }
           return;
         }
-        process.send({runId:run.runId,expected,sibling,databasePath,executorDatabasePath});
+        ready(expected);
         await new Promise(resolve => {
           if (mode !== "inherited") process.once(${JSON.stringify(signal)}, resolve);
         });
@@ -340,48 +342,33 @@ it.skipIf(process.platform === "win32").for([
           stop();
         }
         try {
-          const message = await beforeExit(
-            once(child, "message").then(
-              ([payload]) =>
-                payload as {
-                  databasePath: string;
-                  executorDatabasePath?: string;
-                  runId: string;
-                  expected: ReturnType<typeof getUpdateRun>;
-                  sibling: ReturnType<typeof createUpdateRun>;
-                },
-            ),
-            "ready",
-          );
+          const [message] = (await beforeExit(once(child, "message"), "ready")) as [
+            {
+              databasePath: string;
+              executorDatabasePath?: string;
+              runId: string;
+              expected: ReturnType<typeof getUpdateRun>;
+              sibling: ReturnType<typeof createUpdateRun>;
+            },
+          ];
           expect(binding.assertPath(message.databasePath)).toBe(binding.databasePath);
           assertManagedHandoffTestConsumer(
             binding,
             child.pid,
-            path.dirname(
-              path.dirname(
-                fileURLToPath(
-                  resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.handoffLease),
-                ),
-              ),
+            fileURLToPath(
+              new URL("../", resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.handoffLease)),
             ),
           );
           if (mode !== "no-owner") {
             expect(message.executorDatabasePath).toBe(binding.databasePath);
           }
-          const receiptMode =
-            mode === "queued-progress" ||
-            mode === "refused-progress" ||
-            mode === "uncertain-progress";
-          const compensationMode = mode.endsWith("-compensation") && !publicationMode;
           if (publicationMode) {
             expect(service?.transitions).toEqual(["stopped"]);
             await expect(fetch(`http://127.0.0.1:${service?.port}/readyz`)).rejects.toThrow();
             if (mode === "publishing-compensation") {
               expect(fs.existsSync(installRoot)).toBe(false);
             } else {
-              expect(
-                JSON.parse(fs.readFileSync(path.join(installRoot, "package.json"), "utf8")),
-              ).toMatchObject({
+              expect(JSON.parse(read(installRoot, "package.json"))).toMatchObject({
                 version: "1.0.0",
               });
             }
@@ -416,10 +403,10 @@ it.skipIf(process.platform === "win32").for([
           }
           const [code, exitSignal] = await closed;
           if (mode !== "inherited") {
-            expect(exitSignal).toBeNull();
-            expect(fs.readFileSync(path.join(root, "signal-owner-unwound"), "utf8")).toBe(
-              "settled",
-            );
+            expect({ exitSignal, unwound: read(root, "signal-owner-unwound") }).toEqual({
+              exitSignal: null,
+              unwound: "settled",
+            });
           }
           const expectedCode = signal === "SIGINT" ? 130 : signal === "SIGHUP" ? 129 : 143;
           expect(code ?? (exitSignal === signal ? expectedCode : null)).toBe(expectedCode);
@@ -431,18 +418,13 @@ it.skipIf(process.platform === "win32").for([
             const response = await fetch(`http://127.0.0.1:${service?.port}/readyz`);
             expect(await response.json()).toEqual({ ok: true, version: "1.0.0" });
             const recorded = getUpdateRun(message.runId, { env: { OPENCLAW_STATE_DIR: stateDir } });
-            expect(recorded?.status).toBe("rolled-back");
-            expect(recorded?.steps).toContainEqual(
-              expect.objectContaining({
-                step: "activating",
-                termination: "signal",
-                signal,
-              }),
-            );
-            const report = fs.readFileSync(
-              path.join(stateDir, "update-reports", `${message.runId}.md`),
-              "utf8",
-            );
+            expect(recorded).toMatchObject({
+              status: "rolled-back",
+              steps: expect.arrayContaining([
+                expect.objectContaining({ step: "activating", termination: "signal", signal }),
+              ]),
+            });
+            const report = read(stateDir, "update-reports", `${message.runId}.md`);
             expect(report).toContain(`interrupted by ${signal} during activating`);
             expect(report).toContain("Bounded diagnostic JSON:");
             expect(stderr).toContain("openclaw update repair");
@@ -453,9 +435,7 @@ it.skipIf(process.platform === "win32").for([
               ? {
                   path: path.join(
                     root,
-                    "state",
-                    ".openclaw-restore-00000000-0000-4000-8000-000000000001-0",
-                    "displaced",
+                    "state/.openclaw-restore-00000000-0000-4000-8000-000000000001-0/displaced",
                   ),
                 }
               : { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -487,11 +467,7 @@ it.skipIf(process.platform === "win32").for([
             }
           } else if (mode === "uncertain-progress") {
             expectPendingHistory("validating");
-          } else if (
-            mode === "fresh" ||
-            mode === "queued-progress" ||
-            mode === "refused-progress"
-          ) {
+          } else if (mode === "fresh" || (receiptMode && mode !== "uncertain-progress")) {
             expect(actual).toMatchObject({
               status: "failed",
               phase: "finished",

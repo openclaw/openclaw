@@ -13,6 +13,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import * as exec from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { expectGitMetadataPreview } from "../update-cli-invocation.test-support.js";
 import { printResult } from "./progress.js";
 import * as shared from "./shared.js";
@@ -26,6 +27,20 @@ import { updateCommand } from "./update-command.js";
 vi.mock("../../version.js", () => ({ VERSION: "2026.9.7" }));
 
 const { fixture } = installFreshUpdateFixture();
+
+async function rejectUpdate(opts: Parameters<typeof updateCommand>[0], name?: string) {
+  await expect(updateCommand({ json: true, restart: false, ...opts })).rejects.toMatchObject({
+    code: 1,
+    ...(name ? { name } : {}),
+  });
+  return vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as UpdateRunResult;
+}
+
+function expectContains(output: string, parts: readonly unknown[]) {
+  for (const part of parts) {
+    expect(output).toContain(part);
+  }
+}
 
 it.each([
   { manager: "pnpm", name: "default", requests: ["latest"] },
@@ -81,14 +96,9 @@ it.each([
       expect(typeof options === "number" ? undefined : options.env?.NPM_CONFIG_REGISTRY).toBe(
         env.NPM_CONFIG_REGISTRY,
       );
-      return {
-        code: 0,
+      return createCommandResult({
         stdout: JSON.stringify(respond(argv[2]!.split("@").at(-1)!)),
-        stderr: "",
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      });
     });
   const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
     const url = new URL(input instanceof Request ? input.url : input);
@@ -238,9 +248,7 @@ it.each([
     ];
   }
   vi.spyOn(shared, "resolveTargetVersion").mockRejectedValueOnce(error);
-  await expect(
-    updateCommand({ tag: "2026.9.2", dryRun: true, json: true, restart: false }),
-  ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+  await rejectUpdate({ tag: "2026.9.2", dryRun: true }, "ExitError");
   const printed = readPrintedFailureReport();
   const message = entry.kind === "graph" ? "Lookup failed" : "Target response was invalid";
   const failureFacts = [
@@ -269,11 +277,9 @@ it.each([
   });
   if (entry.kind === "graph") {
     expect(printed.markdown).toContain("OpenClaw update failed");
-    for (const text of ["EACCES", "ECONNRESET", "Transport failed", "Connection refused"]) {
-      expect(report.body).toContain(text);
-    }
+    expectContains(report.body, ["EACCES", "ECONNRESET", "Transport failed", "Connection refused"]);
   } else {
-    for (const text of [
+    expectContains(report.body, [
       "Failed phase: target-resolution",
       "Update mode: package",
       "Update target: 2026.9.2",
@@ -281,9 +287,7 @@ it.each([
       "Installation method: npm-global",
       entry.metadata === "constructor" ? "(Error)" : "TypeError",
       "Target response was invalid",
-    ]) {
-      expect(report.body).toContain(text);
-    }
+    ]);
     if (!entry.metadata) {
       expect(report.body).toContain("src/cli/update-cli/shared.ts:101:9");
     }
@@ -338,16 +342,10 @@ it.each(cases)(
       });
     }
 
-    await expect(
-      updateCommand({
-        ...(code === "target-registry-dist-tag" ? { channel: "stable" } : { tag: "2026.9.2" }),
-        yes: true,
-        json: true,
-        restart: false,
-      }),
-    ).rejects.toMatchObject({ code: 1 });
-
-    const result = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as UpdateRunResult;
+    const result = await rejectUpdate({
+      ...(code === "target-registry-dist-tag" ? { channel: "stable" } : { tag: "2026.9.2" }),
+      yes: true,
+    });
     const metadataFailure = expect.objectContaining({
       name: "target-metadata-preflight",
       exitCode: 1,
@@ -367,10 +365,8 @@ it.each(cases)(
     expect(log.mock.calls.flat().join("\n")).toContain(message);
 
     const report = await prepareUpdateFailureReport({ attemptId: "metadata-admission", result });
-    expect(report.body).toContain(code);
-    expect(report.body).toContain(message);
+    expectContains(report.body, [code, message, "openclaw update"]);
     expect(report.body).toMatch(detail);
-    expect(report.body).toContain("openclaw update");
     expect(report.body).not.toContain("registry.internal.example");
     expect(report.body).not.toContain("/private/operator/npmrc");
     expect(fs.existsSync(fixture.databasePath)).toBe(false);
@@ -393,11 +389,8 @@ it.each(["metadata", "target policy"] as const)(
     } else {
       vi.spyOn(updateGlobal, "detectGlobalInstallManagerForRoot").mockResolvedValue(manager);
     }
-    await expect(
-      updateCommand({ tag, yes: true, json: true, restart: false }),
-    ).rejects.toMatchObject({ code: 1 });
+    const result = await rejectUpdate({ tag, yes: true });
     if (failure === "target policy") {
-      const result = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as UpdateRunResult;
       expect(result).toMatchObject({
         status: "error",
         mode: manager,
@@ -423,9 +416,9 @@ it.each(["metadata", "target policy"] as const)(
         ? {
             status: "failed",
             reason: "target-metadata-preflight",
-            origin: expect.objectContaining({
+            origin: {
               nextAction: expect.stringContaining("openclaw update"),
-            }),
+            },
             steps: expect.arrayContaining([
               expect.objectContaining({
                 failureFacts: [
@@ -437,15 +430,13 @@ it.each(["metadata", "target policy"] as const)(
               }),
             ]),
           }
-        : { target: expect.objectContaining({ kind: "package" }) };
-    expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        lastRun: expect.objectContaining(lastRun),
-        ...(failure === "target policy"
-          ? { update: expect.objectContaining({ packageManager: manager }) }
-          : {}),
-      }),
-    );
+        : { target: { kind: "package" } };
+    expect(vi.mocked(defaultRuntime.writeJson).mock.lastCall).toMatchObject([
+      {
+        lastRun,
+        ...(failure === "target policy" ? { update: { packageManager: manager } } : {}),
+      },
+    ]);
     if (failure === "target policy") {
       expect(packageMetadata.fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
     }

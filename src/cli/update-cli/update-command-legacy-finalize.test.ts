@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,6 +9,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../../scripts/lib/vitest-resource-ownership.mts";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -32,23 +34,57 @@ import { legacyFinalizeEntrypoint } from "./update-command-legacy-finalize-entry
 // authority database and scratch inputs until that original body has joined.
 const fixture = createFixtureLifetime();
 const testNodeExecPath = resolveTestNodeExecPath();
+type LegacyCommand = ReturnType<typeof commandRunner.runUtf8CommandWithTimeout>;
 afterEach(() => fixture.cleanup());
 
-async function closeLegacyFixture(
-  command: ReturnType<typeof commandRunner.runUtf8CommandWithTimeout> | undefined,
-  release: () => void,
-) {
+function tempEnvironment(directory: string) {
+  return { TMPDIR: directory, TMP: directory, TEMP: directory };
+}
+
+function legacyEnvironment(scratch: string) {
+  const configPath = path.join(scratch, "openclaw.json");
+  fs.writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
+  return {
+    ...process.env,
+    HOME: scratch,
+    USERPROFILE: scratch,
+    OPENCLAW_HOME: scratch,
+    OPENCLAW_STATE_DIR: scratch,
+    OPENCLAW_CONFIG_PATH: configPath,
+  };
+}
+
+function runLegacyCommand(options: commandRunner.CommandOptions, check = false) {
+  return commandRunner.runUtf8CommandWithTimeout(
+    [
+      testNodeExecPath,
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl(legacyFinalizeEntrypoint),
+        testNodeExecPath,
+      ),
+      JSON.stringify(runtimeProcessEntrypoints.sqliteReadOnly),
+      ...(check ? ["--check"] : []),
+    ],
+    {
+      baseEnv: {},
+      cwd: process.cwd(),
+      timeoutMs: 60_000,
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+      ...options,
+    },
+  );
+}
+
+async function closeLegacyFixture(command: LegacyCommand | undefined, release: () => void) {
   await fixture.verifyCleanup(async () => {
-    const result = await command;
-    assertLegacyCommandJoined(result);
+    assertLegacyCommandJoined(await command);
     release();
     stateDatabase.closeOpenClawStateDatabase();
   });
 }
 
-function assertLegacyCommandJoined(
-  result: Awaited<ReturnType<typeof commandRunner.runUtf8CommandWithTimeout>> | undefined,
-) {
+function assertLegacyCommandJoined(result: Awaited<LegacyCommand> | undefined) {
   if (result?.cleanup === "uncertain") {
     throw new Error("Legacy finalizer process cleanup is unverified", {
       cause: {
@@ -101,46 +137,17 @@ it(
     fixture.run(async () => {
       signal.throwIfAborted();
       const scratch = fs.realpathSync(fixture.createTempDir("legacy-native-check-"));
-      const configPath = path.join(scratch, "openclaw.json");
-      fs.writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
-      let command: ReturnType<typeof commandRunner.runUtf8CommandWithTimeout> | undefined;
+      let command: LegacyCommand | undefined;
       try {
-        command = commandRunner.runUtf8CommandWithTimeout(
-          [
-            testNodeExecPath,
-            ...resolveRuntimeWorkerArgv(
-              resolveRuntimeWorkerUrl(legacyFinalizeEntrypoint),
-              testNodeExecPath,
-            ),
-            JSON.stringify(runtimeProcessEntrypoints.sqliteReadOnly),
-            "--check",
-          ],
-          {
-            env: {
-              ...process.env,
-              HOME: scratch,
-              USERPROFILE: scratch,
-              OPENCLAW_HOME: scratch,
-              OPENCLAW_STATE_DIR: scratch,
-              OPENCLAW_CONFIG_PATH: configPath,
-              TMPDIR: scratch,
-              TMP: scratch,
-              TEMP: scratch,
-            },
-            baseEnv: {},
-            cwd: process.cwd(),
-            timeoutMs: 60_000,
-            signal,
-            killProcessTree: true,
-            requireProcessTreeExtinction: true,
-          },
+        command = runLegacyCommand(
+          { env: { ...legacyEnvironment(scratch), ...tempEnvironment(scratch) }, signal },
+          true,
         );
         const result = await command;
         assertLegacyCommandJoined(result);
         signal.throwIfAborted();
         const details = result.stderr + "\n" + result.stdout;
-        expect(result.termination, details).toBe("exit");
-        expect(result.code, details).toBe(0);
+        expect(result, details).toMatchObject({ termination: "exit", code: 0 });
         expect(JSON.parse(result.stdout)).toMatchObject({
           executorDelegation: "pid-start-v1",
           retainedOwnerBinding: true,
@@ -171,7 +178,6 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
         JSON.stringify({ name: "openclaw", version: "2026.9.4", type: "module" }),
       );
     }
-    const configPath = path.join(scratch, "openclaw.json");
     const scratchEnvironment = scenario.includes("-scratch");
     const ownedEnvironment = scenario.includes("-owned");
     const incumbent = scenario.endsWith("-incumbent");
@@ -189,20 +195,13 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       fs.writeFileSync(unsafePreferred, "not a directory");
     }
     const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      HOME: scratch,
-      USERPROFILE: scratch,
-      OPENCLAW_HOME: scratch,
-      OPENCLAW_STATE_DIR: scratch,
-      OPENCLAW_CONFIG_PATH: configPath,
+      ...legacyEnvironment(scratch),
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
       OPENCLAW_TEST_RUNTIME_LOG: "1",
       ...(completedByGateway ? { OPENCLAW_TEST_COMPLETED_TERMINAL: "1" } : {}),
       ...(scratchEnvironment
         ? {
-            TMPDIR: ownedEnvironment ? workerTemp : normalTemp,
-            TMP: ownedEnvironment ? workerTemp : normalTemp,
-            TEMP: ownedEnvironment ? workerTemp : normalTemp,
+            ...tempEnvironment(ownedEnvironment ? workerTemp : normalTemp),
             OPENCLAW_TEST_LEGACY_TEMP_FALLBACK: "1",
           }
         : {}),
@@ -214,11 +213,10 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
     ]) {
       delete env[name];
     }
-    let command: ReturnType<typeof commandRunner.runUtf8CommandWithTimeout> | undefined;
+    let command: LegacyCommand | undefined;
     let releaseParent: (() => void) | undefined;
     let releaseChild: (() => void) | undefined;
     try {
-      fs.writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
       const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
       if (completedByGateway) {
         const candidateState = new DatabaseSync(path.join(scratch, "state", "openclaw.sqlite"), {
@@ -238,7 +236,7 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
         env.OPENCLAW_UPDATE_RUN_ID = runId;
       }
       const originalEnvironment = ownedEnvironment
-        ? { ...env, TMPDIR: normalTemp, TMP: normalTemp, TEMP: normalTemp }
+        ? { ...env, ...tempEnvironment(normalTemp) }
         : env;
       const leaseDirectory = scratchEnvironment
         ? resolvePreferredOpenClawTmpDir({
@@ -249,25 +247,17 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       const databasePath = path.join(leaseDirectory, "managed-update-handoffs.sqlite");
       const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: env });
       const acquired = store.acquire(parentRoot, randomUUID(), { kind: "update" });
-      if (acquired.kind !== "acquired") {
-        throw new Error("Missing original owner");
-      }
+      assert(acquired.kind === "acquired", "Missing original owner");
       let parentLease = acquired.lease;
-      releaseParent = () => {
-        store.release(parentLease);
-      };
+      releaseParent = () => store.release(parentLease);
       // Exact v2026.9.4 producer format (3a9d69db): real UUID child registration,
       // parent row and private input, with no later lineage or database-pin fields.
       const child = store.acquire(`${parentRoot}/.openclaw-update-child-${randomUUID()}`, runId, {
         kind: "update",
       });
-      if (child.kind !== "acquired") {
-        throw new Error("Missing legacy child");
-      }
+      assert(child.kind === "acquired", "Missing legacy child");
       let bound = child.lease;
-      releaseChild = () => {
-        store.release(bound);
-      };
+      releaseChild = () => store.release(bound);
       const executor = {
         runId,
         root,
@@ -322,20 +312,6 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       });
     `,
       );
-      const snapshot = {
-        path: configPath,
-        exists: true,
-        raw: "{}",
-        parsed: {},
-        sourceConfig: {},
-        resolved: {},
-        valid: true,
-        runtimeConfig: {},
-        config: {},
-        issues: [],
-        warnings: [],
-        legacyIssues: [],
-      };
       const grantless = scenario.startsWith("grantless");
       if (legacyParent) {
         // v2026.9.3 has no child grant: its managed updater keeps the root lease
@@ -365,7 +341,7 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
           ...(ownedEnvironment ? { ownedManagedUpdateEnv: originalEnvironment } : {}),
           mutationStarted: true,
           installKindChanged: switchedRoot,
-          configSnapshot: snapshot,
+          configSnapshot: createTestConfigSnapshot({}, {}, env.OPENCLAW_CONFIG_PATH),
           requestedChannel: null,
           storedChannel: "stable",
           channel: "stable",
@@ -408,50 +384,31 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
             scenario === "rollback-state-unverified" ? scenario : "state-migrated-no-rollback",
         },
       };
-      command = commandRunner.runUtf8CommandWithTimeout(
-        [
-          testNodeExecPath,
-          ...resolveRuntimeWorkerArgv(
-            resolveRuntimeWorkerUrl(legacyFinalizeEntrypoint),
-            testNodeExecPath,
-          ),
-          JSON.stringify(runtimeProcessEntrypoints.sqliteReadOnly),
-        ],
-        {
-          input: JSON.stringify(input),
-          env: scratchEnvironment
-            ? {
-                ...originalEnvironment,
-                TMPDIR: workerTemp,
-                TMP: scenario.endsWith("-wrong-scratch") ? normalTemp : workerTemp,
-                TEMP: workerTemp,
-              }
-            : env,
-          baseEnv: {},
-          cwd: root,
-          timeoutMs: 60000,
-          signal,
-          killProcessTree: true,
-          requireProcessTreeExtinction: true,
-          beforeInput(pid) {
-            if (scenario.endsWith("-wrong-parent")) {
-              const reassigned = store.bind(parentLease, pid);
-              if (!reassigned) {
-                throw new Error("Parent reassignment failed");
-              }
-              parentLease = reassigned;
+      command = runLegacyCommand({
+        input: JSON.stringify(input),
+        cwd: root,
+        env: scratchEnvironment
+          ? {
+              ...originalEnvironment,
+              ...tempEnvironment(workerTemp),
+              TMP: scenario.endsWith("-wrong-scratch") ? normalTemp : workerTemp,
             }
-            if (grantless) {
-              return;
-            }
-            const registered = store.bind(child.lease, pid);
-            if (!registered) {
-              throw new Error("Legacy binding failed");
-            }
-            bound = registered;
-          },
+          : env,
+        signal,
+        beforeInput(pid) {
+          if (scenario.endsWith("-wrong-parent")) {
+            const reassigned = store.bind(parentLease, pid);
+            assert(reassigned, "Parent reassignment failed");
+            parentLease = reassigned;
+          }
+          if (grantless) {
+            return;
+          }
+          const registered = store.bind(child.lease, pid);
+          assert(registered, "Legacy binding failed");
+          bound = registered;
         },
-      );
+      });
       const result = await command;
       assertLegacyCommandJoined(result);
       signal.throwIfAborted();
@@ -547,9 +504,7 @@ it.for(["joined", "uncertain"] as const)(
     let output = "";
     const root = fs.realpathSync(process.cwd());
     const leaseStore = () => {
-      if (!fixtureEnv) {
-        throw new Error("Legacy fixture command environment was not captured");
-      }
+      assert(fixtureEnv, "Legacy fixture command environment was not captured");
       return createManagedHandoffLeaseStore({
         databasePath: path.join(scratch, "managed-update-handoffs.sqlite"),
         serviceManagerEnv: fixtureEnv,
@@ -561,14 +516,10 @@ it.for(["joined", "uncertain"] as const)(
     };
     contextSignal.addEventListener("abort", unblock, { once: true });
     vi.spyOn(commandRunner, "runUtf8CommandWithTimeout").mockImplementation((_argv, options) => {
-      if (typeof options === "number") {
-        throw new Error("Legacy fixture lost its command options");
-      }
+      assert(typeof options !== "number", "Legacy fixture lost its command options");
       expect(options.signal).toBe(signal);
       fixtureEnv = options.env;
-      if (!fixtureEnv) {
-        throw new Error("Legacy fixture lost its command environment");
-      }
+      assert(fixtureEnv, "Legacy fixture lost its command environment");
       scratch = fixtureEnv.OPENCLAW_STATE_DIR!;
       childKey = (JSON.parse(String(options.input)) as { executor: { childKey: string } }).executor
         .childKey;
@@ -664,8 +615,7 @@ it.for(["joined", "uncertain"] as const)(
     } finally {
       try {
         unblock();
-        const result = await command;
-        assertLegacyCommandJoined(result);
+        assertLegacyCommandJoined(await command);
         await outcome;
         await (drain ?? fixture.cleanup()).catch(() => {});
         // Only the injected uncertainty is rescued: the real command above
