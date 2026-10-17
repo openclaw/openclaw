@@ -13,6 +13,7 @@ import {
   getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
+import { listNodeTestConfigFiles } from "./ci-node-test-inventory.mts";
 import nativeBunQualification from "./ci-test-native-bun-qualification.json" with { type: "json" };
 import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 
@@ -311,6 +312,15 @@ function resolveAllRuntimeSelections(
     ? selection.includePatterns
     : patterns("OPENCLAW_VITEST_INCLUDE_FILE");
   const postIncludes = patterns("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE");
+  const ownerConfigs =
+    !ui && supportsArgs && !includes && !exactTargets
+      ? configs.flatMap(
+          (config) =>
+            fullSuiteVitestShards.find((shard) => shard.config === config)?.projects ?? [config],
+        )
+      : [];
+  const inventories = ownerConfigs.map((config) => listNodeTestConfigFiles(config));
+  const unresolvedConfigs = ownerConfigs.filter((_, index) => !inventories[index]);
   const matches = (file: string, include: readonly string[]) =>
     include.some((pattern) => {
       const relative = relativePath(pattern);
@@ -345,14 +355,12 @@ function resolveAllRuntimeSelections(
     if (uiFiles) {
       return uiFiles.includes(file);
     }
-    const owners = new Set(buildVitestRunPlans([file], cwd).map((plan) => plan.config));
-    return configs.some(
-      (config) =>
-        owners.has(config) ||
-        fullSuiteVitestShards.some(
-          (shard) =>
-            shard.config === config && shard.projects?.some((project) => owners.has(project)),
-        ),
+    // Leaf inventories own membership after aggregate configs have been split.
+    // Process, tooling and other unmapped owners still use the focused planner.
+    return (
+      inventories.some((inventory) => inventory?.includes(file)) ||
+      (unresolvedConfigs.length > 0 &&
+        buildVitestRunPlans([file], cwd).some((plan) => unresolvedConfigs.includes(plan.config)))
     );
   });
   if (
