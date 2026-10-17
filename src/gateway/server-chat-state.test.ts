@@ -437,6 +437,7 @@ describe("createChatRunState", () => {
       phase: "input_delta",
       name: "edit",
       toolCallId: "active",
+      inputChars: 512,
       diff: { added: 3, removed: 1 },
     });
     event(4, "tool", {
@@ -484,7 +485,12 @@ describe("createChatRunState", () => {
       {
         seq: 3,
         stream: "tool",
-        data: { phase: "input_delta", toolCallId: "active", diff: { added: 3, removed: 1 } },
+        data: {
+          phase: "input_delta",
+          toolCallId: "active",
+          inputChars: 512,
+          diff: { added: 3, removed: 1 },
+        },
       },
       { seq: 4, stream: "tool", data: { phase: "update", toolCallId: "active" } },
       {

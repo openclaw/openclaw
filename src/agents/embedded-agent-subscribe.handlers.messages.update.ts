@@ -71,7 +71,7 @@ export function handleMessageUpdate(
     const data = { phase: "input_delta", ...liveEditDiff };
     emitAgentEvent({ runId: ctx.params.runId, stream: "tool", data });
     runBestEffortCallback({
-      label: "live edit diff agent event",
+      label: "tool input progress agent event",
       log: ctx.log,
       callback: () => ctx.params.onAgentEvent?.({ stream: "tool", data }),
     });

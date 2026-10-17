@@ -91,6 +91,7 @@ describe("cli tool result events", () => {
         handlers.emitCliToolInputDelta({
           toolCallId: "write",
           name: "write",
+          inputChars: 42,
           diff: { added: 2, removed: 0 },
         });
         handlers.finalizeParsedTools();
@@ -107,6 +108,7 @@ describe("cli tool result events", () => {
                     phase: "input_delta",
                     toolCallId: "write",
                     name: "write",
+                    inputChars: 42,
                     diff: { added: 2, removed: 0 },
                   },
                 },
