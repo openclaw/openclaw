@@ -157,14 +157,12 @@ type PluginRuntimeResolvedLoadValues = Pick<
   | "expectedSourceDigests"
 >;
 
-export function createPluginRuntimeLoaderLogger(): PluginLogger {
-  return {
-    info: (message) => log.info(message),
-    warn: (message) => log.warn(message),
-    error: (message) => log.error(message),
-    debug: (message) => log.debug(message),
-  };
-}
+export const pluginRuntimeLoaderLogger: PluginLogger = {
+  info: (message) => log.info(message),
+  warn: (message) => log.warn(message),
+  error: (message) => log.error(message),
+  debug: (message) => log.debug(message),
+};
 
 export function buildPluginRuntimeLoadOptions(
   values: PluginRuntimeResolvedLoadValues,

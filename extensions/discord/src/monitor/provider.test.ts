@@ -185,16 +185,20 @@ describe("monitorDiscordProvider", () => {
       kind: "resolved",
       applicationId: "app-1",
     });
+    vi.doMock("../voice/listeners.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../voice/listeners.js")>()),
+      DiscordVoiceGuildCreateListener: function DiscordVoiceGuildCreateListener() {},
+      DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
+      DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
+      DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
+    }));
+    // mock-isolation: Keep media/worker initialization outside provider startup fixtures.
     vi.doMock("../voice/voice-runtime.js", () => {
       voiceRuntimeModuleLoadedMock();
       return {
         DiscordVoiceManager: function DiscordVoiceManager() {
           return { autoJoin: voiceAutoJoinMock };
         },
-        DiscordVoiceGuildCreateListener: function DiscordVoiceGuildCreateListener() {},
-        DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
-        DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
-        DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
       };
     });
     setActivePluginRegistry(createEmptyPluginRegistry());

@@ -66,10 +66,6 @@ function preparationOwnerFor(source: RetainedNativeWorkerSource): PreparationOwn
 export async function preparePluginGenerationArtifact(
   params: PreparationParameters,
 ): Promise<PreparedPluginGenerationArtifact> {
-  return createPreparationClient().prepare(params);
-}
-/** One artifact lifetime owns its worker, including recovery and native-root leases. */
-function createPreparationClient() {
   const nativeSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
   const owner = preparationOwnerFor(nativeSource);
   const storage = resolvePluginSourceCaptureStorage();
@@ -87,8 +83,7 @@ function createPreparationClient() {
   let releasedRoot: Promise<void> | undefined;
   const releaseRoot = () => (releasedRoot ??= root.release());
   const { port1, port2 } = new MessageChannel();
-  const moduleSources = new Map<number, (filename: string) => string>();
-  let nextCapture = 0;
+  let moduleSource: ((filename: string) => string) | undefined;
   let resources = 0;
   let pending = 0;
   let drained: ReturnType<typeof createDeferredCore<void>> | undefined;
@@ -136,7 +131,7 @@ function createPreparationClient() {
     let filename: string | undefined;
     let error: string | undefined;
     try {
-      filename = moduleSources.get(message.captureId)?.(message.filename) ?? message.filename;
+      filename = moduleSource?.(message.filename) ?? message.filename;
     } catch (failure) {
       error = failure instanceof Error ? failure.message : String(failure);
     }
@@ -300,48 +295,37 @@ function createPreparationClient() {
       }
     }
   }
-  let initialized = false;
-  return {
-    get closed() {
-      return Boolean(closing);
-    },
-    async prepare(params: PreparationParameters): Promise<PreparedPluginGenerationArtifact> {
-      const captureId = ++nextCapture;
-      const callbackPort = initialized ? undefined : port2;
-      initialized = true;
-      try {
-        const artifact = await request({
-          operation: "capture",
-          captureId,
-          rootDir: params.rootDir,
-          entryFile: params.standalone ? params.source : undefined,
-          storage,
-          installRoots,
-          readOnly,
-          scratch: root.directory,
-          managedRoot: root.managedRoot,
-          callbackPort,
-          admission: {
-            owners: admission.owners,
-            managedRoots: admission.managedRoots,
-            receipts: admission.receipts,
-            files: admission.files,
-            namespaces: admission.namespaces,
-          },
-        });
-        return {
-          // SAFETY: A successful capture reply encodes the worker's PluginGenerationArtifact.
-          artifact: artifact as PluginGenerationArtifact,
-          attachModuleSource: (mapper) => {
-            moduleSources.set(captureId, mapper);
-          },
-        };
-      } catch (error) {
-        if (!resources) {
-          await close();
-        }
-        throw error;
-      }
-    },
-  };
+  try {
+    const artifact = await request({
+      operation: "capture",
+      captureId: 1,
+      rootDir: params.rootDir,
+      entryFile: params.standalone ? params.source : undefined,
+      storage,
+      installRoots,
+      readOnly,
+      scratch: root.directory,
+      managedRoot: root.managedRoot,
+      callbackPort: port2,
+      admission: {
+        owners: admission.owners,
+        managedRoots: admission.managedRoots,
+        receipts: admission.receipts,
+        files: admission.files,
+        namespaces: admission.namespaces,
+      },
+    });
+    return {
+      // SAFETY: A successful capture reply encodes the worker's PluginGenerationArtifact.
+      artifact: artifact as PluginGenerationArtifact,
+      attachModuleSource: (mapper) => {
+        moduleSource = mapper;
+      },
+    };
+  } catch (error) {
+    if (!resources) {
+      await close();
+    }
+    throw error;
+  }
 }

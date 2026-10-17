@@ -19,6 +19,7 @@ import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
 import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
+import { pluginRuntimeLoaderLogger } from "./runtime/load-context.js";
 import { createPluginServiceAutomationCapabilities } from "./service-automation-capabilities.js";
 import { createPluginServiceControlUiIngress } from "./service-control-ui-ingress.js";
 import { createPluginServiceDiagnostics } from "./service-diagnostics.js";
@@ -537,12 +538,7 @@ async function startPreparedPluginServices({
       config,
       workspaceDir,
       stateDir: STATE_DIR,
-      logger: {
-        info: (msg) => log.info(msg),
-        warn: (msg) => log.warn(msg),
-        error: (msg) => log.error(msg),
-        debug: (msg) => log.debug(msg),
-      },
+      logger: pluginRuntimeLoaderLogger,
       serviceHealth: health,
       ...(getCron ? { getCron } : {}),
       ...(mcpEvents ? { mcpEvents } : {}),

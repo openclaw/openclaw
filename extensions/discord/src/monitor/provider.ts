@@ -399,13 +399,13 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
     };
     let voiceManager: DiscordVoiceManager | null = null;
     if (voiceEnabled) {
+      const { DiscordVoiceManager } = await import("../voice/voice-runtime.js");
       const {
         DiscordVoiceGuildCreateListener,
-        DiscordVoiceManager,
         DiscordVoiceReadyListener,
         DiscordVoiceResumedListener,
         DiscordVoiceStateUpdateListener,
-      } = await import("../voice/voice-runtime.js");
+      } = await import("../voice/listeners.js");
       voiceManager = new DiscordVoiceManager({
         ...monitorOptions,
         scheduler,

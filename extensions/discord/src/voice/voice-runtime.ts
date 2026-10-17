@@ -7,7 +7,6 @@ import type { APIVoiceState, Client } from "../internal/discord.js";
 import { formatMention } from "../mentions.js";
 import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { resolveDiscordVoiceEnabled } from "./config.js";
-import type { DiscordVoiceListenerManager } from "./listener-contract.js";
 import { DiscordVoiceMembershipTracker } from "./membership.js";
 import { resolveDiscordVoiceAccess, resolveDiscordVoiceAccessTarget } from "./owner-access.js";
 import {
@@ -58,7 +57,7 @@ type CaptureJoinOrigin = {
   isResidencyUnchanged: () => boolean;
 };
 
-export class DiscordVoiceManager implements DiscordVoiceListenerManager {
+export class DiscordVoiceManager {
   private sessions = new Map<string, VoiceSessionEntry>();
   private readonly guildLifecycles = new Map<string, VoiceGuildLifecycle>();
   private nextGuildGeneration = 0;
@@ -730,10 +729,3 @@ export class DiscordVoiceManager implements DiscordVoiceListenerManager {
     return result;
   }
 }
-
-export {
-  DiscordVoiceGuildCreateListener,
-  DiscordVoiceReadyListener,
-  DiscordVoiceResumedListener,
-  DiscordVoiceStateUpdateListener,
-} from "./listeners.js";
