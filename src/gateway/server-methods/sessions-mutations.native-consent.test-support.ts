@@ -20,6 +20,13 @@ const nativeModel: ModelCatalogEntry = {
   reasoning: false,
   nativeRuntime: "claude-cli",
 };
+const nativeHarness: AgentHarness = {
+  id: "claude-cli",
+  label: "Native fixture",
+  executionEnvironment: "host-only",
+  supports: () => ({ supported: true }),
+  runAttempt: vi.fn(),
+};
 
 export function registerSessionNativeRuntimeConsentTests(support: {
   getConfig: () => OpenClawConfig;
@@ -41,14 +48,15 @@ export function registerSessionNativeRuntimeConsentTests(support: {
   queueRuntimeSelection: (sessionKey: string) => { provider: string; model: string };
 }): void {
   const { catalogSnapshot, client, context, patchSession, queueRuntimeSelection } = support;
+  const selectModel = { model: `${nativeModel.provider}/${nativeModel.id}` };
+  const expectPatched = async (
+    params: Record<string, unknown>,
+    requestContext: GatewayRequestContext,
+  ) => {
+    expect((await patchSession(params, ["operator.admin"], requestContext))[0]).toBe(true);
+  };
   describe("native runtime permission consent", () => {
-    const harness: AgentHarness = {
-      id: "claude-cli",
-      label: "Native fixture",
-      executionEnvironment: "host-only",
-      supports: () => ({ supported: true }),
-      runAttempt: vi.fn(),
-    };
+    const harness = nativeHarness;
     let nextConsentSession = 0;
 
     async function prepareConsent(entry: Partial<SessionEntry> = {}) {
@@ -104,15 +112,7 @@ export function registerSessionNativeRuntimeConsentTests(support: {
         updatedAt: 1,
       });
       const siblingBefore = loadSessionEntry(siblingScope);
-      const response = await patchSession(
-        {
-          ...fixture.patch,
-          model: `${nativeModel.provider}/${nativeModel.id}`,
-        },
-        ["operator.admin"],
-        fixture.requestContext,
-      );
-      expect(response[0]).toBe(true);
+      await expectPatched({ ...fixture.patch, ...selectModel }, fixture.requestContext);
       expect(loadSessionEntry(fixture.scope)).toMatchObject({
         label: "Keep this chat",
         sessionId: fixture.patch.expectedSessionId,
@@ -125,15 +125,10 @@ export function registerSessionNativeRuntimeConsentTests(support: {
       expect(support.getConfig().agents!.defaults!.sandbox?.mode).toBe("all");
       expect(support.getConfig().tools).toEqual({ fs: { workspaceOnly: true }, deny: ["exec"] });
 
-      expect(
-        (
-          await patchSession(
-            { key: fixture.scope.sessionKey, model: `${nativeModel.provider}/${nativeModel.id}` },
-            ["operator.admin"],
-            fixture.requestContext,
-          )
-        )[0],
-      ).toBe(true);
+      await expectPatched(
+        { key: fixture.scope.sessionKey, ...selectModel },
+        fixture.requestContext,
+      );
       expect(support.configMutationRequested()).toBe(false);
     });
 
@@ -141,28 +136,12 @@ export function registerSessionNativeRuntimeConsentTests(support: {
       "revokes native consent when strengthening or resetting settings %j",
       async (settings) => {
         const fixture = await prepareConsent();
-        expect(
-          (await patchSession(fixture.patch, ["operator.admin"], fixture.requestContext))[0],
-        ).toBe(true);
-        expect(
-          (
-            await patchSession(
-              { key: fixture.scope.sessionKey, ...settings },
-              ["operator.admin"],
-              fixture.requestContext,
-            )
-          )[0],
-        ).toBe(true);
+        const patch = (params: Record<string, unknown>) =>
+          expectPatched({ key: fixture.scope.sessionKey, ...params }, fixture.requestContext);
+        await patch(fixture.patch);
+        await patch(settings);
         expect(loadSessionEntry(fixture.scope)).not.toHaveProperty("nativeRuntimeConsent");
-        expect(
-          (
-            await patchSession(
-              { key: fixture.scope.sessionKey, permissionMode: "full", sandboxMode: "off" },
-              ["operator.admin"],
-              fixture.requestContext,
-            )
-          )[0],
-        ).toBe(true);
+        await patch({ permissionMode: "full", sandboxMode: "off" });
         const selection = await patchSession(
           { key: fixture.scope.sessionKey, model: `${nativeModel.provider}/${nativeModel.id}` },
           ["operator.admin"],
@@ -323,13 +302,7 @@ export function registerSessionNativeRuntimeConsentTests(support: {
       support.prepareRuntime.mockResolvedValue({
         kind: "ready",
         runtimeId: "claude-cli",
-        harness: {
-          id: "claude-cli",
-          label: "Native fixture",
-          executionEnvironment: "host-only",
-          supports: () => ({ supported: true }),
-          runAttempt: vi.fn(),
-        },
+        harness: nativeHarness,
         validate: vi
           .fn<() => string | undefined>()
           .mockReturnValueOnce(undefined)
@@ -382,15 +355,7 @@ export function registerSessionNativeRuntimeConsentTests(support: {
     });
     const queued = queueRuntimeSelection(sessionKey);
     try {
-      expect(
-        (
-          await patchSession(
-            { key: sessionKey, model: "anthropic/claude-sonnet-4-6" },
-            ["operator.admin"],
-            requestContext,
-          )
-        )[0],
-      ).toBe(true);
+      await expectPatched({ key: sessionKey, ...selectModel }, requestContext);
       expect(queued).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
       expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
         providerOverride: "anthropic",

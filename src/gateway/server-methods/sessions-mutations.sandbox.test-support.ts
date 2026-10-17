@@ -13,7 +13,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  SessionMutationAuthorization,
+} from "./types.js";
 
 export function registerSessionSandboxMutationTests({
   client,
@@ -24,6 +28,48 @@ export function registerSessionSandboxMutationTests({
   context: (cfg: OpenClawConfig) => GatewayRequestContext;
   withState: (run: (state: OpenClawTestState) => Promise<void>) => Promise<void>;
 }) {
+  const adminClient = () => {
+    const requestClient = client();
+    requestClient.connect.scopes = ["operator.admin"];
+    return requestClient;
+  };
+  const invoke = async (
+    method: "sessions.patch" | "sessions.patchMany",
+    params: Record<string, unknown>,
+    requestClient = adminClient(),
+    cfg: OpenClawConfig = {},
+    sessionMutationAuthorization?: SessionMutationAuthorization,
+  ) => {
+    const respond = vi.fn();
+    await sessionMutationHandlers[method]!({
+      params,
+      client: requestClient,
+      context: context(cfg),
+      respond,
+      sessionMutationAuthorization,
+    } as never);
+    return respond;
+  };
+  const errorContaining = (message: string) =>
+    expect.objectContaining({ message: expect.stringContaining(message) });
+  const expectRefused = (respond: ReturnType<typeof vi.fn>, message: string) =>
+    expect(respond).toHaveBeenCalledWith(false, undefined, errorContaining(message));
+  const expectTargetRefused = (
+    respond: ReturnType<typeof vi.fn>,
+    method: string,
+    key: string,
+    message: string,
+  ) => {
+    if (method === "sessions.patch") {
+      expectRefused(respond, message);
+    } else {
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        { outcomes: [{ key, ok: false, error: errorContaining(message) }] },
+        undefined,
+      );
+    }
+  };
   describe("session sandbox mutations", () => {
     it.each([
       { method: "sessions.patch", sandboxMode: "off" },
@@ -42,23 +88,14 @@ export function registerSessionSandboxMutationTests({
             updatedAt: 1,
             sandboxMode: before,
           });
-          const respond = vi.fn();
-          await sessionMutationHandlers[method]!({
-            params:
-              method === "sessions.patch"
-                ? { key, sandboxMode }
-                : { targets: [{ key }], patch: { sandboxMode } },
-            client: client(),
-            context: context({}),
-            respond,
-          } as never);
-          expect(respond).toHaveBeenCalledWith(
-            false,
-            undefined,
-            expect.objectContaining({
-              message: expect.stringContaining("operator.admin"),
-            }),
+          const respond = await invoke(
+            method,
+            method === "sessions.patch"
+              ? { key, sandboxMode }
+              : { targets: [{ key }], patch: { sandboxMode } },
+            client(),
           );
+          expectRefused(respond, "operator.admin");
           expect(loadSessionEntry(scope)?.sandboxMode).toBe(before);
         });
       },
@@ -79,24 +116,20 @@ export function registerSessionSandboxMutationTests({
           { ...scope, sessionKey: sibling },
           { sessionId: "sandbox-sibling", updatedAt: 1 },
         );
-        const requestClient = client();
-        requestClient.connect.scopes = ["operator.admin"];
-        const patch = async (sandboxMode: "off" | null, expectedSandboxMode: "off" | null) => {
-          const respond = vi.fn();
-          await sessionMutationHandlers["sessions.patch"]!({
-            params: {
+        const requestClient = adminClient();
+        const patch = (sandboxMode: "off" | null, expectedSandboxMode: "off" | null) =>
+          invoke(
+            "sessions.patch",
+            {
               key,
               sandboxMode,
               expectedSandboxMode,
               expectedSessionId: "sandbox-choice",
               expectedLifecycleRevision: "generation",
             },
-            client: requestClient,
-            context: context(cfg),
-            respond,
-          } as never);
-          return respond;
-        };
+            requestClient,
+            cfg,
+          );
         expect(await patch("off", null)).toHaveBeenCalledWith(
           true,
           expect.objectContaining({ entry: expect.objectContaining({ sandboxMode: "off" }) }),
@@ -109,13 +142,7 @@ export function registerSessionSandboxMutationTests({
         expect(
           (await resolveSandboxRuntimeStatusAsync({ cfg, sessionKey: sibling })).sandboxed,
         ).toBe(true);
-        expect(await patch(null, null)).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            message: expect.stringContaining("changed before patch"),
-          }),
-        );
+        expectRefused(await patch(null, null), "changed before patch");
         expect(loadSessionEntry(scope)?.sandboxMode).toBe("off");
         expect(await patch(null, "off")).toHaveBeenCalledWith(true, expect.any(Object), undefined);
         expect(loadSessionEntry(scope)).not.toHaveProperty("sandboxMode");
@@ -138,37 +165,20 @@ export function registerSessionSandboxMutationTests({
             sandbox: "required",
             permissionMode: "guarded",
           });
-          const requestClient = client();
-          requestClient.connect.scopes = ["operator.admin"];
-          const respond = vi.fn();
-          await sessionMutationHandlers[method]!({
-            params:
-              method === "sessions.patch"
-                ? { key, sandboxMode: "off", permissionMode: "full", label: "must not persist" }
-                : {
-                    targets: [{ key }],
-                    patch: {
-                      sandboxMode: "off",
-                      permissionMode: "full",
-                      label: "must not persist",
-                    },
+          const respond = await invoke(
+            method,
+            method === "sessions.patch"
+              ? { key, sandboxMode: "off", permissionMode: "full", label: "must not persist" }
+              : {
+                  targets: [{ key }],
+                  patch: {
+                    sandboxMode: "off",
+                    permissionMode: "full",
+                    label: "must not persist",
                   },
-            client: requestClient,
-            context: context({}),
-            respond,
-          } as never);
-          const error = expect.objectContaining({
-            message: expect.stringContaining("requires a sandbox"),
-          });
-          if (method === "sessions.patch") {
-            expect(respond).toHaveBeenCalledWith(false, undefined, error);
-          } else {
-            expect(respond).toHaveBeenCalledWith(
-              true,
-              { outcomes: [{ key, ok: false, error }] },
-              undefined,
-            );
-          }
+                },
+          );
+          expectTargetRefused(respond, method, key, "requires a sandbox");
           expect(loadSessionEntry(scope)).toMatchObject({
             sandbox: "required",
             permissionMode: "guarded",
@@ -186,11 +196,10 @@ export function registerSessionSandboxMutationTests({
         for (const key of keys) {
           await upsertSessionEntryCore(scope(key), { sessionId: key, updatedAt: 1 });
         }
-        const requestClient = client();
-        requestClient.connect.scopes = ["operator.admin"];
-        const respond = vi.fn();
-        await sessionMutationHandlers["sessions.patchMany"]!({
-          params: {
+        const requestClient = adminClient();
+        let respond = await invoke(
+          "sessions.patchMany",
+          {
             targets: keys.map((key, index) => ({
               key,
               expectedSessionId: key,
@@ -198,10 +207,8 @@ export function registerSessionSandboxMutationTests({
             })),
             patch: { sandboxMode: "off" },
           },
-          client: requestClient,
-          context: context({}),
-          respond,
-        } as never);
+          requestClient,
+        );
         expect(respond).toHaveBeenCalledWith(
           true,
           {
@@ -220,16 +227,14 @@ export function registerSessionSandboxMutationTests({
         );
         expect(loadSessionEntry(scope(keys[0]!))?.sandboxMode).toBe("off");
         expect(loadSessionEntry(scope(keys[1]!))).not.toHaveProperty("sandboxMode");
-        respond.mockClear();
-        await sessionMutationHandlers["sessions.patchMany"]!({
-          params: {
+        respond = await invoke(
+          "sessions.patchMany",
+          {
             targets: [{ key: keys[0], expectedSandboxMode: "off" }],
             patch: { sandboxMode: null },
           },
-          client: requestClient,
-          context: context({}),
-          respond,
-        } as never);
+          requestClient,
+        );
         expect(respond).toHaveBeenCalledWith(
           true,
           { outcomes: [{ key: keys[0], ok: true }] },
@@ -250,20 +255,13 @@ export function registerSessionSandboxMutationTests({
             lifecycleRevision: "current",
             updatedAt: 1,
           });
-          const requestClient = client();
-          requestClient.connect.scopes = ["operator.admin"];
-          const respond = vi.fn();
-          await sessionMutationHandlers["sessions.patch"]!({
-            params: { key, sandboxMode: "off", expectedSandboxMode: null, ...expectation },
-            client: requestClient,
-            context: context({}),
-            respond,
-          } as never);
-          expect(respond).toHaveBeenCalledWith(
-            false,
-            undefined,
-            expect.objectContaining({ message: expect.stringContaining("changed before patch") }),
-          );
+          const respond = await invoke("sessions.patch", {
+            key,
+            sandboxMode: "off",
+            expectedSandboxMode: null,
+            ...expectation,
+          });
+          expectRefused(respond, "changed before patch");
           expect(loadSessionEntry(scope)).not.toHaveProperty("sandboxMode");
         });
       },
@@ -278,22 +276,12 @@ export function registerSessionSandboxMutationTests({
           const scope = { agentId: "main", env: state.env, sessionKey: key };
           const before = sandboxMode === null ? "off" : undefined;
           await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1, sandboxMode: before });
-          const requestClient = client();
-          requestClient.connect.scopes = ["operator.admin"];
           const handle = createEmbeddedRunHandle();
           setActiveEmbeddedRun(sessionId, handle, key);
-          const respond = vi.fn();
           try {
-            await sessionMutationHandlers["sessions.patch"]!({
-              params: { key, sandboxMode },
-              client: requestClient,
-              context: context({}),
-              respond,
-            } as never);
-            expect(respond).toHaveBeenCalledWith(
-              false,
-              undefined,
-              expect.objectContaining({ message: expect.stringContaining("Stop the active run") }),
+            expectRefused(
+              await invoke("sessions.patch", { key, sandboxMode }),
+              "Stop the active run",
             );
             expect(loadSessionEntry(scope)?.sandboxMode).toBe(before);
           } finally {
@@ -316,8 +304,7 @@ export function registerSessionSandboxMutationTests({
           const sessionId = "sandbox-fence";
           const scope = { agentId: "main", env: state.env, sessionKey: key };
           await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
-          const requestClient = client();
-          requestClient.connect.scopes = ["operator.admin"];
+          const requestClient = adminClient();
           let claim: string | undefined;
           const runId = "sandbox-fence-run";
           const assertCurrent = vi.fn(() => {
@@ -331,36 +318,26 @@ export function registerSessionSandboxMutationTests({
               );
             }
           });
-          const respond = vi.fn();
           try {
-            await sessionMutationHandlers[method]!({
-              params:
-                method === "sessions.patch"
-                  ? { key, sandboxMode: "off", label: "must not persist" }
-                  : {
-                      targets: [{ key }],
-                      patch: { sandboxMode: "off", label: "must not persist" },
-                    },
-              client: requestClient,
-              context: context({}),
-              respond,
-              sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
-            } as never);
+            const respond = await invoke(
+              method,
+              method === "sessions.patch"
+                ? { key, sandboxMode: "off", label: "must not persist" }
+                : {
+                    targets: [{ key }],
+                    patch: { sandboxMode: "off", label: "must not persist" },
+                  },
+              requestClient,
+              {},
+              { assertCurrent, assertTargetCurrent: assertCurrent },
+            );
             expect(assertCurrent).toHaveBeenCalled();
-            const error = expect.objectContaining({
-              message: expect.stringContaining(
-                change === "scope-revoked" ? "operator.admin" : "Stop the active run",
-              ),
-            });
-            if (method === "sessions.patch") {
-              expect(respond).toHaveBeenCalledWith(false, undefined, error);
-            } else {
-              expect(respond).toHaveBeenCalledWith(
-                true,
-                { outcomes: [{ key, ok: false, error }] },
-                undefined,
-              );
-            }
+            expectTargetRefused(
+              respond,
+              method,
+              key,
+              change === "scope-revoked" ? "operator.admin" : "Stop the active run",
+            );
             expect(loadSessionEntry(scope)).not.toHaveProperty("sandboxMode");
             expect(loadSessionEntry(scope)).not.toHaveProperty("label");
           } finally {

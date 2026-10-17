@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { clearFollowupQueue, getFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
@@ -70,7 +71,6 @@ import { registerSessionNativeRuntimeConsentTests } from "./sessions-mutations.n
 import { registerSessionOperatorPreparationTests } from "./sessions-mutations.operator-preparation.test-support.js";
 import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
 import { registerSessionSandboxStickyModelTests } from "./sessions-mutations.sandbox.test-support.js";
-import * as sessionPatchErrors from "./sessions-patch-errors.js";
 
 const defaultAgents: Record<string, AgentEntryConfig> = {
   main: {},
@@ -98,6 +98,11 @@ const modelCatalog: ModelCatalogEntry[] = [
   { provider: "openai", id: "gpt-5.6-sol", name: "GPT" },
 ];
 type TestClient = GatewayClient & { connId: string; invalidated: boolean };
+const sessionScope = (sessionKey: string) => ({ agentId: "main", sessionKey });
+const readSession = (key: string) => loadSessionEntry(sessionScope(key));
+const seedSession = (key: string, entry: Partial<SessionEntry> = {}) =>
+  upsertSessionEntryCore(sessionScope(key), { sessionId: key, updatedAt: 1, ...entry });
+const selectedModel = { providerOverride: "openai", modelOverride: "gpt-5.6-sol" };
 
 function catalogSnapshot(entries = modelCatalog) {
   return {
@@ -300,10 +305,7 @@ describe("sessions.patch sticky model persistence", () => {
 
   it("emits a groups invalidation when a patch first registers a category", async () => {
     const sessionKey = "agent:main:dm:category-groups";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "session-category-groups", updatedAt: 1 },
-    );
+    await seedSession(sessionKey, { sessionId: "session-category-groups" });
     const broadcast = vi.fn();
     const subscribedContext = {
       ...context(),
@@ -317,11 +319,11 @@ describe("sessions.patch sticky model persistence", () => {
       subscribedContext,
     );
     expect(first[0]).toBe(true);
-    const groupsEvents = broadcast.mock.calls.filter(
-      (call) =>
-        call[0] === "sessions.changed" && (call[1] as { reason?: string }).reason === "groups",
-    );
-    expect(groupsEvents).toHaveLength(1);
+    const groupsEvents = () =>
+      broadcast.mock.calls.filter(
+        ([event, payload]) => event === "sessions.changed" && payload.reason === "groups",
+      );
+    expect(groupsEvents()).toHaveLength(1);
 
     // Re-assigning an already-registered category is not a catalog mutation.
     broadcast.mockClear();
@@ -331,12 +333,7 @@ describe("sessions.patch sticky model persistence", () => {
       subscribedContext,
     );
     expect(second[0]).toBe(true);
-    expect(
-      broadcast.mock.calls.filter(
-        (call) =>
-          call[0] === "sessions.changed" && (call[1] as { reason?: string }).reason === "groups",
-      ),
-    ).toHaveLength(0);
+    expect(groupsEvents()).toHaveLength(0);
   });
 
   it.each([undefined, "global"] as const)(
@@ -344,37 +341,26 @@ describe("sessions.patch sticky model persistence", () => {
     async (scope) => {
       cfg.agents!.defaults!.modelSelectionScope = scope;
       const sessionKey = `agent:main:dm:non-admin-${scope ?? "unset"}`;
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        { sessionId: `session-non-admin-${scope ?? "unset"}`, updatedAt: 1 },
-      );
+      await seedSession(sessionKey, { sessionId: `session-non-admin-${scope ?? "unset"}` });
 
       const response = await patchSession({ key: sessionKey, model: "openai/gpt-5.6-sol" }, [
         "operator.write",
       ]);
 
       expect(response[0]).toBe(true);
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-      });
+      expect(readSession(sessionKey)).toMatchObject(selectedModel);
       expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
     },
   );
 
   it("does not persist when model is cleared", async () => {
     const sessionKey = "agent:main:dm:no-sticky-cleared";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        sessionId: "session-cleared",
-        updatedAt: 1,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-        modelOverrideSource: "user",
-        modelOverrideRouteResolution: "resolved",
-      },
-    );
+    await seedSession(sessionKey, {
+      sessionId: "session-cleared",
+      ...selectedModel,
+      modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
+    });
     const requestContext = {
       ...context(),
       getSessionEventSubscriberConnIds: () => new Set(["reader"]),
@@ -398,10 +384,7 @@ describe("sessions.patch sticky model persistence", () => {
 describe("sessions.patch personal model-account ownership", () => {
   it("lets the connected human select a saved personal account for this session", async () => {
     const sessionKey = "agent:main:dm:personal-selection-owner";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "personal-selection-owner", updatedAt: 1 },
-    );
+    await seedSession(sessionKey, { sessionId: "personal-selection-owner" });
     const caller = personClient(accountOwnerId);
     const requestContext = context(new Set([caller]));
 
@@ -413,9 +396,8 @@ describe("sessions.patch personal model-account ownership", () => {
     );
 
     expect(response[0]).toBe(true);
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
+    expect(readSession(sessionKey)).toMatchObject({
+      ...selectedModel,
       authProfileOverride: personalAuthProfileId,
       authProfileOverrideSource: "user",
     });
@@ -426,11 +408,8 @@ describe("sessions.patch personal model-account ownership", () => {
     "denies a new personal selection from a %s before catalog or credential access",
     async (kind) => {
       const sessionKey = `agent:main:dm:personal-selection-denied-${kind.replaceAll(" ", "-")}`;
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        { sessionId: sessionKey, updatedAt: 1, label: "Original" },
-      );
-      const before = loadSessionEntry({ agentId: "main", sessionKey });
+      await seedSession(sessionKey, { label: "Original" });
+      const before = readSession(sessionKey);
       const caller =
         kind === "foreign admin"
           ? personClient(otherPersonId, ["operator.admin"])
@@ -461,7 +440,7 @@ describe("sessions.patch personal model-account ownership", () => {
       expect(response[2]).toMatchObject({ code: "FORBIDDEN" });
       expect(requestContext.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
       expect(readCredential).not.toHaveBeenCalled();
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(before);
+      expect(readSession(sessionKey)).toEqual(before);
       expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
     },
   );
@@ -470,11 +449,8 @@ describe("sessions.patch personal model-account ownership", () => {
     "rejects a personal selection %s while the model catalog is loading",
     async (loss) => {
       const sessionKey = `agent:main:dm:personal-selection-lost-${loss.replaceAll(" ", "-")}`;
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        { sessionId: sessionKey, updatedAt: 1, label: "Before catalog" },
-      );
-      const before = loadSessionEntry({ agentId: "main", sessionKey });
+      await seedSession(sessionKey, { label: "Before catalog" });
+      const before = readSession(sessionKey);
       const writer: GatewayOperatorRoleDefinition = {
         agents: "*",
         scopes: ["operator.write"],
@@ -491,21 +467,6 @@ describe("sessions.patch personal model-account ownership", () => {
         return catalog.promise;
       });
       const readCredential = vi.spyOn(userModelAccounts, "readUserModelAuthProfile");
-      const failures: Array<{ name: string; frames: string[] }> = [];
-      const unexpectedPatchError = sessionPatchErrors.unexpectedPatchError;
-      vi.spyOn(sessionPatchErrors, "unexpectedPatchError").mockImplementation((key, error) => {
-        failures.push({
-          name: error instanceof Error ? error.name : typeof error,
-          frames:
-            error instanceof Error
-              ? (error.stack ?? "")
-                  .split("\n")
-                  .slice(1, 6)
-                  .map((frame) => frame.split(/[\\/]/).at(-1) ?? "")
-              : [],
-        });
-        return unexpectedPatchError(key, error);
-      });
       const pending = patchSession(
         {
           key: sessionKey,
@@ -525,7 +486,6 @@ describe("sessions.patch personal model-account ownership", () => {
                 loss,
                 ok: response[0],
                 error: response[2],
-                failures,
               })}`,
             );
           }),
@@ -546,18 +506,15 @@ describe("sessions.patch personal model-account ownership", () => {
       expect(response[0]).toBe(false);
       expect(response[2]).toMatchObject({ code: "FORBIDDEN" });
       expect(readCredential).not.toHaveBeenCalled();
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(before);
+      expect(readSession(sessionKey)).toEqual(before);
       expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
     },
   );
 
   it("reports lost personal authority during archive drain as forbidden", async () => {
     const sessionKey = "agent:main:dm:personal-selection-archive-drain";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "personal-selection-archive-drain", updatedAt: 1 },
-    );
-    const before = loadSessionEntry({ agentId: "main", sessionKey });
+    await seedSession(sessionKey, { sessionId: "personal-selection-archive-drain" });
+    const before = readSession(sessionKey);
     const caller = personClient(accountOwnerId);
     const connections = new Set([caller]);
     const release = vi.fn();
@@ -586,24 +543,19 @@ describe("sessions.patch personal model-account ownership", () => {
 
     expect(response[0]).toBe(false);
     expect(response[2]).toMatchObject({ code: "FORBIDDEN" });
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(before);
+    expect(readSession(sessionKey)).toEqual(before);
     expect(release).toHaveBeenCalledOnce();
   });
 
   it("retains an existing personal pin when an agent patches unrelated session metadata", async () => {
     const sessionKey = "agent:main:dm:personal-selection-inherited";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        sessionId: "personal-selection-inherited",
-        updatedAt: 1,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-        authProfileOverride: personalAuthProfileId,
-        authProfileOverrideSource: "user",
-        createdActor: { type: "human", id: accountOwnerId, source: "profile" },
-      },
-    );
+    await seedSession(sessionKey, {
+      sessionId: "personal-selection-inherited",
+      ...selectedModel,
+      authProfileOverride: personalAuthProfileId,
+      authProfileOverrideSource: "user",
+      createdActor: { type: "human", id: accountOwnerId, source: "profile" },
+    });
     const caller = client(["operator.write"]);
     caller.internal = { syntheticClient: true, agentToolCaller: { agentId: "main", sessionKey } };
 
@@ -615,12 +567,11 @@ describe("sessions.patch personal model-account ownership", () => {
     );
 
     expect(response[0]).toBe(true);
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+    expect(readSession(sessionKey)).toMatchObject({
       label: "Renamed by the session agent",
       authProfileOverride: personalAuthProfileId,
       authProfileOverrideSource: "user",
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
+      ...selectedModel,
     });
     expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
   });
@@ -629,19 +580,13 @@ describe("sessions.patch personal model-account ownership", () => {
 describe("explicit session model runtimes", () => {
   it("clears only the runtime pin and preserves the explicit model and account", async () => {
     const sessionKey = "agent:main:runtime-clear";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        sessionId: sessionKey,
-        updatedAt: 1,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.6-sol",
-        agentRuntimeOverride: "openclaw",
-        authProfileOverride: personalAuthProfileId,
-        authProfileOverrideSource: "user-link",
-        contextTokens: 1000,
-      },
-    );
+    await seedSession(sessionKey, {
+      ...selectedModel,
+      agentRuntimeOverride: "openclaw",
+      authProfileOverride: personalAuthProfileId,
+      authProfileOverrideSource: "user-link",
+      contextTokens: 1000,
+    });
     const requestContext = {
       ...context(),
       getSessionEventSubscriberConnIds: () => new Set(["reader"]),
@@ -658,7 +603,7 @@ describe("explicit session model runtimes", () => {
       reason: "patch",
       catalogChanged: true,
     });
-    const stored = loadSessionEntry({ agentId: "main", sessionKey });
+    const stored = readSession(sessionKey);
     expect(stored).toMatchObject({
       modelOverride: "gpt-5.6-sol",
       authProfileOverride: personalAuthProfileId,
@@ -675,19 +620,15 @@ describe("explicit session model runtimes", () => {
     { model: "openai/gpt-5.6-sol", agentRuntime: "default" },
   ])("rejects ambiguous runtime selections without mutating the row (%j)", async (patch) => {
     const sessionKey = "agent:main:runtime-invalid";
-    const entry = { sessionId: sessionKey, updatedAt: 1, label: "Original" };
-    await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+    await seedSession(sessionKey, { label: "Original" });
     const response = await patchSession({ key: sessionKey, label: "Wrong", ...patch });
     expect(response[0]).toBe(false);
-    expect(loadSessionEntry({ agentId: "main", sessionKey })?.label).toBe("Original");
+    expect(readSession(sessionKey)?.label).toBe("Original");
   });
 
   it("revalidates runtime availability immediately before committing", async () => {
     const sessionKey = "agent:main:runtime-stale";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: sessionKey, updatedAt: 1, label: "Original" },
-    );
+    await seedSession(sessionKey, { label: "Original" });
     runtimeChoice.prepare.mockResolvedValue({
       kind: "ready",
       runtimeId: "codex",
@@ -704,7 +645,7 @@ describe("explicit session model runtimes", () => {
     });
     expect(response[0]).toBe(false);
     expect(response[2]?.message).toContain("no longer available");
-    const stored = loadSessionEntry({ agentId: "main", sessionKey });
+    const stored = readSession(sessionKey);
     expect(stored).toMatchObject({ label: "Original" });
     expect(stored).not.toHaveProperty("agentRuntimeOverride");
   });
@@ -713,10 +654,7 @@ describe("explicit session model runtimes", () => {
     const sessionKey = "agent:main:runtime-replaced";
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId: "original", updatedAt: 1 },
-    );
+    await seedSession(sessionKey, { sessionId: "original" });
     runtimeChoice.prepare.mockImplementation(async () => {
       entered.resolve();
       await release.promise;
@@ -731,15 +669,12 @@ describe("explicit session model runtimes", () => {
     await Promise.race([entered.promise, pending]);
     try {
       expect(runtimeChoice.prepare).toHaveBeenCalledOnce();
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        { sessionId: "replacement", updatedAt: 2 },
-      );
+      await seedSession(sessionKey, { sessionId: "replacement", updatedAt: 2 });
     } finally {
       release.resolve();
     }
     expect((await pending)[0]).toBe(false);
-    const stored = loadSessionEntry({ agentId: "main", sessionKey });
+    const stored = readSession(sessionKey);
     expect(stored).toMatchObject({ sessionId: "replacement" });
     expect(stored).not.toHaveProperty("agentRuntimeOverride");
   });
@@ -775,7 +710,7 @@ describe("explicit session model runtimes", () => {
       ok: false,
       error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
     });
-    expect(loadSessionEntry({ agentId: "main", sessionKey })?.agentRuntimeOverride).toBe("codex");
+    expect(readSession(sessionKey)?.agentRuntimeOverride).toBe("codex");
     const queued = queueRuntimeSelection(sessionKey);
     try {
       expect(
@@ -812,7 +747,7 @@ describe("explicit session model runtimes", () => {
         loadGatewayModelCatalogSnapshot: async () => catalogSnapshot(),
       }),
     ).toMatchObject({ ok: false, error: { message: "Refresh the model catalog." } });
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
+    expect(readSession(sessionKey)).toBeUndefined();
   });
 });
 

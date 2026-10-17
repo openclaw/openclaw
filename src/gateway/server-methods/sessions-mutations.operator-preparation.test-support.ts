@@ -58,6 +58,18 @@ export function registerSessionOperatorPreparationTests(fixture: {
       );
     return context;
   };
+  const operatorOptions = (caller: GatewayClient, context: GatewayRequestContext) => ({
+    cfg: context.getRuntimeConfig(),
+    getCurrentConfig: context.getRuntimeConfig,
+    agentId: "main",
+    model: "openai/gpt-5.6-sol",
+    commandSource: "test",
+    requestingOperatorProfileId: fixture.profileId(),
+    requestingOperatorScopes: caller.connect.scopes,
+    loadGatewayModelCatalogSnapshot: () =>
+      context.loadGatewayModelCatalogSnapshot({ agentId: "main" }),
+  });
+  const sessionHeader = expect.arrayContaining([expect.objectContaining({ type: "session" })]);
   const cases = (["sessions.patch", "sessions.patchMany", "sessions.create"] as const).flatMap(
     (method) => (["params", "caller", "target"] as const).map((change) => ({ method, change })),
   );
@@ -310,7 +322,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
             sessionId: entry!.sessionId,
             storePath,
           }),
-        ).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session" })]));
+        ).toEqual(sessionHeader);
         const currentDatabase = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
         expect(currentDatabase.agentId).toBe("main");
       } finally {
@@ -335,17 +347,9 @@ export function registerSessionOperatorPreparationTests(fixture: {
           void preparation.catch(() => {});
           try {
             const result = await createGatewaySession({
-              cfg: context.getRuntimeConfig(),
-              getCurrentConfig: context.getRuntimeConfig,
-              agentId: "main",
+              ...operatorOptions(caller, context),
               key,
-              model: "openai/gpt-5.6-sol",
-              commandSource: "test",
-              requestingOperatorProfileId: fixture.profileId(),
-              requestingOperatorScopes: caller.connect.scopes,
               operatorAuthority: preparation,
-              loadGatewayModelCatalogSnapshot: () =>
-                context.loadGatewayModelCatalogSnapshot({ agentId: "main" }),
               prepareLifecycle: async () => {
                 const selected = await selectStoredProjectRegistry(project.id);
                 if (!selected) {
@@ -371,7 +375,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
                 sessionKey: key,
                 sessionId: entry!.sessionId,
               }),
-            ).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session" })]));
+            ).toEqual(sessionHeader);
           } finally {
             try {
               (await preparation.catch(() => undefined))?.release();
@@ -415,11 +419,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
     });
     it.each(
       (["durable", "incognito"] as const).flatMap((storage) => [
-        {
-          storage,
-          fork: false,
-          ending: "source-after-commit" as const,
-        },
+        { storage, fork: false, ending: "source-after-commit" as const },
         { storage, fork: true, ending: "source-and-retry" as const },
         { storage, fork: true, ending: "parent-replaced" as const },
       ]),
@@ -467,7 +467,6 @@ export function registerSessionOperatorPreparationTests(fixture: {
         });
         const caller = fixture.personClient(fixture.profileId(), ["operator.admin"]);
         const context = contextFor(caller);
-        const getCurrentConfig = context.getRuntimeConfig;
         const header = vi.spyOn(transcriptHeader, "ensureTranscriptHeader");
         const prepareFork = sessionFork.prepareSessionForkFromParent;
         const revoked = new Error("original creation source ended before entry commit");
@@ -531,20 +530,12 @@ export function registerSessionOperatorPreparationTests(fixture: {
           void preparation.catch(() => {});
           try {
             return await createGatewaySession({
-              cfg: getCurrentConfig(),
-              getCurrentConfig,
-              agentId: "main",
+              ...operatorOptions(caller, context),
               key: fork && storage === "incognito" ? undefined : childKey,
               parentSessionKey: fork ? parentKey : undefined,
               fork,
               incognito: storage === "incognito",
-              model: "openai/gpt-5.6-sol",
-              commandSource: "test",
-              requestingOperatorProfileId: fixture.profileId(),
-              requestingOperatorScopes: caller.connect.scopes,
               operatorAuthority: preparation,
-              loadGatewayModelCatalogSnapshot: () =>
-                context.loadGatewayModelCatalogSnapshot({ agentId: "main" }),
               prepareLifecycle: async (target) => {
                 childKey = target.key;
                 return {
@@ -567,9 +558,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
                             sessionKey: childKey,
                             sessionId: childId,
                           });
-                          expect(transcript).toEqual(
-                            expect.arrayContaining([expect.objectContaining({ type: "session" })]),
-                          );
+                          expect(transcript).toEqual(sessionHeader);
                           expect(committedEntry).toMatchObject({ sessionId: childId });
                           childSessionId = childId;
                           if (ending === "source-and-retry" || ending === "source-after-commit") {
@@ -629,7 +618,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
                   sessionKey: rejectedKey,
                   sessionId: childSessionId!,
                 }),
-              ).toEqual(expect.arrayContaining([expect.objectContaining({ type: "session" })]));
+              ).toEqual(sessionHeader);
             }
             if (ending === "parent-replaced") {
               expect(loadSessionEntry({ agentId: "main", sessionKey: parentKey })).toEqual(
@@ -647,9 +636,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
                   sessionKey: rejectedKey,
                   sessionId: childSessionId!,
                 }),
-              ).toEqual(
-                fork ? [] : expect.arrayContaining([expect.objectContaining({ type: "session" })]),
-              );
+              ).toEqual(fork ? [] : sessionHeader);
             }
           }
         } finally {

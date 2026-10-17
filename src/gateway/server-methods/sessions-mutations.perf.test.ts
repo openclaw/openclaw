@@ -68,6 +68,29 @@ function humanClient(): GatewayClient {
   };
 }
 
+function mutationContext(
+  overrides: {
+    cron?: Pick<
+      GatewayRequestContext["cron"],
+      "list" | "updateWithPrecondition" | "getDefaultAgentId"
+    >;
+  } = {},
+): GatewayRequestContext {
+  return {
+    getRuntimeConfig: () => ({}),
+    loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
+    broadcastToConnIds: vi.fn(),
+    getSessionEventSubscriberConnIds: () => new Set(),
+    chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
+    dedupe: new Map(),
+    ...overrides,
+  } as unknown as GatewayRequestContext;
+}
+
+const archivedBy = { type: "human", id: "perf-reviewer", label: "Performance Reviewer" };
+const normalizeSql = (sql: string) => sql.toLowerCase().replaceAll(/\s+/g, " ").trim();
+
 function isWholeSessionStoreProjection(normalizedSql: string): boolean {
   const source = ' from "session_nodes" order by "session_key"';
   if (!normalizedSql.startsWith("select ") || !normalizedSql.endsWith(source)) {
@@ -134,10 +157,8 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
       const statements = trackSqliteStatementExecutions(
         requireNativeSqliteDatabase(database.db),
         ["whole-store-projection"] as const,
-        (sql) => {
-          const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ").trim();
-          return isWholeSessionStoreProjection(normalized) ? "whole-store-projection" : null;
-        },
+        (sql) =>
+          isWholeSessionStoreProjection(normalizeSql(sql)) ? "whole-store-projection" : null,
       );
       const respond = vi.fn();
       const hostSql = observeHostDataSql();
@@ -145,18 +166,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
         await sessionMutationHandlers["sessions.patch"]!({
           params: { key: targetKey, ...patch },
           respond,
-          context: {
-            getRuntimeConfig: () => ({}),
-            loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
-              entries: [],
-              routeVariants: [],
-            })),
-            broadcastToConnIds: vi.fn(),
-            getSessionEventSubscriberConnIds: () => new Set(),
-            chatAbortControllers: new Map(),
-            chatQueuedTurns: new Map(),
-            dedupe: new Map(),
-          } as unknown as GatewayRequestContext,
+          context: mutationContext(),
           client: humanClient(),
         } as never);
         expect(historyLane.nativeSequence).toBe(historySequence);
@@ -199,33 +209,20 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     }));
     for (const [index, target] of targets.entries()) {
       const sessionId = `session-archive-perf-${index}`;
+      const scope = { agentId: "main", sessionId, sessionKey: target.key };
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: target.key },
         { sessionId, updatedAt: index + 1 },
       );
-      const root = await appendTranscriptMessage(
-        { agentId: "main", sessionId, sessionKey: target.key },
-        {
-          message: {
-            role: "user",
-            content: `history root ${index}`,
-            timestamp: 1,
-          },
-          now: 1,
-        },
-      );
-      await appendTranscriptMessage(
-        { agentId: "main", sessionId, sessionKey: target.key },
-        {
-          message: {
-            role: "assistant",
-            content: `history tail ${index}`,
-            timestamp: 2,
-          },
-          now: 2,
-          parentId: root.messageId,
-        },
-      );
+      const root = await appendTranscriptMessage(scope, {
+        message: { role: "user", content: `history root ${index}`, timestamp: 1 },
+        now: 1,
+      });
+      await appendTranscriptMessage(scope, {
+        message: { role: "assistant", content: `history tail ${index}`, timestamp: 2 },
+        now: 2,
+        parentId: root.messageId,
+      });
     }
 
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
@@ -233,7 +230,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       requireNativeSqliteDatabase(database.db),
       ["whole-store-projection", "transcript-full-hydration"] as const,
       (sql) => {
-        const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ").trim();
+        const normalized = normalizeSql(sql);
         if (isWholeSessionStoreProjection(normalized)) {
           return "whole-store-projection";
         }
@@ -282,32 +279,15 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     });
     try {
       const respond = vi.fn();
-      const job = (partial: Partial<CronJob> & Pick<CronJob, "id">): CronJob =>
-        ({ enabled: true, sessionTarget: "isolated", ...partial }) as CronJob;
+      const job = (id: string, sessionTarget: string, partial: Partial<CronJob> = {}): CronJob =>
+        ({ enabled: true, id, sessionTarget, ...partial }) as CronJob;
       const cronJobs = new Map(
         [
-          job({
-            id: "unrelated",
-            sessionTarget: "session:agent:main:not-archived",
-          }),
-          job({
-            id: "bound-first",
-            sessionTarget: `session:${targets[0]!.key}`,
-          }),
-          job({
-            id: "bound-shared",
-            sessionKey: targets[2]!.key,
-            sessionTarget: `session:${targets[1]!.key}`,
-          }),
-          job({
-            id: "bound-last",
-            sessionTarget: `session:${targets.at(-1)!.key}`,
-          }),
-          job({
-            enabled: false,
-            id: "already-disabled",
-            sessionTarget: `session:${targets[3]!.key}`,
-          }),
+          job("unrelated", "session:agent:main:not-archived"),
+          job("bound-first", `session:${targets[0]!.key}`),
+          job("bound-shared", `session:${targets[1]!.key}`, { sessionKey: targets[2]!.key }),
+          job("bound-last", `session:${targets.at(-1)!.key}`),
+          job("already-disabled", `session:${targets[3]!.key}`, { enabled: false }),
         ].map((cronJob) => [cronJob.id, cronJob] as const),
       );
       const cronList = vi.fn(async () => [...cronJobs.values()]);
@@ -328,20 +308,13 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
           return current;
         },
       );
-      const context = {
-        getRuntimeConfig: () => ({}),
-        loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
-        broadcastToConnIds: vi.fn(),
-        getSessionEventSubscriberConnIds: () => new Set(),
-        chatAbortControllers: new Map(),
-        chatQueuedTurns: new Map(),
-        dedupe: new Map(),
+      const context = mutationContext({
         cron: {
           list: cronList,
           updateWithPrecondition: cronUpdate,
           getDefaultAgentId: () => "main",
         },
-      } as unknown as GatewayRequestContext;
+      });
 
       await sessionMutationHandlers["sessions.patchMany"]!({
         params: { targets, patch: { archived: true } },
@@ -390,18 +363,16 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       statements.restore();
     }
     for (const [index, target] of targets.entries()) {
-      const sessionId = `session-archive-perf-${index}`;
+      const scope = {
+        agentId: "main",
+        sessionId: `session-archive-perf-${index}`,
+        sessionKey: target.key,
+      };
       expect(loadSessionEntry({ agentId: "main", sessionKey: target.key })).toMatchObject({
         archivedAt: expect.any(Number),
-        archivedBy: { type: "human", id: "perf-reviewer", label: "Performance Reviewer" },
+        archivedBy,
       });
-      const auditNotes = (
-        await loadTranscriptEvents({
-          agentId: "main",
-          sessionId,
-          sessionKey: target.key,
-        })
-      ).filter((event) => {
+      const auditNotes = (await loadTranscriptEvents(scope)).filter((event) => {
         if (!event || typeof event !== "object" || !("message" in event)) {
           return false;
         }

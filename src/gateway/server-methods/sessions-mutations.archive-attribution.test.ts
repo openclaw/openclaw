@@ -3,6 +3,7 @@ import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -23,6 +24,21 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
 });
+const scopeFor = (sessionKey: string) => ({ agentId: "main", sessionKey });
+const readSession = (key: string) => loadSessionEntry(scopeFor(key));
+const seedSession = (key: string, entry: Partial<SessionEntry> = {}) =>
+  upsertSessionEntryCore(scopeFor(key), { sessionId: key, updatedAt: 1, ...entry });
+const withArchiveState = (run: () => Promise<void>) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    await run();
+  });
+const replyOperation = (key: string, sessionId = key) =>
+  createReplyOperation({ ...scopeFor(key), sessionId, resetTriggered: false });
+const expectChanged = (responses: Parameters<RespondFn>[]) => {
+  expect(responses[0]?.[0]).toBe(false);
+  expect(responses[0]?.[2]?.message).toContain("changed before patch");
+};
 
 function client(profileId?: string, displayName?: string): GatewayClient {
   return {
@@ -88,8 +104,7 @@ describe("sessions.patch archive attribution", () => {
   it("drains an archive behind an unrelated writer, then commits after that writer settles", async ({
     signal,
   }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withArchiveState(async () => {
       const key = "agent:main:dashboard:archive-writer-wait";
       const scope = { agentId: "main", sessionKey: key };
       await upsertSessionEntryCore(scope, { sessionId: "archive-writer-wait", updatedAt: 1 });
@@ -146,8 +161,7 @@ describe("sessions.patch archive attribution", () => {
     { change: { category: "Independent" }, name: "category" },
     { change: { archivedAt: 42 }, name: "archive" },
   ])("rejects a $name race before drain and in the drain's live guard", async ({ change }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withArchiveState(async () => {
       const key = "agent:main:dashboard:archive-cas";
       const scope = { agentId: "main", sessionKey: key };
       const entry = { sessionId: "archive-cas", updatedAt: 1, lifecycleRevision: "unchanged" };
@@ -160,12 +174,7 @@ describe("sessions.patch archive attribution", () => {
         expectedArchived: false,
         archived: true,
       };
-      const operation = createReplyOperation({
-        agentId: "main",
-        sessionKey: key,
-        sessionId: entry.sessionId,
-        resetTriggered: false,
-      });
+      const operation = replyOperation(key, entry.sessionId);
       operation.abortSignal.addEventListener("abort", () => operation.complete(), { once: true });
       const drainOwner = lifecycleDrain.prepareSessionLifecycleDrain;
       const drain = vi.spyOn(lifecycleDrain, "prepareSessionLifecycleDrain");
@@ -173,8 +182,7 @@ describe("sessions.patch archive attribution", () => {
         await upsertSessionEntryCore(scope, { ...entry, ...change });
         const before = loadSessionEntry(scope);
         const refused = await invokePatchSession(patch, client());
-        expect(refused[0]?.[0]).toBe(false);
-        expect(refused[0]?.[2]?.message).toContain("changed before patch");
+        expectChanged(refused);
         expect(drain).not.toHaveBeenCalled();
         expect(operation.abortSignal.aborted).toBe(false);
         expect(loadSessionEntry(scope)).toEqual(before);
@@ -188,8 +196,7 @@ describe("sessions.patch archive attribution", () => {
         });
         const raced = await invokePatchSession(patch, client());
         expect(drain).toHaveBeenCalledOnce();
-        expect(raced[0]?.[0]).toBe(false);
-        expect(raced[0]?.[2]?.message).toContain("changed before patch");
+        expectChanged(raced);
         expect(operation.abortSignal.aborted).toBe(false);
         expect(racedEntry).not.toBeNull();
         expect(loadSessionEntry(scope)).toEqual(racedEntry);
@@ -206,8 +213,7 @@ describe("sessions.patch archive attribution", () => {
   it.each([{ sidebarRoot: true }, { category: "Independent" }, { archivedAt: 42 }])(
     "checks organization CAS in the admitted writer for ordinary patches: %j",
     async (change) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot({});
+      await withArchiveState(async () => {
         const key = "agent:main:dashboard:writer-cas";
         const scope = { agentId: "main", sessionKey: key };
         await upsertSessionEntryCore(scope, {
@@ -228,16 +234,14 @@ describe("sessions.patch archive attribution", () => {
           },
           client(),
         );
-        expect(responses[0]?.[0]).toBe(false);
-        expect(responses[0]?.[2]?.message).toContain("changed before patch");
+        expectChanged(responses);
         expect(loadSessionEntry(scope)).toEqual(before);
       });
     },
   );
 
   it("preserves a grandchild through hidden runs when its persistent ancestor becomes independent", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withArchiveState(async () => {
       const root = "agent:main:dashboard:tree-root";
       const child = "agent:main:dashboard:tree-child";
       const hidden = "agent:main:subagent:tree-bridge";
@@ -267,12 +271,7 @@ describe("sessions.patch archive attribution", () => {
         archived: true,
         expectedSidebarAncestors: ancestors,
       };
-      const operation = createReplyOperation({
-        agentId: "main",
-        sessionKey: grandchild,
-        sessionId: grandchild,
-        resetTriggered: false,
-      });
+      const operation = replyOperation(grandchild);
       operation.abortSignal.addEventListener("abort", () => operation.complete(), { once: true });
       const drainOwner = lifecycleDrain.prepareSessionLifecycleDrain;
       const drain = vi.spyOn(lifecycleDrain, "prepareSessionLifecycleDrain");
@@ -290,8 +289,7 @@ describe("sessions.patch archive attribution", () => {
         });
         const raced = await invokePatchSession(patch, client());
         expect(drain).toHaveBeenCalledOnce();
-        expect(raced[0]?.[0]).toBe(false);
-        expect(raced[0]?.[2]?.message).toContain("changed before patch");
+        expectChanged(raced);
         expect(operation.abortSignal.aborted).toBe(false);
         expect(loadSessionEntry(scope(grandchild))?.archivedAt).toBeUndefined();
 
@@ -300,8 +298,7 @@ describe("sessions.patch archive attribution", () => {
         for (const ancestor of [child, hidden]) {
           await upsertSessionEntryCore(scope(ancestor), { archivedAt: 42 });
           const archivedAncestor = await invokePatchSession(patch, client());
-          expect(archivedAncestor[0]?.[0]).toBe(false);
-          expect(archivedAncestor[0]?.[2]?.message).toContain("changed before patch");
+          expectChanged(archivedAncestor);
           expect(operation.abortSignal.aborted).toBe(false);
           expect(loadSessionEntry(scope(grandchild))?.archivedAt).toBeUndefined();
           await upsertSessionEntryCore(scope(ancestor), { archivedAt: undefined });
@@ -317,18 +314,10 @@ describe("sessions.patch archive attribution", () => {
   });
 
   it("returns per-target batch outcomes without acquiring independently archived rows", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withArchiveState(async () => {
       const keys = ["agent:main:dashboard:cas-independent", "agent:main:dashboard:cas-selected"];
       for (const [index, key] of keys.entries()) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: key },
-          {
-            sessionId: key,
-            updatedAt: 1,
-            ...(index === 0 ? { archivedAt: 42 } : {}),
-          },
-        );
+        await seedSession(key, index === 0 ? { archivedAt: 42 } : {});
       }
       const responses: Parameters<RespondFn>[] = [];
       await sessionMutationHandlers["sessions.patchMany"]?.({
@@ -358,21 +347,15 @@ describe("sessions.patch archive attribution", () => {
           { key: keys[1], ok: true },
         ],
       });
-      expect(loadSessionEntry({ agentId: "main", sessionKey: keys[0]! })?.archivedAt).toBe(42);
-      expect(loadSessionEntry({ agentId: "main", sessionKey: keys[1]! })?.archivedAt).toEqual(
-        expect.any(Number),
-      );
+      expect(readSession(keys[0]!)?.archivedAt).toBe(42);
+      expect(readSession(keys[1]!)?.archivedAt).toEqual(expect.any(Number));
     });
   });
 
   it("archives only the selected conversation, preserving nested and promoted child work", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withArchiveState(async () => {
       const parent = "agent:main:dashboard:archive-parent";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: parent },
-        { sessionId: "parent", updatedAt: 1 },
-      );
+      await seedSession(parent, { sessionId: "parent" });
       const children = [];
       for (const sidebarRoot of [false, true]) {
         const key = parent + (sidebarRoot ? "-promoted" : "-nested");
@@ -385,21 +368,14 @@ describe("sessions.patch archive attribution", () => {
         };
         const committed = await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
         expect(committed).not.toBeNull();
-        const operation = createReplyOperation({
-          agentId: "main",
-          sessionKey: key,
-          sessionId: key,
-          resetTriggered: false,
-        });
+        const operation = replyOperation(key);
         children.push({ key, entry: committed, operation });
       }
       try {
         await patchSession({ key: parent, archived: true, expectedSessionId: "parent" }, client());
-        expect(loadSessionEntry({ agentId: "main", sessionKey: parent })?.archivedAt).toEqual(
-          expect.any(Number),
-        );
+        expect(readSession(parent)?.archivedAt).toEqual(expect.any(Number));
         for (const { key, entry, operation } of children) {
-          const stored = loadSessionEntry({ agentId: "main", sessionKey: key });
+          const stored = readSession(key);
           expect(stored).toEqual(entry);
           expect(stored?.archivedAt).toBeUndefined();
           expect(operation.abortSignal.aborted).toBe(false);
@@ -414,8 +390,7 @@ describe("sessions.patch archive attribution", () => {
   it.each([undefined, 20])(
     "preserves the interruption outcome, receipts, and first archiver (endedAt=%s)",
     async (endedAt) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot({});
+      await withArchiveState(async () => {
         const sessionKey = "agent:main:archive-attribution";
         const sessionId = "session-archive-attribution";
         const retained = {
@@ -430,41 +405,35 @@ describe("sessions.patch archive attribution", () => {
           lastRunId: "previous-terminal-client-run",
           ...(endedAt === undefined ? {} : { endedAt, runtimeMs: 10 }),
         };
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          {
-            sessionId,
-            updatedAt: 1,
-            pinnedAt: 2,
-            status: "interrupted",
-            startedAt: 10,
-            abortedLastRun: true,
-            ...retained,
-          },
-        );
+        await seedSession(sessionKey, {
+          sessionId,
+          pinnedAt: 2,
+          status: "interrupted",
+          startedAt: 10,
+          abortedLastRun: true,
+          ...retained,
+        });
 
         await patchSession(
           { key: sessionKey, archived: true, expectedSessionId: sessionId },
           client("profile-ada", "Ada"),
         );
-        expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+        expect(readSession(sessionKey)).toMatchObject({
           ...retained,
           status: "interrupted",
           abortedLastRun: true,
           archivedAt: expect.any(Number),
           archivedBy: { type: "human", id: "profile-ada", label: "Ada" },
         });
-        expect(loadSessionEntry({ agentId: "main", sessionKey })?.lifecycleRunId).toBeUndefined();
-        expect(loadSessionEntry({ agentId: "main", sessionKey })?.endedAt).toBe(endedAt);
-        expect(loadSessionEntry({ agentId: "main", sessionKey })?.runtimeMs).toBe(
-          endedAt === undefined ? undefined : 10,
-        );
+        expect(readSession(sessionKey)?.lifecycleRunId).toBeUndefined();
+        expect(readSession(sessionKey)?.endedAt).toBe(endedAt);
+        expect(readSession(sessionKey)?.runtimeMs).toBe(endedAt === undefined ? undefined : 10);
 
         await patchSession(
           { key: sessionKey, archived: true, expectedSessionId: sessionId },
           client("profile-bob", "Bob"),
         );
-        expect(loadSessionEntry({ agentId: "main", sessionKey })?.archivedBy).toEqual({
+        expect(readSession(sessionKey)?.archivedBy).toEqual({
           type: "human",
           id: "profile-ada",
           label: "Ada",
@@ -474,7 +443,7 @@ describe("sessions.patch archive attribution", () => {
           { key: sessionKey, archived: false, expectedSessionId: sessionId },
           client("profile-bob", "Bob"),
         );
-        const restored = loadSessionEntry({ agentId: "main", sessionKey });
+        const restored = readSession(sessionKey);
         expect(restored?.archivedAt).toBeUndefined();
         expect(restored?.archivedBy).toBeUndefined();
         expect(restored).toMatchObject({ ...retained, status: "interrupted" });
@@ -485,8 +454,7 @@ describe("sessions.patch archive attribution", () => {
   );
 
   it("does not fabricate attribution or transcript events for an unidentified client", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withArchiveState(async () => {
       const sessionKey = "agent:main:solo-archive";
       const sessionId = "session-solo-archive";
       const terminal = {
@@ -498,17 +466,14 @@ describe("sessions.patch archive attribution", () => {
         lastRunId: "failed-run",
         lastRunError: "Execution failed",
       };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        { sessionId, updatedAt: 1, ...terminal },
-      );
+      await seedSession(sessionKey, { sessionId, ...terminal });
 
       await patchSession(
         { key: sessionKey, archived: true, expectedSessionId: sessionId },
         client(),
       );
 
-      const archived = loadSessionEntry({ agentId: "main", sessionKey });
+      const archived = readSession(sessionKey);
       expect(archived).toMatchObject(terminal);
       expect(archived?.archivedAt).toEqual(expect.any(Number));
       expect(archived?.archivedBy).toBeUndefined();
@@ -517,21 +482,11 @@ describe("sessions.patch archive attribution", () => {
   });
 
   it("archives through an alias with attribution", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
+    await withArchiveState(async () => {
       const canonicalKey = "agent:main:alias-happy-archive";
       const aliasKey = "alias-happy-archive";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: canonicalKey },
-        {
-          sessionId: "session-canonical-happy-archive",
-          updatedAt: 1,
-        },
-      );
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: aliasKey },
-        { sessionId: "session-alias-happy-archive", updatedAt: 2 },
-      );
+      await seedSession(canonicalKey, { sessionId: "session-canonical-happy-archive" });
+      await seedSession(aliasKey, { sessionId: "session-alias-happy-archive", updatedAt: 2 });
 
       const projection = await createSessionRowProjection({ cfg: {} });
       try {
