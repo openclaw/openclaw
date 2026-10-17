@@ -93,7 +93,7 @@ function observeOwner(pause?: boolean) {
   };
   return Object.assign(state, {
     exited: exited.promise,
-    onReady(owned: ChildProcess) {
+    onReady: (owned: ChildProcess) => {
       state.child = owned;
       owned.once("exit", () => exited.resolve());
       if (pause !== undefined) {
