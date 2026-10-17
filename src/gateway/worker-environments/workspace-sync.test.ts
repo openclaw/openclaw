@@ -12,34 +12,30 @@ import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-function result(code = 0): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  };
-}
+const result = (code = 0): SpawnResult => ({
+  stdout: "",
+  stderr: "",
+  code,
+  signal: null,
+  killed: false,
+  termination: "exit",
+});
 
 function createPreparedSsh(): PreparedWorkerSsh {
-  let selectedPort = 2222;
-  return {
+  const prepared = {
     sshTarget: "worker@example.test",
     scpTarget: "worker@example.test",
     host: "example.test",
     advertisedPorts: [2222, 22],
-    get port() {
-      return selectedPort;
-    },
+    port: 2222,
     identityPath: "/identity",
     knownHostsPath: "/known-hosts",
-    selectPort(port) {
-      selectedPort = port;
+    selectPort(port: number) {
+      prepared.port = port;
     },
     dispose: async () => {},
   };
+  return prepared;
 }
 
 function createWorkspaceActions(
@@ -57,76 +53,64 @@ function createWorkspaceActions(
   });
 }
 
-describe("worker workspace command transport retry", () => {
-  it.each(["never", "idempotent"] as const)(
-    "does not dispatch a %s command after its turn closes during tunnel preparation",
-    async (transportRetry) => {
-      const run = vi.fn(async () => result());
-      let current = true;
-      const actions = createWorkspaceActions(run, async () => {
-        await Promise.resolve();
-        current = false;
-        return createPreparedSsh();
-      });
-      await expect(
-        actions.runWorkspaceCommand({
-          argv: ["printf", "stale-attachment"],
-          transportRetry,
-          assertCurrent: () => {
-            if (!current) {
-              throw new Error("turn claim closed");
-            }
-          },
-        }),
-      ).rejects.toThrow("turn claim closed");
-      expect(run).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["never", "idempotent"] as const)(
-    "bounds %s retry and preserves selected ports",
-    async (transportRetry) => {
-      let now = 1_000;
-      vi.spyOn(performance, "now").mockImplementation(() => now);
-      const run = vi.fn(async (argv: string[], _options: CommandOptions) => {
-        if (argv.at(-1)?.includes("command") && sshArgvPort(argv) === 2222) {
-          if (transportRetry === "idempotent") {
-            now += 175;
-          }
-          return result(255);
+const retries = ["never", "idempotent"] as const;
+it.each(retries)("rejects stale %s authority after preparation", async (transportRetry) => {
+  const run = vi.fn(async () => result());
+  let current = true;
+  const actions = createWorkspaceActions(run, async () => {
+    await Promise.resolve();
+    current = false;
+    return createPreparedSsh();
+  });
+  await expect(
+    actions.runWorkspaceCommand({
+      argv: ["printf", "stale-attachment"],
+      transportRetry,
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("turn claim closed");
         }
-        return result();
-      });
-      const actions = createWorkspaceActions(run);
+      },
+    }),
+  ).rejects.toThrow("turn claim closed");
+  expect(run).not.toHaveBeenCalled();
+});
 
-      await expect(
-        actions.runWorkspaceCommand({
-          transportRetry,
-          argv: ["printf", "command"],
-          timeoutMs: transportRetry === "never" ? 777 : 1_000,
-        }),
-      ).resolves.toEqual(result(transportRetry === "never" ? 255 : 0));
-      expect(
-        run.mock.calls.map(([argv, options]) => [sshArgvPort(argv), options.timeoutMs]),
-      ).toEqual(
-        transportRetry === "never"
-          ? [[2222, 777]]
-          : [
-              [2222, 1_000],
-              [22, 825],
-            ],
-      );
-      if (transportRetry === "idempotent") {
-        expect(run.mock.calls[0]![1]).not.toBe(run.mock.calls[1]![1]);
-      } else {
-        await actions.runWorkspaceCommand({
-          transportRetry: "idempotent",
-          argv: ["printf", "selection-probe"],
-        });
-        expect(sshArgvPort(run.mock.calls[1]![0])).toBe(2222);
-      }
-    },
-  );
+it.each(retries)("bounds %s retry and selected ports", async (transportRetry) => {
+  let now = 1_000;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  const run = vi
+    .fn<(argv: string[], options: CommandOptions) => Promise<SpawnResult>>()
+    .mockResolvedValue(result())
+    .mockImplementationOnce(async () => {
+      now += transportRetry === "idempotent" ? 175 : 0;
+      return result(255);
+    });
+  const actions = createWorkspaceActions(run);
+
+  await expect(
+    actions.runWorkspaceCommand({
+      transportRetry,
+      argv: ["printf", "command"],
+      timeoutMs: transportRetry === "never" ? 777 : 1_000,
+    }),
+  ).resolves.toEqual(result(transportRetry === "never" ? 255 : 0));
+  const calls = run.mock.calls;
+  const observed = calls.map(([argv, { timeoutMs }]) => [sshArgvPort(argv), timeoutMs]);
+  if (transportRetry === "idempotent") {
+    expect(observed).toEqual([
+      [2222, 1_000],
+      [22, 825],
+    ]);
+    expect(calls[0]![1]).not.toBe(calls[1]![1]);
+  } else {
+    expect(observed).toEqual([[2222, 777]]);
+    await actions.runWorkspaceCommand({
+      transportRetry: "idempotent",
+      argv: ["printf", "selection-probe"],
+    });
+    expect(sshArgvPort(calls[1]![0])).toBe(2222);
+  }
 });
 
 describe("bounded inbound workspace transfer", () => {
@@ -177,7 +161,7 @@ describe("bounded inbound workspace transfer", () => {
   }
 
   it.each(["active", "completed"] as const)(
-    "tolerates a disappearing temporary manifest only during an active transfer (%s)",
+    "tolerates manifest renames only during active transfers (%s)",
     async (transferState) => {
       const destinationRoot = tempDirs.make("openclaw-rsync-manifest-rename-");
       const temporaryManifest = path.join(destinationRoot, ".manifest.json.partial");
@@ -232,16 +216,15 @@ describe("bounded inbound workspace transfer", () => {
     "rejects a completed transfer exceeding its %s quota",
     async (limit) => {
       const destinationRoot = tempDirs.make("openclaw-rsync-final-quota-");
-      const runTask = async () => {
-        await fs.writeFile(path.join(destinationRoot, "oversized"), "over quota");
-        return result();
-      };
-
       await expect(
-        transfer(destinationRoot, runTask, {
-          entryLimit: limit === "entries" ? 0 : 10,
-          totalByteLimit: limit === "bytes" ? 1 : 100,
-        }),
+        transfer(
+          destinationRoot,
+          async () => {
+            await fs.writeFile(path.join(destinationRoot, "oversized"), "over quota");
+            return result();
+          },
+          limit === "entries" ? { entryLimit: 0 } : { totalByteLimit: 1 },
+        ),
       ).rejects.toThrow("inbound transfer exceeds");
     },
   );

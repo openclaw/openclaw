@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { requireGit } from "../../agents/worktrees/git.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import * as commandRuntime from "../../process/exec.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
@@ -62,14 +63,8 @@ function corruptBatch(
   return transform;
 }
 
-async function git(root: string, args: string[]) {
-  const result = await commandRuntime.runCommandWithTimeout(
-    ["git", "-c", "core.longpaths=true", "-C", root, ...args],
-    { timeoutMs: 10_000 },
-  );
-  expect(result.code, result.stderr).toBe(0);
-  return result.stdout.trim();
-}
+const git = (root: string, args: string[]) =>
+  requireGit(root, ["-c", "core.longpaths=true", ...args], { timeoutMs: 10_000 });
 
 async function stagedFixture(
   fileCount = 64,
@@ -143,10 +138,8 @@ async function stagedFixture(
   }
   const baseManifestRaw = manifest([]);
   const currentManifestRaw = manifest(entries);
-  const publishedRef = workerWorkspaceResultRef("f4c0d91b-491b-4be0-901d-419e277338af");
-  const stagedResultRef = linked
-    ? preparedWorkerWorkspaceResultRef(publishedRef)
-    : workerWorkspaceResultRef("read-batch");
+  const publishedRef = workerWorkspaceResultRef("read-batch");
+  const stagedResultRef = linked ? preparedWorkerWorkspaceResultRef(publishedRef) : publishedRef;
   const commit = await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
     root: repository,
     stagingRoot: input,
@@ -242,7 +235,11 @@ it.each<[number, number, FixtureOptions]>([
   },
 );
 
-it.each(["oid", "type", "size", "digest", "truncated", "trailing"] as const)(
+it.each(
+  (["oid", "type", "size", "digest", "truncated", "trailing", "symlink"] as const).filter(
+    (corruption) => corruption !== "symlink" || process.platform !== "win32",
+  ),
+)(
   "rejects a batch with invalid %s before writing staged files and cleans its temporary directory",
   async (corruption) => {
     const fixture = await stagedFixture(0);
@@ -267,13 +264,20 @@ it.each(["oid", "type", "size", "digest", "truncated", "trailing"] as const)(
           return bytes.subarray(0, -1);
         case "trailing":
           return Buffer.concat([bytes, Buffer.from([0])]);
+        case "symlink": {
+          const target = bytes.indexOf(fixture.binaryPath);
+          expect(target).toBeGreaterThan(0);
+          return flipByte(bytes, target, 1);
+        }
       }
     });
     const temporary = vi.spyOn(fs, "mkdtemp");
     const writes = vi.spyOn(fs, "writeFile");
     const links = vi.spyOn(fs, "symlink");
     const use = vi.fn(async () => {});
-    await expect(fixture.read(use)).rejects.toThrow("payload");
+    await expect(fixture.read(use)).rejects.toThrow(
+      corruption === "symlink" ? "payload is invalid: current-link" : "payload",
+    );
     expect(corrupted).toHaveBeenCalledOnce();
     for (const effect of [use, writes, links]) {
       expect(effect).not.toHaveBeenCalled();
@@ -282,22 +286,6 @@ it.each(["oid", "type", "size", "digest", "truncated", "trailing"] as const)(
     const created = temporary.mock.results[0];
     assert(created?.type === "return", "Staging did not create its temporary directory");
     await expect(fs.stat(await created.value)).rejects.toMatchObject({ code: "ENOENT" });
-  },
-);
-
-it.skipIf(process.platform === "win32")(
-  "authenticates symlink blobs before creating links",
-  async () => {
-    const fixture = await stagedFixture(0);
-    const corrupted = corruptBatch(fixture.repository, (stdout) => {
-      const target = stdout.indexOf(fixture.binaryPath);
-      expect(target).toBeGreaterThan(0);
-      return flipByte(stdout, target, 1);
-    });
-    const links = vi.spyOn(fs, "symlink");
-    await expect(fixture.read(async () => {})).rejects.toThrow("payload is invalid: current-link");
-    expect(corrupted).toHaveBeenCalledOnce();
-    expect(links).not.toHaveBeenCalled();
   },
 );
 

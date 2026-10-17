@@ -81,21 +81,15 @@ export function useRepositoryWorkspaceResultFixture() {
           HOME: origin,
           GIT_CONFIG_GLOBAL: os.devNull,
           GIT_CONFIG_NOSYSTEM: "1",
+          GIT_AUTHOR_NAME: "Repository Test",
+          GIT_AUTHOR_EMAIL: "repository@example.invalid",
+          GIT_COMMITTER_NAME: "Repository Test",
+          GIT_COMMITTER_EMAIL: "repository@example.invalid",
         },
       });
     await git("init", "--quiet");
     await git("add", ".");
-    await git(
-      "-c",
-      "user.name=Repository Test",
-      "-c",
-      "user.email=repository@example.invalid",
-      "commit",
-      "--allow-empty",
-      "--quiet",
-      "-m",
-      "base",
-    );
+    await git("commit", "--allow-empty", "--quiet", "-m", "base");
   }
 
   async function fixture(
@@ -150,13 +144,12 @@ export function useRepositoryWorkspaceResultFixture() {
       env: { PATH: process.env.PATH, HOME: home },
     });
     const ownerSignal = new AbortController().signal;
+    const binding = { environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH };
     const tunnel: WorkerTunnelHandle = {
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
+      ...binding,
       stop: vi.fn(),
       ...createNodeWorkerWorkspaceActions({
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
+        ...binding,
         sessionId: SESSION_ID,
         ownerSignal,
         isOwnerCurrent: () => true,
@@ -187,7 +180,7 @@ export function useRepositoryWorkspaceResultFixture() {
     const remote = synced.remoteWorkspaceDir;
     const initialCheckpointRef = (await store.get(repository.workspaceId))!.checkpointRef;
     await seedActivePlacement(executionMode, remote, synced.manifestRef);
-    const beginTurn = async (claimId: string, markResultPending = true) => {
+    async function beginTurn(claimId: string, markResultPending = true) {
       const placement = placements.get(SESSION_ID);
       if (placement?.state !== "active") {
         throw new Error("expected an active repository placement");
@@ -202,11 +195,11 @@ export function useRepositoryWorkspaceResultFixture() {
         await placements.markWorkspaceResultPending(turnClaim);
       }
       return { placement, turnClaim };
-    };
-    const finishTurn = async (
+    }
+    async function finishTurn(
       owned: Awaited<ReturnType<typeof beginTurn>>,
       publishAcceptedWorkspace?: () => Promise<void>,
-    ) => {
+    ) {
       const workspace = await resolveWorkspace();
       return withWorkerTurnTranscriptDatabase(
         { ...sessionTarget, sessionTarget },
@@ -225,7 +218,7 @@ export function useRepositoryWorkspaceResultFixture() {
             publishAcceptedWorkspace,
           }),
       );
-    };
+    }
     const environments: WorkerDispatchEnvironmentService = {
       fenceWorkerTurnForRecovery: () => {
         throw new Error("Repository result fixture does not synthesize startup claims");
@@ -285,13 +278,13 @@ export function useRepositoryWorkspaceResultFixture() {
         .withPreparedRecovery,
     });
     return {
+      ...operations,
       remote,
       store,
       repository,
       initialCheckpointRef,
       beginTurn,
       finishTurn,
-      workspaceOperations,
       mutations,
       mutate,
       write,
@@ -299,8 +292,6 @@ export function useRepositoryWorkspaceResultFixture() {
       expectSettled,
       expectUnaccepted,
       stop,
-      environments,
-      resolveWorkspace,
       tunnel,
       ownerSignal,
     };

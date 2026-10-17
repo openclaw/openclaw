@@ -38,7 +38,10 @@ import {
   SESSION_ID,
   sessionTarget,
 } from "./worker-turn-launcher.test-support.js";
-import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
+import {
+  createWorkerWorkspaceRecoveryFixture,
+  expectWorkspaceFiles,
+} from "./workspace-recovery.test-support.js";
 import {
   requireWorkspaceResultGit,
   withWorkspaceResultRefMutation,
@@ -61,12 +64,34 @@ vi.mock("./repository-github-identity.js", () => ({
 
 describe("repository workspace result ownership", () => {
   const { fixture, readArtifact } = useRepositoryWorkspaceResultFixture();
-
-  it("refuses repository effects after a committed session change without host SQL", async () => {
-    const f = await fixture("worker-turn");
+  type Fixture = Awaited<ReturnType<typeof fixture>>;
+  function editorContext(f: Fixture) {
     const context = createGatewayRequestContext(makeContextParams());
     context.workerSessionPlacementService = placements;
     context.workerEnvironmentService = { ...workerService(), ...f.environments };
+    return context;
+  }
+  async function recover(
+    f: Fixture,
+    store = placements,
+    environments = f.environments,
+    recovery = createWorkerWorkspaceRecoveryFixture({ resolveWorkspace: f.resolveWorkspace }),
+  ) {
+    await recoverPendingWorkspaceResults(
+      {
+        placements: store,
+        environments,
+        failure: createPlacementFailureActions({ placements: store, environments }),
+        workspaceOperations: f.workspaceOperations,
+        ...recovery,
+      },
+      await store.readProjection([SESSION_ID], { current: true }),
+    );
+  }
+
+  it("refuses repository effects after a committed session change without host SQL", async () => {
+    const f = await fixture("worker-turn");
+    const context = editorContext(f);
     const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
       cfg: context.getRuntimeConfig(),
       key: sessionTarget.sessionKey,
@@ -125,7 +150,6 @@ describe("repository workspace result ownership", () => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const queueHeld = createDeferredCore();
-      // Runner cancellation releases the real predecessor without a second timer.
       const unblock = () => release.resolve();
       signal.addEventListener("abort", unblock, { once: true });
       let observedBoundary = false;
@@ -133,7 +157,6 @@ describe("repository workspace result ownership", () => {
       let assertMutationCurrent: (() => void) | undefined;
       let queueOwner: Promise<void> | undefined;
       let saving: Promise<string> | undefined;
-      // Observe real operations; no authority predicate or physical effect is mocked.
       const imports = vi.spyOn(processExec, "runExec");
       const writes = vi.spyOn(fs, "writeFile");
       const temporary = vi.spyOn(fs, "mkdtemp");
@@ -247,14 +270,12 @@ describe("repository workspace result ownership", () => {
         expect(assertMutationCurrent).toThrow(
           "Repository workspace edit lost its exact session placement owner",
         );
-        // Operation authority closes without physical worker shutdown or deletion
-        // of the pending result that still owns eventual recovery.
+        // Draining closes authority but leaves the worker and recovery claim alive.
         expect(f.ownerSignal.aborted).toBe(false);
         expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
         release.resolve();
         await expect(saving).rejects.toThrow("lost its exact session placement owner");
         await queueOwner;
-        // The intermediate copy is gone; only the real private import inputs exist.
         const importRoots: string[] = [];
         for (const [index, [prefix]] of temporary.mock.calls.entries()) {
           expect(prefix.startsWith(payloadPrefix)).toBe(false);
@@ -269,7 +290,6 @@ describe("repository workspace result ownership", () => {
         for (const importRoot of importRoots) {
           await expect(fs.stat(importRoot)).rejects.toMatchObject({ code: "ENOENT" });
         }
-        // Observe the real file-backed command rather than the retired buffered seam.
         for (const call of fastImports()) {
           expect(call[2]).toMatchObject({ stdinFileDescriptor: expect.any(Number) });
         }
@@ -295,9 +315,7 @@ describe("repository workspace result ownership", () => {
 
   it("keeps editor staging SQL off the caller thread across publication blobs and unchanged saves untouched", async () => {
     const f = await fixture("worker-turn");
-    const context = createGatewayRequestContext(makeContextParams());
-    context.workerSessionPlacementService = placements;
-    context.workerEnvironmentService = { ...workerService(), ...f.environments };
+    const context = editorContext(f);
     context.workerRepositoryWorkspaceMutationService = f.mutations;
     const authorize = vi.fn();
     const stage = checkpoints.stageSessionRepositoryCheckpoint;
@@ -307,9 +325,9 @@ describe("repository workspace result ownership", () => {
       // Fixed raw inventory/byte count; only publication deduplication varies.
       const content = (index: number) => `sample-${blobCount}-blob-${index % blobCount}\n`;
       for (let index = 0; index < 8; index++) {
-        await fs.writeFile(path.join(f.remote, `edit-${index}.txt`), content(index));
+        await f.write(`edit-${index}.txt`, content(index));
       }
-      await fs.writeFile(path.join(f.remote, "edit-0.txt"), "before\n");
+      await f.write("edit-0.txt", "before\n");
       using access = await resolveRepositoryWorkspaceAccess(
         await loadGatewaySessionEntryReadOnlyInWorker({
           cfg: context.getRuntimeConfig(),
@@ -342,16 +360,17 @@ describe("repository workspace result ownership", () => {
           return prepared;
         });
       try {
-        const saved = await access.inspect(
-          "set",
-          {
-            path: "edit-0.txt",
-            content: content(0),
-            expectedHash: createHash("sha256").update("before\n").digest("hex"),
-          },
-          authorize,
-        );
-        expect(saved).toMatchObject({ status: "updated" });
+        await expect(
+          access.inspect(
+            "set",
+            {
+              path: "edit-0.txt",
+              content: content(0),
+              expectedHash: createHash("sha256").update("before\n").digest("hex"),
+            },
+            authorize,
+          ),
+        ).resolves.toMatchObject({ status: "updated" });
       } finally {
         observer.mockRestore();
         sql.restore();
@@ -360,8 +379,9 @@ describe("repository workspace result ownership", () => {
         { workspaceId: f.repository.workspaceId, includePublication: true },
         async (snapshot) => {
           expect(snapshot.changedEntries).toHaveLength(8);
-          const blobs = await fs.readdir(path.join(snapshot.publicationStagingRoot!, "blobs"));
-          expect(blobs).toHaveLength(blobCount);
+          await expect(
+            fs.readdir(path.join(snapshot.publicationStagingRoot!, "blobs")),
+          ).resolves.toHaveLength(blobCount);
           expect(await fs.readFile(path.join(snapshot.stagingRoot, "edit-0.txt"), "utf8")).toBe(
             content(0),
           );
@@ -393,21 +413,12 @@ describe("repository workspace result ownership", () => {
       }),
     ).rejects.toThrow("lost the acknowledgement");
     await f.expectUnaccepted();
-    await recoverPendingWorkspaceResults(
-      {
-        placements,
-        environments: f.environments,
-        failure: createPlacementFailureActions({ placements, environments: f.environments }),
-        workspaceOperations: f.workspaceOperations,
-        ...createWorkerWorkspaceRecoveryFixture({ resolveWorkspace: f.resolveWorkspace }),
-      },
-      await placements.readProjection([SESSION_ID], { current: true }),
-    );
+    await recover(f);
     expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
     const checkpoint = await readArtifact(f.repository.workspaceId, "uncertain.txt");
+    expect(checkpoint.preview).toEqual(new Uint8Array(Buffer.from(content)));
     assert.ok(checkpoint.preview);
-    assert.deepStrictEqual(Buffer.from(checkpoint.preview), Buffer.from(content));
     expect(checkpoint.preview.byteOffset).toBe(0);
     expect(checkpoint.preview.buffer.byteLength).toBe(checkpoint.preview.byteLength);
   });
@@ -500,21 +511,17 @@ describe("repository workspace result ownership", () => {
     await f.save("editor.txt", "editor save\n");
     await f.stop(sessionTarget);
     expect(placements.get(SESSION_ID)?.state).toBe("reclaimed");
-    const expected = new Map([
-      ["editor.txt", "editor save\n"],
-      ["first.txt", "first turn\n"],
-      ["second.txt", "second turn\n"],
-      ["setup.txt", "prepared\n"],
-    ]);
+    const expected = {
+      "editor.txt": "editor save\n",
+      "first.txt": "first turn\n",
+      "second.txt": "second turn\n",
+      "setup.txt": "prepared\n",
+    };
     await withSessionRepositoryCheckpoint(
       { workspaceId: f.repository.workspaceId },
       async (snapshot) => {
-        expect(snapshot.changedEntries.map((entry) => entry.path)).toEqual([...expected.keys()]);
-        for (const entry of snapshot.changedEntries) {
-          expect(await fs.readFile(path.join(snapshot.stagingRoot, entry.path), "utf8")).toBe(
-            expected.get(entry.path),
-          );
-        }
+        expect(snapshot.changedEntries.map((entry) => entry.path)).toEqual(Object.keys(expected));
+        await expectWorkspaceFiles(snapshot.stagingRoot, expected);
         expect(snapshot.baseManifestRef).toBe(pinned.baseManifestHash);
       },
     );
@@ -577,13 +584,10 @@ describe("repository workspace result ownership", () => {
     ]);
   });
 
-  it.each([
-    { executionMode: "worker-turn", phase: "pending-pointer", materialized: false },
-    { executionMode: "worker-turn", phase: "Gateway materialization", materialized: true },
-  ] as const)(
-    "recovers an accepted $executionMode checkpoint after restart during $phase",
-    async ({ executionMode, materialized }) => {
-      const f = await fixture(executionMode);
+  it.each([false, true])(
+    "recovers an accepted checkpoint after restart (materialized=%s)",
+    async (materialized) => {
+      const f = await fixture("worker-turn");
       await f.write("survives.txt", "durable before restart\n");
       const owned = await f.beginTurn("interrupted", !materialized);
       const destination = path.join(root, "materialized-worktree");
@@ -653,36 +657,28 @@ describe("repository workspace result ownership", () => {
           throw new Error("worker is gone");
         }),
       };
-      const reportWorkspaceResultRecoveryFailure = vi.fn(async () => {});
-      await recoverPendingWorkspaceResults(
-        {
-          placements: restarted,
-          environments,
-          failure: createPlacementFailureActions({ placements: restarted, environments }),
-          workspaceOperations: f.workspaceOperations,
-          ...createWorkerWorkspaceRecoveryFixture({
-            resolveWorkspace: async () =>
-              materialized
-                ? { kind: "local", path: destination }
-                : {
-                    kind: "repository",
-                    repository: (await f.store.get(f.repository.workspaceId))!,
-                  },
-            reportFailure: reportWorkspaceResultRecoveryFailure,
-          }),
-        },
-        await restarted.readProjection([SESSION_ID], { current: true }),
+      const reportFailure = vi.fn(async () => {});
+      await recover(
+        f,
+        restarted,
+        environments,
+        createWorkerWorkspaceRecoveryFixture({
+          resolveWorkspace: materialized
+            ? async () => ({ kind: "local", path: destination })
+            : f.resolveWorkspace,
+          reportFailure,
+        }),
       );
-      expect(reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
+      expect(reportFailure).not.toHaveBeenCalled();
       expect(await restarted.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(restarted.get(SESSION_ID)).toMatchObject({
         state: materialized ? "local" : "reclaimed",
         turnClaim: null,
       });
       expect(environments.startTunnel).not.toHaveBeenCalled();
-      const saved = await readArtifact(f.repository.workspaceId, "survives.txt");
-      assert.ok(saved.preview);
-      assert.deepStrictEqual(Buffer.from(saved.preview), Buffer.from("durable before restart\n"));
+      expect((await readArtifact(f.repository.workspaceId, "survives.txt")).preview).toEqual(
+        new Uint8Array(Buffer.from("durable before restart\n")),
+      );
     },
   );
 });

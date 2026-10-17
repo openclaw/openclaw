@@ -18,10 +18,23 @@ async function manifestWorkspace() {
   return {
     home,
     workspace,
-    auditPath,
     async capture(prelude: string, args: string[] = [], memo?: Array<[string, string]>) {
+      const instrument = String.raw`{
+        const io = require("node:fs"), open = io.promises.open.bind(io.promises);
+        const handles = [], audit = {};
+        const closed = () => handles.every((handle) => handle.fd === -1);
+        ${prelude}
+        for (const output of [process.stdout, process.stderr]) {
+          const write = output.write.bind(output);
+          output.write = (...args) => { audit.atResult = snapshot(); return write(...args); };
+        }
+        process.once("exit", () => io.writeFileSync(${JSON.stringify(auditPath)}, JSON.stringify({
+          ...audit, ...snapshot(), opened: handles.length, closed: closed(),
+        })));
+      }
+      `;
       const result = await runCommandWithTimeout(
-        [process.execPath, "-e", prelude + REMOTE_WORKSPACE_MANIFEST_JS, workspace, ...args],
+        [process.execPath, "-e", instrument + REMOTE_WORKSPACE_MANIFEST_JS, workspace, ...args],
         { timeoutMs: 10_000, baseEnv: { ...process.env, HOME: home }, input: JSON.stringify(memo) },
       );
       const audit: Record<string, unknown> = JSON.parse(await fs.readFile(auditPath, "utf8"));
@@ -31,7 +44,7 @@ async function manifestWorkspace() {
 }
 
 it("hashes concurrently within four readers and preserves manifest and memo ordering", async () => {
-  const { home, workspace, auditPath, capture } = await manifestWorkspace();
+  const { home, workspace, capture } = await manifestWorkspace();
   const entries = await Promise.all(
     Array.from({ length: 8 }, async (_, index) => {
       const name = `${index}.bin`;
@@ -47,30 +60,19 @@ it("hashes concurrently within four readers and preserves manifest and memo orde
       };
     }),
   );
-  const prelude = String.raw`{
-    const io = require("node:fs");
-    const open = io.promises.open.bind(io.promises);
-    const handles = [];
-    let active = 0, maximum = 0, activeAtResult;
+  const prelude = String.raw`
+    let active = 0;
+    audit.maximum = 0;
+    const snapshot = () => ({ active });
     io.promises.open = async (...args) => {
       active++;
-      maximum = Math.max(maximum, active);
+      audit.maximum = Math.max(audit.maximum, active);
       const handle = await open(...args);
       handles.push(handle);
       const close = handle.close.bind(handle);
-      let closed = false;
-      handle.close = async () => {
-        await close();
-        if (!closed) { closed = true; active--; }
-      };
+      handle.close = async () => { await close(); active--; };
       return handle;
     };
-    const write = process.stdout.write.bind(process.stdout);
-    process.stdout.write = (...args) => { activeAtResult = active; return write(...args); };
-    process.once("exit", () => io.writeFileSync(${JSON.stringify(auditPath)}, JSON.stringify({
-      maximum, activeAtResult, closed: handles.map((handle) => handle.fd === -1),
-    })));
-  }
   `;
   let memo: Array<[string, string]> = [];
   let manifestRef: string | undefined;
@@ -95,7 +97,7 @@ it("hashes concurrently within four readers and preserves manifest and memo orde
     }
     memo = response.memo;
     manifestRef = response.manifestRef;
-    expect(audit).toMatchObject({ activeAtResult: 0, closed: Array(entries.length).fill(true) });
+    expect(audit).toMatchObject({ atResult: { active: 0 }, closed: true, opened: entries.length });
     expect(audit.maximum).toBeGreaterThan(1);
     expect(audit.maximum).toBeLessThanOrEqual(4);
   }
@@ -104,44 +106,40 @@ it("hashes concurrently within four readers and preserves manifest and memo orde
 it.each(["pending-open", "active-reader"] as const)(
   "preserves the first failure and joins a %s before reporting it",
   async (mode) => {
-    const { home, workspace, auditPath, capture } = await manifestWorkspace();
+    const { home, workspace, capture } = await manifestWorkspace();
     const first = path.join(workspace, "a.bin");
     const second = path.join(workspace, "b.bin");
     await Promise.all([fs.writeFile(first, "first"), fs.writeFile(second, Buffer.alloc(64))]);
     // Real opens and streams are held at their I/O boundaries, without a timing race.
-    const prelude = String.raw`{
-      const io = require("node:fs");
+    const prelude = String.raw`
       const first = ${JSON.stringify(first)}, second = ${JSON.stringify(second)};
       const mode = ${JSON.stringify(mode)};
-      const handles = [], started = new Set();
-      let releaseOpen, releaseRead;
-      const openGate = new Promise((resolve) => { releaseOpen = resolve; });
-      const readGate = new Promise((resolve) => { releaseRead = resolve; });
-      let pending = 0, readStarted = false, secondStats = 0, atFailure;
-      let reading;
-      const open = io.promises.open.bind(io.promises);
+      const openGate = Promise.withResolvers(), readGate = Promise.withResolvers();
+      let pending = 0, secondStarted = false, reading;
+      Object.assign(audit, { readStarted: false, secondStats: 0 });
+      const snapshot = () => ({ pending, closed: closed(), streamDestroyed: reading?.destroyed });
       io.promises.open = async (...args) => {
         const file = args[0];
-        started.add(file);
+        if (file === second) secondStarted = true;
         pending++;
-        if (file === second && mode === "pending-open") await openGate;
+        if (file === second && mode === "pending-open") await openGate.promise;
         const handle = await open(...args);
         pending--;
         handles.push(handle);
         const stat = handle.stat.bind(handle), close = handle.close.bind(handle);
         handle.stat = async (...options) => {
           if (file === first) {
-            if (mode === "active-reader" && started.has(second)) await readGate;
+            if (mode === "active-reader" && secondStarted) await readGate.promise;
             throw new Error("first manifest failure");
           }
-          secondStats++;
+          audit.secondStats++;
           return stat(...options);
         };
         handle.close = async () => {
           await close();
           if (file === first) {
             await new Promise((resolve) => setImmediate(resolve));
-            releaseOpen();
+            openGate.resolve();
             throw new Error("secondary close failure");
           }
         };
@@ -157,8 +155,8 @@ it.each(["pending-open", "active-reader"] as const)(
             });
             stream[Symbol.asyncIterator] = async function* () {
               for await (const chunk of iterate()) {
-                readStarted = true;
-                releaseRead();
+                audit.readStarted = true;
+                readGate.resolve();
                 await aborted;
                 yield chunk;
               }
@@ -168,16 +166,6 @@ it.each(["pending-open", "active-reader"] as const)(
         }
         return handle;
       };
-      const write = process.stderr.write.bind(process.stderr);
-      process.stderr.write = (...args) => {
-        atFailure = { pending, closed: handles.every((handle) => handle.fd === -1) };
-        return write(...args);
-      };
-      process.once("exit", () => io.writeFileSync(${JSON.stringify(auditPath)}, JSON.stringify({
-        atFailure, opened: handles.length, pending, readStarted, secondStats,
-        streamDestroyed: reading?.destroyed, closed: handles.every((handle) => handle.fd === -1),
-      })));
-    }
     `;
     const { result, audit } = await capture(prelude);
     expect(result.code).not.toBe(0);
@@ -189,7 +177,7 @@ it.each(["pending-open", "active-reader"] as const)(
       pending: 0,
       closed: true,
       readStarted: mode === "active-reader",
-      atFailure: { pending: 0, closed: true },
+      atResult: { pending: 0, closed: true },
     });
     expect(audit).toMatchObject(
       mode === "pending-open" ? { secondStats: 0 } : { streamDestroyed: true },

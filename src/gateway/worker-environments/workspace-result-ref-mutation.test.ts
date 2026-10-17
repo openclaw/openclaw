@@ -58,6 +58,7 @@ it("shares ref serialization and deferred retention between snapshots and result
   const other = await repository();
   const hasRef = (stagedResultRef: string, repositoryRoot = root) =>
     hasWorkerWorkspaceResultRef({ root: repositoryRoot, stagedResultRef });
+  const refStates = (...refs: string[]) => Promise.all(refs.map((ref) => hasRef(ref)));
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
   const service = new ManagedWorktreeService({
     env,
@@ -149,21 +150,14 @@ it("shares ref serialization and deferred retention between snapshots and result
   await expect(hasRef(retainedRef)).resolves.toBe(true);
   expect((await pruning).snapshotsPruned).toBe(1);
   const cleanupRef = await expectDefined(move, "queued worker result move");
-  expect({
-    staged: await hasRef(stagedResultRef),
-    candidate: await hasRef(candidateRef),
-    cleanup: await hasRef(cleanupRef),
-  }).toEqual({ staged: false, candidate: false, cleanup: true });
+  expect(await refStates(stagedResultRef, candidateRef, cleanupRef)).toEqual([false, false, true]);
 
   await restoreStagedWorkerWorkspaceResultFromCleanup({
     root: linked,
     cleanupRef,
     stagedResultRef,
   });
-  expect({ staged: await hasRef(stagedResultRef), cleanup: await hasRef(cleanupRef) }).toEqual({
-    staged: true,
-    cleanup: false,
-  });
+  expect(await refStates(stagedResultRef, cleanupRef)).toEqual([true, false]);
   await moveStagedWorkerWorkspaceResultToCleanup({ root: linked, stagedResultRef });
   await deleteWorkerWorkspaceResultCleanupRefs({ root: linked });
   expect(await requireGit(root, ["for-each-ref", "--format=%(refname)", "refs/openclaw/"])).toBe(
