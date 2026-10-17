@@ -34,7 +34,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { createChatPageStateContext } from "./chat-page.test-support.ts";
+import { createChatPageSessions, createChatPageStateContext } from "./chat-page.test-support.ts";
 import { removeQueuedMessage, keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { projectChatRun } from "./chat-run-projection.ts";
@@ -3137,7 +3137,7 @@ describe("loadPageAssistantIdentity", () => {
         snapshot: { client, connected: true, hello: null },
       },
       chatSubmissions: createChatSubmissions(),
-      sessions: { refresh: vi.fn().mockResolvedValue(undefined) },
+      sessions: { ...createChatPageSessions(), refresh: vi.fn().mockResolvedValue(undefined) },
     } as unknown as ApplicationContext;
     const state = createPageState(
       context,

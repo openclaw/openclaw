@@ -471,7 +471,10 @@ describe("chat pane sharing authorization", () => {
       visibility,
     });
     pane.presence.update({
-      presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
+      presence: [
+        { ts: 1, user: { id: "owner" } },
+        { ts: 1, user: { id: "alice" } },
+      ],
     });
 
     await pane.refreshSessionSuggestions();

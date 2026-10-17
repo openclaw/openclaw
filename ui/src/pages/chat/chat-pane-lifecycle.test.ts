@@ -260,7 +260,10 @@ it.each(["absent", "open"] as const)(
 function createSuggestionPane(request = vi.fn()) {
   const fixture = barePane(request);
   fixture.pane.presence.update({
-    presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
+    presence: [
+      { ts: 1, user: { id: "owner" } },
+      { ts: 1, user: { id: "alice" } },
+    ],
   });
   return fixture;
 }

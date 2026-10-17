@@ -253,7 +253,7 @@ describe("chat pane session presentation", () => {
   it("publishes selected row mutations from the owner's same-object notification", () => {
     const f = fixture();
     const result = f.publication.result!;
-    result.sessions[0].label = "Updated in place";
+    f.selected.label = "Updated in place";
     f.publish(f.publication);
     expect(f.state.sessionsResult).toBe(result);
     expect(f.rendered).toHaveBeenCalledOnce();

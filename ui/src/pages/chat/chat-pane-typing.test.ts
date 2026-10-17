@@ -5,6 +5,7 @@ import { createEffect, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { PresencePayload } from "../../app/user-profile.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
@@ -28,7 +29,12 @@ function createTypingPane() {
     sessions: createSessionCapabilityFixture(),
   });
   const { pane, state } = fixture;
-  pane.presence.update({ presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }] });
+  pane.presence.update({
+    presence: [
+      { ts: 1, user: { id: "owner" } },
+      { ts: 1, user: { id: "alice" } },
+    ],
+  });
   state.sessionKey = "agent:work:main";
   state.assistantAgentId = "work";
   state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
@@ -97,7 +103,10 @@ describe("chat pane typing presence", () => {
       ],
     } as never;
     pane.presence.update({
-      presence: [{ user: { id: "owner" } }, { user: { id: "writer" } }],
+      presence: [
+        { ts: 1, user: { id: "owner" } },
+        { ts: 1, user: { id: "writer" } },
+      ],
     });
     const scrollport = document.createElement("div");
     let extent = 2000;
@@ -160,7 +169,11 @@ describe("chat pane typing presence", () => {
     state.sessionsResultAgentId = "work";
     const aliceId = "0d9f4c35-d221-49da-9a3f-b8c73921066b";
     pane.presence.update({
-      presence: [{ user: { id: "owner" } }, { user: { id: aliceId } }, { user: { id: "bob" } }],
+      presence: [
+        { ts: 1, user: { id: "owner" } },
+        { ts: 1, user: { id: aliceId } },
+        { ts: 1, user: { id: "bob" } },
+      ],
     });
     state.sessionsResult = {
       count: 1,
@@ -308,7 +321,8 @@ describe("chat pane typing presence", () => {
         path: "",
         sessions: [{ key: "global", kind: "global", sessionId: "pause", updatedAt: 1 }],
       } as never;
-      const viewer = (id: string) => ({
+      const viewer = (id: string): PresencePayload["presence"][number] => ({
+        ts: 1,
         user: { id, identity: { type: "profile", id } },
         watchedSessions: ["agent:work:global"],
       });
@@ -696,7 +710,7 @@ describe("chat pane typing presence", () => {
         row.visibility = "draft";
         break;
       case "solo":
-        pane.presence.update({ presence: [{ user: { id: "owner" } }] });
+        pane.presence.update({ presence: [{ ts: 1, user: { id: "owner" } }] });
         break;
     }
     vi.advanceTimersByTime(250);

@@ -33,8 +33,6 @@ import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
-import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
-import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import { createNavigationPreferencesFixture } from "../../test-helpers/application-context.ts";
 import {
@@ -72,6 +70,8 @@ import type {
 import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
+
+export { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 type PaneHeaderWorkspace = ReturnType<typeof createChatPaneRails>["sessionWorkspace"];
 
@@ -399,48 +399,6 @@ export function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
     content: [{ type: "text", text }],
     __openclaw: { seq },
   };
-}
-
-type SessionCapabilityFixtureOverrides = Omit<Partial<SessionCapability>, "patch" | "state"> & {
-  patch?: (...args: Parameters<NonNullable<SessionCapability["patch"]>>) => unknown;
-  state?: Partial<SessionCapability["state"]>;
-};
-
-export function createSessionCapabilityFixture(
-  overrides: SessionCapabilityFixtureOverrides = {},
-): SessionCapability {
-  const state: SessionCapability["state"] = {
-    result: null,
-    agentId: null,
-    modelOverrides: {},
-    loading: false,
-    error: null,
-    deletedSessions: [],
-    groups: [],
-    groupSettings: [],
-    sectionOrder: [],
-    ...overrides.state,
-  };
-  const archiveState = createSessionArchiveState(
-    (key) => state.result?.sessions.find((row) => row.key === key),
-    () => {},
-    createSessionRowProvenance(),
-  );
-  return {
-    get presentation() {
-      return { result: state.result, agentId: state.agentId };
-    },
-    captureConnectionScope: () => null,
-    isConnectionScopeCurrent: () => false,
-    subscribe: () => () => undefined,
-    deletionState: () => undefined,
-    think: () => undefined,
-    settingsPreview: () => undefined,
-    archiveVisibility: archiveState.visibility,
-    beginArchive: archiveState.beginPending,
-    ...overrides,
-    state,
-  } as typeof overrides & SessionCapability;
 }
 
 export function createSessionContext(
