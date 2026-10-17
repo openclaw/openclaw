@@ -150,6 +150,15 @@ afterEach(async () => {
 });
 
 describe("local sandbox workspace reconciliation", () => {
+  it.each([false, true])(
+    "settles old runtime-file results (source already copied: %s)",
+    async (copied) => {
+      const { proveGeneratedWorkspaceRecovery } =
+        await import("./local-workspace-generated-paths.test-support.js");
+      await proveGeneratedWorkspaceRecovery(owner, copied);
+    },
+  );
+
   it("settles stopped commands without admitting new work or a replacement session", async () => {
     const { proveStoppedLocalWorkspaceCheckpoint } =
       await import("./local-workspace-cancellation.test-support.js");

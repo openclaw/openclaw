@@ -265,7 +265,8 @@ export function projectionOperations(
                         }
                       : {
                           ...(refresh ? { base_commit: snapshot.current.baseCommit! } : {}),
-                          baseline_json: serializeWorkerWorkspaceManifest(snapshot.current),
+                          // Parsing can filter old runtime paths; retain bytes matching the receipt digest.
+                          baseline_json: snapshot.currentManifestRaw,
                           baseline_ref: snapshot.currentManifestRef,
                           // Retain the accepted ref until its Git cleanup completes.
                           pending_target: null,
@@ -456,7 +457,7 @@ export function projectionOperations(
           throw new Error("Archive restore receipt changed");
         }
         await update({
-          baseline_json: serializeWorkerWorkspaceManifest(receipt.base),
+          baseline_json: receipt.baseManifestRaw,
           baseline_ref: receipt.baseManifestRef,
           pending_target: "canonical",
         });
@@ -561,7 +562,7 @@ export function projectionOperations(
             throw new Error("Archive retention receipt changed");
           }
           accepted = {
-            raw: serializeWorkerWorkspaceManifest(receipt.current),
+            raw: receipt.currentManifestRaw,
             ref: receipt.currentManifestRef,
           };
         }
