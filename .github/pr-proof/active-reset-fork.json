@@ -1,0 +1,138 @@
+{
+  "baseline_sha": "86b83b74b4c68e147277b022b517c0d8b5322c16",
+  "tested_pr_head": "0579433678ccfb67cd7f22e4aabf56e3480bf94a",
+  "entry_point": "pnpm openclaw gateway run; pnpm openclaw agent; gateway call sessions.reset/sessions.create/sessions.get",
+  "pipeline": "Completed parent turn -> real reset -> real held MCP tool -> last-completed fork -> child model request captured over HTTP",
+  "state": "Gateway-owned SQLite, isolated HOME/workspace/state and free loopback ports",
+  "external_fixtures": "Model responses and MCP result data were scripted locally. No remote model inference or account credentials.",
+  "liveness_evidence": "The actual MCP request remained blocked until after the child completed. A full fork was rejected as active, while last-completed succeeded. No test-only active-run flag or seeded transcript writes.",
+  "records": [
+    {
+      "variant": "baseline",
+      "case": "clear-reset",
+      "real_tool_pending_at_fork": true,
+      "active_full_fork_rejected": true,
+      "parent_context_contains_old_question": false,
+      "child_request_has_old_question": true,
+      "child_request_has_old_answer": true,
+      "child_request_has_unfinished_parent_task": false,
+      "child_history_has_old_question": true,
+      "parent_messages_unchanged_during_fork": true,
+      "child_previous_response_id": null,
+      "parent_completed": true,
+      "tool_calls": 1,
+      "completed_full_fork_has_new_task": true,
+      "completed_full_fork_has_result": true,
+      "completed_full_fork_has_cleared_history": false,
+      "create_response": {
+        "ok": true,
+        "key": "agent:main:dashboard:fork-proof-clear-reset-child"
+      },
+      "active_full_fork_error": "{\n  \"ok\": false,\n  \"error\": {\n    \"type\": \"gateway_request_error\",\n    \"code\": \"UNAVAILABLE\",\n    \"message\": \"Parent session agent:main:dashboard:fork-proof-clear-reset is still active; try again in a moment.\",\n    \"retryable\": false\n  }\n}"
+    },
+    {
+      "variant": "baseline",
+      "case": "no-reset",
+      "real_tool_pending_at_fork": true,
+      "active_full_fork_rejected": true,
+      "parent_context_contains_old_question": true,
+      "child_request_has_old_question": true,
+      "child_request_has_old_answer": true,
+      "child_request_has_unfinished_parent_task": false,
+      "child_history_has_old_question": true,
+      "parent_messages_unchanged_during_fork": true,
+      "child_previous_response_id": null,
+      "parent_completed": true,
+      "tool_calls": 1,
+      "create_response": {
+        "ok": true,
+        "key": "agent:main:dashboard:fork-proof-no-reset-child"
+      },
+      "active_full_fork_error": "{\n  \"ok\": false,\n  \"error\": {\n    \"type\": \"gateway_request_error\",\n    \"code\": \"UNAVAILABLE\",\n    \"message\": \"Parent session agent:main:dashboard:fork-proof-no-reset is still active; try again in a moment.\",\n    \"retryable\": false\n  }\n}"
+    },
+    {
+      "variant": "patched",
+      "case": "clear-reset",
+      "real_tool_pending_at_fork": true,
+      "active_full_fork_rejected": true,
+      "parent_context_contains_old_question": false,
+      "child_request_has_old_question": false,
+      "child_request_has_old_answer": false,
+      "child_request_has_unfinished_parent_task": false,
+      "child_history_has_old_question": false,
+      "parent_messages_unchanged_during_fork": true,
+      "child_previous_response_id": null,
+      "parent_completed": true,
+      "tool_calls": 1,
+      "completed_full_fork_has_new_task": true,
+      "completed_full_fork_has_result": true,
+      "completed_full_fork_has_cleared_history": false,
+      "create_response": {
+        "ok": true,
+        "key": "agent:main:dashboard:fork-proof-clear-reset-child"
+      },
+      "active_full_fork_error": "{\n  \"ok\": false,\n  \"error\": {\n    \"type\": \"gateway_request_error\",\n    \"code\": \"UNAVAILABLE\",\n    \"message\": \"Parent session agent:main:dashboard:fork-proof-clear-reset is still active; try again in a moment.\",\n    \"retryable\": false\n  }\n}"
+    },
+    {
+      "variant": "patched",
+      "case": "no-reset",
+      "real_tool_pending_at_fork": true,
+      "active_full_fork_rejected": true,
+      "parent_context_contains_old_question": true,
+      "child_request_has_old_question": true,
+      "child_request_has_old_answer": true,
+      "child_request_has_unfinished_parent_task": false,
+      "child_history_has_old_question": true,
+      "parent_messages_unchanged_during_fork": true,
+      "child_previous_response_id": null,
+      "parent_completed": true,
+      "tool_calls": 1,
+      "create_response": {
+        "ok": true,
+        "key": "agent:main:dashboard:fork-proof-no-reset-child"
+      },
+      "active_full_fork_error": "{\n  \"ok\": false,\n  \"error\": {\n    \"type\": \"gateway_request_error\",\n    \"code\": \"UNAVAILABLE\",\n    \"message\": \"Parent session agent:main:dashboard:fork-proof-no-reset is still active; try again in a moment.\",\n    \"retryable\": false\n  }\n}"
+    }
+  ],
+  "controls": "No-reset forks retain completed history. Full forks after parent completion retain the new task/result and exclude cleared history. Parent messages stay unchanged while the tool is held, and the task completes after release.",
+  "source_owner_sha256": "14525bb2604503bddb81252e796e2ae9197ee0ae769b5dabf4f25ddb11af99d1",
+  "proof_script_sha256": "304794e9605dcb56a8eec07b1572c22385d2f43097f57aa5d8a286a72b648e0e",
+  "limits": "Validates runtime state, persistence and request content; not remote model reasoning or UI interactions.",
+  "ci_costs": {
+    "run_id": 37651116523,
+    "head": "0579433678ccfb67cd7f22e4aabf56e3480bf94a",
+    "conclusion": "success",
+    "files": [
+      {
+        "path": "src/config/sessions/session-accessor.sqlite-parent-fork.test.ts",
+        "job_id": 112895001634,
+        "vitest_seconds": 1.02,
+        "runner_seconds": 2.86,
+        "tests": 9
+      },
+      {
+        "path": "src/gateway/server.sessions.create.reset-fork.test.ts",
+        "job_id": 112895001613,
+        "vitest_seconds": 59.16,
+        "runner_seconds": 61.23,
+        "test_case_seconds": 4.96,
+        "tests": 1
+      }
+    ],
+    "timing_scope": "Per-file repository runner seconds, including Vitest startup and teardown; not complete hosted job wall time."
+  },
+  "local_costs": [
+    {
+      "label": "fork-unit-cost",
+      "exit_code": 0,
+      "wall_seconds": 3.2292462089681067,
+      "includes_startup_and_preparation": true
+    },
+    {
+      "label": "fork-gateway-cost",
+      "exit_code": 0,
+      "wall_seconds": 43.614288459008094,
+      "includes_startup_and_preparation": true
+    }
+  ]
+}
