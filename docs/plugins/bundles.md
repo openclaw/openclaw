@@ -207,6 +207,56 @@ MCP servers can use stdio or HTTP transport.
   session start uses `requestTimeoutMs` when it is set, and 10 seconds
   otherwise.
 
+### Python stdio servers in Agent Plugins bundles
+
+OpenClaw launches the configured executable; it does not install a Python
+interpreter or the server's Python dependencies. Prepare the environment
+according to the server's installation instructions before enabling the bundle.
+For a virtual environment, put its executable directory on the `PATH` of the
+process that launches OpenClaw:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+# Install the MCP server and its dependencies as directed by its publisher.
+```
+
+On Windows PowerShell, activate with `.\.venv\Scripts\Activate.ps1`. A Gateway
+service does not inherit activation from an interactive shell: configure its
+service environment to include the absolute path to the virtual environment's
+`bin` directory (`Scripts` on Windows) in `PATH`, then restart that service.
+
+An Agent Plugins `mcp.json` uses the standard's `mcpServers` and `type` fields,
+not the embedded OpenClaw `mcp.servers` shape shown above. For example, a bundle
+shipping a Python server script can declare:
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "local-vault": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["${PLUGIN_ROOT}/server.py", "--data-dir", "${PLUGIN_DATA}"]
+    }
+  }
+}
+```
+
+Replace the script and arguments with the server's actual entry point. Keep
+mutable data under `PLUGIN_DATA`, not `PLUGIN_ROOT`, so replacing the installed
+bundle does not replace its data. The bare `python` command resolves through
+the Gateway's `PATH`; an absolute virtual-environment path is not a valid
+Agent Plugins `command`.
+
+After reviewing the local source and its declared capabilities, install with
+`openclaw plugins install --force --accept-capabilities ./my-bundle` and inspect
+it with `openclaw plugins inspect <id>`. Inspection confirms discovery, not
+successful server startup. Start a new agent session and invoke one of its
+tools to verify the Python environment and data path. Bundle MCP tools are
+materialized during embedded agent turns; the Gateway HTTP
+`/tools/invoke` endpoint is not a test of that session MCP path.
+
 ### Tool naming
 
 OpenClaw registers bundle MCP tools with provider-safe names in the form
