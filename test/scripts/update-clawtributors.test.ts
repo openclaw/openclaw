@@ -1,10 +1,32 @@
-// Update Clawtributors tests cover update clawtributors script behavior.
 import type { ExecFileSyncOptionsWithStringEncoding } from "node:child_process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const originalCwd = process.cwd();
+const contributorsArgs = [
+  "api",
+  "repos/openclaw/openclaw/contributors?per_page=100&anon=1",
+  "--paginate",
+];
+const mergedAuthorsArgs = [
+  "pr",
+  "list",
+  "-R",
+  "openclaw/openclaw",
+  "--state",
+  "merged",
+  "--limit",
+  "5000",
+  "--json",
+  "author",
+  "--jq",
+  ".[].author.login",
+];
+const avatar = (alt: string) =>
+  `<img src="https://avatars.githubusercontent.com/u/42?v=4&s=48" width="48" height="48" alt="${alt}">`;
+const credit = (login: string, alt: string) =>
+  `<a href="https://github.com/${login}">${avatar(alt)}</a>`;
 
 afterEach(() => {
   vi.useRealTimers();
@@ -33,6 +55,11 @@ function mockClawtributorsFixture({
   accountLookupError?: Error;
   accountLookupStatus?: 404 | 410;
 } = {}) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(null, { status: 404 })),
+  );
+  vi.spyOn(console, "log").mockImplementation(() => undefined);
   const readme = [
     "# Fixture",
     "",
@@ -89,29 +116,10 @@ function mockClawtributorsFixture({
   });
   const execPlainGh = vi.fn(
     (args: readonly string[], _options: ExecFileSyncOptionsWithStringEncoding) => {
-      if (
-        args.join("\0") ===
-        ["api", "repos/openclaw/openclaw/contributors?per_page=100&anon=1", "--paginate"].join("\0")
-      ) {
+      if (args.join("\0") === contributorsArgs.join("\0")) {
         return `${JSON.stringify([contributor])}\n`;
       }
-      if (
-        args.join("\0") ===
-        [
-          "pr",
-          "list",
-          "-R",
-          "openclaw/openclaw",
-          "--state",
-          "merged",
-          "--limit",
-          "5000",
-          "--json",
-          "author",
-          "--jq",
-          ".[].author.login",
-        ].join("\0")
-      ) {
+      if (args.join("\0") === mergedAuthorsArgs.join("\0")) {
         return "";
       }
       if (args[0] === "api" && args[1]?.startsWith("users/")) {
@@ -155,11 +163,6 @@ async function importUpdateClawtributors() {
 describe("update-clawtributors", () => {
   it("bounds every GitHub CLI lookup", async () => {
     const fixture = mockClawtributorsFixture({ ensureLogins: ["extra"] });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(null, { status: 404 })),
-    );
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     await importUpdateClawtributors();
 
@@ -170,36 +173,14 @@ describe("update-clawtributors", () => {
       timeout: 120_000,
       killSignal: "SIGKILL",
     };
-    expect(fixture.execPlainGh).toHaveBeenNthCalledWith(
-      1,
-      ["api", "repos/openclaw/openclaw/contributors?per_page=100&anon=1", "--paginate"],
-      options,
-    );
+    expect(fixture.execPlainGh).toHaveBeenNthCalledWith(1, contributorsArgs, options);
     expect(fixture.execPlainGh).toHaveBeenNthCalledWith(2, ["api", "users/extra"], options);
-    expect(fixture.execPlainGh).toHaveBeenNthCalledWith(
-      3,
-      [
-        "pr",
-        "list",
-        "-R",
-        "openclaw/openclaw",
-        "--state",
-        "merged",
-        "--limit",
-        "5000",
-        "--json",
-        "author",
-        "--jq",
-        ".[].author.login",
-      ],
-      options,
-    );
+    expect(fixture.execPlainGh).toHaveBeenNthCalledWith(3, mergedAuthorsArgs, options);
   });
 
   it("resolves renamed seed profiles by stable account id", async () => {
     const fixture = mockClawtributorsFixture({
-      seedEntry:
-        '<a href="https://github.com/old-handle"><img src="https://avatars.githubusercontent.com/u/42?v=4&s=48" width="48" height="48" alt="Original credit"></a>',
+      seedEntry: credit("old-handle", "Original credit"),
       accountLookup: {
         id: 42,
         login: "new-handle",
@@ -207,11 +188,6 @@ describe("update-clawtributors", () => {
         avatar_url: "https://avatars.githubusercontent.com/u/42?v=4",
       },
     });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(null, { status: 404 })),
-    );
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     await importUpdateClawtributors();
 
@@ -219,9 +195,7 @@ describe("update-clawtributors", () => {
       ["api", "user/42"],
       expect.objectContaining({ timeout: 120_000, killSignal: "SIGKILL" }),
     );
-    expect(fixture.readWrittenReadme()).toContain(
-      '<a href="https://github.com/new-handle"><img src="https://avatars.githubusercontent.com/u/42?v=4&s=48" width="48" height="48" alt="Original credit"></a>',
-    );
+    expect(fixture.readWrittenReadme()).toContain(credit("new-handle", "Original credit"));
     expect(fixture.readWrittenReadme()).not.toContain('href="https://github.com/old-handle"');
   });
 
@@ -229,37 +203,23 @@ describe("update-clawtributors", () => {
     "keeps deleted seed profiles as unlinked credit on HTTP %s",
     async (accountLookupStatus) => {
       const fixture = mockClawtributorsFixture({
-        seedEntry:
-          '<a href="https://github.com/gone-handle"><img src="https://avatars.githubusercontent.com/u/42?v=4&s=48" width="48" height="48" alt="Gone contributor"></a>',
+        seedEntry: credit("gone-handle", "Gone contributor"),
         accountLookup: null,
         accountLookupStatus,
       });
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => new Response(null, { status: 404 })),
-      );
-      vi.spyOn(console, "log").mockImplementation(() => undefined);
 
       await importUpdateClawtributors();
 
-      expect(fixture.readWrittenReadme()).toContain(
-        '<img src="https://avatars.githubusercontent.com/u/42?v=4&s=48" width="48" height="48" alt="Gone contributor">',
-      );
+      expect(fixture.readWrittenReadme()).toContain(avatar("Gone contributor"));
       expect(fixture.readWrittenReadme()).not.toContain('href="https://github.com/gone-handle"');
     },
   );
 
   it("aborts instead of unlinking credit on transient account lookup failures", async () => {
     const fixture = mockClawtributorsFixture({
-      seedEntry:
-        '<a href="https://github.com/current-handle"><img src="https://avatars.githubusercontent.com/u/42?v=4&s=48" width="48" height="48" alt="Current contributor"></a>',
+      seedEntry: credit("current-handle", "Current contributor"),
       accountLookupError: new Error("GitHub API unavailable"),
     });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(null, { status: 404 })),
-    );
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     await expect(importUpdateClawtributors()).rejects.toThrow("GitHub API unavailable");
 
@@ -279,7 +239,6 @@ describe("update-clawtributors", () => {
       "fetch",
       vi.fn(async () => new Response(png)),
     );
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     await importUpdateClawtributors();
 
@@ -311,7 +270,6 @@ describe("update-clawtributors", () => {
         ),
       );
     }) as typeof fetch);
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     vi.useFakeTimers();
     const imported = importUpdateClawtributors();

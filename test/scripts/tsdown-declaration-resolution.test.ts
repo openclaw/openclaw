@@ -205,11 +205,9 @@ assert.equal(fs.readFileSync(path.join(root, "packages/gateway-protocol/dist/kee
 fs.writeFileSync("src/index.ts", 'export const invalid: number = "selected";');
 await assert.rejects(buildWorkspacePackage("gateway-client"), /TS2322/);
 assert.equal(process.cwd(), packageDir);
-console.log("standalone package boundary verified");
 `,
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(result.stdout).toContain("standalone package boundary verified");
     }));
 
   it.runIf(process.platform === "win32").concurrent(
@@ -458,13 +456,9 @@ try {
 } finally {
   fs.rmSync(stage, { recursive: true, force: true });
 }
-console.log("inherited ambient roots retained; unrelated roots excluded; selected errors rejected");
 `,
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(result.stdout).toContain(
-        "inherited ambient roots retained; unrelated roots excluded; selected errors rejected",
-      );
     }));
 
   it.skipIf(process.platform === "win32").concurrent(
@@ -539,13 +533,9 @@ try {
   written.resolve();
   Program.prototype.emitToString = originalEmit;
 }
-console.log("cold sibling outputs are available through the installed alias");
 `,
         );
         expect(result.status, result.stdout + result.stderr).toBe(0);
-        expect(result.stdout).toContain(
-          "cold sibling outputs are available through the installed alias",
-        );
       }),
   );
 
@@ -628,11 +618,9 @@ try {
 } finally {
   for (const bundle of bundles) await bundle[Symbol.asyncDispose]();
 }
-console.log("resolved declaration override honored");
 `,
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(result.stdout).toContain("resolved declaration override honored");
     }),
   );
 
@@ -693,13 +681,9 @@ for (const failure of [false, true]) {
     assert.match(fs.readFileSync(path.join(root, ".artifacts/lifecycle-1/second.d.mts"), "utf8"), /secondOrigin: "local"/);
   }
 }
-console.log("workspace/AI native compilation settled after success and failure");
 `,
       );
       expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(result.stdout).toContain(
-        "workspace/AI native compilation settled after success and failure",
-      );
     }));
 
   it.concurrent.for([

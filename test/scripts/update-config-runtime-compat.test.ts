@@ -12,14 +12,30 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const node = resolveTestNodeExecPath();
-
-it("imports the reader once without spawning when a loader strips URL queries", async () => {
-  const root = tempDirs.make("openclaw-update-config-child-");
+async function candidateFixture(prefix: string, source: string) {
+  const root = tempDirs.make(`openclaw-update-config-${prefix}-`);
   const dist = path.join(root, "dist");
   await fs.mkdir(dist);
   await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
-  await fs.writeFile(
-    path.join(dist, "io.runtime-Candidate.mjs"),
+  await fs.writeFile(path.join(dist, "io.runtime-Candidate.mjs"), source);
+  return { root, dist };
+}
+
+function runScript(
+  script: string,
+  options: { root?: string; timeout?: number; env?: NodeJS.ProcessEnv } = {},
+) {
+  return spawnSync(node, ["--input-type=module", "--eval", script], {
+    cwd: options.root,
+    encoding: "utf8",
+    timeout: options.timeout ?? 30_000,
+    env: { ...process.env, NODE_OPTIONS: "", OPENCLAW_UPDATE_IN_PROGRESS: "1", ...options.env },
+  });
+}
+
+it("imports the reader once without spawning when a loader strips URL queries", async () => {
+  const { root, dist } = await candidateFixture(
+    "child",
     `globalThis.readerImports = (globalThis.readerImports ?? 0) + 1;
 export function createConfigIO() { return { loadConfig: () => ({ valid: true }) }; }
 export async function readConfigFileSnapshot() { return { valid: true }; }
@@ -64,12 +80,9 @@ assert.throws(() => parent.createConfigIO({ env: {} }).loadConfig(), { code: "ca
 assert.equal(spawns, 0);
 console.log(JSON.stringify({ readerImports: globalThis.readerImports, spawns, diagnostics }));
 `;
-  const result = spawnSync(node, ["--input-type=module", "--eval", script], {
-    encoding: "utf8",
+  const result = runScript(script, {
     timeout: 10_000,
     env: {
-      ...process.env,
-      NODE_OPTIONS: "",
       OPENCLAW_STATE_DIR: root,
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
       OPENCLAW_CONFIG_READ_CHILD: "",
@@ -91,13 +104,9 @@ console.log(JSON.stringify({ readerImports: globalThis.readerImports, spawns, di
 });
 
 it("returns candidate reads larger than the reader's stdout buffer intact", async () => {
-  const root = tempDirs.make("openclaw-update-config-large-");
-  const dist = path.join(root, "dist");
-  await fs.mkdir(dist);
-  await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
   // About 1 MB: well past macOS pipe and Linux socketpair buffers.
-  await fs.writeFile(
-    path.join(dist, "io.runtime-Candidate.mjs"),
+  const { root, dist } = await candidateFixture(
+    "large",
     `const snapshot = () => ({ valid: true, text: "🦞 café ".repeat(100_000) });
 export function createConfigIO() { return { loadConfig: snapshot, readConfigFileSnapshot: async () => snapshot() }; }
 export async function readConfigFileSnapshot() { return snapshot(); }
@@ -114,22 +123,14 @@ assert.deepEqual(await reader.createConfigIO().readConfigFileSnapshot(), expecte
 assert.deepEqual(reader.readCurrentConfigForPolicyCheck(), expected);
 assert.deepEqual(reader.createConfigIO().loadConfig(), expected);
 `;
-  const result = spawnSync(node, ["--input-type=module", "--eval", script], {
-    encoding: "utf8",
-    timeout: 30_000,
-    env: { ...process.env, NODE_OPTIONS: "", OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-  });
+  const result = runScript(script);
   expect(result.stderr).toBe("");
   expect(result.status).toBe(0);
 });
 
 it("reports a reader exit without a result while withholding the reader's stderr", async () => {
-  const root = tempDirs.make("openclaw-update-config-exit-");
-  const dist = path.join(root, "dist");
-  await fs.mkdir(dist);
-  await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
-  await fs.writeFile(
-    path.join(dist, "io.runtime-Candidate.mjs"),
+  const { root, dist } = await candidateFixture(
+    "exit",
     `if (process.env.OPENCLAW_CONFIG_READ_CHILD === "1") {
   process.stderr.write("synthetic-config-secret\\n");
   process.exit(7);
@@ -149,11 +150,7 @@ await assert.rejects(reader.readConfigFileSnapshot(), { code: "candidate-config-
 assert.throws(() => reader.readCurrentConfigForPolicyCheck(), { code: "candidate-config-read-failed" });
 console.log(JSON.stringify(warnings));
 `;
-  const result = spawnSync(node, ["--input-type=module", "--eval", script], {
-    encoding: "utf8",
-    timeout: 10_000,
-    env: { ...process.env, NODE_OPTIONS: "", OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-  });
+  const result = runScript(script, { timeout: 10_000 });
   expect(result.status, result.stderr).toBe(0);
   expect(result.stderr).toBe("");
   expect(JSON.parse(result.stdout)).toEqual(
@@ -268,11 +265,12 @@ await fs.writeFile(new URL(dependency), "export function probePathCaseInsensitiv
 assert.equal((await io.readBestEffortConfig()).generation, 2);
 console.log(JSON.stringify(diagnostics));
 `;
-  const result = spawnSync(node, ["--input-type=module", "--eval", script], {
-    cwd: path.dirname(root),
-    encoding: "utf8",
-    timeout: 30_000,
-    env: { ...process.env, NODE_OPTIONS: "", NODE_DISABLE_COMPILE_CACHE: "1" },
+  const result = runScript(script, {
+    root: path.dirname(root),
+    env: {
+      OPENCLAW_UPDATE_IN_PROGRESS: process.env.OPENCLAW_UPDATE_IN_PROGRESS,
+      NODE_DISABLE_COMPILE_CACHE: "1",
+    },
   });
   expect(result.status).toBe(0);
   expect(result.stderr).toBe("");
@@ -287,12 +285,8 @@ console.log(JSON.stringify(diagnostics));
     { marker: "0", entry: path.join(dist, "io.runtime.js") },
     { marker: "1", entry: currentEntry },
   ]) {
-    const normal = spawnSync(
-      node,
-      [
-        "--input-type=module",
-        "--eval",
-        `import assert from "node:assert/strict";
+    const normal = runScript(
+      `import assert from "node:assert/strict";
        const runtime = await import(${JSON.stringify(pathToFileURL(entry).href)});
        const result = await runtime.createConfigIO().readBestEffortConfig();
        assert.equal(result.generation, 2);
@@ -302,13 +296,8 @@ console.log(JSON.stringify(diagnostics));
        } else {
          assert.notEqual(result.pid, process.pid);
        }`,
-      ],
       {
-        encoding: "utf8",
-        timeout: 30_000,
         env: {
-          ...process.env,
-          NODE_OPTIONS: "",
           NODE_DISABLE_COMPILE_CACHE: "1",
           OPENCLAW_UPDATE_IN_PROGRESS: marker,
         },
