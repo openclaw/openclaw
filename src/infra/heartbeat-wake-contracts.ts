@@ -1,5 +1,5 @@
 export type HeartbeatRunResult =
-  | { status: "ran"; durationMs: number }
+  | { status: "ran"; durationMs: number; sessionKey?: string; sessionId?: string }
   | { status: "skipped"; reason: string; retryAtMs?: number }
   | { status: "failed"; reason: string };
 
