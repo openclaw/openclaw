@@ -271,21 +271,24 @@ it.for([false, true])(
       });
       clearStoredSessionRowTranscriptForTest(target);
       const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
-      const published = observeSessionRowBackfill([target.sessionKey], undefined, (row) =>
+      using release = holdForeground();
+      using projection = await createTestProjection({ cfg, modelCatalog: [] });
+      await projection.ensureMaterialized();
+      const published = observeSessionRowBackfill([target.sessionKey], projection, (row) =>
         row.lastMessagePreview === "Cold message" ? row.key : "",
       );
-      using projection = await createTestProjection({ cfg, modelCatalog: [] });
+      release();
       await withinTest(published, signal);
       expect(backfill).toHaveBeenCalledTimes(1);
-      const followedUp = observeSessionRowBackfill([target.sessionKey], undefined, (row) =>
-        row.lastMessagePreview === "Second followup" ? row.key : "",
-      );
       await appendTranscript(
         target,
         { role: "user", content: "First followup" },
         { role: "user", content: "Second followup" },
       );
-      await withinTest(followedUp, signal);
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Second followup",
+      );
       expect(
         projection.snapshot(query, { includeLastMessage: true }).row?.lastAssistantMessage,
       ).toEqual(hasAssistant ? { text: "Cold message", timestamp: 100 } : undefined);

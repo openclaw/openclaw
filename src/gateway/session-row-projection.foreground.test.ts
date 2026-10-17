@@ -355,7 +355,7 @@ it("keeps a committed append preview when an older background read finishes", as
     const backfill = holdBackfillPublication();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     try {
-      expect((await backfill.prepared).lastMessagePreview).toBe("Older preview");
+      expect(await backfill.prepared).toMatchObject({ lastMessagePreview: "Older preview" });
       await sessions.persistSessionTranscriptTurn(scope, {
         config: cfg,
         messages: [{ message: { role: "assistant", content: "Committed preview" } }],
