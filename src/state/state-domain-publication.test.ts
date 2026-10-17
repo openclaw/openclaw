@@ -25,9 +25,12 @@ afterEach(() => {
   }
 });
 
-function domain(sourceIdentity?: (db: DatabaseSync) => string | symbol) {
+function domain(
+  sourceIdentity?: (db: DatabaseSync) => string | symbol,
+  name = `receipt-test-${randomUUID()}`,
+) {
   return createStateDomainPublication<Row>({
-    domain: `receipt-test-${randomUUID()}`,
+    domain: name,
     sourceIdentity,
     keyOf: (row) => row.id,
     isValue: (value): value is Row =>
@@ -118,6 +121,58 @@ it("captures only committed postimages across nested rollback and waits for the 
   ]);
   expect(changes).toHaveLength(2);
 });
+
+it("shares nested captures across facades for the same domain and database", () => {
+  const { db, transaction, write } = fixture();
+  const name = `shared-receipt-test-${randomUUID()}`;
+  const first = domain(undefined, name);
+  const second = domain(undefined, name);
+  const captured = transaction(() =>
+    first.capture(db, () => {
+      write({ id: "before", version: 1 }, first);
+      const nested = second.capture(db, () => write({ id: "nested", version: 2 }, second));
+      expect([...nested.receipt.facts.keys()]).toEqual(["before", "nested"]);
+      write({ id: "after", version: 3 }, first);
+      return "written";
+    }),
+  );
+  expect(captured.result).toBe("written");
+  expect([...captured.receipt.facts.keys()]).toEqual(["before", "nested", "after"]);
+});
+
+it.each([false, true])(
+  "restores the outer database capture after a nested capture (throws=%s)",
+  (throws) => {
+    const outer = fixture();
+    const inner = fixture();
+    const publication = outer.publication;
+    const captured = outer.transaction(() =>
+      publication.capture(outer.db, () => {
+        outer.write({ id: "before", version: 1 });
+        const runInner = () =>
+          inner.transaction(() =>
+            publication.capture(inner.db, () => {
+              inner.write({ id: "other-database", version: 2 }, publication);
+              if (throws) {
+                throw new Error("inner rollback");
+              }
+            }),
+          );
+        if (throws) {
+          expect(runInner).toThrow("inner rollback");
+        } else {
+          expect([...runInner().receipt.facts.keys()]).toEqual(["other-database"]);
+        }
+        outer.write({ id: "after", version: 3 });
+      }),
+    );
+    expect([...captured.receipt.facts.keys()]).toEqual(["before", "after"]);
+    expect(inner.db.prepare("SELECT * FROM facts").all()).toEqual(
+      throws ? [] : [{ id: "other-database", version: 2 }],
+    );
+    expect(publication.capture(outer.db, () => {}).receipt.facts.size).toBe(0);
+  },
+);
 
 it("installs all domains from a worker commit before notifying either domain", () => {
   const { db, publication, transaction, write, begin } = fixture();

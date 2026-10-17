@@ -44,7 +44,7 @@ function createApprovalPrompt(approval: TuiPluginApproval, selector: TuiChoiceSe
   );
 }
 
-type ApprovalTimer = number | NodeJS.Timeout;
+type ApprovalTimer = ReturnType<typeof setTimeout>;
 
 type TuiPluginApprovalControllerDeps = {
   client: Pick<TuiBackend, "listPluginApprovals" | "resolvePluginApproval">;
@@ -56,10 +56,6 @@ type TuiPluginApprovalControllerDeps = {
   openOverlay: (component: Component) => OverlayHandle;
   closeOverlay: (handle: OverlayHandle) => void;
   requestRender: () => void;
-  createSelector?: (items: SelectItem[]) => TuiChoiceSelector;
-  nowMs?: () => number;
-  setTimeoutFn?: (callback: () => void, delayMs: number) => ApprovalTimer;
-  clearTimeoutFn?: (timer: ApprovalTimer) => void;
 };
 
 const DEFAULT_DECISIONS: readonly TuiApprovalDecision[] = ["allow-once", "allow-always", "deny"];
@@ -145,10 +141,6 @@ function decisionLabel(decision: TuiApprovalDecision): string {
 }
 
 export function createTuiPluginApprovalController(deps: TuiPluginApprovalControllerDeps) {
-  const createSelector = deps.createSelector ?? createTuiChoiceSelector;
-  const nowMs = deps.nowMs ?? Date.now;
-  const setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
-  const clearTimeoutFn = deps.clearTimeoutFn ?? clearTimeout;
   let queue = new Map<string, TuiPluginApproval>();
   type Presentation = { id: string; overlay?: OverlayHandle; timer?: ApprovalTimer };
   let active: Presentation | null = null;
@@ -161,7 +153,7 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
   const closeActiveOverlay = () => {
     const previous = active;
     if (previous?.timer !== undefined) {
-      clearTimeoutFn(previous.timer);
+      clearTimeout(previous.timer);
     }
     active = null;
     if (previous?.overlay) {
@@ -182,7 +174,7 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
     if (disposed || active) {
       return;
     }
-    const now = nowMs();
+    const now = Date.now();
     for (const approval of queue.values()) {
       if (approval.expiresAtMs <= now) {
         remove(approval.id);
@@ -204,7 +196,7 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
     const surfaceLabel = "plugin approval";
 
     const decisions = approval.request.allowedDecisions ?? DEFAULT_DECISIONS;
-    const selector = createSelector(decisions.map((decision) => DECISION_ITEMS[decision]));
+    const selector = createTuiChoiceSelector(decisions.map((decision) => DECISION_ITEMS[decision]));
     let allowDecisionArmed = false;
     const prompt = createApprovalPrompt(approval, selector);
     const denyIndex = decisions.indexOf("deny");
@@ -297,7 +289,7 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
       presentNext();
       deps.requestRender();
     };
-    const timer = setTimeoutFn(
+    const timer = setTimeout(
       () => {
         if (active?.id !== approval.id) {
           return;
@@ -309,12 +301,10 @@ export function createTuiPluginApprovalController(deps: TuiPluginApprovalControl
         presentNext();
         deps.requestRender();
       },
-      Math.max(1, approval.expiresAtMs - nowMs()),
+      Math.max(1, approval.expiresAtMs - Date.now()),
     );
     presentation.timer = timer;
-    if (typeof timer !== "number") {
-      timer.unref?.();
-    }
+    timer.unref();
     presentation.overlay = deps.openOverlay(prompt);
     deps.requestRender();
   };

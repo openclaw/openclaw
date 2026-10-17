@@ -42,11 +42,11 @@ export function captureCodexConfiguredConnection(
     authToken: start.authToken,
     headers: start.headers,
   });
-  return Object.freeze({
+  return {
     kind: "configured-connection",
     transport: start.transport,
     selectionFingerprint: createHash("sha256").update(key).digest("hex"),
-  });
+  };
 }
 
 export function finalizeCodexConfiguredConnection(params: {

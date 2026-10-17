@@ -84,6 +84,26 @@ describe("isHeartbeatAcknowledgementText", () => {
     expect(isHeartbeatAcknowledgementText("NO_REPLY: actual reminder")).toBe(false);
     expect(isHeartbeatAcknowledgementText("HEARTBEAT_OK all good", 0)).toBe(false);
   });
+
+  it.each(["NO_R", "no_r", "NO_RE", " No_R ", "no_repl"])(
+    "treats a truncated silent token %s as a quiet acknowledgement (#170158)",
+    (text) => {
+      expect(isHeartbeatAcknowledgementText(text)).toBe(false);
+      expect(isHeartbeatAcknowledgementText(text, undefined, true)).toBe(true);
+      expect(stripHeartbeatToken(text, { mode: "message" })).toEqual({
+        shouldSkip: false,
+        text: text.trim(),
+        didStrip: false,
+      });
+    },
+  );
+
+  it.each(["no_", "no_r.", "NO_RESP", "No", "No.", "NO", "NO_REPLY: actual reminder"])(
+    "keeps ordinary short replies like %s substantive on heartbeats",
+    (text) => {
+      expect(isHeartbeatAcknowledgementText(text, undefined, true)).toBe(false);
+    },
+  );
 });
 
 describe("isHeartbeatContentEffectivelyEmpty", () => {

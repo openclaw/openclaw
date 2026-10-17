@@ -1,7 +1,10 @@
+import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
+import type { DecisionProviderContextV2 } from "./provider-context.js";
 import type {
   DecisionEntry,
   DecisionOutcome,
   DecisionQuestion,
+  DecisionRuntimeV1,
   JsonValue,
   ProviderDecisionOutcome,
 } from "./types.js";
@@ -109,3 +112,27 @@ export type DecisionOutcomeV2 =
       readonly provenance: Extract<DecisionOutcome, { status: "ok" }>["provenance"];
     }
   | Extract<DecisionOutcome, { status: "unavailable" }>;
+
+/** Execution options add only provider-declared reasoning to the established caller contract. */
+export type DecisionEvaluateOptionsV2 = Parameters<DecisionRuntimeV1["evaluate"]>[1] & {
+  readonly reasoning?: DecisionProviderContextV2["reasoning"];
+};
+
+/** Shares normal model catalog, route and credential ownership with conversational inference. */
+export interface DecisionProviderV2 {
+  readonly id: string;
+  readonly contractVersion: 2;
+  /** Omit when this plugin has already registered the same normal provider. */
+  readonly provider?: Omit<ProviderPlugin, "id">;
+  evaluate(
+    batch: DecisionBatchV2,
+    context: DecisionProviderContextV2,
+  ): Promise<ProviderDecisionOutcomeV2>;
+}
+
+export interface DecisionRuntimeV2 extends DecisionRuntimeV1 {
+  evaluateV2(
+    batch: DecisionBatchV2,
+    options: DecisionEvaluateOptionsV2,
+  ): Promise<DecisionOutcomeV2>;
+}

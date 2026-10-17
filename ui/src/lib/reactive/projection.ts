@@ -38,7 +38,7 @@ export function projectOwner<S extends { subscribe(notify: () => void): Dispose 
   });
 }
 
-/** A read-through view of an owner. This never becomes an authoritative store. */
+/** Read-through owner view; only revision tracks, never the sampled owner reads or subscriptions. */
 export function projectSource<S, T>(
   initialSource: S,
   contract: SourceContract<S, T>,

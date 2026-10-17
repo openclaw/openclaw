@@ -25,6 +25,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import * as hookRunnerGlobal from "../../plugins/hook-runner-global.js";
 import { createHookRunnerWithRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import {
   type OpenClawTestState,
@@ -265,7 +267,23 @@ async function runMediaTurn(
       cfg,
       client: null,
       activeSessionAgentId: "main",
-      prepared: { lifecycleStorePath: scope.storePath },
+      prepared: {
+        lifecycleStorePath: scope.storePath,
+        replyDispatchRuntime: {
+          agentId: "main",
+          agentDir: state.agentDir(),
+          workspaceDir: state.workspaceDir,
+          config: cfg,
+          modelCatalog: { entries: [], routeVariants: [] },
+          inboundPluginRegistry: createEmptyPluginRegistry(),
+          pluginGeneration: {
+            remoteCatalog: null,
+            pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+            inlineProviderModels: [],
+            configuredCatalogEntries: [],
+          },
+        },
+      },
     },
   );
   return {
@@ -442,7 +460,6 @@ it.each<{
   { name: "private completion", options: { privateCompletion: true } },
   { name: "internal session effects", options: { sessionEffects: "internal" } },
   { name: "external delivery", options: { deliver: true, channel: "telegram" } },
-  { name: "queue-owned media", options: { internalDeliveryMediaUrls: [] } },
   { name: "incognito dispatch", incognito: true },
 ])("does not retain final $name through the WebChat projector", async (scenario) => {
   await withOpenClawTestState({ label: "agent-final-media-suppression" }, async (state) => {

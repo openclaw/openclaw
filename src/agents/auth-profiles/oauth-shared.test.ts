@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import {
   createApiKeyCredential,
@@ -18,20 +19,15 @@ import type { AuthProfileStore, OAuthCredential, RuntimeAuthProfileStore } from 
 
 const credential = (overrides: Partial<OAuthCredential> = {}) =>
   createOAuthRefreshCredential({ expires: Date.now() + 600_000, ...overrides });
+const known = { accountId: "acct-a" };
 
 it.each([
-  ["known same identity", { accountId: "acct-a" }, { accountId: "acct-a" }, true, true],
-  ["known different identity", { accountId: "acct-a" }, { accountId: "acct-b" }, false, false],
+  ["known same identity", known, known, true, true],
+  ["known different identity", known, { accountId: "acct-b" }, false, false],
   ["both identities unknown", {}, {}, true, false],
-  ["unknown identity becomes known", {}, { accountId: "acct-a" }, true, false],
-  ["known identity becomes unknown", { accountId: "acct-a" }, {}, false, false],
-  [
-    "provider changes",
-    { accountId: "acct-a" },
-    { accountId: "acct-a", provider: "anthropic" },
-    false,
-    false,
-  ],
+  ["unknown identity becomes known", {}, known, true, false],
+  ["known identity becomes unknown", known, {}, false, false],
+  ["provider changes", known, { ...known, provider: "anthropic" }, false, false],
 ] as const)(
   "applies exact-owner and different-owner rules for %s",
   (_name, claimed, refreshed, exactOwner, differentOwner) => {
@@ -45,23 +41,12 @@ it.each([
 );
 
 describe("OIDC registered identity", () => {
-  const existing = credential({
-    provider: "oidc-provider",
-    access: "old-access",
-    refresh: "old-refresh",
-    ...oidcIdentity(),
-  });
+  const existing = credential({ provider: "oidc-provider", ...oidcIdentity() });
+  const otherIssuer = "https://other.example.test";
   it.each([
     ["same subject and registration", oidcIdentity(), true],
     ["changed subject", oidcIdentity({ sub: "subject-b" }), false],
-    [
-      "different issuer",
-      {
-        ...oidcIdentity({ iss: "https://other.example.test" }),
-        issuer: "https://other.example.test",
-      },
-      false,
-    ],
+    ["different issuer", { ...oidcIdentity({ iss: otherIssuer }), issuer: otherIssuer }, false],
     [
       "different client",
       { ...oidcIdentity({ aud: "client-other" }), clientId: "client-other" },
@@ -75,8 +60,8 @@ describe("OIDC registered identity", () => {
     const claimed = { ...existing, email: "same@example.test" };
     const incoming = {
       ...claimed,
-      access: "new-access",
-      refresh: "new-refresh",
+      access: "rotated-access",
+      refresh: "rotated-refresh",
       expires: claimed.expires + 600_000,
       ...metadata,
     };
@@ -101,7 +86,7 @@ describe("OIDC registered identity", () => {
       accountId: "account-a",
       ...metadata,
     };
-    const refreshed = { ...claimed, access: "new-access", refresh: "new-refresh" };
+    const refreshed = { ...claimed, access: "rotated-access", refresh: "rotated-refresh" };
     expect(isSafeOAuthOwnerRefreshResult(claimed, refreshed)).toBe(true);
     expect(isSafeOAuthPostClaimSettlement(claimed, refreshed)).toBe(true);
     expect(isSafeToAdoptMainStoreOAuthIdentity(claimed, refreshed)).toBe(true);
@@ -112,9 +97,8 @@ describe("OIDC registered identity", () => {
     const fence = createOAuthRefreshFence({ profileId: "provider:custom", credential: existing });
     expect(isSafeOAuthPostClaimSettlement(existing, refreshed)).toBe(true);
     expect(isSafeOAuthPostClaimSettlement(fence, refreshed)).toBe(true);
-    expect(isSafeToAdoptMainStoreOAuthIdentity({ ...fence, accountId: undefined }, refreshed)).toBe(
-      false,
-    );
+    const anonymous = { ...fence, accountId: undefined };
+    expect(isSafeToAdoptMainStoreOAuthIdentity(anonymous, refreshed)).toBe(false);
   });
 });
 
@@ -132,16 +116,11 @@ it("isolates runtime OAuth overlays without structuredClone", () => {
         credential: credential({ access: "access-1", refresh: "refresh-1" }),
       },
     ]);
-    const profile = overlaid.profiles["openai:default"];
-    expect(profile?.type).toBe("oauth");
-    if (profile?.type !== "oauth") {
-      throw new Error("expected overlaid OAuth profile");
-    }
-    expect(profile.access).toBe("access-1");
-    expect(store.profiles["openai:default"]?.type).toBe("api_key");
+    const profile = expectDefined(overlaid.profiles["openai:default"], "overlaid profile");
+    expect(profile).toMatchObject({ type: "oauth", access: "access-1" });
     profile.provider = "mutated";
     overlaid.order!.openai!.push("mutated");
-    expect(store.profiles["openai:default"]?.provider).toBe("openai");
+    expect(store.profiles["openai:default"]).toMatchObject({ type: "api_key", provider: "openai" });
     expect(store.order?.openai).toEqual(["openai:default"]);
     expect(spy).not.toHaveBeenCalled();
   } finally {
@@ -149,91 +128,49 @@ it("isolates runtime OAuth overlays without structuredClone", () => {
   }
 });
 
-const minimax = credential({
-  provider: "minimax-portal",
-  access: "minimax-access",
-  refresh: "minimax-refresh",
-  expires: 1,
-});
-const provenanceCases: {
-  name: string;
-  store: RuntimeAuthProfileStore;
-  overlays: RuntimeExternalOAuthProfile[];
-  authoritative?: boolean;
-  expectedIds?: string[];
-}[] = [
-  {
-    name: "non-authoritative runtime overlays",
-    store: {
+const minimaxId = "minimax:minimax-cli",
+  anthropicId = "anthropic:claude-cli",
+  openaiId = "openai:default";
+const minimax = credential({ provider: "minimax-portal" });
+const anthropic = credential({ provider: "anthropic" });
+const openai = credential();
+const runtime: RuntimeAuthProfileStore = {
+  version: 1,
+  profiles: { [minimaxId]: minimax },
+  runtimeExternalProfileIds: [minimaxId],
+};
+it.each<
+  [string, RuntimeAuthProfileStore, RuntimeExternalOAuthProfile[], string[] | undefined, boolean?]
+>([
+  [
+    "non-authoritative runtime overlays",
+    { ...runtime, profiles: { ...runtime.profiles, [anthropicId]: anthropic } },
+    [{ profileId: anthropicId, credential: anthropic }],
+    [anthropicId, minimaxId],
+  ],
+  [
+    "authoritative runtime overlays",
+    { ...runtime, runtimeExternalProfileIdsAuthoritative: true },
+    [],
+    [minimaxId],
+    true,
+  ],
+  [
+    "persisted external overlays",
+    {
       version: 1,
-      runtimeExternalProfileIds: ["minimax:minimax-cli"],
-      profiles: {
-        "anthropic:claude-cli": credential({
-          provider: "anthropic",
-          access: "old-access",
-          refresh: "old-refresh",
-          expires: 1,
-        }),
-        "minimax:minimax-cli": minimax,
-      },
-    },
-    overlays: [
-      {
-        profileId: "anthropic:claude-cli",
-        credential: credential({
-          provider: "anthropic",
-          access: "new-access",
-          refresh: "new-refresh",
-          expires: 2,
-        }),
-      },
-    ],
-    expectedIds: ["anthropic:claude-cli", "minimax:minimax-cli"],
-  },
-  {
-    name: "authoritative runtime overlays",
-    store: {
-      version: 1,
-      runtimeExternalProfileIds: ["minimax:minimax-cli"],
-      runtimeExternalProfileIdsAuthoritative: true,
-      profiles: { "minimax:minimax-cli": minimax },
-    },
-    overlays: [],
-    authoritative: true,
-    expectedIds: ["minimax:minimax-cli"],
-  },
-  {
-    name: "persisted external overlays",
-    store: {
-      version: 1,
-      runtimePersistedProfileIds: ["openai:default"],
+      profiles: { [openaiId]: openai },
+      runtimePersistedProfileIds: [openaiId],
       runtimeCredentialSources: {
-        "openai:default": { databasePath: "synthetic-owner.sqlite", provider: "openai" },
-      },
-      profiles: {
-        "openai:default": credential({
-          access: "persisted-access",
-          refresh: "persisted-refresh",
-          expires: 1,
-        }),
+        [openaiId]: { databasePath: "synthetic-owner.sqlite", provider: "openai" },
       },
     },
-    overlays: [
-      {
-        profileId: "openai:default",
-        persistence: "persisted",
-        credential: credential({
-          access: "external-access",
-          refresh: "external-refresh",
-          expires: 2,
-        }),
-      },
-    ],
-  },
-];
-it.each(provenanceCases)(
-  "preserves only valid provenance for $name",
-  ({ store, overlays, authoritative, expectedIds }) => {
+    [{ profileId: openaiId, persistence: "persisted", credential: openai }],
+    undefined,
+  ],
+])(
+  "preserves only valid provenance for %s",
+  (_name, store, overlays, expectedIds, authoritative) => {
     const overlaid: RuntimeAuthProfileStore = overlayRuntimeExternalOAuthProfiles(store, overlays, {
       runtimeExternalProfileIdsAuthoritative: authoritative,
     });

@@ -161,15 +161,19 @@ answer. The tool collects no ambient conversation. Its trusted calling-agent
 binding selects the provider and model; input cannot override that identity or
 selection.
 
-Results preserve Boolean probabilities, fractional zero-based scores, original
-distributions and rounding, optional confidence and usage, and provider/model
-provenance. They do not generate explanations or grant permission to act.
+The tool keeps this bounded Boolean/Choice/Score input contract and executes it
+through V2. Results preserve explicit Boolean answers separately from probabilities,
+abstention (`null`), per-question errors, fractional scores, original distributions,
+optional confidence, provider metadata and usage, including reported USD cost and
+native units. Missing fields stay absent; estimates are not normalized or derived.
+V1 providers remain supported through the lossless bridge. Results do not grant
+permission to act.
 Evidence goes to the selected provider's configured endpoint or local runtime;
 only send data authorized for that destination. Provider plugins own credentials,
 model loading, transport, and wire-specific validation.
 
-Provider capabilities are declared with their model metadata and exposed in
-`models.list.decisionModels`. Unsupported questions and bounds produce actionable,
+Provider capabilities come from the prepared model catalog or canonical manifest
+catalog, also exposed in `models.list.decisionModels`. Unsupported questions and bounds produce actionable,
 bounded guidance. Requests are rejected rather than silently truncated or split.
 Do not substitute shell or HTTP calls when a configured provider is unavailable,
 request credentials in chat, or treat a failure as a negative answer.
@@ -308,8 +312,10 @@ Provider limits differ:
 | TypeSafe AI | 2–255               | 2–10         | Subject to the host's batch limits and the vendor input contract                   |
 
 The host bounds requests to one MiB, 20,000 JSON nodes, depth 32, and 256 questions. It admits at most four
-requests per provider and caps each deadline at 30 seconds. Provider-specific
-limits can be tighter. Unsupported input is rejected instead of silently truncated.
+requests per provider and caps each deadline at 30 seconds. Optional assistance
+leaves the fourth slot for requested evaluations; under contention, the tool
+prefilter skips evaluation and retains tools. Provider-specific limits can be
+tighter. Unsupported input is rejected instead of silently truncated.
 
 An `unavailable` outcome includes a reason such as `disabled`, `not-configured`,
 `unsupported-input`, `overloaded`, or `deadline`. The consumer decides whether to
@@ -340,7 +346,11 @@ its [setup instructions](/plugins/typesafe#enable-and-configure).
 
 ## Provide models from a plugin
 
-A provider plugin implements `DecisionProviderV1` from
+New providers should use the [prepared V2 execution contract](/plugins/sdk-overview/capabilities#prepared-decision-execution-contract-version-2)
+with normal provider catalog and auth ownership. V1 remains supported through
+lossless codecs; native V2 features require a V2 caller and provider.
+
+A V1 provider plugin implements `DecisionProviderV1` from
 `openclaw/plugin-sdk/decisions` and registers it with
 `api.registerDecisionProvider(provider)`. Its `id` and `contractVersion: 1`
 identify the contract; `evaluate(batch, context)` returns validated typed answers

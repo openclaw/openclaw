@@ -17,6 +17,7 @@ import { WorkerTaskError } from "openclaw/plugin-sdk/process-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
+import { tokenizeFtsQuery } from "./keyword-query.js";
 import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
 import {
   createMemoryEmbeddingOperationError,
@@ -65,7 +66,15 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     if (!normalizedQuery) {
       return [];
     }
-    const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
+    const postgres = this.publishedDatabase.admission?.engine === "postgres";
+    if (postgres && normalizedQuery.length > 4096) {
+      throw new Error("PostgreSQL memory search query must not exceed 4096 characters");
+    }
+    if (postgres && tokenizeFtsQuery(normalizedQuery).length > 128) {
+      throw new Error("PostgreSQL memory search query must not exceed 128 terms");
+    }
+    const requestedResults = opts?.maxResults ?? this.settings.query.maxResults;
+    const maxResults = postgres ? Math.min(200, requestedResults) : requestedResults;
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const hasActiveProject = (opts?.activeProjectKeys?.length ?? 0) > 0;
     // Rank one shared window before trimming small requests. Preserve the historical
@@ -302,25 +311,36 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             indexIdentity.status === "mismatched" &&
             indexIdentity.owner === "openclaw" &&
             indexIdentity.versionOrder === "older"));
-      if (shouldRepairIdentity) {
+      const shouldUpgradeProviderKey =
+        indexIdentity.status === "valid" &&
+        this.provider &&
+        indexState.meta?.model === this.provider.model &&
+        indexState.meta.providerKey &&
+        indexState.meta.providerKey !== this.providerKey &&
+        searchSyncEnabled;
+      if (shouldRepairIdentity || shouldUpgradeProviderKey) {
         await releaseReadGeneration();
-        this.recordAutomaticRebuild();
+        if (shouldRepairIdentity) {
+          this.recordAutomaticRebuild();
+        }
         // The writer rechecks identity under its lease; another manager may have repaired it.
         await this.syncAdmitted(
           { reason: "search" },
           { allowEmbeddingBootstrapFallback: true },
         ).catch((err: unknown) => {
-          if (err instanceof WorkerTaskError && err.code === "overloaded") {
-            throw err;
-          }
-          if (readErrorName(err) === "DatabaseSearchCapabilityUnavailableError") {
+          if (
+            shouldUpgradeProviderKey ||
+            (err instanceof WorkerTaskError && err.code === "overloaded") ||
+            readErrorName(err) === "DatabaseSearchCapabilityUnavailableError"
+          ) {
             throw err;
           }
           log.warn(`memory sync failed (search-identity-repair): ${formatErrorMessage(err)}`);
         });
         indexState = await readIndexState();
       }
-      let repairedIndexIdentity = shouldRepairIdentity ? refreshSearchIdentity() : indexIdentity;
+      let repairedIndexIdentity =
+        shouldRepairIdentity || shouldUpgradeProviderKey ? refreshSearchIdentity() : indexIdentity;
       if (
         repairedIndexIdentity.status === "mismatched" &&
         !embeddingBootstrapKeywordOnly &&

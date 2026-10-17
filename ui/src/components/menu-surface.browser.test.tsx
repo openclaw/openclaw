@@ -286,6 +286,51 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
   });
 });
 
+describe.skipIf(!hasPopoverApi)("action menu typography", () => {
+  it.each([390, 1440])(
+    "keeps plain and session actions at the same text scale at %ipx",
+    async (width) => {
+      const { page } = await import("vitest/browser");
+      await page.viewport(width, 900);
+      const host = document.createElement("div");
+      host.style.fontSize = "20px";
+      host.style.setProperty("--control-ui-text-scale", "1");
+      document.body.append(host);
+      mountSolid(
+        () => (
+          <>
+            <Menu
+              id="plain-action-typography"
+              label="Workspace actions"
+              items={[{ id: "copy-path", label: "Copy path" }]}
+            />
+            <Menu
+              id="session-action-typography"
+              label="Session actions"
+              class="session-menu"
+              items={[{ id: "copy-session", label: "Copy session", class: "session-menu__item" }]}
+            />
+          </>
+        ),
+        { container: host },
+      );
+      flush();
+      const menu = host.querySelector<HTMLElement>(".oc-menu")!;
+      const plain = host.querySelector<HTMLElement>('[data-value="copy-path"]')!;
+      const session = host.querySelector<HTMLElement>('[data-value="copy-session"]')!;
+      await page.elementLocator(host.querySelector<HTMLElement>(".oc-menu-trigger")!).click();
+      await expect.poll(() => menu.dataset.phase).toBe("open");
+
+      for (const scale of [1, 1.4]) {
+        host.style.setProperty("--control-ui-text-scale", String(scale));
+        const size = (item: HTMLElement) => Number.parseFloat(getComputedStyle(item).fontSize);
+        expect(size(plain)).toBeCloseTo(13 * scale, 1);
+        expect(size(plain)).toBeCloseTo(size(session), 1);
+      }
+    },
+  );
+});
+
 describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   function useTheme(theme: "dark" | "light") {
     document.documentElement.dataset.theme = theme;

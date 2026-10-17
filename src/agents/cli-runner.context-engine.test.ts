@@ -12,7 +12,7 @@ import {
   type AdmittedRunContext,
 } from "./admitted-run-context.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
-import { waitForDeferredTurnMaintenanceForSession } from "./embedded-agent-runner/context-engine-maintenance.js";
+import { waitForSessionMaintenance } from "./session-maintenance/coordinator.js";
 
 const { executeMock, historyMock, hookHistoryMock, hookRunnerMock, beforeReplyMock, prepareMock } =
   vi.hoisted(() => ({
@@ -529,7 +529,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     await runPreparedCliAgent(context);
 
     expect(dispose).not.toHaveBeenCalled();
-    await waitForDeferredTurnMaintenanceForSession(context.params.sessionKey);
+    await waitForSessionMaintenance(context.params.sessionKey);
     expect(maintain).toHaveBeenCalledTimes(2);
     expect(dispose).not.toHaveBeenCalled();
   });

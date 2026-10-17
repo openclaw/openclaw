@@ -26,9 +26,11 @@ import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.
 import { isQueuedChatTurnForSession } from "../chat-queued-turns.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.claude.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
+import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { SerializedJsonArray } from "../serialized-json.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.js";
+import { registerDeflatedSegment } from "../server/ws-compression.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
 import { resolveSessionHistoryUnavailableMessage } from "../session-history-error.js";
@@ -72,6 +74,7 @@ export async function handleChatHistoryRequest({
   sessionMutationAuthorization,
   retainedTranscript,
   acceptsSerializedJson,
+  acceptsDeflatedSegments,
   req,
 }: GatewayRequestHandlerOptions & {
   method: ChatHistoryMethod;
@@ -239,6 +242,13 @@ export async function handleChatHistoryRequest({
         : [],
     );
     let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
+    // Internal adapters may inspect message objects before responding.
+    const encodeResponse = acceptsSerializedJson && method === req.method;
+    // Model projection replaces serialized messages, so their compressed bytes go unused.
+    const deflateResponse =
+      encodeResponse &&
+      acceptsDeflatedSegments &&
+      !resolveOperatorRolePolicy(client, context.getCommittedRuntimeConfig?.() ?? cfg)?.modelPolicy;
     try {
       historyPage =
         deltaCursor !== undefined
@@ -248,8 +258,8 @@ export async function handleChatHistoryRequest({
               () =>
                 readChatHistoryPage(
                   {
-                    // Internal adapters may inspect message objects before responding.
-                    encodeResponse: acceptsSerializedJson && method === req.method,
+                    encodeResponse,
+                    deflateResponse,
                     includePluginSteering,
                     entry: historyEntry,
                     provider: resolvedSessionModel.provider,
@@ -281,6 +291,12 @@ export async function handleChatHistoryRequest({
     } catch (error) {
       respondReadError(error);
       return;
+    }
+    if (historyPage.encodedResponse && historyPage.encodedMessagesDeflate) {
+      registerDeflatedSegment(
+        historyPage.encodedResponse.messages,
+        historyPage.encodedMessagesDeflate,
+      );
     }
     const responsePage = historyPage.encodedResponse
       ? {
@@ -498,6 +514,7 @@ export async function handleChatHistoryRequest({
             };
             delta = await readChatHistoryDelta(
               {
+                maxChars: effectiveMaxChars,
                 toolResultMaxChars,
                 includePluginSteering,
                 agentId: sessionAgentId,

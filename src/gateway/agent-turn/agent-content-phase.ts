@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
+import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
@@ -27,6 +28,7 @@ import {
   MediaOffloadError,
   logAttachmentFailure,
   parseMessageWithAttachments,
+  stripImageMediaMarkers,
   type ChatAttachment,
 } from "../chat-attachments.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
@@ -75,7 +77,7 @@ export async function prepareAgentContentPhase(params: {
     media: [],
     offloadedRefs: [],
   };
-  let supportsInlineImages: boolean | undefined;
+  let needsImageUnderstanding = false;
   let agentId = params.agentId;
   let requestedSessionKey = params.requestedSessionKey;
 
@@ -98,48 +100,6 @@ export async function prepareAgentContentPhase(params: {
       );
       return undefined;
     }
-  }
-
-  if (params.normalizedAttachments.length > 0) {
-    let baseProvider: string | undefined;
-    let baseModel: string | undefined;
-    let catalogAgentId = agentId;
-    let isConfirmedAcpSession = false;
-    if (params.requestedSessionKeyRaw) {
-      const target = resolveSessionStoreIdentity({
-        cfg: params.cfg,
-        sessionKey: params.requestedSessionKeyRaw,
-        agentId,
-      });
-      const session = await readAcpSessionEntryAsync({
-        cfg: params.cfg,
-        agentId: target.agentId,
-        sessionKey: target.canonicalKey,
-        assertCurrent: params.assertAdmissionCurrent,
-      });
-      params.assertAdmissionCurrent?.();
-      catalogAgentId = target.agentId;
-      const modelRef = resolveSessionModelRef(
-        session?.cfg ?? params.cfg,
-        session?.entry,
-        target.agentId,
-      );
-      baseProvider = modelRef.provider;
-      baseModel = modelRef.model;
-      isConfirmedAcpSession =
-        params.request.acpTurnSource === "manual_spawn" &&
-        isAcpSessionKey(params.requestedSessionKeyRaw) &&
-        session?.acp != null;
-    }
-    supportsInlineImages = isConfirmedAcpSession
-      ? true
-      : await resolveGatewayModelSupportsImages({
-          loadGatewayModelCatalog: params.context.loadGatewayModelCatalog,
-          loadGatewayModelCatalogSnapshot: params.context.loadGatewayModelCatalogSnapshot,
-          agentId: catalogAgentId,
-          provider: params.providerOverride || baseProvider,
-          model: params.modelOverride || baseModel,
-        });
   }
 
   const voiceWakeTrigger = normalizeOptionalString(params.request.voiceWakeTrigger) ?? "";
@@ -215,16 +175,64 @@ export async function prepareAgentContentPhase(params: {
   }
 
   if (params.normalizedAttachments.length > 0) {
+    let session: Awaited<ReturnType<typeof readAcpSessionEntryAsync>> = null;
+    let catalogAgentId = agentId;
+    const attachmentSessionKey = requestedSessionKey ?? params.requestedSessionKeyRaw;
+    if (attachmentSessionKey) {
+      const target = resolveSessionStoreIdentity({
+        cfg: params.cfg,
+        sessionKey: attachmentSessionKey,
+        agentId,
+      });
+      session = await readAcpSessionEntryAsync({
+        cfg: params.cfg,
+        agentId: target.agentId,
+        sessionKey: target.canonicalKey,
+        assertCurrent: params.assertAdmissionCurrent,
+      });
+      params.assertAdmissionCurrent?.();
+      catalogAgentId = target.agentId;
+    }
+    const baseModel = resolveSessionModelRef(
+      session?.cfg ?? params.cfg,
+      session?.entry,
+      catalogAgentId,
+    );
+    const model = params.modelOverride
+      ? (resolvePersistedOverrideModelRef({
+          defaultProvider: params.providerOverride ?? baseModel.provider,
+          overrideProvider: params.providerOverride,
+          overrideModel: params.modelOverride,
+        }) ?? baseModel)
+      : { provider: params.providerOverride ?? baseModel.provider, model: baseModel.model };
+    const isConfirmedAcpSession =
+      params.request.acpTurnSource === "manual_spawn" &&
+      params.requestedSessionKeyRaw !== undefined &&
+      isAcpSessionKey(params.requestedSessionKeyRaw) &&
+      session?.acp != null;
+    const supportsImages =
+      isConfirmedAcpSession ||
+      (await resolveGatewayModelSupportsImages({
+        loadGatewayModelCatalog: params.context.loadGatewayModelCatalog,
+        loadGatewayModelCatalogSnapshot: params.context.loadGatewayModelCatalogSnapshot,
+        agentId: catalogAgentId,
+        ...model,
+      }));
+    needsImageUnderstanding = !supportsImages;
     params.assertAdmissionCurrent?.();
     try {
       content = await parseMessageWithAttachments(content.message, params.normalizedAttachments, {
         maxBytes: resolveChatAttachmentMaxBytes(params.cfg),
         log: params.context.logGateway,
-        supportsInlineImages,
+        supportsImages,
         acceptNonImage: false,
         assertCurrent: params.assertAdmissionCurrent,
       });
-      content.message = content.message.trim();
+      content.message = (
+        needsImageUnderstanding
+          ? stripImageMediaMarkers(content.message, content.offloadedRefs)
+          : content.message
+      ).trim();
     } catch (err) {
       if (err instanceof AgentRequestReservationEndedError) {
         throw err;
@@ -249,6 +257,7 @@ export async function prepareAgentContentPhase(params: {
   return {
     agentId,
     requestedSessionKey,
+    needsImageUnderstanding,
     effectiveTranscriptInputText: transcriptInputText,
     ...content,
     replyTo,

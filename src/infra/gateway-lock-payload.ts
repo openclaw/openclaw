@@ -36,7 +36,10 @@ export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
       host: os.hostname(),
       ...boot,
       ...(boot.platform === "linux"
-        ? { pidNsInode: fs.statSync("/proc/self/ns/pid", { bigint: true }).ino.toString() }
+        ? {
+            // PRoot can read this magic link but cannot follow its synthetic target with stat.
+            pidNsInode: fs.readlinkSync("/proc/self/ns/pid").match(/^pid:\[(\d+)\]$/u)?.[1],
+          }
         : {}),
     });
     processNamespace = { platform: value.platform, value };

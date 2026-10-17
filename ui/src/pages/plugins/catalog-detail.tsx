@@ -21,6 +21,7 @@ import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-mess
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
 
 export type PluginCatalogDetailProps = {
+  registerIcon?: (readId: () => string) => () => void;
   onAskPlugin?: () => void;
   busy?: boolean;
   installProgress?: PluginInstallProgress;
@@ -41,17 +42,18 @@ export type PluginCatalogDetailProps = {
 };
 
 export function renderPluginReadme(readme: string | undefined): JSX.Element {
-  const readmeHtml = readme
-    ? toSanitizedMarkdownHtml(readme, { mode: "document" })
-        .replaceAll("<h1", "<h2")
-        .replaceAll("</h1>", "</h2>")
-    : null;
   return readme ? (
     <article
       class="plugin-catalog-detail__readme sidebar-markdown"
       onClick={handleMarkdownCodeBlockClick}
     >
-      <SanitizedHtml html={readmeHtml ?? ""} class="lit-content" style={{ display: "contents" }} />
+      <SanitizedHtml
+        html={toSanitizedMarkdownHtml(readme, { mode: "document" })
+          .replaceAll("<h1", "<h2")
+          .replaceAll("</h1>", "</h2>")}
+        class="lit-content"
+        style={{ display: "contents" }}
+      />
     </article>
   ) : (
     <p class="plugin-catalog-detail__empty">{t("pluginsPage.detailNoReadme")}</p>
@@ -80,6 +82,7 @@ function CatalogDetailContent(props: {
       onBack={props.state.onBack}
       icon={
         <PluginArtTile
+          registerIcon={props.state.registerIcon}
           slug={plugin().id}
           name={plugin().catalog.name}
           iconUrl={packageIcon()}

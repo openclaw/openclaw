@@ -44,8 +44,10 @@ current. A missing account, failed refresh, account/config mutation, or retired
 client leaves native models unavailable until discovery succeeds again. The next
 picker/catalog request or native execution reacquires retired observations.
 
-A client with no owned work retires after 30 idle seconds. Requests in that grace
-period reuse it. Active requests, turns, retained or releasing threads, native
+A client with no owned work retires after five idle minutes. Periodic discovery
+and background turns reuse the same client within that window. Background turns
+release their own thread and MCP resources without retiring the shared process;
+strict one-shot CLI runs still close their unclaimed client. Active requests, turns, retained or releasing threads, native
 children, background terminals, and ephemeral history retain their client until
 their owners release it. The existing warm-session executor and thread-retention
 policies remain in effect. Clients and accounts stay isolated by agent home.

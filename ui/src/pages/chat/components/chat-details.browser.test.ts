@@ -163,9 +163,22 @@ describe("chat Details presentation", () => {
     expect(conversation.getBoundingClientRect().width).toBe(1320);
   });
 
-  it("insets navigation highlights without shifting neighboring environment rows", async () => {
+  it("nests section content under aligned headings without shifting navigation highlights", async () => {
     const openFiles = vi.fn();
-    const { element, trigger, panel } = await fixture(props({ onOpenWorkspace: openFiles }));
+    const { element, trigger, panel } = await fixture(
+      props({
+        onOpenWorkspace: openFiles,
+        selectedSession: {
+          key: card.sessionKey,
+          kind: "direct",
+          totalTokens: 64000,
+          totalTokensFresh: true,
+          contextTokens: 128000,
+          inputTokens: 1200,
+          outputTokens: 450,
+        },
+      }),
+    );
     trigger.click();
     await element.updateComplete;
     const environment = panel.querySelector(".chat-details__environment")!;
@@ -174,6 +187,13 @@ describe("chat Details presentation", () => {
     const workspaceIcon = environment.querySelector(".chat-details__row > svg")!;
     const leadingIcon = navigation.querySelector("svg")!;
     const trailingIcon = navigation.querySelector("svg:last-child")!;
+    const context = panel.querySelector<HTMLDetailsElement>(".chat-details__context")!;
+    await toggle(context);
+    const contextHeading = context.querySelector("summary")!;
+    const budget = context.querySelector(".chat-details__context-budget")!;
+    const stats = context.querySelector(".chat-details__stats")!;
+    const progressHeading = panel.querySelector(".session-progress-card__summary")!;
+    const progressBody = panel.querySelector(".session-progress-card__body")!;
     for (const width of [600, 300]) {
       const frame = panel.closest<HTMLElement>(".chat-main__conversation-frame")!;
       frame.style.width = width + "px";
@@ -184,10 +204,20 @@ describe("chat Details presentation", () => {
       expect(leadingIcon.getBoundingClientRect().left).toBe(
         workspaceIcon.getBoundingClientRect().left,
       );
-      expect(
+      const headingLeft =
         heading.getBoundingClientRect().left +
-          Number.parseFloat(getComputedStyle(heading).paddingLeft),
-      ).toBe(leadingIcon.getBoundingClientRect().left);
+        Number.parseFloat(getComputedStyle(heading).paddingLeft);
+      expect(headingLeft - panel.getBoundingClientRect().left - panel.clientLeft).toBe(16);
+      expect(leadingIcon.getBoundingClientRect().left - headingLeft).toBe(8);
+      expect(contextHeading.getBoundingClientRect().left).toBe(headingLeft);
+      expect(progressHeading.getBoundingClientRect().left).toBe(headingLeft);
+      expect(budget.getBoundingClientRect().left - headingLeft).toBe(8);
+      expect(stats.getBoundingClientRect().left - headingLeft).toBe(8);
+      expect(
+        progressBody.getBoundingClientRect().left +
+          Number.parseFloat(getComputedStyle(progressBody).paddingLeft) -
+          headingLeft,
+      ).toBe(8);
       expect(row.height).toBeGreaterThanOrEqual(36);
       expect(panel.scrollWidth).toBeLessThanOrEqual(panel.clientWidth);
     }
@@ -330,9 +360,9 @@ describe("chat Details presentation", () => {
     expect(session.querySelector("[data-details-group]")).toBeNull();
     await toggle(progressSection);
     expect(progressSection.open).toBe(false);
-    expect(getComputedStyle(progress.querySelector(".chat-details-progress__menu")!).display).toBe(
-      "none",
-    );
+    expect(
+      getComputedStyle(progress.querySelector(".chat-details-progress__menu")!).display,
+    ).not.toBe("none");
     element.props = { ...element.props!, progressCard: { ...card, revision: 3 } };
     await element.updateComplete;
     flush();
@@ -431,12 +461,10 @@ describe("chat Details presentation", () => {
     expect(progress.querySelector<HTMLDetailsElement>(".session-progress-card")!.open).toBe(true);
     await select("settings");
     expect(settings).toHaveBeenCalledOnce();
-    progress.querySelector<HTMLButtonElement>(".session-progress-card__dismiss")!.click();
+    await select("dismiss");
     expect(dismiss).toHaveBeenCalledWith(card);
     expect(clear).not.toHaveBeenCalled();
-    progress
-      .querySelector<HTMLButtonElement>('.session-progress-card__refresh[data-state="idle"]')!
-      .click();
+    await select("refresh");
     expect(refresh).toHaveBeenCalledWith(card);
     await select("clear");
     expect(clear).toHaveBeenCalledWith(card);

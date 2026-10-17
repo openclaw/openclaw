@@ -50,9 +50,9 @@ async function openPanel(
     suppliedEnvironments: [desktopEnvironment],
     desktopClientFactory: () => ({ connect }),
   });
-  mountPanel(panel);
+  await mountPanel(panel);
   await panel.updateComplete;
-  expect(panel.renderRoot.querySelector(".desktop-environment button")).not.toBeNull();
+  expect(panel.querySelector(".desktop-environment button")).not.toBeNull();
   clickPanelButton(panel);
   await waitForSolid(() =>
     expect(request.mock.calls.filter(([method]) => method === "desktop.observe")).toHaveLength(1),
@@ -80,7 +80,7 @@ describe("Desktop observe abandonment", () => {
       if (change === "hidden") {
         updatePanel(panel, { presented: false });
       } else if (change === "removed") {
-        unmountPanel(panel);
+        await unmountPanel(panel);
       } else {
         updatePanel(panel, { client: createGatewayClient(replacementRequest).client });
       }
@@ -124,7 +124,7 @@ describe("Desktop observe abandonment", () => {
       try {
         if (stage === "credentials") {
           await waitForSolid(() =>
-            expect(panel.renderRoot.querySelector(".desktop-credentials")).not.toBeNull(),
+            expect(panel.querySelector(".desktop-credentials")).not.toBeNull(),
           );
         } else {
           await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
@@ -156,7 +156,7 @@ describe("Desktop observe abandonment", () => {
             expect(handle.disconnect).toHaveBeenCalledOnce();
           }
         }
-        unmountPanel(panel);
+        await unmountPanel(panel);
         await panel.updateComplete;
         if (stage === "authenticated") {
           expect(handle.disconnect).toHaveBeenCalledOnce();
@@ -171,7 +171,7 @@ describe("Desktop observe abandonment", () => {
         }
       } finally {
         result.resolve(handle);
-        unmountPanel(panel);
+        await unmountPanel(panel);
         await panel.updateComplete;
       }
     },

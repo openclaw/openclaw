@@ -101,6 +101,12 @@ export function prepareSessionRunTargetAbort(params: {
       selectedSessionIds.add(selectedSessionId);
     }
     let active = selectedOperations.some((operation) => !operation.result);
+    // The first cancellation signal clears the provider's live wait.
+    const hadLocalModelWait = runs.some(
+      (run) =>
+        (!selectedSessionId || run.sessionId === selectedSessionId) &&
+        run.abort.isWaitingForLocalModel(),
+    );
     const failures: unknown[] = [];
     let aborted =
       commands?.cancel(
@@ -158,7 +164,12 @@ export function prepareSessionRunTargetAbort(params: {
             }
           })
         : undefined;
-    return { active, aborted, retirement };
+    return {
+      active,
+      aborted,
+      retirement,
+      ...(aborted && hadLocalModelWait ? { localModelMayStillBeFinishing: true as const } : {}),
+    };
   };
   return Object.assign(abort, { requestRunIds });
 }
@@ -256,9 +267,6 @@ export async function stopSubagentsForRequester(params: {
   if (result.status === "error") {
     logVerbose(`abort: failed to stop subagents for ${requesterKey}: ${result.error}`);
   }
-  if (result.killed > 0) {
-    logVerbose(`abort: stopped ${result.killed} subagent run(s) for ${requesterKey}`);
-  }
   return {
     stopped: result.killed,
     failed: result.status === "error" ? result.failed : 0,
@@ -340,6 +348,7 @@ export async function executeFastAbortRequest(
     let authorized = false;
     let aborted = false;
     let activeAbortRejected = false;
+    let localModelMayStillBeFinishing = false;
     const acpCancellations: Promise<void>[] = [];
     try {
       const { stopped, failed, execAborted } = await stopSubagentsForRequester({
@@ -415,12 +424,7 @@ export async function executeFastAbortRequest(
                 target.key === resolvedTargetKey
                   ? (target.sessionId ?? selection.target?.sessionId)
                   : target.sessionId;
-              const cleared = target.clearQueues(selectedSessionId);
-              if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-                logVerbose(
-                  `abort: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
-                );
-              }
+              target.clearQueues(selectedSessionId);
             }
             for (const target of targets) {
               const outcome = target.abort(
@@ -435,6 +439,7 @@ export async function executeFastAbortRequest(
               }
               activeAbortRejected ||= outcome.active && !outcome.aborted;
               aborted = outcome.aborted || aborted;
+              localModelMayStillBeFinishing ||= outcome.localModelMayStillBeFinishing === true;
             }
           } finally {
             // The tree already holds queued reservations. Initiate ACP without awaiting
@@ -508,6 +513,7 @@ export async function executeFastAbortRequest(
         handled: true,
         aborted,
         ...(rejectionReason ? { rejectionReason } : {}),
+        ...(localModelMayStillBeFinishing ? { localModelMayStillBeFinishing: true } : {}),
         stoppedSubagents: stopped,
         failedSubagents: failed,
       };

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import * as embeddedAgent from "../agents/embedded-agent.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -22,8 +23,10 @@ import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-
 import { createNonExitingRuntime } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
-import type { ActivateSetupInferenceDeps } from "./setup-inference-core.js";
 import { captureSystemAgentOwnerPluginArtifacts } from "./verified-inference.js";
+
+// mock-isolation: Setup probes replace model I/O without loading the embedded runtime.
+vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
 
 const prepareProvider = vi.hoisted(() =>
   vi.fn<
@@ -162,30 +165,29 @@ it.each([false, true])(
           );
         });
         const capture = vi.fn(captureSystemAgentOwnerPluginArtifacts);
-        const runEmbeddedAgent = vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(
-          async (params) => {
-            expect(onPreparationComplete).toHaveBeenCalledOnce();
-            params.onSuccessfulAuthBinding?.({
-              authFingerprint,
-              agentHarnessId: "openclaw",
-              modelId: "fixture-model",
-              modelApi: "openai-completions",
-            });
-            if (replaceDuringProbe) {
-              await fs.writeFile(pluginEntry, pluginSource + "// Replaced artifact.\n");
-            }
-            return {
-              meta: {
-                durationMs: 1,
-                finalAssistantVisibleText: "OK",
-                executionTrace: {
-                  winnerProvider: "fixture-provider",
-                  winnerModel: "fixture-model",
-                },
+        const runEmbeddedAgent = vi.fn<typeof embeddedAgent.runEmbeddedAgent>(async (params) => {
+          expect(onPreparationComplete).toHaveBeenCalledOnce();
+          params.onSuccessfulAuthBinding?.({
+            authFingerprint,
+            agentHarnessId: "openclaw",
+            modelId: "fixture-model",
+            modelApi: "openai-completions",
+          });
+          if (replaceDuringProbe) {
+            await fs.writeFile(pluginEntry, pluginSource + "// Replaced artifact.\n");
+          }
+          return {
+            meta: {
+              durationMs: 1,
+              finalAssistantVisibleText: "OK",
+              executionTrace: {
+                winnerProvider: "fixture-provider",
+                winnerModel: "fixture-model",
               },
-            };
-          },
-        );
+            },
+          };
+        });
+        vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
         const onPreparationComplete = vi.fn(() => {
           expect(capture).toHaveBeenCalledOnce();
           expect(trustedRecord).toBeDefined();
@@ -218,7 +220,6 @@ it.each([false, true])(
                 }),
                 captureSystemAgentOwnerPluginArtifacts: capture,
                 resolveApiKeyForProvider: async () => resolvedAuth,
-                runEmbeddedAgent,
               },
             });
             expect(onPreparationComplete).toHaveBeenCalledOnce();

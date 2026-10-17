@@ -2,11 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import * as codexRuntimePlugin from "../commands/codex-runtime-plugin-install.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as records from "../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import * as update from "../plugins/update.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import * as worker from "../state/openclaw-state-lease-worker-operation.js";
@@ -35,12 +37,30 @@ it("binds automatic Codex path trust to the selected bundle", async () => {
       await state.writeConfig(cfg);
       const snapshot = await readConfigFileSnapshot();
       const metadata = createEmptyPluginMetadataSnapshot(state.workspaceDir);
+      const resolveMetadata = vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot");
+      vi.spyOn(codexRuntimePlugin, "ensureCodexRuntimePluginForModelSelection").mockImplementation(
+        async ({ cfg: config }) => ({ ok: true, cfg: config, required: false }),
+      );
       for (const { sourceMatches, installMatches, origin, accepted } of [
         { sourceMatches: true, installMatches: true, origin: "bundled", accepted: true },
         { sourceMatches: false, installMatches: true, origin: "bundled", accepted: false },
         { sourceMatches: true, installMatches: false, origin: "bundled", accepted: false },
         { sourceMatches: true, installMatches: true, origin: "config", accepted: false },
       ] as const) {
+        resolveMetadata.mockReturnValue({
+          ...metadata,
+          index: {
+            ...metadata.index,
+            plugins: [pluginRecord("codex", { origin, rootDir })],
+            installRecords: {
+              codex: {
+                source: "path",
+                sourcePath: sourceMatches ? rootDir : state.statePath("foreign", "codex"),
+                installPath: installMatches ? rootDir : state.statePath("foreign", "codex"),
+              },
+            },
+          },
+        });
         const staged = await stageCodexCandidate(
           {
             cfg,
@@ -54,27 +74,7 @@ it("binds automatic Codex path trust to the selected bundle", async () => {
               surface: "gateway",
               runtime: createNonExitingRuntime(),
             },
-            deps: {
-              resolvePluginMetadataSnapshot: () => ({
-                ...metadata,
-                index: {
-                  ...metadata.index,
-                  plugins: [pluginRecord("codex", { origin, rootDir })],
-                  installRecords: {
-                    codex: {
-                      source: "path",
-                      sourcePath: sourceMatches ? rootDir : state.statePath("foreign", "codex"),
-                      installPath: installMatches ? rootDir : state.statePath("foreign", "codex"),
-                    },
-                  },
-                },
-              }),
-              ensureCodexRuntimePlugin: async ({ cfg: config }) => ({
-                ok: true,
-                cfg: config,
-                required: false,
-              }),
-            },
+            deps: {},
             effects: { credentialsSaved: false },
             beforePersistentEffect: async () => {},
           },

@@ -260,7 +260,7 @@ export function createSessionHistoryWorkerReaders(
         throw new Error(`Session row facts support at most ${MAX_SESSION_ROW_FACTS_KEYS} keys`);
       }
       const captured = {
-        env: { ...input.env },
+        env: captureSessionTranscriptStorageEnvironment(input.env),
         sessionKeys: [...input.sessionKeys],
         continuation: input.continuation ? { ...input.continuation } : undefined,
       };

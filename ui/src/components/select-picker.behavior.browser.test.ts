@@ -1,6 +1,7 @@
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { pickerClass } from "./select-picker.ts";
-import type { PickerParams, PickerOption } from "./select-picker.ts";
+import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { Picker, type PickerParams, type PickerOption } from "./select-picker.ts";
 import overlayStyles from "./solid/overlay.css?inline";
 
 const options: PickerOption[] = [
@@ -13,7 +14,10 @@ const options: PickerOption[] = [
   })),
 ];
 
-afterEach(() => document.body.replaceChildren());
+afterEach(() => {
+  cleanupSolid();
+  document.body.replaceChildren();
+});
 
 async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
   const params: PickerParams<PickerOption> = {
@@ -26,19 +30,33 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
   };
   const container = document.createElement("div");
   document.body.append(container);
-  const picker = document.createElement("openclaw-select-picker");
-  picker.style.cssText = "width:100%;min-width:min(138px,100%)";
+  const mountTarget = document.createElement("div");
+  container.append(mountTarget);
+  let setParams!: (next: PickerParams<PickerOption>) => void;
+  mountSolid(
+    () => {
+      const [current, setCurrent] = createSignal({ ...params });
+      setParams = setCurrent;
+      return Picker({
+        get params() {
+          return current();
+        },
+      });
+    },
+    { container: mountTarget },
+  );
+  const picker = container.querySelector("openclaw-select-picker")!;
   const next = document.createElement("button");
   next.id = "next";
   next.textContent = "Next";
-  container.append(picker, next);
+  container.append(next);
   const update = async (patch: Partial<PickerParams<PickerOption>>) => {
     Object.assign(params, patch);
-    picker.className = pickerClass(params);
-    picker.params = { ...params };
+    setParams({ ...params });
+    flush();
     await picker.updateComplete;
   };
-  await update({});
+  await picker.updateComplete;
   const trigger = picker.querySelector<HTMLButtonElement>("button")!;
   const open = async () => {
     trigger.click();

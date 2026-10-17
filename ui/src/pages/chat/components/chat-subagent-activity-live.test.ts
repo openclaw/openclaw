@@ -13,8 +13,8 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { projectSubagentStatus } from "../chat-subagent-wait.ts";
-import { ChatSubagentActivity } from "./chat-subagent-activity-live.ts";
-import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
+import { ChatSubagentActivity } from "./chat-subagent-activity-live.tsx";
+import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
 
 type ChatSubagentActivityLive = SolidBridgeElement<SubagentActivityProps>;
 
@@ -97,6 +97,20 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
   }
   await emit({ revision: 3, headline: "Running the backend tests" });
   expect(element.textContent).toContain("Running the backend tests");
+  element.compact = true;
+  await emit({
+    revision: 4,
+    headline: "Running the backend tests",
+    planProgress: { completed: 1, total: 3 },
+  });
+  expect(element.querySelector(".chat-subagent-activity__steps")?.textContent).toBe("1/3");
+  expect(element.querySelector("meter")?.value).toBe(1);
+  expect(element.querySelector(".chat-subagent-activity__row")?.getAttribute("title")).toBe(
+    "Backend implementation. Running. Running the backend tests. 1 of 3 steps",
+  );
+  await emit({ revision: 5, headline: "Running the backend tests" });
+  expect(element.querySelector(".chat-subagent-activity__steps")).toBeNull();
+  element.compact = false;
   connection.publish({ ...connection.gateway.snapshot, hello: gatewayHelloForMethods([]) });
   flush();
   expect(element.textContent).not.toContain("Running the backend tests");

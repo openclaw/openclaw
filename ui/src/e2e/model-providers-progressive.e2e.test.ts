@@ -51,20 +51,17 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
     await server?.close();
   });
 
-  it("starts discovery when the Models route inherits a pending connect snapshot", async () => {
+  it("reuses a pending Models snapshot until discovery publishes completion", async () => {
     const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const model = { provider: "fixture", id: "current", name: "Current model", available: true };
+    const pendingCatalog = { models: [model], pendingProviders: ["fixture"] };
     const gateway = await installMockGateway(page, {
       defaultAgentId: "main",
       deferredMethods: ["agents.list"],
       models: [model],
       methodResponses: {
-        "models.list": {
-          models: [model],
-          pendingProviders: [],
-          providerOutcomes: [{ provider: "fixture", status: "ready" }],
-        },
+        "models.list": pendingCatalog,
         "models.authStatus": {
           ts: 1,
           providers: [{ provider: "fixture", profiles: [], apiKey: { source: "config" } }],
@@ -80,7 +77,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       await gateway.emitGatewayEvent("models.snapshot", {
         target,
         scope: { agentId: "main" },
-        catalog: { models: [model], pendingProviders: ["fixture"] },
+        catalog: pendingCatalog,
       });
       const reads = (await gateway.getRequests("models.list")).length;
       expect(reads).toBe(0);
@@ -89,6 +86,18 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       const badge = page.locator(
         '[data-provider-id="fixture"] .model-providers__head .settings-status',
       );
+      await expect.poll(() => badge.textContent()).toBe("Checking models…");
+      expect(await gateway.getRequests("models.list")).toHaveLength(reads);
+      await gateway.setMethodResponse("models.list", {
+        models: [model],
+        pendingProviders: [],
+        providerOutcomes: [{ provider: "fixture", status: "ready" }],
+      });
+      await gateway.emitGatewayEvent("chat.metadata.changed", {
+        modelCatalogChanged: true,
+        authChanged: false,
+        commandsChanged: false,
+      });
       await expect.poll(() => badge.textContent()).toBe("Ready");
       expect((await gateway.getRequests("models.list")).length).toBe(reads + 1);
       await page.locator('a[href="/settings/appearance"]').first().click();

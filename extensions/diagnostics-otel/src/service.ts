@@ -555,7 +555,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             ? undefined
             : { exclude: ["diagnostic.phase.completed"] }
           : tracesActive
-            ? { exclude: ["gateway.event_loop.sample", "diagnostic.gc"] }
+            ? {
+                exclude: [
+                  "gateway.event_loop.sample",
+                  "diagnostic.gc",
+                  "gateway.ws.event",
+                  "gateway.ws.connections",
+                ],
+              }
             : { include: ["log.record", "security.event"] },
       );
       if (tracesActive) {

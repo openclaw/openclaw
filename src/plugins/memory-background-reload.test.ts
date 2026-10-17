@@ -30,6 +30,8 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "./runtime/gateway-request-scope.js";
 import { preparePluginLoaderAliases } from "./sdk-alias.js";
+import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "./services.js";
+import { startPluginServices, type PluginServicesHandle } from "./services.test-support.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginDefinition } from "./types.js";
 
@@ -167,7 +169,7 @@ function loadMemory(host: RegistryHost, config: OpenClawConfig) {
   return { record, instance, runtime };
 }
 
-function registerMemoryWorkspaceWatch(workspace: string) {
+function registerMemoryWorkspaceWatch(workspace: string, beforeRead?: () => Promise<void>) {
   const subscriptions: Array<{ notify: () => void; signal: AbortSignal }> = [];
   let nextSubscription = createDeferredCore();
   const files: MemoryWorkspaceFiles = {
@@ -175,10 +177,13 @@ function registerMemoryWorkspaceWatch(workspace: string) {
     listFiles: listMemoryFiles,
     inspectFile: buildFileEntry,
     readFile: readMemoryFile,
-    readForIndexing: async (file) => ({
-      content: await fs.readFile(file, "utf8"),
-      canonicalRelativePath: path.relative(workspace, file),
-    }),
+    readForIndexing: async (file) => {
+      await beforeRead?.();
+      return {
+        content: await fs.readFile(file, "utf8"),
+        canonicalRelativePath: path.relative(workspace, file),
+      };
+    },
     buildMultimodalChunk: buildMultimodalChunkForIndexing,
     watch: async (_request, onChange, watchSignal) => {
       subscriptions.push({
@@ -283,6 +288,69 @@ it("retires live watchers and starts successor indexing without a search or turn
     release();
     vi.restoreAllMocks();
     await state.cleanup();
+  }
+});
+
+it("restarts memory watchers after reload waits for active indexing past its stop deadline", async ({
+  signal,
+}) => {
+  const state = await createOpenClawTestState({ label: "memory-indexing-reload-timeout" });
+  const config = memoryConfig(state.workspaceDir, {
+    sources: ["memory"],
+    rememberAcrossConversations: false,
+  });
+  const entered = createDeferredCore();
+  const releaseIndexing = createDeferredCore();
+  let holdIndexing = false;
+  const watch = registerMemoryWorkspaceWatch(state.workspaceDir, async () => {
+    if (holdIndexing) {
+      entered.resolve();
+      await releaseIndexing.promise;
+    }
+  });
+  const host = registryHost();
+  const memory = loadMemory(host, config);
+  const index = host.registry.services.find(({ id }) => id === "memory-core-index");
+  assert(index);
+  // The service lifecycle fixture exercises Memory Core's index, without unrelated sidecars.
+  host.registry.services = [index];
+  let services: PluginServicesHandle | undefined;
+  try {
+    const initiallyWatching = watch.nextSubscription();
+    services = await startPluginServices({ registry: host.registry, config });
+    await withinTest(initiallyWatching, signal);
+    const { manager } = await openManager(memory, config);
+    await manager.sync?.({ reason: "startup-settled" });
+    await fs.mkdir(path.join(state.workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(state.workspaceDir, "memory", "held-indexing.md"),
+      "Violet cranes nest beside the lagoon.",
+    );
+    holdIndexing = true;
+    watch.subscriptions[0]!.notify();
+    await withinTest(entered.promise, signal);
+    const replacementWatching = watch.nextSubscription();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const reloading = services.reload(config, new Set([index.id]));
+    await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+    await reloading;
+    expect(watch.subscriptions).toHaveLength(1);
+    expect(watch.subscriptions[0]!.signal.aborted).toBe(false);
+    vi.useRealTimers();
+    holdIndexing = false;
+    releaseIndexing.resolve();
+    await withinTest(replacementWatching, signal);
+    expect(watch.subscriptions).toHaveLength(2);
+    expect(watch.subscriptions[0]!.signal.aborted).toBe(true);
+    expect(watch.subscriptions[1]!.signal.aborted).toBe(false);
+  } finally {
+    holdIndexing = false;
+    releaseIndexing.resolve();
+    vi.useRealTimers();
+    await services?.stop();
+    await memory.instance.dispose();
+    watch.release();
+    await cleanupState(state);
   }
 });
 

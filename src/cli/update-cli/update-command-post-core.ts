@@ -2,7 +2,6 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { stripVTControlCharacters } from "node:util";
 import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
@@ -60,6 +59,7 @@ import { runExec, runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import { createUpdateCommandAuthority } from "./update-command-authority.js";
+import { readUpdateTargetCliOptions } from "./update-command-cli-options.js";
 import { writePostCoreSourceConfigFile } from "./update-command-config.js";
 import { withUpdateCommandExecutorChild } from "./update-command-executor.js";
 import type { UpdatePostCoreInput } from "./update-command-migrated-types.js";
@@ -306,24 +306,21 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     throw new UpdateCommandRecoveryPendingError("Post-core update requires its live executor.");
   }
   const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
-  if (!delegated && params.opts.acceptCapabilities) {
+  let fullIntegrityCheck = false;
+  if (!delegated && (params.opts.acceptCapabilities || params.opts.fullIntegrityCheck)) {
     // Same-version artifacts can expose different CLI options. Keep consent in
     // the current process when the installed target cannot receive it.
-    const invocation = resolveOpenClawCliInvocation({
-      execPath: nodeRunner,
-      entryPath,
-      execArgv: [],
-      args: ["update", "--help"],
-    });
-    const { stdout } = await runExec(invocation.command, invocation.args, {
-      baseEnv,
-      logOutput: false,
-      timeoutMs: params.timeoutMs,
-    });
+    const options = await readUpdateTargetCliOptions(
+      { nodeRunner, entryPath, command: "update" },
+      { baseEnv, timeoutMs: params.timeoutMs },
+    );
     authority.assertCurrent();
-    if (!/^[\t ]*--accept-capabilities(?:[\t ]|$)/m.test(stripVTControlCharacters(stdout))) {
+    if (params.opts.acceptCapabilities && !options.has("--accept-capabilities")) {
       return { resumed: false };
     }
+    fullIntegrityCheck = Boolean(
+      params.opts.fullIntegrityCheck && options.has("--full-integrity-check"),
+    );
   }
 
   const argv = [
@@ -333,6 +330,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     ...(params.opts.restart === false ? ["--no-restart"] : []),
     ...(params.opts.yes ? ["--yes"] : []),
     ...(params.opts.acceptCapabilities ? ["--accept-capabilities"] : []),
+    ...(fullIntegrityCheck ? ["--full-integrity-check"] : []),
   ];
   // Older targets need the existing allowance. New targets recover operator intent
   // from the private handoff instead of treating this compatibility value as explicit.
@@ -440,6 +438,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
               restart: params.opts.restart,
               yes: params.opts.yes,
               acceptCapabilities: params.opts.acceptCapabilities,
+              fullIntegrityCheck: params.opts.fullIntegrityCheck,
               timeout: serializedTimeout,
             },
           };

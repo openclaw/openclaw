@@ -26,7 +26,7 @@ export function renderSidebarMenuAction(
   return {
     id: value,
     label,
-    class: ["sidebar-customize-menu__item", options.className].filter(Boolean).join(" "),
+    class: ["sidebar-customize-menu__item", options.className],
     disabled: options.disabled,
     attributes: { title: options.title },
     icon: (
@@ -151,9 +151,9 @@ export function renderSidebarNavLink(params: {
       class={["nav-item", { "nav-item--active": params.active }]}
       aria-current={params.active ? "page" : undefined}
       onFocus={onPreload ? (event: Event) => onPreload(event) : undefined}
-      onBlur={params.onCancelPreload ?? undefined}
+      onBlur={params.onCancelPreload}
       onPointerEnter={onPreload ? (event: Event) => onPreload(event) : undefined}
-      onPointerLeave={params.onCancelPreload ?? undefined}
+      onPointerLeave={params.onCancelPreload}
       onTouchStart={onPreload ? (event: TouchEvent) => onPreload(event, true) : undefined}
       onClick={(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
@@ -190,10 +190,8 @@ export function renderSidebarPluginNavigationMenu(params: {
         label: action.label,
         class: [
           "sidebar-customize-menu__item",
-          action.destructive ? "session-menu__item--destructive" : "",
-        ]
-          .filter(Boolean)
-          .join(" "),
+          { "session-menu__item--destructive": action.destructive },
+        ],
         variant: action.destructive ? "danger" : undefined,
         icon:
           action.icon && Object.hasOwn(iconData, action.icon) ? (

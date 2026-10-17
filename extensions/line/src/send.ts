@@ -18,6 +18,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { messageAction, normalizeLineMessage } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
+import { normalizeLineMessagingTarget } from "./messaging-target.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
 import { recordLineSentMessages } from "./outbound-message-log.js";
 import { applyLineQuoteToken, withoutLineQuoteTokens } from "./quote-tokens.js";
@@ -141,17 +142,7 @@ function resolveLineProviderMessageIds(
 }
 
 function normalizeTarget(to: string): string {
-  const trimmed = to.trim();
-  if (!trimmed) {
-    throw new Error("Recipient is required for LINE sends");
-  }
-
-  const normalized = trimmed
-    .replace(/^line:group:/i, "")
-    .replace(/^line:room:/i, "")
-    .replace(/^line:user:/i, "")
-    .replace(/^line:/i, "");
-
+  const normalized = normalizeLineMessagingTarget(to);
   if (!normalized) {
     throw new Error("Recipient is required for LINE sends");
   }

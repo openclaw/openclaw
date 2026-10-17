@@ -33,6 +33,7 @@ import {
   createTestChatPane,
   createPaneTestHost,
   connectPaneTestView,
+  getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -375,23 +376,21 @@ describe("chat pane retained presentation lifecycle", () => {
       sessions: {} as SessionCapability,
     });
     pane.active = true;
-    const requestUpdate = vi.spyOn(
-      pane as unknown as { requestUpdate(name: PropertyKey, previous: unknown): void },
-      "requestUpdate",
-    );
+    const updates: Array<[boolean, boolean]> = [];
+    vi.spyOn(getPaneTestRuntime(pane), "invalidate").mockImplementation(() => {
+      updates.push([pane.presented, pane.active]);
+    });
 
     pane.presented = false;
     pane.active = false;
     pane.presented = true;
     pane.active = true;
 
-    expect(
-      requestUpdate.mock.calls.filter(([name]) => name === "presented" || name === "active"),
-    ).toEqual([
-      ["presented", true],
-      ["active", true],
-      ["presented", false],
-      ["active", false],
+    expect(updates).toEqual([
+      [false, true],
+      [false, false],
+      [true, false],
+      [true, true],
     ]);
   });
 
@@ -467,6 +466,7 @@ describe("chat pane retained presentation lifecycle", () => {
         }
         await pane.updateComplete;
         const lightbox = pane.querySelector("openclaw-image-lightbox");
+        await vi.dynamicImportSettled();
         await lightbox?.updateComplete;
         const modal =
           lightbox?.shadowRoot?.querySelector("openclaw-modal-dialog") ??

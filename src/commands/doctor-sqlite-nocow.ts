@@ -142,7 +142,7 @@ async function quickCheck(pathname: string) {
   const db = openNodeSqliteDatabase(pathname, { readOnly: true, allowExtension: true });
   try {
     await loadSqliteVecExtension({ db });
-    assertSqliteIntegrity(db, pathname, "quick_check");
+    assertSqliteIntegrity(db, pathname, { check: "quick" });
   } finally {
     db.close();
   }

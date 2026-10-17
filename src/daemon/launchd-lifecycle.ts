@@ -435,6 +435,9 @@ export async function restartLaunchAgent(
     if (!handoff.ok) {
       throw new Error(`launchd restart handoff failed: ${handoff.error}`);
     }
+    if (!(await handoff.value)) {
+      throw new Error("launchd restart handoff failed: helper failed to spawn");
+    }
     reportMutation(plistReloadNeeded ? "handoff-reload" : "handoff-kickstart");
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };

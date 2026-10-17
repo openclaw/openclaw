@@ -80,17 +80,10 @@ it.each([
   { name: "the ten-minute safety bound without a caller deadline", budgetMs: undefined },
 ])("bounds a vanished admission peer by $name", async ({ budgetMs }) => {
   const channel = new MessageChannel();
-  const elapsed = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-  let decision: Int32Array | undefined;
   let waitedPastThirtySeconds = false;
-  channel.port1.once("message", (request: { port: MessagePort; decision: SharedArrayBuffer }) => {
+  channel.port1.once("message", (request: { port: MessagePort }) => {
     request.port.close();
     channel.port1.close();
-    decision = new Int32Array(request.decision);
-    // A slow host can still answer after 112s. Only the caller's budget may
-    // shorten the ten-minute abandoned-peer bound.
-    Atomics.store(elapsed, 0, budgetMs === undefined ? 112_000 : budgetMs + 1);
-    Atomics.notify(decision, 0);
   });
   const worker = new Worker(
     `const { parentPort, workerData } = require("node:worker_threads");
@@ -99,12 +92,20 @@ it.each([
        register();
        const { exchangeSqliteDatabaseAdmissions, withSqliteDatabaseAdmissionWait } = await import(workerData.relay);
        const monotonic = process.hrtime.bigint.bind(process.hrtime);
-       const elapsed = new Int32Array(workerData.elapsed);
-       process.hrtime.bigint = () => monotonic() + BigInt(Atomics.load(elapsed, 0)) * 1_000_000n;
-       const wait = Atomics.wait;
-       Atomics.wait = (array, index, value, timeout) => {
-         if (Atomics.load(elapsed, 0) === 112_000) parentPort.postMessage({ waiting: timeout });
-         return wait(array, index, value, timeout);
+       let elapsed = 0;
+       process.hrtime.bigint = () => monotonic() + BigInt(elapsed) * 1_000_000n;
+       // Advance at the wait boundary so fake time cannot race a native park.
+       Atomics.wait = (array, index, _value, timeout) => {
+         if (elapsed === 112_000) {
+           parentPort.postMessage({ waiting: timeout });
+           elapsed = 600_001;
+           // A late grant must still lose to the exhausted budget.
+           Atomics.store(array, index, 1);
+         } else {
+           // A slow host can answer after 112s; only the caller may shorten the bound.
+           elapsed = workerData.budgetMs === undefined ? 112_000 : workerData.budgetMs + 1;
+         }
+         return "timed-out";
        };
        parentPort.postMessage({ ready: true });
        try {
@@ -124,7 +125,6 @@ it.each([
       execArgv: [],
       workerData: {
         port: channel.port2,
-        elapsed: elapsed.buffer,
         budgetMs,
         loader: import.meta.resolve("tsx/esm/api"),
         relay: new URL("./sqlite-worker-database-admission-relay.ts", import.meta.url).href,
@@ -134,18 +134,17 @@ it.each([
   );
   try {
     const result = await new Promise((resolve, reject) => {
+      let reply: unknown;
       worker.on("error", reject);
+      // Exit can drain the result message and fire before an await continuation.
+      worker.once("exit", () => resolve(reply));
       worker.on("message", (message) => {
         if ("waiting" in message) {
           waitedPastThirtySeconds = true;
           expect(message.waiting).toBeGreaterThan(480_000);
           expect(message.waiting).toBeLessThanOrEqual(488_000);
-          Atomics.store(elapsed, 0, 600_001);
-          // A late decision also prevents a lost wake if the worker has not parked yet.
-          Atomics.store(decision!, 0, 1);
-          Atomics.notify(decision!, 0);
         } else if (!("ready" in message)) {
-          resolve(message);
+          reply = message;
         }
       });
     });
@@ -154,7 +153,6 @@ it.each([
       message: "SQLite admission facts exchange timed out; the host did not reply",
       code: "unavailable",
     });
-    await once(worker, "exit");
   } finally {
     channel.port1.close();
     channel.port2.close();

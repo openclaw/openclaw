@@ -711,7 +711,6 @@ describe("buildGatewayCronService", () => {
       expect(spawn).toHaveBeenCalledOnce();
 
       await state.cron.start();
-      await state.reconcileExitWatchers?.();
       await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
     });
   });
@@ -1261,8 +1260,8 @@ describe("buildGatewayCronService", () => {
     try {
       // Gate reconcile's first list call: capture the pre-add (empty) snapshot,
       // hold it while the add's direct route starts the owner, then release the
-      // stale snapshot. The revision fence must re-list instead of stopping the
-      // freshly started owner as "removed".
+      // stale snapshot. The older sweep must not stop the freshly started
+      // owner as "removed"; the mutation already routed its current definition.
       const originalList = state.cron.list.bind(state.cron);
       const { promise: staleListGate, resolve: releaseStaleList } = createDeferred();
       let armed = true;

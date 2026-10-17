@@ -91,7 +91,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
       .finally(() => {
         if (generation === this.reactionGeneration) {
           this.reactionReadUpdates = undefined;
-          this.requestUpdate();
+          this.invalidate();
         }
       });
   }
@@ -120,7 +120,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
     );
     this.reactionReadUpdates?.set(event.messageId, event.reactions);
     this.messageReactions = new Map(this.messageReactions).set(event.messageId, event.reactions);
-    this.requestUpdate();
+    this.invalidate();
   }
 
   protected readonly handleMessageReaction = (
@@ -184,7 +184,7 @@ export abstract class ChatPaneReactions extends ChatPaneSharingActions {
         this.reactionWrites.get(messageId) === operation
       ) {
         this.reactionWrites.delete(messageId);
-        this.requestUpdate();
+        this.invalidate();
       }
     }
   };

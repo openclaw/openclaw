@@ -4,8 +4,9 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
-import { getAgentDeletionDatabaseCleanup } from "../state/agent-deletion-cleanup.js";
+import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { isAbortError } from "./abort-signal.js";
 import { observeAgentRunActivity } from "./agent-run-activity.js";
 import { formatErrorMessage } from "./errors.js";
@@ -40,6 +41,7 @@ type UsageCostRefreshState = {
   agentId: string;
   config?: OpenClawConfig;
   databasePath: string;
+  statePath: string;
   queueKey: string;
   env?: NodeJS.ProcessEnv;
   sessionActor?: SessionActorStorageBinding;
@@ -326,16 +328,6 @@ export function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): v
       path: params.databasePath,
       env: params.env,
     });
-  // Purge publications must not start rebuildable cache work in the retiring database.
-  if (
-    getAgentDeletionDatabaseCleanup({
-      agentId: params.agentId,
-      path: databasePath,
-      env: params.env,
-    })?.ownsDatabase
-  ) {
-    return;
-  }
   const queueKey = databasePath;
   const refreshes = usageCostRefreshes.get(scopeSignal) ?? new Map<string, UsageCostRefreshState>();
   const existing = refreshes.get(queueKey);
@@ -350,6 +342,7 @@ export function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): v
     config: params.config,
     databasePath,
     queueKey,
+    statePath: resolveOpenClawStateSqlitePath(params.env ?? process.env),
     env: params.env,
     sessionActor: params.sessionActor,
     fullRefreshRequested: false,
@@ -486,6 +479,16 @@ async function runQueuedUsageCostRefresh(
       }
       let partialBatch = false;
       try {
+        // Publications queued before deletion leave discovery before acquiring storage.
+        if (
+          (await readAgentDeletionJournalStatusInWorker(
+            state.agentId,
+            { path: state.statePath, env: state.env },
+            signal,
+          )) !== "absent"
+        ) {
+          return;
+        }
         if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
           const priorityFiles = [...state.readingSessionFiles.keys()];
           const fullRefreshRequested = state.fullRefreshRequested && priorityFiles.length === 0;
@@ -578,7 +581,6 @@ async function runQueuedUsageCostRefresh(
         }
       } catch (error) {
         if (signal?.aborted && !(error instanceof AggregateError) && isAbortError(error)) {
-          logger.debug("background refresh cancelled during shutdown");
           return;
         }
         logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });

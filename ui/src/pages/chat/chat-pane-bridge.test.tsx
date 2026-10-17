@@ -22,12 +22,8 @@ import {
 it("exposes the current navigation face through the real pane host without a gateway read", async () => {
   // Keep this boundary test on bridge properties and the real navigation method.
   // Full pane startup/retirement is covered by the mounted lifecycle suites.
-  const connected = vi
-    .spyOn(ChatPaneRuntime.prototype, "connectedCallback")
-    .mockImplementation(() => {});
-  const disconnected = vi
-    .spyOn(ChatPaneRuntime.prototype, "disconnectedCallback")
-    .mockImplementation(() => {});
+  const connected = vi.spyOn(ChatPaneRuntime.prototype, "start").mockImplementation(() => {});
+  const disconnected = vi.spyOn(ChatPaneRuntime.prototype, "dispose").mockImplementation(() => {});
   onTestFinished(() => {
     connected.mockRestore();
     disconnected.mockRestore();

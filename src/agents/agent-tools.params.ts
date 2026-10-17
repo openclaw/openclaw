@@ -160,7 +160,7 @@ export async function normalizeFileToolPathParamsFromKeys<T extends Record<strin
   return normalized ?? record;
 }
 
-export function missingRequiredParamLabels(
+function missingRequiredParamLabels(
   record: Record<string, unknown> | undefined,
   groups: readonly RequiredParamGroup[],
 ): string[] {
@@ -187,7 +187,7 @@ export function assertRequiredParams(
   groups: readonly RequiredParamGroup[],
   toolName: string,
 ): void {
-  if (!record || typeof record !== "object") {
+  if (!record) {
     throw parameterValidationError(`Missing parameters for ${toolName}`);
   }
 
@@ -214,14 +214,14 @@ export function wrapToolParamValidation(
       const pathKeys = requiredParamGroups?.some((group) => group.keys.includes("path"))
         ? ["path"]
         : [];
-      const normalizedParams =
+      const normalizedRecord =
         record && pathKeys.length > 0
           ? await normalizeFileToolPathParamsFromKeys(record, pathKeys, cwd, bridge)
-          : params;
+          : record;
       if (requiredParamGroups?.length) {
-        assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);
+        assertRequiredParams(normalizedRecord, requiredParamGroups, tool.name);
       }
-      return tool.execute(toolCallId, normalizedParams, signal, onUpdate);
+      return tool.execute(toolCallId, normalizedRecord ?? params, signal, onUpdate);
     },
   };
 }

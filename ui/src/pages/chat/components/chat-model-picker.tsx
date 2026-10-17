@@ -76,18 +76,6 @@ export type ChatModelPickerParams = {
   onRequestUpdate?: () => void;
 };
 
-function closeModelPickerAfterSelection(event: MouseEvent) {
-  // SAFETY: Model option buttons are the only callers of this click handler.
-  const option = event.currentTarget as HTMLElement;
-  const details = option.closest<HTMLDetailsElement>("details");
-  if (details) {
-    findOverlayParent(option)?.request(false);
-    if (event.detail === 0) {
-      details.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
-    }
-  }
-}
-
 function prepareChatModelPicker(params: ChatModelPickerParams) {
   const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
   const activeModelOption = params.modelOptions.find((option) =>
@@ -202,6 +190,8 @@ function ModelList(props: { label: string; more?: boolean; children: JSX.Element
 }
 
 export function ChatModelPicker(params: ChatModelPickerParams) {
+  let summary: HTMLElement;
+  let searchInput: HTMLInputElement | undefined;
   const pickerOverlay = createChatPickerOverlay((target) => {
     params.onOpenChange?.(target.open);
     if (!target.open) {
@@ -213,14 +203,22 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     const active = target.ownerDocument.activeElement;
     requestAnimationFrame(() => {
       if (target.isConnected && target.open && target.ownerDocument.activeElement === active) {
-        target
-          .querySelector<HTMLInputElement>("[data-chat-model-search]")
-          ?.focus({ preventScroll: true });
+        searchInput?.focus({ preventScroll: true });
       }
     });
   });
   const state = createMemo(() => prepareChatModelPicker(params));
   let details: HTMLDetailsElement | undefined;
+  const closeModelPickerAfterSelection = (event: MouseEvent) => {
+    // Option buttons live inside the picker overlay; its summary lives outside it.
+    if (event.currentTarget instanceof Element) {
+      findOverlayParent(event.currentTarget)?.request(false);
+    }
+    if (event.detail === 0) {
+      summary.focus({ preventScroll: true });
+    }
+  };
+  // Keep the imperative search/filter DOM island synchronized with catalog updates.
   createEffect(
     () => [
       params.modelCatalogState,
@@ -287,19 +285,23 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     const groupLabel = () => t("chat.modelControls.providerModels", { provider: providerLabel() });
     const options = () => [...props.lead, ...props.more];
     const auth = () => params.providerAuth?.get(canonicalModelAuthProviderId(props.provider));
-    const showAuth = () =>
-      auth() &&
-      !(
-        auth()?.kind === "missing" &&
-        options().some(
-          (option) =>
-            option.disabled &&
-            (option.unavailableReason === "missing-auth" ||
-              option.unavailableReason === "auth-failed"),
-        )
-      );
-    const authLabel = () =>
-      showAuth() ? [auth()?.label, auth()?.detail].filter(Boolean).join(" · ") : undefined;
+    const authKind = createMemo(() => auth()?.kind);
+    const showAuth = createMemo(
+      () =>
+        Boolean(auth()) &&
+        !(
+          auth()?.kind === "missing" &&
+          options().some(
+            (option) =>
+              option.disabled &&
+              (option.unavailableReason === "missing-auth" ||
+                option.unavailableReason === "auth-failed"),
+          )
+        ),
+    );
+    const authLabel = createMemo(() =>
+      showAuth() ? [auth()?.label, auth()?.detail].filter(Boolean).join(" · ") : undefined,
+    );
     const routeDetail = () => {
       const route = resolveModelRuntimeRoute(props.provider);
       return route ? t(`chat.modelControls.routes.${route}.detail`) : undefined;
@@ -334,13 +336,13 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
             </span>
           </button>
           {showAuth() ? (
-            <span class="chat-controls__auth-meta" data-auth-kind={auth()?.kind}>
+            <span class="chat-controls__auth-meta" data-auth-kind={authKind()}>
               <span aria-hidden="true">
                 <Icon
                   name={
-                    auth()?.kind === "subscription"
+                    authKind() === "subscription"
                       ? "circleUser"
-                      : auth()?.kind === "api"
+                      : authKind() === "api"
                         ? "key"
                         : "alertTriangle"
                   }
@@ -408,6 +410,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
       onKeyDown={handleModelPickerKeydown}
     >
       <summary
+        ref={(element) => (summary = element)}
         class={[
           "chat-controls__inline-select-trigger chat-controls__model-trigger",
           {
@@ -465,9 +468,8 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
         data-anchored-overlay
         popover="manual"
         onOverlay-show={() => {
-          const input = details?.querySelector<HTMLInputElement>("[data-chat-model-search]");
-          if (input) {
-            updateModelSearch(input, true);
+          if (searchInput?.isConnected) {
+            updateModelSearch(searchInput, true);
           }
         }}
       >
@@ -494,6 +496,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
                 <div class="chat-controls__model-search-wrap">
                   <Icon name="search" />
                   <input
+                    ref={(element) => (searchInput = element)}
                     class="chat-controls__model-search"
                     data-chat-model-search="true"
                     type="search"

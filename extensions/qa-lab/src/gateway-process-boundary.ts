@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
@@ -153,8 +154,7 @@ function parseQaGatewayProcessSandboxProof(value: unknown) {
     !isRecord(value) ||
     value.version !== PROCESS_BOUNDARY_VERSION ||
     value.status !== "pass" ||
-    !Array.isArray(value.envKeys) ||
-    !value.envKeys.every((key) => typeof key === "string")
+    !isStringArray(value.envKeys)
   ) {
     throw new Error("invalid process-boundary sandbox proof");
   }

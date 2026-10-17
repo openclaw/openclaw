@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -86,7 +88,7 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
             ...workflowOperator,
             version: "1.2.0",
             agentName: "Workflow Operator",
-            workspaceFiles: 2,
+            workspaceFiles: 5,
             skills: 1,
             plugins: 1,
             mcpServers: 0,
@@ -95,6 +97,9 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
               instructions: [
                 { name: "AGENTS.md", source: "workspace/AGENTS.md", excerpt: agentsExcerpt },
                 { name: "SOUL.md", source: "workspace/SOUL.md", excerpt: soulExcerpt },
+                { name: "USER.md", source: "workspace/USER.md" },
+                { name: "BOOTSTRAP.md", source: "BOOTSTRAP.md" },
+                { name: "notes/context.md", source: "notes/context.md" },
               ],
               skills: [
                 { name: "@openclaw/travel-research", version: "1.2.0", excerpt: skillExcerpt },
@@ -137,6 +142,129 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
     });
   }
 
+  it.each(viewports)("aligns agent cards with Claws at $name width", async (viewport) => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: viewport.width, height: viewport.height },
+    });
+    const page = await context.newPage();
+    const name = "Research briefing for the international product and engineering team";
+    const message =
+      "The research briefing is ready, with sources and next steps for the team. ".repeat(8);
+    await installMockGateway(page, {
+      featureMethods: ["openclaw.chat", "claws.catalog.search"],
+      methodResponses: {
+        "config.get": { config, sourceConfig: config, resolved: config, valid: true },
+        "agents.list": {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [
+            {
+              id: "main",
+              name,
+              model: { primary: "example/model-small" },
+            },
+            { id: "empty", name: "New teammate" },
+          ],
+        },
+        "sessions.list": {
+          ts: 6_000,
+          path: "",
+          count: 1,
+          sessions: [
+            {
+              key: "agent:main:main",
+              agentId: "main",
+              kind: "direct",
+              isMain: true,
+              updatedAt: 5_000,
+              lastMessagePreview: message,
+            },
+          ],
+          defaults: { model: null, modelProvider: null, contextTokens: null },
+          hasMore: false,
+        },
+        "claws.catalog.search": { entries: [workflowOperator] },
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}agents`);
+      const agent = page.locator('.agents-home__card[data-agent-id="main"]');
+      const empty = page.locator('.agents-home__card[data-agent-id="empty"]');
+      const claw = page.locator("[data-claws-entry]").first();
+      await expect.poll(() => agent.locator(".agents-home__preview").textContent()).toBe(message);
+      await claw.waitFor();
+      expect(await agent.getByRole("heading").textContent()).toBe(name);
+      expect(await empty.textContent()).toContain("No messages yet");
+      expect(await agent.textContent()).not.toContain("example/model-small");
+      expect(await agent.locator("button, a, [tabindex]").count()).toBe(0);
+
+      const styles = (locator: import("playwright").Locator) =>
+        locator.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return {
+            padding: style.padding,
+            gap: style.gap,
+            fontSize: style.fontSize,
+            lineHeight: style.lineHeight,
+            color: style.color,
+            background: style.backgroundColor,
+            radius: style.borderRadius,
+          };
+        });
+      expect(await styles(agent)).toEqual(await styles(claw));
+      expect(await styles(agent.locator(".agents-home__open"))).toEqual(
+        await styles(claw.getByRole("button", { name: "Add" })),
+      );
+      expect(await styles(agent.locator(".agents-home__preview"))).toEqual(
+        await styles(claw.locator(".agents-home__claw-summary")),
+      );
+      const layout = await agent.evaluate((element) => {
+        const head = element.querySelector(".agents-home__identity")!.getBoundingClientRect();
+        const action = element.querySelector(".agents-home__open")!.getBoundingClientRect();
+        const preview = element.querySelector(".agents-home__preview")!;
+        const style = getComputedStyle(preview);
+        return {
+          head: head.toJSON(),
+          action: action.toJSON(),
+          body: preview.getBoundingClientRect().toJSON(),
+          lineHeight: Number.parseFloat(style.lineHeight),
+          scrollHeight: preview.scrollHeight,
+        };
+      });
+      expect(Math.abs(layout.action.y - layout.head.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(layout.action.right - layout.head.right)).toBeLessThanOrEqual(1);
+      expect(layout.body.y).toBeGreaterThanOrEqual(layout.head.bottom);
+      expect(layout.body.height).toBeLessThanOrEqual(layout.lineHeight * 2 + 1);
+      expect(layout.scrollHeight).toBeGreaterThan(layout.body.height);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        viewport.width,
+      );
+      if (capture) {
+        const dir = createControlUiE2eArtifactDir(`agents-cards-${viewport.name}`);
+        const frame = await takeControlUiScreenshotFrame(
+          page,
+          agent,
+          [agent.getByRole("heading"), agent.locator(".agents-home__preview")],
+          { animations: "disabled", scrollTo: agent },
+        );
+        await writeFile(`${dir}/cards.png`, frame.png);
+      }
+      await agent.focus();
+      await page.keyboard.press("Tab");
+      expect(await empty.evaluate((element) => document.activeElement === element)).toBe(true);
+      await page.keyboard.press("Enter");
+      await page.waitForURL(/\/chat\/empty$/u);
+      await page.goBack();
+      await agent.locator(".agents-home__open").click();
+      await page.waitForURL(/\/chat\/main$/u);
+    } finally {
+      await context.close();
+    }
+  });
+
   it.each(viewports)(
     "shows the Claw contents at $name width without empty sections",
     async (viewport) => {
@@ -156,6 +284,22 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
         expect(await card.textContent()).not.toContain("by @openclaw");
         expect(await card.textContent()).not.toContain("@openclaw/workflow-operator");
         expect(await page.locator("[data-claws-attention]").count()).toBe(0);
+        if (capture) {
+          const catalog = page.locator("[data-claws-explore]");
+          const toolbar = catalog.locator(".agents-home__explore-toolbar");
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            toolbar,
+            [
+              catalog.getByRole("heading", { level: 2, name: "Claws", exact: true }),
+              catalog.getByText("Purpose-built agents for your team.", { exact: true }),
+              catalog.getByRole("searchbox", { name: "Search Claws", exact: true }),
+            ],
+            { scrollTo: toolbar, animations: "disabled" },
+          );
+          const dir = createControlUiE2eArtifactDir(`claws-add-${viewport.name}`);
+          await writeFile(`${dir}/agents-claws.png`, frame.png);
+        }
         await card.getByRole("button", { name: "Add" }).click();
         await page.waitForURL(/\/agents\/claws\/workflow-operator$/u);
         const detail = page.locator(".plugin-catalog-detail");
@@ -167,6 +311,34 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
         );
         expect(await publisher.getByRole("img", { name: "Official" }).count()).toBe(1);
         expect(await detail.getByRole("heading", { name: "Workspace files" }).count()).toBe(1);
+        const workspace = detail.locator(".plugin-capabilities").first();
+        expect(await workspace.locator("h2 > span").textContent()).toBe("5");
+        expect(
+          await workspace.locator(".claws-workspace-file__open strong").allTextContents(),
+        ).toEqual(["SOUL.md", "AGENTS.md", "USER.md", "BOOTSTRAP.md", "notes/context.md"]);
+        expect(await workspace.locator(".claws-workspace-file__info").count()).toBe(5);
+        expect(await workspace.getByRole("button", { name: "View all" }).count()).toBe(0);
+        const help = workspace.getByRole("button", { name: "About SOUL.md" });
+        await workspace.getByRole("button", { name: "SOUL.md", exact: true }).focus();
+        await page.keyboard.press("Tab");
+        expect(await help.evaluate((button) => button === document.activeElement)).toBe(true);
+        const tooltip = workspace.locator("openclaw-tooltip").first();
+        await tooltip.locator("[role=tooltip]").waitFor({ state: "visible" });
+        expect(await tooltip.getByRole("tooltip").textContent()).toContain(
+          "persona, tone, and boundaries",
+        );
+        expect(await gateway.getRequests("claws.catalog.preview")).toHaveLength(0);
+        if (capture) {
+          const dir = createControlUiE2eArtifactDir(`claws-add-${viewport.name}`);
+          await page.screenshot({ path: `${dir}/file-purpose.png`, animations: "disabled" });
+        }
+        await page.keyboard.press("Escape");
+        await tooltip.locator("[role=tooltip]").waitFor({ state: "hidden" });
+        await help.click();
+        await tooltip.locator("[role=tooltip]").waitFor({ state: "visible" });
+        expect(await gateway.getRequests("claws.catalog.preview")).toHaveLength(0);
+        await page.keyboard.press("Escape");
+        await detail.getByRole("heading", { name: "Workspace files" }).click();
         const fileDescriptions = detail
           .locator(".plugin-capabilities")
           .first()
@@ -229,6 +401,28 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
         if (capture) {
           const dir = createControlUiE2eArtifactDir(`claws-add-${viewport.name}`);
           await page.screenshot({ path: `${dir}/detail.png`, animations: "disabled" });
+        }
+        await gateway.setMethodResponse("claws.catalog.preview", {
+          preview: { kind: "instruction", name: "SOUL.md", content: "# Soul preview" },
+        });
+        await workspace.getByRole("button", { name: "SOUL.md", exact: true }).click();
+        const preview = page.locator("openclaw-file-preview-modal");
+        await preview.locator(".item[data-path='USER.md']").waitFor();
+        expect(await preview.locator(".item").count()).toBe(5);
+        await preview.getByRole("heading", { name: "Soul preview", exact: true }).waitFor();
+        if (capture) {
+          const dir = createControlUiE2eArtifactDir(`claws-add-${viewport.name}`);
+          await page.screenshot({ path: `${dir}/all-files.png`, animations: "disabled" });
+        }
+        for (const name of ["USER.md", "BOOTSTRAP.md", "notes/context.md"]) {
+          await gateway.setMethodResponse("claws.catalog.preview", {
+            preview: { kind: "instruction", name, content: `# Preview ${name}` },
+          });
+          await preview.locator(`.item[data-path="${name}"]`).click();
+          await preview.getByRole("heading", { name: `Preview ${name}`, exact: true }).waitFor();
+          expect((await gateway.getRequests("claws.catalog.preview")).at(-1)?.params).toMatchObject(
+            { name },
+          );
         }
       } finally {
         await context.close();

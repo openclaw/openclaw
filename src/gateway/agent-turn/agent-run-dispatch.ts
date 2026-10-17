@@ -70,7 +70,7 @@ export function dispatchAgentRunFromGateway(params: {
   followupCompletion?: FollowupCompletionOwner;
   admittedRunEntry: ChatAbortControllerEntry | undefined;
   ingressOpts: Parameters<typeof agentCommandFromGatewayIngress>[0];
-  loadMedia?: () => Promise<AgentRunMediaCustody>;
+  loadMedia?: () => Promise<AgentRunMediaCustody | undefined>;
   runId: string;
   cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
   dedupeKeys: readonly string[];

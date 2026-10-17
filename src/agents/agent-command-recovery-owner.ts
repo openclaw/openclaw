@@ -200,7 +200,6 @@ export async function runWithAgentCommandRecoveryOwner<
       if (restoreAdmittedRecovery) {
         pendingRecovery = await repairMainSessionRecoveryMutation({
           mutation: restoreAdmittedRecovery,
-          onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
           onError: (restoreError) =>
             log.warn(
               `failed to restore admitted recovery after command preparation: ${formatErrorMessage(restoreError)}`,

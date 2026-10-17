@@ -87,6 +87,7 @@ it.each(["allowed", "forbidden", "revoked"] as const)(
       bindingStore: {
         read: unexpectedSessionBinding,
         readAsync: unexpectedSessionBinding,
+        prepareRead: unexpectedSessionBinding,
         readMany: unexpectedSessionBinding,
         readNativeSubagentSubmissions: unexpectedSessionBinding,
         hasOtherThreadOwner: unexpectedSessionBinding,

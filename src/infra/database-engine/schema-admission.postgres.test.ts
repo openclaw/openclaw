@@ -272,23 +272,23 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
   ])(
     "refuses unsupported capabilities at admission (%s, %s, %s)",
     (version, serverEncoding, clientEncoding) => {
-      const query = Reflect.get(
+      const prepare = Reflect.get(
         PostgresSyncConnection.prototype,
-        "query",
-      ) as PostgresSyncConnection["query"];
-      vi.spyOn(PostgresSyncConnection.prototype, "query").mockImplementation(function (
+        "prepare",
+      ) as PostgresSyncConnection["prepare"];
+      vi.spyOn(PostgresSyncConnection.prototype, "prepare").mockImplementation(function (
         this: PostgresSyncConnection,
         sql,
-        ...rest
       ) {
+        const statement = prepare.call(this, sql);
         if (sql.startsWith("SELECT current_setting")) {
-          return {
-            rows: [{ version, server_encoding: serverEncoding, client_encoding: clientEncoding }],
-            rowCount: 1,
-            columns: [],
-          };
+          vi.spyOn(statement, "get").mockReturnValue({
+            version,
+            server_encoding: serverEncoding,
+            client_encoding: clientEncoding,
+          });
         }
-        return query.call(this, sql, ...rest);
+        return statement;
       });
       expect(() => fixture(() => {})).toThrow(/version 16 or newer and UTF8/);
     },

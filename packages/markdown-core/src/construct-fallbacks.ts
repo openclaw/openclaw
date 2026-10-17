@@ -8,10 +8,9 @@ import {
   type MarkdownLinkSpan,
   type MarkdownStyle,
   type MarkdownStyleSpan,
+  type MarkdownTextEdit as TextEdit,
 } from "./ir-spans.js";
 import { appendMarkdownIR, type MarkdownIR } from "./ir.js";
-
-type TextEdit = { start: number; end: number; text: string };
 
 const STYLE_CONSTRUCTS: Partial<Record<MarkdownStyle, FormatConstruct>> = {
   bold: "bold",

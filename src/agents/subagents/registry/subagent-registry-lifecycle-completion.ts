@@ -434,10 +434,12 @@ function planTerminalCompletion(
     if (
       !entry.collect &&
       entry.expectsCompletionMessage === false &&
-      entry.completionRequesterSessionId &&
-      entry.completionRequesterLifecycleRevision
+      entry.completionRequesterSessionId
     ) {
       // The original requester owns this notice even when the child was replaced.
+      // Sessions created without a lifecycle revision (for example by the `agent`
+      // RPC) bind by session id plus the absent revision; a later reset assigns one,
+      // so the requester identity check still rejects replacements.
       entry.completionTarget = "parent";
       entry.requesterTurnRunId = undefined;
     }

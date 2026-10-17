@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
@@ -246,7 +247,7 @@ suite.define(() => {
 
       // Unified layout: the trigger row (menus above the composer) sits
       // inside the start-screen welcome, below the hero.
-      const heroBox = await page.locator(".agent-chat__welcome h2").boundingBox();
+      const heroBox = await page.locator(".agent-chat__welcome-identity").boundingBox();
       const triggersBox = await page.locator(".new-session-page__triggers").boundingBox();
       const composerBox = await page.locator(".new-session-page__composer").boundingBox();
       const modelBox = await page.locator('[data-chat-model-select="true"]').boundingBox();
@@ -337,6 +338,11 @@ suite.define(() => {
       };
       await expect.poll(() => mobileModelSettings.isVisible()).toBe(true);
       await expect.poll(permissionIconCenterError).toBeLessThanOrEqual(1);
+      // Visibility and centered icons also hold before the responsive layout lands.
+      await waitForLayoutSettled(
+        page,
+        '.new-session-page__composer .agent-chat__composer-footer, .new-session-page__composer [data-chat-model-select="true"]',
+      );
       const [mobileFooterBox, mobileModelSettingsBox] = await Promise.all([
         page.locator(".new-session-page__composer .agent-chat__composer-footer").boundingBox(),
         mobileModelSettings.boundingBox(),
@@ -523,8 +529,13 @@ suite.define(() => {
             element.addEventListener("overlay-after-hide", () => resolve(), { once: true });
           }),
       );
-      await page.locator(".agent-chat__welcome h2").click();
+      // The name now opens the agent picker; use the visible, noninteractive avatar
+      // to prove outside-pointer dismissal without opening a sibling menu.
+      await page.locator(".agent-chat__welcome-avatar").click();
       await afterPointerHide;
+      expect(
+        await agentPicker.locator(".agent-select__trigger").getAttribute("aria-expanded"),
+      ).toBe("false");
       await expect
         .poll(() => checkoutSelect.evaluate((element) => element.matches(":popover-open")))
         .toBe(false);

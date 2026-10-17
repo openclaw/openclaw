@@ -15,10 +15,7 @@ import {
   prepareSessionNavigationHandoff,
   runSessionNavigationIntent,
 } from "../../lib/sessions/navigation-handoff.ts";
-import {
-  resolveSessionPreferredFace,
-  sessionNavigationTarget,
-} from "../../lib/sessions/route-navigation.ts";
+import { resolveSessionPreferredFace } from "../../lib/sessions/route-navigation.ts";
 import {
   isUiGlobalScopeConfigured,
   resolveUiConfiguredMainKey,
@@ -28,12 +25,12 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-brid
 import { updatePersonActivityCard } from "../person-activity-card.tsx";
 import { observePersonActivityData } from "../person-activity-data.ts";
 import { personActivityRouting } from "../person-activity-link.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "../portaled-hovercard.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "../portaled-hovercard.ts";
 import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import "../../styles/chat/person-reference.css";
 
-export type PersonReferenceProps = {
+type PersonReferenceProps = {
   host: HTMLElement;
   profileId?: string;
   label?: string;
@@ -43,12 +40,12 @@ const active = new WeakMap<Document, () => void>();
 let nextCardId = 0;
 
 /** Explicit transcript selections only. The directory remains Gateway-owned, not a UI name index. */
-export function PersonReferenceContent(props: PersonReferenceProps) {
+function PersonReferenceContent(props: PersonReferenceProps) {
   const context = useOptionalApplication();
   const profileId = () => props.profileId ?? "";
   const label = () => props.label ?? "";
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
-  const portal = new PortaledHovercardController(() => close());
+  const portal = createPortaledHovercardOwner(() => close());
   let trigger: HTMLButtonElement | undefined;
   let stopRoute: (() => void) | undefined;
   let person: PresenceViewer | null | undefined;
@@ -232,16 +229,8 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
                   mainKey: resolveUiConfiguredMainKey(defaults),
                   globalScope: isUiGlobalScopeConfigured(defaults),
                   routing: personActivityRouting(context, close),
-                  openSession: (row, agentId) => {
+                  openSession: (row, agentId, options) => {
                     const face = resolveSessionPreferredFace(row);
-                    const target = sessionNavigationTarget({
-                      face,
-                      sessionKey: row.key,
-                      row,
-                      fallbackAgentId: agentId,
-                      basePath: context.basePath,
-                      mainKey: resolveUiConfiguredMainKey(defaults),
-                    });
                     close();
                     runSessionNavigationIntent(props.host, {
                       agentId,
@@ -255,12 +244,8 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
                         ) {
                           return false;
                         }
-                        prepareSessionNavigationHandoff(
-                          context.gateway,
-                          target.options.pathname,
-                          row.key,
-                        );
-                        context.navigate(face, target.options);
+                        prepareSessionNavigationHandoff(context.gateway, options.pathname, row.key);
+                        context.navigate(face, options);
                         selectApplicationSession({
                           selection: context.agentSelection,
                           gateway: context.gateway,
@@ -367,7 +352,7 @@ export function PersonReferenceContent(props: PersonReferenceProps) {
 }
 
 type PersonReferenceProperties = { profileId: string; label: string };
-export type PersonReferenceElement = SolidBridgeElement<PersonReferenceProperties>;
+type PersonReferenceElement = SolidBridgeElement<PersonReferenceProperties>;
 defineSolidBridge<PersonReferenceProperties>(
   "openclaw-person-reference",
   (props, host) => {

@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Boots the OpenClaw CLI entry point under Node.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { format } from "node:util";
@@ -110,7 +109,6 @@ function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
 
 const gatewayEntryStartupTrace = createGatewayDispatchStartupTrace(process.argv, "entry");
 
-// Guard: only run entry-point logic when this file is the main module.
 // The bundler may import entry.js as a shared dependency when dist/index.js
 // is the actual entry point; without this guard the top-level code below
 // would call runCli a second time, starting a duplicate gateway that fails

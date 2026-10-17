@@ -85,7 +85,9 @@ describe("createTelegramBot typed command pipeline", () => {
       expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
         SessionKey: `agent:main:main:thread:${chat.id}:99`,
         CommandAuthorized: true,
+        CommandTurn: { kind: "native", body: "/status", authorized: true },
       });
+      expect(harness.replySpy.mock.calls[0]?.[0]).not.toHaveProperty("OwnerAllowFrom");
       expect(apiCalls).not.toHaveBeenCalledWith(
         "sendMessage",
         expect.objectContaining({ text: "You are not authorized to use this command." }),

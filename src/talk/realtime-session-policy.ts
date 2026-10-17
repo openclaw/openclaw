@@ -102,14 +102,14 @@ export function resolveRealtimeVoiceBargeIn(params: {
   if (params.capabilities?.supportsBargeIn === false || params.outputAudioMode === "continuous") {
     return false;
   }
-  if (typeof params.configuredBargeIn === "boolean") {
-    return params.configuredBargeIn;
-  }
-  return resolveRealtimeVoiceInterruptResponseOnInputAudio(params.interruptResponseOnInputAudio);
+  return (
+    params.configuredBargeIn ??
+    resolveRealtimeVoiceInterruptResponseOnInputAudio(params.interruptResponseOnInputAudio)
+  );
 }
 
 export function resolveRealtimeVoiceMinBargeInAudioEndMs(configured: number | undefined): number {
-  return typeof configured === "number" ? configured : 250;
+  return configured ?? 250;
 }
 
 function resolveRealtimeVoiceWakeNamePolicy(params: {

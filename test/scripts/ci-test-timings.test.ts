@@ -10,7 +10,7 @@ import fs, {
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
@@ -912,6 +912,7 @@ function samplerToolingLog(
 
 type SamplerFixture = {
   changedUiFiles?: string[];
+  gitDirectory?: string;
   observedAt?: string;
   runs: ReturnType<typeof samplerRun>[];
   jobs: ReturnType<typeof samplerJob>[];
@@ -953,7 +954,7 @@ function withSamplerFixture(
       `const childProcess = require("node:child_process");
 const execFileSync = childProcess.execFileSync;
 childProcess.execFileSync = (file, args, options) =>
-  file === "git" && args[0] === "diff"
+  file === "git" && args[0] === "diff" && ${!fixture.gitDirectory}
     ? ${JSON.stringify((fixture.changedUiFiles ?? []).join("\0"))}
     : execFileSync(file, args, options);
 require("node:module").syncBuiltinESMExports();
@@ -1036,7 +1037,7 @@ if (args[1] === "--help") {
             ...(dryRun ? ["--dry-run"] : []),
           ],
           {
-            cwd: fileURLToPath(new URL("../../", import.meta.url)),
+            cwd: fixture.gitDirectory ?? fileURLToPath(new URL("../../", import.meta.url)),
             encoding: "utf8",
             timeout: 30_000,
             env: { ...process.env, OPENCLAW_GH_BIN: fakeGh, GH_TOKEN: "fixture-token" },
@@ -2251,6 +2252,129 @@ describe("CI timing sampler provenance", () => {
         expect(result.stdout).toContain("UI file samples excluded after source changes: 1");
       },
     );
+  });
+
+  it("refits unchanged UI neighbors without fetching historical blobs for moved tests", () => {
+    const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-refit-history-")));
+    const origin = path.join(directory, "origin");
+    const checkout = path.join(directory, "checkout");
+    const oldFile = "ui/src/old.e2e.test.ts";
+    const newFile = "extensions/demo/new.e2e.test.ts";
+    const changed = "ui/src/changed.e2e.test.ts";
+    const deleted = "ui/src/deleted.e2e.test.ts";
+    const git = (cwd: string, ...args: string[]) => {
+      const result = spawnSync("git", ["-c", "commit.gpgsign=false", "-C", cwd, ...args], {
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    const write = (file: string, text: string) => {
+      fs.mkdirSync(path.dirname(path.join(origin, file)), { recursive: true });
+      writeFileSync(path.join(origin, file), text);
+    };
+    try {
+      fs.mkdirSync(origin);
+      git(origin, "init", "-q", "-b", "main");
+      git(origin, "config", "user.name", "Timing Fixture");
+      git(origin, "config", "user.email", "fixture@example.com");
+      git(origin, "config", "uploadpack.allowFilter", "true");
+      const content = Array.from({ length: 100 }, (_, index) => `line ${index}\n`).join("");
+      for (const file of [oldFile, changed, deleted, measuredFile]) {
+        write(file, file === oldFile ? content : `${file}\n${content}`);
+      }
+      git(origin, "add", ".");
+      git(origin, "commit", "-qm", "measured source");
+      const beforeMove = git(origin, "rev-parse", "HEAD");
+      const oldBlob = git(origin, "rev-parse", `HEAD:${oldFile}`);
+      write(newFile, `${content}moved\n`);
+      fs.unlinkSync(path.join(origin, oldFile));
+      git(origin, "add", "-A");
+      git(origin, "commit", "-qm", "move test");
+      const afterMove = git(origin, "rev-parse", "HEAD");
+      write(newFile, `${content}moved and edited\n`);
+      write(changed, "changed\n");
+      fs.unlinkSync(path.join(origin, deleted));
+      git(origin, "add", "-A");
+      git(origin, "commit", "-qm", "current source");
+      const head = git(origin, "rev-parse", "HEAD");
+      git(
+        directory,
+        "clone",
+        "-q",
+        "--filter=blob:none",
+        "--no-checkout",
+        pathToFileURL(origin).href,
+        checkout,
+      );
+      git(checkout, "checkout", "-q", head);
+      git(checkout, "config", "diff.renames", "true");
+      git(checkout, "remote", "set-url", "origin", path.join(directory, "unavailable"));
+      const missing = () =>
+        git(checkout, "rev-list", "--objects", "--all", "--missing=print")
+          .split("\n")
+          .filter((line) => line.startsWith("?"))
+          .toSorted();
+      const absent = missing();
+      expect(absent).toContain(`?${oldBlob}`);
+      expect(git(checkout, "rev-list", "--count", "HEAD")).toBe("3");
+      git(checkout, "merge-base", "--is-ancestor", beforeMove, head);
+      expect(readFileSync(path.join(checkout, newFile), "utf8")).toBe(
+        `${content}moved and edited\n`,
+      );
+      const runs = [1, 2, 3, 4].map((id) =>
+        samplerRun(id, { head_sha: id < 3 ? beforeMove : afterMove }),
+      );
+      withSamplerFixture(
+        {
+          runs,
+          gitDirectory: checkout,
+          baseline: {
+            ...baseline,
+            uiE2e: {
+              ...baseline.uiE2e,
+              fileSeconds: {
+                [oldFile]: 8,
+                [newFile]: 9,
+                [changed]: 10,
+                [deleted]: 11,
+                [measuredFile]: 100,
+              },
+            },
+          },
+          jobs: runs.flatMap(({ id, head_sha }) => [
+            samplerJob(id * 10, id, { head_sha }),
+            samplerJob(id * 10 + 1, id, {
+              head_sha,
+              name: "checks-ui-e2e (1/9)",
+              log: uiLog({
+                [id < 3 ? oldFile : newFile]: 69,
+                [changed]: 69,
+                [deleted]: 69,
+                [measuredFile]: 130,
+              }),
+            }),
+          ]),
+        },
+        (fixture) => {
+          const result = fixture.invoke(false, 4);
+          expect(result.status, result.stderr).toBe(0);
+          expect(
+            ciTestTimingsSchema.parse(JSON.parse(fixture.contents())).uiE2e.fileSeconds,
+          ).toEqual({
+            [oldFile]: 8,
+            [newFile]: 9,
+            [changed]: 10,
+            [deleted]: 11,
+            [measuredFile]: 130,
+          });
+        },
+      );
+      expect(missing()).toEqual(absent);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("seeks compact contributors past docs-only and unparseable runs, preserving all attempts and unchanged bytes", () => {

@@ -40,7 +40,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
   readRevision(this: void, database: DatabaseSync): number | undefined;
   writer(this: void, database: DatabaseSync): Admission | undefined;
   suspended(this: void, database: DatabaseSync): boolean;
-  publish(this: void, record: Admission): void;
+  publish(this: void, record: Admission, keys: readonly string[]): void;
 }) {
   /** Local sibling writers notify maintenance after publishing their shared write revision. */
   function onSqliteDatabaseWriteSettled(
@@ -137,7 +137,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     if (changed) {
       // Scope discovery is cold metadata, shared through the existing admission exchange.
       advanceSqliteDatabaseGeneration(record, "publicationRevision");
-      owner.publish(record);
+      owner.publish(record, keys);
     }
   }
 
@@ -177,7 +177,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
       if (changed) {
         advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
         advanceSqliteDatabaseGeneration(record, "publicationRevision");
-        owner.publish(record);
+        owner.publish(record, keys);
       }
     };
     if (

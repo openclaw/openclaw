@@ -5,7 +5,7 @@ import path from "node:path";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
 import { splitNullBuffer } from "../../agents/worktrees/git-path-inventory.js";
-import { requireGit, requireGitBuffer } from "../../agents/worktrees/git.js";
+import { requireGit, requireGitBuffer, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
@@ -29,6 +29,7 @@ import {
   applyStagedWorkerWorkspace,
   recoverWorkerWorkspaceReconciliation,
 } from "./workspace-reconcile.js";
+import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 import {
   hasWorkerWorkspaceResultRef,
   workerWorkspaceResultRef,
@@ -39,6 +40,9 @@ import {
 } from "./workspace-result-staging.js";
 
 type Direction = "canonical" | "projection";
+function pendingDirection(value: string | null): Direction | undefined {
+  return value === "canonical" || value === "projection" ? value : undefined;
+}
 
 function projectionPath(owner: LocalWorkspaceOwner) {
   if (!/^[a-f0-9-]{36}$/u.test(owner.worktree.id)) {
@@ -143,10 +147,7 @@ export function projectionOperations(
     if (!selected.journal_json) {
       return;
     }
-    if (
-      !selected.journal_pack ||
-      (selected.pending_target !== "canonical" && selected.pending_target !== "projection")
-    ) {
+    if (!selected.journal_pack || !pendingDirection(selected.pending_target)) {
       throw new Error("Local workspace recovery metadata is incomplete");
     }
     const journal = {
@@ -154,7 +155,7 @@ export function projectionOperations(
       basePack: selected.journal_pack,
     };
     await recoverWorkerWorkspaceReconciliation({
-      root: targetPath(selected.pending_target),
+      root: targetPath(pendingDirection(selected.pending_target)!),
       journal,
       assertCurrent,
     });
@@ -184,11 +185,12 @@ export function projectionOperations(
     if (
       !selected.baseline_ref ||
       !selected.baseline_json ||
-      (selected.pending_target !== "canonical" && selected.pending_target !== "projection")
+      !pendingDirection(selected.pending_target)
     ) {
       throw new Error("Local workspace result has no accepted baseline");
     }
-    const target = selected.pending_target;
+    const target = pendingDirection(selected.pending_target)!;
+    const refresh = isLocalWorkspaceBaseRefreshRef(selected.pending_ref);
     // Reservation precedes staging. A crash before its Git effect leaves the
     // source bytes untouched and resumes capture into this exact reserved ref.
     if (
@@ -197,6 +199,11 @@ export function projectionOperations(
         stagedResultRef: selected.pending_ref,
       }))
     ) {
+      if (refresh) {
+        throw new Error(
+          "Base refresh source is unavailable; retry github_publish refresh_base. Saved work was preserved.",
+        );
+      }
       const snapshot = await capture(target);
       await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
         root: owner.worktree.path,
@@ -215,6 +222,12 @@ export function projectionOperations(
       { root: owner.worktree.path, stagedResultRef: selected.pending_ref },
       async (snapshot) => {
         current();
+        if (
+          refresh &&
+          (!snapshot.current.baseCommit || snapshot.baseManifestRef !== selected.baseline_ref)
+        ) {
+          throw new Error("Local workspace result no longer matches its accepted baseline");
+        }
         await applyStagedWorkerWorkspace({
           root: targetPath(target),
           stagingRoot: snapshot.stagingRoot,
@@ -244,14 +257,21 @@ export function projectionOperations(
                 await update(
                   conflictPaths.length
                     ? { journal_json: null, journal_pack: null }
-                    : {
-                        baseline_json: serializeWorkerWorkspaceManifest(snapshot.current),
-                        baseline_ref: snapshot.currentManifestRef,
-                        // Retain the accepted ref until its Git cleanup completes.
-                        pending_target: null,
-                        journal_json: null,
-                        journal_pack: null,
-                      },
+                    : refresh && target === "canonical"
+                      ? {
+                          pending_target: "projection",
+                          journal_json: null,
+                          journal_pack: null,
+                        }
+                      : {
+                          ...(refresh ? { base_commit: snapshot.current.baseCommit! } : {}),
+                          baseline_json: serializeWorkerWorkspaceManifest(snapshot.current),
+                          baseline_ref: snapshot.currentManifestRef,
+                          // Retain the accepted ref until its Git cleanup completes.
+                          pending_target: null,
+                          journal_json: null,
+                          journal_pack: null,
+                        },
                 );
               } catch (error) {
                 throw new AcceptedWorkspacePublicationIndeterminateError(
@@ -272,6 +292,10 @@ export function projectionOperations(
         });
       },
     );
+    if (refresh && target === "canonical" && current().pending_target === "projection") {
+      await settle(retainAccepted);
+      return;
+    }
     if (current().pending_target) {
       throw new Error(
         "Local sandbox edits conflict with the managed workspace; pending changes were preserved. Resolve the workspace conflicts before retrying.",
@@ -405,6 +429,15 @@ export function projectionOperations(
     synchronize,
     settle,
     recover,
+    applyBaseRefresh: async (stagedResultRef: string) => {
+      if (!isLocalWorkspaceBaseRefreshRef(stagedResultRef)) {
+        throw new Error("Workspace base refresh requires its own source result");
+      }
+      await settle();
+      // One immutable source result reaches both copies before the shared baseline advances.
+      await update({ pending_ref: stagedResultRef, pending_target: "canonical" });
+      await settle();
+    },
     restoreSnapshot: async () => {
       await recover();
       const selected = current();
@@ -433,6 +466,16 @@ export function projectionOperations(
     finishRestore: cleanupAccepted,
     prepareArchive: async (snapshotCommit: string) => {
       await settle();
+      const merge = await runGit(
+        owner.worktree.path,
+        ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"],
+        { signal, beforeRun: assertCurrent },
+      );
+      if (merge.code !== 1) {
+        throw new Error(
+          "Workspace base integration is pending; finish github_publish refresh_base before archiving this worktree. Saved files and merge state were preserved.",
+        );
+      }
       const accepted = await capture("canonical");
       if (accepted.manifestRef !== current().baseline_ref) {
         throw new Error("Local workspace changed before archive capture");

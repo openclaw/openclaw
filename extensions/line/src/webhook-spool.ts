@@ -1,4 +1,3 @@
-// Line plugin module owns durable webhook admission and core-drain wiring.
 import type { webhook } from "@line/bot-sdk";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {

@@ -1,12 +1,9 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { Value } from "typebox/value";
-import {
-  SessionsGoalClearParamsSchema,
-  SessionsGoalUpdateParamsSchema,
-  type SessionsGoalClearParams,
-  type SessionsGoalMutationResult,
-  type SessionsGoalUpdateParams,
+import type {
+  SessionsGoalClearParams,
+  SessionsGoalMutationResult,
+  SessionsGoalUpdateParams,
 } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -18,6 +15,10 @@ import {
   goalOperationStorageGeneration,
 } from "../../lib/chat/goal-operation-storage.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import {
+  isSessionsGoalClearParams,
+  isSessionsGoalUpdateParams,
+} from "../../lib/protocol-validators.generated/session-input.js";
 import {
   scopedAgentIdForSession,
   scopedAgentListParamsForSession,
@@ -56,10 +57,26 @@ const rejectedGoalReasons = new Set([
   "expired",
   "operation-conflict",
   "session-rebound",
+  "session-busy",
   "goal-rebound",
   "capacity",
   "invalid",
 ]);
+
+function rejectedGoalReason(error: unknown): string | undefined {
+  const details =
+    error instanceof GatewayRequestError && isRecord(error.details) ? error.details : null;
+  const reason = details?.reason;
+  if (
+    typeof reason === "string" &&
+    ((details?.code === "GOAL_OPERATION_REJECTED" && rejectedGoalReasons.has(reason)) ||
+      // Resume can be rejected by chat pre-admission before a turn is reserved.
+      (reason.startsWith("goal-") && rejectedGoalReasons.has(reason.slice(5))))
+  ) {
+    return reason;
+  }
+  return undefined;
+}
 
 function rejectGoalOperation(host: ChatHost, message: string): false {
   setChatError(host, message, true);
@@ -93,15 +110,15 @@ function goalOperationTarget(host: ChatHost) {
       } catch {
         saved = "invalid";
       }
-      const schema =
+      const validate =
         isRecord(saved) && "action" in saved
-          ? SessionsGoalUpdateParamsSchema
-          : SessionsGoalClearParamsSchema;
+          ? isSessionsGoalUpdateParams
+          : isSessionsGoalClearParams;
       operation =
         saved === "expired"
           ? { retired: "expired", pending: false }
           : isRecord(saved) &&
-              Value.Check(schema, saved) &&
+              validate(saved) &&
               saved.sessionKey === sessionKey &&
               saved.agentId === agentId &&
               saved.sessionId === sessionId
@@ -369,9 +386,9 @@ async function runGoalOperation(
             : { ...identity, action: action.action },
       pending: false,
     };
-    const schema =
-      action.action === "clear" ? SessionsGoalClearParamsSchema : SessionsGoalUpdateParamsSchema;
-    if (!Value.Check(schema, operation.params)) {
+    const validate =
+      action.action === "clear" ? isSessionsGoalClearParams : isSessionsGoalUpdateParams;
+    if (!validate(operation.params)) {
       return rejectGoalOperation(host, t("chat.goals.invalidRequest"));
     }
     try {
@@ -415,6 +432,7 @@ async function runGoalOperation(
       if (
         !("action" in params && params.action === "resume") ||
         !targetIsCurrent() ||
+        rejectedGoalReason(error) !== undefined ||
         !(
           error instanceof GatewayProtocolRequestTimeoutError ||
           (error instanceof GatewayRequestError && error.code === "UNAVAILABLE")
@@ -478,14 +496,8 @@ async function runGoalOperation(
   } catch (error) {
     // UNAVAILABLE can follow a commit. A definitive rejection may retire the intent,
     // but receipt expiry still requires observing the current Goal before a new decision.
-    const details =
-      error instanceof GatewayRequestError && isRecord(error.details) ? error.details : null;
-    const reason = details?.reason;
-    const rejected =
-      typeof reason === "string" &&
-      ((details?.code === "GOAL_OPERATION_REJECTED" && rejectedGoalReasons.has(reason)) ||
-        // Resume can be rejected by chat pre-admission before a turn is reserved.
-        (reason.startsWith("goal-") && rejectedGoalReasons.has(reason.slice(5))));
+    const reason = rejectedGoalReason(error);
+    const rejected = reason !== undefined;
     if (rejected) {
       const retired = reason === "expired" || reason === "goal-expired" ? "expired" : undefined;
       if (retired) {

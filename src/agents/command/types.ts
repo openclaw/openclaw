@@ -183,9 +183,6 @@ export type AgentCommandOpts = {
   forceCodeModeTools?: boolean;
   /** Invocation-owned Code Mode activation; limits still come from config. */
   codeModeOverride?: boolean | "auto";
-  /** Host-owned exact media set for a scoped automatic recovery delivery. */
-  internalDeliveryMediaUrls?: string[];
-  internalDeliverySuppressText?: boolean;
   /** Host-owned: deliver only authored output; runtime error payloads stay out of the chat. */
   internalDeliverySuppressErrors?: boolean;
   /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
@@ -265,7 +262,7 @@ export type AgentCommandOpts = {
 };
 
 /** Public ingress clears the same host-owned fields its option type excludes. */
-export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = Object.freeze({
+export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   clientCaps: undefined,
   gatewayUiCommandTarget: undefined,
   toolBindings: undefined,
@@ -290,7 +287,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = Object.freeze({
   isTerminalOutcomeObserved: undefined,
   prepareAssistantTranscriptMessage: undefined,
   internalDeliverySuppressErrors: undefined,
-} satisfies Partial<AgentCommandOpts>);
+} as const satisfies Partial<AgentCommandOpts>;
 
 type AgentCommandGatewayOnlyKey = Exclude<
   keyof typeof AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS,

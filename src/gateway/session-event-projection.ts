@@ -97,7 +97,8 @@ export function prepareSessionEventProjection(
     >();
     let revision = projection.state.revision;
     let accessRevision = readGatewayAccessRevision();
-    let runProjector = connection.getRunProjector();
+    // Run display facts belong to this synchronous publication; recipient authority stays live.
+    const runProjector = connection.createRunProjector();
     return (client) => {
       // Check before audience payload/encoding caches: equal sharing scopes do not imply equal UI.
       if (prepared?.controlUiOnly && client.connect.client.id !== GATEWAY_CLIENT_IDS.CONTROL_UI) {
@@ -106,17 +107,11 @@ export function prepareSessionEventProjection(
       if (!connection.isCurrentProjection(projection) || !projection.isCurrent(record)) {
         return undefined;
       }
-      const currentRunProjector = connection.getRunProjector();
       const currentAccessRevision = readGatewayAccessRevision();
-      if (
-        revision !== projection.state.revision ||
-        accessRevision !== currentAccessRevision ||
-        runProjector !== currentRunProjector
-      ) {
+      if (revision !== projection.state.revision || accessRevision !== currentAccessRevision) {
         audiences.clear();
         revision = projection.state.revision;
         accessRevision = currentAccessRevision;
-        runProjector = currentRunProjector;
       }
       // Resolve each recipient's live authority before reusing this synchronous publication.
       const presentation = presentRecipient(client, runProjector);

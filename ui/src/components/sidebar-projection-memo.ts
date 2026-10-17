@@ -26,10 +26,10 @@ import type {
   SidebarSessionSortMode,
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 
 export type SidebarProjectionHost = {
-  readonly sessionData: SessionDataController;
+  readonly sessionData: SessionDataOwner;
   readonly sessionDataContext: ApplicationContext | undefined;
   readonly sessionProjection: SidebarSessionProjection;
   readonly sidebarAgentsMode: "chip" | "roster";
@@ -64,7 +64,7 @@ export type SidebarProjectionHost = {
   selectedAgentMainSessionKey(agentId: string): string;
   knownSessionGroups(): string[];
   knownSectionOrder(): string[];
-  visibleSessionCatalogs(): SessionDataController["sessionCatalogs"];
+  visibleSessionCatalogs(): SessionDataOwner["sessionCatalogs"];
 };
 
 /** Slot identities belong to the publishing owners; projection never compares row contents. */

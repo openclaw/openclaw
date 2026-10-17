@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import "../agents/utility-completion.js";
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
 import {
@@ -130,24 +131,27 @@ describe("session observer model preparation", () => {
     harness.observer.dispose();
   });
 
-  it("times out stalled model preparation without starting another preparation", async () => {
+  it("times out stalled model preparation without starting another preparation", async ({
+    signal,
+  }) => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    const prepareModel = vi.fn(
-      () =>
-        new Promise<never>(() => {
-          // Intentionally unresolved: the observer timeout owns this test path.
-        }),
-    );
+    const preparation = createDeferred<ReturnType<typeof preparedModel>>();
+    const prepareModel = vi.fn(() => preparation.promise);
     const harness = createHarness({ prepareModel });
-    startAndAddToolNotes(harness.observer);
+    try {
+      startAndAddToolNotes(harness.observer);
 
-    await vi.advanceTimersByTimeAsync(34_000);
-    await flushObserver();
+      await vi.advanceTimersByTimeAsync(42_000);
+      await flushObserver();
 
-    expect(prepareModel).toHaveBeenCalledOnce();
-    expect(harness.completeModel).not.toHaveBeenCalled();
-    harness.observer.dispose();
+      expect(prepareModel).toHaveBeenCalledOnce();
+      expect(harness.completeModel).not.toHaveBeenCalled();
+    } finally {
+      const disposal = harness.observer.disposeAsync();
+      preparation.resolve(preparedModel());
+      await withinTest(disposal, signal);
+    }
   });
 
   it("retries after a rejected preparation", async () => {

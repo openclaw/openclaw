@@ -148,22 +148,17 @@ export function formatNodeRunnerInventoryIssue(
     : `device worker node ${nodeId} requires an update before it can host sessions; run ${issue.updateCommand}, then reconnect it (for a headless node, run ${issue.headlessReconnectCommand})`;
 }
 
-class NodeRunnerUpdateRequiredError extends Error {
-  readonly code = "node_runner_update_required";
-
-  constructor(nodeId: string) {
-    super(formatNodeRunnerInventoryIssue(nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE));
-    this.name = "NodeRunnerUpdateRequiredError";
-  }
-}
-
 export function createNodeRunnerInventoryIssueError(
   nodeId: string,
   issue: NodeRunnerInventoryIssue,
 ): Error {
+  const error = new Error(formatNodeRunnerInventoryIssue(nodeId, issue));
   return issue.code === "update-required"
-    ? new NodeRunnerUpdateRequiredError(nodeId)
-    : new Error(formatNodeRunnerInventoryIssue(nodeId, issue));
+    ? Object.assign(error, {
+        code: "node_runner_update_required",
+        name: "NodeRunnerUpdateRequiredError",
+      })
+    : error;
 }
 
 /** Worker execution requires captured policy and the current assignment prompt context. */

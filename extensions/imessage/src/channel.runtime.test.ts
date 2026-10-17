@@ -1,4 +1,3 @@
-// Imessage tests cover channel plugin behavior.
 import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,27 +23,35 @@ vi.mock("./client.js", async (importOriginal) => ({
 const { sendIMessageOutbound, startIMessageGatewayAccount } = await import("./channel.runtime.js");
 const { resolveIMessageAccount } = await import("./accounts.js");
 const { imessagePlugin } = await import("./channel.js");
+type Config = Parameters<typeof resolveIMessageAccount>[0]["cfg"];
+type ChannelConfig = NonNullable<NonNullable<Config["channels"]>["imessage"]>;
+function accountConfig(
+  accounts: ChannelConfig["accounts"],
+  config: Omit<ChannelConfig, "accounts"> = {},
+) {
+  return { channels: { imessage: { ...config, accounts } } };
+}
+function skipsWatcher(logEvents: { line: string }[]) {
+  return logEvents.some((event) => event.line.includes("skipping watcher"));
+}
 
-function makeCtx(params: {
-  cfg: Parameters<typeof resolveIMessageAccount>[0]["cfg"];
-  accountId: string;
-}) {
-  const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId });
+function makeCtx(cfg: Config, accountId: string) {
+  const account = resolveIMessageAccount({ cfg, accountId });
   const ac = new AbortController();
   const statusEvents: unknown[] = [];
   const logEvents: { level: string; line: string }[] = [];
   return {
     ctx: {
       scheduler: createTestPluginServiceScheduler(),
-      cfg: params.cfg,
-      accountId: params.accountId,
+      cfg,
+      accountId,
       account,
       runtime: {} as never,
       abortSignal: ac.signal,
       log: {
         info: (line: string) => logEvents.push({ level: "info", line }),
       },
-      getStatus: () => ({ accountId: params.accountId }),
+      getStatus: () => ({ accountId }),
       setStatus: (next: unknown) => statusEvents.push(next),
       channelRuntime: undefined as never,
     } as never,
@@ -55,240 +62,181 @@ function makeCtx(params: {
 }
 
 describe("startIMessageGatewayAccount duplicate-source handling", () => {
-  it("parks the watcher slot without spawning monitorIMessageProvider for a non-owner duplicate", async () => {
-    monitorMock.mockClear();
-    const cfg = {
-      channels: {
-        imessage: {
-          accounts: {
-            "swang430-gmail-com": { cliPath: "imsg" },
-            default: { enabled: true },
-          },
-        },
-      },
-    } as never;
-    const { ctx, abort, logEvents, statusEvents } = makeCtx({ cfg, accountId: "default" });
-
-    const settled = vi.fn();
-    const task = startIMessageGatewayAccount(ctx).then(settled);
-
-    await vi.waitFor(() => {
-      expect(logEvents.some((event) => event.line.includes("skipping watcher"))).toBe(true);
-    });
-    expect(monitorMock).not.toHaveBeenCalled();
-    expect(settled).not.toHaveBeenCalled();
-    expect(logEvents.some((e) => e.line.includes("skipping watcher"))).toBe(true);
-    expect(logEvents.some((e) => e.line.includes('using account "swang430-gmail-com"'))).toBe(true);
-    expect(statusEvents).not.toEqual([]);
-    expect(statusEvents.every((event) => !(event as Record<string, unknown>).lifecycle)).toBe(true);
-
-    abort();
-    await task;
-    expect(settled).toHaveBeenCalled();
-    expect(monitorMock).not.toHaveBeenCalled();
-  });
-
   it.each([
     {
-      name: "the same absolute executable with implicit and explicit databases",
-      primary: { cliPath: "/usr/local/bin/imsg" },
-      secondary: () => ({
-        cliPath: "/usr/local/bin/imsg",
-        dbPath: path.join(process.env.HOME || os.homedir(), "Library", "Messages", "chat.db"),
+      name: "parks a non-owner duplicate without spawning a watcher",
+      accounts: (): NonNullable<ChannelConfig["accounts"]> => ({
+        "swang430-gmail-com": { cliPath: "imsg" },
+        default: { enabled: true },
       }),
+      ownerId: "swang430-gmail-com",
+      duplicateId: "default",
+      startOwner: false,
     },
-  ])("starts only one real monitor for $name", async ({ primary, secondary }) => {
-    monitorMock.mockClear();
-    monitorMock.mockResolvedValueOnce(undefined);
-    const cfg = {
-      channels: {
-        imessage: {
-          accounts: { primary, secondary: secondary() },
+    {
+      name: "shares an executable with implicit and explicit databases",
+      accounts: (): NonNullable<ChannelConfig["accounts"]> => ({
+        primary: { cliPath: "/usr/local/bin/imsg" },
+        secondary: {
+          cliPath: "/usr/local/bin/imsg",
+          dbPath: path.join(process.env.HOME || os.homedir(), "Library", "Messages", "chat.db"),
         },
-      },
-    } as never;
-    const owner = makeCtx({ cfg, accountId: "primary" });
-    const duplicate = makeCtx({ cfg, accountId: "secondary" });
-
-    await startIMessageGatewayAccount(owner.ctx);
-    const duplicateTask = startIMessageGatewayAccount(duplicate.ctx);
+      }),
+      ownerId: "primary",
+      duplicateId: "secondary",
+      startOwner: true,
+    },
+  ])("$name", async ({ accounts, ownerId, duplicateId, startOwner }) => {
+    monitorMock.mockReset().mockResolvedValue(undefined);
+    const cfg = accountConfig(accounts());
+    if (startOwner) {
+      await startIMessageGatewayAccount(makeCtx(cfg, ownerId).ctx);
+    }
+    const { ctx, abort, logEvents, statusEvents } = makeCtx(cfg, duplicateId);
+    const settled = vi.fn();
+    const task = startIMessageGatewayAccount(ctx).then(settled);
+    const monitorCount = startOwner ? 1 : 0;
     try {
-      await vi.waitFor(() => {
-        expect(duplicate.logEvents.some((event) => event.line.includes("skipping watcher"))).toBe(
-          true,
-        );
-      });
-      expect(monitorMock).toHaveBeenCalledTimes(1);
-      expect(duplicate.logEvents.some((event) => event.line.includes("skipping watcher"))).toBe(
+      await vi.waitFor(() => expect(skipsWatcher(logEvents)).toBe(true));
+      expect(monitorMock).toHaveBeenCalledTimes(monitorCount);
+      expect(settled).not.toHaveBeenCalled();
+      expect(logEvents.some((e) => e.line.includes(`using account "${ownerId}"`))).toBe(true);
+      expect(statusEvents).not.toEqual([]);
+      expect(statusEvents.every((event) => !(event as Record<string, unknown>).lifecycle)).toBe(
         true,
       );
-      expect(
-        duplicate.statusEvents.every((event) => !(event as Record<string, unknown>).lifecycle),
-      ).toBe(true);
     } finally {
-      duplicate.abort();
-      await duplicateTask;
+      abort();
+      await task;
     }
+    expect(settled).toHaveBeenCalled();
+    expect(monitorMock).toHaveBeenCalledTimes(monitorCount);
   });
 
   it("starts independent monitors for distinct auto-detected remote wrappers named imsg", async () => {
     monitorMock.mockClear();
     monitorMock.mockResolvedValue(undefined);
-    const cfg = {
-      channels: {
-        imessage: {
-          accounts: {
-            primary: {
-              enabled: true,
-              cliPath: "/opt/host-a/imsg",
-              dbPath: "/Users/bot/Library/Messages/chat.db",
-            },
-            secondary: {
-              enabled: true,
-              cliPath: "/opt/host-b/imsg",
-              dbPath: "/Users/bot/Library/Messages/chat.db",
-            },
-          },
-        },
-      },
-    } as never;
-    const first = makeCtx({ cfg, accountId: "primary" });
-    const second = makeCtx({ cfg, accountId: "secondary" });
+    const remoteAccount = (host: string) => ({
+      enabled: true,
+      cliPath: `/opt/${host}/imsg`,
+      dbPath: "/Users/bot/Library/Messages/chat.db",
+    });
+    const cfg = accountConfig({
+      primary: remoteAccount("host-a"),
+      secondary: remoteAccount("host-b"),
+    });
+    const first = makeCtx(cfg, "primary");
+    const second = makeCtx(cfg, "secondary");
 
     await startIMessageGatewayAccount(first.ctx);
     await startIMessageGatewayAccount(second.ctx);
     expect(monitorMock).toHaveBeenCalledTimes(2);
-    expect(second.logEvents.some((event) => event.line.includes("skipping watcher"))).toBe(false);
+    expect(skipsWatcher(second.logEvents)).toBe(false);
   });
 });
 
-describe("sendIMessageOutbound approval identity", () => {
-  it("keeps a Gateway-shaped host media capability reader-free", async () => {
-    const mediaAccess = { localRoots: ["/trusted/workspace"], workspaceDir: "/trusted/workspace" };
-    const send = vi.fn(
-      async (_to: string, _text: string, options: { mediaAccess?: typeof mediaAccess }) => ({
-        messageId: "p:0/gateway-media",
-        options,
-      }),
-    );
+it("keeps a Gateway-shaped host media capability reader-free", async () => {
+  const mediaAccess = { localRoots: ["/trusted/workspace"], workspaceDir: "/trusted/workspace" };
+  const send = vi.fn(
+    async (_to: string, _text: string, options: { mediaAccess?: typeof mediaAccess }) => ({
+      messageId: "p:0/gateway-media",
+      options,
+    }),
+  );
 
-    await sendIMessageOutbound({
-      cfg: {} as never,
-      to: "+15551230000",
-      text: "caption",
-      mediaUrl: "workspace-image.png",
-      mediaAccess,
+  await sendIMessageOutbound({
+    cfg: {} as never,
+    to: "+15551230000",
+    text: "caption",
+    mediaUrl: "workspace-image.png",
+    mediaAccess,
+    deps: { imessage: send },
+  });
+
+  expect(send.mock.calls[0]?.[2]?.mediaAccess).toBe(mediaAccess);
+  expect(send.mock.calls[0]?.[2]).not.toHaveProperty("mediaReadFile");
+});
+
+it("enforces the resolved account cap for work", async () => {
+  const state = await createOpenClawTestState({ prefix: "imessage-account-media-" });
+  const client = new IMessageRpcClient();
+  const delivered: Buffer[] = [];
+  const request = vi.spyOn(client, "request").mockImplementation(async (_method, params) => {
+    if (typeof params?.file !== "string") {
+      throw new Error("Missing native attachment path");
+    }
+    delivered.push(await readFile(params.file));
+    return { guid: "p:0/account-media" };
+  });
+  try {
+    const smallBytes = Buffer.from("%PDF-1.4\nsmall attachment");
+    const largeBytes = Buffer.alloc(2 * 1024 * 1024, 0x61);
+    const small = state.path("small.pdf");
+    const large = state.path("large.pdf");
+    await writeFile(small, smallBytes);
+    await writeFile(large, largeBytes);
+    const send: typeof sendMessageIMessage = (to, text, options) =>
+      sendMessageIMessage(to, text, { ...options, client });
+    const params = {
+      cfg: accountConfig(
+        { Work: { mediaMaxMb: 1 } },
+        {
+          cliPath: state.path("fixture-imsg"),
+          dbPath: state.path("fixture-chat.db"),
+          mediaMaxMb: 8,
+          defaultAccount: "work",
+        },
+      ),
+      accountId: "work",
+      to: "imessage:+15555550123",
+      text: "",
+      mediaLocalRoots: [state.root],
       deps: { imessage: send },
-    });
-
-    expect(send.mock.calls[0]?.[2]?.mediaAccess).toBe(mediaAccess);
-    expect(send.mock.calls[0]?.[2]).not.toHaveProperty("mediaReadFile");
-  });
+    };
+    await expect(sendIMessageOutbound({ ...params, mediaUrl: large })).rejects.toThrow(
+      /exceeds.*limit/i,
+    );
+    expect(request).not.toHaveBeenCalled();
+    const result = await sendIMessageOutbound({ ...params, mediaUrl: small });
+    expect(result.receipt.platformMessageIds).toEqual(["p:0/account-media"]);
+    expect(delivered).toEqual([smallBytes]);
+    await sendIMessageOutbound({ ...params, accountId: "default", mediaUrl: large });
+    expect(delivered).toEqual([smallBytes, largeBytes]);
+  } finally {
+    request.mockRestore();
+    await client.stop();
+    await state.cleanup();
+  }
 });
 
-describe("iMessage account media limits", () => {
-  it("enforces the resolved account cap for work", async () => {
-    const state = await createOpenClawTestState({ prefix: "imessage-account-media-" });
-    const client = new IMessageRpcClient();
-    const delivered: Buffer[] = [];
-    const request = vi.spyOn(client, "request").mockImplementation(async (_method, params) => {
-      if (typeof params?.file !== "string") {
-        throw new Error("Missing native attachment path");
-      }
-      delivered.push(await readFile(params.file));
-      return { guid: "p:0/account-media" };
-    });
-    try {
-      const smallBytes = Buffer.from("%PDF-1.4\nsmall attachment");
-      const largeBytes = Buffer.alloc(2 * 1024 * 1024, 0x61);
-      const small = state.path("small.pdf");
-      const large = state.path("large.pdf");
-      await writeFile(small, smallBytes);
-      await writeFile(large, largeBytes);
-      const send: typeof sendMessageIMessage = (to, text, options) =>
-        sendMessageIMessage(to, text, { ...options, client });
-      const params = {
-        cfg: {
-          channels: {
-            imessage: {
-              cliPath: state.path("fixture-imsg"),
-              dbPath: state.path("fixture-chat.db"),
-              mediaMaxMb: 8,
-              defaultAccount: "work",
-              accounts: { Work: { mediaMaxMb: 1 } },
-            },
-          },
-        },
-        accountId: "work",
-        to: "imessage:+15555550123",
-        text: "",
-        mediaLocalRoots: [state.root],
-        deps: { imessage: send },
-      };
-      await expect(sendIMessageOutbound({ ...params, mediaUrl: large })).rejects.toThrow(
-        /exceeds.*limit/i,
-      );
-      expect(request).not.toHaveBeenCalled();
-      const result = await sendIMessageOutbound({ ...params, mediaUrl: small });
-      expect(result.receipt.platformMessageIds).toEqual(["p:0/account-media"]);
-      expect(delivered).toEqual([smallBytes]);
-      await sendIMessageOutbound({ ...params, accountId: "default", mediaUrl: large });
-      expect(delivered).toHaveLength(2);
-      expect(delivered[0]?.equals(smallBytes)).toBe(true);
-      expect(delivered[1]?.equals(largeBytes)).toBe(true);
-    } finally {
-      request.mockRestore();
-      await client.stop();
-      await state.cleanup();
-    }
-  });
-});
+const pairingCfg = accountConfig(
+  {
+    alpha: { cliPath: "/gateway/alpha-imsg", dbPath: "/gateway/alpha-chat.db" },
+    beta: { cliPath: "/gateway/beta-imsg", dbPath: "/gateway/beta-chat.db" },
+  },
+  { defaultAccount: "alpha" },
+);
 
-describe("imessagePlugin pairing.notifyApproval", () => {
-  const pairingCfg = {
-    channels: {
-      imessage: {
-        defaultAccount: "alpha",
-        accounts: {
-          alpha: { cliPath: "/gateway/alpha-imsg", dbPath: "/gateway/alpha-chat.db" },
-          beta: { cliPath: "/gateway/beta-imsg", dbPath: "/gateway/beta-chat.db" },
-        },
-      },
-    },
-  };
+it("sends the approval from the approved account", async () => {
+  const notifyApproval = imessagePlugin.pairing?.notifyApproval;
+  if (!notifyApproval) {
+    throw new Error("imessage pairing.notifyApproval unavailable");
+  }
+  const request = vi.fn(async () => ({ guid: "p:0/pairing-approval" }));
+  createRpcClientMock.mockReset();
+  createRpcClientMock.mockResolvedValue({ request, stop: vi.fn(async () => {}) });
 
-  it.each([
-    {
-      name: "the approved account",
-      accountId: "beta",
-      cliPath: "/gateway/beta-imsg",
-      dbPath: "/gateway/beta-chat.db",
-    },
-  ])("sends the approval from $name", async ({ accountId, cliPath, dbPath }) => {
-    const notifyApproval = imessagePlugin.pairing?.notifyApproval;
-    if (!notifyApproval) {
-      throw new Error("imessage pairing.notifyApproval unavailable");
-    }
-    const request = vi.fn(async () => ({ guid: "p:0/pairing-approval" }));
-    createRpcClientMock.mockReset();
-    createRpcClientMock.mockResolvedValue({ request, stop: vi.fn(async () => {}) });
+  await notifyApproval({ cfg: pairingCfg, id: "+15551234567", accountId: "beta" });
 
-    await notifyApproval({
-      cfg: pairingCfg,
-      id: "+15551234567",
-      ...(accountId ? { accountId } : {}),
-    });
-
-    expect(createRpcClientMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ cliPath, dbPath }),
-    );
-    expect(request).toHaveBeenCalledExactlyOnceWith(
-      "send",
-      expect.objectContaining({
-        to: "+15551234567",
-        text: "✅ OpenClaw access approved. Send a message to start chatting.",
-      }),
-      expect.any(Object),
-    );
-  });
+  expect(createRpcClientMock).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ cliPath: "/gateway/beta-imsg", dbPath: "/gateway/beta-chat.db" }),
+  );
+  expect(request).toHaveBeenCalledExactlyOnceWith(
+    "send",
+    expect.objectContaining({
+      to: "+15551234567",
+      text: "✅ OpenClaw access approved. Send a message to start chatting.",
+    }),
+    expect.any(Object),
+  );
 });

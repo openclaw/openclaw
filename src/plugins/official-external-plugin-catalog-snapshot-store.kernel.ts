@@ -182,18 +182,20 @@ export function readHostedCatalogSnapshotInDatabase(
   return rowToSnapshot(readHostedCatalogSnapshotRow(db, url));
 }
 
-/** The caller owns the write transaction containing the reread and upsert. */
+/** Signed feeds keep their current-row check and upsert in the caller's transaction. */
 export function writeHostedCatalogSnapshotInDatabase(
   db: EngineConnection,
   snapshot: HostedOfficialExternalPluginCatalogSnapshot,
   now: number,
 ): void {
   const stateDb = getNodeSqliteKysely<HostedCatalogSnapshotDatabase>(db);
-  assertSignedSnapshotWriteIsMonotonic({
-    candidate: snapshot.monotonic,
-    candidateBody: snapshot.body,
-    current: readHostedCatalogSnapshotRow(db, snapshot.metadata.url),
-  });
+  if (snapshot.monotonic?.mode === "signed-feed") {
+    assertSignedSnapshotWriteIsMonotonic({
+      candidate: snapshot.monotonic,
+      candidateBody: snapshot.body,
+      current: readHostedCatalogSnapshotRow(db, snapshot.metadata.url),
+    });
+  }
   const values = {
     body: snapshot.body,
     status: snapshot.metadata.status,

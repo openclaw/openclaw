@@ -19,6 +19,7 @@ import type {
 } from "../../../src/plugin-sdk/control-ui.js";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
@@ -76,6 +77,7 @@ export function observePluginProperties<P extends object>(
 
 function MountedContent(props: { mount?: (target: HTMLElement) => () => void }) {
   let container!: HTMLDivElement;
+  // Host-owned content is mounted into the plugin's imperative DOM island.
   createEffect(
     () => props.mount,
     (mount) => mount?.(container),
@@ -87,14 +89,13 @@ const views = new WeakMap<HTMLElement, { focus(options?: FocusOptions): void }>(
 
 function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
   const context = useOptionalApplication();
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const notify = () => setRevision((value) => value + 1);
+  const [error, setError] = createSignal("", { ownedWrite: true });
+  const [mountGeneration, setMountGeneration] = createSignal(0, { ownedWrite: true });
+  const [delegated, setDelegated] = createSignal(false, { ownedWrite: true });
   let registration: ViewRegistration | undefined;
   let mountAbort: AbortController | undefined;
-  let mountGeneration = 0;
   let composerGeneration = 0;
   let ownerChanged = false;
-  let error = "";
   let handle: ReturnType<ControlUiView<unknown>>;
   let viewContext: ControlUiViewContext<unknown> | undefined;
   let disposed = false;
@@ -112,8 +113,8 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     return entry as ViewRegistration | undefined;
   };
   registration = resolveRegistration();
+  const [available, setAvailable] = createSignal(Boolean(registration));
   const unmount = () => {
-    mountGeneration += 1;
     mountAbort?.abort();
     mountAbort = undefined;
     const previous = handle;
@@ -128,6 +129,10 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     }
     defaultContainers.clear();
     viewContext = undefined;
+    if (!disposed) {
+      setMountGeneration((generation) => generation + 1);
+      setDelegated(false);
+    }
   };
   observePluginProperties(
     host,
@@ -207,12 +212,11 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
   const fail = (failure: unknown) => {
     const pluginId = registration?.pluginId ?? "host";
     unmount();
-    error = failure instanceof Error ? failure.message : String(failure);
+    setError(failure instanceof Error ? failure.message : String(failure));
     context?.plugins.reportError(pluginId, failure);
-    notify();
   };
   const update = () => {
-    if (!mountAbort || !viewContext || !registration || error) {
+    if (!mountAbort || !viewContext || !registration) {
       return;
     }
     try {
@@ -226,6 +230,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       fail(failure);
     }
   };
+  // Synchronize the foreign plugin view with live registration and host props.
   createEffect(
     () => {
       runtime.read();
@@ -252,26 +257,19 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
         ownerChanged = false;
         unmount();
         registration = next;
-        error = "";
-        notify();
+        setAvailable(Boolean(next));
+        setError("");
       }
       update();
     },
   );
   const mount = (container: HTMLElement) => {
-    if (!host.isConnected || disposed || !registration || registration.signal.aborted || error) {
+    if (!host.isConnected || disposed || !registration || registration.signal.aborted) {
       return;
     }
     const abort = new AbortController();
     mountAbort = abort;
-    registration.signal.addEventListener(
-      "abort",
-      () => {
-        unmount();
-        notify();
-      },
-      { once: true, signal: abort.signal },
-    );
+    listen(registration.signal, "abort", unmount, { once: true, signal: abort.signal });
     try {
       viewContext = {
         host: scopeControlUiHost(registration.host, abort.signal, () => host.isConnected),
@@ -285,7 +283,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
           defaultContainers.get(target)?.();
           const dispose = host.mountDefaultView?.(target) ?? (() => {});
           defaultContainers.set(target, dispose);
-          notify();
+          setDelegated(true);
           return () => {
             if (defaultContainers.get(target) !== dispose) {
               return;
@@ -293,7 +291,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
             defaultContainers.delete(target);
             dispose();
             if (!disposed) {
-              notify();
+              setDelegated(defaultContainers.size > 0);
             }
           };
         },
@@ -304,6 +302,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     }
   };
   function ViewRoot() {
+    // Plugins may mount host Solid content, which must inherit this retained root.
     const viewOwner = getOwner();
     let container!: HTMLDivElement;
     onSettled(() => {
@@ -324,6 +323,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       if (handle?.focus) {
         handle.focus();
       } else {
+        // The plugin owns its markup; focus falls back to its first editable control.
         const input = host.querySelector<HTMLElement>("textarea, input, [contenteditable=true]");
         if (input) {
           input.focus(options);
@@ -338,34 +338,24 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     unmount();
     views.delete(host);
   });
-  const state = () => {
-    revision();
-    return { registration, error, mountGeneration, delegated: defaultContainers.size > 0 };
-  };
   return (
     <>
-      <Show when={state().error}>
+      <Show when={error()}>
         <div class="card" role="alert">
-          {state().error}
-          <button
-            class="btn btn--sm"
-            onClick={() => {
-              error = "";
-              notify();
-            }}
-          >
+          {error()}
+          <button class="btn btn--sm" onClick={() => setError("")}>
             {t("pluginUi.retryView")}
           </button>
         </div>
       </Show>
       <Show
-        when={state().registration && !state().error}
+        when={available() && !error()}
         fallback={<MountedContent mount={props.mountDefaultView} />}
       >
-        <Show when={!state().delegated}>
+        <Show when={!delegated()}>
           <MountedContent mount={props.mountReplacementCompanion} />
         </Show>
-        <Show when={state().mountGeneration + 1} keyed>
+        <Show when={mountGeneration() + 1} keyed>
           {(_generation) => <ViewRoot />}
         </Show>
       </Show>
@@ -398,6 +388,7 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
   presented?: boolean;
   enabled?: boolean;
 }) {
+  // Delegated mounts run later inside a foreign plugin and retain the host's owner.
   const owner = getOwner();
   const context = useOptionalApplication();
   const runtime = projectSource(context?.plugins, {

@@ -5,7 +5,9 @@ import {
 } from "@openclaw/gateway-client/browser";
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
+import type { GatewayEventListener } from "../api/gateway.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -16,24 +18,28 @@ import {
   bumpCanvasWidgetFrameConnectionGeneration,
   getCanvasWidgetFrameConnectionGeneration,
 } from "../lib/chat/canvas-widget-frame-generation.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   createApplicationGateway,
   createSolidApplicationContextProvider,
 } from "../test-helpers/solid-application-context.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { CanvasWidgetView, type OpenClawCanvasWidgetView } from "./canvas-widget-view.ts";
+import { CanvasWidgetView, type OpenClawCanvasWidgetView } from "./canvas-widget-view.tsx";
 import { WIDGET_PROMPT_EVENT } from "./mcp-app-security.ts";
 
+const repeat = (length: number) => "x".repeat(length);
 const elementName = "openclaw-canvas-widget-view";
 const documentView: CanvasDocumentViewResult = {
   html: "<p>Widget ready</p>",
   sandboxUrl: "/mcp-app-sandbox?frames=none",
   sandboxPort: 8444,
 };
+type WidgetClient = { request: ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>> };
+let client: WidgetClient;
 
 type WidgetGatewaySnapshot = Omit<Partial<ApplicationGatewaySnapshot>, "client"> & {
-  client: { request: ReturnType<typeof vi.fn> };
+  client: WidgetClient;
 };
 
 const gateways = new WeakMap<
@@ -42,6 +48,7 @@ const gateways = new WeakMap<
     snapshot: WidgetGatewaySnapshot;
     connectionRevision: number;
     notify: () => void;
+    emit: GatewayEventListener;
   }
 >();
 
@@ -65,17 +72,45 @@ function connection(
   gateway.notify();
 }
 
+async function transition(
+  view: OpenClawCanvasWidgetView,
+  phase: ApplicationGatewaySnapshot["phase"],
+  patch?: Partial<ApplicationGatewaySnapshot>,
+) {
+  connection(view, phase, patch);
+  await settle(view);
+}
+
 function mount(
-  client: { request: ReturnType<typeof vi.fn> },
+  widgetClient: WidgetClient = client,
   docId = "cv_inline",
   parent: Element | ShadowRoot = document.body,
+  operatorScopes?: string[],
 ) {
   const view = document.createElement(elementName) as OpenClawCanvasWidgetView;
+  const listeners = new Set<GatewayEventListener>();
   const gateway = {
-    snapshot: { client, phase: "connected" } as WidgetGatewaySnapshot,
+    snapshot: {
+      client: widgetClient,
+      phase: "connected",
+      ...(operatorScopes
+        ? { hello: gatewayHelloForMethods(["canvas.document.view"], operatorScopes) }
+        : {}),
+    } as WidgetGatewaySnapshot,
     connection: { gatewayUrl: "ws://gateway.example:8443" },
     connectionRevision: 0,
     notify: () => {},
+    emit: ((event) => {
+      for (const listener of listeners) {
+        listener(event);
+      }
+    }) as GatewayEventListener,
+    subscribeEvents: (listener: GatewayEventListener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     subscribe: (notify: () => void) => {
       gateway.notify = notify;
       return () => {};
@@ -115,10 +150,11 @@ function message(
   data: unknown,
   ports: MessagePort[] = [],
   origin?: string,
+  source: MessageEventSource | null = frame.contentWindow,
 ) {
   window.dispatchEvent(
     new MessageEvent("message", {
-      source: frame.contentWindow,
+      source,
       origin: origin ?? new URL(frame.src).origin,
       data,
       ports,
@@ -126,34 +162,50 @@ function message(
   );
 }
 
+async function loaded(docId = "cv_inline", parent: Element | ShadowRoot = document.body) {
+  const view = mount(client, docId, parent);
+  return { view, frame: await frameFor(view) };
+}
+
+function proxyReady(frame: HTMLIFrameElement) {
+  message(frame, {
+    method: "ui/notifications/sandbox-proxy-ready",
+    params: { sandboxUrl: frame.src },
+  });
+}
+
+function expectRead(widgetClient: WidgetClient, docId: string) {
+  expect(widgetClient.request).toHaveBeenLastCalledWith(
+    "canvas.document.view",
+    { docId },
+    { timeoutMs: 30_000 },
+  );
+}
+
+function expectRecovering(view: OpenClawCanvasWidgetView) {
+  expect(view.querySelector('[role="alert"]')).toBeNull();
+  expect(view.querySelector('[role="status"]')?.textContent).toContain("recover automatically");
+}
+
 describe("Canvas widget view", () => {
+  beforeEach(() => {
+    client = { request: vi.fn().mockResolvedValue(documentView) };
+  });
   afterEach(() => {
     document.body.replaceChildren();
     delete (document as unknown as Record<string, unknown>).activeElement;
     vi.restoreAllMocks();
     vi.useRealTimers();
-    vi.unstubAllGlobals();
   });
 
   it("loads authenticated HTML once for concurrent views and waits for the exact isolated proxy", async () => {
-    let resolve!: (value: CanvasDocumentViewResult) => void;
-    const client = {
-      request: vi.fn(
-        () =>
-          new Promise<CanvasDocumentViewResult>((done) => {
-            resolve = done;
-          }),
-      ),
-    };
+    const pending = createDeferred<CanvasDocumentViewResult>();
+    client.request.mockImplementation(() => pending.promise);
     const first = mount(client);
     const second = mount(client);
     await expect.poll(() => client.request.mock.calls.length).toBe(1);
-    expect(client.request).toHaveBeenCalledWith(
-      "canvas.document.view",
-      { docId: "cv_inline" },
-      { timeoutMs: 30_000 },
-    );
-    resolve(documentView);
+    expectRead(client, "cv_inline");
+    pending.resolve(documentView);
     const frame = await frameFor(first);
     await frameFor(second);
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
@@ -194,22 +246,13 @@ describe("Canvas widget view", () => {
   it.each(["generation", "client"])(
     "discards an old connection's read when its %s changes",
     async (change) => {
-      let resolveOld!: (value: CanvasDocumentViewResult) => void;
-      const client = {
-        request: vi
-          .fn()
-          .mockImplementationOnce(
-            () =>
-              new Promise<CanvasDocumentViewResult>((done) => {
-                resolveOld = done;
-              }),
-          )
-          .mockResolvedValue({ ...documentView, html: "<p>New connection</p>" }),
-      };
+      const old = createDeferred<CanvasDocumentViewResult>();
+      const currentDocument = { ...documentView, html: "<p>New connection</p>" };
+      client.request.mockImplementationOnce(() => old.promise).mockResolvedValue(currentDocument);
       const view = mount(client);
       await expect.poll(() => client.request.mock.calls.length).toBe(1);
       const replacement = {
-        request: vi.fn().mockResolvedValue({ ...documentView, html: "<p>New connection</p>" }),
+        request: vi.fn().mockResolvedValue(currentDocument),
       };
       if (change === "generation") {
         bumpCanvasWidgetFrameConnectionGeneration();
@@ -219,7 +262,7 @@ describe("Canvas widget view", () => {
         gateways.get(view)!.notify();
       }
       await frameFor(view);
-      resolveOld(documentView);
+      old.resolve(documentView);
       await settle(view);
       expect(view.documentHtml).toBe("<p>New connection</p>");
       expect(client.request).toHaveBeenCalledTimes(change === "generation" ? 2 : 1);
@@ -228,8 +271,7 @@ describe("Canvas widget view", () => {
   );
 
   it("renders authenticated HTML inertly until scripts are enabled without rereading it", async () => {
-    const client = { request: vi.fn().mockResolvedValue(documentView) };
-    const view = mount(client);
+    const view = mount();
     view.allowScripts = false;
     const strictFrame = await frameFor(view);
     expect(strictFrame.getAttribute("src")).toBeNull();
@@ -243,8 +285,7 @@ describe("Canvas widget view", () => {
     expect(interactiveFrame.hasAttribute("srcdoc")).toBe(false);
     interactiveFrame.dispatchEvent(new Event("error"));
     await view.updateComplete;
-    expect(view.querySelector('[role="alert"]')).toBeNull();
-    expect(view.querySelector('[role="status"]')?.textContent).toContain("recover automatically");
+    expectRecovering(view);
     view.allowScripts = false;
     await view.updateComplete;
     expect(view.querySelector("iframe")?.srcdoc).toBe(documentView.html);
@@ -252,7 +293,6 @@ describe("Canvas widget view", () => {
   });
 
   it("replaces browsing contexts when direct Solid props change script policy", async () => {
-    const client = { request: vi.fn().mockResolvedValue(documentView) };
     const gateway = createApplicationGateway();
     gateway.gateway.connection.gatewayUrl = "ws://gateway.example:8443";
     gateway.publish({
@@ -297,13 +337,8 @@ describe("Canvas widget view", () => {
   });
 
   it("shows a failed read and retries without keeping the rejected shared request", async () => {
-    const client = {
-      request: vi
-        .fn()
-        .mockRejectedValueOnce(new Error("Widget unavailable"))
-        .mockResolvedValue(documentView),
-    };
-    const view = mount(client);
+    client.request.mockRejectedValueOnce(new Error("Widget unavailable"));
+    const view = mount();
     await expect
       .poll(() => view.querySelector('[role="alert"]')?.textContent)
       .toContain("Widget unavailable");
@@ -313,41 +348,29 @@ describe("Canvas widget view", () => {
   });
 
   it("retains rendered content across client replacement, revalidates unchanged bytes, and replaces changed bytes", async () => {
-    const client = { request: vi.fn().mockResolvedValue(documentView) };
-    const view = mount(client);
-    const frame = await frameFor(view);
+    const { view, frame } = await loaded();
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
-    message(frame, {
-      method: "ui/notifications/sandbox-proxy-ready",
-      params: { sandboxUrl: frame.src },
-    });
+    proxyReady(frame);
     await settle(view);
     const replacement = { request: vi.fn().mockResolvedValue(documentView) };
     gateways.get(view)!.snapshot.client = replacement;
-    connection(view, "reconnecting");
-    await settle(view);
+    await transition(view, "reconnecting");
     expect(view.querySelector("iframe")).toBe(frame);
     expect(view.documentHtml).toBe(documentView.html);
     expect(view.querySelector('[role="alert"]')).toBeNull();
     expect(client.request).toHaveBeenCalledOnce();
     expect(replacement.request).not.toHaveBeenCalled();
-    connection(view, "connected");
-    await settle(view);
+    await transition(view, "connected");
     expect(client.request).toHaveBeenCalledOnce();
-    expect(replacement.request).toHaveBeenCalledExactlyOnceWith(
-      "canvas.document.view",
-      { docId: view.docId },
-      { timeoutMs: 30_000 },
-    );
+    expect(replacement.request).toHaveBeenCalledOnce();
+    expectRead(replacement, view.docId);
     expect(view.querySelector("iframe")).toBe(frame);
     expect(
       post.mock.calls.filter(([data]) => data.method === "ui/notifications/sandbox-resource-ready"),
     ).toHaveLength(1);
     replacement.request.mockResolvedValue({ ...documentView, html: "<p>Updated bytes</p>" });
-    connection(view, "reconnecting");
-    await settle(view);
-    connection(view, "connected");
-    await settle(view);
+    await transition(view, "reconnecting");
+    await transition(view, "connected");
     expect(view.querySelector("iframe")).not.toBe(frame);
     expect(view.documentHtml).toBe("<p>Updated bytes</p>");
   });
@@ -357,32 +380,28 @@ describe("Canvas widget view", () => {
     const sibling = document.createElement("div");
     thread.className = sibling.className = "chat-thread";
     document.body.append(thread, sibling);
-    const events: Array<{ type: string; deltaY: number; scrollTop: number }> = [];
+    const events: Array<[type: string, deltaY: number, scrollTop: number]> = [];
     thread.scrollTop = 400;
     thread.addEventListener("wheel", (event) => {
-      events.push({ type: "wheel", deltaY: event.deltaY, scrollTop: thread.scrollTop });
+      events.push(["wheel", event.deltaY, thread.scrollTop]);
     });
     Object.defineProperty(thread, "scrollBy", {
       value: vi.fn((options: ScrollToOptions) => {
         const deltaY = options.top ?? 0;
-        events.push({ type: "scroll", deltaY, scrollTop: thread.scrollTop });
+        events.push(["scroll", deltaY, thread.scrollTop]);
         thread.scrollTop += deltaY;
       }),
     });
     const scrollSibling = vi.fn();
     sibling.scrollBy = scrollSibling;
-    const client = { request: vi.fn().mockResolvedValue(documentView) };
-    const view = mount(client, "cv_scroll", thread);
-    const start = async (frame: HTMLIFrameElement) => {
-      const post = vi.spyOn(frame.contentWindow!, "postMessage");
-      message(frame, {
-        method: "ui/notifications/sandbox-proxy-ready",
-        params: { sandboxUrl: frame.src },
-      });
+    const { view, frame } = await loaded("cv_scroll", thread);
+    const start = async (target: HTMLIFrameElement) => {
+      const post = vi.spyOn(target.contentWindow!, "postMessage");
+      proxyReady(target);
       await settle(view);
       expect(post).toHaveBeenCalledWith(
         { type: "openclaw:widget-board-host", nonce: expect.any(String) },
-        new URL(frame.src).origin,
+        new URL(target.src).origin,
       );
       const nonce = post.mock.calls.find(([data]) => data.type === "openclaw:widget-board-host")![0]
         .nonce;
@@ -390,18 +409,17 @@ describe("Canvas widget view", () => {
         ([data]) => data.method === "ui/notifications/sandbox-resource-ready",
       )![0].params.renderId;
       post.mockClear();
-      message(frame, {
+      message(target, {
         method: "ui/notifications/sandbox-resource-loaded",
         params: { renderId },
       });
       // Stored wrappers can miss host state until their document finishes loading.
       expect(post).toHaveBeenCalledWith(
         { type: "openclaw:widget-board-host", nonce },
-        new URL(frame.src).origin,
+        new URL(target.src).origin,
       );
       return nonce;
     };
-    const frame = await frameFor(view);
     const nonce = await start(frame);
     const scroll = { type: "openclaw:widget-scroll", nonce, deltaY: 120 };
     const foreignFrame = document.createElement("iframe");
@@ -416,8 +434,8 @@ describe("Canvas widget view", () => {
     expect(events).toEqual([]);
     message(frame, scroll);
     expect(events).toEqual([
-      { type: "wheel", deltaY: 120, scrollTop: 400 },
-      { type: "scroll", deltaY: 120, scrollTop: 400 },
+      ["wheel", 120, 400],
+      ["scroll", 120, 400],
     ]);
     expect(thread.scrollTop).toBe(520);
     events.length = 0;
@@ -431,18 +449,12 @@ describe("Canvas widget view", () => {
     const currentNonce = await start(current);
     expect(currentNonce).not.toBe(nonce);
     message(current, scroll);
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        source: oldSource,
-        origin: new URL(current.src).origin,
-        data: { ...scroll, nonce: currentNonce },
-      }),
-    );
+    message(current, { ...scroll, nonce: currentNonce }, [], undefined, oldSource);
     expect(events).toEqual([]);
     message(current, { ...scroll, nonce: currentNonce, deltaY: -80 });
     expect(events).toEqual([
-      { type: "wheel", deltaY: -80, scrollTop: 520 },
-      { type: "scroll", deltaY: -80, scrollTop: 520 },
+      ["wheel", -80, 520],
+      ["scroll", -80, 520],
     ]);
     expect(thread.scrollTop).toBe(440);
     events.length = 0;
@@ -453,14 +465,97 @@ describe("Canvas widget view", () => {
     expect(sibling.scrollTop).toBe(0);
   });
 
+  it("opens a guest widget automatically when its result commits", async () => {
+    vi.useFakeTimers();
+    const pending = createDeferred<CanvasDocumentViewResult>();
+    client.request.mockReturnValueOnce(pending.promise);
+    const view = mount(client, "cv_inline", document.body, ["operator.sessions.read"]);
+    const gateway = gateways.get(view)!;
+    await settle(view);
+    expect(client.request).toHaveBeenLastCalledWith(
+      "canvas.document.view",
+      { docId: view.docId, sessionKey: view.sessionKey },
+      { timeoutMs: 30_000 },
+    );
+    pending.reject(
+      new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: "Waiting for the widget result.",
+        retryable: true,
+        details: { type: "canvas_widget_pending" },
+      }),
+    );
+    await settle(view);
+    expect(view.querySelector('[role="status"]')?.textContent).toContain(
+      "Waiting for the widget result",
+    );
+    expect(view.querySelector('[role="alert"]')).toBeNull();
+    gateway.emit({
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: "agent:main:another",
+        message: { role: "toolResult", toolName: "show_widget" },
+      },
+    });
+    expect(client.request).toHaveBeenCalledOnce();
+    gateway.emit({
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: view.sessionKey,
+        message: { role: "toolResult", toolName: "show_widget" },
+      },
+    });
+    await settle(view);
+    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(view.documentHtml).toBe(documentView.html);
+    expect(view.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("replaces an in-flight guest lookup when its result commits", async () => {
+    vi.useFakeTimers();
+    const stale = createDeferred<CanvasDocumentViewResult>();
+    client.request.mockReturnValueOnce(stale.promise);
+    const view = mount(client, "cv_inline", document.body, ["operator.sessions.read"]);
+    const gateway = gateways.get(view)!;
+    await settle(view);
+    gateway.emit({
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: view.sessionKey,
+        message: { role: "toolResult", toolName: "show_widget" },
+      },
+    });
+    await settle(view);
+    stale.reject(new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Access denied" }));
+    await settle(view);
+    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(view.documentHtml).toBe(documentView.html);
+    expect(view.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("preserves a loaded full-access frame when a result commits", async () => {
+    const { view, frame } = await loaded();
+    gateways.get(view)!.emit({
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: view.sessionKey,
+        message: { role: "toolResult", toolName: "show_widget" },
+      },
+    });
+    await settle(view);
+    expect(view.querySelector("iframe")).toBe(frame);
+    expect(client.request).toHaveBeenCalledOnce();
+  });
+
   it.each(["credential", "session", "denied"])(
     "retires retained content after %s changes",
     async (change) => {
-      const client = { request: vi.fn().mockResolvedValue(documentView) };
-      const view = mount(client);
-      const frame = await frameFor(view);
-      connection(view, "reconnecting");
-      await settle(view);
+      const { view, frame } = await loaded();
+      await transition(view, "reconnecting");
       client.request.mockRejectedValue(
         new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Access denied" }),
       );
@@ -476,12 +571,12 @@ describe("Canvas widget view", () => {
         expect(view.querySelector("iframe")).toBeNull();
         expect(view.documentHtml).toBeUndefined();
       }
-      connection(view, "connected");
-      await settle(view);
+      await transition(view, "connected");
       expect(view.querySelector("iframe")).toBeNull();
       expect(frame.isConnected).toBe(false);
       expect(view.documentHtml).toBeUndefined();
       expect(view.querySelector('[role="alert"]')?.textContent).toContain("Access denied");
+      expect(view.querySelector("button")).toBeNull();
     },
   );
 
@@ -492,63 +587,49 @@ describe("Canvas widget view", () => {
       timeoutMs: 10_000,
       requestSent: true,
     });
-    const client = { request: vi.fn().mockRejectedValue(timeout) };
-    const view = mount(client);
+    client.request.mockRejectedValue(timeout);
+    const view = mount();
     await settle(view);
-    expect(view.querySelector('[role="alert"]')).toBeNull();
-    expect(view.querySelector('[role="status"]')?.textContent).toContain("recover automatically");
+    expectRecovering(view);
     await vi.advanceTimersByTimeAsync(999);
     expect(client.request).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1);
     expect(client.request).toHaveBeenCalledTimes(2);
-    connection(view, "reconnecting");
-    await settle(view);
+    await transition(view, "reconnecting");
     await vi.advanceTimersByTimeAsync(60_000);
     expect(client.request).toHaveBeenCalledTimes(2);
     client.request.mockResolvedValue(documentView);
-    connection(view, "connected");
-    await settle(view);
+    await transition(view, "connected");
     expect(view.querySelector("iframe")).not.toBeNull();
     expect(client.request).toHaveBeenCalledTimes(3);
   });
 
   it("keeps a slow authenticated read alive after the loading notice", async () => {
     vi.useFakeTimers();
-    const client = {
-      request: vi.fn(async () => {
-        await new Promise((resolve) => {
-          window.setTimeout(resolve, 15_000);
-        });
-        return documentView;
-      }),
-    };
-    const view = mount(client);
+    const slowRead = createDeferred<CanvasDocumentViewResult>();
+    client.request.mockReturnValue(slowRead.promise);
+    const view = mount();
     view.preferredHeight = 520;
     await settle(view);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(view.querySelector('[role="status"]')?.textContent).toContain("recover automatically");
     expect(view.querySelector<HTMLElement>('[role="status"]')?.style.minHeight).toBe("520px");
     await vi.advanceTimersByTimeAsync(5_000);
+    slowRead.resolve(documentView);
     await settle(view);
     expect(client.request).toHaveBeenCalledOnce();
     expect(view.querySelector("iframe")).not.toBeNull();
   });
 
   it("retains a known profile through reconnect presence hydration but clears a verified mismatch", async () => {
-    const client = { request: vi.fn().mockResolvedValue(documentView) };
-    const view = mount(client);
-    gateways.get(view)!.snapshot.selfUser = {
-      id: "owner",
-    } as ApplicationGatewaySnapshot["selfUser"];
+    const view = mount();
+    const owner = { id: "owner" } as ApplicationGatewaySnapshot["selfUser"];
+    gateways.get(view)!.snapshot.selfUser = owner;
     const frame = await frameFor(view);
-    connection(view, "reconnecting", { selfUser: null });
-    await settle(view);
-    connection(view, "connected", { selfUser: null });
-    await settle(view);
+    await transition(view, "reconnecting", { selfUser: null });
+    await transition(view, "connected", { selfUser: null });
     expect(view.querySelector("iframe")).toBe(frame);
-    gateways.get(view)!.snapshot.selfUser = {
-      id: "owner",
-    } as ApplicationGatewaySnapshot["selfUser"];
+    gateways.get(view)!.snapshot.selfUser = owner;
     gateways.get(view)!.notify();
     await settle(view);
     expect(view.querySelector("iframe")).toBe(frame);
@@ -561,9 +642,7 @@ describe("Canvas widget view", () => {
   });
 
   it("does not wake the agent for offline or resource-download errors", async () => {
-    const client = { request: vi.fn().mockResolvedValue(documentView) };
-    const view = mount(client, "cv_network_error");
-    const frame = await frameFor(view);
+    const { view, frame } = await loaded("cv_network_error");
     message(frame, { type: "openclaw:widget-runtime-error", message: "Failed to fetch" });
     connection(view, "reconnecting");
     message(frame, { type: "openclaw:widget-runtime-error", message: "d3 is not defined" });
@@ -573,8 +652,8 @@ describe("Canvas widget view", () => {
   });
 
   it("refuses a sandbox on the authenticated Gateway origin", async () => {
-    const client = { request: vi.fn().mockResolvedValue({ ...documentView, sandboxPort: 8443 }) };
-    const view = mount(client);
+    client.request.mockResolvedValue({ ...documentView, sandboxPort: 8443 });
+    const view = mount();
     await expect
       .poll(() => view.querySelector('[role="alert"]')?.textContent)
       .toContain("Sandbox host URL is invalid");
@@ -582,33 +661,14 @@ describe("Canvas widget view", () => {
   });
 
   it.each([
-    {
-      label: "surrogate title boundary",
-      title: `${"x".repeat(79)}😀tail`,
-      expectedTitle: "x".repeat(79),
-      message: "x".repeat(600),
-      expectedMessage: "x".repeat(500),
-    },
-    {
-      label: "surrogate message boundary",
-      title: "Status",
-      expectedTitle: "Status",
-      message: `${"x".repeat(499)}😀tail`,
-      expectedMessage: "x".repeat(499),
-    },
-    {
-      label: "stored dangling surrogate",
-      title: "Status",
-      expectedTitle: "Status",
-      message: `${"x".repeat(499)}\ud83d`,
-      expectedMessage: `${"x".repeat(499)}\ufffd`,
-    },
+    ["surrogate title", `${repeat(79)}😀tail`, repeat(79), repeat(600), repeat(500)],
+    ["surrogate message", "Status", "Status", `${repeat(499)}😀tail`, repeat(499)],
+    ["dangling surrogate", "Status", "Status", `${repeat(499)}\ud83d`, `${repeat(499)}\ufffd`],
   ])(
-    "shows a bounded script error and wakes only once with a $label",
-    async ({ label, title, expectedTitle, message: errorMessage, expectedMessage }) => {
+    "bounds script errors and wakes once at the %s boundary",
+    async (label, title, expectedTitle, errorMessage, expectedMessage) => {
       const now = 1_800_000_000_000;
       vi.spyOn(Date, "now").mockReturnValue(now);
-      const client = { request: vi.fn().mockResolvedValue(documentView) };
       const docId = `cv_runtime_error_${label}`;
       const view = mount(client, docId);
       view.messageTimestamp = now - 600_000;
@@ -622,13 +682,7 @@ describe("Canvas widget view", () => {
         column: 7,
       };
       message(frame, report, [], "https://wrong.example");
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          source: window,
-          origin: new URL(frame.src).origin,
-          data: report,
-        }),
-      );
+      message(frame, report, [], undefined, window);
       expect(client.request).toHaveBeenCalledOnce();
       message(frame, report);
       message(frame, report);
@@ -652,9 +706,7 @@ describe("Canvas widget view", () => {
   );
 
   it("ignores stale sessions and malformed errors and omits invalid locations", async () => {
-    const client = { request: vi.fn().mockResolvedValue(documentView) };
-    const view = mount(client, "cv_runtime_invalid");
-    const frame = await frameFor(view);
+    const { view, frame } = await loaded("cv_runtime_invalid");
     const report = { type: "openclaw:widget-runtime-error", message: "Missing element" };
     message(frame, { ...report, message: { message: "Invalid" } });
     view.sessionKey = "agent:main:changed";
@@ -680,7 +732,6 @@ describe("Canvas widget view", () => {
     async ({ label, ageMs }) => {
       const now = 1_800_000_000_000;
       vi.spyOn(Date, "now").mockReturnValue(now);
-      const client = { request: vi.fn().mockResolvedValue(documentView) };
       const view = mount(client, `cv_runtime_age_${label}`);
       view.messageTimestamp = ageMs === undefined ? undefined : now - ageMs;
       const frame = await frameFor(view);
@@ -700,9 +751,7 @@ describe("Canvas widget view", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const root = container.attachShadow({ mode: "open" });
-    const client = { request: vi.fn().mockResolvedValue(documentView) };
-    const view = mount(client, "cv_theme", root);
-    const frame = await frameFor(view);
+    const { view, frame } = await loaded("cv_theme", root);
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
     document.documentElement.dataset.themeMode = "light";
     await expect
@@ -729,14 +778,9 @@ describe("Canvas widget view", () => {
     "client replacement",
     "parking",
   ])("gates the focused private prompt channel on %s", async (change) => {
-    const client = { request: vi.fn().mockResolvedValue(documentView) };
-    const view = mount(client, `cv_prompt_${change}`);
-    const frame = await frameFor(view);
+    const { view, frame } = await loaded(`cv_prompt_${change}`);
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
-    message(frame, {
-      method: "ui/notifications/sandbox-proxy-ready",
-      params: { sandboxUrl: frame.src },
-    });
+    proxyReady(frame);
     await Promise.resolve();
     let onMessage!: (event: MessageEvent) => void;
     const postMessage = vi.fn();
@@ -755,33 +799,25 @@ describe("Canvas widget view", () => {
     view.addEventListener(WIDGET_PROMPT_EVENT, received);
     message(frame, { type: "openclaw:widget-prompt-offer" }, [port]);
     expect(postMessage).toHaveBeenCalledWith({ type: "openclaw:widget-prompt-host-ready" });
-    onMessage(
-      new MessageEvent("message", {
-        data: { type: "openclaw:widget-prompt", prompt: "Background" },
-      }),
-    );
+    const prompt = (text: string) =>
+      onMessage(
+        new MessageEvent("message", {
+          data: { type: "openclaw:widget-prompt", prompt: text },
+        }),
+      );
+    prompt("Background");
     expect(received).not.toHaveBeenCalled();
     Object.defineProperty(document, "activeElement", { get: () => frame, configurable: true });
     Object.defineProperty(frame, "checkVisibility", { value: () => true });
     message(frame, { type: "openclaw:widget-prompt", prompt: "Forged window message" });
     expect(received).not.toHaveBeenCalled();
-    onMessage(
-      new MessageEvent("message", {
-        data: { type: "openclaw:widget-prompt", prompt: "Show details" },
-      }),
-    );
+    prompt("Show details");
     expect(received).toHaveBeenCalledOnce();
     expect(client.request).toHaveBeenCalledOnce();
     if (change === "parking") {
-      const prompt = () =>
-        onMessage(
-          new MessageEvent("message", {
-            data: { type: "openclaw:widget-prompt", prompt: "Resume details" },
-          }),
-        );
       const report = { type: "openclaw:widget-runtime-error", message: "Missing details" };
       view.presentationActive = false;
-      prompt();
+      prompt("Resume details");
       message(frame, report);
       expect({
         prompts: received.mock.calls.length,
@@ -795,7 +831,7 @@ describe("Canvas widget view", () => {
       expect(close).not.toHaveBeenCalled();
       view.presentationActive = true;
       await settle(view);
-      prompt();
+      prompt("Resume details");
       expect(received).toHaveBeenCalledTimes(2);
       expect(client.request).toHaveBeenCalledOnce();
       expect(view.querySelector("iframe")).toBe(frame);
@@ -812,42 +848,26 @@ describe("Canvas widget view", () => {
       return;
     }
     if (change === "connection recovery" || change === "client replacement") {
-      connection(view, "reconnecting");
-      await settle(view);
-      const prompt = () =>
-        onMessage(
-          new MessageEvent("message", {
-            data: { type: "openclaw:widget-prompt", prompt: "Resume details" },
-          }),
-        );
-      prompt();
+      await transition(view, "reconnecting");
+
+      prompt("Resume details");
       expect(received).toHaveBeenCalledOnce();
       expect(view.querySelector("iframe")).toBe(frame);
-      let revalidate!: (value: CanvasDocumentViewResult) => void;
+      const revalidation = createDeferred<CanvasDocumentViewResult>();
       const currentClient =
         change === "client replacement"
           ? { request: vi.fn().mockResolvedValue(documentView) }
           : client;
-      currentClient.request.mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            revalidate = resolve;
-          }),
-      );
+      currentClient.request.mockImplementationOnce(() => revalidation.promise);
       gateways.get(view)!.snapshot.client = currentClient;
-      connection(view, "connected");
-      await settle(view);
-      expect(currentClient.request).toHaveBeenLastCalledWith(
-        "canvas.document.view",
-        { docId: view.docId },
-        { timeoutMs: 30_000 },
-      );
-      prompt();
+      await transition(view, "connected");
+      expectRead(currentClient, view.docId);
+      prompt("Resume details");
       expect(received).toHaveBeenCalledOnce();
       expect(view.querySelector("iframe")).toBe(frame);
-      revalidate(documentView);
+      revalidation.resolve(documentView);
       await settle(view);
-      prompt();
+      prompt("Resume details");
       expect(received).toHaveBeenCalledTimes(2);
       expect(view.querySelector("iframe")).toBe(frame);
       expect(close).not.toHaveBeenCalled();
@@ -868,12 +888,10 @@ describe("Canvas widget view", () => {
       view.allowScripts = false;
     }
     expect(close).toHaveBeenCalledOnce();
-    expect(removeEventListener).toHaveBeenCalledWith("message", onMessage);
-    onMessage(
-      new MessageEvent("message", {
-        data: { type: "openclaw:widget-prompt", prompt: "Stale port" },
-      }),
+    expect(removeEventListener.mock.calls).toContainEqual(
+      expect.arrayContaining(["message", onMessage]),
     );
+    prompt("Stale port");
     expect(received).toHaveBeenCalledOnce();
     if (change === "strict then scripts") {
       view.allowScripts = true;

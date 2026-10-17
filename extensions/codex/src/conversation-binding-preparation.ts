@@ -179,13 +179,14 @@ export async function resolveConversationAppServerRuntime(params: {
     throw new Error(block);
   }
   const permissionMode = entry?.permissionMode;
+  const pluginConfig = readCodexPluginConfig(params.pluginConfig);
   const sessionRoot = permissionMode ? entry?.sessionRoot : undefined;
   // The rootless permission boundary comes from agent config only. A bound
   // thread's requested cwd (/codex bind --cwd) must never widen or become it.
   const agentWorkspaceDir =
     params.config && agentId
       ? resolveAgentWorkspaceDir(params.config, agentId)
-      : resolveCodexDefaultWorkspaceDir(params.pluginConfig);
+      : resolveCodexDefaultWorkspaceDir(pluginConfig);
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
     config: params.config,
     agentId,
@@ -205,7 +206,7 @@ export async function resolveConversationAppServerRuntime(params: {
       : undefined;
   using _ = { [Symbol.dispose]: () => sandboxForPolicy?.[Symbol.dispose]?.() };
   const configuredRuntime = resolveCodexAppServerRuntimeOptions({
-    pluginConfig: params.pluginConfig,
+    pluginConfig,
     execPolicy,
     modelProvider: params.modelProvider,
     model: params.model,
@@ -225,7 +226,7 @@ export async function resolveConversationAppServerRuntime(params: {
     permissionMode,
     sessionRoot,
     defaultRoot: agentWorkspaceDir,
-    pluginConfig: readCodexPluginConfig(params.pluginConfig),
+    pluginConfig,
     canUseAutoReview,
     requirementsToml: readCodexRequirementsToml({}),
     execMode: execPolicy.mode,
@@ -369,7 +370,7 @@ async function writeThreadBindingFromResponse(
   client: CodexAppServerClient,
   response: CodexThreadResumeResponse | CodexThreadStartResponse,
   requestOptions: () => CodexAppServerLeasedRequestOptions,
-): Promise<void> {
+): Promise<{ threadId: string; clientId: string }> {
   let retained = false;
   let sameOwner = false;
   try {
@@ -430,6 +431,7 @@ async function writeThreadBindingFromResponse(
     if (!committed) {
       throw new Error("Codex conversation binding changed while storing its thread.");
     }
+    return { threadId: response.thread.id, clientId: client.getInstanceId() };
   } catch (error) {
     // A matching stored binding may already have lost its idle subscription.
     // Keep existing live owners, but never leave an accepted resume untracked.
@@ -450,7 +452,7 @@ async function bindThread(params: CodexThreadBindingParams, threadId?: string) {
     client: await getLeasedSharedCodexAppServerClient(resolved.clientOptions),
   };
   try {
-    await withCodexAppServerClientRequestScope({
+    const binding = await withCodexAppServerClientRequestScope({
       lease: clientLease,
       options: resolved.clientOptions,
       run: async (client, connectionRequestOptions) => {
@@ -513,18 +515,25 @@ async function bindThread(params: CodexThreadBindingParams, threadId?: string) {
             requestOptions(),
           );
         }
-        await writeThreadBindingFromResponse(params, resolved, client, response, requestOptions);
+        return await writeThreadBindingFromResponse(
+          params,
+          resolved,
+          client,
+          response,
+          requestOptions,
+        );
       },
     });
+    transferred = true;
+    return {
+      binding,
+      assertCurrent: resolved.assertCurrent,
+      source: resolved.source,
+      release: resolved.release,
+    };
   } finally {
     releaseCodexAppServerClientLease(clientLease);
   }
-  transferred = true;
-  return {
-    assertCurrent: resolved.assertCurrent,
-    source: resolved.source,
-    release: resolved.release,
-  };
 }
 
 export async function prepareCodexConversationBinding(params: {
@@ -596,10 +605,7 @@ export async function prepareCodexConversationBinding(params: {
       using _ = { [Symbol.dispose]: sourceAuthority.release };
       await sourceAuthority.assertCurrent();
       const sourceGuard = sourceAuthority.source;
-      const stored = await params.bindingStore.readAsync(identity);
-      if (!stored) {
-        throw new Error("Codex conversation binding disappeared while initializing its thread.");
-      }
+      const stored = sourceAuthority.binding;
       if (sourceIdentity && params.data.source && !current?.conversationSourceTransferComplete) {
         await params.bindingStore.withLease(sourceIdentity, async () => {
           await sourceAuthority.assertCurrent();

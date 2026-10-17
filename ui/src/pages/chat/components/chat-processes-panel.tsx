@@ -117,7 +117,7 @@ export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps>(
                       {stopButton(row())}
                     </div>
                     <div class="chat-processes__metadata">
-                      <span class={row().status === "failed" ? "chat-processes__failure" : ""}>
+                      <span class={{ "chat-processes__failure": row().status === "failed" }}>
                         {status(row())}
                         {row().exitCode != null &&
                           ` · ${t("chat.processesPanel.exitCode", { code: String(row().exitCode) })}`}

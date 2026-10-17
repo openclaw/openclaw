@@ -208,7 +208,7 @@ function writePersistedInstalledPluginIndexRow(
   database: EngineConnection,
   index: InstalledPluginIndex,
   revision: number,
-): void {
+): InstalledPluginIndexRow {
   const persistedIndex = {
     version: index.version,
     warning: index.warning ?? INSTALLED_PLUGIN_INDEX_WARNING,
@@ -259,6 +259,11 @@ function writePersistedInstalledPluginIndexRow(
   );
   // sqlite-allow-raw: Serialization precedes native prepare; the caller owns rollback.
   database.prepare(compiled.sql).run(...bind());
+  return {
+    state_key: INSTALLED_PLUGIN_INDEX_STATE_KEY,
+    value_json: valueJson,
+    updated_at_ms: revision,
+  };
 }
 
 export function writePersistedInstalledPluginIndexToSqlite(
@@ -287,24 +292,17 @@ export function writePersistedInstalledPluginIndexToSqlite(
         }
       }
       lease.assertOwnedInTransaction(db);
+      const previous = previousRow ? parseInstalledPluginIndex(previousRow.index) : null;
       if (preserveAdmissions) {
-        preservePluginSourceAdmissions(
-          previousRow ? parseInstalledPluginIndex(previousRow.index) : null,
-          persisted,
-        );
+        preservePluginSourceAdmissions(previous, persisted);
       }
       const revision = resolveNextInstalledPluginIndexRevision(
         previousRow ? previousRow.revision : null,
       );
-      writePersistedInstalledPluginIndexRow(db, persisted, revision);
-      // Capture inside the same transaction; later reads could include another writer's work.
-      const after = readInstalledPluginIndexRow(db);
-      if (!after) {
-        throw new Error("Installed plugin index write did not persist its row");
-      }
+      const after = writePersistedInstalledPluginIndexRow(db, persisted, revision);
       lease.assertOwnedInTransaction(db, "commit");
       return {
-        previous: previousRow ? parseInstalledPluginIndex(previousRow.index) : null,
+        previous,
         revision,
         mutation: { databasePath, before: before ?? null, after },
       };
@@ -363,7 +361,6 @@ export async function writePersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<string> {
   assertWritableInstalledPluginIndexStoreOptions(options);
-  const prepared = structuredClone(index);
   const captured = {
     ...options,
     env: cloneEnvWithPlatformSemantics(options.env ?? process.env),
@@ -375,7 +372,7 @@ export async function writePersistedInstalledPluginIndex(
       await runInstalledPluginIndexWrite(captured, lease, (scope, identity) =>
         scope.execute({
           type: "plugins.metadata.index.write",
-          input: { identity, index: prepared },
+          input: { identity, index },
         }),
       );
       return captured.filePath;
@@ -396,11 +393,10 @@ export async function restorePersistedInstalledPluginIndexIfCurrent(
   if (!existsSync(resolveInstalledPluginIndexStorePath(storeOptions))) {
     return false;
   }
-  const prepared = index && structuredClone(index);
   return runInstalledPluginIndexWrite(storeOptions, lease, (scope, identity) =>
     scope.execute({
       type: "plugins.metadata.index.restore",
-      input: { identity, index: prepared, expectedRevision },
+      input: { identity, index, expectedRevision },
     }),
   );
 }
@@ -629,7 +625,7 @@ export async function refreshPersistedInstalledPluginIndexWithReceipt(
       installOwner: resolvePluginCandidateInstallOwner(candidate),
       ambiguous: isPluginCandidateInstallOwnerAmbiguous(candidate),
     }));
-  const prepared: PreparedInstalledPluginIndexRefresh = structuredClone({
+  const prepared: PreparedInstalledPluginIndexRefresh = {
     config: params.config,
     workspaceDir: params.workspaceDir,
     stateDir: params.stateDir,
@@ -649,7 +645,7 @@ export async function refreshPersistedInstalledPluginIndexWithReceipt(
     env: { ...env },
     installRoots: resolveActivePluginInstallRoots(env),
     ...(now ? { nowMs: now().getTime() } : {}),
-  });
+  };
   const refresh = async (lease: PluginLifecycleLeaseContext) => {
     const receipt = await runInstalledPluginIndexWrite(
       storeOptions,

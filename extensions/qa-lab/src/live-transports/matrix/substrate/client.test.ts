@@ -1,10 +1,11 @@
 // Qa Lab Matrix tests cover client behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildMatrixQaMessageContent,
   resolveNextRegistrationAuth,
 } from "./client-message-content.js";
 import { createMatrixQaClient, provisionMatrixQaRoom } from "./client.js";
+import { mockMatrixQaHttp } from "./http.test-support.js";
 
 function resolveRequestUrl(input: RequestInfo | URL) {
   if (typeof input === "string") {
@@ -24,6 +25,10 @@ function parseJsonRequestBody(init?: RequestInit) {
 }
 
 describe("matrix driver client", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("omits Matrix HTML markup when the body has no visible mention token", () => {
     expect(
       buildMatrixQaMessageContent({
@@ -61,10 +66,11 @@ describe("matrix driver client", () => {
       return Response.json({});
     };
 
+    mockMatrixQaHttp(fetchImpl);
+
     const client = createMatrixQaClient({
       accessToken: "token",
       baseUrl: "http://127.0.0.1:28008/",
-      fetchImpl,
     });
 
     await client.inviteUserToRoom({
@@ -114,10 +120,11 @@ describe("matrix driver client", () => {
       return Response.json({ event_id: "$reaction-1" });
     };
 
+    mockMatrixQaHttp(fetchImpl);
+
     const client = createMatrixQaClient({
       accessToken: "token",
       baseUrl: "http://127.0.0.1:28008/",
-      fetchImpl,
     });
 
     await expect(
@@ -140,10 +147,11 @@ describe("matrix driver client", () => {
       return Response.json({ event_id: eventId });
     };
 
+    mockMatrixQaHttp(fetchImpl);
+
     const client = createMatrixQaClient({
       accessToken: "token",
       baseUrl: "http://127.0.0.1:28008/",
-      fetchImpl,
     });
 
     await expect(
@@ -204,10 +212,11 @@ describe("matrix driver client", () => {
       return Response.json({ event_id: "$media-1" });
     };
 
+    mockMatrixQaHttp(fetchImpl);
+
     const client = createMatrixQaClient({
       accessToken: "token",
       baseUrl: "http://127.0.0.1:28008/",
-      fetchImpl,
     });
 
     await expect(
@@ -267,10 +276,11 @@ describe("matrix driver client", () => {
         { status: 200, headers: { "content-type": "application/json" } },
       );
 
+    mockMatrixQaHttp(fetchImpl);
+
     const client = createMatrixQaClient({
       accessToken: "token",
       baseUrl: "http://127.0.0.1:28008/",
-      fetchImpl,
     });
 
     await expect(
@@ -296,10 +306,11 @@ describe("matrix driver client", () => {
         headers: { "content-type": "application/json" },
       });
 
+    mockMatrixQaHttp(fetchImpl);
+
     const client = createMatrixQaClient({
       accessToken: "token",
       baseUrl: "http://127.0.0.1:28008/",
-      fetchImpl,
     });
 
     await expect(
@@ -323,10 +334,11 @@ describe("matrix driver client", () => {
       return Response.json({ room_id: "!encrypted:matrix-qa.test" });
     };
 
+    mockMatrixQaHttp(fetchImpl);
+
     const client = createMatrixQaClient({
       accessToken: "token",
       baseUrl: "http://127.0.0.1:28008/",
-      fetchImpl,
     });
 
     await expect(
@@ -420,6 +432,8 @@ describe("matrix driver client", () => {
       throw new Error(`unexpected fetch ${url}`);
     };
 
+    mockMatrixQaHttp(fetchImpl);
+
     const result = await provisionMatrixQaRoom({
       baseUrl: "http://127.0.0.1:28008/",
       driverLocalpart: "qa-driver",
@@ -427,7 +441,6 @@ describe("matrix driver client", () => {
       registrationToken: "reg-token",
       roomName: "OpenClaw Matrix QA",
       sutLocalpart: "qa-sut",
-      fetchImpl,
       topology: {
         defaultRoomKey: "main",
         rooms: [
@@ -516,6 +529,8 @@ describe("matrix driver client", () => {
       throw new Error(`unexpected fetch ${url}`);
     };
 
+    mockMatrixQaHttp(fetchImpl);
+
     const result = await provisionMatrixQaRoom({
       baseUrl: "http://127.0.0.1:28008/",
       driverLocalpart: "qa-driver",
@@ -523,7 +538,6 @@ describe("matrix driver client", () => {
       registrationToken: "reg-token",
       roomName: "unused",
       sutLocalpart: "qa-sut",
-      fetchImpl,
       topology: {
         defaultRoomKey: "group",
         rooms: [

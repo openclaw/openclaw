@@ -329,7 +329,7 @@ export function resolveTrustedEnterpriseGitHubAccountId(params: {
 }
 
 /** Metadata is accepted only from the same trusted hop that asserted the immutable account. */
-export function resolveTrustedEnterpriseGitHubMetadata(params: {
+function resolveTrustedEnterpriseGitHubMetadata(params: {
   authResult: Pick<GatewayAuthResult, "ok" | "method" | "user">;
   authConfig?: GatewayAuthConfig;
   config?: OpenClawConfig;

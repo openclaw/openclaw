@@ -72,12 +72,15 @@ export type SessionChangedEventInfo = {
 };
 
 export function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
-  const next = { ...row };
+  let next = row;
   for (const [key, value] of Object.entries(row)) {
     if (
       value === undefined ||
       (key === "totalTokensFresh" && value === false && row.totalTokens === undefined)
     ) {
+      if (next === row) {
+        next = { ...row };
+      }
       Reflect.deleteProperty(next, key);
     }
   }
@@ -85,8 +88,7 @@ export function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
 }
 
 export function isPersistedSessionRow(row: GatewaySessionRow): boolean {
-  const sessionId = typeof row.sessionId === "string" ? row.sessionId.trim() : "";
-  return Boolean(sessionId || typeof row.updatedAt === "number");
+  return Boolean(row.sessionId?.trim() || row.updatedAt != null);
 }
 
 export function preserveRosterPresentationMetadata(
@@ -97,7 +99,9 @@ export function preserveRosterPresentationMetadata(
     !existing ||
     !incoming.sessionId ||
     incoming.sessionId !== existing.sessionId ||
-    (incoming.derivedTitle !== undefined && incoming.lastMessagePreview !== undefined)
+    (incoming.derivedTitle !== undefined &&
+      incoming.lastMessagePreview !== undefined &&
+      incoming.lastAssistantMessage !== undefined)
   ) {
     return incoming;
   }
@@ -106,10 +110,13 @@ export function preserveRosterPresentationMetadata(
   if (incomingAgentId && existingAgentId && incomingAgentId !== existingAgentId) {
     return incoming;
   }
-  const row = { ...incoming };
-  for (const field of ["derivedTitle", "lastMessagePreview"] as const) {
+  let row = incoming;
+  for (const field of ["derivedTitle", "lastMessagePreview", "lastAssistantMessage"] as const) {
     if (incoming[field] === undefined && existing[field] !== undefined) {
-      row[field] = existing[field];
+      if (row === incoming) {
+        row = { ...incoming };
+      }
+      Object.assign(row, { [field]: existing[field] });
     }
   }
   return row;
@@ -120,8 +127,8 @@ function isOlderSessionSnapshot(
   existing: GatewaySessionRow | undefined,
 ): boolean {
   return (
-    typeof incoming.updatedAt === "number" &&
-    typeof existing?.updatedAt === "number" &&
+    incoming.updatedAt != null &&
+    existing?.updatedAt != null &&
     incoming.updatedAt < existing.updatedAt
   );
 }
@@ -213,7 +220,7 @@ function sessionRunStatus(value: unknown): SessionRunStatus | null {
     : null;
 }
 
-type ParsedSessionChangedEvent = readonly [
+export type ParsedSessionChangedEvent = readonly [
   info: SessionChangedEventInfo,
   event: Record<string, unknown>,
   source: Record<string, unknown>,
@@ -407,6 +414,7 @@ export type SessionRowObservation = {
 
 type SessionRowReconcileOptions = SessionReconcileOptions & {
   preserveExisting?: boolean;
+  clearedFields?: readonly string[];
 };
 
 type RejectedRowDisposition =
@@ -480,6 +488,9 @@ export function reconcileSessionRow(
     ),
     existing,
   );
+  for (const field of options.clearedFields ?? []) {
+    Reflect.deleteProperty(admittedRow, field);
+  }
   if (isStaleForActiveSession(admittedRow, previous)) {
     return reject("stale-active");
   }
@@ -516,6 +527,15 @@ export function reconcileSessionChangedRow(
   if (!parsed) {
     return { applied: false, row: existing };
   }
+  return reconcileParsedSessionChangedRow(existing, parsed, options, project);
+}
+
+export function reconcileParsedSessionChangedRow(
+  existing: GatewaySessionRow | undefined,
+  parsed: ParsedSessionChangedEvent,
+  options: SessionReconcileOptions & { admitSnapshot?: boolean } = {},
+  project?: SessionChangedRowProjection,
+): SessionChangedRowResult {
   const [info, event, source] = parsed;
   const { key, reason } = info;
   if (info.isAncestorReference) {
@@ -598,10 +618,12 @@ export function reconcileSessionChangedRow(
     ...(sessionId ? { sessionId } : {}),
     ...(fullSnapshot && snapshotAgentId ? { agentId: snapshotAgentId } : {}),
   };
+  const clearedFields: string[] = [];
   // Optional wire fields use null as a tombstone; the explicit nullable fields keep null.
   for (const [field, value] of Object.entries(rowFields)) {
     if (value === null && !NULLABLE_SESSION_ROW_FIELDS.has(field)) {
       Reflect.deleteProperty(offered, field);
+      clearedFields.push(field);
     }
   }
   const fields = [
@@ -614,6 +636,7 @@ export function reconcileSessionChangedRow(
     {
       ...options,
       selectedGlobalAgentId: info.agentId ?? options.selectedGlobalAgentId ?? null,
+      clearedFields,
     },
     project && existing
       ? {

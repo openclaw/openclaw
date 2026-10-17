@@ -69,9 +69,6 @@ test.each([false, true])(
       const fixtureSignal = getAsyncWorkSignal();
       ensureProfileForEmail("nested-state-reader@example.test");
       const { storePath } = await createSessionStoreDir();
-      await writeSessionStore({
-        entries: { main: { sessionId: "nested-state-reader", updatedAt: 1 } },
-      });
       const runtime = getGatewayRecoveryRuntime();
       const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
       if (!projection) {
@@ -97,6 +94,16 @@ test.each([false, true])(
           return read(...args);
         });
       restoreRead = () => reads.mockRestore();
+      // The shared suite retains ACP absence by session key across these cases.
+      // Seed a fresh key after interception so its receipt cannot bypass the held read.
+      await writeSessionStore({
+        entries: {
+          [`agent:main:nested-state-reader-${disposalFails}`]: {
+            sessionId: `nested-state-reader-${disposalFails}`,
+            updatedAt: 1,
+          },
+        },
+      });
       sessionChanges.emit({ all: true, scope: { storePath }, factsInvalidated: true });
       preparing = projection.ensureMaterialized();
       void preparing.catch(() => {});

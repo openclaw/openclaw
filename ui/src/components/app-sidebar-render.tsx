@@ -35,7 +35,8 @@ import "./theme-brand-icon.tsx";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
-  readonly people: import("./sidebar-people-controller.ts").SidebarPeopleController;
+  readonly people: import("./sidebar-people.ts").SidebarPeoplePreferences;
+  readonly peopleView?: ReturnType<typeof import("./sidebar-people.ts").createSidebarPeople>;
   renderPinnedSidebarSession(session: () => SidebarRecentSession): JSX.Element;
   toggleSection(sectionId: string): void;
 };
@@ -398,7 +399,7 @@ export function renderAppSidebarPageEntry(
   const pinnedSession = () => (entry.type === "session" ? sessionRows().get(entry.key) : undefined);
   const content =
     entry.type === "route" ? (
-      host.sidebarMenus.renderRoute(entry.route)
+      host.sidebarMenus.renderRoute(entry.route, host)
     ) : entry.type === "plugin" ? (
       <Show
         when={pluginTab()}
@@ -478,7 +479,7 @@ export function renderAppSidebarPluginTab(
   );
   return (
     <Show when={routeId()} fallback={link}>
-      {(route) => host.sidebarMenus.renderRoute(route())}
+      {(route) => host.sidebarMenus.renderRoute(route(), host)}
     </Show>
   );
 }

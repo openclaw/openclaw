@@ -99,6 +99,61 @@ afterEach(() => {
 });
 
 describe("chat sidebar region", () => {
+  it("builds unopened panel options only when the operator opens the type menu", async () => {
+    const readIcon = vi.fn(() => "terminal" as const);
+    const definitions = sidebarPanelDefinitions().map((definition) =>
+      Object.defineProperty(
+        Object.assign({}, definition, { available: definition.slot === "terminal" }),
+        "icon",
+        { get: () => (definition.slot === "terminal" ? readIcon() : definition.icon) },
+      ),
+    );
+    const region = await createRegion(openSlot({ columns: [] }, "detail"), definitions);
+    expect(readIcon).not.toHaveBeenCalled();
+    region.panelDefinitions = definitions.map((definition) =>
+      Object.defineProperty(Object.assign({}, definition, { label: "Updated terminal" }), "icon", {
+        get: () => (definition.slot === "terminal" ? readIcon() : definition.icon),
+      }),
+    );
+    readIcon.mockClear();
+    await region.updateComplete;
+    expect(readIcon).not.toHaveBeenCalled();
+    root(region).querySelector<HTMLButtonElement>(".side-panel-type-menu__trigger")!.click();
+    await waitForSolid(() =>
+      expect(root(region).querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
+    );
+    expect(readIcon).toHaveBeenCalled();
+    expect(root(region).querySelector(".side-panel-type-menu__item")?.textContent).toContain(
+      "Updated terminal",
+    );
+  });
+
+  it("preserves header focus when an already locked side panel refreshes", async () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const region = await createRegion();
+    const header = element('<div class="sidebar-region__header"><button>Actions</button></div>');
+    root(region).prepend(header);
+    const actions = header.querySelector("button")!;
+    actions.focus();
+    region.sideFocusOrigin = () => actions;
+    region.sideFocusLocked = true;
+    await region.updateComplete;
+    vi.advanceTimersToNextFrame();
+    expect(document.activeElement).toBe(
+      root(region).querySelector('.tabstrip-tab[aria-selected="true"]'),
+    );
+
+    actions.focus();
+    region.sideFocusOrigin = undefined;
+    region.layout = { ...region.layout };
+    await region.updateComplete;
+    vi.advanceTimersToNextFrame();
+    expect(document.activeElement).toBe(actions);
+  });
+
   it("restores an expanded panel from its active tab with pointer or keyboard", async () => {
     const region = await createRegion({
       ...openSlot({ columns: [] }, "workspace"),
@@ -613,7 +668,10 @@ describe("chat sidebar region", () => {
     );
     expect(
       Array.from(root(region).querySelectorAll(".side-panel-type-menu__item"), (item) =>
-        item.textContent?.replace(/\s+/gu, " ").trim(),
+        [".oc-menu-item__label", ".oc-menu-item__details"]
+          .map((selector) => item.querySelector(selector)?.textContent?.trim())
+          .filter(Boolean)
+          .join(" "),
       ),
     ).toEqual([
       "Terminal Ctrl+`",

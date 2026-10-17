@@ -12,7 +12,7 @@ import {
   renderChatThread,
   mountTestTranscript,
 } from "../test-helpers/chat-transcript-native.tsx";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import { createChatTranscript } from "./chat-transcript-controller.ts";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
@@ -42,12 +42,8 @@ describe("chat transcript geometry", () => {
           anchorToEnd: false,
         });
       }
-      const host = Object.assign(document.createElement("div"), {
-        addController: vi.fn(),
-        removeController: vi.fn(),
-        requestUpdate: vi.fn(),
-        updateComplete: Promise.resolve(true),
-      });
+      const host = document.createElement("div");
+      const notify = vi.fn();
       vi.stubGlobal("innerWidth", 800);
       vi.stubGlobal("innerHeight", 600);
       const readHostWidth = vi.fn(() => 800);
@@ -56,7 +52,7 @@ describe("chat transcript geometry", () => {
         clientWidth: { get: readHostWidth },
         clientHeight: { get: readHostHeight },
       });
-      const transcript = new ChatTranscriptController(host, () => paneId);
+      const transcript = createChatTranscript(notify, () => paneId);
       const rows = Array.from({ length: 100 }, (_, index) => ({
         kind: "content" as const,
         key: `row:${index}`,
@@ -74,30 +70,30 @@ describe("chat transcript geometry", () => {
           ),
           container,
         );
-        transcript.hostUpdated();
+        transcript.update();
         flush();
         return renderRow.mock.calls.length;
       };
-      transcript.hostConnected();
+      transcript.start();
       expect(renderWindow([])).toBe(0);
       expect(readHostWidth).not.toHaveBeenCalled();
       expect(readHostHeight).not.toHaveBeenCalled();
       flushFrames();
 
-      // The initial tail and saved-reader windows use the same six-row buffer
+      // The initial tail and saved-reader windows use the same two-row buffer
       // as later frames; presentation never widens it after first paint.
       const initialRenderCount = renderWindow();
       expect(initialRenderCount, JSON.stringify(renderRow.mock.calls.map(([row]) => row.key))).toBe(
-        offset === null ? 7 : 17,
+        offset === null ? 3 : 9,
       );
       const mounted = transcriptRows(container).map((row) => Number(row.dataset.index));
       expect(mounted).toEqual(expect.arrayContaining(offset === null ? [99] : [40, 44]));
       // Repeated commits and animation frames keep the same mounted window.
-      expect(renderWindow()).toBe(offset === null ? 7 : 17);
+      expect(renderWindow()).toBe(offset === null ? 3 : 9);
       flushFrames();
-      expect(renderWindow()).toBe(offset === null ? 7 : 17);
+      expect(renderWindow()).toBe(offset === null ? 3 : 9);
 
-      transcript.hostDisconnected();
+      transcript.dispose();
     },
   );
 
@@ -164,7 +160,7 @@ describe("chat transcript geometry", () => {
         expect(row.style.containIntrinsicBlockSize).toBe("100.375px");
       }
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   });
 
@@ -200,12 +196,12 @@ describe("chat transcript geometry", () => {
         }
         expect(readHeight).not.toHaveBeenCalled();
         if (disconnect) {
-          transcript.hostDisconnected();
+          transcript.dispose();
         }
         flushFrames();
         expect(readHeight).toHaveBeenCalledTimes(disconnect ? 0 : 1);
       } finally {
-        transcript.hostDisconnected();
+        transcript.dispose();
       }
     },
   );
@@ -240,7 +236,7 @@ describe("chat transcript geometry", () => {
     };
     const renderTranscript = () => {
       render(renderChatThread(props, transcript), region);
-      transcript.hostUpdated();
+      transcript.update();
       flush();
     };
     const emitResize = (element: Element, width: number, height: number) => {
@@ -250,8 +246,8 @@ describe("chat transcript geometry", () => {
     };
     try {
       renderTranscript();
-      transcript.hostConnected();
-      transcript.hostUpdated();
+      transcript.start();
+      transcript.update();
       flush();
       const viewport = expectDefined(transcript.scrollElement, "rail viewport");
       const inner = expectDefined(viewport.querySelector(".chat-thread-inner"), "rail column");
@@ -290,10 +286,10 @@ describe("chat transcript geometry", () => {
       expect(readInnerBounds).toHaveBeenCalledOnce();
 
       // A disconnected shell retires its old column observation before remounting.
-      transcript.hostDisconnected();
+      transcript.dispose();
       render(null, region);
       await flushDeferredRowPrune();
-      transcript.hostConnected();
+      transcript.start();
       renderTranscript();
       await flushDeferredRowPrune();
       const replacementViewport = expectDefined(
@@ -324,7 +320,7 @@ describe("chat transcript geometry", () => {
       expect(readInnerBounds).not.toHaveBeenCalled();
 
       emitResize(replacement, 700, 400);
-      transcript.hostDisconnected();
+      transcript.dispose();
       render(null, region);
       flushFrames();
       expect(readInnerBounds).not.toHaveBeenCalled();
@@ -333,7 +329,7 @@ describe("chat transcript geometry", () => {
       emitResize(region, 1200, 800);
       expect(requestAnimationFrame).not.toHaveBeenCalled();
 
-      transcript.hostConnected();
+      transcript.start();
       renderTranscript();
       await flushDeferredRowPrune();
       emitResize(region, 1200, regionHeight);
@@ -342,7 +338,7 @@ describe("chat transcript geometry", () => {
       expect(restored.hasAttribute("data-position-rail-gutter")).toBe(true);
       expect(restored.style.getPropertyValue("--chat-position-rail-viewport-height")).toBe("720px");
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
       render(null, region);
     }
   });
@@ -355,18 +351,13 @@ describe("chat transcript geometry", () => {
       });
     }
     const geometryEventTarget = document.body.appendChild(document.createElement("div"));
-    const host = {
-      addController: vi.fn(),
-      removeController: vi.fn(),
-      requestUpdate: vi.fn(),
-      updateComplete: Promise.resolve(true),
-    };
+    const notify = vi.fn();
     const viewportChanged = vi.fn();
-    const main = new ChatTranscriptController(host, () => "pane-geometry-main", {
+    const main = createChatTranscript(notify, () => "pane-geometry-main", {
       geometryEventTarget,
       onViewportResize: viewportChanged,
     });
-    const detail = new ChatTranscriptController(host, () => "pane-geometry-detail", {
+    const detail = createChatTranscript(notify, () => "pane-geometry-detail", {
       geometryEventTarget,
     });
     // Another pane may precede main chat in DOM order; neither observer nor
@@ -378,14 +369,14 @@ describe("chat transcript geometry", () => {
     const renderTranscripts = () => {
       render(renderChatThread(mainProps, main), mainPanel);
       render(renderChatThread(detailProps, detail), detailPanel);
-      main.hostUpdated();
-      detail.hostUpdated();
+      main.update();
+      detail.update();
       flush();
     };
 
     renderTranscripts();
-    main.hostConnected();
-    detail.hostConnected();
+    main.start();
+    detail.start();
     await flushDeferredRowPrune();
     renderTranscripts();
     for (const observer of resizeObservers) {
@@ -445,8 +436,8 @@ describe("chat transcript geometry", () => {
 
     expect(transcriptSize(mainPanel)).toBe(960);
     expect(transcriptSize(detailPanel)).toBe(720);
-    main.hostDisconnected();
-    detail.hostDisconnected();
+    main.dispose();
+    detail.dispose();
     expect(main.scrollElement).toBeNull();
     expect(detail.scrollElement).toBeNull();
   });
@@ -461,12 +452,12 @@ describe("chat transcript geometry", () => {
     }));
     const props = threadProps("pane-zero-rect", "agent:main:zero-rect", messages);
     render(renderChatThread(props, transcript), container);
-    transcript.hostConnected();
-    transcript.hostUpdated();
+    transcript.start();
+    transcript.update();
     await flushDeferredRowPrune();
     // Commit initial row measurements before recording the visible extent.
     render(renderChatThread(props, transcript), container);
-    transcript.hostUpdated();
+    transcript.update();
     const scrollElement = container.querySelector<HTMLElement>(".chat-thread");
     expect(scrollElement).not.toBeNull();
     expect(transcriptRows(container).length).toBeGreaterThan(0);
@@ -486,10 +477,10 @@ describe("chat transcript geometry", () => {
       }
     }
     render(renderChatThread(props, transcript), container);
-    transcript.hostUpdated();
+    transcript.update();
 
     expect(transcriptRows(container).length).toBeGreaterThan(0);
     expect(transcriptSize(container)).toBe(visibleSize);
-    transcript.hostDisconnected();
+    transcript.dispose();
   });
 });

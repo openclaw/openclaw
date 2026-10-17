@@ -11,6 +11,7 @@ export function UsagePage(props: { routeData?: UsageRouteData }) {
   const context = useApplication();
   const page = createUsagePage(context);
   const routeData = createMemo(() => props.routeData);
+  // Route receipts drive the usage owner's Gateway queries while preserving local presentation.
   createEffect(routeData, (data) => page.setRouteData(data));
   return (
     <openclaw-usage-page>

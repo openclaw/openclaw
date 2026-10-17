@@ -14,7 +14,7 @@ import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
-import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-controller.ts";
+import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-owner.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";

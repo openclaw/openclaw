@@ -104,7 +104,8 @@ it("serves a committed postimage without rereading or freezing its publisher", a
   const databasePath = path.join(tempDirs.make("auth-row-postimage-"), "auth.sqlite");
   using database = openNodeSqliteDatabase(databasePath);
   database.exec("CREATE TABLE cache_fixture (value)");
-  const cache = createRuntimeAuthProfileRowsCache(() => "1");
+  let revision = "1";
+  const cache = createRuntimeAuthProfileRowsCache(() => revision);
   const read = vi.fn(async () => emptyRows());
   const resolve = () =>
     cache.prepare(databasePath, { identity: "fixture", read, assertCurrent() {} }).read();
@@ -114,6 +115,7 @@ it("serves a committed postimage without rereading or freezing its publisher", a
     profiles: { "example:key": { type: "api_key", provider: "example", key: "fixture-new" } },
     lastGood: { example: "example:key" },
   };
+  revision = "2";
   cache.recordSource(databasePath, "fixture", committed);
   committed.profiles = {};
   committed.lastGood!.example = "caller-edit";
@@ -133,6 +135,39 @@ it("serves a committed postimage without rereading or freezing its publisher", a
   expect(read).toHaveBeenCalledOnce();
   cache.recordSource(databasePath, "fixture", null);
   await resolve();
+  expect(read).toHaveBeenCalledTimes(2);
+});
+
+it("retains private lifetimes across runtime publication and reloads incomplete postimages", async () => {
+  const databasePath = path.join(tempDirs.make("auth-row-lifetimes-"), "auth.sqlite");
+  let revision = "1";
+  const cache = createRuntimeAuthProfileRowsCache(() => revision);
+  const store: AuthProfileStore = {
+    version: 1,
+    profiles: { "example:key": { type: "api_key", provider: "example", key: "fixture" } },
+  };
+  const rows = {
+    ...emptyRows(),
+    store: {
+      status: "readable" as const,
+      raw: {
+        ...store,
+        authorizationLifetimes: { "example:key": "00000000-0000-4000-8000-000000000001" },
+      },
+    },
+  };
+  const read = vi.fn(async () => rows);
+  const resolve = (source: "runtime" | "canonical") =>
+    cache.prepare(databasePath, { identity: "fixture", read, assertCurrent() {} }, source).read();
+  await resolve("runtime");
+  cache.recordSource(databasePath, "fixture", store);
+  expect(await resolve("canonical")).toEqual(rows);
+  expect(read).toHaveBeenCalledOnce();
+
+  revision = "2";
+  cache.recordSource(databasePath, "fixture", store);
+  expect((await resolve("runtime")).store).toEqual({ status: "readable", raw: store });
+  expect(await resolve("canonical")).toEqual(rows);
   expect(read).toHaveBeenCalledTimes(2);
 });
 
@@ -159,7 +194,8 @@ it.each(["agent", "shared-state"] as const)(
     });
     const cache = createRuntimeAuthProfileRowsCache(() => "1");
     const read = vi.fn(async () => readAuthProfileRows(database, databasePath, kind));
-    const resolve = () => cache.prepare(databasePath, { read, assertCurrent() {} }).read();
+    const resolve = () =>
+      cache.prepare(databasePath, { read, assertCurrent() {} }, "canonical").read();
     const first = await resolve();
     database.exec("UPDATE session_fixture SET value=value+1");
     expect(await resolve()).toBe(first);

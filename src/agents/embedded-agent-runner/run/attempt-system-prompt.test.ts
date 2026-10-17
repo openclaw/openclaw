@@ -7,6 +7,10 @@ import {
 } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  clearMemoryPluginState,
+  registerTestMemoryPromptBuilder,
+} from "../../../plugins/memory-state.test-fixtures.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { buildBundleMcpToolsFromCatalog } from "../../agent-bundle-mcp-materialize.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
@@ -59,6 +63,7 @@ afterEach(() => {
     admission.close();
   }
   vi.restoreAllMocks();
+  clearMemoryPluginState();
   providerRegistryMocks.isPluginProvidersLoadInFlight.mockClear();
   providerRegistryMocks.resolvePluginProvidersCore.mockClear();
 });
@@ -72,6 +77,7 @@ async function preparePermissionPrompt(
   session?: Pick<EmbeddedRunAttemptParams, "sessionKey" | "sandboxSessionKey">,
   skills?: { prompt: string; toolsAllow?: string[]; initialToolNames?: string[] },
   webSearchUnconfigured?: () => boolean,
+  attemptOverrides?: Partial<EmbeddedRunAttemptParams>,
 ) {
   const tool = (name: string): AgentTool => ({
     name,
@@ -111,6 +117,7 @@ async function preparePermissionPrompt(
     toolsAllow: skills?.toolsAllow,
     sourceReplyDeliveryMode:
       requireExplicitMessageTarget === undefined ? undefined : "message_tool_only",
+    ...attemptOverrides,
   } as EmbeddedRunAttemptParams;
   const capabilityToolNames = new Set(tools.map(({ name }) => name));
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
@@ -413,6 +420,34 @@ describe("buildAttemptSystemPrompt", () => {
       expect(result.systemPrompt).toContain("USER_CONTEXT_MARKER");
     },
   );
+
+  it("leaves project annotation guidance to the selected memory plugin", async () => {
+    const seenProjectKeys: Array<string | undefined> = [];
+    registerTestMemoryPromptBuilder((params) => {
+      seenProjectKeys.push(params.projectKey);
+      return ["## Provider Memory", "PROVIDER_MEMORY_MARKER"];
+    });
+    const { prepared } = await preparePermissionPrompt(
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        preparedModelRuntime: {
+          projectKey: "github.com/acme/Alpha",
+          activeProjectKeys: [],
+          configuredModelAliases: [],
+          isCurrent: () => true,
+        } as unknown as EmbeddedRunAttemptParams["preparedModelRuntime"],
+      },
+    );
+
+    expect(seenProjectKeys).toContain("github.com/acme/Alpha");
+    expect(prepared.systemPromptText).toContain("PROVIDER_MEMORY_MARKER");
+    expect(prepared.systemPromptText).not.toContain("<!-- project:");
+  });
 
   it("filters first-turn curated context to global and active-project entries", async () => {
     const result = await buildAttemptSystemPrompt({

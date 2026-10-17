@@ -80,9 +80,6 @@ function fixture() {
         throw new Error("Host received a directory outside this physical resource");
       }
       hostPolicy(request);
-      if (request.type === "removed") {
-        inventory.delete(request.directory);
-      }
       reply = { id: request.id, ok: true };
     } catch (error: unknown) {
       const encoded = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
@@ -144,7 +141,7 @@ afterEach(async () => {
 });
 
 it("projects an accepted allocation before closing its child after target port loss", async () => {
-  const { client, resource, launch, native, port2, inventory, hostMessages } = fixture();
+  const { client, resource, launch, native, port2, hostMessages } = fixture();
   const entered = createDeferredCore();
   const complete = createDeferredCore<string>();
   native.run.mockImplementationOnce(async () => {
@@ -171,7 +168,6 @@ it("projects an accepted allocation before closing its child after target port l
   expect(hostMessages.map(({ id: _id, ...request }) => request)).toEqual([
     { type: "allocated", directory: "/fixture/allocated-before-reply", preparationId: 1 },
     { type: "retire", directory: "/fixture/allocated-before-reply" },
-    { type: "removed", directory: "/fixture/allocated-before-reply" },
   ]);
   expect(native.close).toHaveBeenCalledOnce();
   expect(operations.copy).toHaveBeenCalledWith(
@@ -185,7 +181,6 @@ it("projects an accepted allocation before closing its child after target port l
     maxRetries: 3,
     retryDelay: 20,
   });
-  expect(inventory.size).toBe(0);
 });
 
 it("retains creator custody behind a host reader fence and retries cleanup on the same resource", async () => {
@@ -215,7 +210,7 @@ it("retains creator custody behind a host reader fence and retries cleanup on th
     { mode: "staging-reconcile" },
     { env: launch.env, cwd: launch.cwd, deadlineOwnedByCaller: false },
   );
-  expect(inventory.size).toBe(0);
+  expect(operations.remove).toHaveBeenCalledOnce();
 });
 
 it("refuses cleanup after losing its host fence port without releasing creator custody", async () => {
@@ -295,7 +290,6 @@ it("creates native sessions only through RPC and preserves captured launch and s
   expect(native.close).toHaveBeenCalledOnce();
   expect(inventory).toEqual(new Set(["/fixture/staging"]));
   await client.removed("/fixture/staging");
-  expect(inventory.size).toBe(0);
   await resource.close();
   expect(operations.copy).not.toHaveBeenCalled();
   expect(operations.remove).not.toHaveBeenCalled();

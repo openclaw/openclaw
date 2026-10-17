@@ -4,21 +4,38 @@ import { expect, it } from "vitest";
 import { CLI_PARENT_BOUND_PRELOAD } from "../../cli-parent-lifetime.mjs";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
-it.each(["complete", "parent-bound"] as const)(
-  "respawn lifetime preserves %s completion",
-  async (lifetime) => {
+it.each([
+  { lifetime: "complete", transport: "preload" },
+  { lifetime: "parent-bound", transport: "preload" },
+  { lifetime: "complete", transport: "env" },
+  { lifetime: "parent-bound", transport: "env" },
+] as const)(
+  "respawn lifetime preserves $lifetime completion through $transport",
+  async ({ lifetime, transport }) => {
     const source = `
-      import { watchCliRespawnParent } from ${JSON.stringify(new URL("../../cli-parent-lifetime.mjs", import.meta.url).href)};
+      import { watchCliRespawnParent, getCliParentPid } from ${JSON.stringify(new URL("../../cli-parent-lifetime.mjs", import.meta.url).href)};
       watchCliRespawnParent();
       const timer = ${lifetime === "complete" ? "undefined" : "setInterval(() => {}, 1000)"};
       process.once("SIGTERM", () => { clearInterval(timer); process.stdout.write("settled"); });
 
-      process.send("ready");
+      process.send({ parent: getCliParentPid(), marker: process.env.OPENCLAW_CLI_RESPAWN_PARENT,
+        inheritedPreload: process.execArgv.some(arg => arg.startsWith("data:text/javascript,")) });
     `;
     const child = spawn(
       resolveTestNodeExecPath(),
-      ["--import", CLI_PARENT_BOUND_PRELOAD, "--input-type=module", "-e", source],
-      { stdio: ["ignore", "pipe", "pipe", "ipc"] },
+      [
+        ...(transport === "preload" ? ["--import", CLI_PARENT_BOUND_PRELOAD] : []),
+        "--input-type=module",
+        "-e",
+        source,
+      ],
+      {
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+        env: {
+          ...process.env,
+          ...(transport === "env" ? { OPENCLAW_CLI_RESPAWN_PARENT: String(process.pid) } : {}),
+        },
+      },
     );
     let stdout = "";
     child.stdout?.on("data", (chunk) => {
@@ -26,7 +43,10 @@ it.each(["complete", "parent-bound"] as const)(
     });
     const exited = once(child, "exit");
     try {
-      expect((await once(child, "message"))[0]).toBe("ready");
+      expect((await once(child, "message"))[0]).toEqual({
+        parent: process.pid,
+        inheritedPreload: false,
+      });
       if (lifetime === "parent-bound") {
         child.disconnect();
       }
@@ -67,9 +87,9 @@ it.runIf(process.platform !== "win32").each([
         : "import {runRespawnedChild} from " +
           JSON.stringify(new URL("../../node-runtime-recovery.mjs", import.meta.url).href) +
           ";" +
-          "await runRespawnedChild(process.execPath,['-e'," +
+          "await runRespawnedChild({command:process.execPath,args:['-e'," +
           JSON.stringify(child) +
-          "],{});";
+          "],env:{}});";
     const result = spawnSync(
       process.execPath,
       ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", source],

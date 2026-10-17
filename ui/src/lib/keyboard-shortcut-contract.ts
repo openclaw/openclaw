@@ -7,12 +7,14 @@ import {
   type KeyboardShortcutDefinition,
   type KeyboardShortcutModifier,
 } from "../../../src/shared/keyboard-shortcuts.ts";
+import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 
 export { isApplePlatform } from "../../../src/shared/keyboard-shortcuts.ts";
 
 export const KEYBOARD_SHORTCUT_COMBOS = {
   commandPalette: COMMAND_PALETTE_SHORTCUT,
   newSession: { modifiers: ["mod", "shift"], key: "o", platformSpecific: true },
+  nativeNewSession: { modifiers: ["mod"], key: "n", platformSpecific: true },
   archiveSession: { modifiers: ["mod", "shift"], key: "a", platformSpecific: true },
   keyboardShortcuts: { modifiers: ["mod"], key: "/" },
   toggleSidebar: { modifiers: ["mod"], key: "b", platformSpecific: true },
@@ -52,6 +54,13 @@ type KeyboardShortcutKey =
   | (typeof KEYBOARD_SHORTCUT_COMBOS)[keyof typeof KEYBOARD_SHORTCUT_COMBOS]["key"]
   | (typeof COMMAND_PALETTE_SHORTCUTS)[number]["key"];
 export type KeyboardShortcutCombo = KeyboardShortcutDefinition<KeyboardShortcutKey>;
+
+export function resolveNewSessionShortcut(): KeyboardShortcutCombo {
+  // Browser tabs retain New Window; desktop hosts own their window shortcuts.
+  return isNativeWebChromeHost()
+    ? KEYBOARD_SHORTCUT_COMBOS.nativeNewSession
+    : KEYBOARD_SHORTCUT_COMBOS.newSession;
+}
 
 export function formatKeyboardShortcutParts(
   combo: KeyboardShortcutCombo,

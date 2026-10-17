@@ -1,6 +1,7 @@
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
 
@@ -29,29 +30,15 @@ type MicrophoneActivityProps = {
 
 // Levels stay with the talk owner; its subscription updates only decorative bars.
 export function MicrophoneActivity(props: MicrophoneActivityProps) {
-  let host!: HTMLElement;
-  const signal = createMemo(() => props.inputLevel);
-  createEffect(signal, (source) => {
-    const renderLevel = (level: number) => {
-      host.dataset.level = String(level);
-      for (const [index, bar] of [...host.children].entries()) {
-        if (bar instanceof HTMLElement) {
-          bar.style.setProperty(
-            "--talk-bar-scale",
-            String(0.18 + level * (BAR_GAINS[index] ?? 1) * 0.82),
-          );
-        }
-      }
-    };
-    renderLevel(source?.value ?? 0);
-    return source?.subscribe(renderLevel);
+  const inputLevel = createMemo(() => {
+    const source = props.inputLevel;
+    return source && projectOwner(source, (owner) => owner.value, Object.is);
   });
+  const level = () => inputLevel()?.read() ?? 0;
   return (
     <openclaw-microphone-activity
-      ref={(element) => {
-        host = element;
-      }}
       class="agent-chat__voice-activity"
+      data-level={String(level())}
       data-status={
         props.status === "connecting" || props.status === "thinking" ? props.status : "listening"
       }
@@ -59,10 +46,13 @@ export function MicrophoneActivity(props: MicrophoneActivityProps) {
       aria-hidden="true"
     >
       <For each={BAR_GAINS}>
-        {(_, index) => (
+        {(gain, index) => (
           <span
             class="agent-chat__voice-activity-bar"
-            style={{ "--talk-bar-delay": `${index() * -70}ms` }}
+            style={{
+              "--talk-bar-delay": `${index() * -70}ms`,
+              "--talk-bar-scale": String(0.18 + level() * gain * 0.82),
+            }}
           />
         )}
       </For>

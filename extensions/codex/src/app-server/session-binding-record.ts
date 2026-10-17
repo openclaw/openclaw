@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { NativeSessionBindingStateStoreV2 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -45,6 +46,18 @@ export {
   type CodexAppServerThreadBinding,
   type StoredCodexAppServerBinding,
 } from "./session-binding-record-codec.js";
+
+export type CodexBindingStateStore = Omit<
+  NativeSessionBindingStateStoreV2<StoredCodexAppServerBinding>,
+  "lookup" | "assertLeaseCurrent"
+> &
+  Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup"> & {
+    prepareRead: Parameters<typeof prepareCurrentCodexAppServerBindingRead>[0]["prepareRead"];
+    asyncReads: Pick<
+      PluginStateKeyedStore<StoredCodexAppServerBinding>,
+      "lookup" | "lookupMany" | "entries"
+    >;
+  };
 
 /** Stable owner of one Codex thread binding. */
 export type CodexAppServerBindingIdentity =
@@ -103,7 +116,7 @@ export function ownsStoredSessionGeneration(
   );
 }
 
-/** Final effect guards retain the live row until raw SDK binding writers retire. */
+/** Legacy effect guards; prepared readers also observe raw SDK binding writes. */
 export function readCurrentCodexAppServerBinding(
   state: Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup">,
   identity: CodexAppServerBindingIdentity,
@@ -118,6 +131,28 @@ export async function readCurrentCodexAppServerBindingAsync(
 ): Promise<CodexAppServerThreadBinding | undefined> {
   const key = bindingStoreKey(identity);
   return decodeCurrentCodexAppServerBinding(key, await state.lookup(key), identity);
+}
+
+export async function prepareCurrentCodexAppServerBindingRead(
+  state: {
+    prepareRead(key: string): Promise<
+      | {
+          read(): StoredCodexAppServerBinding | undefined;
+          release(): void;
+        }
+      | undefined
+    >;
+  },
+  identity: CodexAppServerBindingIdentity,
+) {
+  const key = bindingStoreKey(identity);
+  const current = await state.prepareRead(key);
+  return current
+    ? {
+        read: () => decodeCurrentCodexAppServerBinding(key, current.read(), identity),
+        release: () => current.release(),
+      }
+    : undefined;
 }
 
 function decodeCurrentCodexAppServerBinding(

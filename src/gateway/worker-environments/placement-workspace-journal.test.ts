@@ -141,6 +141,7 @@ describe("worker placement workspace journal", () => {
       await store.abortWorkspaceReconciliation(owner);
       expect(await store.listWorkspaceReconciliationOwners()).toEqual([]);
       await store.beginWorkspaceReconciliation(owner, journal);
+      expect(await store.listWorkspaceReconciliationOwners()).toEqual([owner]);
       expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
       expect(await prune()).toEqual([]);
       const accepted = await store.updateWorkspaceBaseManifest({

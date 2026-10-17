@@ -12,19 +12,151 @@ import type {
   SourceStatus,
 } from "../../types.js";
 import { checkAbort } from "../http.js";
-import { ABORT_LABEL, GithubClient, GithubHttpError, parse, pathWithQuery } from "./client.js";
 import {
-  advisorySchema,
-  collaboratorSchema,
-  commentSchema,
-  commitSchema,
-  issueSchema,
-  pullSchema,
-  repoSchema,
-  searchCommitSchema,
-  userSchema,
-} from "./schemas.js";
-import { search, searchPath, searchSeconds } from "./search.js";
+  ABORT_LABEL,
+  GithubClient,
+  GithubHttpError,
+  GithubSourceError,
+  parse,
+  pathWithQuery,
+} from "./client.js";
+
+const date = z.string().refine((value) => Number.isFinite(Date.parse(value)));
+const userSchema = z.object({ login: z.string().min(1) });
+const collaboratorSchema = userSchema.extend({
+  permissions: z
+    .object({
+      push: z.boolean().optional(),
+      maintain: z.boolean().optional(),
+      admin: z.boolean().optional(),
+    })
+    .optional(),
+});
+const repoSchema = z.object({
+  full_name: z.string().regex(/^[^/]+\/[^/]+$/),
+  archived: z.boolean(),
+  pushed_at: date.nullish(),
+});
+const issueSchema = z.object({
+  number: z.number().int().positive(),
+  title: z.string(),
+  html_url: z.string(),
+  repository_url: z.string(),
+  user: userSchema.nullable(),
+  created_at: date,
+  closed_at: date.nullish(),
+  pull_request: z.object({ merged_at: date.nullish() }).optional(),
+});
+const pullSchema = z.object({ merged_by: userSchema.nullable() });
+const commitSchema = z.object({
+  sha: z.string(),
+  html_url: z.string(),
+  author: userSchema.nullable(),
+  commit: z.object({ message: z.string(), committer: z.object({ date }).nullable() }),
+});
+const searchCommitSchema = commitSchema.extend({
+  repository: z.object({ full_name: z.string() }),
+});
+const commentSchema = z.object({
+  user: userSchema.nullable(),
+  body: z.string().nullish(),
+  created_at: date,
+  html_url: z.string(),
+});
+const advisorySchema = z.object({
+  summary: z.string(),
+  html_url: z.string(),
+  published_at: date.nullish(),
+  updated_at: date.nullish(),
+  credits: z.array(z.object({ login: z.string().nullish(), user: userSchema.nullish() })).nullish(),
+  publisher: userSchema.nullish(),
+});
+
+type SearchQuery =
+  | {
+      kind: "issues";
+      qualifier: "created" | "closed" | "merged" | "updated";
+      type: "issue" | "pull-request";
+    }
+  | { kind: "commits"; qualifier: "committer-date" };
+
+function searchPath(query: SearchQuery, org: string, start: number, end: number): string {
+  const type = query.kind === "issues" ? ` is:${query.type}` : "";
+  return pathWithQuery(`/search/${query.kind}`, {
+    q: `org:${org}${type} ${query.qualifier}:${new Date(start * 1000).toISOString()}..${new Date(end * 1000).toISOString()}`,
+  });
+}
+
+function searchSeconds(window: ActivityWindow): [number, number] {
+  return [Math.floor(window.sinceMs / 1000), Math.floor((window.untilMs - 1) / 1000)];
+}
+
+async function* search<T>(
+  client: GithubClient,
+  query: SearchQuery,
+  org: string,
+  window: ActivityWindow,
+  itemSchema: z.ZodType<T>,
+  first?: Awaited<ReturnType<GithubClient["get"]>>,
+  afterPage?: () => Promise<void>,
+): AsyncGenerator<T> {
+  const { kind } = query;
+  const schema = z.object({
+    total_count: z.number().int().nonnegative(),
+    incomplete_results: z.boolean().optional(),
+    items: z.array(itemSchema),
+  });
+  async function* range(
+    start: number,
+    end: number,
+    initial?: Awaited<ReturnType<GithubClient["get"]>>,
+  ): AsyncGenerator<T> {
+    let page = initial ?? (await client.get(searchPath(query, org, start, end)));
+    let result = parse(schema, page.data);
+    // The parsed page owns the useful fields; release bodies stripped by the schema,
+    // including the caller's reused probe, before descending into split searches.
+    page.data = undefined;
+    if (result.total_count >= 1000 && start < end) {
+      result.items = [];
+      client.status.stats.searchSplits = Number(client.status.stats.searchSplits) + 1;
+      // Search ranges are inclusive at second precision; disjoint children avoid cap-boundary duplicates.
+      const mid = Math.floor((start + end) / 2);
+      yield* range(start, mid);
+      yield* range(mid + 1, end);
+      return;
+    }
+    if (result.total_count >= 1000) {
+      client.warn(
+        `${org} ${kind}`,
+        new GithubSourceError("Search cap reached within one second; some activity may be missing"),
+      );
+    }
+    const seen = new Set<string>();
+    let emitted = 0;
+    for (;;) {
+      if (result.incomplete_results) {
+        client.warn(
+          `${org} ${kind}`,
+          new GithubSourceError("GitHub returned incomplete search results"),
+        );
+      }
+      yield* result.items;
+      await afterPage?.();
+      emitted += result.items.length;
+      if (!page.next || emitted >= 1000) {
+        break;
+      }
+      if (seen.has(page.next)) {
+        throw new GithubSourceError("Search pagination did not advance");
+      }
+      seen.add(page.next);
+      page = await client.get(page.next);
+      result = parse(schema, page.data);
+      page.data = undefined;
+    }
+  }
+  yield* range(...searchSeconds(window), first);
+}
 
 type Repository = z.infer<typeof repoSchema>;
 
@@ -40,8 +172,8 @@ function repoPath(repo: string): string {
   return `/repos/${repo.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-function inWindow(date: string | null | undefined, window: ActivityWindow): boolean {
-  const atMs = date ? Date.parse(date) : Number.NaN;
+function inWindow(timestamp: string | null | undefined, window: ActivityWindow): boolean {
+  const atMs = timestamp ? Date.parse(timestamp) : Number.NaN;
   return atMs >= window.sinceMs && atMs < window.untilMs;
 }
 
@@ -183,8 +315,8 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
         }
       };
       const addCommit = async (repo: string, commit: z.infer<typeof commitSchema>) => {
-        const date = commit.commit.committer?.date;
-        if (!inWindow(date, window)) {
+        const committedAt = commit.commit.committer?.date;
+        if (!inWindow(committedAt, window)) {
           return;
         }
         active.add(repo.toLowerCase());
@@ -193,7 +325,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
           repo,
           title: commit.commit.message.split(/\r?\n/, 1)[0] ?? "",
           url: commit.html_url,
-          atMs: Date.parse(date ?? ""),
+          atMs: Date.parse(committedAt ?? ""),
           actor: commit.author?.login ?? "",
           coauthors: coauthors(commit.commit.message, roster),
         });
@@ -436,10 +568,10 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
               if (advisory.updated_at && Date.parse(advisory.updated_at) < window.sinceMs) {
                 break;
               }
-              const date = inWindow(advisory.updated_at, window)
+              const advisoryDate = inWindow(advisory.updated_at, window)
                 ? advisory.updated_at
                 : advisory.published_at;
-              if (!inWindow(date, window)) {
+              if (!inWindow(advisoryDate, window)) {
                 continue;
               }
               const actors = new Set(
@@ -454,7 +586,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
                   repo: repo.full_name,
                   title: advisory.summary,
                   url: advisory.html_url,
-                  atMs: Date.parse(date ?? ""),
+                  atMs: Date.parse(advisoryDate ?? ""),
                   actor,
                 });
               }

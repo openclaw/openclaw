@@ -504,9 +504,7 @@ function patchResolvedSecretRefLeaves(params: {
       : { changed: true, value: params.resolved };
   }
   if (Array.isArray(params.source) && Array.isArray(params.resolved)) {
-    const next = Array.isArray(params.current)
-      ? [...params.current]
-      : structuredClone(params.resolved);
+    const next = Array.isArray(params.current) ? [...params.current] : [...params.resolved];
     let changed = false;
     for (const [index, source] of params.source.entries()) {
       const patch = patchResolvedSecretRefLeaves({
@@ -523,9 +521,7 @@ function patchResolvedSecretRefLeaves(params: {
     return { changed, value: changed ? next : params.current };
   }
   if (isRecord(params.source) && isRecord(params.resolved)) {
-    const next = isRecord(params.current)
-      ? { ...params.current }
-      : structuredClone(params.resolved);
+    const next = isRecord(params.current) ? { ...params.current } : { ...params.resolved };
     let changed = false;
     for (const [key, source] of Object.entries(params.source)) {
       const patch = patchResolvedSecretRefLeaves({

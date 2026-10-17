@@ -749,7 +749,7 @@ describe("Settings agent selector", () => {
   });
 });
 
-it("preserves search drafts and navigation focus during unrelated status updates", () => {
+it("preserves search drafts, navigation focus, and instance-local scroll shadows", () => {
   const props: SidebarProps = {
     ...sidebarAgentProps(),
     basePath: "",
@@ -778,6 +778,21 @@ it("preserves search drafts and navigation focus during unrelated status updates
   render({ ...props, connectionStatus: "offline" }, container);
   expect(container.querySelector(".settings-sidebar__item")).toBe(link);
   expect(document.activeElement).toBe(link);
+  render({ ...props, searchQuery: "gateway" }, container);
+  expect(input.value).toBe("gateway");
+  const other = mountSolid(() => <SettingsSidebar {...props} />);
+  flush();
+  const nav = container.querySelector<HTMLElement>(".settings-sidebar__nav")!;
+  const search = container.querySelector(".settings-sidebar__search")!;
+  const otherSearch = other.container.querySelector(".settings-sidebar__search")!;
+  nav.scrollTop = 12;
+  nav.dispatchEvent(new Event("scroll"));
+  expect(search.classList.contains("settings-sidebar__search--scrolled")).toBe(true);
+  expect(otherSearch.classList.contains("settings-sidebar__search--scrolled")).toBe(false);
+  nav.scrollTop = 0;
+  nav.dispatchEvent(new Event("scroll"));
+  expect(search.classList.contains("settings-sidebar__search--scrolled")).toBe(false);
+  other.unmount();
 });
 
 it("refreshes the Ask label when the branding owner publishes", () => {

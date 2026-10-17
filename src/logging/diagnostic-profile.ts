@@ -12,7 +12,6 @@ import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 export const DIAGNOSTIC_PROFILE_MAX_BYTES = 1024 * 1024;
 const ENGINE_NAMES = new Set(["(root)", "(program)", "(idle)", "(garbage collector)"]);
 let capturing = false;
-let cleanupUncertain = false;
 
 type FailureReason =
   | "cooldown"
@@ -103,12 +102,7 @@ export function createInspectorProfileCapture<Profile>(
       } catch {
         // Disconnect must still release the inspector after a failed disable.
       }
-      try {
-        session.disconnect();
-      } catch (error) {
-        cleanupUncertain = true;
-        throw error;
-      }
+      session.disconnect();
       if (!disabled) {
         throw new ProfileFailure("cleanup-failed");
       }
@@ -124,14 +118,7 @@ export function createNativeCpuProfileCapture(
     // Node shares its native profiler with the stall recorder's overlapping windows.
     start: () => (handle = v8.startCpuProfile({ sampleInterval: intervalMicros / 1_000 })),
     stop: () => handle && { profile: parseNativeCpuProfile(handle.stop()) },
-    close: () => {
-      try {
-        handle?.[Symbol.dispose]();
-      } catch (error) {
-        cleanupUncertain = true;
-        throw error;
-      }
-    },
+    close: () => handle?.[Symbol.dispose](),
   };
 }
 
@@ -250,9 +237,6 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     reason,
     cleanupFailed,
   });
-  if (cleanupUncertain) {
-    return unavailable("cleanup-failed", true);
-  }
   if (capturing) {
     return unavailable("busy");
   }

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
 import {
   getConfiguredDecisionProviderIds,
   resolveDecisionModelSetting,
@@ -8,24 +9,44 @@ import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import type { PluginProviderRegistration } from "../plugins/provider-plugin.types.js";
 import type { PluginRecord, PluginRegistry } from "../plugins/registry-types.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
+import {
+  decisionBatchV1ToV2,
+  decisionBatchV2ToV1,
+  decisionResultV1ToV2,
+  decisionResultV2ToV1,
+} from "./compatibility.js";
 import {
   decisionDebugEnabled,
   logDecisionEvaluation,
   type DecisionEvaluationFacts,
 } from "./diagnostics.js";
 import type {
+  DecisionBatchV2,
+  DecisionEvaluateOptionsV2,
+  DecisionOutcomeV2,
+  DecisionProviderV2,
+} from "./types-v2.js";
+import type {
   DecisionBatch,
   DecisionOutcome,
   DecisionProviderV1,
-  DecisionRuntimeV1,
   ProviderFailureReason,
   UnavailableReason,
 } from "./types.js";
 import { DecisionContractError, validateDecisionResult } from "./validation.js";
 
-type Options = Parameters<DecisionRuntimeV1["evaluate"]>[1];
+type Options = DecisionEvaluateOptionsV2;
+type Batch = DecisionBatch | DecisionBatchV2;
+type Outcome = DecisionOutcome | DecisionOutcomeV2;
+/** Core accounting consumes only these route-bound public billing facts. */
+export type PreparedDecisionBilling = {
+  provider: string;
+  model: string;
+  billing?: ModelDecisionCapabilities["billing"];
+};
 const FAILURE_REASONS = new Set<ProviderFailureReason>([
   "credentials-unavailable",
   "authentication",
@@ -70,8 +91,9 @@ export class DecisionProviderHost {
   private outputTokens = 0;
 
   constructor(
-    readonly provider: DecisionProviderV1,
+    readonly provider: DecisionProviderV1 | DecisionProviderV2,
     readonly record: PluginRecord,
+    private readonly registration?: PluginProviderRegistration,
   ) {}
 
   private generation(config: OpenClawConfig): Health {
@@ -161,6 +183,10 @@ export class DecisionProviderHost {
   }
 
   private ready(): boolean | undefined {
+    if (this.provider.contractVersion === 2) {
+      // V2 authentication belongs to the selected prepared agent/profile, not a global probe.
+      return undefined;
+    }
     try {
       // Providers may resolve per-call credentials without prepared local evidence.
       if (this.provider.isReady === undefined) {
@@ -184,15 +210,19 @@ export class DecisionProviderHost {
       config.plugins?.enabled !== false &&
       config.plugins?.entries?.[this.record.id]?.enabled !== false;
     const admitted = !this.retired && !this.reloadPause && instance?.acceptingCalls === true;
-    const readiness = admitted && instance.run(() => this.ready());
+    const readiness =
+      this.provider.contractVersion === 1
+        ? admitted && instance.run(() => this.ready())
+        : undefined;
     return {
       providerId: this.provider.id,
       pluginId: this.record.id,
       configured,
-      credentialReady: readiness === true,
+      ...(this.provider.contractVersion === 1 ? { credentialReady: readiness === true } : {}),
       callable:
         configured &&
         enabled &&
+        admitted &&
         readiness !== false &&
         !health.trial &&
         health.openUntil <= performance.now() &&
@@ -207,7 +237,7 @@ export class DecisionProviderHost {
     };
   }
 
-  async evaluate(
+  evaluate(
     submitted: DecisionBatch,
     options: Options,
     model: string,
@@ -216,9 +246,55 @@ export class DecisionProviderHost {
     consumerId?: string,
     isAdmissible?: () => boolean,
   ): Promise<DecisionOutcome> {
+    return this.evaluateVersion(
+      submitted,
+      options,
+      model,
+      config,
+      registry,
+      1,
+      consumerId,
+      isAdmissible,
+    ) as Promise<DecisionOutcome>; // SAFETY: Version 1 dispatch pairs this V1 batch with a V1 outcome.
+  }
+
+  evaluateV2(
+    submitted: DecisionBatchV2,
+    options: Options,
+    model: string,
+    config: OpenClawConfig,
+    registry: PluginRegistry,
+    consumerId?: string,
+    isAdmissible?: () => boolean,
+    onPreparedBilling?: (facts: PreparedDecisionBilling) => void,
+  ): Promise<DecisionOutcomeV2> {
+    return this.evaluateVersion(
+      submitted,
+      options,
+      model,
+      config,
+      registry,
+      2,
+      consumerId,
+      isAdmissible,
+      onPreparedBilling,
+    ) as Promise<DecisionOutcomeV2>; // SAFETY: Version 2 dispatch pairs this V2 batch with a V2 outcome.
+  }
+
+  private async evaluateVersion(
+    submitted: Batch,
+    options: Options,
+    model: string,
+    config: OpenClawConfig,
+    registry: PluginRegistry,
+    version: 1 | 2,
+    consumerId?: string,
+    isAdmissible?: () => boolean,
+    onPreparedBilling?: (facts: PreparedDecisionBilling) => void,
+  ): Promise<Outcome> {
     const started = performance.now();
     const facts: DecisionEvaluationFacts = { dispatched: false };
-    let outcome: DecisionOutcome | undefined;
+    let outcome: Outcome | undefined;
     try {
       outcome = await this.evaluateRequest(
         submitted,
@@ -227,8 +303,10 @@ export class DecisionProviderHost {
         config,
         registry,
         facts,
+        version,
         consumerId,
         isAdmissible,
+        onPreparedBilling,
       );
       return outcome;
     } finally {
@@ -244,15 +322,17 @@ export class DecisionProviderHost {
   }
 
   private async evaluateRequest(
-    submitted: DecisionBatch,
+    submitted: Batch,
     options: Options,
     model: string,
     config: OpenClawConfig,
     registry: PluginRegistry,
     facts: DecisionEvaluationFacts,
+    version: 1 | 2,
     consumerId?: string,
     isAdmissible?: () => boolean,
-  ): Promise<DecisionOutcome> {
+    onPreparedBilling?: (facts: PreparedDecisionBilling) => void,
+  ): Promise<Outcome> {
     options.signal.throwIfAborted();
     const instance = getPluginInstance(this.record);
     if (this.retired || this.reloadPause || !instance?.acceptingCalls || instance.owner?.revoked) {
@@ -271,7 +351,9 @@ export class DecisionProviderHost {
     if (health.openUntil > performance.now() || health.trial) {
       return this.unavailable("circuit-open");
     }
-    if (this.pending.size >= MAX_CONCURRENT) {
+    // Optional work leaves the last physical slot for requested evaluations.
+    const limit = options.priority === "optional" ? MAX_CONCURRENT - 1 : MAX_CONCURRENT;
+    if (this.pending.size >= limit) {
       return this.unavailable("overloaded");
     }
     const halfOpen = health.openUntil > 0;
@@ -289,9 +371,9 @@ export class DecisionProviderHost {
       settle = resolve;
     });
     this.pending.set(controller, { consumerId, done });
-    let observedInterruption: DecisionOutcome | undefined;
+    let observedInterruption: Outcome | undefined;
     let admissionError: { error: unknown } | undefined;
-    const interrupted = (): DecisionOutcome | undefined => {
+    const interrupted = (): Outcome | undefined => {
       options.signal.throwIfAborted();
       if (controller.signal.reason instanceof DecisionConsumerClosedError) {
         throw controller.signal.reason;
@@ -345,29 +427,65 @@ export class DecisionProviderHost {
       // Await physical settlement. A callback that ignores abort keeps its native lease
       // and is fenced by normal failed-drain recovery, never detached as "disposed".
       let outcome;
-      let questions: DecisionBatch["questions"];
+      const v1Batch =
+        version === 1
+          ? (submitted as DecisionBatch) // SAFETY: The V1 entry point supplies a V1 batch for version 1.
+          : decisionBatchV2ToV1(
+              submitted as DecisionBatchV2, // SAFETY: The V2 entry point supplies a V2 batch for version 2.
+            );
+      const v2Batch =
+        version === 2
+          ? (submitted as DecisionBatchV2) // SAFETY: The V2 entry point supplies a V2 batch for version 2.
+          : decisionBatchV1ToV2(
+              submitted as DecisionBatch, // SAFETY: The V1 entry point supplies a V1 batch for version 1.
+            );
+      const provider = this.provider;
+      if (
+        (provider.contractVersion === 1 &&
+          (!v1Batch || (options.reasoning !== undefined && options.reasoning !== "auto"))) ||
+        (provider.contractVersion === 2 && !v2Batch)
+      ) {
+        return this.unavailable("unsupported-input");
+      }
+      // Keep offered questions separate from provider-mutated input for both contracts.
+      const offeredV1 = v1Batch ? structuredClone(v1Batch) : undefined;
+      const offeredV2 = v2Batch ? structuredClone(v2Batch) : undefined;
+      const admissible = () => {
+        observedInterruption ??= interrupted();
+        return observedInterruption === undefined;
+      };
       try {
-        // Preserve the offered questions even when the provider mutates its input.
-        questions = structuredClone(submitted.questions);
         outcome = await instance.runInRegistry(
           registry,
-          () => {
+          async () => {
             facts.dispatched = true;
-            return this.provider.evaluate(submitted, {
-              model,
-              ...(options.agentId ? { agentId: options.agentId } : {}),
+            if (provider.contractVersion === 1) {
+              return provider.evaluate(v1Batch!, {
+                model,
+                ...(options.agentId ? { agentId: options.agentId } : {}),
+                signal,
+                deadlineMonotonicMs,
+                ...(isAdmissible ? { isAdmissible: admissible } : {}),
+              });
+            }
+            if (!this.registration) {
+              throw new DecisionContractError();
+            }
+            const { executePreparedDecision } = await import("../agents/decision-inference.js");
+            if (!admissible()) {
+              return { status: "unavailable" as const, reason: "unsupported-input" as const };
+            }
+            return executePreparedDecision({
+              provider,
+              registration: this.registration,
+              batch: v2Batch!,
+              modelId: model,
+              config,
+              options,
               signal,
               deadlineMonotonicMs,
-              ...(isAdmissible
-                ? {
-                    isAdmissible: () => {
-                      // The same owner fences consumer and provider generations. Keep
-                      // its observed outcome even if config changes back during cleanup.
-                      observedInterruption ??= interrupted();
-                      return observedInterruption === undefined;
-                    },
-                  }
-                : {}),
+              isAdmissible: admissible,
+              onPreparedBilling,
             });
           },
           // The provider callback's physical settlement is already tracked by
@@ -387,11 +505,30 @@ export class DecisionProviderHost {
         return stopped;
       }
       if (outcome?.status === "ok") {
-        // Reuse the validated snapshot for usage and return projection as well.
-        const result = outcome.result;
-        if (!validateDecisionResult({ questions }, result)) {
+        // The prepared V2 adapter already validates against route capabilities.
+        const nativeResult = outcome.result;
+        if (
+          provider.contractVersion === 1 &&
+          (!offeredV1 || !validateDecisionResult(offeredV1, nativeResult))
+        ) {
           this.fail(health, "invalid-response");
           return this.unavailable("invalid-response");
+        }
+        const result =
+          version === provider.contractVersion
+            ? nativeResult
+            : version === 1
+              ? decisionResultV2ToV1(
+                  offeredV2!,
+                  nativeResult as import("./types-v2.js").DecisionBatchResultV2, // SAFETY: The provider V2 branch validated this native result against offeredV2.
+                )
+              : decisionResultV1ToV2(
+                  offeredV1!,
+                  nativeResult as import("./types.js").DecisionBatchResult, // SAFETY: The provider V1 branch validated this native result against offeredV1.
+                );
+        // V1 narrowing must be lossless: explicit abstention or provider units cannot be fabricated away.
+        if (!result) {
+          return this.unavailable("unsupported-input");
         }
         health.failures = 0;
         health.openUntil = 0;

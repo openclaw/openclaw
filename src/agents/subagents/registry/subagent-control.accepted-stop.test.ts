@@ -336,7 +336,6 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
     cfg: getRuntimeConfig(),
     request: { message: "Continue admitted work", idempotencyKey: runId },
     runId,
-    lifecycleGeneration,
     agentDedupeKeys,
     suppressVisibleSessionEffects: false,
     context,
@@ -368,7 +367,6 @@ it("joins an execution registered while its accepted Stop awaits kill-claim pers
     let admissionEntry: SessionEntry | undefined = sessionEntry;
     const nativeAdmission = createAgentAdmissionController({
       runId,
-      lifecycleGeneration,
       agentDedupeKeys,
       expectedSession: { handoffId: admission.createHandoff(), sessionId },
       context,
@@ -510,7 +508,8 @@ it.each([
     const unrecordedLoss = mode === "self-disposal with unrecorded binding loss";
     const retiresDuringStop = mode === "self-disposal during wake cancellation" || unrecordedLoss;
     const selfDisposal = mode === "self-disposal" || retiresDuringStop;
-    const completed = mode === "completed" || (selfDisposal && !unrecordedLoss);
+    const completed =
+      mode === "completed" || mode === "controller replaced" || (selfDisposal && !unrecordedLoss);
     if (retiresDuringStop) {
       fixture.wake.mockResolvedValue(false);
     }

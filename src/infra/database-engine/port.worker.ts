@@ -228,9 +228,10 @@ export async function readDatabasePortAllocations(
           qualified(endpoint, table.name),
           identity.column,
         ]);
+        // Matched backups retain resets and uncalled sequences, even below existing row IDs.
         const row = (
           await endpoint.db.query(
-            `SELECT greatest(last_value, coalesce(retained, last_value))::text AS value, is_called OR coalesce(retained >= last_value, false) AS called FROM ${sequence.rows[0].name} CROSS JOIN (SELECT max(${quote(identity.column)}) AS retained FROM ${qualified(endpoint, table.name)}) m`,
+            `SELECT last_value::text AS value, is_called AS called FROM ${sequence.rows[0].name}`,
           )
         ).rows[0];
         result[key] = { value: row.value, called: row.called };
@@ -256,7 +257,7 @@ export async function readDatabasePortAllocations(
   return result;
 }
 
-/** Plain INTEGER PRIMARY KEY allocation follows retained rows on SQLite, not PG sequences. */
+/** SQLite follows retained rows; AUTOINCREMENT also retains a called sequence high-watermark. */
 export function sqlitePortAllocations(
   descriptor: PortDescriptor,
   physical: PortVerification["allocations"],
@@ -265,8 +266,12 @@ export function sqlitePortAllocations(
   const expected = { ...source };
   for (const table of copiedTables(descriptor)) {
     for (const identity of table.identities) {
-      if (!identity.autoIncrement) {
-        const key = `${table.name}.${identity.column}`;
+      const key = `${table.name}.${identity.column}`;
+      if (
+        !identity.autoIncrement ||
+        !source[key]!.called ||
+        BigInt(physical[key]!.value) > BigInt(source[key]!.value)
+      ) {
         expected[key] = physical[key]!;
       }
     }
@@ -335,6 +340,7 @@ async function scan(
   maxRowBytes: number,
   destination?: Endpoint,
   assertCurrent = () => {},
+  transformRow?: (table: string, row: PortRow) => PortRow | undefined,
 ) {
   const tables: PortVerification["tables"] = {};
   for (const table of copiedTables(descriptor)) {
@@ -356,7 +362,13 @@ async function scan(
         if (done) {
           break;
         }
-        for (const row of batch) {
+        const copied = transformRow
+          ? batch.flatMap((row) => {
+              const transformed = transformRow(table.name, row);
+              return transformed ? [transformed] : [];
+            })
+          : batch;
+        for (const row of copied) {
           hash.update(
             JSON.stringify(table.columns.map((c) => encodeSqliteValue(row[c.name]))) + "\n",
           );
@@ -367,8 +379,8 @@ async function scan(
         if (destination?.engine === "sqlite") {
           next = stream.next();
         }
-        if (destination) {
-          pending = insertBatch(destination, table, batch, assertCurrent);
+        if (destination && copied.length) {
+          pending = insertBatch(destination, table, copied, assertCurrent);
           void pending.catch(() => {});
         }
         if (destination?.engine !== "sqlite") {
@@ -565,6 +577,8 @@ export async function materializeDatabasePort(params: {
   maxRowBytes?: number;
   sourceAllocations?: PortVerification["allocations"];
   activeFragments?: readonly string[];
+  /** Export-only redaction before hashing/copying; retained rows preserve keys and column types. */
+  transformRow?: (table: string, row: PortRow) => PortRow | undefined;
 }): Promise<PortVerification> {
   const { source, destination, assertCurrent } = params;
   if (source.engine === destination.engine) {
@@ -632,7 +646,14 @@ export async function materializeDatabasePort(params: {
     }
     const facts =
       params.sourceAllocations ?? (await readDatabasePortAllocations(source, descriptor));
-    const tables = await scan(source, descriptor, maxRowBytes, destination, assertCurrent);
+    const tables = await scan(
+      source,
+      descriptor,
+      maxRowBytes,
+      destination,
+      assertCurrent,
+      params.transformRow,
+    );
     assertCurrent();
     await restoreAllocations(destination, descriptor, facts);
     for (const projection of descriptor.projections ?? []) {

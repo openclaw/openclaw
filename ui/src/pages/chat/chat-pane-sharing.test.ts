@@ -26,7 +26,7 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
+import type { ChatSessionSharingState } from "./components/chat-session-sharing.solid.tsx";
 
 const { confirmPublicShare, copyPublicShare } = vi.hoisted(() => ({
   confirmPublicShare: vi.fn<(...args: unknown[]) => Promise<boolean>>(),
@@ -186,7 +186,7 @@ describe("public session sharing", () => {
       const row = sessionRow();
       setSharingAuthorization(pane, { scopes: [scope] });
       const states = pane.sessionSharingStates;
-      const updates = vi.spyOn(getPaneTestRuntime(pane), "requestUpdate");
+      const updates = vi.spyOn(getPaneTestRuntime(pane), "invalidate");
       const workspace = createPaneHeaderWorkspaceFixture(state);
 
       pane.renderPaneHeader(workspace, row, false, undefined, false, null);

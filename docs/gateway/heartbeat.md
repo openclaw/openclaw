@@ -169,7 +169,7 @@ without repeating the same admission attempt.
 
 - If nothing needs attention, reply with **`NO_REPLY`**.
 - A turn with no usable response, acknowledgment, pending continuation, or confirmed delivery is recorded as failed. This does not add a missing-answer notice to the chat.
-- A token-only uppercase fragment such as `NO_R` is treated as a quiet reply too. With `showOk` enabled, it produces the usual `HEARTBEAT_OK` acknowledgment instead of delivering the fragment.
+- A token-only strict prefix of `NO_REPLY` with at least four characters, such as `NO_R` or `no_r`, is treated as a quiet reply too, ignoring casing. This fragment handling is limited to heartbeats. With `showOk` enabled, it produces the usual `HEARTBEAT_OK` acknowledgment instead of delivering the fragment.
 - Heartbeat runs may instead call `heartbeat_respond` with `notify: false` for no visible update, or `notify: true` plus `notificationText` for an alert. When present, the structured tool response takes precedence over the text fallback.
 - A meaningful `heartbeat_respond` result with `notify: false` remains silent but is remembered as bounded internal context for the next user turn in that session. A generated `notify: true` alert whose delivery is blocked or unconfirmed is also recorded, including its alert text and delivery reason. This is the latest outcome for the session, not an alert history or exact-delivery replay queue. `no_change` acknowledgments and confirmed visible notifications are not stored this way.
 - Existing custom prompts may still return the legacy `HEARTBEAT_OK` acknowledgment. OpenClaw accepts it at the **start or end** of a reply and drops the reply when its remaining content is at most 300 characters. The suppression budget is fixed.

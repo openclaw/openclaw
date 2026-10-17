@@ -4,7 +4,11 @@ import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/s
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
-import { canArchiveSessionRow, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
+import {
+  canArchiveSessionRow,
+  parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
+} from "../lib/sessions/session-key.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
 import { renderSidebarSessionIndicators } from "./app-sidebar-session-indicators.tsx";
@@ -117,7 +121,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     const hostValue = host();
     const sessionValue = session();
     return displayValue?.catalogMenu
-      ? hostValue.sidebarMenus.catalogMenu.isOpenFor(displayValue.catalogMenu.key)
+      ? hostValue.sidebarMenus.catalogMenuView.isOpenFor(displayValue.catalogMenu.key)
       : hostValue.sidebarMenus.sessionMenu?.session.key === sessionValue.key;
   });
   const color = createMemo(() => normalizeSessionColorValue(session().color ?? ""));
@@ -358,6 +362,44 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   );
   return row;
 }
+/** The unadmitted create renders in the slot its admitted row will take: selected,
+ *  actionless, and aligned with real rows. Roster groups pass their agent id. */
+export function renderPendingSessionCreateRow(
+  host: () => Pick<SessionListHost, "pendingSessionCreate" | "sidebarAgentsMode">,
+  agentId?: string,
+) {
+  const pending = createMemo(() => {
+    const value = host().pendingSessionCreate();
+    return value &&
+      (agentId === undefined ||
+        parseAgentSessionKey(value.creation.sessionKey)?.agentId === agentId)
+      ? value
+      : undefined;
+  });
+  return (
+    <Show when={pending()}>
+      {(value) => (
+        <div
+          class={[
+            "sidebar-recent-session session-row-host sidebar-recent-session--single-line sidebar-recent-session--active sidebar-recent-session--creating",
+            { "sidebar-recent-session--team": host().sidebarAgentsMode === "roster" },
+          ]}
+        >
+          <div class="sidebar-recent-session__link" aria-current="page" aria-busy="true">
+            <span class="sidebar-session-indicator" aria-hidden="true" />
+            <span class="sidebar-recent-session__text">
+              <span class="sidebar-recent-session__title-row">
+                <Show when={value().displayName} fallback={<SessionTitlePlaceholder />}>
+                  {(name) => <span class="sidebar-recent-session__name">{name()}</span>}
+                </Show>
+              </span>
+            </span>
+          </div>
+        </div>
+      )}
+    </Show>
+  );
+}
 export function renderChildSessionLoadError(host: SessionListHost, parentKey: string) {
   const error = createMemo(() => host.sessionData.childSessionErrorsByParent.get(parentKey));
   return (
@@ -451,6 +493,5 @@ export function renderSessionTree(params: {
     </div>
   );
 }
-export { renderSidebarSessionIndicators };
 const RecentSession = renderRecentSession;
 const SessionTree = renderSessionTree;

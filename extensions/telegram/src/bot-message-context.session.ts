@@ -11,7 +11,7 @@ import {
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
@@ -30,7 +30,6 @@ import {
   getTelegramTextParts,
   normalizeForwardedContext,
   resolveTelegramPrimaryMedia,
-  type TelegramMediaKind,
   type TelegramReplyTarget,
 } from "./bot/helpers.js";
 import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
@@ -45,6 +44,7 @@ import {
   telegramPromptContextHistory,
 } from "./group-history-window.js";
 import type { TelegramReplyChainEntry } from "./message-cache-codec.js";
+import { isTelegramMediaKind } from "./message-cache-persistence.js";
 import { TELEGRAM_REPLY_CHAIN_MAX_DEPTH } from "./message-cache.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildTelegramConversationId } from "./topic-conversation.js";
@@ -136,17 +136,9 @@ function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): s
   return `[${labels.join(" ")}]\n${bodyLines.join("\n")}`;
 }
 
-const TELEGRAM_MEDIA_KINDS: TelegramMediaKind[] = [
-  "audio",
-  "document",
-  "image",
-  "sticker",
-  "video",
-];
-
 function resolveReplyChainMediaType(entry: TelegramReplyChainEntry) {
   const mediaType = entry.mediaType;
-  const nativeKind = TELEGRAM_MEDIA_KINDS.find((kind) => kind === mediaType);
+  const nativeKind = isTelegramMediaKind(mediaType) ? mediaType : undefined;
   const kind = entry.mediaKind || nativeKind;
   return {
     ...(kind ? { kind } : {}),
@@ -730,14 +722,6 @@ export async function buildTelegramInboundContextPayload(
               : undefined,
         }
       : undefined;
-
-  if (shouldLogVerbose()) {
-    const mediaInfo = allMedia.length > 1 ? ` mediaCount=${allMedia.length}` : "";
-    const topicInfo = resolvedThreadId != null ? ` topic=${resolvedThreadId}` : "";
-    logVerbose(
-      `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length}${mediaInfo}${topicInfo}`,
-    );
-  }
 
   return {
     ctxPayload,

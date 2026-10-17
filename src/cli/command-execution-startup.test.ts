@@ -151,12 +151,12 @@ describe("command-execution-startup", () => {
   });
 
   it.each([
-    { commandPath: ["gateway"], ownsPreparation: true },
-    { commandPath: ["gateway", "run"], ownsPreparation: true },
-    { commandPath: ["doctor"], ownsPreparation: false },
+    { commandPath: ["gateway"] },
+    { commandPath: ["gateway", "run"] },
+    { commandPath: ["doctor"] },
   ])(
-    "prepares fresh $commandPath snapshots asynchronously with the correct host scope",
-    async ({ commandPath, ownsPreparation }) => {
+    "prepares fresh $commandPath snapshots asynchronously without runtime activation ownership",
+    async ({ commandPath }) => {
       const root = tempDirs.make("openclaw-cli-snapshot-preparation-");
       const configPath = path.join(root, "openclaw.json");
       const env = {
@@ -184,13 +184,7 @@ describe("command-execution-startup", () => {
         observe: false,
       });
       const prepare = vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync");
-      const captures: Array<ReturnType<typeof runtime.captureManagedConfigSnapshotPreparation>> =
-        [];
       ensureConfigReadyMock.mockImplementationOnce(async () => {
-        captures.push(runtime.captureManagedConfigSnapshotPreparation(configPath));
-        expect(
-          runtime.captureManagedConfigSnapshotPreparation(path.join(root, "other.json")),
-        ).toBeNull();
         expect(runtime.hasManagedRuntimeConfigWriteOwner(configPath)).toBe(false);
         await expect(
           runtime.preflightManagedRuntimeConfigWrite(
@@ -229,18 +223,6 @@ describe("command-execution-startup", () => {
           },
         });
         expect(prepare).toHaveBeenCalledTimes(2);
-        expect(runtime.captureManagedConfigSnapshotPreparation(configPath)).toBeNull();
-        const captured = captures[0];
-        if (ownsPreparation) {
-          if (!captured) {
-            throw new Error("Gateway bootstrap did not own snapshot preparation");
-          }
-          await expect(captured(async () => undefined)).rejects.toThrow(
-            "snapshot preparation owner has closed",
-          );
-        } else {
-          expect(captured).toBeNull();
-        }
       } finally {
         prepare.mockRestore();
         vi.unstubAllEnvs();

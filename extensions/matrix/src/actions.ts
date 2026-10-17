@@ -168,7 +168,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     "member-info",
     "channel-info",
   ],
-  /** @deprecated Use describeMessageToolAsync. Final compatibility day: 2026-12-31. */
+  /** @deprecated Use describeMessageToolAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   describeMessageTool: ({ cfg, accountId, senderIsOwner }) => {
     return describeMatrixMessageTool(
       resolveMatrixActionAccount({ cfg: cfg as CoreConfig, accountId }),

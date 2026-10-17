@@ -166,7 +166,7 @@ export function createUsageCostCollectionAccess(params: {
               const facts = read.value[index]!;
               transcriptFacts.set(transcriptKey(item.marker), {
                 generation: facts.generation ?? null,
-                cold: facts.cold === true,
+                cold: facts.cold,
               });
             }
             return read.value;

@@ -199,6 +199,16 @@ describe("parseSystemAgentOperation", () => {
     });
   });
 
+  it.each(["openclaw-demo", "@composio/composio", "community/demo@1.2.3"])(
+    "accepts the default ClawHub package %s for assistant installs",
+    (spec) => {
+      expect(parseSystemAgentOperation(`plugin install ${spec}`)).toEqual({
+        kind: "plugin-install",
+        spec,
+      });
+    },
+  );
+
   it("parses config read and schema lookups", () => {
     expect(parseSystemAgentOperation("config get gateway.port")).toEqual({
       kind: "config-get",

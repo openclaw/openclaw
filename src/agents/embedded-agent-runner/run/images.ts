@@ -8,9 +8,7 @@ import type {
   ModelInputContent,
   ProviderContext,
 } from "../../../../packages/ai/src/provider-types.js";
-import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Context, ImageContent, TextContent } from "../../../llm/types.js";
-import { redactSensitiveText } from "../../../logging/redact.js";
 import {
   isImageMediaFact,
   isVideoMediaFact,
@@ -190,7 +188,6 @@ async function loadMediaFromRef(
   const localRoots = gatewayAttachment
     ? [getMediaDir()]
     : (options.localRoots ?? (options.workspaceOnly ? [options.workspaceDir] : undefined));
-  const redactedRef = redactSensitiveText(ref.raw || ref.resolved);
   try {
     let targetPath = ref.resolved;
 
@@ -209,10 +206,8 @@ async function loadMediaFromRef(
           inboundFallbackDir: "media/inbound",
         });
         targetPath = resolved.resolved;
-      } catch (err) {
-        log.warn(
-          `${label}: sandbox validation failed for ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
-        );
+      } catch {
+        log.warn(`${label}: sandbox validation failed`);
         return null;
       }
     } else if (!path.isAbsolute(targetPath)) {
@@ -232,11 +227,9 @@ async function loadMediaFromRef(
 
     options.signal?.throwIfAborted();
     return media;
-  } catch (err) {
+  } catch {
     options.signal?.throwIfAborted();
-    log.warn(
-      `${label}: failed to load ${redactedRef}: ${redactSensitiveText(formatErrorMessage(err))}`,
-    );
+    log.warn(`${label}: failed to load`);
     return null;
   }
 }
@@ -389,7 +382,6 @@ export async function detectAndLoadPromptImages(
       mimeType: loadedMedia.contentType ?? "image/jpeg",
     };
     counts.loadedCount++;
-    log.debug(`Native image: loaded ${ref.type} ${ref.resolved}`);
     return image;
   };
   const promptImages: PromptImageEntry[] = [];
