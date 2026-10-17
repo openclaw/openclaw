@@ -1,4 +1,3 @@
-// Session resolve tests cover agent scoping, selector precedence, and protocol errors.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
@@ -33,7 +32,6 @@ const { resolveSessionKeyFromResolveParams: resolveSessionKeyFromResolveParamsWi
 
 type ResolveParams = Parameters<typeof resolveSessionKeyFromResolveParamsWithClient>[0];
 
-let targetStore: Record<string, SessionEntry>;
 let selectedStore:
   | {
       store: Record<string, SessionEntry>;
@@ -44,65 +42,62 @@ let selectedStore:
       >;
     }
   | undefined;
-let projections: Map<OpenClawConfig, ReturnType<typeof createSessionRowProjectionFixture>>;
-const setFixtureStore = (store: NonNullable<typeof selectedStore>) => {
-  selectedStore = store;
-};
-const resolveSessionKeyFromResolveParams = (
-  params: Omit<ResolveParams, "client" | "projection"> & {
-    cfg: OpenClawConfig;
-    client?: ResolveParams["client"];
-  },
-) => {
-  setRuntimeConfigSnapshot(params.cfg);
-  let projection = projections.get(params.cfg);
-  if (!projection) {
-    const store = selectedStore?.store ?? targetStore;
-    projection = createSessionRowProjectionFixture({
-      cfg: params.cfg,
-      store,
-      storePath: selectedStore?.storePath,
-      agentId: params.p.agentId ?? "main",
-      targetsBySessionKey:
-        selectedStore?.targetsBySessionKey &&
-        new Map(
-          [...selectedStore.targetsBySessionKey].map(([key, target]) => [
-            key,
-            {
-              ...target,
-              entry: store[key],
-              readSourceEntry: (parentKey: string) => store[parentKey],
-              resolveSourceKey: (parentKey: string) => parentKey,
-            },
-          ]),
-        ),
-    });
-    projections.set(params.cfg, projection);
-  }
+let projections: ReturnType<typeof createSessionRowProjectionFixture>[];
+const resolve = (p: ResolveParams["p"], cfg: OpenClawConfig = {}) => {
+  setRuntimeConfigSnapshot(cfg);
+  const store = selectedStore?.store ?? {};
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    store,
+    storePath: selectedStore?.storePath,
+    agentId: p.agentId ?? "main",
+    targetsBySessionKey:
+      selectedStore?.targetsBySessionKey &&
+      new Map(
+        [...selectedStore.targetsBySessionKey].map(([key, target]) => [
+          key,
+          {
+            ...target,
+            entry: store[key],
+            readSourceEntry: (parentKey: string) => store[parentKey],
+            resolveSourceKey: (parentKey: string) => parentKey,
+          },
+        ]),
+      ),
+  });
+  projections.push(projection);
   return resolveSessionKeyFromResolveParamsWithClient({
-    client: params.client ?? null,
-    p: params.p,
+    client: null,
+    p,
     projection,
   });
 };
 
 describe("resolveSessionKeyFromResolveParams", () => {
+  const target = (key: string) =>
+    [key, { agentId: "main", storeTarget: { agentId: "main", storePath } }] as const;
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let storePath: string;
+
+  function setStore(
+    store: Record<string, SessionEntry>,
+    targetsBySessionKey?: NonNullable<typeof selectedStore>["targetsBySessionKey"],
+  ) {
+    selectedStore = { store, storePath, targetsBySessionKey };
+  }
 
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
     storePath = path.join(tempDirs.make("sessions-resolve-"), "sessions.json");
     selectedStore = undefined;
-    projections = new Map();
+    projections = [];
     onTestFinished(() => {
-      for (const projection of projections.values()) {
+      for (const projection of projections) {
         projection.dispose();
       }
       clearRuntimeConfigSnapshot();
     });
     hoisted.listAgentIdsMock.mockReset();
-    targetStore = {};
     // Default: all agents are known (main is always present).
     hoisted.listAgentIdsMock.mockReturnValue(["main"]);
   });
@@ -110,25 +105,17 @@ describe("resolveSessionKeyFromResolveParams", () => {
   it("uses a display-name slug only to narrow a short-id tie", () => {
     const releaseKey = "agent:main:thread:12345678-0aaa-4000-8000-000000000001";
     const deployKey = "agent:main:thread:12345678-0bbb-4000-8000-000000000002";
-    setFixtureStore({
-      storePath,
-      store: {
-        [releaseKey]: { sessionId: releaseKey, updatedAt: 2, displayName: "Release monitor" },
-        [deployKey]: {
-          sessionId: deployKey,
-          updatedAt: 1,
-          displayName: "Deploy monitor",
-          boardFace: "chat",
-        },
+    setStore({
+      [releaseKey]: { sessionId: releaseKey, updatedAt: 2, displayName: "Release monitor" },
+      [deployKey]: {
+        sessionId: deployKey,
+        updatedAt: 1,
+        displayName: "Deploy monitor",
+        boardFace: "chat",
       },
     });
 
-    expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { shortId: "12345678", slugHint: "deploy-monitor" },
-      }),
-    ).toEqual({
+    expect(resolve({ shortId: "12345678", slugHint: "deploy-monitor" })).toEqual({
       ok: true,
       key: deployKey,
       agentId: "main",
@@ -140,28 +127,20 @@ describe("resolveSessionKeyFromResolveParams", () => {
   it("ignores a deleted-agent short-id collision before resolving a unique match", () => {
     const survivingKey = "agent:main:thread:12345678-0aaa-4000-8000-000000000001";
     const deletedKey = "agent:deleted-agent:thread:12345678-0bbb-4000-8000-000000000002";
-    setFixtureStore({
-      storePath,
-      store: {
-        [deletedKey]: { sessionId: deletedKey, updatedAt: 2, displayName: "Deleted session" },
-        [survivingKey]: {
-          sessionId: survivingKey,
-          updatedAt: 1,
-          archivedAt: 20,
-          displayName: "Original session",
-          label: "Surviving session",
-          boardFace: "dashboard",
-          boardPresentation: "expanded",
-        },
+    setStore({
+      [deletedKey]: { sessionId: deletedKey, updatedAt: 2, displayName: "Deleted session" },
+      [survivingKey]: {
+        sessionId: survivingKey,
+        updatedAt: 1,
+        archivedAt: 20,
+        displayName: "Original session",
+        label: "Surviving session",
+        boardFace: "dashboard",
+        boardPresentation: "expanded",
       },
     });
 
-    expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { shortId: "12345678", slugHint: "deleted-session" },
-      }),
-    ).toEqual({
+    expect(resolve({ shortId: "12345678", slugHint: "deleted-session" })).toEqual({
       ok: true,
       key: survivingKey,
       agentId: "main",
@@ -186,15 +165,10 @@ describe("resolveSessionKeyFromResolveParams", () => {
         ];
       }),
     );
-    setFixtureStore({ storePath, store });
+    setStore(store);
 
     const expectedKeys = Object.keys(store).slice(0, 10);
-    expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { shortId: "12345678", slugHint: "renamed-session" },
-      }),
-    ).toEqual({
+    expect(resolve({ shortId: "12345678", slugHint: "renamed-session" })).toEqual({
       ok: true,
       ambiguous: true,
       candidates: expectedKeys.map((key, index) => {
@@ -215,38 +189,32 @@ describe("resolveSessionKeyFromResolveParams", () => {
   it("applies agent scoping to short-id matches", () => {
     const mainKey = "agent:main:thread:feedface-0000-4000-8000-000000000001";
     const workKey = "agent:work:thread:feedface-0000-4000-8000-000000000002";
-    setFixtureStore({
-      storePath,
-      store: {
-        [mainKey]: { sessionId: mainKey, updatedAt: 1 },
-        [workKey]: { sessionId: workKey, updatedAt: 2 },
-      },
+    setStore({
+      [mainKey]: { sessionId: mainKey, updatedAt: 1 },
+      [workKey]: { sessionId: workKey, updatedAt: 2 },
     });
 
     expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: { agents: { entries: { main: {}, work: {} } } },
-        p: { shortId: "feedface", agentId: "main" },
-      }),
+      resolve(
+        { shortId: "feedface", agentId: "main" },
+        { agents: { entries: { main: {}, work: {} } } },
+      ),
     ).toEqual({ ok: true, key: mainKey, agentId: "main" });
   });
 
   it("supports allowMissing for short ids", () => {
-    setFixtureStore({ storePath, store: {} });
+    setStore({});
 
-    expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { shortId: "deadbeef", allowMissing: true },
-      }),
-    ).toEqual({ ok: true, missing: true });
+    expect(resolve({ shortId: "deadbeef", allowMissing: true })).toEqual({
+      ok: true,
+      missing: true,
+    });
   });
 
   it("resolves a configured global alias with its stored non-default owner", () => {
     hoisted.listAgentIdsMock.mockReturnValue(["main", "work"]);
-    setFixtureStore({
-      storePath,
-      store: {
+    setStore(
+      {
         global: {
           sessionId: "work-global",
           updatedAt: 1,
@@ -254,15 +222,13 @@ describe("resolveSessionKeyFromResolveParams", () => {
           boardFace: "dashboard",
         },
       },
-      targetsBySessionKey: new Map([
-        ["global", { agentId: "work", storeTarget: { agentId: "work", storePath } }],
-      ]),
-    });
+      new Map([["global", { agentId: "work", storeTarget: { agentId: "work", storePath } }]]),
+    );
     expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: { session: { scope: "global", mainKey: "primary" } },
-        p: { reference: { key: "agent:work:primary" }, agentId: "work", includeGlobal: true },
-      }),
+      resolve(
+        { reference: { key: "agent:work:primary" }, agentId: "work", includeGlobal: true },
+        { session: { scope: "global", mainKey: "primary" } },
+      ),
     ).toEqual({
       ok: true,
       key: "global",
@@ -280,20 +246,14 @@ describe("resolveSessionKeyFromResolveParams", () => {
         .mockReturnValue(null);
       onTestFinished(() => bundledFallback.mockRestore());
       const key = "agent:main:matrix:channel:!Room:example.org";
-      setFixtureStore({
-        storePath,
-        store: { [key]: { sessionId: key, updatedAt: 1, displayName: "Room" } },
-        targetsBySessionKey: new Map([
-          [key, { agentId: "main", storeTarget: { agentId: "main", storePath } }],
-        ]),
-      });
-      const result = resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: {
-          reference: { key: `agent:main:matrix:channel:${room}` },
-          agentId: "main",
-          allowMissing: true,
-        },
+      setStore(
+        { [key]: { sessionId: key, updatedAt: 1, displayName: "Room" } },
+        new Map([target(key)]),
+      );
+      const result = resolve({
+        reference: { key: `agent:main:matrix:channel:${room}` },
+        agentId: "main",
+        allowMissing: true,
       });
       expect(result).toEqual(
         room.startsWith("!Room")
@@ -329,31 +289,19 @@ describe("resolveSessionKeyFromResolveParams", () => {
       displayName: "Shared dashboard",
       boardFace: "dashboard",
     };
-    setFixtureStore({
-      storePath,
-      store,
-      targetsBySessionKey: new Map(
-        Object.keys(store).map((key) => [
+    setStore(store, new Map(Object.keys(store).map(target)));
+    expect(resolve({ reference: { key: "agent:main:missing", slug: "shared-dashboard" } })).toEqual(
+      {
+        ok: true,
+        ambiguous: true,
+        candidates: keys.slice(0, 10).map((key) => ({
           key,
-          { agentId: "main", storeTarget: { agentId: "main", storePath } },
-        ]),
-      ),
-    });
-    expect(
-      resolveSessionKeyFromResolveParams({
-        cfg: {},
-        p: { reference: { key: "agent:main:missing", slug: "shared-dashboard" } },
-      }),
-    ).toEqual({
-      ok: true,
-      ambiguous: true,
-      candidates: keys.slice(0, 10).map((key) => ({
-        key,
-        agentId: "main",
-        displayName: "Shared dashboard",
-        boardFace: "dashboard",
-      })),
-    });
+          agentId: "main",
+          displayName: "Shared dashboard",
+          boardFace: "dashboard",
+        })),
+      },
+    );
   });
 
   it.each([
@@ -367,7 +315,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
       message: "Provide either key, sessionId, label, shortId, or reference (not multiple)",
     },
   ])("rejects invalid short reference params: $message", ({ p, message }) => {
-    expect(resolveSessionKeyFromResolveParams({ cfg: {}, p })).toMatchObject({
+    expect(resolve(p)).toMatchObject({
       ok: false,
       error: { code: ErrorCodes.INVALID_REQUEST, message },
     });

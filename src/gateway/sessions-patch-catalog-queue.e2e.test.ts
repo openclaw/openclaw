@@ -185,36 +185,27 @@ test("an authenticated metadata patch completes while another session awaits cat
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as Record<string, unknown>);
-      const findPatchTiming = (trace: DiagnosticTraceContext | undefined) => {
+      const findTiming = (trace: DiagnosticTraceContext | undefined, prefix: string) => {
         const expectedTrace = expectDefined(trace, "request trace");
         const row = expectDefined(
           records.find(
             (record) =>
               typeof record.message === "string" &&
-              record.message.startsWith("slow session patch ") &&
+              record.message.startsWith(prefix) &&
               record.traceId === expectedTrace.traceId &&
               record.spanId === expectedTrace.spanId,
           ),
           "correlated patch timing record",
         );
-        return row.message;
+        return row;
       };
-      const catalogTiming = findPatchTiming(catalogTrace);
+      const catalogTiming = findTiming(catalogTrace, "slow session patch ").message;
       expect(catalogTiming).toEqual(expect.stringContaining("method=sessions.patch "));
       const catalogDuration = / catalog=(\d+)ms(?: |$)/.exec(String(catalogTiming))?.[1];
       expect(Number(catalogDuration)).toBeGreaterThanOrEqual(1_000);
-      const writerTiming = findPatchTiming(writerTrace);
+      const writerTiming = findTiming(writerTrace, "slow session patch ").message;
       expect(writerTrace?.traceId).not.toBe(catalogTrace?.traceId);
-      const sqliteRow = expectDefined(
-        records.find(
-          (record) =>
-            typeof record.message === "string" &&
-            record.message.startsWith("slow SQLite session write") &&
-            record.traceId === writerTrace?.traceId &&
-            record.spanId === writerTrace?.spanId,
-        ),
-        "correlated SQLite timing record",
-      );
+      const sqliteRow = findTiming(writerTrace, "slow SQLite session write");
       const sqliteTiming = expectDefined(
         Object.values(sqliteRow).find(
           (value): value is Record<string, unknown> =>
@@ -228,20 +219,6 @@ test("an authenticated metadata patch completes while another session awaits cat
       expect(JSON.stringify([catalogTiming, writerTiming])).not.toContain(privateLabel);
       expect(JSON.stringify([catalogTiming, writerTiming])).not.toContain(metadataKey);
       expect(JSON.stringify([catalogTiming, writerTiming])).not.toContain(catalogKey);
-      process.stdout.write(
-        "SESSION_PATCH_TIMING_TRACE_PROOF " +
-          JSON.stringify({
-            catalog: catalogTiming,
-            writer: writerTiming,
-            sqlite: {
-              queueWaitMs: sqliteTiming.queueWaitMs,
-              writerExecutionMs: sqliteTiming.writerExecutionMs,
-              completionDelayMs: sqliteTiming.completionDelayMs,
-            },
-            tracesCorrelated: true,
-          }) +
-          "\n",
-      );
     } finally {
       try {
         if (client) {

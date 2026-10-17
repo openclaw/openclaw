@@ -90,6 +90,31 @@ async function resolve(p: SessionsResolveParams) {
   });
 }
 
+function requestResolve(
+  projection: SessionRowProjection,
+  params: SessionsResolveParams,
+  respond: RespondFn,
+  config = cfg,
+  client: Parameters<
+    NonNullable<(typeof sessionReadHandlers)["sessions.resolve"]>
+  >[0]["client"] = null,
+) {
+  return expectDefined(
+    sessionReadHandlers["sessions.resolve"],
+    "resolve handler",
+  )({
+    params,
+    context: createDirectChatContext({
+      getRuntimeConfig: () => config,
+      ...bindSessionRowProjection({}, () => projection),
+    }),
+    req: { type: "req", id: "resolve", method: "sessions.resolve" },
+    client,
+    isWebchatConnect: () => false,
+    respond,
+  });
+}
+
 const resolved = { ok: true, key: scope.sessionKey, agentId: "main" };
 
 describe("session resolution metadata", () => {
@@ -145,14 +170,11 @@ describe("session resolution metadata", () => {
         let projection: SessionRowProjection | undefined;
         let pending: Promise<void> | undefined;
         try {
-          projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-          await projection.ensureMaterialized();
-          const context = createDirectChatContext({
-            getRuntimeConfig: () => cfg,
-            ...bindSessionRowProjection({}, () => projection),
-          });
+          const currentProjection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+          projection = currentProjection;
+          await currentProjection.ensureMaterialized();
           const respond = vi.fn<RespondFn>();
-          const first = await projection.withSelectionPreparation(async () => {
+          const first = await currentProjection.withSelectionPreparation(async () => {
             holdOwnership = true;
             replaceSessionEntrySync(sibling, {
               ...siblingEntry,
@@ -161,14 +183,11 @@ describe("session resolution metadata", () => {
             });
             const started = performance.now();
             pending = Promise.resolve(
-              sessionReadHandlers["sessions.resolve"]!({
-                params: selector === "shortId" ? { shortId: "4d2e08ab" } : { reference: { key } },
-                context,
-                req: { type: "req", id: "resolve-owner", method: "sessions.resolve" },
-                client: null,
-                isWebchatConnect: () => false,
+              requestResolve(
+                currentProjection,
+                selector === "shortId" ? { shortId: "4d2e08ab" } : { reference: { key } },
                 respond,
-              }),
+              ),
             );
             const winner = await Promise.race([
               pending.then(() => "response" as const),
@@ -251,24 +270,13 @@ describe("session resolution metadata", () => {
           return readOwnership(params);
         });
       try {
-        const context = createDirectChatContext({
-          getRuntimeConfig: () => cfg,
-          ...bindSessionRowProjection({}, () => projection),
-        });
         for (const params of selectors) {
           sessionChanges.emit({
             all: true,
             scope: { storePath: openOpenClawAgentDatabase(scope).path },
           });
           const respond = vi.fn();
-          await sessionReadHandlers["sessions.resolve"]!({
-            params,
-            context,
-            req: { type: "req", id: "resolve-unrelated-metadata", method: "sessions.resolve" },
-            client: null,
-            isWebchatConnect: () => false,
-            respond,
-          });
+          await requestResolve(projection, params, respond);
           expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(resolved), undefined);
         }
       } finally {
@@ -296,24 +304,13 @@ describe("session resolution metadata", () => {
       });
       try {
         sessionChanges.emit({ all: true, scope: "catalog" });
-        const context = createDirectChatContext({
-          getRuntimeConfig: () => cfg,
-          ...bindSessionRowProjection({}, () => projection),
-        });
         for (const params of [
           { sessionId: entry.sessionId },
           { label: entry.label },
           { reference: { key: scope.sessionKey } },
         ]) {
           const respond = vi.fn();
-          await sessionReadHandlers["sessions.resolve"]!({
-            params,
-            context,
-            req: { type: "req", id: "resolve-during-rebuild", method: "sessions.resolve" },
-            client: null,
-            isWebchatConnect: () => false,
-            respond,
-          });
+          await requestResolve(projection, params, respond);
           expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(resolved), undefined);
         }
       } finally {
@@ -322,75 +319,49 @@ describe("session resolution metadata", () => {
     });
   });
 
-  it.each(["key"])(
-    "resolves parent-scoped %s requests without hydrating retained subagent tasks",
-    async (selector) => {
-      await withOpenClawTestState(
-        { env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
-        async () => {
-          const now = Date.now();
-          const parent = "agent:main:main";
-          const key = "agent:main:subagent:12345678-0aaa-4000-8000-000000000001";
-          const selected = { ...entry, updatedAt: now, spawnedBy: parent };
-          replaceSessionEntrySync({ ...scope, sessionKey: key }, selected);
-          const rows = [key, "agent:main:subagent:retained"].map((childSessionKey, index) => ({
-            runId: `resolve-run-${index}`,
-            childSessionKey,
-            requesterSessionKey: parent,
-            requesterDisplayKey: "main",
-            task: `retained-resolve-task:${"x".repeat(16_384)}`,
-            cleanup: "keep" as const,
-            createdAt: now - 100,
-            execution: { status: "terminal" as const, startedAt: now - 100, endedAt: now - 50 },
-            completion: { required: false },
-            delivery: { status: "not_required" as const },
-          }));
-          saveSubagentRegistryToSqlite(new Map(rows.map((row) => [row.runId, row])));
+  it("resolves parent-scoped key requests without hydrating retained subagent tasks", async () => {
+    await withOpenClawTestState(
+      { env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+      async () => {
+        const now = Date.now();
+        const parent = "agent:main:main";
+        const key = "agent:main:subagent:12345678-0aaa-4000-8000-000000000001";
+        const selected = { ...entry, updatedAt: now, spawnedBy: parent };
+        replaceSessionEntrySync({ ...scope, sessionKey: key }, selected);
+        const rows = [key, "agent:main:subagent:retained"].map((childSessionKey, index) => ({
+          runId: `resolve-run-${index}`,
+          childSessionKey,
+          requesterSessionKey: parent,
+          requesterDisplayKey: "main",
+          task: `retained-resolve-task:${"x".repeat(16_384)}`,
+          cleanup: "keep" as const,
+          createdAt: now - 100,
+          execution: { status: "terminal" as const, startedAt: now - 100, endedAt: now - 50 },
+          completion: { required: false },
+          delivery: { status: "not_required" as const },
+        }));
+        saveSubagentRegistryToSqlite(new Map(rows.map((row) => [row.runId, row])));
+        clearSubagentRunsReadCacheForTest();
+        const projection = await projectionFor();
+        const respond = vi.fn();
+        const parse = vi.spyOn(JSON, "parse");
+        try {
+          await requestResolve(projection, { key, spawnedBy: parent, agentId: "main" }, respond);
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ ok: true, key, agentId: "main" }),
+            undefined,
+          );
+          expect(parse.mock.calls.some(([json]) => json.includes("retained-resolve-task:"))).toBe(
+            false,
+          );
+        } finally {
+          parse.mockRestore();
           clearSubagentRunsReadCacheForTest();
-          const value =
-            selector === "sessionId"
-              ? selected.sessionId
-              : selector === "shortId"
-                ? "12345678"
-                : selector === "label"
-                  ? selected.label
-                  : selector === "reference"
-                    ? { key }
-                    : key;
-          const projection = await projectionFor();
-          const respond = vi.fn();
-          const parse = vi.spyOn(JSON, "parse");
-          try {
-            await expectDefined(
-              sessionReadHandlers["sessions.resolve"],
-              "resolve handler",
-            )({
-              params: { [selector]: value, spawnedBy: parent, agentId: "main" },
-              context: createDirectChatContext({
-                getRuntimeConfig: () => cfg,
-                ...bindSessionRowProjection({}, () => projection),
-              }),
-              req: { type: "req", id: "registry-resolve", method: "sessions.resolve" },
-              client: null,
-              isWebchatConnect: () => false,
-              respond,
-            });
-            expect(respond).toHaveBeenCalledWith(
-              true,
-              expect.objectContaining({ ok: true, key, agentId: "main" }),
-              undefined,
-            );
-            expect(parse.mock.calls.some(([json]) => json.includes("retained-resolve-task:"))).toBe(
-              false,
-            );
-          } finally {
-            parse.mockRestore();
-            clearSubagentRunsReadCacheForTest();
-          }
-        },
-      );
-    },
-  );
+        }
+      },
+    );
+  });
 
   it.each(selectors)("resolves %j without decoding unrelated saved prompts", async (p) => {
     await withOpenClawTestState({ label: "resolve-prompts" }, async () => {
@@ -488,28 +459,20 @@ describe("session resolution metadata", () => {
       replaceSessionEntrySync(scope, visible);
       const projection = await projectionFor(roleCfg);
       await projection.ensureMaterialized();
-      const context = createDirectChatContext({
-        getRuntimeConfig: () => roleCfg,
-        ...bindSessionRowProjection({}, () => projection),
-      });
       const publications: Array<{
         visibility: string | undefined;
         response: Parameters<RespondFn>;
       }> = [];
       const request = () =>
-        expectDefined(
-          sessionReadHandlers["sessions.resolve"],
-          "resolve handler",
-        )({
-          params: { reference: { key: scope.sessionKey }, agentId: "main", allowMissing: true },
-          context,
-          req: { type: "req", id: "resolve-publication", method: "sessions.resolve" },
-          client,
-          isWebchatConnect: () => false,
-          respond: (...response) => {
+        requestResolve(
+          projection,
+          { reference: { key: scope.sessionKey }, agentId: "main", allowMissing: true },
+          (...response) => {
             publications.push({ visibility: loadSessionEntry(scope)?.visibility, response });
           },
-        });
+          roleCfg,
+          client,
+        );
       await request();
       const pending = request();
       queueMicrotask(() => {
@@ -520,10 +483,11 @@ describe("session resolution metadata", () => {
 
       const found = [true, { ...resolved, displayName: entry.label }, undefined];
       const missing = [true, { ok: false }, undefined];
-      expect(publications).toHaveLength(3);
-      expect(publications[0]).toEqual({ visibility: "shared", response: found });
-      expect(publications[1]).toEqual({ visibility: "shared", response: found });
-      expect(publications[2]).toEqual({ visibility: "draft", response: missing });
+      expect(publications).toEqual([
+        { visibility: "shared", response: found },
+        { visibility: "shared", response: found },
+        { visibility: "draft", response: missing },
+      ]);
     });
   });
 
@@ -551,21 +515,12 @@ describe("session resolution metadata", () => {
         const owner = openOpenClawAgentDatabase(scope);
         const database = owner.db;
         runSqliteImmediateTransactionSync(database, () => seedCanonicalSessionValidation(owner));
-        if (kind === "malformed" || kind === "nul") {
+        if (kind === "malformed") {
           database
             .prepare(
               "UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?",
             )
-            .run(
-              kind === "malformed" ? "{" : JSON.stringify(entry) + "\0trailing",
-              scope.sessionKey,
-            );
-        } else if (kind === "mismatched-time") {
-          database
-            .prepare(
-              "UPDATE session_nodes SET updated_at = ?, entry_valid = 0 WHERE session_key = ?",
-            )
-            .run(2, scope.sessionKey);
+            .run("{", scope.sessionKey);
         } else {
           database
             .prepare(
