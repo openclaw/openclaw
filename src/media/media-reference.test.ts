@@ -68,7 +68,7 @@ describe("media reference helpers", () => {
     const realFilePath = await fs.realpath(filePath);
 
     try {
-      await expect(resolveInboundMediaReference(`media://inbound/${id}`)).resolves.toStrictEqual({
+      await expect(resolveInbound(`media://inbound/${id}`)).resolves.toStrictEqual({
         id,
         normalizedSource: `media://inbound/${id}`,
         physicalPath: realFilePath,

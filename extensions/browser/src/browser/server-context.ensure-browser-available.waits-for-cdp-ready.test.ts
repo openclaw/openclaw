@@ -290,7 +290,15 @@ describe("browser server-context ensureBrowserAvailable", () => {
     const { runtime, freshProfile } = setupEnsureBrowserAvailableHarness();
     chrome.launch.mockRejectedValue(
       new BrowserProfileUnavailableError("display required", {
-        metadata: { reason: BROWSER_ERROR_REASONS.noDisplayForHeadedProfile },
+        metadata: {
+          reason: BROWSER_ERROR_REASONS.noDisplayForHeadedProfile,
+          details: {
+            profile: "openclaw",
+            requestedHeadless: false,
+            headlessSource: "config",
+            displayPresent: false,
+          },
+        },
       }),
     );
 

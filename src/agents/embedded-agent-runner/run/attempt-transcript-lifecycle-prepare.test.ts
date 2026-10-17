@@ -177,10 +177,15 @@ async function withInitialWriter(
         });
         prepared = transcript;
         const openManager = async () =>
-          (options.incognito ? SessionManager.openAsync : SessionManager.open)(
-            { ...target, ...promptState.sessionWriterFence },
-            state.workspaceDir,
-          );
+          options.incognito
+            ? SessionManager.openAsync(
+                { ...target, ...promptState.sessionWriterFence },
+                state.workspaceDir,
+              )
+            : SessionManager.open(
+                { ...target, ...promptState.sessionWriterFence },
+                state.workspaceDir,
+              );
         const runFixture = async () =>
           run({
             admission,

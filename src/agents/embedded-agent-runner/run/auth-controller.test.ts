@@ -498,7 +498,9 @@ it("preserves an empty runtime-auth result for fallback validation", async () =>
 
 it("registers exchanged credentials when sentinels are disabled", async () => {
   vi.stubEnv("OPENCLAW_SECRET_SENTINELS", "off");
-  onTestFinished(() => vi.unstubAllEnvs());
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
   const source = mintSecretSentinel("kill-switch-source-secret", {
     label: "model-auth:custom-openai",
   });
@@ -694,7 +696,9 @@ it("rejects privileged runtime transport overrides on the first auth exchange", 
 
 it("ignores stale scheduled refresh results after auth profile rotation", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   const staleRefresh = createDeferred<ReturnType<typeof runtimeAuth>>();
   mocks.getApiKeyForModelCore.mockImplementation(async ({ profileId }) => {
     const selected = profileId === "backup" ? "backup" : "default";
@@ -766,7 +770,9 @@ it.each([false, true])(
   "injects the AWS SDK sentinel and clears stale refresh state (exchange throws: %s)",
   async (exchangeThrows) => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const warn = vi.fn<(message: string) => void>();
     if (!exchangeThrows) {
       harness.runtimeAuthState = {

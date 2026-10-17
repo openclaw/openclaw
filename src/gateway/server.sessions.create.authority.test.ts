@@ -88,11 +88,13 @@ function expectInvalid(
   expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST", message } });
 }
 
-function sessionRequests(options: Parameters<typeof directSessionReq>[2]) {
+function sessionRequests(
+  options: Omit<NonNullable<Parameters<typeof directSessionReq>[2]>, "coercePayload">,
+) {
   return <T = unknown>(
     method: Parameters<typeof directSessionReq>[0],
     params: Record<string, unknown>,
-  ) => directSessionReq<T>(method, params, options);
+  ): ReturnType<typeof directSessionReq<T>> => directSessionReq<T>(method, params, options);
 }
 
 async function expectOk(request: ReturnType<typeof directSessionReq>) {

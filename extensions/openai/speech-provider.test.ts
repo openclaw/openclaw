@@ -7,6 +7,7 @@ import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
 const OPENAI_TTS_SNAPSHOT = "gpt-4o-mini-tts-2025-12-15";
 
+// mock-isolation: keep speech request assertions off real network and SSRF state.
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
     response: await globalThis.fetch(params.url, params.init),

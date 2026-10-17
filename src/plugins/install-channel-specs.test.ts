@@ -8,7 +8,9 @@ import {
 } from "./install-channel-specs.js";
 
 vi.mock("../infra/install-source-utils.js", () => ({ resolveNpmSpecMetadata: vi.fn() }));
-beforeEach(() => vi.mocked(resolveNpmSpecMetadata).mockReset());
+beforeEach(() => {
+  vi.mocked(resolveNpmSpecMetadata).mockReset();
+});
 
 const npmName = "@openclaw/codex";
 const clawHubName = "@openclaw/discord";

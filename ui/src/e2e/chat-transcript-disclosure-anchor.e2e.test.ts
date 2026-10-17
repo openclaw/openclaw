@@ -1,8 +1,10 @@
+// Control UI E2E tests protect transcript disclosure geometry across animation frames.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -18,92 +20,34 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const textBlock = (text: string) => ({ type: "text", text });
-function message(role: string, content: unknown, timestamp: number) {
-  return { role, content, timestamp };
-}
-const assistant = (content: string | unknown[], timestamp: number) =>
-  message("assistant", typeof content === "string" ? [textBlock(content)] : content, timestamp);
-const rows = (count: number, text: (n: number) => string) =>
-  Array.from({ length: count }, (_, index) => text(index + 1));
-const prettyJson = (data: unknown) => JSON.stringify(data, null, 2);
-function toolCall(id: string, name: string, args: Record<string, unknown>) {
-  return { type: "toolCall", id, name, arguments: args };
-}
-function toolResult(toolCallId: string, toolName: string, text: string, timestamp: number) {
-  return { ...message("toolResult", [textBlock(text)], timestamp), toolCallId, toolName };
-}
-
-function makeTranscript(count: number, start = 1) {
-  return Array.from({ length: count }, (_, index) => [
-    message(
-      "user",
-      `Earlier prompt ${index + 1}: ${"Keep this transcript scrollable. ".repeat(3)}`,
-      start + index * 2,
-    ),
-    assistant(`Earlier response ${index + 1}.`, start + index * 2 + 1),
-  ]).flat();
-}
-
-async function createDisclosurePage(height: number, width: number) {
-  const context = await suite.browser.newContext({
-    reducedMotion: "reduce",
-    viewport: { height, width },
-  });
-  return { context, page: await context.newPage() };
-}
-
-async function centerDisclosure(control: Locator) {
-  await control.evaluate((button) => {
-    const row = button.closest<HTMLElement>(".chat-virtual-row");
-    const thread = button.closest<HTMLElement>(".chat-thread");
-    if (!row || !thread) {
-      throw new Error("Expected disclosure inside a virtual transcript row");
+async function captureDisclosureThemes(directory: string, name: string, summary: Locator) {
+  const page = summary.page();
+  for (const theme of ["light", "dark"] as const) {
+    if (theme === "dark") {
+      await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
+        .toBe("dark");
     }
-    const rowTop = row.getBoundingClientRect().top - thread.getBoundingClientRect().top;
-    thread.scrollTop += Math.round(rowTop - thread.clientHeight / 2);
-  });
-  await waitForChatScrollIdle(control.page());
-}
-
-function measureRow(element: Element, nextId?: string) {
-  const row = element.closest<HTMLElement>(".chat-virtual-row")!;
-  const scroller = row.closest<HTMLElement>(".chat-thread")!;
-  const rect = row.getBoundingClientRect();
-  const viewport = scroller.getBoundingClientRect();
-  const nextTop = nextId
-    ? scroller
-        .querySelector(`.chat-bubble[data-entry-id="${nextId}"]`)!
-        .closest(".chat-virtual-row")!
-        .getBoundingClientRect().top
-    : rect.bottom;
-  return {
-    key: row.dataset.virtualRowKey,
-    height: row.offsetHeight,
-    top: rect.top,
-    bottom: rect.bottom,
-    viewportTop: viewport.top,
-    viewportBottom: viewport.bottom,
-    nextTop,
-    gap: nextTop - rect.bottom,
-    returnOffset: scroller.scrollTop + rect.top - viewport.top,
-  };
-}
-
-async function saveJson(directory: string, name: string, data: unknown) {
-  await fs.writeFile(path.join(directory, `${name}.json`), `${prettyJson(data)}\n`);
+    await fs.writeFile(
+      path.join(directory, `${name}-${theme}.png`),
+      await takeControlUiElementScreenshot(page, page.locator(".chat-main"), [summary]),
+    );
+  }
 }
 
 type DisclosureFrame = {
   expanded: boolean;
+  mountedBodies: number;
   rowHeight: number;
   rowTop: number;
   scrollHeight: number;
   scrollTop: number;
 };
 
-async function traceDisclosure(
-  summary: Locator,
+async function toggleDisclosureWithFrameTrace(
+  page: import("playwright").Page,
+  summary: import("playwright").Locator,
   actionSelector?: string,
 ): Promise<DisclosureFrame[]> {
   return await summary.evaluate((button, selector) => {
@@ -119,6 +63,8 @@ async function traceDisclosure(
           ? button.closest("details")?.hasAttribute("open") === true
           : button.getAttribute("aria-expanded") === "true" ||
             button.getAttribute("aria-pressed") === "true",
+        mountedBodies: row.querySelectorAll(".chat-tool-msg-body, .chat-activity-group__body")
+          .length,
         rowHeight: row.getBoundingClientRect().height,
         rowTop: row.getBoundingClientRect().top - thread.getBoundingClientRect().top,
         scrollHeight: thread.scrollHeight,
@@ -147,26 +93,29 @@ async function traceDisclosure(
   }, actionSelector);
 }
 
-function expectStableFrames(frames: DisclosureFrame[], label = "disclosure") {
+function expectStableDisclosureFrames(frames: DisclosureFrame[], label = "disclosure") {
   const initial = frames[0];
   expect(initial).toBeDefined();
   expect(frames.at(-1)?.expanded, `${label} state`).toBe(!initial!.expanded);
-  const resized = frames.some(
-    ({ rowHeight, scrollHeight }) =>
-      Math.abs(rowHeight - initial!.rowHeight) > 0.5 || scrollHeight !== initial!.scrollHeight,
-  );
-  expect(resized, `${label} resize`).toBe(true);
-  const drift = frames.flatMap(({ rowTop, scrollTop }) => [
-    Math.abs(rowTop - initial!.rowTop),
-    Math.abs(scrollTop - initial!.scrollTop),
-  ]);
   expect(
-    Math.max(...drift),
-    `${label} geometry and scroll offset: ${JSON.stringify(frames)}`,
+    frames.some(
+      (frame) =>
+        Math.abs(frame.rowHeight - initial!.rowHeight) > 0.5 ||
+        frame.scrollHeight !== initial!.scrollHeight,
+    ),
+    `${label} resize`,
+  ).toBe(true);
+  expect(
+    Math.max(...frames.map((frame) => Math.abs(frame.rowTop - initial!.rowTop))),
+    `${label} geometry: ${JSON.stringify(frames)}`,
+  ).toBeLessThanOrEqual(2);
+  expect(
+    Math.max(...frames.map((frame) => Math.abs(frame.scrollTop - initial!.scrollTop))),
+    `${label} scroll offset`,
   ).toBeLessThanOrEqual(2);
 }
 
-async function showSplitDashboard(page: Page, sessionKey: string) {
+async function showSplitDashboard(page: import("playwright").Page, sessionKey: string) {
   const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
   await page.addInitScript(
     ({ key, settingsKey }) => {
@@ -183,347 +132,460 @@ async function showSplitDashboard(page: Page, sessionKey: string) {
   await page.locator(".chat-pane-primary-column .chat-thread").waitFor();
 }
 
-async function checkRecovery(
-  reducedMotion: "no-preference" | "reduce",
-  interruption: "wheel" | "synthetic-pointer" | "native-pointer",
-  recoveryPosition: "within-viewport" | "above-viewport",
-) {
-  const artifactDir = path.join(
-    createControlUiE2eArtifactDir(
-      "virtual-sizing",
-      process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR,
-    ),
-    "after",
-    `${reducedMotion}-${interruption}-${recoveryPosition}`,
-  );
-  await suite.withPage(
-    {
-      reducedMotion,
-      viewport: { width: 1440, height: 900 },
-    },
-    async ({ page }) => {
-      await page.clock.install();
-      const gateway = await installMockGateway(page, {
-        heldMethods: ["chat.message.get"],
-        historyMessages: Array.from({ length: 60 }, (_, index) => ({
-          role: index % 2 === 0 ? "user" : "assistant",
-          content:
-            index === 1
-              ? "Assistant preview awaiting full text."
-              : `Transcript message ${index}. ${"Keep this conversation scrollable. ".repeat(6)}`,
-          timestamp: 1000 + index,
-          __openclaw: {
-            id: `sizing-message-${index}`,
-            seq: index + 1,
-            ...(index % 2 === 1 ? { truncated: true, reason: "display-cap" } : {}),
-          },
-        })),
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await page.getByText("Transcript message 59.", { exact: false }).waitFor();
-      await waitForChatScrollIdle(page);
-      const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-      await thread.hover();
-      await page.mouse.wheel(0, -100_000);
-      await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
-      await gateway.waitForRequest("chat.message.get");
-      await waitForChatScrollIdle(page);
-      await page
-        .locator('.chat-bubble[data-entry-id="sizing-message-1"]')
-        .waitFor({ state: "visible" });
-      let during: { top: number; max: number };
-      if (interruption === "synthetic-pointer") {
-        // Interrupt during native scroll; a Node round trip can outlive the row's visible range.
-        during = await page.locator(".chat-scroll-to-bottom").evaluate((button, waitTimeout) => {
-          const scroller = document.querySelector<HTMLElement>(
-            ".chat-pane-cache__pane--active .chat-thread",
-          )!;
-          return new Promise<{ top: number; max: number }>((resolve, reject) => {
-            const interrupt = (event: Event) => {
-              if (!event.isTrusted || scroller.scrollTop <= 0) {
-                return;
-              }
-              clearTimeout(timer);
-              scroller.removeEventListener("scroll", interrupt);
-              const position = {
-                top: scroller.scrollTop,
-                max: scroller.scrollHeight - scroller.clientHeight,
-              };
-              scroller.dispatchEvent(
-                new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }),
-              );
-              resolve(position);
-            };
-            const timer = setTimeout(() => {
-              scroller.removeEventListener("scroll", interrupt);
-              reject(new Error("Native scrolling did not reach the interruption geometry"));
-            }, waitTimeout);
-            scroller.addEventListener("scroll", interrupt);
-            (button as HTMLElement).click();
-          });
-        }, controlUiE2eWaitTimeoutMs);
-      } else {
-        const wheel = interruption === "wheel";
-        const track = await thread.boundingBox();
-        expect(track).not.toBeNull();
-        const input = await thread.evaluateHandle(
-          (scroller, { waitTimeout, wheel: isWheel }) => {
-            const eventType = isWheel ? "wheel" : "pointerdown";
-            const pendingAboveReader = () => {
-              const viewportTop = scroller.getBoundingClientRect().top;
-              const bubble = Array.from(
-                scroller.querySelectorAll<HTMLElement>(
-                  '.chat-bubble[data-entry-id^="sizing-message-"]',
-                ),
-              ).findLast(
-                (candidate) =>
-                  Number(candidate.dataset.entryId!.slice("sizing-message-".length)) % 2 === 1 &&
-                  candidate.closest(".chat-virtual-row")!.getBoundingClientRect().bottom <=
-                    viewportTop,
-              );
-              return bubble
-                ? {
-                    messageId: bubble.dataset.entryId!,
-                    bottom: bubble.closest(".chat-virtual-row")!.getBoundingClientRect().bottom,
-                    viewportTop,
-                  }
-                : null;
-            };
-            type InputArrival = {
-              top: number;
-              max: number;
-              trusted: boolean;
-              scroller: boolean;
-              pending: ReturnType<typeof pendingAboveReader>;
-            };
-            let resolveReady!: (position: Pick<InputArrival, "top" | "max">) => void;
-            let rejectReady!: (error: Error) => void;
-            const ready = new Promise<Pick<InputArrival, "top" | "max">>((resolve, reject) => {
-              resolveReady = resolve;
-              rejectReady = reject;
-            });
-            let resolveArrival!: (arrival: InputArrival) => void;
-            let rejectArrival!: (error: Error) => void;
-            const arrived = new Promise<InputArrival>((resolve, reject) => {
-              resolveArrival = resolve;
-              rejectArrival = reject;
-            });
-            const onScroll = (event: Event) => {
-              if (
-                !event.isTrusted ||
-                scroller.scrollTop <= 0 ||
-                (!isWheel && !pendingAboveReader())
-              ) {
-                return;
-              }
-              scroller.removeEventListener("scroll", onScroll);
-              document.addEventListener(eventType, onInput, { capture: true, passive: true });
-              resolveReady({
-                top: scroller.scrollTop,
-                max: scroller.scrollHeight - scroller.clientHeight,
-              });
-            };
-            const onInput = (event: Event) => {
-              // Sample the real input before the scroller's takeover handler cancels motion.
-              resolveArrival({
-                top: scroller.scrollTop,
-                max: scroller.scrollHeight - scroller.clientHeight,
-                trusted: event.isTrusted,
-                scroller:
-                  event.target === scroller ||
-                  (isWheel && event.target instanceof Node && scroller.contains(event.target)),
-                pending: pendingAboveReader(),
-              });
-              clearTimeout(timer);
-              document.removeEventListener(eventType, onInput, true);
-            };
-            const dispose = () => {
-              clearTimeout(timer);
-              scroller.removeEventListener("scroll", onScroll);
-              document.removeEventListener(eventType, onInput, true);
-              rejectReady(new Error("Native input observation ended before scrolling"));
-              rejectArrival(new Error("Native input observation ended before input arrived"));
-            };
-            const timer = setTimeout(dispose, waitTimeout);
-            scroller.addEventListener("scroll", onScroll);
-            return { ready, arrived, dispose };
-          },
-          { waitTimeout: controlUiE2eWaitTimeoutMs, wheel },
-        );
-        try {
-          // Arm before START; its post-click bookkeeping must not delay native input.
-          const interrupt = input
-            .evaluate((observation) => observation.ready)
-            .then(async (position) => {
-              if (wheel) {
-                await page.mouse.move(track!.x + track!.width / 2, track!.y + track!.height / 2);
-                await page.mouse.wheel(0, -100_000);
-              } else {
-                await page.mouse.click(track!.x + track!.width - 3, track!.y + 20);
-              }
-              return position;
-            });
-          const [arrival, started] = await Promise.all([
-            input.evaluate((observation) => observation.arrived),
-            interrupt,
-            page.locator(".chat-scroll-to-bottom").click(),
-          ]);
-          expect(arrival).toMatchObject({ trusted: true, scroller: true });
-          await saveJson(artifactDir, "native-input", { started, arrival });
-          // Passive wheel handlers may follow compositor scrolling; use the pre-input sample.
-          during = wheel ? started : arrival;
-          expect(during.top).toBeGreaterThan(0);
-          if (!wheel) {
-            expect(arrival.pending).not.toBeNull();
-            expect(arrival.pending!.bottom).toBeLessThanOrEqual(arrival.pending!.viewportTop);
-          }
-        } finally {
-          await input.evaluate((observation) => observation.dispose());
-          await input.dispose();
-        }
-      }
-      if (reducedMotion === "no-preference") {
-        expect(during.top).toBeLessThan(during.max);
-      }
-      await page.locator(".chat-scroll-to-bottom").waitFor({ state: "visible" });
-      // Settle Chromium's final canceled-animation offset before releasing text.
-      await waitForChatScrollIdle(page);
-      if (interruption === "wheel" && reducedMotion === "reduce") {
-        await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
-      }
-      const interruptedOffset = await thread.evaluate((element) => element.scrollTop);
-      expect(interruptedOffset).toBeLessThan(during.max);
-      if (interruption !== "wheel") {
-        expect(interruptedOffset).toBeGreaterThan(0);
-      }
-      const interruptedAnchor = await captureTopVisibleVirtualRow(thread);
-      // Native input may outlast the first row: recover a row from the settled viewport.
-      const messageId = await thread.evaluate((element, position) => {
-        const viewport = element.getBoundingClientRect();
-        const bubbles = Array.from(
-          element.querySelectorAll<HTMLElement>('.chat-bubble[data-entry-id^="sizing-message-"]'),
-        );
-        const bubble = bubbles.findLast((candidate) => {
-          if (Number(candidate.dataset.entryId!.slice("sizing-message-".length)) % 2 !== 1) {
-            return false;
-          }
-          const row = candidate.closest(".chat-virtual-row")!.getBoundingClientRect();
-          return position === "above-viewport"
-            ? row.bottom <= viewport.top
-            : row.top >= viewport.top && row.top < viewport.bottom;
-        });
-        return bubble?.dataset.entryId ?? null;
-      }, recoveryPosition);
-      expect(messageId).not.toBeNull();
-      const recoveredIndex = Number(messageId!.slice("sizing-message-".length));
-      const nextMessageId = `sizing-message-${recoveredIndex + 1}`;
-      const bubble = page.locator(`.chat-bubble[data-entry-id="${messageId}"]`);
-      const requestMatcher = expect.objectContaining({
-        params: expect.objectContaining({ messageId }),
-      });
-      const pendingRequest = (await gateway.getRequests("chat.message.get")).findLast((request) =>
-        requestMatcher.asymmetricMatch(request),
-      );
-      expect(pendingRequest).toBeDefined();
-      const initial = await bubble.evaluate(measureRow);
-      expect(
-        initial.bottom <= initial.viewportTop,
-        `recovered row must remain mounted ${recoveryPosition}`,
-      ).toBe(recoveryPosition === "above-viewport");
-      if (recoveryPosition === "within-viewport") {
-        expect(initial.top).toBeLessThan(initial.viewportBottom);
-      }
-      const fullText = rows(
-        5,
-        (n) =>
-          `Recovered paragraph ${n}. ${"All wrapped lines must reserve space before the next user message. ".repeat(5)}`,
-      ).join("\n\n");
-      await gateway.deliverLatest({
-        type: "res",
-        id: pendingRequest!.id,
-        ok: true,
-        payload: { ok: true, message: { role: "assistant", content: fullText } },
-      });
-      await bubble.getByText("Recovered paragraph 1.", { exact: false }).waitFor();
-      await waitForChatScrollIdle(page);
-      // Outlast virtual-core's five-second reconciliation deadline to prove durable geometry.
-      await page.clock.runFor(5_500);
-      const final = await bubble.evaluate(measureRow, nextMessageId);
-      const finalAnchor = await captureTopVisibleVirtualRow(thread);
-      await page.screenshot({ path: path.join(artifactDir, "02-after-interruption.png") });
-      await saveJson(artifactDir, "interrupted-scroll", {
-        initial,
-        during,
-        interruptedOffset,
-        interruptedAnchor,
-        final,
-        finalAnchor,
-      });
-      // Growth above the reader may adjust scrollTop, but must preserve the visible anchor.
-      expect(finalAnchor.key).toBe(interruptedAnchor.key);
-      expect(Math.abs(finalAnchor.viewportTop - interruptedAnchor.viewportTop)).toBeLessThanOrEqual(
-        1,
-      );
-      if (recoveryPosition === "within-viewport") {
-        expect(
-          Math.abs((await thread.evaluate((element) => element.scrollTop)) - interruptedOffset),
-        ).toBeLessThanOrEqual(1);
-      }
-      expect(final.key).toBe(initial.key);
-      expect(final.height).toBeGreaterThan(initial.height);
-      expect(Math.abs(final.gap), JSON.stringify({ initial, during, final })).toBeLessThanOrEqual(
-        1,
-      );
-      // Leaving and returning proves the virtual cache, not just DOM flow, has the recovered size.
-      if (recoveredIndex < 30) {
-        await page.locator(".chat-scroll-to-bottom").click();
-        await expect
-          .poll(() =>
-            thread.evaluate((element) =>
-              Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop),
-            ),
-          )
-          .toBeLessThanOrEqual(2);
-        await page
-          .locator('.chat-bubble[data-entry-id="sizing-message-59"]')
-          .waitFor({ state: "visible" });
-      } else {
-        await thread.hover();
-        await page.mouse.wheel(0, -100_000);
-        await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
-      }
-      await expect.poll(() => bubble.count()).toBe(0);
-      // Returning is reader input: retire any still-reconciling latest command.
-      await thread.hover();
-      const returnDelta = await thread.evaluate(
-        (element, offset) => offset - element.scrollTop,
-        final.returnOffset,
-      );
-      await page.mouse.wheel(0, returnDelta);
-      await bubble
-        .getByText("Recovered paragraph 1.", { exact: false })
-        .waitFor({ state: "visible" });
-      await waitForChatScrollIdle(page);
-      const returned = await bubble.evaluate(measureRow, nextMessageId);
-      expect(returned.height).toBe(final.height);
-      expect(Math.abs(returned.gap)).toBeLessThanOrEqual(1);
-    },
-  );
-}
-
 suite.define(() => {
   it.each([
-    ["no-preference", "wheel", "within-viewport"],
-    ["reduce", "wheel", "within-viewport"],
-    ["no-preference", "synthetic-pointer", "within-viewport"],
-    ["no-preference", "native-pointer", "above-viewport"],
+    { reducedMotion: "no-preference", interruption: "wheel", recoveryPosition: "within-viewport" },
+    { reducedMotion: "reduce", interruption: "wheel", recoveryPosition: "within-viewport" },
+    {
+      reducedMotion: "no-preference",
+      interruption: "synthetic-pointer",
+      recoveryPosition: "within-viewport",
+    },
+    {
+      reducedMotion: "no-preference",
+      interruption: "native-pointer",
+      recoveryPosition: "above-viewport",
+    },
   ] as const)(
-    "remeasures recovered assistant text after interrupted scrolling (%s, %s, %s)",
-    checkRecovery,
+    "remeasures recovered assistant text after interrupted scrolling ($reducedMotion, $interruption, $recoveryPosition)",
+    async ({ reducedMotion, interruption, recoveryPosition }) => {
+      const artifactDir = path.join(
+        createControlUiE2eArtifactDir(
+          "virtual-sizing",
+          process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR,
+        ),
+        "after",
+        `${reducedMotion}-${interruption}-${recoveryPosition}`,
+      );
+      await suite.withPage(
+        {
+          reducedMotion,
+          viewport: { width: 1440, height: 900 },
+          recordVideo: { dir: artifactDir },
+        },
+        async ({ page }) => {
+          await page.clock.install();
+          const gateway = await installMockGateway(page, {
+            heldMethods: ["chat.message.get"],
+            historyMessages: Array.from({ length: 60 }, (_, index) => ({
+              role: index % 2 === 0 ? "user" : "assistant",
+              content:
+                index === 1
+                  ? "Assistant preview awaiting full text."
+                  : `Transcript message ${index}. ${"Keep this conversation scrollable. ".repeat(6)}`,
+              timestamp: 1000 + index,
+              __openclaw: {
+                id: `sizing-message-${index}`,
+                seq: index + 1,
+                ...(index % 2 === 1 ? { truncated: true, reason: "display-cap" } : {}),
+              },
+            })),
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.getByText("Transcript message 59.", { exact: false }).waitFor();
+          await waitForChatScrollIdle(page);
+          const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+          await thread.hover();
+          await page.mouse.wheel(0, -100_000);
+          await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
+          await gateway.waitForRequest("chat.message.get");
+          await waitForChatScrollIdle(page);
+          await page
+            .locator('.chat-bubble[data-entry-id="sizing-message-1"]')
+            .waitFor({ state: "visible" });
+          await page.screenshot({ path: path.join(artifactDir, "01-before-scroll.png") });
+          let during: { top: number; max: number };
+          if (interruption === "synthetic-pointer") {
+            // Check native gutter hit testing separately from animation timing.
+            const pointer = await thread.evaluateHandle((element) => {
+              const observed = { trusted: false, scroller: false };
+              document.addEventListener(
+                "pointerdown",
+                (event) => {
+                  observed.trusted = event.isTrusted;
+                  observed.scroller = event.target === element;
+                },
+                { capture: true, once: true },
+              );
+              return observed;
+            });
+            const track = await thread.boundingBox();
+            expect(track).not.toBeNull();
+            await page.mouse.click(track!.x + track!.width - 3, track!.y + 20);
+            expect(await pointer.jsonValue()).toEqual({ trusted: true, scroller: true });
+            await pointer.dispose();
+            // Synthetic intent runs in the first positive native scroll callback;
+            // a Node round trip can outlive the fixed row's visible range.
+            // Smooth animation and production cancellation remain real.
+            during = await page
+              .locator(".chat-scroll-to-bottom")
+              .evaluate((button, waitTimeout) => {
+                const scroller = document.querySelector<HTMLElement>(
+                  ".chat-pane-cache__pane--active .chat-thread",
+                )!;
+                return new Promise<{ top: number; max: number }>((resolve, reject) => {
+                  const interrupt = (event: Event) => {
+                    if (!event.isTrusted || scroller.scrollTop <= 0) {
+                      return;
+                    }
+                    clearTimeout(timer);
+                    scroller.removeEventListener("scroll", interrupt);
+                    const position = {
+                      top: scroller.scrollTop,
+                      max: scroller.scrollHeight - scroller.clientHeight,
+                    };
+                    scroller.dispatchEvent(
+                      new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }),
+                    );
+                    resolve(position);
+                  };
+                  const timer = setTimeout(() => {
+                    scroller.removeEventListener("scroll", interrupt);
+                    reject(new Error("Native scrolling did not reach the interruption geometry"));
+                  }, waitTimeout);
+                  scroller.addEventListener("scroll", interrupt);
+                  (button as HTMLElement).click();
+                });
+              }, controlUiE2eWaitTimeoutMs);
+          } else {
+            const wheel = interruption === "wheel";
+            const track = await thread.boundingBox();
+            expect(track).not.toBeNull();
+            const input = await thread.evaluateHandle(
+              (scroller, { waitTimeout, wheel: isWheel }) => {
+                const eventType = isWheel ? "wheel" : "pointerdown";
+                const pendingAboveReader = () => {
+                  const viewportTop = scroller.getBoundingClientRect().top;
+                  const bubble = Array.from(
+                    scroller.querySelectorAll<HTMLElement>(
+                      '.chat-bubble[data-entry-id^="sizing-message-"]',
+                    ),
+                  ).findLast(
+                    (candidate) =>
+                      Number(candidate.dataset.entryId!.slice("sizing-message-".length)) % 2 ===
+                        1 &&
+                      candidate.closest(".chat-virtual-row")!.getBoundingClientRect().bottom <=
+                        viewportTop,
+                  );
+                  return bubble
+                    ? {
+                        messageId: bubble.dataset.entryId!,
+                        bottom: bubble.closest(".chat-virtual-row")!.getBoundingClientRect().bottom,
+                        viewportTop,
+                      }
+                    : null;
+                };
+                type InputArrival = {
+                  top: number;
+                  max: number;
+                  trusted: boolean;
+                  scroller: boolean;
+                  pending: ReturnType<typeof pendingAboveReader>;
+                };
+                let resolveReady!: (position: Pick<InputArrival, "top" | "max">) => void;
+                let rejectReady!: (error: Error) => void;
+                const ready = new Promise<Pick<InputArrival, "top" | "max">>((resolve, reject) => {
+                  resolveReady = resolve;
+                  rejectReady = reject;
+                });
+                let resolveArrival!: (arrival: InputArrival) => void;
+                let rejectArrival!: (error: Error) => void;
+                const arrived = new Promise<InputArrival>((resolve, reject) => {
+                  resolveArrival = resolve;
+                  rejectArrival = reject;
+                });
+                const onScroll = (event: Event) => {
+                  if (
+                    !event.isTrusted ||
+                    scroller.scrollTop <= 0 ||
+                    (!isWheel && !pendingAboveReader())
+                  ) {
+                    return;
+                  }
+                  scroller.removeEventListener("scroll", onScroll);
+                  document.addEventListener(eventType, onInput, { capture: true, passive: true });
+                  resolveReady({
+                    top: scroller.scrollTop,
+                    max: scroller.scrollHeight - scroller.clientHeight,
+                  });
+                };
+                const onInput = (event: Event) => {
+                  // Sample the real input before the scroller's takeover handler cancels motion.
+                  resolveArrival({
+                    top: scroller.scrollTop,
+                    max: scroller.scrollHeight - scroller.clientHeight,
+                    trusted: event.isTrusted,
+                    scroller:
+                      event.target === scroller ||
+                      (isWheel && event.target instanceof Node && scroller.contains(event.target)),
+                    pending: pendingAboveReader(),
+                  });
+                  clearTimeout(timer);
+                  document.removeEventListener(eventType, onInput, true);
+                };
+                const dispose = () => {
+                  clearTimeout(timer);
+                  scroller.removeEventListener("scroll", onScroll);
+                  document.removeEventListener(eventType, onInput, true);
+                  rejectReady(new Error("Native input observation ended before scrolling"));
+                  rejectArrival(new Error("Native input observation ended before input arrived"));
+                };
+                const timer = setTimeout(dispose, waitTimeout);
+                scroller.addEventListener("scroll", onScroll);
+                return { ready, arrived, dispose };
+              },
+              { waitTimeout: controlUiE2eWaitTimeoutMs, wheel },
+            );
+            try {
+              // Arm before START; its post-click bookkeeping must not delay native input.
+              const interrupt = input
+                .evaluate((observation) => observation.ready)
+                .then(async (position) => {
+                  if (wheel) {
+                    await page.mouse.move(
+                      track!.x + track!.width / 2,
+                      track!.y + track!.height / 2,
+                    );
+                    await page.mouse.wheel(0, -100_000);
+                  } else {
+                    await page.mouse.click(track!.x + track!.width - 3, track!.y + 20);
+                  }
+                  return position;
+                });
+              const [arrival, started] = await Promise.all([
+                input.evaluate((observation) => observation.arrived),
+                interrupt,
+                page.locator(".chat-scroll-to-bottom").click(),
+              ]);
+              expect(arrival).toMatchObject({ trusted: true, scroller: true });
+              await fs.writeFile(
+                path.join(artifactDir, "native-input.json"),
+                JSON.stringify({ started, arrival }, null, 2),
+              );
+              // A passive wheel listener can run after the compositor scrolls.
+              // Prove motion started from its pre-input native scroll sample.
+              during = wheel ? started : arrival;
+              expect(during.top).toBeGreaterThan(0);
+              if (!wheel) {
+                expect(arrival.pending).not.toBeNull();
+                expect(arrival.pending!.bottom).toBeLessThanOrEqual(arrival.pending!.viewportTop);
+              }
+            } finally {
+              await input.evaluate((observation) => observation.dispose());
+              await input.dispose();
+            }
+          }
+          if (reducedMotion === "no-preference") {
+            expect(during.top).toBeLessThan(during.max);
+          }
+          await page.locator(".chat-scroll-to-bottom").waitFor({ state: "visible" });
+          // Chromium can commit its last canceled animation offset after input
+          // returns. Capture the settled reader before releasing text.
+          await waitForChatScrollIdle(page);
+          if (interruption === "wheel" && reducedMotion === "reduce") {
+            await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
+          }
+          const interruptedOffset = await thread.evaluate((element) => element.scrollTop);
+          expect(interruptedOffset).toBeLessThan(during.max);
+          if (interruption !== "wheel") {
+            expect(interruptedOffset).toBeGreaterThan(0);
+          }
+          const interruptedAnchor = await captureTopVisibleVirtualRow(thread);
+          // Native input can arrive after the first message has scrolled away.
+          // Select the recovery row from the settled viewport, not its fixture index.
+          const messageId = await thread.evaluate((element, position) => {
+            const viewport = element.getBoundingClientRect();
+            const bubbles = Array.from(
+              element.querySelectorAll<HTMLElement>(
+                '.chat-bubble[data-entry-id^="sizing-message-"]',
+              ),
+            );
+            const bubble = bubbles.findLast((candidate) => {
+              if (Number(candidate.dataset.entryId!.slice("sizing-message-".length)) % 2 !== 1) {
+                return false;
+              }
+              const row = candidate.closest(".chat-virtual-row")!.getBoundingClientRect();
+              return position === "above-viewport"
+                ? row.bottom <= viewport.top
+                : row.top >= viewport.top && row.top < viewport.bottom;
+            });
+            return bubble?.dataset.entryId ?? null;
+          }, recoveryPosition);
+          expect(messageId).not.toBeNull();
+          const recoveredIndex = Number(messageId!.slice("sizing-message-".length));
+          const nextMessageId = `sizing-message-${recoveredIndex + 1}`;
+          const bubble = page.locator(`.chat-bubble[data-entry-id="${messageId}"]`);
+          const requestMatcher = expect.objectContaining({
+            params: expect.objectContaining({ messageId }),
+          });
+          const pendingRequest = (await gateway.getRequests("chat.message.get")).findLast(
+            (request) => requestMatcher.asymmetricMatch(request),
+          );
+          expect(pendingRequest).toBeDefined();
+          const initial = await bubble.evaluate((element) => {
+            const row = element.closest<HTMLElement>(".chat-virtual-row")!;
+            const rect = row.getBoundingClientRect();
+            const viewport = row.closest(".chat-thread")!.getBoundingClientRect();
+            return {
+              key: row.dataset.virtualRowKey,
+              height: row.offsetHeight,
+              top: rect.top,
+              bottom: rect.bottom,
+              viewportTop: viewport.top,
+              viewportBottom: viewport.bottom,
+            };
+          });
+          expect(
+            initial.bottom <= initial.viewportTop,
+            `recovered row must remain mounted ${recoveryPosition}`,
+          ).toBe(recoveryPosition === "above-viewport");
+          if (recoveryPosition === "within-viewport") {
+            expect(initial.top).toBeLessThan(initial.viewportBottom);
+          }
+          const fullText = Array.from(
+            { length: 5 },
+            (_, index) =>
+              `Recovered paragraph ${index + 1}. ${"All wrapped lines must reserve space before the next user message. ".repeat(5)}`,
+          ).join("\n\n");
+          await gateway.deliverLatest({
+            type: "res",
+            id: pendingRequest!.id,
+            ok: true,
+            payload: { ok: true, message: { role: "assistant", content: fullText } },
+          });
+          await bubble.getByText("Recovered paragraph 1.", { exact: false }).waitFor();
+          await waitForChatScrollIdle(page);
+          // Outlast virtual-core's five-second scroll reconciliation deadline:
+          // the assertion protects durable geometry, not a transient resize frame.
+          await page.clock.runFor(5_500);
+          const final = await bubble.evaluate((element, nextId) => {
+            const row = element.closest<HTMLElement>(".chat-virtual-row")!;
+            const scroller = row.closest<HTMLElement>(".chat-thread")!;
+            const next = scroller
+              .querySelector(`.chat-bubble[data-entry-id="${nextId}"]`)!
+              .closest<HTMLElement>(".chat-virtual-row")!;
+            const rect = row.getBoundingClientRect();
+            return {
+              key: row.dataset.virtualRowKey,
+              height: row.offsetHeight,
+              top: rect.top,
+              bottom: rect.bottom,
+              nextTop: next.getBoundingClientRect().top,
+              gap: next.getBoundingClientRect().top - rect.bottom,
+              returnOffset: scroller.scrollTop + rect.top - scroller.getBoundingClientRect().top,
+            };
+          }, nextMessageId);
+          const finalAnchor = await captureTopVisibleVirtualRow(thread);
+          await page.screenshot({ path: path.join(artifactDir, "02-after-interruption.png") });
+          await fs.writeFile(
+            path.join(artifactDir, "interrupted-scroll.json"),
+            JSON.stringify(
+              { initial, during, interruptedOffset, interruptedAnchor, final, finalAnchor },
+              null,
+              2,
+            ),
+          );
+          // Growth above the reader legitimately adjusts scrollTop; the visible
+          // row must stay anchored regardless of where input stopped scrolling.
+          expect(finalAnchor.key).toBe(interruptedAnchor.key);
+          expect(
+            Math.abs(finalAnchor.viewportTop - interruptedAnchor.viewportTop),
+          ).toBeLessThanOrEqual(1);
+          if (recoveryPosition === "within-viewport") {
+            expect(
+              Math.abs((await thread.evaluate((element) => element.scrollTop)) - interruptedOffset),
+            ).toBeLessThanOrEqual(1);
+          }
+          expect(final.key).toBe(initial.key);
+          expect(final.height).toBeGreaterThan(initial.height);
+          expect(
+            Math.abs(final.gap),
+            JSON.stringify({ initial, during, final }),
+          ).toBeLessThanOrEqual(1);
+          // Leaving and returning must use the recovered size in the virtual
+          // range too, not merely conceal stale cached geometry with DOM flow.
+          if (recoveredIndex < 30) {
+            await page.locator(".chat-scroll-to-bottom").click();
+            await expect
+              .poll(() =>
+                thread.evaluate((element) =>
+                  Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop),
+                ),
+              )
+              .toBeLessThanOrEqual(2);
+            await page
+              .locator('.chat-bubble[data-entry-id="sizing-message-59"]')
+              .waitFor({ state: "visible" });
+          } else {
+            await thread.hover();
+            await page.mouse.wheel(0, -100_000);
+            await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
+          }
+          await expect.poll(() => bubble.count()).toBe(0);
+          // Returning is reader input: retire any still-reconciling latest command.
+          await thread.hover();
+          const returnDelta = await thread.evaluate(
+            (element, offset) => offset - element.scrollTop,
+            final.returnOffset,
+          );
+          await page.mouse.wheel(0, returnDelta);
+          await bubble
+            .getByText("Recovered paragraph 1.", { exact: false })
+            .waitFor({ state: "visible" });
+          await waitForChatScrollIdle(page);
+          const returned = await bubble.evaluate((element, nextId) => {
+            const row = element.closest<HTMLElement>(".chat-virtual-row")!;
+            const next = row
+              .closest(".chat-thread")!
+              .querySelector(`.chat-bubble[data-entry-id="${nextId}"]`)!
+              .closest<HTMLElement>(".chat-virtual-row")!;
+            return {
+              height: row.offsetHeight,
+              gap: next.getBoundingClientRect().top - row.getBoundingClientRect().bottom,
+            };
+          }, nextMessageId);
+          expect(returned.height).toBe(final.height);
+          expect(Math.abs(returned.gap)).toBeLessThanOrEqual(1);
+          await page.screenshot({ path: path.join(artifactDir, "03-after-return.png") });
+          await thread.evaluate(
+            (element, offset) => {
+              element.scrollTop = offset;
+            },
+            final.returnOffset + Math.min(300, final.height / 2),
+          );
+          await waitForChatScrollIdle(page);
+          await page.screenshot({ path: path.join(artifactDir, "04-visible-adjacency.png") });
+        },
+      );
+    },
   );
+
   it("keeps completed-work and tool disclosures anchored on every expand and collapse frame", async () => {
-    const { context, page } = await createDisclosurePage(800, 1400);
+    const artifactDirParent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-transcript-disclosure-anchor", artifactDirParent)
+      : undefined;
+    const context = await suite.browser.newContext({
+      reducedMotion: "reduce",
+      viewport: { height: 800, width: 1400 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 800, width: 1400 } } }
+        : {}),
+    });
+    const page = await context.newPage();
     const sessionKey = "agent:main:dashboard:disclosure-geometry";
+    const transcriptPrefix = Array.from({ length: 12 }, (_, index) => [
+      {
+        role: "user",
+        content: `Earlier prompt ${index + 1}: keep enough transcript above the active row to make the pane scroll.`,
+        timestamp: index * 2 + 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `Earlier response ${index + 1}.` }],
+        timestamp: index * 2 + 2,
+      },
+    ]).flat();
     await installMockGateway(page, {
       sessionKey,
       featureMethods: ["board.get", "chat.history", "chat.metadata", "chat.startup"],
@@ -536,23 +598,105 @@ suite.define(() => {
         },
       },
       historyMessages: [
-        ...makeTranscript(12),
-        message("user", "Inspect the transcript and run its tests.", 99),
-        assistant(
-          [
-            toolCall("call-anchor", "bash", { command: "pnpm test chat" }),
-            toolCall("call-anchor-read", "read", { path: "chat-tool-cards.ts" }),
+        ...transcriptPrefix,
+        {
+          role: "user",
+          content: "Inspect the transcript implementation and run its focused tests.",
+          timestamp: 99,
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-anchor",
+              name: "bash",
+              arguments: { command: "pnpm test ui/src/pages/chat" },
+            },
+            {
+              type: "toolCall",
+              id: "call-anchor-read",
+              name: "read",
+              arguments: { path: "ui/src/pages/chat/components/chat-tool-cards.ts" },
+            },
           ],
-          100,
-        ),
-        toolResult("call-anchor", "bash", rows(24, (n) => `Test ${n}: passed.`).join("\n"), 101),
-        toolResult("call-anchor-read", "read", "export function renderToolCard() {}", 102),
-        assistant("Transcript tests pass.", 103),
-        ...makeTranscript(3, 104),
-        message("user", "Run one short sibling tool check.", 110),
-        assistant([toolCall("call-sibling", "bash", { command: "pnpm test card" })], 111),
-        toolResult("call-sibling", "bash", "Focused sibling passed.", 112),
-        assistant("The sibling tool check passed.", 113),
+          timestamp: 100,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-anchor",
+          toolName: "bash",
+          content: [
+            {
+              type: "text",
+              text: Array.from(
+                { length: 24 },
+                (_, index) => `Focused test ${index + 1}: passed with stable transcript geometry.`,
+              ).join("\n"),
+            },
+          ],
+          timestamp: 101,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-anchor-read",
+          toolName: "read",
+          content: [{ type: "text", text: "export function renderToolCard() {}" }],
+          timestamp: 102,
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "The transcript implementation is sound and all focused tests pass.",
+            },
+          ],
+          timestamp: 103,
+        },
+        ...Array.from({ length: 3 }, (_, index) => [
+          {
+            role: "user",
+            content: `Follow-up ${index + 1}: record the next transcript observation.`,
+            timestamp: 104 + index * 2,
+          },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: `Observation ${index + 1} recorded.` }],
+            timestamp: 105 + index * 2,
+          },
+        ]).flat(),
+        {
+          role: "user",
+          content: "Run one short sibling tool check.",
+          timestamp: 110,
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-sibling",
+              name: "bash",
+              arguments: {
+                command: "pnpm test ui/src/pages/chat/components/chat-tool-cards.test.ts",
+              },
+            },
+          ],
+          timestamp: 111,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-sibling",
+          toolName: "bash",
+          content: [{ type: "text", text: "Focused sibling passed." }],
+          timestamp: 112,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "The sibling tool check passed." }],
+          timestamp: 113,
+        },
       ],
     });
 
@@ -567,8 +711,8 @@ suite.define(() => {
     await waitForChatScrollIdle(page);
     expect(Math.abs(await chatThreadDistanceFromBottom(page))).toBeLessThanOrEqual(2);
     const traces: Record<string, DisclosureFrame[]> = {};
-    traces.workEndExpand = await traceDisclosure(endWorkSummary);
-    traces.workEndCollapse = await traceDisclosure(endWorkSummary);
+    traces.workEndExpand = await toggleDisclosureWithFrameTrace(page, endWorkSummary);
+    traces.workEndCollapse = await toggleDisclosureWithFrameTrace(page, endWorkSummary);
 
     const transcript = page.locator(".chat-pane-cache__pane--active .chat-thread");
     await transcript.hover();
@@ -580,61 +724,118 @@ suite.define(() => {
         (button) => button.closest<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey,
       ),
     ).not.toBe(endRowKey);
-    await centerDisclosure(middleWorkSummary);
-    traces.workMiddleExpand = await traceDisclosure(middleWorkSummary);
+    await middleWorkSummary.evaluate((button) => {
+      const row = button.closest<HTMLElement>(".chat-virtual-row");
+      const thread = button.closest<HTMLElement>(".chat-thread");
+      if (!row || !thread) {
+        throw new Error("Expected disclosure inside a virtual transcript row");
+      }
+      const rowTop = row.getBoundingClientRect().top - thread.getBoundingClientRect().top;
+      thread.scrollTop += Math.round(rowTop - thread.clientHeight / 2);
+    });
+    await waitForChatScrollIdle(page);
+    traces.workMiddleExpand = await toggleDisclosureWithFrameTrace(page, middleWorkSummary);
     const activitySummary = page
       .locator(
         ".chat-group--activity > .chat-group-messages > .chat-activity-group > .chat-activity-group__summary",
       )
       .first();
-    traces.activityMiddleExpand = await traceDisclosure(activitySummary);
+    traces.activityMiddleExpand = await toggleDisclosureWithFrameTrace(page, activitySummary);
     const activityGroup = activitySummary.locator("..");
     const toolSummary = activityGroup
       .locator(".chat-tool-msg-summary")
-      .filter({ hasText: "pnpm test chat" });
-    traces.toolMiddleExpand = await traceDisclosure(toolSummary);
-    traces.toolMiddleCollapse = await traceDisclosure(toolSummary);
+      .filter({ hasText: "pnpm test ui/src/pages/chat" });
+    traces.toolMiddleExpand = await toggleDisclosureWithFrameTrace(page, toolSummary);
+    traces.toolMiddleCollapse = await toggleDisclosureWithFrameTrace(page, toolSummary);
     const fileToolToggle = activityGroup.locator(".chat-tool-row__toggle").first();
-    traces.fileToolMiddleExpand = await traceDisclosure(fileToolToggle);
-    traces.fileToolMiddleCollapse = await traceDisclosure(fileToolToggle);
-    traces.activityMiddleCollapse = await traceDisclosure(activitySummary);
-    traces.workMiddleCollapse = await traceDisclosure(middleWorkSummary);
+    traces.fileToolMiddleExpand = await toggleDisclosureWithFrameTrace(page, fileToolToggle);
+    traces.fileToolMiddleCollapse = await toggleDisclosureWithFrameTrace(page, fileToolToggle);
+    traces.activityMiddleCollapse = await toggleDisclosureWithFrameTrace(page, activitySummary);
+    traces.workMiddleCollapse = await toggleDisclosureWithFrameTrace(page, middleWorkSummary);
 
+    if (artifactDir) {
+      await fs.writeFile(
+        path.join(artifactDir, "disclosure-geometry.json"),
+        `${JSON.stringify(traces, null, 2)}\n`,
+      );
+      await middleWorkSummary.focus();
+      await captureDisclosureThemes(artifactDir, "disclosure-geometry", middleWorkSummary);
+    }
     await context.close();
     for (const frames of Object.values(traces)) {
-      expectStableFrames(frames);
+      expectStableDisclosureFrames(frames);
     }
   });
 
   it("keeps raw tool details anchored at the end and middle of a long transcript", async () => {
-    const { context, page } = await createDisclosurePage(600, 900);
+    const artifactDirParent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-transcript-disclosure-anchor", artifactDirParent)
+      : undefined;
+    const context = await suite.browser.newContext({
+      reducedMotion: "reduce",
+      viewport: { height: 600, width: 900 },
+      ...(artifactDir
+        ? { recordVideo: { dir: artifactDir, size: { height: 600, width: 900 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const transcriptPrefix = Array.from({ length: 14 }, (_, index) => [
+      {
+        role: "user",
+        content: `Earlier raw-details prompt ${index + 1}.`,
+        timestamp: index * 2 + 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `Earlier raw-details response ${index + 1}.` }],
+        timestamp: index * 2 + 2,
+      },
+    ]).flat();
     await installMockGateway(page, {
       historyMessages: [
-        ...makeTranscript(14),
-        assistant(
-          [
-            toolCall("raw-details-widget", "canvas_render", { title: "Geometry proof" }),
+        ...transcriptPrefix,
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "raw-details-widget",
+              name: "canvas_render",
+              arguments: { title: "Disclosure geometry proof" },
+            },
             {
               type: "tool_result",
               id: "raw-details-widget",
               name: "canvas_render",
-              text: prettyJson({
-                kind: "canvas",
-                proof: rows(24, (n) => `Test ${n}: passed.`),
-                view: {
-                  backend: "canvas",
-                  id: "proof",
-                  url: "/__openclaw__/canvas/documents/proof/index.html",
-                  title: "Geometry proof",
-                  preferred_height: 160,
+              text: JSON.stringify(
+                {
+                  kind: "canvas",
+                  proof: Array.from(
+                    { length: 24 },
+                    (_, index) => `Focused test ${index + 1}: passed with stable geometry.`,
+                  ),
+                  view: {
+                    backend: "canvas",
+                    id: "disclosure-geometry-proof",
+                    url: "/__openclaw__/canvas/documents/disclosure-geometry-proof/index.html",
+                    title: "Disclosure geometry proof",
+                    preferred_height: 160,
+                  },
+                  presentation: { target: "assistant_message" },
                 },
-                presentation: { target: "assistant_message" },
-              }),
+                null,
+                2,
+              ),
             },
           ],
-          100,
-        ),
-        assistant("Disclosure geometry proof rendered.", 101),
+          timestamp: 100,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Disclosure geometry proof rendered." }],
+          timestamp: 101,
+        },
       ],
     });
 
@@ -642,10 +843,9 @@ suite.define(() => {
     const toolSummary = page.locator(".chat-tool-msg-summary");
     await toolSummary.waitFor();
     await waitForChatScrollIdle(page);
-    expectStableFrames(await traceDisclosure(toolSummary));
-    const rawDetailsToggle = page.locator(
-      ".chat-tool-card__widget-host .chat-tool-card__raw-toggle",
-    );
+    expectStableDisclosureFrames(await toggleDisclosureWithFrameTrace(page, toolSummary));
+    const widgetHost = page.locator(".chat-tool-card__widget-host");
+    const rawDetailsToggle = widgetHost.locator(".chat-tool-card__raw-toggle");
     await rawDetailsToggle.waitFor({ state: "attached" });
     await page.locator(".chat-thread").evaluate((thread) => {
       thread.scrollTop = thread.scrollHeight;
@@ -653,45 +853,93 @@ suite.define(() => {
     await waitForChatScrollIdle(page);
     expect(Math.abs(await chatThreadDistanceFromBottom(page))).toBeLessThanOrEqual(2);
     const traces: Record<string, DisclosureFrame[]> = {};
-    // Click the toggle directly to exclude popup close/reposition geometry from this proof.
-    traces.rawDetailsEndExpand = await traceDisclosure(rawDetailsToggle);
-    traces.rawDetailsEndCollapse = await traceDisclosure(rawDetailsToggle);
+    // Menu selection already proves it clicks this toggle; exclude the popup's
+    // own close/reposition geometry from the transcript-anchor measurement.
+    traces.rawDetailsEndExpand = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
+    traces.rawDetailsEndCollapse = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
 
-    await centerDisclosure(rawDetailsToggle);
-    traces.rawDetailsMiddleExpand = await traceDisclosure(rawDetailsToggle);
+    await rawDetailsToggle.evaluate((button) => {
+      const row = button.closest<HTMLElement>(".chat-virtual-row");
+      const thread = button.closest<HTMLElement>(".chat-thread");
+      if (!row || !thread) {
+        throw new Error("Expected raw-details disclosure inside a virtual transcript row");
+      }
+      const rowTop = row.getBoundingClientRect().top - thread.getBoundingClientRect().top;
+      thread.scrollTop += Math.round(rowTop - thread.clientHeight / 2);
+    });
+    await waitForChatScrollIdle(page);
+    traces.rawDetailsMiddleExpand = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
 
-    traces.rawDetailsMiddleCollapse = await traceDisclosure(rawDetailsToggle);
+    if (artifactDir) {
+      await fs.writeFile(
+        path.join(artifactDir, "raw-details-geometry.json"),
+        `${JSON.stringify(traces, null, 2)}\n`,
+      );
+      await captureDisclosureThemes(artifactDir, "raw-details-geometry", toolSummary);
+    }
+    traces.rawDetailsMiddleCollapse = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
+    const video = page.video();
     await context.close();
+    if (artifactDir) {
+      await video?.saveAs(path.join(artifactDir, "raw-details-geometry.webm"));
+    }
     for (const [label, frames] of Object.entries(traces)) {
-      expectStableFrames(frames, label);
+      expectStableDisclosureFrames(frames, label);
     }
   });
 
   it("keeps message disclosures and shared JSON controls anchored in a long transcript", async () => {
-    const { context, page } = await createDisclosurePage(600, 900);
+    const context = await suite.browser.newContext({
+      reducedMotion: "reduce",
+      viewport: { height: 600, width: 900 },
+    });
+    const page = await context.newPage();
+    const transcriptPrefix = Array.from({ length: 12 }, (_, index) => [
+      {
+        role: "user",
+        content: `Earlier sibling-disclosure prompt ${index + 1}.`,
+        timestamp: index * 2 + 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `Earlier sibling-disclosure response ${index + 1}.` }],
+        timestamp: index * 2 + 2,
+      },
+    ]).flat();
     await installMockGateway(page, {
       historyMessages: [
-        ...makeTranscript(12),
-        message(
-          "user",
-          `User disclosure anchor marker. ${"A wrapped prompt line that must remain visually anchored. ".repeat(24)}`,
-          100,
-        ),
-        message(
-          "assistant",
-          JSON.stringify({
+        ...transcriptPrefix,
+        {
+          role: "user",
+          content: `User disclosure anchor marker. ${"A wrapped prompt line that must remain visually anchored. ".repeat(24)}`,
+          timestamp: 100,
+        },
+        {
+          role: "assistant",
+          content: JSON.stringify({
             marker: "json-disclosure-anchor-marker",
-            rows: rows(30, (n) => `JSON disclosure proof row ${n}`),
+            rows: Array.from(
+              { length: 30 },
+              (_, index) => `JSON disclosure proof row ${index + 1}`,
+            ),
           }),
-          101,
-        ),
-        message(
-          "assistant",
-          `\`\`\`text\n${"A wide transcript code line that must wrap without moving its virtual row. ".repeat(24)}\n\`\`\``,
-          102,
-        ),
-        message("user", "Keep both sibling disclosures above this final exchange.", 103),
-        assistant("Both sibling disclosures are ready.", 104),
+          timestamp: 101,
+        },
+        {
+          role: "assistant",
+          content: `\`\`\`text\n${"A wide transcript code line that must wrap without moving its virtual row. ".repeat(24)}\n\`\`\``,
+          timestamp: 102,
+        },
+        {
+          role: "user",
+          content: "Keep both sibling disclosures above this final exchange.",
+          timestamp: 103,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Both sibling disclosures are ready." }],
+          timestamp: 104,
+        },
       ],
     });
 
@@ -721,12 +969,14 @@ suite.define(() => {
     await wrapToggle.waitFor({ state: "visible" });
     const traces: Record<string, DisclosureFrame[]> = {};
     const traceVisibleControl = async (control: Locator, actionSelector?: string) => {
-      // Reveal nearest edge: centering a tall footer would put its collapsed row above the reader.
+      // JSON now opens as a tree, so earlier controls can start outside the viewport.
+      // Reveal only as far as needed: centering a tall prompt's footer would put
+      // its entire collapsed row above the reader, where resize compensation is correct.
       await control.evaluate((element) =>
         element.scrollIntoView({ block: "nearest", inline: "nearest" }),
       );
       await waitForChatScrollIdle(page);
-      return traceDisclosure(control, actionSelector);
+      return toggleDisclosureWithFrameTrace(page, control, actionSelector);
     };
     traces.userMessageExpand = await traceVisibleControl(userToggle);
     traces.userMessageCollapse = await traceVisibleControl(userToggle);
@@ -744,7 +994,7 @@ suite.define(() => {
     traces.codeUnwrap = await traceVisibleControl(wrapToggle);
     await context.close();
     for (const [label, frames] of Object.entries(traces)) {
-      expectStableFrames(frames, label);
+      expectStableDisclosureFrames(frames, label);
     }
   });
 });

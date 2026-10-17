@@ -189,7 +189,7 @@ async function fixture(
 }
 
 function withFixture(
-  run: (fixture: Awaited<ReturnType<typeof fixture>>) => Promise<void>,
+  run: (prepared: Awaited<ReturnType<typeof fixture>>) => Promise<void>,
   owner: Owner = "shared",
   credential?: AuthProfileCredential,
 ) {

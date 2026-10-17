@@ -39,7 +39,7 @@ export function usePlaybackFixture(prefix: string, mocks: string[]) {
   }
   return {
     readSource,
-    async createSource(fileName: string, contents: string | Buffer = "source") {
+    async createSource(fileName: string, contents: string | Uint8Array = "source") {
       const filePath = path.join(home.home, fileName);
       await fs.writeFile(filePath, contents);
       return await readSource(filePath);

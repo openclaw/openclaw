@@ -199,8 +199,10 @@ async function prepareRace(state: OpenClawTestState) {
             return rows;
           },
         });
-      vi.spyOn(statement, "get").mockImplementation(afterRead(statement.get.bind(statement)));
-      vi.spyOn(statement, "all").mockImplementation(afterRead(statement.all.bind(statement)));
+      const get = statement.get.bind(statement);
+      const all = statement.all.bind(statement);
+      vi.spyOn(statement, "get").mockImplementation(afterRead(get));
+      vi.spyOn(statement, "all").mockImplementation(afterRead(all));
       const iterate = statement.iterate.bind(statement);
       vi.spyOn(statement, "iterate").mockImplementation(function* (...args) {
         yield* iterate(...args);

@@ -36,8 +36,10 @@ import {
   createDualFormatInstallFixtureFactory,
 } from "./test-helpers/install-fixtures.js";
 
+// mock-isolation: package installation tests must not execute real package-manager commands.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: vi.fn() }));
 
+// mock-isolation: resolve the synthetic host installation rather than the real checkout.
 vi.mock("../infra/openclaw-root.js", () => ({ resolveOpenClawPackageRootSync: vi.fn() }));
 
 const resolveCompatibilityHostVersionMock = vi.fn();
@@ -1069,4 +1071,3 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     }
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

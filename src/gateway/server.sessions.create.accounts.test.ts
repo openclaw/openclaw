@@ -53,7 +53,8 @@ function sessionRequests(
     request: <T = unknown>(
       method: Parameters<typeof directSessionReq>[0],
       params: Record<string, unknown>,
-    ) => directSessionReq<T>(method, params, { client, context }),
+    ): ReturnType<typeof directSessionReq<T>> =>
+      directSessionReq<T>(method, params, { client, context }),
     read: (sessionKey: string) => loadSessionEntry({ sessionKey, storePath }),
   };
 }
