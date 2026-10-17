@@ -1,17 +1,12 @@
 // Qa Lab Matrix tests cover request behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockMatrixQaHttp } from "./http.test-support.js";
 import { requestMatrixJson } from "./request.js";
 
 describe("requestMatrixJson", () => {
-  let http: ReturnType<typeof mockMatrixQaHttp>;
-  beforeEach(() => {
-    http = mockMatrixQaHttp();
-  });
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.unstubAllGlobals();
   });
 
   it("caps oversized request timeouts before creating the abort signal", async () => {
@@ -19,7 +14,7 @@ describe("requestMatrixJson", () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(signal);
     const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ ok: true }));
 
-    vi.stubGlobal("fetch", fetchImpl);
+    const http = mockMatrixQaHttp(fetchImpl);
 
     await requestMatrixJson({
       baseUrl: "https://matrix.example.test",
@@ -62,7 +57,7 @@ describe("requestMatrixJson", () => {
         }),
     );
 
-    vi.stubGlobal("fetch", fetchImpl);
+    const http = mockMatrixQaHttp(fetchImpl);
 
     await expect(
       requestMatrixJson({
@@ -86,7 +81,7 @@ describe("requestMatrixJson", () => {
         }),
     );
 
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     const result = await requestMatrixJson<{ ok?: boolean }>({
       baseUrl: "https://matrix.example.test",
@@ -109,7 +104,7 @@ describe("requestMatrixJson", () => {
         }),
     );
 
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     const result = await requestMatrixJson<{ data: string }>({
       baseUrl: "https://matrix.example.test",

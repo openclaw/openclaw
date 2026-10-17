@@ -1,5 +1,5 @@
 // Qa Lab Matrix tests cover client behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildMatrixQaMessageContent,
   resolveNextRegistrationAuth,
@@ -25,12 +25,8 @@ function parseJsonRequestBody(init?: RequestInit) {
 }
 
 describe("matrix driver client", () => {
-  beforeEach(() => {
-    mockMatrixQaHttp();
-  });
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.unstubAllGlobals();
   });
 
   it("omits Matrix HTML markup when the body has no visible mention token", () => {
@@ -70,7 +66,7 @@ describe("matrix driver client", () => {
       return Response.json({});
     };
 
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     const client = createMatrixQaClient({
       accessToken: "token",
@@ -124,7 +120,7 @@ describe("matrix driver client", () => {
       return Response.json({ event_id: "$reaction-1" });
     };
 
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     const client = createMatrixQaClient({
       accessToken: "token",
@@ -151,7 +147,7 @@ describe("matrix driver client", () => {
       return Response.json({ event_id: eventId });
     };
 
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     const client = createMatrixQaClient({
       accessToken: "token",
@@ -216,7 +212,7 @@ describe("matrix driver client", () => {
       return Response.json({ event_id: "$media-1" });
     };
 
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     const client = createMatrixQaClient({
       accessToken: "token",
@@ -280,7 +276,7 @@ describe("matrix driver client", () => {
         { status: 200, headers: { "content-type": "application/json" } },
       );
 
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     const client = createMatrixQaClient({
       accessToken: "token",
@@ -310,7 +306,7 @@ describe("matrix driver client", () => {
         headers: { "content-type": "application/json" },
       });
 
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     const client = createMatrixQaClient({
       accessToken: "token",
@@ -338,7 +334,7 @@ describe("matrix driver client", () => {
       return Response.json({ room_id: "!encrypted:matrix-qa.test" });
     };
 
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     const client = createMatrixQaClient({
       accessToken: "token",
@@ -436,7 +432,7 @@ describe("matrix driver client", () => {
       throw new Error(`unexpected fetch ${url}`);
     };
 
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     const result = await provisionMatrixQaRoom({
       baseUrl: "http://127.0.0.1:28008/",
@@ -533,7 +529,7 @@ describe("matrix driver client", () => {
       throw new Error(`unexpected fetch ${url}`);
     };
 
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     const result = await provisionMatrixQaRoom({
       baseUrl: "http://127.0.0.1:28008/",

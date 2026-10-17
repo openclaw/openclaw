@@ -1,5 +1,5 @@
 // Qa Lab Matrix tests cover sync behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MatrixQaObservedEvent, MatrixQaRoomEvent } from "./events.js";
 import { mockMatrixQaHttp } from "./http.test-support.js";
 import { createMatrixQaRoomObserver, primeMatrixQaRoom } from "./sync.js";
@@ -29,18 +29,14 @@ function syncResponse(
 }
 
 describe("matrix sync helpers", () => {
-  beforeEach(() => {
-    mockMatrixQaHttp();
-  });
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.unstubAllGlobals();
   });
 
   it("primes the Matrix sync cursor without recording observed events", async () => {
     const fetchImpl: typeof fetch = async () => Response.json({ next_batch: "primed-sync-cursor" });
 
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     await expect(
       primeMatrixQaRoom({
@@ -75,7 +71,7 @@ describe("matrix sync helpers", () => {
       ]);
     };
     const observedEvents: MatrixQaObservedEvent[] = [];
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     const observer = createMatrixQaRoomObserver({
       accessToken: "token",
@@ -117,7 +113,7 @@ describe("matrix sync helpers", () => {
       calls += 1;
       return syncResponse([message("$main-reply", "main reply")], "!main:matrix-qa.test");
     };
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     const observer = createMatrixQaRoomObserver({
       accessToken: "token",
@@ -168,7 +164,7 @@ describe("matrix sync helpers", () => {
         message("$notice", "notice", { msgtype: "m.notice" }),
       ]);
     };
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     const observer = createMatrixQaRoomObserver({
       accessToken: "token",
@@ -239,7 +235,7 @@ describe("matrix sync helpers", () => {
         "recovered-batch",
       );
     };
-    vi.stubGlobal("fetch", fetchImpl);
+    mockMatrixQaHttp(fetchImpl);
 
     const observer = createMatrixQaRoomObserver({
       baseUrl: "http://127.0.0.1:28008/",
@@ -273,7 +269,7 @@ describe("matrix sync helpers", () => {
 
   it("preserves terminal sync failures, including unrelated TimeoutErrors", async () => {
     const timeoutError = new DOMException("upstream protocol timeout", "TimeoutError");
-    vi.stubGlobal("fetch", async () => {
+    const http = mockMatrixQaHttp(async () => {
       throw timeoutError;
     });
     const observer = createMatrixQaRoomObserver({
@@ -290,9 +286,8 @@ describe("matrix sync helpers", () => {
       }),
     ).rejects.toBe(timeoutError);
 
-    vi.stubGlobal("fetch", async () =>
-      Response.json({ error: "invalid access token" }, { status: 401 }),
-    );
+    http.request.mockRestore();
+    mockMatrixQaHttp(async () => Response.json({ error: "invalid access token" }, { status: 401 }));
     const authObserver = createMatrixQaRoomObserver({
       baseUrl: "http://127.0.0.1:28008/",
       observedEvents: [],
@@ -311,8 +306,7 @@ describe("matrix sync helpers", () => {
     const deadline = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
     const bodyError = new Error("late Matrix response body failure");
-    vi.stubGlobal(
-      "fetch",
+    mockMatrixQaHttp(
       async () =>
         new Response(
           new ReadableStream({
