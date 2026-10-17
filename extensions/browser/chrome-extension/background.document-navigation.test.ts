@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cdp,
+  connectRelay,
+  deferredScope,
   expectType,
   expectUnused,
   relayConfig,
@@ -20,17 +21,8 @@ async function setup(mode: "all" | "selected" = "selected") {
       { id: 8, url: "about:blank", groupId: 7 },
     ],
   });
-  const socket = h.relaySockets[0];
-  assert(socket);
-  await h.authenticate(socket);
-  let seq = 1000;
-  const frames = () => socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
-  const request = async (message: Record<string, unknown>) => {
-    const id = ++seq;
-    socket.receive({ ...message, seq: id });
-    await vi.waitFor(() => expect(frames().find((frame) => frame.seq === id)).toBeDefined());
-    return frames().find((frame) => frame.seq === id);
-  };
+  const connection = await connectRelay(h);
+  const { request } = connection;
   expectType(await request({ type: "attach", tabId: 7 }));
   const emit = (method: string, params: unknown) =>
     h.debuggerEventListener?.({ tabId: 7 }, method, params);
@@ -50,16 +42,32 @@ async function setup(mode: "all" | "selected" = "selected") {
       return args[1] === "Page.navigate" ? await navigate() : {};
     });
   };
+  const command = (method: string, params?: Record<string, unknown>, extra = {}) =>
+    request({ ...cdp(method, params, 7), ...extra });
   const navigate = (params: Record<string, unknown> = { url: "about:blank", frameId: "root" }) =>
-    request(cdp("Page.navigate", params, 7));
-  return Object.assign(h, { socket, frames, request, emit, commitBlank, native, navigate });
+    command("Page.navigate", params);
+  const commit = (
+    complete: () => Record<string, unknown> | Promise<Record<string, unknown>> = () => blankResult,
+  ) =>
+    native(async () => {
+      commitBlank();
+      return await complete();
+    });
+  const staleLookup = (update: (tabId: number) => void) => {
+    const get = h.tabsGet.getMockImplementation()!;
+    h.tabsGet.mockImplementationOnce(async (id) => {
+      const stale = await get(id);
+      update(id);
+      return stale;
+    });
+  };
+  commit();
+  return Object.assign(h, connection, { command, emit, commit, staleLookup, native, navigate });
 }
-const releases: Array<() => void> = [];
+const { deferred, releaseAll } = deferredScope();
 beforeEach(() => vi.resetModules());
 afterEach(async () => {
-  for (const release of releases.splice(0)) {
-    release();
-  }
+  releaseAll();
   await cleanupBackgroundHarnesses();
   vi.unstubAllGlobals();
 });
@@ -67,14 +75,8 @@ afterEach(async () => {
 describe("commanded existing document navigation", () => {
   it("preserves the native blank/reset/trace/return order in selected mode", async () => {
     const h = await setup();
-    h.native(async () => {
-      h.commitBlank();
-      return blankResult;
-    });
     h.socket.send.mockClear();
-    expect(
-      await h.request(cdp("Page.navigate", { url: "about:blank", frameId: "root" }, 7)),
-    ).toMatchObject({ type: "result", result: blankResult });
+    expect(await h.navigate()).toMatchObject({ type: "result", result: blankResult });
     expect(
       h
         .frames()
@@ -86,26 +88,21 @@ describe("commanded existing document navigation", () => {
       "Page.lifecycleEvent",
       "result",
     ]);
-    expectType(await h.request(cdp("Tracing.start", undefined, 7)));
+    expectType(await h.command("Tracing.start"));
     expectType(await h.request({ type: "attach", tabId: 8 }), "error");
     h.debuggerSendCommand.mockImplementationOnce(async () => {
-      const get = h.tabsGet.getMockImplementation()!;
-      h.tabsGet.mockImplementationOnce(async (id) => {
-        const stale = await get(id);
+      h.staleLookup((id) => {
         h.updateTab(id, { url: originalUrl }, false);
         h.emit("Page.frameNavigated", {
           frame: { id: "root", loaderId: "return", url: originalUrl },
         });
-        return stale;
       });
       return { frameId: "root", loaderId: "return" };
     });
-    expectType(await h.request(cdp("Page.navigate", { url: originalUrl }, 7)));
-    expectType(await h.request(cdp("Tracing.end", undefined, 7)));
+    expectType(await h.navigate({ url: originalUrl }));
+    expectType(await h.command("Tracing.end"));
     h.updateTab(7, { url: "about:blank" });
-    expect(await runtime(h, "getTabAccess", { tabId: 7 })).toMatchObject({
-      accessible: false,
-    });
+    expect(await runtime(h, "getTabAccess", { tabId: 7 })).toMatchObject({ accessible: false });
     expectUnused(h.tabsRemove, h.tabsUpdate);
   });
   it.each([
@@ -115,14 +112,8 @@ describe("commanded existing document navigation", () => {
     "revalidates Selected pending $pendingUrl between response lookups",
     async ({ pendingUrl, response }) => {
       const h = await setup();
-      h.native(async () => {
-        h.commitBlank();
-        const get = h.tabsGet.getMockImplementation()!;
-        h.tabsGet.mockImplementationOnce(async (id) => {
-          const stale = await get(id);
-          h.updateTab(id, { pendingUrl });
-          return stale;
-        });
+      h.commit(() => {
+        h.staleLookup((id) => h.updateTab(id, { pendingUrl }));
         return blankResult;
       });
       expectType(await h.navigate(), response);
@@ -138,30 +129,17 @@ describe("commanded existing document navigation", () => {
     h.native(async () => blankResult);
     expectType(await h.navigate({ url: "about:blank", frameId: "child" }));
     expectType(
-      await h.request({
-        type: "cdp",
-        tabId: 7,
-        sessionId: "child-session",
-        method: "Page.navigate",
-        params: { url: "about:blank" },
-      }),
+      await h.command("Page.navigate", { url: "about:blank" }, { sessionId: "child-session" }),
     );
     h.updateTab(7, { url: "about:blank" });
-    expectType(
-      await h.request({ type: "cdp", tabId: 7, method: "Tracing.start", authorized: true }),
-      "error",
-    );
+    expectType(await h.command("Tracing.start", undefined, { authorized: true }), "error");
     expectType(await h.request(cdp("Page.navigate", { url: "about:blank" }, 8)), "error");
     expectUnused(h.tabsRemove);
   });
   it("fences a selected reconnect before response without deleting or restoring the tab", async () => {
     const h = await setup();
-    const result = createDeferred<Record<string, unknown>>();
-    releases.push(() => result.resolve(blankResult));
-    h.native(async () => {
-      h.commitBlank();
-      return await result.promise;
-    });
+    const result = deferred(blankResult);
+    h.commit(() => result.promise);
     const navigating = h.navigate();
     await vi.waitFor(() => expect(h.debuggerSendCommand.mock.calls.length).toBe(2));
     h.socket.send.mockClear();
@@ -182,20 +160,13 @@ describe("commanded existing document navigation", () => {
     // Closed sockets intentionally cannot receive the old response.
     await expect(navigating).rejects.toThrow();
     expect(h.frames().some((f) => f.type === "cdpEvent")).toBe(false);
-    expect(await runtime(h, "getTabAccess", { tabId: 7 })).toMatchObject({
-      accessible: false,
-    });
+    expect(await runtime(h, "getTabAccess", { tabId: 7 })).toMatchObject({ accessible: false });
     expectUnused(h.tabsRemove, h.tabsUpdate);
   });
   it("discards a stale selected discovery snapshot of the source before consuming blank provenance", async () => {
     const h = await setup();
-    h.native(async () => {
-      h.commitBlank();
-      return blankResult;
-    });
     const staleTabs = await h.tabsQuery();
-    const lookup = createDeferred<typeof staleTabs>();
-    releases.push(() => lookup.resolve(staleTabs));
+    const lookup = deferred(staleTabs);
     let inspecting = false;
     h.tabsQuery.mockImplementationOnce(async () => {
       inspecting = true;
@@ -206,7 +177,7 @@ describe("commanded existing document navigation", () => {
     expectType(await h.navigate());
     lookup.resolve(staleTabs);
     expect(await status).toMatchObject({ accessibleTabCount: 1 });
-    expectType(await h.request(cdp("Tracing.start", undefined, 7)));
+    expectType(await h.command("Tracing.start"));
     expectUnused(h.tabsRemove);
   });
 });

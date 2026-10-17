@@ -1,8 +1,8 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectType,
   expectUnused,
+  deferredScope,
   holdNext,
   relayConfig,
   runtime,
@@ -17,6 +17,17 @@ const flush = () =>
   });
 const frames = (socket: FakeWebSocket): Array<Record<string, unknown>> =>
   socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
+const findFrame = (socket: FakeWebSocket, seq: number) =>
+  frames(socket).find((entry) => entry.seq === seq);
+const expectRuntime = (socket: FakeWebSocket) =>
+  expect(
+    frames(socket).filter((entry) => entry.method === "Runtime.executionContextCreated"),
+  ).toHaveLength(1);
+const waitType = (socket: FakeWebSocket, seq: number, type = "result") =>
+  vi.waitFor(() => expectType(findFrame(socket, seq), type));
+const attachedResult = { type: "result", seq: 1, result: { targetId: "target-7" } };
+const waitAttached = (socket: FakeWebSocket) =>
+  vi.waitFor(() => expect(frames(socket)).toContainEqual(attachedResult));
 
 async function reply(socket: FakeWebSocket, seq: number, message: Record<string, unknown>) {
   const before = frames(socket).length;
@@ -30,7 +41,7 @@ async function reply(socket: FakeWebSocket, seq: number, message: Record<string,
   });
 }
 
-async function fixture() {
+async function fixture(initiallyAttached = false) {
   const h = await loadBackground({
     deferSocketClose: true,
     storedConfig: relayConfig("all"),
@@ -84,20 +95,28 @@ async function fixture() {
       result: { targetId: `target-${tabId}` },
     });
   }
+  if (initiallyAttached) {
+    await attach(old);
+  }
   return { h, old, attached, replacement, attach };
 }
-const pendingReleases = new Set<() => void>();
-function deferred<T>(fallback: T) {
-  const gate = createDeferred<T>();
-  pendingReleases.add(() => gate.resolve(fallback));
-  return { promise: gate.promise, resolve: (value = fallback) => gate.resolve(value) };
+const { deferred, releaseAll } = deferredScope();
+function heldAccess(h: Awaited<ReturnType<typeof loadBackground>>) {
+  const gate = deferred(undefined);
+  h.tabsGet.mockClear();
+  holdNext(h.tabsGet, gate.promise);
+  return gate;
+}
+function heldFocus(h: Awaited<ReturnType<typeof loadBackground>>) {
+  const gate = deferred(undefined);
+  h.windowsUpdate.mockImplementationOnce(async () => {
+    await gate.promise;
+  });
+  return gate;
 }
 beforeEach(() => vi.resetModules());
 afterEach(async () => {
-  for (const release of pendingReleases) {
-    release();
-  }
-  pendingReleases.clear();
+  releaseAll();
   await flush();
   await cleanupBackgroundHarnesses();
   vi.unstubAllGlobals();
@@ -106,8 +125,7 @@ afterEach(async () => {
 
 describe("authenticated relay debugger lifetime", () => {
   it("starts a fresh Runtime after authentication failure without changing grants", async () => {
-    const f = await fixture();
-    await f.attach(f.old);
+    const f = await fixture(true);
     await reply(f.old, 2, { type: "cdp", tabId, method: "Runtime.enable" });
     f.attached.set(99, { runtimeEnabled: true });
     f.old.receive({ type: "auth.invalid" });
@@ -115,9 +133,7 @@ describe("authenticated relay debugger lifetime", () => {
     const next = await f.replacement();
     await f.attach(next);
     await reply(next, 2, { type: "cdp", tabId, method: "Runtime.enable" });
-    expect(
-      frames(next).filter((frame) => frame.method === "Runtime.executionContextCreated"),
-    ).toHaveLength(1);
+    expectRuntime(next);
     expect(f.h.debuggerDetach).toHaveBeenCalledWith({ targetId: "target-7" });
     expect(f.h.debuggerDetach).not.toHaveBeenCalledWith({ targetId: "target-99" });
     expect(f.h.debuggerAttach).toHaveBeenCalledTimes(2);
@@ -151,27 +167,18 @@ describe("authenticated relay debugger lifetime", () => {
       await waitCalled(f.h.debuggerDetach, { targetId: `target-${tabId}` });
       expect(f.h.debuggerAttach).toHaveBeenCalledTimes(1);
       detachGate.resolve();
-      await vi.waitFor(() =>
-        expect(frames(next)).toContainEqual({
-          type: "result",
-          seq: 1,
-          result: { targetId: "target-7" },
-        }),
-      );
+      await waitAttached(next);
       expect(f.h.debuggerAttach).toHaveBeenCalledTimes(2);
       const detaches = f.h.debuggerDetach.mock.calls.length;
       f.old.finishClose();
       await reply(next, 3, { type: "cdp", tabId, method: "Runtime.enable" });
       expect(f.h.debuggerDetach).toHaveBeenCalledTimes(detaches);
       expect(frames(next).some((frame) => frame.seq === 44)).toBe(false);
-      expect(
-        frames(next).filter((frame) => frame.method === "Runtime.executionContextCreated"),
-      ).toHaveLength(1);
+      expectRuntime(next);
     },
   );
   it("detaches without waiting for old evaluation and never delivers its reply on a colliding new seq", async () => {
-    const f = await fixture();
-    await f.attach(f.old);
+    const f = await fixture(true);
     const gate = deferred<Record<string, unknown>>({});
     f.h.debuggerSendCommand.mockImplementationOnce(async () => await gate.promise);
     f.old.receive({ type: "cdp", seq: 9, tabId, method: "Runtime.evaluate" });
@@ -192,15 +199,8 @@ describe("authenticated relay debugger lifetime", () => {
   it.each(["activateTab", "createTab"])(
     "fences %s paused over a tab lookup while preserving creator-owned rollback",
     async (type) => {
-      const f = await fixture();
-      await f.attach(f.old);
-      const gate = deferred(undefined);
-      const getTab = f.h.tabsGet.getMockImplementation()!;
-      f.h.tabsGet.mockClear();
-      f.h.tabsGet.mockImplementationOnce(async (id) => {
-        await gate.promise;
-        return getTab(id);
-      });
+      const f = await fixture(true);
+      const gate = heldAccess(f.h);
       f.old.receive({
         type,
         seq: 8,
@@ -226,56 +226,48 @@ describe("authenticated relay debugger lifetime", () => {
       expect(frames(f.old).some((frame) => frame.seq === 8)).toBe(false);
     },
   );
-  it("never admits replacement CDP work into the retiring physical session", async () => {
-    const f = await fixture();
-    await f.attach(f.old);
-    const gate = deferred(undefined);
-    holdNext(f.h.debuggerDetach, gate.promise);
-    f.old.finishClose();
-    const next = await f.replacement();
-    next.receive({ type: "cdp", seq: 9, tabId, method: "Runtime.evaluate" });
-    await reply(next, 10, { type: "ping" });
-    expectUnused(f.h.debuggerSendCommand);
-    gate.resolve();
-    await vi.waitFor(() =>
-      expect(frames(next)).toContainEqual({
-        type: "error",
+  it.each(["cdp", "attach"])(
+    "fences replacement %s work while the old native session retires",
+    async (type) => {
+      const f = await fixture(true);
+      const gate = deferred(undefined);
+      holdNext(f.h.debuggerDetach, gate.promise);
+      f.old.finishClose();
+      const next = await f.replacement();
+      next.receive({
+        type,
         seq: 9,
-        message: expect.stringContaining("not attached"),
-      }),
-    );
-    await f.attach(next);
-    await reply(next, 11, { type: "cdp", tabId, method: "Runtime.enable" });
-    expect(
-      frames(next).filter((frame) => frame.method === "Runtime.executionContextCreated"),
-    ).toHaveLength(1);
-  });
-  it("does not recapture attach authority revoked while a previous socket drains", async () => {
-    const f = await fixture();
-    await f.attach(f.old);
-    const gate = deferred(undefined);
-    holdNext(f.h.debuggerDetach, gate.promise);
-    f.old.finishClose();
-    const next = await f.replacement();
-    next.receive({ type: "attach", seq: 9, tabId });
-    await reply(next, 10, { type: "ping" });
-    f.h.updateTab(tabId, { url: "chrome://settings" });
-    f.h.updateTab(tabId, { url: "https://example.com/returned" });
-    gate.resolve();
-    await vi.waitFor(() =>
-      expect(frames(next)).toContainEqual({
-        type: "error",
-        seq: 9,
-        message: expect.stringContaining("access was revoked"),
-      }),
-    );
-    expect(f.h.debuggerAttach).toHaveBeenCalledTimes(1);
-    await f.attach(next, 11);
-    expect(f.h.debuggerAttach).toHaveBeenCalledTimes(2);
-  });
+        tabId,
+        ...(type === "cdp" ? { method: "Runtime.evaluate" } : {}),
+      });
+      await reply(next, 10, { type: "ping" });
+      if (type === "attach") {
+        f.h.updateTab(tabId, { url: "chrome://settings" });
+        f.h.updateTab(tabId, { url: "https://example.com/returned" });
+      } else {
+        expectUnused(f.h.debuggerSendCommand);
+      }
+      gate.resolve();
+      await vi.waitFor(() =>
+        expect(frames(next)).toContainEqual({
+          type: "error",
+          seq: 9,
+          message: expect.stringContaining(type === "cdp" ? "not attached" : "access was revoked"),
+        }),
+      );
+      if (type === "attach") {
+        expect(f.h.debuggerAttach).toHaveBeenCalledTimes(1);
+        await f.attach(next, 11);
+        expect(f.h.debuggerAttach).toHaveBeenCalledTimes(2);
+      } else {
+        await f.attach(next);
+        await reply(next, 11, { type: "cdp", tabId, method: "Runtime.enable" });
+        expectRuntime(next);
+      }
+    },
+  );
   it("keeps retirement fenced through an opening deadline and delayed stale close", async () => {
-    const f = await fixture();
-    await f.attach(f.old);
+    const f = await fixture(true);
     const gate = deferred(undefined);
     holdNext(f.h.debuggerDetach, gate.promise);
     f.old.close();
@@ -296,21 +288,12 @@ describe("authenticated relay debugger lifetime", () => {
     f.old.finishClose();
     expired.finishClose();
     gate.resolve();
-    await vi.waitFor(() =>
-      expect(frames(next)).toContainEqual({
-        type: "result",
-        seq: 1,
-        result: { targetId: "target-7" },
-      }),
-    );
+    await waitAttached(next);
     await reply(next, 3, { type: "cdp", tabId, method: "Runtime.enable" });
-    expect(
-      frames(next).filter((frame) => frame.method === "Runtime.executionContextCreated"),
-    ).toHaveLength(1);
+    expectRuntime(next);
   });
   it("fails closed when physical retirement cannot prove detach", async () => {
-    const f = await fixture();
-    await f.attach(f.old);
+    const f = await fixture(true);
     vi.spyOn(console, "warn").mockImplementation(() => {});
     f.h.debuggerDetach.mockRejectedValue(new Error("native detach refused"));
     f.old.finishClose();
@@ -339,59 +322,47 @@ describe("authenticated relay debugger lifetime", () => {
   });
 });
 
-describe("same-transport native generation", () => {
-  it.each(["before dispatch", "native completion", "post-access completion"])(
-    "rejects old work held at %s across detach and reattach",
-    async (stage) => {
-      const f = await fixture();
-      await f.attach(f.old);
-      const gate = deferred(undefined);
-      const entered = deferred(undefined);
-      const getTab = f.h.tabsGet.getMockImplementation()!;
-      const holdAccess = () =>
-        f.h.tabsGet.mockImplementationOnce(async (id) => {
+it.each(["before dispatch", "native completion", "post-access completion"])(
+  "rejects old work held at %s across detach and reattach",
+  async (stage) => {
+    const f = await fixture(true);
+    const gate = deferred(undefined);
+    const entered = deferred(undefined);
+    const getTab = f.h.tabsGet.getMockImplementation()!;
+    const holdAccess = () =>
+      f.h.tabsGet.mockImplementationOnce(async (id) => {
+        entered.resolve();
+        await gate.promise;
+        return getTab(id);
+      });
+    if (stage === "before dispatch") {
+      holdAccess();
+    } else {
+      f.h.debuggerSendCommand.mockImplementationOnce(async () => {
+        if (stage === "native completion") {
           entered.resolve();
           await gate.promise;
-          return getTab(id);
-        });
-      if (stage === "before dispatch") {
-        holdAccess();
-      } else {
-        f.h.debuggerSendCommand.mockImplementationOnce(async () => {
-          if (stage === "native completion") {
-            entered.resolve();
-            await gate.promise;
-          } else {
-            holdAccess();
-          }
-          return { oldGeneration: true };
-        });
-      }
-      f.old.receive({ type: "cdp", seq: 90, tabId, method: "Runtime.evaluate" });
-      await entered.promise;
-      await reply(f.old, 91, { type: "detach", tabId });
-      await f.attach(f.old, 92);
-      gate.resolve();
-      await vi.waitFor(() =>
-        expectType(
-          frames(f.old).find((frame) => frame.seq === 90),
-          "error",
-        ),
-      );
-      expect(f.h.debuggerSendCommand).toHaveBeenCalledTimes(stage === "before dispatch" ? 0 : 1);
-      expectType(await reply(f.old, 93, { type: "cdp", tabId, method: "Runtime.enable" }));
-    },
-  );
-});
+        } else {
+          holdAccess();
+        }
+        return { oldGeneration: true };
+      });
+    }
+    f.old.receive({ type: "cdp", seq: 90, tabId, method: "Runtime.evaluate" });
+    await entered.promise;
+    await reply(f.old, 91, { type: "detach", tabId });
+    await f.attach(f.old, 92);
+    gate.resolve();
+    await waitType(f.old, 90, "error");
+    expect(f.h.debuggerSendCommand).toHaveBeenCalledTimes(stage === "before dispatch" ? 0 : 1);
+    expectType(await reply(f.old, 93, { type: "cdp", tabId, method: "Runtime.enable" }));
+  },
+);
 
 describe("native attachment retirement ordering", () => {
   it("fences creation handoff after native replacement and preserves a user-taken-over tab", async () => {
     const f = await fixture();
-    const gate = deferred(undefined);
-    f.h.windowsUpdate.mockImplementationOnce(async () => {
-      await gate.promise;
-      return undefined;
-    });
+    const gate = heldFocus(f.h);
     const createdTabId = tabId + 1;
     f.old.receive({ type: "createTab", seq: 80, url: "https://example.com/new", focus: true });
     await waitCalled(f.h.windowsUpdate);
@@ -406,12 +377,7 @@ describe("native attachment retirement ordering", () => {
     expectType(await reply(f.old, 82, { type: "attach", tabId: createdTabId }));
     f.h.updateTab(createdTabId, { url: "https://example.com/user-takeover" });
     gate.resolve();
-    await vi.waitFor(() =>
-      expectType(
-        frames(f.old).find((frame) => frame.seq === 80),
-        "error",
-      ),
-    );
+    await waitType(f.old, 80, "error");
     expectUnused(f.h.tabsRemove);
     expectType(
       await reply(f.old, 83, { type: "cdp", tabId: createdTabId, method: "Runtime.enable" }),
@@ -433,24 +399,14 @@ describe("native attachment retirement ordering", () => {
     await waitCalled(f.h.debuggerDetach);
     expect(f.h.debuggerAttach).toHaveBeenCalledTimes(1);
     detachGate.resolve();
-    await vi.waitFor(() => expectType(frames(f.old).find((frame) => frame.seq === 72)));
-    expectType(
-      frames(f.old).find((frame) => frame.seq === 70),
-      "error",
-    );
+    await waitType(f.old, 72);
+    expectType(findFrame(f.old, 70), "error");
   });
   it.each(["native detach", "removal", "access loss"])(
     "synchronously invalidates commands before %s reconciliation awaits",
     async (ending) => {
-      const f = await fixture();
-      await f.attach(f.old);
-      const gate = deferred(undefined);
-      const getTab = f.h.tabsGet.getMockImplementation()!;
-      f.h.tabsGet.mockClear();
-      f.h.tabsGet.mockImplementationOnce(async (id) => {
-        await gate.promise;
-        return getTab(id);
-      });
+      const f = await fixture(true);
+      const gate = heldAccess(f.h);
       f.old.receive({ type: "cdp", seq: 60, tabId, method: "Runtime.evaluate" });
       await waitCalled(f.h.tabsGet);
       if (ending === "native detach") {
@@ -466,12 +422,7 @@ describe("native attachment retirement ordering", () => {
       }
       await f.attach(f.old, 61);
       gate.resolve();
-      await vi.waitFor(() =>
-        expectType(
-          frames(f.old).find((frame) => frame.seq === 60),
-          "error",
-        ),
-      );
+      await waitType(f.old, 60, "error");
       expectUnused(f.h.debuggerSendCommand);
       expectType(await reply(f.old, 62, { type: "cdp", tabId, method: "Runtime.enable" }));
     },
@@ -483,21 +434,14 @@ it("cancels attach admission when a same-socket detach arrives before native dis
   f.old.receive({ type: "attach", seq: 51, tabId });
   f.old.receive({ type: "detach", seq: 52, tabId });
   f.old.receive({ type: "attach", seq: 53, tabId });
-  await vi.waitFor(() => expectType(frames(f.old).find((frame) => frame.seq === 53)));
-  expectType(
-    frames(f.old).find((frame) => frame.seq === 51),
-    "error",
-  );
+  await waitType(f.old, 53);
+  expectType(findFrame(f.old, 51), "error");
   expect(f.h.debuggerAttach).toHaveBeenCalledTimes(1);
 });
 
 it("rolls back only its created tab after socket close during focus", async () => {
   const f = await fixture();
-  const gate = deferred(undefined);
-  f.h.windowsUpdate.mockImplementationOnce(async () => {
-    await gate.promise;
-    return undefined;
-  });
+  const gate = heldFocus(f.h);
   f.old.receive({ type: "createTab", seq: 80, url: "https://example.com/new", focus: true });
   await waitCalled(f.h.windowsUpdate);
   f.old.finishClose();

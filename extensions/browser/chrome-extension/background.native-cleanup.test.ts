@@ -1,9 +1,10 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectType,
   expectUnused,
+  deferredScope,
   relayConfig,
+  relayFrames,
   runtime,
   waitCalled,
 } from "./background.lifecycle-test-helpers.js";
@@ -12,12 +13,18 @@ import {
   loadBackground,
   TEST_RELAY_KEY,
 } from "./background.test-harness.js";
-const releases: Array<() => void> = [];
+const { deferred, releaseAll } = deferredScope();
+async function expectPending(promise: Promise<unknown>) {
+  const settled = vi.fn();
+  void promise.then(settled);
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  expect(settled).not.toHaveBeenCalled();
+}
 beforeEach(() => vi.resetModules());
 afterEach(async () => {
-  for (const release of releases.splice(0)) {
-    release();
-  }
+  releaseAll();
   await cleanupBackgroundHarnesses();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -59,21 +66,14 @@ async function fixture() {
   h.debuggerGetTargetInfo.mockImplementation(async (source) => ({
     targetInfo: { targetId: resolve(source) },
   }));
-  h.debuggerSendCommand.mockImplementation(async (source, method) => {
-    const targetId = resolve(source);
-    return method === "Target.getTargetInfo"
-      ? { targetInfo: { targetId, type: "page" } }
-      : { targetId };
-  });
   const socket = h.relaySockets[0]!;
   await h.authenticate(socket);
   let seq = 0;
-  const frames = (s = socket) => s.send.mock.calls.map(([raw]) => JSON.parse(raw));
   const command = async (type: string, tabId: number, s = socket) => {
     const id = ++seq;
     s.receive({ type, tabId, seq: id });
     return await vi.waitFor(() => {
-      const result = frames(s).find((f) => f.seq === id);
+      const result = relayFrames(s).find((f) => f.seq === id);
       expect(result).toBeDefined();
       return result;
     });
@@ -92,8 +92,7 @@ async function fixture() {
     return next;
   };
   const holdDetach = (tabId: number) => {
-    const gate = createDeferred<void>();
-    releases.push(() => gate.resolve());
+    const gate = deferred<void>(undefined);
     const id = tabs.get(tabId);
     const original = h.debuggerDetach.getMockImplementation()!;
     h.debuggerDetach.mockImplementation(async (source) => {
@@ -104,7 +103,7 @@ async function fixture() {
     });
     return gate;
   };
-  return { h, socket, tabs, clients, command, attach, reconnect, frames, holdDetach };
+  return { h, tabs, clients, command, attach, reconnect, holdDetach };
 }
 
 describe("native debugger cleanup debt", () => {
@@ -117,15 +116,8 @@ describe("native debugger cleanup debt", () => {
     const next = await f.reconnect();
     expect.soft(await f.command("attach", 9, next)).toMatchObject({ type: "result" });
     expect(f.clients.has(oldA)).toBe(true);
-    let completed = false;
-    const b = f.command("attach", 8, next).then((result) => {
-      completed = true;
-      return result;
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect.soft(completed).toBe(false);
+    const b = f.command("attach", 8, next);
+    await expectPending(b);
     gate.resolve();
     expect.soft(await b).toMatchObject({ type: "result" });
     expect.soft(await f.command("attach", 7, next)).toMatchObject({ type: "result" });
@@ -148,15 +140,8 @@ describe("native debugger cleanup debt", () => {
     await waitCalled(f.h.debuggerDetach);
     f.clients.delete(old);
     f.h.debuggerDetachListener?.({ tabId: 7 }, "target_closed");
-    let attached = false;
-    const acquiring = f.command("attach", 7).then((result) => {
-      attached = true;
-      return result;
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(attached).toBe(false);
+    const acquiring = f.command("attach", 7);
+    await expectPending(acquiring);
     gate.resolve();
     await detaching;
     expect.soft(await acquiring).toMatchObject({ type: "result" });
@@ -189,8 +174,7 @@ describe("native debugger cleanup debt", () => {
   });
   it("captures cleanup identity after native success overtaken by access loss", async () => {
     const f = await fixture();
-    const gate = createDeferred<void>();
-    releases.push(() => gate.resolve());
+    const gate = deferred<void>(undefined);
     const attach = f.h.debuggerAttach.getMockImplementation()!;
     f.h.debuggerAttach.mockImplementationOnce(async (source) => {
       await attach(source, "1.3");
@@ -239,8 +223,7 @@ describe("native debugger cleanup debt", () => {
       },
     });
     await runtime(h, "getStatus");
-    const gate = createDeferred<Array<{ tabId: number; id: string; attached: boolean }>>();
-    releases.push(() => gate.resolve([]));
+    const gate = deferred<Array<{ tabId: number; id: string; attached: boolean }>>([]);
     let held = false;
     h.debuggerGetTargets.mockImplementationOnce(async () => {
       held = true;
@@ -258,17 +241,10 @@ describe("native debugger cleanup debt", () => {
     ).toMatchObject({ ok: true });
     const socket = h.relaySockets.at(-1)!;
     await h.authenticate(socket);
-    let live = false;
-    h.debuggerAttach.mockImplementation(async () => {
-      live = true;
-    });
-    h.debuggerDetach.mockImplementation(async () => {
-      live = false;
-    });
     h.debuggerGetTargetInfo.mockResolvedValue({ targetInfo: { targetId: "fresh-native" } });
     socket.receive({ type: "attach", tabId: 7, seq: 91 });
     await vi.waitFor(() =>
-      expect(socket.send.mock.calls.map(([raw]) => JSON.parse(raw))).toContainEqual({
+      expect(relayFrames(socket)).toContainEqual({
         type: "result",
         seq: 91,
         result: { targetId: "fresh-native" },
@@ -276,7 +252,7 @@ describe("native debugger cleanup debt", () => {
     );
     gate.resolve([{ tabId: 7, id: "fresh-native", attached: true }]);
     expect(await status).toMatchObject({ ok: false, error: expect.stringContaining("superseded") });
-    expect(live).toBe(true);
+    expect(h.debuggerAttach).toHaveBeenCalledOnce();
     expectUnused(h.debuggerDetach);
   });
 });
