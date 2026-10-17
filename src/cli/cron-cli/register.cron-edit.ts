@@ -14,7 +14,10 @@ import { parseDurationMs } from "../parse-duration.js";
 import { CronCliError } from "./cron-cli-error.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
-import { resolveCronEditPayloadDeliveryPatch } from "./register.cron-edit-options.js";
+import {
+  listDroppedCronCommandEnvKeys,
+  resolveCronEditPayloadDeliveryPatch,
+} from "./register.cron-edit-options.js";
 import { registerCronMutationOptions } from "./register.cron-options.js";
 import {
   applyExistingCronSchedulePatch,
@@ -55,6 +58,24 @@ async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<Cro
       throw new CronCliError(`unknown automation id: ${id}`, { cause: error });
     }
     return existing;
+  }
+}
+
+async function readDroppedCommandEnvKeys(
+  readExistingCronJob: () => Promise<CronJobForEdit>,
+  patch: Record<string, unknown>,
+): Promise<string[]> {
+  const payload = patch.payload;
+  if (typeof payload !== "object" || payload === null || !("env" in payload)) {
+    return [];
+  }
+  if (payload.env === undefined) {
+    return [];
+  }
+  try {
+    return listDroppedCronCommandEnvKeys(await readExistingCronJob(), patch);
+  } catch {
+    return [];
   }
 }
 
@@ -398,12 +419,20 @@ export function registerCronEditCommand(cron: Command) {
             patch.failureAlert = failureAlert;
           }
 
+          // --command-env replaces the stored environment. Look up what it drops so the
+          // operator is told; a failed lookup must never block the edit itself.
+          const droppedEnvKeys = await readDroppedCommandEnvKeys(readExistingCronJob, patch);
           const res = await callGatewayFromCli("cron.update", opts, {
             id,
             patch,
             ...(expectedConfigRevision !== undefined ? { expectedConfigRevision } : {}),
           });
           defaultRuntime.writeJson(res);
+          if (droppedEnvKeys.length > 0) {
+            defaultRuntime.error(
+              `warning: --command-env replaces the whole command environment; removed ${droppedEnvKeys.join(", ")}. Re-run with every KEY=VALUE you want to keep to restore them.`,
+            );
+          }
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
           handleCronCliError(err);
