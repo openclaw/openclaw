@@ -54,6 +54,7 @@ export async function runWriteConfigHealth(
     return false;
   }
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
+  const { copyConfigResolutionFactsThroughRewrite } = await import("../config/resolution-facts.js");
   const { ConfigMutationConflictError, readConfigFileSnapshot, transformConfigFile } =
     await import("../config/config.js");
   const { collectChangedConfigPaths } = await import("../config/include-write-boundary.js");
@@ -114,6 +115,7 @@ export async function runWriteConfigHealth(
       );
     }
     const migration = applyProviderRenames(ctx.cfg, providerRenames);
+    copyConfigResolutionFactsThroughRewrite(ctx.cfg, migration.config);
     ctx.cfg = migration.config;
     if (migration.changes.length > 0) {
       ctx.configResult.pendingChangePanels = [
@@ -160,10 +162,13 @@ export async function runWriteConfigHealth(
       ctx.configResult.skipWizardMetadataForIncludeWrite !== true &&
       !resolveUpdateRehearsalRoot(ctx.env ?? process.env)
     ) {
-      ctx.cfg = applyWizardMetadata(ctx.cfg, {
+      const previousCfg = ctx.cfg;
+      const nextCfg = applyWizardMetadata(previousCfg, {
         command: "doctor",
-        mode: resolveDoctorMode(ctx.cfg),
+        mode: resolveDoctorMode(previousCfg),
       });
+      copyConfigResolutionFactsThroughRewrite(previousCfg, nextCfg);
+      ctx.cfg = nextCfg;
     }
     const legacyParentVersionOverride =
       resolveLegacyParentVersionOverride(ctx).lastTouchedVersionOverride;

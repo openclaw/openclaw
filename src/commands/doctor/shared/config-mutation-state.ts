@@ -1,4 +1,5 @@
 import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
 export type DoctorConfigMutationState = {
@@ -30,6 +31,8 @@ export function applyDoctorConfigMutation(params: {
     return params.state;
   }
   const config = inheritLegacyDefaultAgentId(params.state.candidate, params.mutation.config);
+  // Repair helpers may return plain clones; only unchanged fields retain their authored source.
+  copyConfigResolutionFactsThroughRewrite(params.state.candidate, config);
 
   return {
     cfg: params.shouldRepair ? config : params.state.cfg,

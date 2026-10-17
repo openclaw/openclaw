@@ -4,12 +4,19 @@ import { setDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { ConfigMutationResult } from "../config/mutate.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
+import {
+  createConfigResolutionFacts,
+  getResolvedConfigEnvSecretRef,
+  resolveConfigSecretRef,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWriteConfigHealth } from "./doctor-health-contribution-runners.config.js";
 import { writeDoctorGatewayConfig } from "./doctor-health-contribution-runners.gateway.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
 const mocks = vi.hoisted(() => ({
+  applyWizardMetadata: vi.fn<typeof import("../commands/onboard-helpers.js").applyWizardMetadata>(),
   removeAuthProfilesAcrossOwnerStores: vi.fn(async () => true),
   replaceConfigFile: vi.fn<
     (_params: unknown) => Promise<
@@ -30,6 +37,7 @@ vi.mock("../commands/doctor/shared/config-flow-steps.js", () => ({
 
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: vi.fn(async () => createDoctorConfigSnapshot()),
   transformConfigFile: async ({
     transform,
     ...options
@@ -49,7 +57,15 @@ vi.mock("../config/logging.js", () => ({
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
-  applyWizardMetadata: (cfg: OpenClawConfig) => cfg,
+  applyWizardMetadata: mocks.applyWizardMetadata,
+}));
+
+vi.mock("../commands/doctor/shared/provider-rename-state.js", () => ({
+  maybeRepairProviderRenameCronJobs: vi.fn(async () => ({ changes: [], warnings: [] })),
+}));
+
+vi.mock("../commands/doctor/shared/codex-route-session-repair.js", () => ({
+  maybeRepairCodexSessionRoutes: vi.fn(async () => ({ changes: [], warnings: [] })),
 }));
 
 function createContext(): DoctorHealthFlowContext {
@@ -74,12 +90,92 @@ function createContext(): DoctorHealthFlowContext {
 
 describe("Doctor retired auth profile cleanup", () => {
   beforeEach(() => {
+    mocks.applyWizardMetadata.mockReset().mockImplementation((cfg) => cfg);
     mocks.removeAuthProfilesAcrossOwnerStores.mockClear().mockResolvedValue(true);
     mocks.replaceConfigFile.mockReset().mockResolvedValue({
       path: "/tmp/openclaw.json",
       persistedHash: "committed-revision",
     });
   });
+
+  it.each(["wizard metadata", "provider rename"] as const)(
+    "retains only unchanged secret provenance after %s before security checks",
+    async (rewrite) => {
+      const ctx = createContext();
+      const cfg: OpenClawConfig = {
+        ...ctx.cfg,
+        channels: {
+          telegram: {
+            accounts: {
+              shorthand: { botToken: "synthetic-token" },
+              escaped: { botToken: "${DOCTOR_TOKEN}" },
+            },
+          },
+        },
+        wizard: { lastRunAt: "2020-01-01T00:00:00.000Z" },
+        models: {
+          providers: {
+            old: { baseUrl: "https://old.invalid/v1", apiKey: "synthetic-key", models: [] },
+          },
+        },
+      };
+      const shorthandPath = "channels.telegram.accounts.shorthand.botToken";
+      const movedPath = "models.providers.old.apiKey";
+      const changedPath = "wizard.lastRunAt";
+      setConfigResolutionFacts(
+        cfg,
+        createConfigResolutionFacts(
+          [],
+          new Map(),
+          "default",
+          new Map([
+            [shorthandPath, "DOCTOR_TOKEN"],
+            [movedPath, "DOCTOR_MODEL_KEY"],
+            [changedPath, "DOCTOR_OLD_TIME"],
+          ]),
+        ),
+      );
+      ctx.cfg = cfg;
+      ctx.configResult.cfg = cfg;
+      if (rewrite === "wizard metadata") {
+        const { applyWizardMetadata } = await vi.importActual<
+          typeof import("../commands/onboard-helpers.js")
+        >("../commands/onboard-helpers.js");
+        mocks.applyWizardMetadata.mockImplementationOnce(applyWizardMetadata);
+      } else {
+        ctx.prompter.shouldRepair = true;
+        ctx.configResult.providerRenames = [
+          { from: "old", to: "new", baseUrl: "https://old.invalid/v1" },
+        ];
+      }
+
+      expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(true);
+
+      expect(ctx.cfg).not.toBe(cfg);
+      expect(getResolvedConfigEnvSecretRef(ctx.cfg, shorthandPath)?.id).toBe("DOCTOR_TOKEN");
+      expect(
+        resolveConfigSecretRef({
+          config: ctx.cfg,
+          path: "channels.telegram.accounts.escaped.botToken",
+          value: ctx.cfg.channels?.telegram?.accounts?.escaped?.botToken,
+          includeResolved: true,
+        }),
+      ).toBeNull();
+      if (rewrite === "wizard metadata") {
+        expect(ctx.cfg.wizard?.lastRunAt).not.toBe(cfg.wizard?.lastRunAt);
+        expect(getResolvedConfigEnvSecretRef(ctx.cfg, changedPath)).toBeNull();
+        expect(getResolvedConfigEnvSecretRef(ctx.cfg, movedPath)?.id).toBe("DOCTOR_MODEL_KEY");
+      } else {
+        expect(ctx.cfg.models?.providers?.old).toBeUndefined();
+        expect(ctx.cfg.models?.providers?.new.apiKey).toBe("synthetic-key");
+        expect(getResolvedConfigEnvSecretRef(ctx.cfg, movedPath)).toBeNull();
+        expect(getResolvedConfigEnvSecretRef(ctx.cfg, "models.providers.new.apiKey")).toBeNull();
+        expect(getResolvedConfigEnvSecretRef(ctx.cfg, changedPath)?.id).toBe("DOCTOR_OLD_TIME");
+      }
+      expect(getResolvedConfigEnvSecretRef(cfg, movedPath)?.id).toBe("DOCTOR_MODEL_KEY");
+      expect(getResolvedConfigEnvSecretRef(cfg, changedPath)?.id).toBe("DOCTOR_OLD_TIME");
+    },
+  );
 
   it("uses each committed receipt for the next write", async () => {
     const ctx = createContext();
