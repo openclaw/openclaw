@@ -96,7 +96,6 @@ describe("sqlite WAL maintenance", () => {
     ["SMB", 0x517b],
     ["CIFS", 0xff534d42],
     ["SMB2", 0xfe534d42],
-    ["9p (V9FS)", 0x01021997],
   ])("uses rollback journaling for databases on Linux %s volumes", (_label, fsType) => {
     const tempDir = tempDirs.make("openclaw-sqlite-network-");
     const db = createMockDb();

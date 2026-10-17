@@ -12,8 +12,9 @@ const ROLLBACK_FILESYSTEM_MAGIC = new Set([
   0x517b, // SMB
   0xff534d42, // CIFS
   0xfe534d42, // SMB2
-  0x01021997, // 9p (V9FS)
 ]);
+// 9p is decided by its mount options, not its magic: see isExclusiveGofer9pMount.
+const LINUX_V9FS_SUPER_MAGIC = 0x01021997;
 const LINUX_BTRFS_SUPER_MAGIC = 0x9123683e;
 const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
 // Filesystem classification runs during database open, so never let the fallback probe stall it.
@@ -27,7 +28,7 @@ const log = createSubsystemLogger("infra/sqlite-wal");
 let warnedNoCow = false;
 
 type SqliteFilesystemJournalPolicy = "rollback" | "unsupported" | "wal";
-type MountEntry = { mountPoint: string; fsType: string; source?: string };
+type MountEntry = { mountPoint: string; fsType: string; source?: string; superOptions?: string[] };
 
 function findExistingVolumePaths(
   targetPath: string,
@@ -69,6 +70,7 @@ function parseProcMountInfoEntries(contents: string): MountEntry[] {
         mountPoint: decodeMountInfoPath(mountPoint),
         fsType,
         ...(suffixFields[1] ? { source: decodeMountInfoPath(suffixFields[1]) } : {}),
+        ...(suffixFields[2] ? { superOptions: suffixFields[2].split(",") } : {}),
       });
     }
   }
@@ -142,7 +144,26 @@ function isSshfsMountSource(source: string | undefined): boolean {
   );
 }
 
+/**
+ * gVisor serves a sandbox's own files to its kernel (the Sentry) over 9p on an fd pair, and mounts
+ * them `cache=fscache` only under exclusive file access: nothing outside the sandbox writes them, and
+ * every process sharing a WAL index runs on that one kernel, so SQLite's shared memory stays coherent.
+ * Shared gofer mounts (`cache=remote_revalidating`) and 9p over virtio between a VM and its host stay
+ * rollback.
+ */
+function isExclusiveGofer9pMount(entry: MountEntry): boolean {
+  const options = entry.superOptions ?? [];
+  return (
+    entry.fsType.toLowerCase().startsWith("9p") &&
+    options.includes("trans=fd") &&
+    options.includes("cache=fscache")
+  );
+}
+
 function resolveMountTypeJournalPolicy(entry: MountEntry): SqliteFilesystemJournalPolicy {
+  if (isExclusiveGofer9pMount(entry)) {
+    return "wal";
+  }
   const normalized = entry.fsType.toLowerCase();
   if (
     normalized.startsWith("nfs") ||
@@ -264,6 +285,23 @@ function combineMountEntryJournalPolicies(
   return policies.has("rollback") ? "rollback" : "wal";
 }
 
+/** WAL only when every lookup path is on an exclusive gVisor gofer mount; unknown 9p stays rollback. */
+function resolveV9fsJournalPolicy(
+  targetPaths: readonly [string, string],
+): SqliteFilesystemJournalPolicy {
+  const mountResult = readMountEntries();
+  if (!mountResult.ok) {
+    return "rollback";
+  }
+  const mounts = mountResult.value;
+  return targetPaths.every((targetPath) => {
+    const entry = findMountEntry(targetPath, mounts);
+    return entry !== undefined && isExclusiveGofer9pMount(entry);
+  })
+    ? "wal"
+    : "rollback";
+}
+
 function isWindowsUncPath(targetPath: string): boolean {
   return (
     /^\\\\\?\\UNC\\[^\\]+\\[^\\]+/i.test(targetPath) ||
@@ -302,8 +340,12 @@ export function resolvePathJournalPolicy(targetPath: string): SqliteFilesystemJo
     return combineMountEntryJournalPolicies(mountLookupPaths);
   }
   try {
-    if (ROLLBACK_FILESYSTEM_MAGIC.has(fs.statfsSync(checkedPaths.canonicalPath).type)) {
+    const filesystemType = fs.statfsSync(checkedPaths.canonicalPath).type;
+    if (ROLLBACK_FILESYSTEM_MAGIC.has(filesystemType)) {
       return "rollback";
+    }
+    if (filesystemType === LINUX_V9FS_SUPER_MAGIC) {
+      return resolveV9fsJournalPolicy(mountLookupPaths);
     }
   } catch {
     // Missing native metadata falls through to the same mount policy lookup.
