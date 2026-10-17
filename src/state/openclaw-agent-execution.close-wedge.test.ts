@@ -351,14 +351,7 @@ it("keeps another agent's admitted database usable after a deleted agent refuses
   const refused = capture(env, "removed");
   let survivors: Promise<PromiseSettledResult<unknown>[]> | undefined;
   const refusingSource = executionSource(undefined, (request) => {
-    if (
-      !survivors &&
-      request.stage === "prepare" &&
-      request.facts &&
-      typeof request.facts === "object" &&
-      "kind" in request.facts &&
-      request.facts.kind === "shared-owner"
-    ) {
+    if (!survivors && request.stage === "open") {
       survivors = Promise.allSettled(admitted.map((survivor) => readEntries(survivor, [])));
     }
   });
