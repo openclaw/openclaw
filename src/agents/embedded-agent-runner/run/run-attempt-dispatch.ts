@@ -1,5 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  readChannelSourceTurnId,
+  readChannelSourceTurnSameThreadRequired,
+  setChannelSourceTurnId,
+  setChannelSourceTurnSameThreadRequired,
+} from "../../../auto-reply/reply/source-turn-id.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
@@ -681,6 +687,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
     ...continuationRetryCount.capability,
   };
+  // Explicit attempt projection must retain the original admitted source across recovery run IDs.
+  setChannelSourceTurnId(attemptParams, readChannelSourceTurnId(params));
+  setChannelSourceTurnSameThreadRequired(
+    attemptParams,
+    readChannelSourceTurnSameThreadRequired(params),
+  );
   let rawAttempt: EmbeddedRunAttemptResult;
   try {
     rawAttempt = await withPreparedEmbeddedGatewayTools(attemptParams, () => {

@@ -131,6 +131,8 @@ type SessionsSendDeliveryParams = {
   retainAcceptance?: boolean;
   /** Returned input can retain its exact recipient generation through consumption. */
   recipientGeneration?: { assertCurrent: () => void; release: () => void };
+  /** Original visible input when model-facing steering includes runtime instructions. */
+  transcriptText?: string;
   onQueueAccepted?: (accepted: boolean) => void;
   assertDispatchCurrent?: () => void;
   // Destination policy fences input commit, not an already accepted acknowledgment.
@@ -228,7 +230,7 @@ export async function trySessionsSendActiveRunDelivery(
           userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
             assertOriginalInputCommit: assertInputCurrent,
             input: {
-              text: messageText,
+              text: params.transcriptText ?? messageText,
               provenance: inputProvenance,
               ...(inputProvenance.sourceRole === "subagent" ? { display: false as const } : {}),
               idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
