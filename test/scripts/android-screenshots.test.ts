@@ -1,12 +1,5 @@
 import { spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -36,6 +29,26 @@ function runLinuxSipsAdapter(args: string[]) {
     encoding: "utf8",
     env: process.env,
   });
+}
+
+function convertJpeg(input: string, output: string) {
+  return runLinuxSipsAdapter([
+    "-s",
+    "format",
+    "jpeg",
+    "-s",
+    "formatOptions",
+    "best",
+    input,
+    "--out",
+    output,
+  ]);
+}
+
+function executable(root: string, name: string, source: string) {
+  const file = path.join(root, name);
+  writeFileSync(file, source, { mode: 0o755 });
+  return file;
 }
 
 describe("android screenshots script", () => {
@@ -74,9 +87,9 @@ describe("android screenshots script", () => {
   it("rejects a physical device selected during screenshot discovery", () => {
     const root = tempDirs.make("openclaw-android-screenshot-adb-");
     const script = copyScreenshotScript(root);
-    const adb = path.join(root, "adb");
-    writeFileSync(
-      adb,
+    const adb = executable(
+      root,
+      "adb",
       `#!/usr/bin/env bash
 if [[ "$1" == "devices" ]]; then
   printf 'List of devices attached\\nphysical-serial\\tdevice\\n'
@@ -92,9 +105,7 @@ fi
 printf 'unexpected adb invocation: %s\\n' "$*" >&2
 exit 97
 `,
-      "utf8",
     );
-    chmodSync(adb, 0o755);
 
     const result = runAndroidScreenshots(
       ["--form-factor", "phone", "--skip-build", "--skip-install"],
@@ -117,10 +128,9 @@ exit 97
     const readyPipe = path.join(root, "emulator-ready");
     const fifo = spawnSync("mkfifo", [readyPipe], { encoding: "utf8" });
     expect(fifo.status, fifo.stderr).toBe(0);
-    const adb = path.join(root, "adb");
-    const emulator = path.join(root, "emulator");
-    writeFileSync(
-      adb,
+    const adb = executable(
+      root,
+      "adb",
       `#!/bin/bash
 set -euo pipefail
 if [[ "$1" == "devices" ]]; then
@@ -141,8 +151,9 @@ printf 'unexpected adb invocation: %s\\n' "$*" >&2
 exit 97
 `,
     );
-    writeFileSync(
-      emulator,
+    const emulator = executable(
+      root,
+      "emulator",
       `#!/bin/bash
 set -euo pipefail
 if [[ "$1" == "-list-avds" ]]; then
@@ -153,8 +164,6 @@ printf 'Synthetic Wear emulator startup diagnostic\\n' >&2
 printf 'ready\\n' > "$FIXTURE_EMULATOR_READY"
 `,
     );
-    chmodSync(adb, 0o755);
-    chmodSync(emulator, 0o755);
     const result = runAndroidScreenshots(
       ["--form-factor", "wear", "--skip-build", "--skip-install"],
       {
@@ -198,17 +207,7 @@ printf 'ready\\n' > "$FIXTURE_EMULATOR_READY"
       const malformedInput = path.join(root, "malformed input.png");
       const malformedOutput = path.join(root, "malformed output.jpg");
       writeFileSync(malformedInput, "not an image", "utf8");
-      const malformed = runLinuxSipsAdapter([
-        "-s",
-        "format",
-        "jpeg",
-        "-s",
-        "formatOptions",
-        "best",
-        malformedInput,
-        "--out",
-        malformedOutput,
-      ]);
+      const malformed = convertJpeg(malformedInput, malformedOutput);
       expect(malformed.status).not.toBe(0);
       expect(malformed.stderr).toContain("input is not a readable image");
       expect(existsSync(malformedOutput)).toBe(false);
@@ -221,18 +220,18 @@ printf 'ready\\n' > "$FIXTURE_EMULATOR_READY"
         const input = path.join(root, `input ${dimensions}.png`);
         const output = path.join(root, `output ${dimensions}.jpg`);
         const [width, height] = dimensions.split("x");
+        const gradient = (size: string, color: string) => [
+          "(",
+          "-size",
+          size,
+          `gradient:#000000-${grayscale ? "#ffffff" : color}`,
+        ];
         const fixture = spawnSync(
           IMAGEMAGICK_CONVERT,
           [
-            "(",
-            "-size",
-            dimensions,
-            grayscale ? "gradient:#000000-#ffffff" : "gradient:#000000-#ff0000",
+            ...gradient(dimensions, "#ff0000"),
             ")",
-            "(",
-            "-size",
-            `${height}x${width}`,
-            grayscale ? "gradient:#000000-#ffffff" : "gradient:#000000-#00ff00",
+            ...gradient(`${height}x${width}`, "#00ff00"),
             "-transpose",
             ")",
             "-compose",
@@ -252,17 +251,7 @@ printf 'ready\\n' > "$FIXTURE_EMULATOR_READY"
         );
         expect(fixture.status, fixture.stderr).toBe(0);
 
-        const result = runLinuxSipsAdapter([
-          "-s",
-          "format",
-          "jpeg",
-          "-s",
-          "formatOptions",
-          "best",
-          input,
-          "--out",
-          output,
-        ]);
+        const result = convertJpeg(input, output);
         expect(result.status, result.stderr).toBe(0);
 
         const description = spawnSync(

@@ -10,6 +10,8 @@ const target = {
 const controls = ["tool_search", "tool_describe", "dispatch_action"];
 const probeText = "probe ok; PLUGIN_ROOT=/fixture; PLUGIN_DATA=/fixture-data; PROBE_MODE=live";
 type Round = { name: string; args: Record<string, unknown>; value: unknown };
+const parameters = { type: "object", properties: {}, additionalProperties: false };
+const described = (patch = {}) => ({ ...target, parameters: { ...parameters, ...patch } });
 
 function targetResult(
   text = probeText,
@@ -30,10 +32,7 @@ function rounds(text = probeText): Round[] {
     {
       name: "tool_describe",
       args: { id: target.id },
-      value: {
-        ...target,
-        parameters: { additionalProperties: false, properties: {}, type: "object" },
-      },
+      value: described(),
     },
     { name: "dispatch_action", args: { id: target.id, args: {} }, value: targetResult(text) },
   ];
@@ -108,93 +107,58 @@ describe("Agent Plugins bundle mock response", () => {
     expect(resolveAgentPluginBundleResponse(body)).toEqual(expected);
   });
 
-  it.each<[string, (value: Round[]) => void]>([
-    ...(
-      [
-        ["wrong search call", 0, { name: "read" }],
-        ["wrong search query", 0, { args: { query: "other", limit: 1 } }],
-        ["missing candidate", 0, { value: [] }],
-        ["ambiguous candidates", 0, { value: [target, { ...target, id: "other" }] }],
-        ["wrong candidate source", 0, { value: [{ ...target, source: "openclaw" }] }],
-        ["wrong describe selector", 1, { args: { id: "other" } }],
-        [
-          "wrong described target",
-          1,
-          {
-            value: {
-              ...target,
-              id: "other",
-              parameters: { type: "object", properties: {}, additionalProperties: false },
-            },
-          },
-        ],
-        ["missing described schema", 1, { value: target }],
-        ["wrong call selector", 2, { args: { id: "other", args: {} } }],
-        ["unexpected target arguments", 2, { args: { id: target.id, args: { unexpected: true } } }],
-        [
-          "wrong receipt target",
-          2,
-          { value: { ...targetResult(), tool: { ...target, id: "other" } } },
-        ],
-        [
-          "missing target details",
-          2,
-          { value: { tool: target, result: { content: [{ type: "text", text: probeText }] } } },
-        ],
-        ["wrong MCP server", 2, { value: targetResult(probeText, { mcpServer: "other" }) }],
-        ["wrong MCP operation", 2, { value: targetResult(probeText, { mcpTool: "other" }) }],
-        ["failed target result", 2, { value: targetResult(probeText, { status: "error" }) }],
-        ["missing environment evidence", 2, { value: targetResult("probe ok") }],
-        [
-          "corrupted probe success field",
-          2,
-          { value: targetResult(probeText.replace("probe ok", "probe ok=false")) },
-        ],
-        [
-          "corrupted probe mode field",
-          2,
-          { value: targetResult(probeText.replace("PROBE_MODE=live", "PROBE_MODE=live-corrupt")) },
-        ],
-        ["LF-suffixed probe mode field", 2, { value: targetResult(`${probeText}\n`) }],
-      ] satisfies [string, number, Partial<Round>][]
-    ).map(([label, index, patch]): [string, (value: Round[]) => void] => [
-      label,
-      (value) => {
-        value[index] = { ...value[index]!, ...patch };
-      },
-    ]),
-    ...(
-      [
-        [
-          "unexpected required arguments",
-          { type: "object", properties: {}, additionalProperties: false, required: ["city"] },
-        ],
-        [
-          "unexpected properties",
-          { type: "object", properties: { city: { type: "string" } }, additionalProperties: false },
-        ],
-        [
-          "permissive additional properties",
-          { type: "object", properties: {}, additionalProperties: true },
-        ],
-        ["missing additional-property restriction", { type: "object", properties: {} }],
-      ] satisfies [string, Record<string, unknown>][]
-    ).map(([label, parameters]): [string, (value: Round[]) => void] => [
-      label,
-      (value) => {
-        value.splice(2);
-        value[1]!.value = { ...target, parameters };
-      },
-    ]),
+  it.each<[string, number, Partial<Round>]>([
+    ["wrong search call", 0, { name: "read" }],
+    ["wrong search query", 0, { args: { query: "other", limit: 1 } }],
+    ["missing candidate", 0, { value: [] }],
+    ["ambiguous candidates", 0, { value: [target, { ...target, id: "other" }] }],
+    ["wrong candidate source", 0, { value: [{ ...target, source: "openclaw" }] }],
+    ["wrong describe selector", 1, { args: { id: "other" } }],
+    ["wrong described target", 1, { value: { ...described(), id: "other" } }],
+    ["missing described schema", 1, { value: target }],
+    ["wrong call selector", 2, { args: { id: "other", args: {} } }],
+    ["unexpected target arguments", 2, { args: { id: target.id, args: { unexpected: true } } }],
+    ["wrong receipt target", 2, { value: { ...targetResult(), tool: { ...target, id: "other" } } }],
     [
-      "extra invocation",
-      (value) => {
-        value.push({ ...value[2]! });
-      },
+      "missing target details",
+      2,
+      { value: { tool: target, result: { content: [{ type: "text", text: probeText }] } } },
     ],
-  ])("rejects %s even when success markers are present", (_label, corrupt) => {
+    ["wrong MCP server", 2, { value: targetResult(probeText, { mcpServer: "other" }) }],
+    ["wrong MCP operation", 2, { value: targetResult(probeText, { mcpTool: "other" }) }],
+    ["failed target result", 2, { value: targetResult(probeText, { status: "error" }) }],
+    ["missing environment evidence", 2, { value: targetResult("probe ok") }],
+    [
+      "corrupted probe success field",
+      2,
+      { value: targetResult(probeText.replace("probe ok", "probe ok=false")) },
+    ],
+    [
+      "corrupted probe mode field",
+      2,
+      { value: targetResult(probeText.replace("PROBE_MODE=live", "PROBE_MODE=live-corrupt")) },
+    ],
+    ["LF-suffixed probe mode field", 2, { value: targetResult(`${probeText}\n`) }],
+    ["unexpected required arguments", 1, { value: described({ required: ["city"] }) }],
+    [
+      "unexpected properties",
+      1,
+      { value: described({ properties: { city: { type: "string" } } }) },
+    ],
+    ["permissive additional properties", 1, { value: described({ additionalProperties: true }) }],
+    [
+      "missing additional-property restriction",
+      1,
+      { value: { ...target, parameters: { type: "object", properties: {} } } },
+    ],
+    ["extra invocation", 3, {}],
+  ])("rejects %s even when success markers are present", (_label, index, patch) => {
     const completed = rounds();
-    corrupt(completed);
+    if (index === 3) {
+      completed.push({ ...completed[2]! });
+    } else {
+      completed[index] = { ...completed[index]!, ...patch };
+    }
     expect(resolveAgentPluginBundleResponse(request(completed))).toEqual({
       text: "AGENT_BUNDLE_MCP_FAIL unexpected-tool-output",
     });

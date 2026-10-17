@@ -33,10 +33,17 @@ type Call = {
 };
 type Failure = number | Error | Response;
 const preflightUrl = `https://firebaseappdistribution.googleapis.com/v1/${appName}/aabInfo`;
-const reset = () =>
+const transportError = (code: string) =>
   new TypeError("private transport details", {
-    cause: Object.assign(new Error("private connection details"), { code: "ECONNRESET" }),
+    cause: Object.assign(new Error("private connection details"), { code }),
   });
+const reset = () => transportError("ECONNRESET");
+const rateLimit = (seconds: string) =>
+  new Response("private provider body", {
+    status: 429,
+    headers: { "Retry-After": seconds },
+  });
+const silenceWarnings = () => vi.spyOn(console, "warn").mockImplementation(() => {});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -182,6 +189,9 @@ function fixture() {
     files,
     bytes,
     calls,
+    requests: (url: string) => calls.filter((call) => call.url === url),
+    effects: () =>
+      calls.filter((call) => call.url.includes("firebaseappdistribution") && call.method !== "GET"),
     failures,
     receipt,
     client: () => createAndroidFirebaseDistribution({ env }),
@@ -198,25 +208,16 @@ describe("Android Firebase distribution", () => {
   it.each([
     ["token server failure", "https://oauth2.googleapis.com/token", (): Failure => 503, 500],
     ["preflight connection reset", preflightUrl, (): Failure => reset(), 500],
-    [
-      "preflight rate limit",
-      preflightUrl,
-      (): Failure =>
-        new Response("private provider body", {
-          status: 429,
-          headers: { "Retry-After": "3" },
-        }),
-      3000,
-    ],
+    ["preflight rate limit", preflightUrl, (): Failure => rateLimit("3"), 3000],
   ] as const)(
     "retries a transient %s before completing distribution",
     async (_label, url, failure, minimumDelay) => {
       const test = fixture();
-      const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const warnings = silenceWarnings();
       test.failures.set(`${url.endsWith("/token") ? "POST" : "GET"} ${url}`, [failure()]);
       const result = await test.client().distribute(test.options);
       expect(result.releases.phone.state).toBe("distributed");
-      expect(test.calls.filter((call) => call.url === url)).toHaveLength(2);
+      expect(test.requests(url)).toHaveLength(2);
       expect(vi.mocked(delay).mock.calls[0]![0]).toBeGreaterThanOrEqual(minimumDelay);
       expect(test.calls.filter((call) => call.url.endsWith(":distribute"))).toHaveLength(2);
       expect(JSON.stringify(warnings.mock.calls)).not.toMatch(
@@ -227,10 +228,10 @@ describe("Android Firebase distribution", () => {
 
   it("stops after four failed reads and reports safe error codes and attempt counts", async () => {
     const test = fixture();
-    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnings = silenceWarnings();
     test.failures.set(`GET ${preflightUrl}`, reset());
     await expect(test.client().preflight()).rejects.toThrow(/ECONNRESET.*attempt 4\/4/);
-    expect(test.calls.filter((call) => call.url === preflightUrl)).toHaveLength(4);
+    expect(test.requests(preflightUrl)).toHaveLength(4);
     expect(delay).toHaveBeenCalledTimes(3);
     expect(JSON.stringify(warnings.mock.calls)).not.toMatch(
       /private|Bearer|synthetic-access-token/,
@@ -243,10 +244,7 @@ describe("Android Firebase distribution", () => {
     ...["CERT_HAS_EXPIRED", "private-unrecognized-code"].map(
       (code): [string, () => Failure, string] => [
         code,
-        () =>
-          new TypeError("private transport details", {
-            cause: Object.assign(new Error("private connection details"), { code }),
-          }),
+        () => transportError(code),
         code === "CERT_HAS_EXPIRED" ? code : "REQUEST_FAILED",
       ],
     ),
@@ -256,7 +254,7 @@ describe("Android Firebase distribution", () => {
     const result = test.client().preflight();
     await expect(result).rejects.toThrow(message);
     await expect(result).rejects.not.toThrow(/private/);
-    expect(test.calls.filter((call) => call.url === preflightUrl)).toHaveLength(1);
+    expect(test.requests(preflightUrl)).toHaveLength(1);
     expect(delay).not.toHaveBeenCalled();
   });
 
@@ -264,17 +262,11 @@ describe("Android Firebase distribution", () => {
     "stops at the read deadline imposed by %s",
     async (mode) => {
       const test = fixture();
-      const response =
-        mode === "Retry-After"
-          ? new Response("private provider body", {
-              status: 429,
-              headers: { "Retry-After": "180" },
-            })
-          : undefined;
+      const response = mode === "Retry-After" ? rateLimit("180") : undefined;
       if (!response) {
         let now = Date.now();
         vi.spyOn(Date, "now").mockImplementation(() => now);
-        vi.spyOn(console, "warn").mockImplementation(() => {});
+        silenceWarnings();
         vi.mocked(delay).mockImplementation(async () => {
           now += 120_000;
         });
@@ -283,7 +275,7 @@ describe("Android Firebase distribution", () => {
       await expect(test.client().preflight()).rejects.toThrow(
         response ? /HTTP 429.*attempt 1\/4/ : /ECONNRESET.*attempt 1\/4/,
       );
-      expect(test.calls.filter((call) => call.url === preflightUrl)).toHaveLength(1);
+      expect(test.requests(preflightUrl)).toHaveLength(1);
       expect(delay).toHaveBeenCalledTimes(response ? 0 : 1);
       if (response) {
         expect(response.bodyUsed).toBe(true);
@@ -308,9 +300,7 @@ describe("Android Firebase distribution", () => {
   it("uploads the retained signed Wear bytes before Phone, labels notes, and does not repeat completed notifications", async () => {
     const test = fixture();
     const result = await test.client().distribute(test.options);
-    const effects = test.calls.filter(
-      (call) => call.url.includes("firebaseappdistribution") && call.method !== "GET",
-    );
+    const effects = test.effects();
     expect(effects.map((call) => `${call.method} ${call.url.split("/releases")[1]}`)).toEqual([
       "POST :upload",
       "PATCH /wear?updateMask=release_notes.text",
@@ -338,11 +328,7 @@ describe("Android Firebase distribution", () => {
     expect(test.receipt().releases.phone.state).toBe("distributed");
     test.calls.length = 0;
     await test.client().distribute(test.options);
-    expect(
-      test.calls.filter(
-        (call) => call.url.includes("firebaseappdistribution") && call.method !== "GET",
-      ),
-    ).toEqual([]);
+    expect(test.effects()).toEqual([]);
   });
 
   it("resumes a partial pair without uploading or emailing Wear again", async () => {
@@ -355,11 +341,7 @@ describe("Android Firebase distribution", () => {
     test.failures.clear();
     test.calls.length = 0;
     await test.client().distribute(test.options);
-    expect(
-      test.calls
-        .filter((call) => call.url.includes("firebaseappdistribution") && call.method !== "GET")
-        .map((call) => `${call.method} ${call.url}`),
-    ).toEqual([phoneDistribution]);
+    expect(test.effects().map((call) => `${call.method} ${call.url}`)).toEqual([phoneDistribution]);
   });
 
   it.each([503, new Error("synthetic transport interruption")])(

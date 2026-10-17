@@ -246,6 +246,24 @@ type LaneResult = {
   output_exists?: boolean;
 };
 
+function expectAbsent(result: LaneResult | undefined, ...absent: string[]) {
+  for (const event of absent) {
+    expect(result?.events).not.toContain(event);
+  }
+}
+
+const reviewConfig = (changes: boolean | null) => ({
+  changes_not_sent_for_review: changes,
+  rescue_changes_not_sent_for_review: false,
+});
+const release = (code: number, text: string) => [
+  {
+    codes: [code],
+    status: "completed",
+    notes: [{ language: "en-US", text }],
+  },
+];
+
 describe("Android Fastlane release upload gates", () => {
   it("revalidates the saved plan before cutover and atomically uploads the explicit phone/Wear pair", () => {
     const fixtureRoot = createFixture();
@@ -314,35 +332,20 @@ STDOUT.puts JSON.generate(results)
     expect(rejected?.events).toEqual([]);
     for (const rejectedPlan of [changedBaseline, changedCode]) {
       expect(rejectedPlan?.error).toContain("changed after preparation");
-      expect(rejectedPlan?.events).not.toContain("upload");
-      expect(rejectedPlan?.events).not.toContain("ref:initialize-android");
+      expectAbsent(rejectedPlan, "upload", "ref:initialize-android");
       expect(rejectedPlan?.events.at(-1)).toBe("abort");
     }
     expect(failedInitialize?.error).toContain("Cutover marker initialization failed");
-    expect(failedInitialize?.events).not.toContain("upload");
+    expectAbsent(failedInitialize, "upload");
     expect(failedInitialize?.events.at(-1)).toBe("abort");
     expect(validated?.error).toBeUndefined();
     expect(validated?.events).toContain("validate-edit");
-    expect(validated?.events).not.toContain("commit");
-    expect(validated?.events).not.toContain("ref:initialize-android");
-    expect(validated?.events).not.toContain("ref:record");
+    expectAbsent(validated, "commit", "ref:initialize-android", "ref:record");
     expect(validated?.events.at(-1)).toBe("abort");
     expect(uploaded?.error).toBeUndefined();
     expect(uploaded?.tracks).toEqual({
-      internal: [
-        {
-          codes: [2026080254],
-          status: "completed",
-          notes: [{ language: "en-US", text: "Phone chat improvements." }],
-        },
-      ],
-      "wear:internal": [
-        {
-          codes: [2026080255],
-          status: "completed",
-          notes: [{ language: "en-US", text: "Wear voice fixes." }],
-        },
-      ],
+      internal: release(2026080254, "Phone chat improvements."),
+      "wear:internal": release(2026080255, "Wear voice fixes."),
     });
     const events = uploaded!.events;
     expect(events.filter((event) => event === "commit")).toHaveLength(1);
@@ -369,29 +372,18 @@ STDOUT.puts JSON.generate(results)
     expect(internal?.tracks).toEqual(uploaded?.tracks);
     expect(internal?.events.filter((event) => event === "upload")).toHaveLength(2);
     expect(internal?.events.filter((event) => event === "commit")).toHaveLength(1);
+    expectAbsent(internal, "listing", "screenshots", "image");
     expect(internal?.events.at(-1)).toBe("ref:record");
     expect(internal?.events.some((event) => event.includes("android-screenshots.sh"))).toBe(false);
-    expect(internal?.events).not.toContain("listing");
-    expect(internal?.events).not.toContain("screenshots");
-    expect(internal?.events).not.toContain("image");
     expect(internal?.pinned_notes).toBe("Pinned archive notes stay unchanged.\n");
-    expect(uploaded?.committed_config).toMatchObject({
-      changes_not_sent_for_review: null,
-      rescue_changes_not_sent_for_review: false,
-    });
-    expect(internal?.committed_config).toMatchObject({
-      changes_not_sent_for_review: null,
-      rescue_changes_not_sent_for_review: false,
-    });
+    expect(uploaded?.committed_config).toMatchObject(reviewConfig(null));
+    expect(internal?.committed_config).toMatchObject(reviewConfig(null));
     expect(closedTesting?.error).toBeUndefined();
     expect(closedTesting?.tracks).toMatchObject({
       beta: [{ codes: [2026080254] }],
       "wear:beta": [{ codes: [2026080255] }],
     });
-    expect(closedTesting?.committed_config).toMatchObject({
-      changes_not_sent_for_review: true,
-      rescue_changes_not_sent_for_review: false,
-    });
+    expect(closedTesting?.committed_config).toMatchObject(reviewConfig(true));
     expect(closedTesting?.events.at(-1)).toBe("ref:record");
     if (process.env.OPENCLAW_TEST_FASTLANE_BUNDLE === "1") {
       expect(uploaded?.committed_query).toEqual({});

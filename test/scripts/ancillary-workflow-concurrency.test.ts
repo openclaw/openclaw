@@ -10,70 +10,46 @@ type ManualPolicy =
   | { mode: "absent" }
   | { mode: "isolated per-run" | "same-SHA cancels" | "same-ref queues"; group: string };
 
-const WORKFLOWS: {
+type WorkflowPolicy = {
   file: string;
   prGroup: string;
   manual: ManualPolicy;
   manualAdmission?: string;
   push?: { group: string; cancel: boolean };
   convertToDraft?: true;
-}[] = [
-  {
-    file: ".github/workflows/ci-check-testbox.yml",
-    prGroup: "Blacksmith Testbox-pr-v1-123",
-    manual: { mode: "isolated per-run", group: "Blacksmith Testbox-manual-v1-201" },
+};
+const fixtureSha = "a".repeat(40);
+const workflowPath = (name: string) => `.github/workflows/${name}.yml`;
+const WORKFLOWS: WorkflowPolicy[] = [
+  ...[
+    ["ci-check-testbox", "Blacksmith Testbox"],
+    ["ci-check-arm-testbox", "Blacksmith ARM Testbox"],
+    ["ci-build-artifacts-testbox", "Blacksmith Build Artifacts Testbox"],
+  ].map(([name, label]) => ({
+    file: workflowPath(name!),
+    prGroup: `${label}-pr-v1-123`,
+    manual: { mode: "isolated per-run" as const, group: `${label}-manual-v1-201` },
     manualAdmission: "admission",
-  },
+  })),
+  ...[
+    ["ios-periphery", "ios-periphery-iOS Periphery Dead Code"],
+    ["macos-periphery", "macos-periphery-macOS Periphery Dead Code"],
+    ["shared-openclawkit-periphery", "shared-openclawkit-periphery"],
+    ["linux-app", "linux-app-Linux App"],
+  ].map(([name, prefix]) => ({
+    file: workflowPath(name!),
+    prGroup: `${prefix}-123`,
+    convertToDraft: true as const,
+    manual: { mode: "same-SHA cancels" as const, group: `${prefix}-${fixtureSha}` },
+  })),
   {
-    file: ".github/workflows/ci-check-arm-testbox.yml",
-    prGroup: "Blacksmith ARM Testbox-pr-v1-123",
-    manual: { mode: "isolated per-run", group: "Blacksmith ARM Testbox-manual-v1-201" },
-    manualAdmission: "admission",
-  },
-  {
-    file: ".github/workflows/ci-build-artifacts-testbox.yml",
-    prGroup: "Blacksmith Build Artifacts Testbox-pr-v1-123",
-    manual: { mode: "isolated per-run", group: "Blacksmith Build Artifacts Testbox-manual-v1-201" },
-    manualAdmission: "admission",
-  },
-  {
-    file: ".github/workflows/ios-periphery.yml",
-    prGroup: "ios-periphery-iOS Periphery Dead Code-123",
-    convertToDraft: true,
-    manual: {
-      mode: "same-SHA cancels",
-      group: `ios-periphery-iOS Periphery Dead Code-${"a".repeat(40)}`,
-    },
-  },
-  {
-    file: ".github/workflows/macos-periphery.yml",
-    prGroup: "macos-periphery-macOS Periphery Dead Code-123",
-    convertToDraft: true,
-    manual: {
-      mode: "same-SHA cancels",
-      group: `macos-periphery-macOS Periphery Dead Code-${"a".repeat(40)}`,
-    },
-  },
-  {
-    file: ".github/workflows/shared-openclawkit-periphery.yml",
-    prGroup: "shared-openclawkit-periphery-123",
-    convertToDraft: true,
-    manual: { mode: "same-SHA cancels", group: `shared-openclawkit-periphery-${"a".repeat(40)}` },
-  },
-  {
-    file: ".github/workflows/node-runtime-conformance.yml",
+    file: workflowPath("node-runtime-conformance"),
     prGroup: "node-runtime-conformance-pull_request-123",
     convertToDraft: true,
     manual: {
       mode: "same-SHA cancels",
-      group: `node-runtime-conformance-workflow_dispatch-${"a".repeat(40)}`,
+      group: `node-runtime-conformance-workflow_dispatch-${fixtureSha}`,
     },
-  },
-  {
-    file: ".github/workflows/linux-app.yml",
-    prGroup: "linux-app-Linux App-123",
-    convertToDraft: true,
-    manual: { mode: "same-SHA cancels", group: `linux-app-Linux App-${"a".repeat(40)}` },
   },
   {
     file: ".github/workflows/website-installer-sync.yml",
@@ -218,6 +194,12 @@ function workflowConcurrency(workflow: Workflow): Concurrency {
   }
   return workflow.concurrency;
 }
+
+const readWorkflow = (file: string) => parse(readFileSync(file, "utf8")) as Workflow;
+type Admission = Awaited<ReturnType<typeof admission>>;
+const groupsOf = (runs: Admission[]) => runs.map(({ group }) => group);
+const cancellations = (runs: Admission[]) => runs.map(({ cancel }) => cancel);
+const uniqueGroups = (values: string[]) => new Set(values.map((group) => group.toLowerCase())).size;
 
 // Like ci-workflow-guards, this uses VM evaluation, not a general Actions parser.
 // Supported here: typed primitive ==/!=/!/&&/||, parentheses, property lookup,
@@ -378,7 +360,7 @@ async function admission(workflow: Workflow, github: Github, vars: Record<string
   };
 }
 
-function expectDraftSkipped(result: Awaited<ReturnType<typeof admission>>) {
+function expectDraftSkipped(result: Admission) {
   for (const [id, eligible] of Object.entries(result.eligibility.jobs)) {
     if (id !== "scope") {
       expect(eligible, id).toBe(false);
@@ -388,7 +370,7 @@ function expectDraftSkipped(result: Awaited<ReturnType<typeof admission>>) {
   expect(result.eligibility.checkouts).toBe(0);
 }
 
-function expectUseful(...results: Awaited<ReturnType<typeof admission>>[]) {
+function expectUseful(...results: Admission[]) {
   for (const result of results) {
     expect(
       Object.entries(result.eligibility.jobs).some(([id, eligible]) => id !== "scope" && eligible),
@@ -398,14 +380,14 @@ function expectUseful(...results: Awaited<ReturnType<typeof admission>>[]) {
 
 describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
   const { file, prGroup, manual, push, convertToDraft } = policy;
-  const workflow = parse(readFileSync(file, "utf8")) as Workflow;
+  const workflow = readWorkflow(file);
 
   it("admits useful and intentional draft changes together while isolating passive drafts and other PRs", async () => {
     const ready = await admission(workflow, pr(workflow, 100, "ready_for_review"));
     const newer = await admission(workflow, pr(workflow, 101, "synchronize", false, "b"));
     const other = await admission(workflow, pr(workflow, 102, "opened", false, "a", 124));
-    expect([ready.group, newer.group]).toEqual([prGroup, prGroup]);
-    expect([ready.cancel, newer.cancel, other.cancel]).toEqual([true, true, true]);
+    expect(groupsOf([ready, newer])).toEqual([prGroup, prGroup]);
+    expect(cancellations([ready, newer, other])).toEqual([true, true, true]);
     expect(other.group).not.toBe(prGroup);
     expectUseful(ready, newer, other);
     for (const [id, eligible] of Object.entries(ready.eligibility.jobs)) {
@@ -430,9 +412,7 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
         passiveGroups.push(draft.group);
       }
     }
-    expect(
-      new Set([prGroup, other.group, ...passiveGroups].map((group) => group.toLowerCase())).size,
-    ).toBe(6);
+    expect(uniqueGroups([prGroup, other.group, ...passiveGroups])).toBe(6);
   });
 
   it(`retains the manual contract: ${manual.mode}`, async () => {
@@ -449,16 +429,14 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
     expect(runs[0]!.group).toBe(manual.group);
     expectUseful(...runs);
     expect(runs.every(({ group }) => group !== prGroup)).toBe(true);
-    expect(runs.map(({ cancel }) => cancel)).toEqual(
-      Array(4).fill(manual.mode === "same-SHA cancels"),
-    );
+    expect(cancellations(runs)).toEqual(Array(4).fill(manual.mode === "same-SHA cancels"));
     if (manual.mode === "same-ref queues") {
-      expect(runs.slice(0, 3).map(({ group }) => group)).toEqual(Array(3).fill(manual.group));
+      expect(groupsOf(runs.slice(0, 3))).toEqual(Array(3).fill(manual.group));
       expect(runs[3]!.group).toBe(manual.group.replace("refs/heads/main", "refs/heads/release"));
     } else {
       expect(runs[1]!.group === runs[0]!.group).toBe(manual.mode === "same-SHA cancels");
       expect(runs[2]!.group).not.toBe(runs[0]!.group);
-      expect(new Set(runs.slice(0, 3).map(({ group }) => group.toLowerCase())).size).toBe(
+      expect(uniqueGroups(groupsOf(runs.slice(0, 3)))).toBe(
         manual.mode === "same-SHA cancels" ? 2 : 3,
       );
     }
@@ -478,13 +456,7 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
       const laterHourly = await admission(workflow, refEvent(workflow, "schedule", 206, "b"));
       const manualRun = await admission(workflow, refEvent(workflow, "workflow_dispatch", 204));
       const skipped = await admission(workflow, refEvent(workflow, "push", 205, "c"));
-      expect(
-        new Set(
-          [prGroup, enabled.group, hourly.group, manualRun.group].map((group) =>
-            group.toLowerCase(),
-          ),
-        ).size,
-      ).toBe(4);
+      expect(uniqueGroups([prGroup, ...groupsOf([enabled, hourly, manualRun])])).toBe(4);
       expect(skipped.group).toBe(enabled.group);
       expectUseful(enabled, newer, hourly, laterHourly, manualRun);
       expect(laterHourly.group).toBe(hourly.group);
@@ -499,9 +471,7 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
 });
 
 it("honors cancellation after a schedule-only scope job is skipped", () => {
-  const workflow = parse(
-    readFileSync(".github/workflows/plugin-init-scaffold-validation.yml", "utf8"),
-  ) as Workflow;
+  const workflow = readWorkflow(workflowPath("plugin-init-scaffold-validation"));
   const guard = workflow.jobs["validate-provider-scaffold"]!.if!;
   const context = {
     github: pr(workflow, 100, "ready_for_review"),
@@ -513,7 +483,7 @@ it("honors cancellation after a schedule-only scope job is skipped", () => {
 });
 
 describe("Labeler admission", () => {
-  const workflow = parse(readFileSync(".github/workflows/labeler.yml", "utf8")) as Workflow;
+  const workflow = readWorkflow(workflowPath("labeler"));
   const bodyChange = { body: { from: "Previous description" } };
   function event(
     runId: number,
@@ -587,9 +557,7 @@ describe("Labeler admission", () => {
 });
 
 describe("PR context admission", () => {
-  const workflow = parse(
-    readFileSync(".github/workflows/real-behavior-proof.yml", "utf8"),
-  ) as Workflow;
+  const workflow = readWorkflow(workflowPath("real-behavior-proof"));
   const event = (runId: number, action: string, changes?: Github["event"]["changes"]): Github => ({
     ...pr(workflow, runId, action),
     event_name: "pull_request_target",
@@ -639,7 +607,7 @@ describe("PR context admission", () => {
 });
 
 describe("Auto response admission", () => {
-  const workflow = parse(readFileSync(".github/workflows/auto-response.yml", "utf8")) as Workflow;
+  const workflow = readWorkflow(workflowPath("auto-response"));
   const event = (runId: number, action: string, changes?: Github["event"]["changes"]): Github => ({
     ...pr(workflow, runId, action),
     event_name: "pull_request_target",
@@ -703,7 +671,7 @@ describe("Auto response admission", () => {
 it("isolates supported useful, passive, manual and push events across the tracked workflows", () => {
   for (const event of ["ready_for_review", "opened", "workflow_dispatch", "push"] as const) {
     const groups = WORKFLOWS.flatMap(({ file }) => {
-      const workflow = parse(readFileSync(file, "utf8")) as Workflow;
+      const workflow = readWorkflow(file);
       const github =
         event === "workflow_dispatch" || event === "push"
           ? refEvent(workflow, event, 201)

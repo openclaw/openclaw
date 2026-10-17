@@ -29,6 +29,16 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
+function findings(source: string, file = "ui/Example.kt") {
+  return findUnlocalizedAndroidUiLiterals(
+    source,
+    `apps/android/app/src/main/java/ai/openclaw/app/${file}`,
+  ).map((finding) => finding.source);
+}
+
+const sortedMatches = (source: string, pattern: RegExp, group = 0) =>
+  [...source.matchAll(pattern)].map((match) => match[group]!).toSorted();
+
 describe("Android app i18n resources", () => {
   it("counts manual resources reached only through the generated native lookup", async () => {
     const shellPath = path.resolve(
@@ -62,12 +72,8 @@ describe("Android app i18n resources", () => {
         filePath.endsWith("/strings.xml"),
     );
     const base = await readFile("apps/android/wear/src/main/res/values/strings.xml", "utf8");
-    const baseKeys = [...base.matchAll(/<string name="([^"]+)"/gu)]
-      .map((match) => match[1] as string)
-      .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
-    const basePlaceholders = [...base.matchAll(/%\d+\$[a-z]/giu)]
-      .map((match) => match[0])
-      .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+    const baseKeys = sortedMatches(base, /<string name="([^"]+)"/gu, 1);
+    const basePlaceholders = sortedMatches(base, /%\d+\$[a-z]/giu);
 
     expect(wearResources).toHaveLength(NATIVE_I18N_LOCALES.length);
     for (const [, content] of wearResources) {
@@ -76,11 +82,8 @@ describe("Android app i18n resources", () => {
         .map((tag) => tag.match(/\bname="([^"]+)"/u)?.[1])
         .filter((key): key is string => key !== undefined)
         .toSorted();
-      const placeholders = [...content.matchAll(/%\d+\$[a-z]/giu)]
-        .map((match) => match[0])
-        .toSorted();
       expect(keys).toEqual(baseKeys);
-      expect(placeholders).toEqual(basePlaceholders);
+      expect(sortedMatches(content, /%\d+\$[a-z]/giu)).toEqual(basePlaceholders);
       expect(content).not.toMatch(/(?:&apos;|(?<!\\)')/u);
       expect(content).toContain('<resources xmlns:tools="http://schemas.android.com/tools">');
       for (const tag of stringTags) {
@@ -220,15 +223,8 @@ describe("Android app i18n resources", () => {
 
   it("finds direct, typed, conditional, interpolated, Elvis, and accessibility literals", () => {
     const source = `
-      data class ConnectionState(
-        val connected: Boolean,
-        val statusText: String,
-      )
-      data class SettingsToggleRow(
-        val title: String,
-        val subtitle: String,
-      )
-
+      data class ConnectionState(val connected: Boolean, val statusText: String)
+      data class SettingsToggleRow(val title: String, val subtitle: String)
       Text("Settings")
       Text(text = nativeStringResource("Connected"))
       ClawPrimaryButton(text = "Continue", onClick = {})
@@ -249,23 +245,18 @@ describe("Android app i18n resources", () => {
           State.Waiting -> nativeString("Waiting")
         }
     `;
-    expect(
-      findUnlocalizedAndroidUiLiterals(
-        source,
-        "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
-      ),
-    ).toEqual([
-      expect.objectContaining({ source: "Settings" }),
-      expect.objectContaining({ source: "Continue" }),
-      expect.objectContaining({ source: "Working" }),
-      expect.objectContaining({ source: "Gateway" }),
-      expect.objectContaining({ source: "Connecting to $host" }),
-      expect.objectContaining({ source: "Phone capability" }),
-      expect.objectContaining({ source: "Share device data" }),
-      expect.objectContaining({ source: "Attachment" }),
-      expect.objectContaining({ source: "Open detail" }),
-      expect.objectContaining({ source: "Second sentence." }),
-      expect.objectContaining({ source: "Ready" }),
+    expect(findings(source)).toEqual([
+      "Settings",
+      "Continue",
+      "Working",
+      "Gateway",
+      "Connecting to $host",
+      "Phone capability",
+      "Share device data",
+      "Attachment",
+      "Open detail",
+      "Second sentence.",
+      "Ready",
     ]);
   });
 
@@ -275,21 +266,13 @@ describe("Android app i18n resources", () => {
         val metadata: Map<String, String>,
         val statusText: String,
       )
-      data class OptionalState(
-        val statusText: String = "",
-        val code: String,
-      )
-
+      data class OptionalState(val statusText: String = "", val code: String)
       GenericState<Map<String, String>>(emptyMap(), "Generic ready")
       OptionalState(code = "Internal code")
     `;
-    const findings = findUnlocalizedAndroidUiLiterals(
-      source,
-      "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
-    ).map((finding) => finding.source);
-
-    expect(findings).toContain("Generic ready");
-    expect(findings).not.toContain("Internal code");
+    const result = findings(source);
+    expect(result).toContain("Generic ready");
+    expect(result).not.toContain("Internal code");
   });
 
   it("scans helpers with generic and lambda parameters", () => {
@@ -297,13 +280,9 @@ describe("Android app i18n resources", () => {
       fun <T> statusText(value: T, transform: (T) -> String): String =
         if (transform(value).isBlank()) "No status" else nativeString("Ready")
     `;
-    const findings = findUnlocalizedAndroidUiLiterals(
-      source,
-      "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
-    ).map((finding) => finding.source);
-
-    expect(findings).toContain("No status");
-    expect(findings).not.toContain("Ready");
+    const result = findings(source);
+    expect(result).toContain("No status");
+    expect(result).not.toContain("Ready");
   });
 
   it("finds raw strings in direct UI and presentation helpers", () => {
@@ -315,12 +294,7 @@ describe("Android app i18n resources", () => {
           Raw helper copy
         """.trimIndent()
     `;
-    const findings = findUnlocalizedAndroidUiLiterals(
-      source,
-      "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
-    ).map((finding) => finding.source);
-
-    expect(findings).toEqual(
+    expect(findings(source)).toEqual(
       expect.arrayContaining(["Direct raw copy", expect.stringContaining("Raw helper copy")]),
     );
   });
@@ -330,32 +304,14 @@ describe("Android app i18n resources", () => {
       Text("Progress \u00b7 ready")
       Text("Literal \\u00b7 marker")
     `;
-    const findings = findUnlocalizedAndroidUiLiterals(
-      source,
-      "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
-    ).map((finding) => finding.source);
-
-    expect(findings).toEqual(["Progress · ready", String.raw`Literal \u00b7 marker`]);
+    expect(findings(source)).toEqual(["Progress · ready", String.raw`Literal \u00b7 marker`]);
   });
 
   it("inventories command, attention, and overview model display literals", () => {
     const source = `
-      data class CommandItem(
-        val key: String,
-        val title: String,
-        val subtitle: String,
-      )
-      data class HomeAttentionRow(
-        val title: String,
-        val subtitle: String,
-        val route: String,
-      )
-      data class OverviewMetricCardSpec(
-        val title: String,
-        val value: String,
-        val subtitle: String,
-      )
-
+      data class CommandItem(val key: String, val title: String, val subtitle: String)
+      data class HomeAttentionRow(val title: String, val subtitle: String, val route: String)
+      data class OverviewMetricCardSpec(val title: String, val value: String, val subtitle: String)
       CommandItem("chat", "Open Chat", "Start a conversation")
       CommandItem(
         key = "voice",
@@ -373,12 +329,7 @@ describe("Android app i18n resources", () => {
         subtitle = "All systems nominal",
       )
     `;
-    const findings = findUnlocalizedAndroidUiLiterals(
-      source,
-      "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
-    ).map((finding) => finding.source);
-
-    expect(findings).toEqual([
+    expect(findings(source)).toEqual([
       "Open Chat",
       "Start a conversation",
       "Gateway",

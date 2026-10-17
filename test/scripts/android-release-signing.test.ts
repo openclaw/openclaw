@@ -20,6 +20,25 @@ const ZERO_INSTALL_FILES = [
 ] as const;
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
+const gitIdentity = {
+  GIT_AUTHOR_NAME: "OpenClaw Test",
+  GIT_AUTHOR_EMAIL: "test@example.com",
+  GIT_COMMITTER_NAME: "OpenClaw Test",
+  GIT_COMMITTER_EMAIL: "test@example.com",
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "commit.gpgsign",
+  GIT_CONFIG_VALUE_0: "false",
+};
+
+function expectNoSecrets(text: string) {
+  expect(text).not.toContain(STORE_PASSWORD);
+  expect(text).not.toContain(KEY_PASSWORD);
+}
+
+function expectSuccess(result: ReturnType<typeof runNode>) {
+  expect(result.ok).toBe(true);
+  expectNoSecrets(`${result.stdout}${result.stderr}`);
+}
 
 function runNode(args: string[], env: NodeJS.ProcessEnv = {}) {
   try {
@@ -51,13 +70,7 @@ function runGit(args: string[], cwd?: string, env: NodeJS.ProcessEnv = {}) {
     cwd,
     env: {
       ...process.env,
-      GIT_AUTHOR_NAME: "OpenClaw Test",
-      GIT_AUTHOR_EMAIL: "test@example.com",
-      GIT_COMMITTER_NAME: "OpenClaw Test",
-      GIT_COMMITTER_EMAIL: "test@example.com",
-      GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: "commit.gpgsign",
-      GIT_CONFIG_VALUE_0: "false",
+      ...gitIdentity,
       ...env,
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -202,39 +215,33 @@ describe("scripts/android-release-signing.mjs", () => {
       const manifestPath = writeManifest(tempRoot, signingRepo);
       const { keystorePath, propertiesPath } = writeSigningSources(tempRoot);
       const materializedDir = path.join(tempRoot, "materialized");
-      const workspace = path.join(materializedDir, "apps-signing");
-      const env = {
-        MATCH_PASSWORD,
-        GIT_AUTHOR_NAME: "OpenClaw Test",
-        GIT_AUTHOR_EMAIL: "test@example.com",
-        GIT_COMMITTER_NAME: "OpenClaw Test",
-        GIT_COMMITTER_EMAIL: "test@example.com",
-        GIT_CONFIG_COUNT: "1",
-        GIT_CONFIG_KEY_0: "commit.gpgsign",
-        GIT_CONFIG_VALUE_0: "false",
-      };
-
-      const push = runNode(
-        [
-          "--mode",
-          "sync-push",
-          "--manifest",
-          manifestPath,
+      const env = { MATCH_PASSWORD, ...gitIdentity };
+      const run = (mode: string, extra: string[] = []) =>
+        runNode(
+          [
+            "--mode",
+            mode,
+            "--manifest",
+            manifestPath,
+            "--materialized-dir",
+            materializedDir,
+            ...extra,
+          ],
+          env,
+        );
+      const pullWorkspace = ["--workspace", path.join(materializedDir, "pull-workspace")];
+      const keystore = path.join(materializedDir, "upload-keystore.jks");
+      const properties = path.join(materializedDir, "gradle.properties");
+      expectSuccess(
+        run("sync-push", [
           "--workspace",
-          workspace,
-          "--materialized-dir",
-          materializedDir,
+          path.join(materializedDir, "apps-signing"),
           "--keystore",
           keystorePath,
           "--properties",
           propertiesPath,
-        ],
-        env,
+        ]),
       );
-
-      expect(push.ok).toBe(true);
-      expect(`${push.stdout}${push.stderr}`).not.toContain(STORE_PASSWORD);
-      expect(`${push.stdout}${push.stderr}`).not.toContain(KEY_PASSWORD);
 
       const remoteCheck = path.join(tempRoot, "remote-check");
       runGit(["clone", signingRepo, remoteCheck], tempRoot);
@@ -242,84 +249,39 @@ describe("scripts/android-release-signing.mjs", () => {
         path.join(remoteCheck, "android", "openclaw", "gradle.properties.enc"),
         "utf8",
       );
-      expect(encryptedProperties).not.toContain(STORE_PASSWORD);
-      expect(encryptedProperties).not.toContain(KEY_PASSWORD);
+      expectNoSecrets(encryptedProperties);
 
       fs.mkdirSync(materializedDir, { recursive: true });
-      const stalePropertiesPath = path.join(materializedDir, "gradle.properties");
-      fs.writeFileSync(stalePropertiesPath, "stale=1\n", { mode: 0o644 });
-      fs.chmodSync(stalePropertiesPath, 0o644);
+      fs.writeFileSync(properties, "stale=1\n", { mode: 0o644 });
+      fs.chmodSync(properties, 0o644);
+      expectSuccess(run("sync-pull", pullWorkspace));
+      expect(fs.readFileSync(keystore, "utf8")).toBe("fake keystore bytes\n");
 
-      const pull = runNode(
-        [
-          "--mode",
-          "sync-pull",
-          "--manifest",
-          manifestPath,
-          "--workspace",
-          path.join(materializedDir, "pull-workspace"),
-          "--materialized-dir",
-          materializedDir,
-        ],
-        env,
-      );
-
-      expect(pull.ok).toBe(true);
-      expect(`${pull.stdout}${pull.stderr}`).not.toContain(STORE_PASSWORD);
-      expect(`${pull.stdout}${pull.stderr}`).not.toContain(KEY_PASSWORD);
-      expect(fs.readFileSync(path.join(materializedDir, "upload-keystore.jks"), "utf8")).toBe(
-        "fake keystore bytes\n",
-      );
-
-      const materializedProperties = fs.readFileSync(
-        path.join(materializedDir, "gradle.properties"),
-        "utf8",
-      );
-      expect(materializedProperties).toContain(
-        `OPENCLAW_ANDROID_STORE_FILE=${path.join(materializedDir, "upload-keystore.jks")}`,
-      );
+      const materializedProperties = fs.readFileSync(properties, "utf8");
+      expect(materializedProperties).toContain(`OPENCLAW_ANDROID_STORE_FILE=${keystore}`);
       expect(materializedProperties).toContain(`OPENCLAW_ANDROID_STORE_PASSWORD=${STORE_PASSWORD}`);
       expect(materializedProperties).toContain("OPENCLAW_ANDROID_KEY_ALIAS=openclaw-upload");
       expect(materializedProperties).toContain(`OPENCLAW_ANDROID_KEY_PASSWORD=${KEY_PASSWORD}`);
       if (process.platform !== "win32") {
-        expect(fs.statSync(path.join(materializedDir, "gradle.properties")).mode & 0o777).toBe(
-          0o600,
-        );
-        expect(fs.statSync(path.join(materializedDir, "upload-keystore.jks")).mode & 0o777).toBe(
-          0o600,
-        );
+        for (const file of [properties, keystore]) {
+          expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+        }
       }
 
-      const check = runNode([
-        "--mode",
-        "check",
-        "--manifest",
-        manifestPath,
-        "--materialized-dir",
-        materializedDir,
-      ]);
-
-      expect(check.ok).toBe(true);
-
-      fs.rmSync(path.join(materializedDir, "upload-keystore.jks"));
-      fs.rmSync(path.join(materializedDir, "gradle.properties"));
-      const materialize = runNode(
-        [
+      expect(
+        runNode([
           "--mode",
-          "materialize",
+          "check",
           "--manifest",
           manifestPath,
-          "--workspace",
-          path.join(materializedDir, "pull-workspace"),
           "--materialized-dir",
           materializedDir,
-        ],
-        env,
-      );
-      expect(materialize.ok).toBe(true);
-      expect(fs.readFileSync(path.join(materializedDir, "upload-keystore.jks"), "utf8")).toBe(
-        "fake keystore bytes\n",
-      );
+        ]).ok,
+      ).toBe(true);
+      fs.rmSync(keystore);
+      fs.rmSync(properties);
+      expect(run("materialize", pullWorkspace).ok).toBe(true);
+      expect(fs.readFileSync(keystore, "utf8")).toBe("fake keystore bytes\n");
     },
   );
 
@@ -341,7 +303,6 @@ describe("scripts/android-release-signing.mjs", () => {
 
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("MATCH_PASSWORD is required");
-    expect(result.stderr).not.toContain(STORE_PASSWORD);
-    expect(result.stderr).not.toContain(KEY_PASSWORD);
+    expectNoSecrets(result.stderr);
   });
 });
