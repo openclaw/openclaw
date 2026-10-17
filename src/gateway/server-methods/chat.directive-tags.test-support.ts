@@ -104,26 +104,15 @@ export function createChatDirectiveSender(handlers: {
     requestParams?: Record<string, unknown>;
     directExternal?: boolean;
     waitForCompletion?: boolean;
-    waitForDedupe?: boolean;
     waitFor?: NonStreamingChatSendWaitFor;
   }): Promise<Record<string, unknown> | undefined> => {
-    const sendParams: {
-      sessionKey: string;
-      message: string;
-      idempotencyKey: string;
-      deliver?: boolean;
-    } = {
-      sessionKey: params.sessionKey ?? "main",
-      message: params.message ?? "hello",
-      idempotencyKey: params.idempotencyKey,
-    };
-    if (typeof params.deliver === "boolean") {
-      sendParams.deliver = params.deliver;
-    }
     const handler = params.directExternal === false ? handlers.internal : handlers.external;
-    const handlerOptions = {
+    await handler({
       params: {
-        ...sendParams,
+        sessionKey: params.sessionKey ?? "main",
+        message: params.message ?? "hello",
+        idempotencyKey: params.idempotencyKey,
+        ...(typeof params.deliver === "boolean" ? { deliver: params.deliver } : {}),
         ...params.requestParams,
       },
       respond: params.respond,
@@ -131,12 +120,11 @@ export function createChatDirectiveSender(handlers: {
       client: (params.client ?? null) as never,
       isWebchatConnect: () => false,
       context: params.context,
-    };
-    await handler(handlerOptions);
+    });
 
     const waitFor =
       params.waitFor ??
-      (params.waitForCompletion === false || params.waitForDedupe === false
+      (params.waitForCompletion === false
         ? "none"
         : params.expectBroadcast === false
           ? "dedupe"
@@ -144,18 +132,15 @@ export function createChatDirectiveSender(handlers: {
     if (waitFor === "none") {
       return undefined;
     }
+    await params.context.dedupe.waitForResponse(params.idempotencyKey);
     if (waitFor === "dedupe") {
-      await params.context.dedupe.waitForResponse(params.idempotencyKey);
       return undefined;
     }
-
-    const terminalCalls = () =>
-      params.context.broadcast.mock.calls.filter(
-        ([event, payload]) => event === "chat" && asOptionalRecord(payload)?.state !== "delta",
-      );
-    await params.context.dedupe.waitForResponse(params.idempotencyKey);
-    expect(terminalCalls()).toHaveLength(1);
-    return asOptionalRecord(terminalCalls()[0]?.[1]);
+    const terminalCalls = params.context.broadcast.mock.calls.filter(
+      ([event, payload]) => event === "chat" && asOptionalRecord(payload)?.state !== "delta",
+    );
+    expect(terminalCalls).toHaveLength(1);
+    return asOptionalRecord(terminalCalls[0]?.[1]);
   };
 }
 
@@ -247,12 +232,13 @@ export function createChatDirectiveSuiteResources() {
       rawKey: string,
       opts?: { agentId?: string },
     ) {
+      const fallbackKey = `agent:${opts?.agentId ?? "main"}:${state.mainSessionKey}`;
       const canonicalKey =
         typeof state.sessionEntry.canonicalKey === "string"
           ? state.sessionEntry.canonicalKey
-          : rawKey === "main"
-            ? `agent:${opts?.agentId ?? "main"}:${state.mainSessionKey}`
-            : rawKey || `agent:${opts?.agentId ?? "main"}:${state.mainSessionKey}`;
+          : rawKey && rawKey !== "main"
+            ? rawKey
+            : fallbackKey;
       const { canonicalKey: _canonicalKey, ...sessionEntry } = state.sessionEntry;
       const persistedEntry = state.sessionMissing
         ? undefined
@@ -326,10 +312,7 @@ export async function seedChatDirectiveFileTranscript(
     "utf-8",
   );
   // The accessor resolves transcript targets from the persisted store, not the mocked Gateway.
-  await replaceSessionEntry(scope, {
-    sessionId,
-    updatedAt: Date.now(),
-  });
+  await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
 }
 
 export function expectClaimOnlyTranscriptMedia(
@@ -343,13 +326,12 @@ export function expectClaimOnlyTranscriptMedia(
   expect(media).toEqual(expectedMedia);
   for (const fact of media ?? []) {
     expect(fact.url).toMatch(/^media:\/\/inbound\/[^?#]+$/u);
-    expect(fact).not.toHaveProperty("path");
-    expect(fact).not.toHaveProperty("workspaceDir");
-    expect(fact).not.toHaveProperty("data");
+    for (const key of ["path", "workspaceDir", "data"]) {
+      expect(fact).not.toHaveProperty(key);
+    }
   }
   const serialized = JSON.stringify(message);
-  expect(serialized).not.toContain("base64");
-  for (const value of forbiddenValues) {
+  for (const value of ["base64", ...forbiddenValues]) {
     expect(serialized).not.toContain(value);
   }
 }
@@ -426,12 +408,8 @@ export function createChatDirectiveUserMessageReader(
   readEntries: () => Array<Record<string, unknown>>,
 ) {
   return () =>
-    readEntries()
-      .map((entry) => entry.message)
-      .filter(
-        (candidate): candidate is Record<string, unknown> =>
-          typeof candidate === "object" &&
-          candidate !== null &&
-          (candidate as { role?: unknown }).role === "user",
-      );
+    readEntries().flatMap(({ message }) => {
+      const record = asOptionalRecord(message);
+      return record?.role === "user" ? [record] : [];
+    });
 }

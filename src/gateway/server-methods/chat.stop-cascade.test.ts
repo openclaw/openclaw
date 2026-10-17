@@ -1,4 +1,3 @@
-/** Typed Stop exercises the real chat.send pipeline and collector cancellation owners. */
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
@@ -43,6 +42,56 @@ import {
 
 const fixture = useChatAbortRegistryFixture();
 
+function registerChild(
+  runId: string,
+  scope: Parameters<typeof loadSessionEntryReadOnly>[0] & { sessionKey: string },
+  requesterSessionKey: string,
+  agentId: string,
+  queued = true,
+) {
+  return registerSubagentRun({
+    runId,
+    childSessionKey: scope.sessionKey,
+    childAgentId: agentId,
+    sessionEntry: loadSessionEntryReadOnly(scope),
+    requesterSessionKey,
+    requesterAgentId: agentId,
+    requesterDisplayKey: requesterSessionKey,
+    requesterTurnRunId: "parent",
+    task: runId,
+    cleanup: "keep",
+    collect: true,
+    queued,
+    expectsCompletionMessage: false,
+  });
+}
+
+function sendStop(
+  context: ReturnType<typeof createChatAbortContext>,
+  sessionKey: string,
+  scopes: string[],
+  extra: Record<string, unknown> & { agentId?: string } = {},
+) {
+  return invokeChatAbortHandler({
+    handler: (options) =>
+      handleChatSend({
+        ...options,
+        params: { sessionKey, message: "/stop", idempotencyKey: "typed-stop", ...extra },
+      }),
+    context,
+    request: { sessionKey, ...(extra.agentId ? { agentId: extra.agentId } : {}) },
+    client: { connId: "owner", connect: { scopes } },
+  });
+}
+
+function expectChangedLeaf(respond: Awaited<ReturnType<typeof sendStop>>) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+  );
+}
+
 function createGuardedStopFixture() {
   const storePath = path.join(fixture.stateDir, "shared.sqlite");
   const cfg: OpenClawConfig = {
@@ -73,22 +122,7 @@ function createGuardedStopFixture() {
   const otherRun = createActiveRun(other.sessionKey, other);
   context.chatAbortControllers.set("other-owner", otherRun);
   const send = (sessionKey: string, extra: Record<string, unknown> = {}) =>
-    invokeChatAbortHandler({
-      handler: (options) =>
-        handleChatSend({
-          ...options,
-          params: {
-            sessionKey,
-            agentId: "ops",
-            message: "/stop",
-            idempotencyKey: "guarded-stop",
-            ...extra,
-          },
-        }),
-      context,
-      request: { sessionKey, agentId: "ops" },
-      client: { connId: "owner", connect: { scopes: ["operator.admin"] } },
-    });
+    sendStop(context, sessionKey, ["operator.admin"], { agentId: "ops", ...extra });
   const child = async (runId: string, requesterSessionKey = parent.sessionKey) => {
     const scope = seed(`agent:ops:subagent:${runId}`, "ops", `${runId}-session`);
     const groupId = `guarded-stop-${runId}`;
@@ -100,21 +134,7 @@ function createGuardedStopFixture() {
         activeRunIds: [`${runId}-capacity`],
       }),
     ).toBe(true);
-    await registerSubagentRun({
-      runId,
-      childSessionKey: scope.sessionKey,
-      childAgentId: "ops",
-      sessionEntry: loadSessionEntryReadOnly(scope),
-      requesterSessionKey,
-      requesterAgentId: "ops",
-      requesterDisplayKey: requesterSessionKey,
-      requesterTurnRunId: "parent",
-      task: runId,
-      cleanup: "keep",
-      collect: true,
-      queued: true,
-      expectsCompletionMessage: false,
-    });
+    await registerChild(runId, scope, requesterSessionKey, "ops");
     const start = vi.fn(async () => {});
     activateSwarmRun({
       groupId,
@@ -142,30 +162,16 @@ function appendStopCanary(
 }
 
 it.each([
-  {
-    name: "stale leaf",
-    key: "agent:ops:guarded-parent",
-    expectedLeafEntryId: "stale",
-    accepted: false,
-  },
-  {
-    name: "copied leaf from another session",
-    key: "agent:ops:guarded-parent",
-    expectedLeafEntryId: "current-leaf",
-    sessionId: "previous-session",
-    accepted: false,
-  },
-  {
-    name: "steer compatibility",
-    key: "agent:ops:guarded-parent",
-    expectedLeafEntryId: "stale",
-    sessionId: "old",
-    queueMode: "steer",
-    accepted: true,
-  },
-])(
-  "typed Stop honors $name without touching the other owner",
-  async ({ name, key, accepted, ...extra }) => {
+  ["stale leaf", false, { expectedLeafEntryId: "stale" }],
+  ["copied leaf", false, { expectedLeafEntryId: "current-leaf", sessionId: "previous-session" }],
+  [
+    "steer compatibility",
+    true,
+    { expectedLeafEntryId: "stale", sessionId: "old", queueMode: "steer" },
+  ],
+] as const)(
+  "typed Stop honors %s without touching the other owner",
+  async (name, accepted, extra) => {
     const test = createGuardedStopFixture();
     const selected = test.parent;
     appendStopCanary(selected, "current-leaf", "selected conversation");
@@ -175,7 +181,7 @@ it.each([
     const queued = createActiveRun(selected.sessionKey, selected);
     test.context.chatAbortControllers.set("parent", active);
     test.context.chatQueuedTurns.set("queued", queued);
-    const respond = await test.send(key, extra);
+    const respond = await test.send(selected.sessionKey, extra);
 
     if (accepted) {
       expect(respond).toHaveBeenCalledWith(true, {
@@ -184,11 +190,7 @@ it.each([
         runIds: ["queued", "parent"],
       });
     } else {
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-      );
+      expectChangedLeaf(respond);
     }
     expect(active.controller.signal.aborted, name).toBe(accepted);
     expect(queued.controller.signal.aborted, name).toBe(accepted);
@@ -199,7 +201,7 @@ it.each([
   },
 );
 
-it("typed Stop cannot acquire a replacement collector after projection readiness yields", async () => {
+it("typed Stop cannot acquire a replacement collector after yielding", async () => {
   const test = createGuardedStopFixture();
   const collector = await test.child("collector");
   expect(isSubagentRunQueued(getLatestLiveSubagentRunByChildSessionKey(collector.sessionKey))).toBe(
@@ -227,10 +229,8 @@ it("typed Stop cannot acquire a replacement collector after projection readiness
   try {
     await Promise.race([
       entered.promise,
-      pending.then((respond) => {
-        throw new Error(
-          `Stop did not reach collector projection readiness: ${JSON.stringify(respond.mock.calls)}`,
-        );
+      pending.then(() => {
+        throw new Error("Stop completed before collector projection readiness");
       }),
     ]);
     const replacement = { ...collector, sessionId: "replacement-collector" };
@@ -246,11 +246,7 @@ it("typed Stop cannot acquire a replacement collector after projection readiness
     test.context.chatQueuedTurns.set("successor-queued", queued);
     resume.resolve();
     const respond = await pending;
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-    );
+    expectChangedLeaf(respond);
     for (const run of [old, successor, queued, test.otherRun]) {
       expect(run.controller.signal.aborted).toBe(false);
     }
@@ -317,14 +313,9 @@ it("typed Stop preserves ownership errors when the requested leaf is still activ
   }
 });
 
-it.each([
-  { kind: "owned", requestSessionKey: "main" },
-  { kind: "orphan", requestSessionKey: "agent:main:main" },
-  { kind: "foreign", requestSessionKey: "agent:main:main" },
-  { kind: "protected", requestSessionKey: "agent:main:main" },
-])(
-  "typed Stop respects full-session collector ownership: $kind via $requestSessionKey",
-  async ({ kind, requestSessionKey }) => {
+it.each(["owned", "orphan", "foreign", "protected"])(
+  "typed Stop respects full-session collector ownership: %s",
+  async (kind) => {
     const sessionKey = "agent:main:main";
     const runningKey = "agent:main:subagent:running";
     const queuedKey = "agent:main:subagent:queued";
@@ -344,21 +335,13 @@ it.each([
         sessionKey: childSessionKey,
         defaultSessionId: `${runId}-session`,
       });
-      await registerSubagentRun({
+      await registerChild(
         runId,
-        childSessionKey,
-        childAgentId: "main",
-        sessionEntry: loadSessionEntryReadOnly({ storePath, sessionKey: childSessionKey }),
-        requesterSessionKey: sessionKey,
-        requesterAgentId: "main",
-        requesterDisplayKey: sessionKey,
-        requesterTurnRunId: "parent",
-        task: runId,
-        cleanup: "keep",
-        collect: true,
-        queued: runId === "queued",
-        expectsCompletionMessage: false,
-      });
+        { storePath, sessionKey: childSessionKey },
+        sessionKey,
+        "main",
+        runId === "queued",
+      );
     }
     const dispatch = vi.fn(async () => {});
     enqueueSwarmRun({
@@ -386,20 +369,10 @@ it.each([
     }
     const canCascade = kind === "owned" || kind === "orphan";
     try {
-      const respond = await invokeChatAbortHandler({
-        handler: (options) =>
-          handleChatSend({
-            ...options,
-            params: {
-              sessionKey: requestSessionKey,
-              message: "/stop",
-              idempotencyKey: "typed-stop",
-            },
-          }),
-        context,
-        request: { sessionKey: requestSessionKey },
-        client: { connId: "owner", connect: { scopes: ["operator.read", "operator.write"] } },
-      });
+      const respond = await sendStop(context, kind === "owned" ? "main" : sessionKey, [
+        "operator.read",
+        "operator.write",
+      ]);
       expect(respond.mock.calls.at(-1)?.[0]).toBe(kind !== "foreign");
       expect(parent.controller.signal.aborted).toBe(kind === "owned");
       expect(runningAbort).toHaveBeenCalledTimes(canCascade ? 1 : 0);

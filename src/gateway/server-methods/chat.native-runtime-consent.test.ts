@@ -31,6 +31,20 @@ vi.mock("./chat-send-admission.js", () => ({
 }));
 useNativeProcessFixture();
 
+type TestState = Parameters<Parameters<typeof withOpenClawTestState>[1]>[0];
+async function withNative(run: (state: TestState, config: OpenClawConfig) => Promise<void>) {
+  await withOpenClawTestState({ label: "chat-native-consent" }, async (state) => {
+    const config = nativeConfig(state.workspaceDir);
+    await state.writeConfig(config);
+    const native = await registerNative(state, config, "owner-agent.mjs");
+    try {
+      await run(state, config);
+    } finally {
+      await native.service.stop?.(native.context);
+    }
+  });
+}
+
 function nativeConfig(workspace: string): OpenClawConfig {
   return {
     tools: { profile: "full", deny: ["browser"] },
@@ -54,16 +68,9 @@ function nativeClient(scopes = ["operator.admin"], profileId?: string): GatewayC
       scopes,
       client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
     },
-    ...(profileId
-      ? {
-          authenticatedUserProfile: {
-            profileId,
-            displayName: null,
-            hasAvatar: false,
-            updatedAt: 1,
-          },
-        }
-      : {}),
+    authenticatedUserProfile: profileId
+      ? { profileId, displayName: null, hasAvatar: false, updatedAt: 1 }
+      : undefined,
   };
 }
 
@@ -109,13 +116,27 @@ function pauseConsentCommit() {
   return { entered, release };
 }
 
+function restricted(respond: ReturnType<typeof vi.fn<RespondFn>>, reason: string) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      details: expect.objectContaining({ code: "AGENT_RUNTIME_RESTRICTED", reason }),
+    }),
+  );
+}
+
+function captureOutcome(send: () => unknown) {
+  return Promise.resolve(send()).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+}
+
 it.each([false, true])(
   "refuses native chat.send before input persistence with an existing session=%s",
-  async (preseed) => {
-    await withOpenClawTestState({ label: "chat-native-consent" }, async (state) => {
-      const config = nativeConfig(state.workspaceDir);
-      await state.writeConfig(config);
-      const native = await registerNative(state, config, "owner-agent.mjs");
+  (preseed) =>
+    withNative(async (_state, config) => {
       const target = {
         agentId: "main",
         sessionKey: "agent:main:dashboard:native-consent",
@@ -142,47 +163,35 @@ it.each([false, true])(
         target.sessionKey,
         false,
       );
-      try {
-        await send();
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            details: expect.objectContaining({
-              code: "AGENT_RUNTIME_RESTRICTED",
-              reason: "tool-policy",
-              runtimeId: "acp-opencode",
-            }),
-          }),
-        );
-        const persisted = expectDefined(
-          listSessionEntries({ agentId: target.agentId, readOnly: true }).find(
-            (row) => row.sessionKey === target.sessionKey,
-          )?.entry,
-          "real consent-bound session",
-        );
-        expect(respond.mock.calls[0]?.[2]?.details).toMatchObject({
-          recovery: { sessionId: persisted.sessionId },
-        });
-        expect(
-          await readVisibleSessionTranscriptMessageEntries({
-            ...target,
-            sessionId: persisted.sessionId,
-          }),
-        ).toEqual([]);
-        expect(persisted.nativeRuntimeConsent).toBeUndefined();
-        if (!preseed) {
-          expect(persisted.lifecycleRevision).toBeTypeOf("string");
-          expect(persisted.providerOverride).toBeUndefined();
-          expect(persisted.modelOverride).toBeUndefined();
-          expect(persisted.agentRuntimeOverride).toBeUndefined();
-        }
-        expect(context.chatAbortControllers.size).toBe(0);
-      } finally {
-        await native.service.stop?.(native.context);
+      await send();
+      restricted(respond, "tool-policy");
+      const persisted = expectDefined(
+        listSessionEntries({ agentId: target.agentId, readOnly: true }).find(
+          (row) => row.sessionKey === target.sessionKey,
+        )?.entry,
+        "real consent-bound session",
+      );
+      expect(respond.mock.calls[0]?.[2]?.details).toMatchObject({
+        recovery: { sessionId: persisted.sessionId },
+        runtimeId: "acp-opencode",
+      });
+      expect(
+        await readVisibleSessionTranscriptMessageEntries({
+          ...target,
+          sessionId: persisted.sessionId,
+        }),
+      ).toEqual([]);
+      expect(persisted.nativeRuntimeConsent).toBeUndefined();
+      if (!preseed) {
+        expect(persisted.lifecycleRevision).toBeTypeOf("string");
+        expect([
+          persisted.providerOverride,
+          persisted.modelOverride,
+          persisted.agentRuntimeOverride,
+        ]).toEqual([undefined, undefined, undefined]);
       }
-    });
-  },
+      expect(context.chatAbortControllers.size).toBe(0);
+    }),
 );
 
 it.each([
@@ -190,75 +199,56 @@ it.each([
   { kind: "creator sandbox", reason: "sandbox-required" },
   { kind: "execution sandbox", reason: "sandbox-required" },
   { kind: "remote execution", reason: "remote-execution" },
-] as const)(
-  "refuses a new $kind target without creating a consent row",
-  async ({ kind, reason }) => {
-    await withOpenClawTestState({ label: "chat-native-mandatory" }, async (state) => {
-      const config = nativeConfig(state.workspaceDir);
-      const profile = ensureProfileForEmail("native-creator@example.test");
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      const client = nativeClient(
-        kind === "non-admin" ? ["operator.write"] : undefined,
-        profile.id,
-      );
-      if (kind === "creator sandbox") {
-        config.gateway = {
-          roles: {
-            default: "restricted",
-            definitions: {
-              restricted: {
-                agents: "*",
-                scopes: ["operator.admin"],
-                sessions: { others: "write" },
-                sandbox: "required",
-              },
+] as const)("refuses a new $kind target without creating a consent row", ({ kind, reason }) =>
+  withOpenClawTestState({ label: "chat-native-mandatory" }, async (state) => {
+    const config = nativeConfig(state.workspaceDir);
+    const profile = ensureProfileForEmail("native-creator@example.test");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    const client = nativeClient(kind === "non-admin" ? ["operator.write"] : undefined, profile.id);
+    if (kind === "creator sandbox") {
+      config.gateway = {
+        roles: {
+          default: "restricted",
+          definitions: {
+            restricted: {
+              agents: "*",
+              scopes: ["operator.admin"],
+              sessions: { others: "write" },
+              sandbox: "required",
             },
           },
-        };
-      } else if (kind === "execution sandbox" || kind === "remote execution") {
-        config.tools = {
-          ...config.tools,
-          exec: { host: kind === "execution sandbox" ? "sandbox" : "node" },
-        };
-      }
-      await state.writeConfig(config);
-      const native = await registerNative(state, config, "owner-agent.mjs");
-      const { respond, context, send } = sendNative(config, client);
-      try {
-        await send();
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            details: expect.objectContaining({ code: "AGENT_RUNTIME_RESTRICTED", reason }),
-          }),
-        );
-        expect(respond.mock.calls[0]?.[2]?.details).not.toHaveProperty("recovery");
-        expect(listSessionEntries({ agentId: "main", readOnly: true })).toEqual([]);
-        expect(context.chatAbortControllers.size).toBe(0);
-      } finally {
-        await native.service.stop?.(native.context);
-      }
-    });
-  },
+        },
+      };
+    } else if (kind === "execution sandbox" || kind === "remote execution") {
+      config.tools = {
+        ...config.tools,
+        exec: { host: kind === "execution sandbox" ? "sandbox" : "node" },
+      };
+    }
+    await state.writeConfig(config);
+    const native = await registerNative(state, config, "owner-agent.mjs");
+    const { respond, context, send } = sendNative(config, client);
+    try {
+      await send();
+      restricted(respond, reason);
+      expect(respond.mock.calls[0]?.[2]?.details).not.toHaveProperty("recovery");
+      expect(listSessionEntries({ agentId: "main", readOnly: true })).toEqual([]);
+      expect(context.chatAbortControllers.size).toBe(0);
+    } finally {
+      await native.service.stop?.(native.context);
+    }
+  }),
 );
 
 it.each(["authority", "mandatory policy", "competing entry"] as const)(
   "rechecks $change before committing first-send consent identity",
-  async (change) => {
-    await withOpenClawTestState({ label: "chat-native-creation-race" }, async (state) => {
-      const config = nativeConfig(state.workspaceDir);
-      await state.writeConfig(config);
-      const native = await registerNative(state, config, "owner-agent.mjs");
+  (change) =>
+    withNative(async (_state, config) => {
       const client = nativeClient();
       const { context, send } = sendNative(config, client);
       const sessionKey = "agent:main:main";
       const { entered, release } = pauseConsentCommit();
-      const sending = Promise.resolve(send());
-      const outcome = sending.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+      const outcome = captureOutcome(send);
       try {
         await entered.promise;
         if (change === "authority") {
@@ -290,19 +280,14 @@ it.each(["authority", "mandatory policy", "competing entry"] as const)(
       } finally {
         release.resolve();
         await outcome;
-        await native.service.stop?.(native.context);
       }
-    });
-  },
+    }),
 );
 
 it.runIf(process.platform !== "win32")(
   "rejects first-send consent when its captured database owner is replaced",
-  async () => {
-    await withOpenClawTestState({ label: "chat-native-database-replacement" }, async (state) => {
-      const config = nativeConfig(state.workspaceDir);
-      await state.writeConfig(config);
-      const native = await registerNative(state, config, "owner-agent.mjs");
+  () =>
+    withNative(async (state, config) => {
       const { respond, context, send } = sendNative(config);
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
@@ -310,11 +295,7 @@ it.runIf(process.platform !== "win32")(
       const displacedPath = `${databasePath}.native-original`;
       await backup(requireNativeSqliteDatabase(database.db), replacementPath);
       const { entered, release } = pauseConsentCommit();
-      const sending = Promise.resolve(send());
-      const outcome = sending.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+      const outcome = captureOutcome(send);
       let replaced = false;
       try {
         await entered.promise;
@@ -346,8 +327,6 @@ it.runIf(process.platform !== "win32")(
         if (existsSync(replacementPath)) {
           unlinkSync(replacementPath);
         }
-        await native.service.stop?.(native.context);
       }
-    });
-  },
+    }),
 );
