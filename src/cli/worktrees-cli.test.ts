@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatCliFailureLines } from "./failure-output.js";
 import { parseCliProfileArgs } from "./profile.js";
 import { registerWorktreesCli } from "./worktrees-cli.js";
 
@@ -168,28 +169,70 @@ describe("worktrees cli", () => {
     });
   });
 
-  it("rejects an invalid --removed-at before retiring a snapshot", async () => {
+  const retireSnapshotArgs = (removedAt: string) => [
+    "retire-snapshot",
+    "worktree-id",
+    "--expected-ref",
+    "refs/openclaw/snapshots/worktree-id",
+    "--expected-oid",
+    "a".repeat(40),
+    "--removed-at",
+    removedAt,
+    "--retained-ref",
+    "refs/heads/main",
+    "--retained-oid",
+    "b".repeat(40),
+  ];
+
+  it.each(["1700000000100ms", "1,700,000,000,100", "12abc", "1.5", "-1", "", "9007199254740993"])(
+    "rejects the malformed --removed-at value %j before retiring a snapshot",
+    async (removedAt) => {
+      setRuntimeConfigSnapshot({}, {});
+      const retire = vi
+        .spyOn(owner, "retireSnapshot")
+        .mockRejectedValue(new Error("Unexpected snapshot retirement"));
+      await expect(run(retireSnapshotArgs(removedAt))).rejects.toThrow(
+        "--removed-at must be a non-negative integer (epoch milliseconds).",
+      );
+      expect(retire).not.toHaveBeenCalled();
+    },
+  );
+
+  it("renders the rejected --removed-at value instead of the generic CLI failure", async () => {
     setRuntimeConfigSnapshot({}, {});
-    const retire = vi
-      .spyOn(owner, "retireSnapshot")
-      .mockRejectedValue(new Error("Unexpected snapshot retirement"));
-    await expect(
-      run([
-        "retire-snapshot",
-        "worktree-id",
-        "--expected-ref",
-        "refs/openclaw/snapshots/worktree-id",
-        "--expected-oid",
-        "a".repeat(40),
-        "--removed-at",
-        "1700000000100ms",
-        "--retained-ref",
-        "refs/heads/main",
-        "--retained-oid",
-        "b".repeat(40),
-      ]),
-    ).rejects.toThrow("--removed-at must be a non-negative integer (epoch milliseconds).");
-    expect(retire).not.toHaveBeenCalled();
+    vi.spyOn(owner, "retireSnapshot").mockRejectedValue(
+      new Error("Unexpected snapshot retirement"),
+    );
+    const error = await run(retireSnapshotArgs("1700000000100ms")).catch((cause: unknown) => cause);
+    expect(
+      formatCliFailureLines({
+        title: "The CLI command failed.",
+        error,
+        argv: ["node", "openclaw", "worktrees", "retire-snapshot"],
+        env: {},
+      }),
+    ).toEqual([
+      '--removed-at must be a non-negative integer (epoch milliseconds). Got: "1700000000100ms"',
+    ]);
+  });
+
+  it("passes a valid --removed-at through to the retirement owner", async () => {
+    setRuntimeConfigSnapshot({}, {});
+    const retire = vi.spyOn(owner, "retireSnapshot").mockResolvedValue({
+      retired: true as const,
+      id: "worktree-id",
+    });
+    muteOutput(false);
+    await run(retireSnapshotArgs("1700000000100"));
+    expect(retire).toHaveBeenCalledWith({
+      id: "worktree-id",
+      expectedSnapshotRef: "refs/openclaw/snapshots/worktree-id",
+      expectedSnapshotOid: "a".repeat(40),
+      expectedRemovedAt: 1_700_000_000_100,
+      retainedSourceRef: "refs/heads/main",
+      expectedRetainedSourceOid: "b".repeat(40),
+      ...admission,
+    });
   });
 
   it("rejects an empty cleanup job selector before cleanup", async () => {
