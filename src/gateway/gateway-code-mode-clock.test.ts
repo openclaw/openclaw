@@ -3,6 +3,10 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  writeOpenAiResponsesSse,
+  writeOpenAiResponsesText,
+} from "../../test/helpers/openai-responses-sse.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
@@ -101,13 +105,9 @@ describe("Gateway Code Mode clock rollback", () => {
         "utf8",
       );
 
-      let responseCount = 0;
       const responseBodies: Array<{ input?: unknown[] }> = [];
       let approvalId = "";
       let restoreWallClock = () => {};
-      const writeSseResponse = (events: Record<string, unknown>[]) =>
-        events.map((event) => "data: " + JSON.stringify(event) + "\n\n").join("") +
-        "data: [DONE]\n\n";
       const providerServer = createServer((request, response) => {
         void (async () => {
           if (request.url !== "/v1/responses") {
@@ -121,7 +121,6 @@ describe("Gateway Code Mode clock rollback", () => {
           const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
             input?: unknown[];
           };
-          responseCount += 1;
           responseBodies.push(body);
           const hasToolOutput = body.input?.some(
             (item) =>
@@ -129,7 +128,6 @@ describe("Gateway Code Mode clock rollback", () => {
               typeof item === "object" &&
               (item as { type?: unknown }).type === "function_call_output",
           );
-          let events: Record<string, unknown>[];
           if (!hasToolOutput) {
             const item = {
               type: "function_call",
@@ -142,7 +140,7 @@ describe("Gateway Code Mode clock rollback", () => {
               }),
               status: "completed",
             };
-            events = [
+            writeOpenAiResponsesSse(response, [
               {
                 type: "response.output_item.added",
                 output_index: 0,
@@ -170,55 +168,14 @@ describe("Gateway Code Mode clock rollback", () => {
                   usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
                 },
               },
-            ];
+            ]);
           } else {
-            const finalItem = {
-              type: "message",
-              id: "msg_code_mode_clock_final",
-              role: "assistant",
-              status: "completed",
-              content: [
-                {
-                  type: "output_text",
-                  text: "CODE_MODE_APPROVAL_COMPLETE",
-                  annotations: [],
-                },
-              ],
-            };
-            events = [
-              {
-                type: "response.output_item.added",
-                output_index: 0,
-                item: { ...finalItem, status: "in_progress", content: [] },
-              },
-              {
-                type: "response.output_text.delta",
-                output_index: 0,
-                content_index: 0,
-                item_id: finalItem.id,
-                delta: "CODE_MODE_APPROVAL_COMPLETE",
-              },
-              {
-                type: "response.output_text.done",
-                output_index: 0,
-                content_index: 0,
-                item_id: finalItem.id,
-                text: "CODE_MODE_APPROVAL_COMPLETE",
-              },
-              { type: "response.output_item.done", output_index: 0, item: finalItem },
-              {
-                type: "response.completed",
-                response: {
-                  id: "resp_code_mode_clock_final",
-                  status: "completed",
-                  output: [finalItem],
-                  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-                },
-              },
-            ];
+            writeOpenAiResponsesText(response, {
+              text: "CODE_MODE_APPROVAL_COMPLETE",
+              messageId: "msg_code_mode_clock_final",
+              responseId: "resp_code_mode_clock_final",
+            });
           }
-          response.writeHead(200, { "content-type": "text/event-stream" });
-          response.end(writeSseResponse(events));
         })().catch((error: unknown) => {
           response.writeHead(500).end(String(error));
         });
@@ -366,7 +323,7 @@ describe("Gateway Code Mode clock rollback", () => {
             sessionKey,
           });
           expect(JSON.stringify(history.messages)).toContain("CODE_MODE_APPROVAL_COMPLETE");
-          expect(responseCount).toBe(2);
+          expect(responseBodies).toHaveLength(2);
           const secondRequest = responseBodies[1];
           const completedCodeModeOutput = secondRequest?.input?.find(
             (item) =>

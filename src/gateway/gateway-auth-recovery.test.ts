@@ -2,8 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFailed } from "vitest";
 import type { ModelChoice } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { readProcessRssMb } from "../../scripts/lib/gateway-bench-probes.ts";
 import {
@@ -22,6 +21,54 @@ import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
+async function startProvider(server: ReturnType<typeof createServer>, signal: AbortSignal) {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  signal.throwIfAborted();
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Mock provider did not expose its listening port");
+  }
+  return `http://127.0.0.1:${address.port}/v1`;
+}
+
+function connectGateway(
+  gateway: OpenClawTestInstance,
+  signal: AbortSignal,
+  verifyCleanup: NonNullable<Parameters<typeof acquireGatewayTestClient>[1]["verifyCleanup"]>,
+) {
+  return acquireGatewayTestClient(
+    {
+      url: gateway.url,
+      token: gateway.gatewayToken,
+      clientName: "cli",
+      mode: "cli",
+      role: "operator",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    },
+    {
+      timeoutMs: 30_000,
+      timeoutMessage: "Gateway client did not connect",
+      closeMessage: "Gateway closed",
+      signal,
+      verifyCleanup,
+    },
+  );
+}
+
+async function closeProvider(server: ReturnType<typeof createServer>) {
+  if (!server.listening) {
+    return;
+  }
+  const closed = new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  server.closeAllConnections();
+  await closed;
+}
+
 async function verifyBuiltGatewayHead(repoRoot: string, signal: AbortSignal) {
   signal.throwIfAborted();
   const head = resolveGitHead({ cwd: repoRoot });
@@ -37,7 +84,6 @@ async function verifyBuiltGatewayHead(repoRoot: string, signal: AbortSignal) {
     signal.throwIfAborted();
     expect(metadata[field], file).toBe(head);
   }
-  return head;
 }
 
 // Exercise HTTP failures, persisted credential replacement, and recovery in one built Gateway.
@@ -49,7 +95,6 @@ describe("Gateway profile failure recovery", () => {
     },
     async (context) => {
       const repoRoot = process.cwd();
-      let head: ReturnType<typeof resolveGitHead> | undefined;
 
       const credentials = {
         rate: "qa-rate-profile-key",
@@ -93,305 +138,232 @@ describe("Gateway profile failure recovery", () => {
       });
       let instance: OpenClawTestInstance | undefined;
       let client: Awaited<ReturnType<typeof acquireGatewayTestClient>> | undefined;
-      let proofStep = "setup";
-      let providerListening = false;
+      onTestFailed(() => console.error({ phase, requests }, instance?.logs()));
 
       await runQaGatewayTestFixture(
         context,
         async ({ signal, verifyCleanup }) => {
-          try {
-            head = await verifyBuiltGatewayHead(repoRoot, signal);
-            signal.throwIfAborted();
-            await new Promise<void>((resolve, reject) => {
-              providerServer.once("error", reject);
-              providerServer.listen(0, "127.0.0.1", () => {
-                providerListening = true;
-                resolve();
-              });
-            });
-            signal.throwIfAborted();
-            const address = providerServer.address();
-            if (!address || typeof address === "string") {
-              throw new Error("Mock provider did not expose its listening port");
-            }
-            const provider = buildMockOpenAiResponsesProvider(
-              `http://127.0.0.1:${address.port}/v1`,
-              "gpt-5.6-luna",
-            );
-            const rateModelRef = `${rateProviderId}/${provider.modelId}`;
-            instance = await createOpenClawTestInstance({
-              name: "auth-recovery",
-              cwd: repoRoot,
-              signal,
-              verifyCleanup,
-              stopTimeoutMs: 10_000,
-              env: {
-                VITEST: undefined,
-                NODE_ENV: "production",
-                OPENCLAW_TEST_CONSOLE: "1",
-                OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-                OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-                OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-              },
-            });
-            signal.throwIfAborted();
-            const gateway = instance;
-            const cfg = {
-              gateway: {
-                port: gateway.port,
-                auth: { mode: "token", token: gateway.gatewayToken },
-                controlUi: { enabled: false },
-              },
-              hooks: { enabled: false },
-              agents: {
-                ownership: "explicit",
-                defaults: {
-                  workspace: gateway.state.workspaceDir,
-                  skipBootstrap: true,
-                  heartbeat: { every: "0m" },
-                  model: { primary: provider.modelRef, fallbacks: [] },
-                  models: {
-                    [rateModelRef]: {
-                      agentRuntime: { id: "openclaw" },
-                      params: { transport: "sse", openaiWsWarmup: false },
-                    },
-                    [provider.modelRef]: {
-                      agentRuntime: { id: "openclaw" },
-                      params: { transport: "sse", openaiWsWarmup: false },
-                    },
+          await verifyBuiltGatewayHead(repoRoot, signal);
+          signal.throwIfAborted();
+          const provider = buildMockOpenAiResponsesProvider(
+            await startProvider(providerServer, signal),
+            "gpt-5.6-luna",
+          );
+          const rateModelRef = `${rateProviderId}/${provider.modelId}`;
+          instance = await createOpenClawTestInstance({
+            name: "auth-recovery",
+            cwd: repoRoot,
+            signal,
+            verifyCleanup,
+            stopTimeoutMs: 10_000,
+            env: {
+              VITEST: undefined,
+              NODE_ENV: "production",
+              OPENCLAW_TEST_CONSOLE: "1",
+              OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+              OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+              OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+            },
+          });
+          signal.throwIfAborted();
+          const gateway = instance;
+          const cfg = {
+            gateway: {
+              port: gateway.port,
+              auth: { mode: "token", token: gateway.gatewayToken },
+              controlUi: { enabled: false },
+            },
+            hooks: { enabled: false },
+            agents: {
+              ownership: "explicit",
+              defaults: {
+                workspace: gateway.state.workspaceDir,
+                skipBootstrap: true,
+                heartbeat: { every: "0m" },
+                model: { primary: provider.modelRef, fallbacks: [] },
+                models: {
+                  [rateModelRef]: {
+                    agentRuntime: { id: "openclaw" },
+                    params: { transport: "sse", openaiWsWarmup: false },
                   },
-                },
-                entries: {
-                  rate: {
-                    model: { primary: `${rateModelRef}@${profileIds.rate}`, fallbacks: [] },
-                  },
-                  auth: {
-                    model: { primary: `${provider.modelRef}@${profileIds.auth}`, fallbacks: [] },
+                  [provider.modelRef]: {
+                    agentRuntime: { id: "openclaw" },
+                    params: { transport: "sse", openaiWsWarmup: false },
                   },
                 },
               },
-              auth: {
+              entries: {
+                rate: {
+                  model: { primary: `${rateModelRef}@${profileIds.rate}`, fallbacks: [] },
+                },
+                auth: {
+                  model: { primary: `${provider.modelRef}@${profileIds.auth}`, fallbacks: [] },
+                },
+              },
+            },
+            auth: {
+              profiles: {
+                [profileIds.rate]: { provider: rateProviderId, mode: "api_key" },
+                [profileIds.auth]: { provider: provider.providerId, mode: "api_key" },
+              },
+            },
+            models: {
+              mode: "replace",
+              providers: {
+                [rateProviderId]: {
+                  ...provider.config,
+                  apiKey: undefined,
+                  request: { allowPrivateNetwork: true },
+                },
+                [provider.providerId]: {
+                  ...provider.config,
+                  apiKey: undefined,
+                  request: { allowPrivateNetwork: true },
+                },
+              },
+            },
+            plugins: { slots: { memory: "none" } },
+            tools: { profile: "minimal" },
+          } satisfies OpenClawConfig;
+          await gateway.state.writeConfig(cfg);
+          signal.throwIfAborted();
+          // Exercise retry exhaustion without waiting through the default recovery window.
+          await gateway.state.writeJson("agents/rate/agent/settings.json", {
+            retry: { provider: { maxRetries: 1 } },
+          });
+          signal.throwIfAborted();
+          for (const agentId of ["rate", "auth"] as const) {
+            await gateway.state.writeAuthProfiles(
+              {
+                version: 1,
                 profiles: {
-                  [profileIds.rate]: { provider: rateProviderId, mode: "api_key" },
-                  [profileIds.auth]: { provider: provider.providerId, mode: "api_key" },
-                },
-              },
-              models: {
-                mode: "replace",
-                providers: {
-                  [rateProviderId]: {
-                    ...provider.config,
-                    apiKey: undefined,
-                    request: { allowPrivateNetwork: true },
-                  },
-                  [provider.providerId]: {
-                    ...provider.config,
-                    apiKey: undefined,
-                    request: { allowPrivateNetwork: true },
+                  [profileIds[agentId]]: {
+                    type: "api_key",
+                    provider: agentId === "rate" ? rateProviderId : provider.providerId,
+                    key: credentials[agentId],
                   },
                 },
               },
-              plugins: { slots: { memory: "none" } },
-              tools: { profile: "minimal" },
-            } satisfies OpenClawConfig;
-            await gateway.state.writeConfig(cfg);
-            signal.throwIfAborted();
-            // Exercise retry exhaustion without waiting through the default recovery window.
-            await gateway.state.writeJson("agents/rate/agent/settings.json", {
-              retry: { provider: { maxRetries: 1 } },
-            });
-            signal.throwIfAborted();
-            for (const agentId of ["rate", "auth"] as const) {
-              await gateway.state.writeAuthProfiles(
-                {
-                  version: 1,
-                  profiles: {
-                    [profileIds[agentId]]: {
-                      type: "api_key",
-                      provider: agentId === "rate" ? rateProviderId : provider.providerId,
-                      key: credentials[agentId],
-                    },
-                  },
-                },
-                // Models saves connection credentials in the shared owner; rate health stays agent-local.
-                agentId === "auth" ? "main" : agentId,
-              );
-              signal.throwIfAborted();
-            }
-            expect(await gateway.entrypoint()).toEqual(["dist/index.js"]);
-            signal.throwIfAborted();
-            proofStep = "gateway.start";
-            await gateway.startGateway();
-            signal.throwIfAborted();
-            const gatewayPid = gateway.child?.pid;
-            expect(gatewayPid).toBeTypeOf("number");
-            proofStep = "gateway.connect";
-            client = await acquireGatewayTestClient(
-              {
-                url: gateway.url,
-                token: gateway.gatewayToken,
-                clientName: "cli",
-                mode: "cli",
-                role: "operator",
-                scopes: ["operator.admin", "operator.read", "operator.write"],
-              },
-              {
-                timeoutMs: 30_000,
-                timeoutMessage: "Auth-recovery Gateway client did not connect",
-                closeMessage: "Auth-recovery Gateway closed",
-                signal,
-                verifyCleanup,
-              },
+              // Models saves connection credentials in the shared owner; rate health stays agent-local.
+              agentId === "auth" ? "main" : agentId,
             );
             signal.throwIfAborted();
-            const activeClient = client;
-            const runTurn = async (agentId: keyof typeof profileIds, message: string) => {
-              signal.throwIfAborted();
-              const sessionKey = `agent:${agentId}:auth-recovery-${randomUUID()}`;
-              proofStep = "agent";
-              const accepted = await activeClient.request<{ runId: string; status: string }>(
-                "agent",
-                {
-                  agentId,
-                  sessionKey,
-                  message,
-                  deliver: false,
-                  idempotencyKey: randomUUID(),
-                },
-                { signal },
-              );
-              signal.throwIfAborted();
-              expect(accepted.status).toBe("accepted");
-              proofStep = "agent.wait";
-              const terminal = await activeClient.request<{ status: string }>(
-                "agent.wait",
-                {
-                  runId: accepted.runId,
-                  timeoutMs: 60_000,
-                },
-                { timeoutMs: 65_000, signal },
-              );
-              signal.throwIfAborted();
-              return { sessionKey, terminal };
-            };
-            const failTurn = async (agentId: keyof typeof profileIds) => {
-              const { terminal } = await runTurn(agentId, `AUTH_FAILURE_${agentId.toUpperCase()}`);
-              signal.throwIfAborted();
-              expect(terminal.status).toBe("error");
-              expect(requests[agentId]).toBeGreaterThan(0);
-              expect(unexpectedCredential).toBe(false);
-              return loadPersistedAuthProfileStore(
-                gateway.state.agentDir(agentId === "auth" ? "main" : agentId),
-              )?.usageStats?.[profileIds[agentId]];
-            };
-            const rateStats = await failTurn("rate");
-            signal.throwIfAborted();
-            expect(rateStats?.cooldownReason).toBe("rate_limit");
-            expect(requests.rate).toBe(2);
-
-            phase = "auth";
-            const authStats = await failTurn("auth");
-            signal.throwIfAborted();
-            expect(["auth", "auth_permanent"]).toContain(
-              authStats?.cooldownReason ?? authStats?.disabledReason,
-            );
-            proofStep = "models.authSetApiKey";
-            const saved = await activeClient.request<{
-              provider: string;
-              profileId: string;
-              warning?: string;
-            }>(
-              "models.authSetApiKey",
-              { agentId: "auth", provider: provider.providerId, apiKey: credentials.recovered },
-              { timeoutMs: 30_000, signal },
-            );
-            signal.throwIfAborted();
-            expect(saved).toEqual({ provider: provider.providerId, profileId: profileIds.auth });
-            proofStep = "models.authRefresh";
-            const refreshed = await activeClient.request<{ refreshed: boolean }>(
-              "models.authRefresh",
-              { agentId: "auth", operation: "login" },
-              { timeoutMs: 30_000, signal },
-            );
-            signal.throwIfAborted();
-            expect(refreshed.refreshed).toBe(true);
-            proofStep = "models.list";
-            const catalog = await activeClient.request<{ models: ModelChoice[] }>(
-              "models.list",
-              { agentId: "auth", view: "configured" },
-              { signal },
-            );
-            signal.throwIfAborted();
-            expect(
-              catalog.models.find(
-                (model) => model.provider === provider.providerId && model.id === provider.modelId,
-              ),
-            ).toMatchObject({ available: true });
-
-            phase = "recovered";
-            const { sessionKey, terminal } = await runTurn("auth", "Reply AUTH_RECOVERY_OK.");
-            signal.throwIfAborted();
-            expect(terminal.status, gateway.logs()).toBe("ok");
-            expect(requests.recovered).toBe(1);
-            expect(unexpectedCredential).toBe(false);
-            proofStep = "chat.history";
-            const history = await activeClient.request<{ messages: unknown[] }>(
-              "chat.history",
-              { sessionKey },
-              { signal },
-            );
-            signal.throwIfAborted();
-            expect(history.messages).toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({
-                  role: "assistant",
-                  content: expect.arrayContaining([
-                    expect.objectContaining({ type: "text", text: "AUTH_RECOVERY_OK" }),
-                  ]),
-                }),
-              ]),
-            );
-            expect(gateway.child?.pid).toBe(gatewayPid);
-            expect(
-              loadPersistedAuthProfileStore(gateway.state.agentDir("rate"))?.usageStats?.[
-                profileIds.rate
-              ],
-            ).toEqual(rateStats);
-            console.info(
-              "[auth-recovery-runtime-proof]",
-              JSON.stringify({
-                head,
-                gatewayPid,
-                requests,
-                rateCooldownRecorded: true,
-                authFailureRecorded: true,
-                credentialSaveAcknowledged: true,
-                authRefreshAcknowledged: true,
-                recoveredModelAvailable: true,
-                responseTextVerified: true,
-                sameGatewayProcess: true,
-                rateStatePreserved: true,
-              }),
-            );
-          } catch (error) {
-            try {
-              console.error(
-                "[auth-recovery-failure]",
-                JSON.stringify({
-                  head,
-                  phase,
-                  proofStep,
-                  gatewayPid: instance?.child?.pid,
-                  exitCode: instance?.child?.exitCode,
-                  signalCode: instance?.child?.signalCode,
-                }),
-                instance?.logs(),
-              );
-            } catch {
-              // Diagnostic output must not replace the original fixture failure.
-            }
-            throw error;
           }
+          expect(await gateway.entrypoint()).toEqual(["dist/index.js"]);
+          signal.throwIfAborted();
+          await gateway.startGateway();
+          signal.throwIfAborted();
+          const gatewayPid = gateway.child?.pid;
+          expect(gatewayPid).toBeTypeOf("number");
+          client = await connectGateway(gateway, signal, verifyCleanup);
+          signal.throwIfAborted();
+          const activeClient = client;
+          const runTurn = async (agentId: keyof typeof profileIds, message: string) => {
+            signal.throwIfAborted();
+            const sessionKey = `agent:${agentId}:auth-recovery-${randomUUID()}`;
+            const accepted = await activeClient.request<{ runId: string; status: string }>(
+              "agent",
+              {
+                agentId,
+                sessionKey,
+                message,
+                deliver: false,
+                idempotencyKey: randomUUID(),
+              },
+              { signal },
+            );
+            signal.throwIfAborted();
+            expect(accepted.status).toBe("accepted");
+            const terminal = await activeClient.request<{ status: string }>(
+              "agent.wait",
+              {
+                runId: accepted.runId,
+                timeoutMs: 60_000,
+              },
+              { timeoutMs: 65_000, signal },
+            );
+            signal.throwIfAborted();
+            return { sessionKey, terminal };
+          };
+          const failTurn = async (agentId: keyof typeof profileIds) => {
+            const { terminal } = await runTurn(agentId, `AUTH_FAILURE_${agentId.toUpperCase()}`);
+            signal.throwIfAborted();
+            expect(terminal.status).toBe("error");
+            expect(requests[agentId]).toBeGreaterThan(0);
+            expect(unexpectedCredential).toBe(false);
+            return loadPersistedAuthProfileStore(
+              gateway.state.agentDir(agentId === "auth" ? "main" : agentId),
+            )?.usageStats?.[profileIds[agentId]];
+          };
+          const rateStats = await failTurn("rate");
+          signal.throwIfAborted();
+          expect(rateStats?.cooldownReason).toBe("rate_limit");
+          expect(requests.rate).toBe(2);
+
+          phase = "auth";
+          const authStats = await failTurn("auth");
+          signal.throwIfAborted();
+          expect(["auth", "auth_permanent"]).toContain(
+            authStats?.cooldownReason ?? authStats?.disabledReason,
+          );
+          const saved = await activeClient.request<{
+            provider: string;
+            profileId: string;
+            warning?: string;
+          }>(
+            "models.authSetApiKey",
+            { agentId: "auth", provider: provider.providerId, apiKey: credentials.recovered },
+            { timeoutMs: 30_000, signal },
+          );
+          signal.throwIfAborted();
+          expect(saved).toEqual({ provider: provider.providerId, profileId: profileIds.auth });
+          const refreshed = await activeClient.request<{ refreshed: boolean }>(
+            "models.authRefresh",
+            { agentId: "auth", operation: "login" },
+            { timeoutMs: 30_000, signal },
+          );
+          signal.throwIfAborted();
+          expect(refreshed.refreshed).toBe(true);
+          const catalog = await activeClient.request<{ models: ModelChoice[] }>(
+            "models.list",
+            { agentId: "auth", view: "configured" },
+            { signal },
+          );
+          signal.throwIfAborted();
+          expect(
+            catalog.models.find(
+              (model) => model.provider === provider.providerId && model.id === provider.modelId,
+            ),
+          ).toMatchObject({ available: true });
+
+          phase = "recovered";
+          const { sessionKey, terminal } = await runTurn("auth", "Reply AUTH_RECOVERY_OK.");
+          signal.throwIfAborted();
+          expect(terminal.status, gateway.logs()).toBe("ok");
+          expect(requests.recovered).toBe(1);
+          expect(unexpectedCredential).toBe(false);
+          const history = await activeClient.request<{ messages: unknown[] }>(
+            "chat.history",
+            { sessionKey },
+            { signal },
+          );
+          signal.throwIfAborted();
+          expect(history.messages).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                role: "assistant",
+                content: expect.arrayContaining([
+                  expect.objectContaining({ type: "text", text: "AUTH_RECOVERY_OK" }),
+                ]),
+              }),
+            ]),
+          );
+          expect(gateway.child?.pid).toBe(gatewayPid);
+          expect(
+            loadPersistedAuthProfileStore(gateway.state.agentDir("rate"))?.usageStats?.[
+              profileIds.rate
+            ],
+          ).toEqual(rateStats);
         },
         async () => {
           await client?.stopAndWait({ timeoutMs: 1_000 });
@@ -399,17 +371,7 @@ describe("Gateway profile failure recovery", () => {
         async () => {
           await instance?.cleanup();
         },
-        async () => {
-          if (!providerListening) {
-            return;
-          }
-          const closed = new Promise<void>((resolve, reject) => {
-            providerServer.close((error) => (error ? reject(error) : resolve()));
-          });
-          providerServer.closeAllConnections();
-          await closed;
-          providerListening = false;
-        },
+        () => closeProvider(providerServer),
       );
     },
   );
@@ -421,40 +383,24 @@ describe("Gateway configured catalog authentication", () => {
     { timeout: 180_000 },
     async (context) => {
       const repoRoot = process.cwd();
-      let head: ReturnType<typeof resolveGitHead> | undefined;
       const agentIds = Array.from({ length: 11 }, (_, index) =>
         index === 0 ? "main" : `catalog-${index}`,
       );
       const credential = "qa-configured-catalog-key";
-      let upstreamRequests = 0;
       const providerServer = createServer((request, response) => {
         request.resume();
-        upstreamRequests += 1;
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify({ data: [] }));
       });
       let instance: OpenClawTestInstance | undefined;
       let client: Awaited<ReturnType<typeof acquireGatewayTestClient>> | undefined;
-      let providerListening = false;
       await runQaGatewayTestFixture(
         context,
         async ({ signal, verifyCleanup }) => {
-          head = await verifyBuiltGatewayHead(repoRoot, signal);
+          await verifyBuiltGatewayHead(repoRoot, signal);
           signal.throwIfAborted();
-          await new Promise<void>((resolve, reject) => {
-            providerServer.once("error", reject);
-            providerServer.listen(0, "127.0.0.1", () => {
-              providerListening = true;
-              resolve();
-            });
-          });
-          signal.throwIfAborted();
-          const address = providerServer.address();
-          if (!address || typeof address === "string") {
-            throw new Error("Catalog provider did not expose its listening port");
-          }
           const provider = buildMockOpenAiResponsesProvider(
-            `http://127.0.0.1:${address.port}/v1`,
+            await startProvider(providerServer, signal),
             "synthetic-0",
           );
           const models = Array.from({ length: 400 }, (_, index) => ({
@@ -521,31 +467,12 @@ describe("Gateway configured catalog authentication", () => {
           signal.throwIfAborted();
           expect(await gateway.entrypoint()).toEqual(["dist/index.js"]);
           signal.throwIfAborted();
-          const startupStarted = performance.now();
           await gateway.startGateway();
           signal.throwIfAborted();
-          const startupMs = performance.now() - startupStarted;
-          client = await acquireGatewayTestClient(
-            {
-              url: gateway.url,
-              token: gateway.gatewayToken,
-              clientName: "cli",
-              mode: "cli",
-              role: "operator",
-              scopes: ["operator.admin", "operator.read", "operator.write"],
-            },
-            {
-              timeoutMs: 30_000,
-              timeoutMessage: "Catalog Gateway client did not connect",
-              closeMessage: "Catalog Gateway closed",
-              signal,
-              verifyCleanup,
-            },
-          );
+          client = await connectGateway(gateway, signal, verifyCleanup);
           signal.throwIfAborted();
           const expectedIds = new Set(models.map((model) => model.id));
           let returnedRows = 0;
-          const rpcStarted = performance.now();
           for (const agentId of agentIds) {
             signal.throwIfAborted();
             const result = await client.request<{ models: ModelChoice[] }>(
@@ -565,25 +492,9 @@ describe("Gateway configured catalog authentication", () => {
             ).toBe(true);
             returnedRows += configured.length;
           }
-          const rpcElapsedMs = performance.now() - rpcStarted;
           const gatewayRssMb = readProcessRssMb(gateway.child?.pid);
           expect(gatewayRssMb).toBeGreaterThan(0);
           expect(returnedRows).toBe(4_400);
-          console.info(
-            "[configured-catalog-auth-runtime-proof]",
-            JSON.stringify({
-              head,
-              configuredModels: models.length,
-              agents: agentIds.length,
-              rpcRequests: agentIds.length,
-              returnedRows,
-              allAvailable: true,
-              startupMs,
-              rpcElapsedMs,
-              gatewayRssMb,
-              upstreamRequests,
-            }),
-          );
         },
         async () => {
           await client?.stopAndWait({ timeoutMs: 1_000 });
@@ -591,17 +502,7 @@ describe("Gateway configured catalog authentication", () => {
         async () => {
           await instance?.cleanup();
         },
-        async () => {
-          if (!providerListening) {
-            return;
-          }
-          const closed = new Promise<void>((resolve, reject) => {
-            providerServer.close((error) => (error ? reject(error) : resolve()));
-          });
-          providerServer.closeAllConnections();
-          await closed;
-          providerListening = false;
-        },
+        () => closeProvider(providerServer),
       );
     },
   );

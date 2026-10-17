@@ -1,12 +1,6 @@
-/**
- * Tests for live-probe helpers that validate the CLI MCP loopback backend.
- */
-import {
-  createServer as createHttpServer,
-  type IncomingMessage,
-  type ServerResponse,
-} from "node:http";
+import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import { createServer as createTcpServer, type Server, type Socket } from "node:net";
+import { text } from "node:stream/consumers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { verifyCliCronMcpLoopbackPreflight } from "./gateway-cli-backend.live-probe-helpers.js";
 import {
@@ -39,24 +33,13 @@ async function listen(server: Server): Promise<number> {
   return address.port;
 }
 
-async function readRequestBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
 function writeJson(response: ServerResponse, status: number, body: unknown): void {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
 }
 
-function preflightParams(env: NodeJS.ProcessEnv = {}) {
-  return {
-    sessionKey: "session-key",
-    env,
-  };
+function preflight(env: NodeJS.ProcessEnv = {}) {
+  return verifyCliCronMcpLoopbackPreflight({ sessionKey: "session-key", env });
 }
 
 describe("gateway CLI backend live probe helpers", () => {
@@ -76,7 +59,7 @@ describe("gateway CLI backend live probe helpers", () => {
       const methods: string[] = [];
       const server = createHttpServer((request, response) => {
         void (async () => {
-          const body = JSON.parse(await readRequestBody(request)) as {
+          const body = JSON.parse(await text(request)) as {
             id?: unknown;
             method?: string;
           };
@@ -98,28 +81,18 @@ describe("gateway CLI backend live probe helpers", () => {
                       ? [{ name: "automations", inputSchema: { type: "object", properties: {} } }]
                       : [],
                   }
-                : body.method === "tools/call"
-                  ? {
-                      isError: true,
-                      content: [
-                        {
-                          type: "text",
-                          text: "trusted operational run instance required for this gateway call",
-                        },
-                      ],
-                    }
-                  : {},
+                : {},
           });
         })();
       });
       const port = await listen(server);
       activateLoopbackRuntime(port);
       try {
-        const preflight = verifyCliCronMcpLoopbackPreflight(preflightParams());
+        const result = preflight();
         if (present) {
-          await expect(preflight).resolves.toBeUndefined();
+          await expect(result).resolves.toBeUndefined();
         } else {
-          await expect(preflight).rejects.toThrow(
+          await expect(result).rejects.toThrow(
             "mcp loopback tools/list did not expose automations",
           );
         }
@@ -141,11 +114,9 @@ describe("gateway CLI backend live probe helpers", () => {
     activateLoopbackRuntime(port);
     const startedAt = Date.now();
     try {
-      await expect(
-        verifyCliCronMcpLoopbackPreflight(
-          preflightParams({ OPENCLAW_MCP_LOOPBACK_PROBE_TIMEOUT_MS: "100" }),
-        ),
-      ).rejects.toThrow(/aborted|AbortError/iu);
+      await expect(preflight({ OPENCLAW_MCP_LOOPBACK_PROBE_TIMEOUT_MS: "100" })).rejects.toThrow(
+        /aborted|AbortError/iu,
+      );
       expect(Date.now() - startedAt).toBeLessThan(2_500);
     } finally {
       for (const socket of sockets) {
@@ -163,11 +134,9 @@ describe("gateway CLI backend live probe helpers", () => {
     const port = await listen(server);
     activateLoopbackRuntime(port);
     try {
-      await expect(
-        verifyCliCronMcpLoopbackPreflight(
-          preflightParams({ OPENCLAW_MCP_LOOPBACK_PROBE_MAX_BODY_BYTES: "64" }),
-        ),
-      ).rejects.toThrow("mcp loopback response body exceeded 64 bytes");
+      await expect(preflight({ OPENCLAW_MCP_LOOPBACK_PROBE_MAX_BODY_BYTES: "64" })).rejects.toThrow(
+        "mcp loopback response body exceeded 64 bytes",
+      );
     } finally {
       server.close();
     }
@@ -195,11 +164,9 @@ describe("gateway CLI backend live probe helpers", () => {
     process.on("unhandledRejection", onUnhandledRejection);
 
     try {
-      await expect(
-        verifyCliCronMcpLoopbackPreflight(
-          preflightParams({ OPENCLAW_MCP_LOOPBACK_PROBE_MAX_BODY_BYTES: "64" }),
-        ),
-      ).rejects.toThrow("mcp loopback response body exceeded 64 bytes");
+      await expect(preflight({ OPENCLAW_MCP_LOOPBACK_PROBE_MAX_BODY_BYTES: "64" })).rejects.toThrow(
+        "mcp loopback response body exceeded 64 bytes",
+      );
       expect(cancel).toHaveBeenCalledOnce();
       expect(body.locked).toBe(false);
       await new Promise<void>((resolve) => {
@@ -224,9 +191,7 @@ describe("gateway CLI backend live probe helpers", () => {
     );
     activateLoopbackRuntime(12345);
 
-    await expect(verifyCliCronMcpLoopbackPreflight(preflightParams())).rejects.toThrow(
-      "loopback response read failed",
-    );
+    await expect(preflight()).rejects.toThrow("loopback response read failed");
     expect(body.locked).toBe(false);
   });
 });

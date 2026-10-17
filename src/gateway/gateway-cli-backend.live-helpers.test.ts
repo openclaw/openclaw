@@ -1,6 +1,3 @@
-/**
- * Tests live helper utilities for gateway CLI backend probes.
- */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -29,37 +26,39 @@ describe("gateway cli backend live helpers", () => {
     vi.useRealTimers();
     gatewayStartupEnv.restore();
     cliBackendsTesting.resetDepsForTest();
-    delete process.env.OPENCLAW_SKIP_CHANNELS;
-    delete process.env.OPENCLAW_SKIP_PROVIDERS;
-    delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-    delete process.env.OPENCLAW_SKIP_CRON;
-    delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
-    delete process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-    delete process.env.OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP;
-    delete process.env.OPENCLAW_LIVE_CLI_BACKEND_ADVISORY;
-    delete process.env.ANTHROPIC_API_KEY;
-    delete process.env.ANTHROPIC_API_KEY_OLD;
+    for (const key of Object.keys(originalEnv)
+      .filter(
+        (name) => !["PATH", "OPENCLAW_GATEWAY_PORT", "OPENCLAW_PATH_BOOTSTRAPPED"].includes(name),
+      )
+      .concat([
+        "OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP",
+        "OPENCLAW_LIVE_CLI_BACKEND_ADVISORY",
+      ])) {
+      delete process.env[key];
+    }
   });
+
+  const originalEnv = {
+    OPENCLAW_SKIP_CHANNELS: "old-channels",
+    OPENCLAW_SKIP_PROVIDERS: "old-providers",
+    OPENCLAW_SKIP_GMAIL_WATCHER: "old-gmail",
+    OPENCLAW_SKIP_CRON: "old-cron",
+    OPENCLAW_SKIP_CANVAS_HOST: "old-canvas",
+    OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "old-browser",
+    OPENCLAW_BUNDLED_PLUGINS_DIR: "old-bundled",
+    OPENCLAW_TEST_MINIMAL_GATEWAY: "old-minimal",
+    ANTHROPIC_API_KEY: "old-anthropic",
+    ANTHROPIC_API_KEY_OLD: "old-anthropic-old",
+    PATH: "old-path",
+    OPENCLAW_GATEWAY_PORT: "old-port",
+    OPENCLAW_PATH_BOOTSTRAPPED: "old-bootstrap",
+  };
 
   it("applies and restores live env including full gateway mode", async () => {
     const { applyCliBackendLiveEnv, restoreCliBackendLiveEnv, snapshotCliBackendLiveEnv } =
       liveHelpers;
 
-    process.env.OPENCLAW_SKIP_CHANNELS = "old-channels";
-    process.env.OPENCLAW_SKIP_PROVIDERS = "old-providers";
-    process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "old-gmail";
-    process.env.OPENCLAW_SKIP_CRON = "old-cron";
-    process.env.OPENCLAW_SKIP_CANVAS_HOST = "old-canvas";
-    process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "old-browser";
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "old-bundled";
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "old-minimal";
-    process.env.ANTHROPIC_API_KEY = "old-anthropic";
-    process.env.ANTHROPIC_API_KEY_OLD = "old-anthropic-old";
-    process.env.PATH = "old-path";
-    process.env.OPENCLAW_GATEWAY_PORT = "old-port";
-    process.env.OPENCLAW_PATH_BOOTSTRAPPED = "old-bootstrap";
+    Object.assign(process.env, originalEnv);
 
     const snapshot = snapshotCliBackendLiveEnv();
     applyCliBackendLiveEnv(new Set<string>());
@@ -67,37 +66,25 @@ describe("gateway cli backend live helpers", () => {
     process.env.OPENCLAW_GATEWAY_PORT = "gateway-port";
     process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
 
-    expect(process.env.OPENCLAW_SKIP_CHANNELS).toBe("1");
-    expect(process.env.OPENCLAW_SKIP_PROVIDERS).toBe("1");
-    expect(process.env.OPENCLAW_SKIP_GMAIL_WATCHER).toBe("1");
-    expect(process.env.OPENCLAW_SKIP_CRON).toBe("1");
-    expect(process.env.OPENCLAW_SKIP_CANVAS_HOST).toBe("1");
-    expect(process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER).toBe("1");
-    expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe("old-bundled");
-    expect(process.env.OPENCLAW_TEST_MINIMAL_GATEWAY).toBe("0");
+    expect(process.env).toMatchObject({
+      ...Object.fromEntries(
+        Object.keys(originalEnv)
+          .filter((key) => key.startsWith("OPENCLAW_SKIP_"))
+          .map((key) => [key, "1"]),
+      ),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: "old-bundled",
+      OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+    });
     expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(process.env.ANTHROPIC_API_KEY_OLD).toBeUndefined();
 
     restoreCliBackendLiveEnv(snapshot);
 
-    expect(process.env.OPENCLAW_SKIP_CHANNELS).toBe("old-channels");
-    expect(process.env.OPENCLAW_SKIP_PROVIDERS).toBe("old-providers");
-    expect(process.env.OPENCLAW_SKIP_GMAIL_WATCHER).toBe("old-gmail");
-    expect(process.env.OPENCLAW_SKIP_CRON).toBe("old-cron");
-    expect(process.env.OPENCLAW_SKIP_CANVAS_HOST).toBe("old-canvas");
-    expect(process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER).toBe("old-browser");
-    expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe("old-bundled");
-    expect(process.env.OPENCLAW_TEST_MINIMAL_GATEWAY).toBe("old-minimal");
-    expect(process.env.ANTHROPIC_API_KEY).toBe("old-anthropic");
-    expect(process.env.ANTHROPIC_API_KEY_OLD).toBe("old-anthropic-old");
-    expect(process.env.PATH).toBe("old-path");
-    expect(process.env.OPENCLAW_GATEWAY_PORT).toBe("old-port");
-    expect(process.env.OPENCLAW_PATH_BOOTSTRAPPED).toBe("old-bootstrap");
+    expect(process.env).toMatchObject(originalEnv);
   });
 
   it("defaults the model switch probe to Claude Sonnet -> Opus", async () => {
-    const { resolveCliModelSwitchProbeTarget, shouldRunCliModelSwitchProbe } =
-      await import("./gateway-cli-backend.live-helpers.js");
+    const { resolveCliModelSwitchProbeTarget, shouldRunCliModelSwitchProbe } = liveHelpers;
 
     delete process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE;
 
@@ -110,8 +97,7 @@ describe("gateway cli backend live helpers", () => {
   });
 
   it("rejects removed Codex CLI refs for live CLI backend selection", async () => {
-    const { resolveCliBackendLiveModelSelection } =
-      await import("./gateway-cli-backend.live-helpers.js");
+    const { resolveCliBackendLiveModelSelection } = liveHelpers;
 
     expect(() =>
       resolveCliBackendLiveModelSelection({
@@ -122,8 +108,7 @@ describe("gateway cli backend live helpers", () => {
   });
 
   it("configures legacy CLI model refs as canonical provider models plus CLI runtime", async () => {
-    const { resolveCliBackendLiveModelSelection } =
-      await import("./gateway-cli-backend.live-helpers.js");
+    const { resolveCliBackendLiveModelSelection } = liveHelpers;
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
       resolvePluginSetupRegistry: () => ({
@@ -160,7 +145,7 @@ describe("gateway cli backend live helpers", () => {
   });
 
   it("lets env disable the model switch probe", async () => {
-    const { shouldRunCliModelSwitchProbe } = await import("./gateway-cli-backend.live-helpers.js");
+    const { shouldRunCliModelSwitchProbe } = liveHelpers;
 
     process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE = "0";
 
@@ -173,7 +158,7 @@ describe("gateway cli backend live helpers", () => {
       CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV,
       resolveCliBackendLiveProviderSkipDecision,
       shouldAllowCliBackendLiveProviderSkip,
-    } = await import("./gateway-cli-backend.live-helpers.js");
+    } = liveHelpers;
 
     expect(shouldAllowCliBackendLiveProviderSkip({})).toBe(false);
     expect(
@@ -233,39 +218,24 @@ describe("gateway cli backend live helpers", () => {
   });
 
   it("retries Codex CLI timeout payloads only before the final attempt", async () => {
-    const { isCliBackendLiveTimeoutPayload, shouldRetryCliBackendLiveTimeout } =
-      await import("./gateway-cli-backend.live-helpers.js");
+    const { isCliBackendLiveTimeoutPayload, shouldRetryCliBackendLiveTimeout } = liveHelpers;
     const timeoutPayload = { status: "timeout" };
+    const retry = (attempt: number, providerId = "codex-cli") =>
+      shouldRetryCliBackendLiveTimeout({
+        attempt,
+        maxAttempts: 2,
+        payload: timeoutPayload,
+        providerId,
+      });
 
     expect(isCliBackendLiveTimeoutPayload(timeoutPayload)).toBe(true);
-    expect(
-      shouldRetryCliBackendLiveTimeout({
-        attempt: 1,
-        maxAttempts: 2,
-        payload: timeoutPayload,
-        providerId: "codex-cli",
-      }),
-    ).toBe(true);
-    expect(
-      shouldRetryCliBackendLiveTimeout({
-        attempt: 2,
-        maxAttempts: 2,
-        payload: timeoutPayload,
-        providerId: "codex-cli",
-      }),
-    ).toBe(false);
-    expect(
-      shouldRetryCliBackendLiveTimeout({
-        attempt: 1,
-        maxAttempts: 2,
-        payload: timeoutPayload,
-        providerId: "claude-cli",
-      }),
-    ).toBe(false);
+    expect(retry(1)).toBe(true);
+    expect(retry(2)).toBe(false);
+    expect(retry(1, "claude-cli")).toBe(false);
   });
 
   it("allows live env overrides for fresh and resume CLI args", async () => {
-    const { resolveCliBackendLiveArgs } = await import("./gateway-cli-backend.live-helpers.js");
+    const { resolveCliBackendLiveArgs } = liveHelpers;
 
     process.env.OPENCLAW_LIVE_CLI_BACKEND_ARGS = JSON.stringify([
       "exec",
@@ -299,70 +269,28 @@ describe("gateway cli backend live helpers", () => {
   });
 
   it("retries cancelled cron MCP replies", async () => {
-    const { shouldRetryCliCronMcpProbeReply } =
-      await import("./gateway-cli-backend.live-helpers.js");
-
-    expect(
-      shouldRetryCliCronMcpProbeReply(
-        "The `cron` MCP tool call was cancelled again, so the job was not created.",
-      ),
-    ).toBe(true);
-    expect(
-      shouldRetryCliCronMcpProbeReply(
-        "The cron tool call was cancelled again, so the job still was not created.",
-      ),
-    ).toBe(true);
-    expect(
-      shouldRetryCliCronMcpProbeReply(
-        "The `cron` MCP call was cancelled again, so the job was not created.",
-      ),
-    ).toBe(true);
-    expect(
-      shouldRetryCliCronMcpProbeReply(
-        "The cron tool call was cancelled again, so nothing was created.",
-      ),
-    ).toBe(true);
-    expect(
-      shouldRetryCliCronMcpProbeReply(
-        "The `cron` MCP tool call was cancelled (`user cancelled MCP tool call`).",
-      ),
-    ).toBe(true);
-    expect(
-      shouldRetryCliCronMcpProbeReply(
-        "The tool call was cancelled before completion, so I can’t verify the cron job was created.",
-      ),
-    ).toBe(true);
-    expect(
-      shouldRetryCliCronMcpProbeReply(
-        "The cron tool call was cancelled twice, so I could not create the job.",
-      ),
-    ).toBe(true);
-    expect(
-      shouldRetryCliCronMcpProbeReply(
-        "The cron tool call was cancelled twice, so I couldn’t create `live-mcp-67f4e9`. Please retry and I’ll do it again.",
-      ),
-    ).toBe(true);
-    expect(
-      shouldRetryCliCronMcpProbeReply(
-        "The cron tool call was canceled twice on the host side, so I couldn’t create `live-mcp-2d1afb`. If you want, send the same request again and I’ll retry.",
-      ),
-    ).toBe(true);
-    expect(
-      shouldRetryCliCronMcpProbeReply(
-        "I tried the `cron` tool call twice, but both attempts were canceled by the environment (`user cancelled MCP tool call`), so I can’t honestly reply with the success token.",
-      ),
-    ).toBe(true);
-    expect(shouldRetryCliCronMcpProbeReply("   ")).toBe(true);
-    expect(
-      shouldRetryCliCronMcpProbeReply(
-        "The cron tool call was cancelled twice, so I couldn’t create `live-mcp-932c6b`. If you want, I can try again.",
-      ),
-    ).toBe(true);
-    expect(
-      shouldRetryCliCronMcpProbeReply(
-        "The cron job was not created because the schedule payload was invalid.",
-      ),
-    ).toBe(false);
-    expect(shouldRetryCliCronMcpProbeReply("live-mcp-abc123")).toBe(false);
+    const { shouldRetryCliCronMcpProbeReply } = liveHelpers;
+    for (const reply of [
+      "The `cron` MCP tool call was cancelled again, so the job was not created.",
+      "The cron tool call was cancelled again, so the job still was not created.",
+      "The `cron` MCP call was cancelled again, so the job was not created.",
+      "The cron tool call was cancelled again, so nothing was created.",
+      "The `cron` MCP tool call was cancelled (`user cancelled MCP tool call`).",
+      "The tool call was cancelled before completion, so I can’t verify the cron job was created.",
+      "The cron tool call was cancelled twice, so I could not create the job.",
+      "The cron tool call was cancelled twice, so I couldn’t create `live-mcp-67f4e9`. Please retry and I’ll do it again.",
+      "The cron tool call was canceled twice on the host side, so I couldn’t create `live-mcp-2d1afb`. If you want, send the same request again and I’ll retry.",
+      "I tried the `cron` tool call twice, but both attempts were canceled by the environment (`user cancelled MCP tool call`), so I can’t honestly reply with the success token.",
+      "   ",
+      "The cron tool call was cancelled twice, so I couldn’t create `live-mcp-932c6b`. If you want, I can try again.",
+    ]) {
+      expect(shouldRetryCliCronMcpProbeReply(reply), reply).toBe(true);
+    }
+    for (const reply of [
+      "The cron job was not created because the schedule payload was invalid.",
+      "live-mcp-abc123",
+    ]) {
+      expect(shouldRetryCliCronMcpProbeReply(reply), reply).toBe(false);
+    }
   });
 });

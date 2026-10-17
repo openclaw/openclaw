@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import "../commands/agent.js";
@@ -65,31 +66,11 @@ describe("Gateway agent skill refresh", () => {
             chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
           }
           requests.push(Buffer.concat(chunks).toString("utf8"));
-          const message = {
-            type: "message",
-            id: randomUUID(),
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: "ok", annotations: [] }],
-          };
-          response.writeHead(200, { "content-type": "text/event-stream" });
-          for (const event of [
-            {
-              type: "response.output_item.added",
-              item: { ...message, status: "in_progress", content: [] },
-            },
-            { type: "response.output_item.done", item: message },
-            {
-              type: "response.completed",
-              response: {
-                status: "completed",
-                usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-              },
-            },
-          ]) {
-            response.write(`data: ${JSON.stringify(event)}\n\n`);
-          }
-          response.end("data: [DONE]\n\n");
+          writeOpenAiResponsesText(response, {
+            text: "ok",
+            messageId: randomUUID(),
+            responseId: randomUUID(),
+          });
         })().catch((error: unknown) => {
           handlerFailures.push(error);
           if (!response.destroyed) {
@@ -232,16 +213,16 @@ describe("Gateway agent skill refresh", () => {
           expect(discoveryWorkers()).toEqual([expect.objectContaining({ workerCount: 1 })]);
           const firstLifecycleCount = lifecycleEvents.length;
           const firstEventCount = countSkillsChanged(gatewayEvents);
-          await editSkillAndRefresh(
-            workspace,
-            seedSkillFile,
-            "seed-proof",
-            "updated-seed-description",
-            signal,
-          );
+          const activeClient = gateway.client;
+          const refresh = (file: string, description: string) =>
+            editSkillAndRefresh(workspace, file, description, signal);
+          const turn = async (message: string) => {
+            await runAgentTurn(activeClient, sessionKey, message, signal);
+            return loadSessionEntry({ agentId: "main", sessionKey, storePath });
+          };
+          await refresh(seedSkillFile, "updated-seed-description");
           expect(lifecycleEvents.length).toBeGreaterThan(firstLifecycleCount);
-          await runAgentTurn(gateway.client, sessionKey, "second", signal);
-          const second = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+          const second = await turn("second");
           expect(second?.skillsSnapshot?.version).toBeGreaterThan(
             first?.skillsSnapshot?.version ?? 0,
           );
@@ -251,22 +232,14 @@ describe("Gateway agent skill refresh", () => {
           const secondLifecycleCount = lifecycleEvents.length;
           const secondEventCount = countSkillsChanged(gatewayEvents);
 
-          await runAgentTurn(gateway.client, sessionKey, "third without edit", signal);
-          const third = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+          const third = await turn("third without edit");
           expect(third?.skillsSnapshot?.version).toBe(second?.skillsSnapshot?.version);
           expect(lifecycleEvents).toHaveLength(secondLifecycleCount);
           expect(countSkillsChanged(gatewayEvents)).toBe(secondEventCount);
           const repeatedTurnEventCount = lifecycleEvents.length;
-          await editSkillAndRefresh(
-            workspace,
-            seedSkillFile,
-            "seed-proof",
-            "updated-seed-description-v2",
-            signal,
-          );
+          await refresh(seedSkillFile, "updated-seed-description-v2");
           expect(lifecycleEvents.length).toBeGreaterThan(repeatedTurnEventCount);
-          await runAgentTurn(gateway.client, sessionKey, "fourth", signal);
-          const fourth = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+          const fourth = await turn("fourth");
           expect(fourth?.skillsSnapshot?.version).toBeGreaterThan(
             second?.skillsSnapshot?.version ?? 0,
           );
@@ -275,16 +248,9 @@ describe("Gateway agent skill refresh", () => {
           await fs.mkdir(path.dirname(canonicalSkillFile), { recursive: true });
           signal.throwIfAborted();
           const canonicalEventCount = lifecycleEvents.length;
-          await editSkillAndRefresh(
-            workspace,
-            canonicalSkillFile,
-            "canonical-proof",
-            "canonical-root-description",
-            signal,
-          );
+          await refresh(canonicalSkillFile, "canonical-root-description");
           expect(lifecycleEvents.length).toBeGreaterThan(canonicalEventCount);
-          await runAgentTurn(gateway.client, sessionKey, "fifth", signal);
-          const fifth = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+          const fifth = await turn("fifth");
           expect(fifth?.skillsSnapshot?.version).toBeGreaterThan(
             fourth?.skillsSnapshot?.version ?? 0,
           );
@@ -409,28 +375,27 @@ function discoveryWorkers() {
 async function editSkillAndRefresh(
   workspaceDir: string,
   file: string,
-  name: string,
   description: string,
   signal: AbortSignal,
 ): Promise<void> {
   signal.throwIfAborted();
-  await writeSkill(file, name, description);
+  await writeSkill(file, path.basename(path.dirname(file)), description);
   await refreshSkillsDiscovery({ workspaceDir });
   signal.throwIfAborted();
 }
 
 async function initializeGitWorkspace(workspace: string, signal: AbortSignal): Promise<void> {
   signal.throwIfAborted();
-  await execFileAsync("git", ["init", "-b", "main", workspace]);
-  signal.throwIfAborted();
-  await execFileAsync("git", ["-C", workspace, "config", "user.name", "OpenClaw Tests"]);
-  signal.throwIfAborted();
-  await execFileAsync("git", ["-C", workspace, "config", "user.email", "tests@openclaw.invalid"]);
-  signal.throwIfAborted();
-  await execFileAsync("git", ["-C", workspace, "add", "."]);
-  signal.throwIfAborted();
-  await execFileAsync("git", ["-C", workspace, "commit", "-m", "initial"]);
-  signal.throwIfAborted();
+  for (const args of [
+    ["init", "-b", "main", workspace],
+    ["-C", workspace, "config", "user.name", "OpenClaw Tests"],
+    ["-C", workspace, "config", "user.email", "tests@openclaw.invalid"],
+    ["-C", workspace, "add", "."],
+    ["-C", workspace, "commit", "-m", "initial"],
+  ]) {
+    await execFileAsync("git", args);
+    signal.throwIfAborted();
+  }
 }
 
 async function writeSkill(file: string, name: string, description: string): Promise<void> {

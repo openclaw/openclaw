@@ -76,24 +76,15 @@ export type RuntimeBackendEntry = ReturnType<
 >[number];
 
 export async function initializeCacheProbeGitWorkspace(workspaceDir: string): Promise<void> {
-  await execFileAsync("git", ["init", "--quiet", workspaceDir]);
-  await execFileAsync("git", ["-C", workspaceDir, "config", "user.name", "OpenClaw Tests"]);
-  await execFileAsync("git", [
-    "-C",
-    workspaceDir,
-    "config",
-    "user.email",
-    "openclaw-tests@localhost",
-  ]);
-  await execFileAsync("git", ["-C", workspaceDir, "add", "--all"]);
-  await execFileAsync("git", [
-    "-C",
-    workspaceDir,
-    "commit",
-    "--quiet",
-    "-m",
-    "cache probe baseline",
-  ]);
+  for (const args of [
+    ["init", "--quiet", workspaceDir],
+    ["-C", workspaceDir, "config", "user.name", "OpenClaw Tests"],
+    ["-C", workspaceDir, "config", "user.email", "openclaw-tests@localhost"],
+    ["-C", workspaceDir, "add", "--all"],
+    ["-C", workspaceDir, "commit", "--quiet", "-m", "cache probe baseline"],
+  ]) {
+    await execFileAsync("git", args);
+  }
 }
 
 type CliCacheUsage = {
@@ -101,18 +92,11 @@ type CliCacheUsage = {
   cacheRead?: number;
   cacheWrite?: number;
 };
+type CliCacheMeta = Partial<Record<"usage" | "lastCallUsage", CliCacheUsage>>;
 
 export function logCliCacheUsage(turn: string, result: unknown): number {
-  const typedResult =
-    // SAFETY: agent results expose this optional metadata shape; every field stays optional below.
-    result as {
-      meta?: {
-        agentMeta?: {
-          usage?: CliCacheUsage;
-          lastCallUsage?: CliCacheUsage;
-        };
-      };
-    };
+  // SAFETY: agent results expose optional normalized usage metadata.
+  const typedResult = result as { meta?: { agentMeta?: CliCacheMeta } };
   const agentMeta = typedResult.meta?.agentMeta;
   const usage = agentMeta?.lastCallUsage ?? agentMeta?.usage;
   if (!usage) {
