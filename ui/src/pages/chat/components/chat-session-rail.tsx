@@ -1,7 +1,7 @@
 import "../../../styles/chat/session-rail.css";
 import "../../../styles/chat/working-indicator.css";
 import "./chat-comment-controller.ts";
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, For, Show } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
@@ -12,6 +12,7 @@ import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type {
   ChatSessionCompanionThread,
@@ -73,22 +74,19 @@ function ChatSessionRailContent(props: ChatSessionRailProps) {
   let region!: HTMLElement;
   let thread!: HTMLDivElement;
   const blocks = markdownBlocksRef(() => props.presented);
-  const [configRevision, setConfigRevision] = createSignal(0);
-  // The upload configuration owner publishes outside Solid.
-  createEffect(
-    () => props.uploadConfig,
-    (config) => config?.subscribe(() => setConfigRevision((value) => value + 1)),
-  );
+  const uploadConfig = createMemo(() => {
+    const config = props.uploadConfig;
+    return config && projectOwner(config, (owner) => owner);
+  });
   // The synchronous companion owner mutates settled turns in place. Snapshot its published fields.
   const turns = createMemo(() => props.companion.turns.map((turn) => ({ ...turn, source: turn })));
   const pending = () => props.companion.turns.some((turn) => turn.status === "pending");
   const attachmentProps = createMemo<ChatAttachmentControlsProps>(() => {
-    configRevision();
     const companion = props.companion;
     const reads = companion.attachmentReads;
     const readSignal = reads?.readSignal;
     return {
-      uploadConfig: props.uploadConfig,
+      uploadConfig: uploadConfig()?.read(),
       attachments: companion.attachments,
       getAttachments: () => props.companion.attachments ?? [],
       attachmentReads: reads,
