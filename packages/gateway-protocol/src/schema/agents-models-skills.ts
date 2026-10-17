@@ -18,6 +18,14 @@ import { GitHubSetupHandleSchema } from "./secrets.js";
 import { SessionPermissionModeSchema } from "./sessions-row.js";
 import { SkillsDetailResultSchema } from "./skill-detail.js";
 
+export {
+  AgentsAvatarGenerateParamsSchema,
+  AgentsAvatarGenerateResultSchema,
+} from "./agents-avatar-generate.js";
+export type {
+  AgentsAvatarGenerateParams,
+  AgentsAvatarGenerateResult,
+} from "./agents-avatar-generate.js";
 export { SkillsDetailResultSchema } from "./skill-detail.js";
 export { AgentKindSchema, AgentOwnershipSchema };
 export { AgentsListParamsSchema, type AgentsListParams } from "./agents-list-session-placement.js";
@@ -132,19 +140,6 @@ export const AgentsUpdateParamsSchema = closedObject({
 export const AgentsUpdateResultSchema = closedObject({
   ok: Type.Literal(true),
   agentId: NonEmptyString,
-});
-
-/** Generates an avatar preview from text explicitly supplied by its creator. */
-export const AgentsAvatarGenerateParamsSchema = closedObject({
-  agentId: NonEmptyString,
-  prompt: Type.String({ minLength: 1, maxLength: 8_000, pattern: "\\S" }),
-});
-
-/** The Gateway renders the static SVG; generating does not change the saved identity. */
-export const AgentsAvatarGenerateResultSchema = closedObject({
-  name: Type.String({ minLength: 1, maxLength: 120 }),
-  description: Type.String({ minLength: 1, maxLength: 2_000 }),
-  svg: Type.String({ minLength: 1, maxLength: 128_000 }),
 });
 
 /** Deletes an agent and optionally its workspace/config files. */
@@ -788,8 +783,6 @@ export type AgentsCreateParams = Static<typeof AgentsCreateParamsSchema>;
 export type AgentsCreateResult = Static<typeof AgentsCreateResultSchema>;
 export type AgentsUpdateParams = Static<typeof AgentsUpdateParamsSchema>;
 export type AgentsUpdateResult = Static<typeof AgentsUpdateResultSchema>;
-export type AgentsAvatarGenerateParams = Static<typeof AgentsAvatarGenerateParamsSchema>;
-export type AgentsAvatarGenerateResult = Static<typeof AgentsAvatarGenerateResultSchema>;
 export type AgentsDeleteParams = Static<typeof AgentsDeleteParamsSchema>;
 export type AgentsDeleteResult = Static<typeof AgentsDeleteResultSchema>;
 export type AgentsListResult = Static<typeof AgentsListResultSchema>;
