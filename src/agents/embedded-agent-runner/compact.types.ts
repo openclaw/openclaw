@@ -1,9 +1,18 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { ExecToolDefaults } from "../bash-tools.exec-types.js";
+import type { AgentHarnessCompactionSourceAuthority } from "../harness/host-source-authority.js";
 import type { ModelCallUrgency } from "../run-trigger.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
+import type { CompactionRequestConstraints } from "../sessions/compaction/request-budget.js";
+import type {
+  CompactionAppendPersistence,
+  CompactionAppendPersistenceAsync,
+} from "../sessions/session-compaction-persistence.js";
+import type { AcceptedCompactionSuccessor } from "./compaction-successor.js";
+import type { PreparedCompactionSession } from "./run/compaction-accounting-bridge.js";
 
 export type CompactEmbeddedAgentSessionParams = Pick<
   import("./run/params.js").RunEmbeddedAgentParams,
@@ -140,4 +149,23 @@ export type CompactEmbeddedAgentSessionRuntimeParams = Omit<
 > & {
   /** Deprecated file-backed artifact target. Prefer sessionTarget for new callers. */
   sessionFile?: string;
+};
+
+type QueuedCompactionHostCommit = {
+  entry: AcceptedCompactionSuccessor["entry"];
+  tokensAfter?: number;
+  compactionKind: "context-engine" | "server-endpoint";
+};
+
+/** Host-only bookkeeping, deliberately separate from plugin compaction parameters. */
+export type QueuedCompactionHostOptions = CompactionRequestConstraints & {
+  sourceAuthority: AgentHarnessCompactionSourceAuthority;
+  assertActive?: SessionSourceAssertion;
+  preparedSession?: PreparedCompactionSession;
+  transcriptBytePreflightHarness?: "codex";
+  withCompactionPersistence?: CompactionAppendPersistence;
+  withCompactionPersistenceAsync?: CompactionAppendPersistenceAsync;
+  onCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
+  onHostCompactionCommitted?: (commit: QueuedCompactionHostCommit) => Promise<void> | void;
+  onHostCompactionTranscriptSettled?: (commit: QueuedCompactionHostCommit) => Promise<void> | void;
 };

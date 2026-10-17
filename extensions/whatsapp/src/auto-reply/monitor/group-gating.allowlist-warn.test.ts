@@ -5,11 +5,11 @@ vi.mock("./group-activation.js", () => ({
   resolveGroupActivationFor: vi.fn(async () => "mention"),
 }));
 
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildGroupHistoryKey } from "openclaw/plugin-sdk/routing";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
-import type { MentionConfig } from "../mentions.js";
-import { applyGroupGating } from "./group-gating.js";
-import type { GroupHistoryEntry } from "./inbound-context.js";
+import { createGroupGatingTestHandler } from "./group-gating.test-harness.js";
 
 function makeUnregisteredGroupMsg(
   conversationId: string,
@@ -44,13 +44,13 @@ function makeUnregisteredGroupMsg(
   });
 }
 
-type WarnLogger = (obj: unknown, msg: string) => void;
-type ApplyGroupGatingParams = Parameters<typeof applyGroupGating>[0];
+type WarnLogger = (...args: unknown[]) => void;
+type GroupTestParams = { cfg: OpenClawConfig };
 
 function makeParams(
   msg: AdmittedWebInboundMessage,
-  warn: WarnLogger,
-  cfg: ApplyGroupGatingParams["cfg"] = {
+  warn: ReturnType<typeof vi.fn<WarnLogger>>,
+  cfg: GroupTestParams["cfg"] = {
     channels: {
       whatsapp: {
         groupPolicy: "allowlist",
@@ -78,22 +78,28 @@ function makeParams(
   if (!admission) {
     throw new Error("Expected admitted WhatsApp test message");
   }
+  const fixture = createGroupGatingTestHandler({ cfg, warn });
   return {
+    ...fixture,
     cfg,
     msg,
-    groupHistoryKey: `whatsapp:group:${admission.conversation.id}`,
-    agentId: "main",
-    sessionKey: `agent:main:whatsapp:group:${admission.conversation.id}`,
-    baseMentionConfig: { mentionRegexes: [/\bopenclaw\b/i] } satisfies MentionConfig,
-    groupHistories: new Map<string, GroupHistoryEntry[]>(),
-    groupHistoryLimit: 20,
-    groupMemberNames: new Map<string, Map<string, string>>(),
-    logVerbose: vi.fn(),
-    replyLogger: { warn },
+    groupHistoryKey: buildGroupHistoryKey({
+      channel: "whatsapp",
+      accountId: admission.accountId,
+      peerKind: "group",
+      peerId: admission.conversation.id,
+    }),
+    logVerbose: fixture.verboseMock,
   };
 }
 
-describe("applyGroupGating allowlist drop warning", () => {
+async function handleGroup(params: ReturnType<typeof makeParams>) {
+  const before = params.processMock.mock.calls.length;
+  await params.handler(params.msg);
+  return { shouldProcess: params.processMock.mock.calls.length > before };
+}
+
+describe("WhatsApp group admission drop warning", () => {
   it.each([
     {
       name: "names the root groups path for non-default accounts inheriting root groups",
@@ -109,7 +115,7 @@ describe("applyGroupGating allowlist drop warning", () => {
           },
         },
         messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
-      } as ApplyGroupGatingParams["cfg"],
+      } as GroupTestParams["cfg"],
       verboseMessage: undefined,
     },
   ])("$name", async ({ conversationId, accountId, groupsPath, cfg, verboseMessage }) => {
@@ -117,7 +123,7 @@ describe("applyGroupGating allowlist drop warning", () => {
     const msg = makeUnregisteredGroupMsg(conversationId, accountId);
     const params = makeParams(msg, warn, cfg);
 
-    await expect(applyGroupGating(params)).resolves.toEqual({ shouldProcess: false });
+    await expect(handleGroup(params)).resolves.toEqual({ shouldProcess: false });
 
     expect(warn).toHaveBeenCalledTimes(1);
     if (verboseMessage) {
@@ -133,7 +139,7 @@ describe("applyGroupGating allowlist drop warning", () => {
     const warn = vi.fn<WarnLogger>();
     const msg = makeUnregisteredGroupMsg("registered@g.us");
 
-    await applyGroupGating(makeParams(msg, warn));
+    await handleGroup(makeParams(msg, warn));
 
     expect(warn).not.toHaveBeenCalled();
   });
@@ -148,7 +154,7 @@ describe("applyGroupGating allowlist drop warning", () => {
           accounts: { work: { groups: { "*": {} } } },
         },
       },
-    } satisfies ApplyGroupGatingParams["cfg"];
+    } satisfies GroupTestParams["cfg"];
     const makeUnmentioned = (conversationId: string, accountId = "default") => {
       const msg = makeUnregisteredGroupMsg(conversationId, accountId);
       msg.payload.body = "What up";
@@ -156,10 +162,10 @@ describe("applyGroupGating allowlist drop warning", () => {
     };
     const first = makeUnmentioned("mention-a@g.us");
 
-    await expect(applyGroupGating(first)).resolves.toEqual({ shouldProcess: false });
-    await applyGroupGating(first);
-    await applyGroupGating(makeUnmentioned("mention-b@g.us"));
-    await applyGroupGating(makeUnmentioned("mention-a@g.us", "work"));
+    await expect(handleGroup(first)).resolves.toEqual({ shouldProcess: false });
+    await handleGroup(first);
+    await handleGroup(makeUnmentioned("mention-b@g.us"));
+    await handleGroup(makeUnmentioned("mention-a@g.us", "work"));
 
     expect(warn).toHaveBeenCalledTimes(3);
     expect(first.groupHistories.get(first.groupHistoryKey)?.map((entry) => entry.body)).toEqual([

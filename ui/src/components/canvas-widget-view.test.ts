@@ -7,6 +7,7 @@ import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
+import type { GatewayEventListener } from "../api/gateway.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -17,13 +18,14 @@ import {
   bumpCanvasWidgetFrameConnectionGeneration,
   getCanvasWidgetFrameConnectionGeneration,
 } from "../lib/chat/canvas-widget-frame-generation.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   createApplicationGateway,
   createSolidApplicationContextProvider,
 } from "../test-helpers/solid-application-context.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { CanvasWidgetView, type OpenClawCanvasWidgetView } from "./canvas-widget-view.ts";
+import { CanvasWidgetView, type OpenClawCanvasWidgetView } from "./canvas-widget-view.tsx";
 import { WIDGET_PROMPT_EVENT } from "./mcp-app-security.ts";
 
 const repeat = (length: number) => "x".repeat(length);
@@ -46,6 +48,7 @@ const gateways = new WeakMap<
     snapshot: WidgetGatewaySnapshot;
     connectionRevision: number;
     notify: () => void;
+    emit: GatewayEventListener;
   }
 >();
 
@@ -82,13 +85,32 @@ function mount(
   widgetClient: WidgetClient = client,
   docId = "cv_inline",
   parent: Element | ShadowRoot = document.body,
+  operatorScopes?: string[],
 ) {
   const view = document.createElement(elementName) as OpenClawCanvasWidgetView;
+  const listeners = new Set<GatewayEventListener>();
   const gateway = {
-    snapshot: { client: widgetClient, phase: "connected" } as WidgetGatewaySnapshot,
+    snapshot: {
+      client: widgetClient,
+      phase: "connected",
+      ...(operatorScopes
+        ? { hello: gatewayHelloForMethods(["canvas.document.view"], operatorScopes) }
+        : {}),
+    } as WidgetGatewaySnapshot,
     connection: { gatewayUrl: "ws://gateway.example:8443" },
     connectionRevision: 0,
     notify: () => {},
+    emit: ((event) => {
+      for (const listener of listeners) {
+        listener(event);
+      }
+    }) as GatewayEventListener,
+    subscribeEvents: (listener: GatewayEventListener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     subscribe: (notify: () => void) => {
       gateway.notify = notify;
       return () => {};
@@ -443,6 +465,92 @@ describe("Canvas widget view", () => {
     expect(sibling.scrollTop).toBe(0);
   });
 
+  it("opens a guest widget automatically when its result commits", async () => {
+    vi.useFakeTimers();
+    const pending = createDeferred<CanvasDocumentViewResult>();
+    client.request.mockReturnValueOnce(pending.promise);
+    const view = mount(client, "cv_inline", document.body, ["operator.sessions.read"]);
+    const gateway = gateways.get(view)!;
+    await settle(view);
+    expect(client.request).toHaveBeenLastCalledWith(
+      "canvas.document.view",
+      { docId: view.docId, sessionKey: view.sessionKey },
+      { timeoutMs: 30_000 },
+    );
+    pending.reject(
+      new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: "Waiting for the widget result.",
+        retryable: true,
+        details: { type: "canvas_widget_pending" },
+      }),
+    );
+    await settle(view);
+    expect(view.querySelector('[role="status"]')?.textContent).toContain(
+      "Waiting for the widget result",
+    );
+    expect(view.querySelector('[role="alert"]')).toBeNull();
+    gateway.emit({
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: "agent:main:another",
+        message: { role: "toolResult", toolName: "show_widget" },
+      },
+    });
+    expect(client.request).toHaveBeenCalledOnce();
+    gateway.emit({
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: view.sessionKey,
+        message: { role: "toolResult", toolName: "show_widget" },
+      },
+    });
+    await settle(view);
+    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(view.documentHtml).toBe(documentView.html);
+    expect(view.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("replaces an in-flight guest lookup when its result commits", async () => {
+    vi.useFakeTimers();
+    const stale = createDeferred<CanvasDocumentViewResult>();
+    client.request.mockReturnValueOnce(stale.promise);
+    const view = mount(client, "cv_inline", document.body, ["operator.sessions.read"]);
+    const gateway = gateways.get(view)!;
+    await settle(view);
+    gateway.emit({
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: view.sessionKey,
+        message: { role: "toolResult", toolName: "show_widget" },
+      },
+    });
+    await settle(view);
+    stale.reject(new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Access denied" }));
+    await settle(view);
+    expect(client.request).toHaveBeenCalledTimes(2);
+    expect(view.documentHtml).toBe(documentView.html);
+    expect(view.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("preserves a loaded full-access frame when a result commits", async () => {
+    const { view, frame } = await loaded();
+    gateways.get(view)!.emit({
+      type: "event",
+      event: "session.message",
+      payload: {
+        sessionKey: view.sessionKey,
+        message: { role: "toolResult", toolName: "show_widget" },
+      },
+    });
+    await settle(view);
+    expect(view.querySelector("iframe")).toBe(frame);
+    expect(client.request).toHaveBeenCalledOnce();
+  });
+
   it.each(["credential", "session", "denied"])(
     "retires retained content after %s changes",
     async (change) => {
@@ -468,6 +576,7 @@ describe("Canvas widget view", () => {
       expect(frame.isConnected).toBe(false);
       expect(view.documentHtml).toBeUndefined();
       expect(view.querySelector('[role="alert"]')?.textContent).toContain("Access denied");
+      expect(view.querySelector("button")).toBeNull();
     },
   );
 
@@ -779,7 +888,9 @@ describe("Canvas widget view", () => {
       view.allowScripts = false;
     }
     expect(close).toHaveBeenCalledOnce();
-    expect(removeEventListener).toHaveBeenCalledWith("message", onMessage);
+    expect(removeEventListener.mock.calls).toContainEqual(
+      expect.arrayContaining(["message", onMessage]),
+    );
     prompt("Stale port");
     expect(received).toHaveBeenCalledOnce();
     if (change === "strict then scripts") {

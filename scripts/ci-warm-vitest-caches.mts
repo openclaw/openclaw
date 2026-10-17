@@ -5,7 +5,6 @@ import { buildChildEnv } from "./ci-run-node-test-shard.mts";
 import { createVitestCacheWarmGroups } from "./lib/ci-node-test-plan.mts";
 import { BUN_UI_TEST_ENV, resolveCiTestRuntimeSelections } from "./lib/ci-test-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
-import { requirePinnedBun } from "./lib/pinned-bun.mts";
 
 // Consumer entrypoints choose their own reusable cache leaves; the planner owns
 // membership for both backend-local protected seeds. Trial policies never expand
@@ -119,8 +118,8 @@ try {
     0,
     { runtime: "bun", cacheSlot: 0 },
   );
-  // The direct UI launcher bypasses shard admission; bind its verified runtime here.
-  bunEnv.OPENCLAW_BUN_PATH = requirePinnedBun(bunEnv);
+  // Keep the inherited Bun selection: the launcher verifies it, and CI resolves the
+  // pinned fork from PATH, which is not an OPENCLAW_BUN_PATH file.
   bunEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE = bunEnv.OPENCLAW_VITEST_INCLUDE_FILE;
   delete bunEnv.OPENCLAW_VITEST_INCLUDE_FILE;
   await collect(

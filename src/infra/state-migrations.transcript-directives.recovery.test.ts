@@ -66,8 +66,14 @@ describe("historical transcript directive archive recovery", () => {
         "main",
         JSON.stringify(
           cursorPhase === "complete"
-            ? { phase: "complete" }
-            : { phase: "archives", generation: "generation", sessionId: "complete-recovery" },
+            ? { phase: "complete", version: 2 }
+            : {
+                phase: "archives",
+                generation: "generation",
+                scope: "all",
+                sessionId: "complete-recovery",
+                version: 2,
+              },
         ),
         1,
         1,
@@ -159,7 +165,7 @@ describe("historical transcript directive archive recovery", () => {
                 .get("historical-transcript-directives-v1")?.app_version,
             ),
           ),
-        ).toEqual({ phase: "complete" });
+        ).toEqual({ phase: "complete", version: 2 });
         expect(fs.readFileSync(archivePath)).toEqual(archiveBytes);
       } finally {
         recovered.close();

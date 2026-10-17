@@ -2,7 +2,6 @@ import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/
 import type {
   SessionCatalogHost,
   SessionCatalogSession,
-  SessionDiscussionState,
   SessionSharingRole,
   SessionSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -54,6 +53,7 @@ import {
   getChatHistoryLoadState,
   isChatHistoryRetrying,
 } from "./chat-history-state.ts";
+import { createChatPaneDiscussionState } from "./chat-pane-discussion-state.ts";
 import { sameChatPanePresence } from "./chat-pane-presence.ts";
 import type { PendingSessionPanelToggle } from "./chat-pane-session-panel-toggle.ts";
 import type { ChatPaneConnectionScope, PaneSessionChangeOptions } from "./chat-pane-shared.ts";
@@ -107,9 +107,7 @@ export abstract class ChatPaneStateOwner {
       // live textarea while visibility change can still reach browser storage.
       state.handleChatDraftChange(liveDraft);
     }
-    if (draftChanged || state.chatStreamRenderFrame != null) {
-      requestChatPageUpdate(state);
-    }
+    requestChatPageUpdate(state);
   };
   start() {
     if (this.chatState.disposed) {
@@ -121,10 +119,12 @@ export abstract class ChatPaneStateOwner {
     this.isConnected = true;
     this.transcript.start();
     this.refreshBoardSubscriptions();
+    // Focus ownership hands off draft persistence synchronously, before another input event.
     this.chatState.addCleanup(
       chatInputOwnerForContext(this.context).subscribe(() => this.activeChanged(this.active)),
     );
     this.activeChanged(this.active);
+    // Approval publications reconcile live request ownership even when rendering is parked.
     this.chatState.addCleanup(
       this.context.overlays?.subscribe((snapshot) => {
         if (this.state) {
@@ -133,6 +133,7 @@ export abstract class ChatPaneStateOwner {
         this.invalidate();
       }) ?? (() => {}),
     );
+    // Configuration publications reconcile the scoped swarm hydrator outside rendering.
     this.chatState.addCleanup(
       this.context.runtimeConfig?.subscribe(() => {
         this.refreshSwarmRoster();
@@ -367,7 +368,7 @@ export abstract class ChatPaneStateOwner {
   get runActivity() {
     return this.chatState.projectRunActivity(this.state);
   }
-  protected readonly composerCapabilities = new ChatComposerCapabilityHost(() => this.invalidate());
+  readonly composerCapabilities = new ChatComposerCapabilityHost();
   protected readonly transcript = createChatTranscript(
     () => this.invalidate(),
     () => this.paneId,
@@ -527,8 +528,7 @@ export abstract class ChatPaneStateOwner {
   };
   protected swarmHydrator: SwarmRosterHydrator | null = null;
   protected swarmEnabled = true;
-  protected readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
-  protected readonly sessionDiscussionOpenUrls = new Map<string, string | null>();
+  readonly sessionDiscussion = createChatPaneDiscussionState();
   protected readonly pendingPanelToggleRequests = new Map<
     SessionPanelToggleSlot,
     PendingSessionPanelToggle
@@ -614,7 +614,7 @@ export abstract class ChatPaneStateOwner {
     public context: ApplicationContext,
   ) {}
 
-  private subscribedBoardProvider: BoardProvider | undefined;
+  subscribedBoardProvider: BoardProvider | undefined;
   private stopBoardSubscriptions: (() => void) | undefined;
 
   refreshBoardSubscriptions(): void {
@@ -627,14 +627,10 @@ export abstract class ChatPaneStateOwner {
     }
     this.stopBoardSubscriptions?.();
     this.subscribedBoardProvider = provider;
-    const stopSnapshot = provider.snapshot$.subscribe(this.invalidate);
-    const stopError = provider.loadError$.subscribe(this.invalidate);
-    const stopEvents = provider.events.subscribe((event) => this.handleBoardCommand(event));
-    this.stopBoardSubscriptions = () => {
-      stopSnapshot();
-      stopError();
-      stopEvents();
-    };
+    // Commands must reach the synchronous pane owner in order, including while parked.
+    this.stopBoardSubscriptions = provider.events.subscribe((event) =>
+      this.handleBoardCommand(event),
+    );
   }
 
   protected abstract refreshSessionPullRequests(options?: {

@@ -152,6 +152,7 @@ export function SkillsPage(props: SkillsPageProps) {
           ensureInitialData();
         }
       };
+      // Each agent transition retires prior skill requests, preserving A-to-B-to-A changes before rendering.
       const cleanup = selection.subscribe(sync);
       sync();
       return cleanup;

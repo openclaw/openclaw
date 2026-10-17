@@ -295,6 +295,7 @@ export function createSessionRowProjectionFixture(params: {
       policyConfig: cfg,
       modelCatalog,
       rowContext,
+      physicalStorePaths: (path) => [path],
       scope: (options) => {
         const ownerAgentIds = new Set(listAgentIds(cfg));
         return {

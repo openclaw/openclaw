@@ -343,34 +343,10 @@ export function createChannelIngressQueue<
     }
   };
 
-  const enqueue = async (
-    id: string,
-    payload: TPayload,
-    enqueueOptions?: Parameters<
-      ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["enqueue"]
-    >[2],
-    assertOperationCurrent?: () => void,
-  ): ReturnType<ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["enqueue"]> => {
-    assertOperationCurrent?.();
-    const eventId = idFrom(id);
-    const receivedAt = enqueueOptions?.receivedAt ?? now();
-    const result = await execute(
-      "channelIngress.enqueue",
-      {
-        ...scope,
-        id: eventId,
-        payloadJson: JSON.stringify(payload),
-        metadataJson:
-          enqueueOptions?.metadata === undefined ? null : JSON.stringify(enqueueOptions.metadata),
-        receivedAt,
-        now: now(),
-        laneKey: enqueueOptions?.laneKey,
-      },
-      capture(),
-      undefined,
-      undefined,
-      assertOperationCurrent,
-    );
+  type Queue = ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>;
+  const enqueueResult = (
+    result: ChannelIngressWorkerOperations["channelIngress.enqueue"]["output"][number],
+  ): Awaited<ReturnType<Queue["enqueue"]>> => {
     const row = result.row;
     if (result.accepted) {
       return {
@@ -392,14 +368,55 @@ export function createChannelIngressQueue<
     if (row.status === "claimed") {
       const record = claimedRecord<TPayload, TMetadata>(row);
       if (!record) {
-        throw new Error(`Corrupt claimed channel ingress event ${queueName}/${eventId}`);
+        throw new Error(`Corrupt claimed channel ingress event ${queueName}/${row.event_id}`);
       }
       return { kind: "claimed", duplicate: true, record };
     }
     return { kind: "pending", duplicate: true, record: requiredRecord<TPayload, TMetadata>(row) };
   };
+  const enqueueBatch = async (
+    events: Parameters<NonNullable<Queue["enqueueBatch"]>>[0],
+    assertOperationCurrent?: () => void,
+  ): Promise<Array<Awaited<ReturnType<Queue["enqueue"]>>>> => {
+    assertOperationCurrent?.();
+    if (events.length === 0) {
+      return [];
+    }
+    const result = await execute(
+      "channelIngress.enqueue",
+      {
+        ...scope,
+        events: events.map((event) => ({
+          id: idFrom(event.id),
+          payloadJson: JSON.stringify(event.payload),
+          metadataJson: event.metadata === undefined ? null : JSON.stringify(event.metadata),
+          receivedAt: event.receivedAt ?? now(),
+          laneKey: event.laneKey,
+        })),
+        now: now(),
+      },
+      capture(),
+      undefined,
+      undefined,
+      assertOperationCurrent,
+    );
+    return result.map(enqueueResult);
+  };
+  const enqueue = async (
+    id: string,
+    payload: TPayload,
+    enqueueOptions?: Parameters<Queue["enqueue"]>[2],
+    assertOperationCurrent?: () => void,
+  ): ReturnType<Queue["enqueue"]> => {
+    const [result] = await enqueueBatch(
+      [{ id, payload, ...enqueueOptions }],
+      assertOperationCurrent,
+    );
+    return result!;
+  };
   return {
     enqueue,
+    enqueueBatch,
     enqueueAuthorized: (id, payload, authorizedOptions) => {
       if (typeof authorizedOptions.assertCurrent !== "function") {
         return Promise.reject(

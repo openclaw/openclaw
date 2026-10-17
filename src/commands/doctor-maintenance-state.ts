@@ -224,6 +224,7 @@ export async function createDoctorMaintenanceState(options: {
           ...params,
           assertCurrent: options.assertCurrent,
           deadlineMs: options.deadline(),
+          signal: options.signal,
         },
       );
       await enterResources(acquired);
@@ -299,6 +300,7 @@ export async function createDoctorMaintenanceState(options: {
             paths,
             stateDir,
             env: selectedEnv,
+            log: (message) => params.runtime.log(sanitizeDoctorNote(message)),
             assertCurrent: () => assertOwnerCurrent(databasePath),
           });
         });

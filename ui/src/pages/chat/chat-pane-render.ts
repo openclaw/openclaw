@@ -19,7 +19,7 @@ import {
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { projectsForGateway } from "../../lib/projects.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { GitHubPublicationController } from "../../lib/sessions/github-publication-controller.ts";
+import { GitHubPublicationOwner } from "../../lib/sessions/github-publication-owner.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
@@ -62,7 +62,6 @@ import {
   selectedChatSessionRow,
 } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
@@ -72,6 +71,10 @@ import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
   private readonly notify = () => this.invalidate();
+
+  get realtimeTalk() {
+    return this.state?.realtimeTalk;
+  }
 
   readProviderReviewState() {
     return this.state;
@@ -264,7 +267,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
             navigateToModelProvider(this.context, currentAgentId, provider),
           onModelAccounts: () => this.context.navigate("profile"),
         });
-    const composerState = getChatComposerState(this.presentationId);
     const projectCatalog = projectsForGateway(this.context.gateway).snapshot;
     const publicationScope = this.captureConnectionScope();
     const readPublicationRow = () => {
@@ -292,7 +294,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         this.githubPublication = this.context.sessions.githubPublication.attach(
           publicationRow,
           this.notify,
-          GitHubPublicationController,
+          GitHubPublicationOwner,
         );
       }
       const publication = this.githubPublication;
@@ -447,6 +449,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
       draft: state.chatMessage,
+      draftSource: this.chatState.composerDraft,
       composerPredictions: {
         enabled: this.context.config.current.composerPredictionsEnabled === true,
         active: !catalogKey && this.active && this.presented,
@@ -467,17 +470,18 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       modelCatalog: state.chatModelCatalog,
       modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
       queue: state.chatQueue,
-      realtimeTalkActive: state.realtimeTalkActive,
-      realtimeTalkStatus: state.realtimeTalkStatus,
-      realtimeTalkDetail: state.realtimeTalkDetail,
-      realtimeTalkInputNotice: state.realtimeTalkInputNotice,
-      realtimeTalkInputLevel: state.realtimeTalkInputLevel,
-      realtimeTalkConversation: state.realtimeTalkConversationState.entries,
-      realtimeTalkVideoStream: state.realtimeTalkVideoStream,
-      realtimeTalkCameraDevices: state.realtimeTalkCameraDevices,
-      realtimeTalkVideoCapable: state.realtimeTalkVideoCapable,
-      realtimeTalkVideoPending: state.realtimeTalkVideoPending,
-      realtimeTalkCameraError: state.realtimeTalkCameraError,
+      getQueue: () => state.chatQueue,
+      realtimeTalkActive: state.realtimeTalk.snapshot.realtimeTalkActive,
+      realtimeTalkStatus: state.realtimeTalk.snapshot.realtimeTalkStatus,
+      realtimeTalkDetail: state.realtimeTalk.snapshot.realtimeTalkDetail,
+      realtimeTalkInputNotice: state.realtimeTalk.snapshot.realtimeTalkInputNotice,
+      realtimeTalkInputLevel: state.realtimeTalk.snapshot.realtimeTalkInputLevel,
+      realtimeTalkConversation: state.realtimeTalk.snapshot.realtimeTalkConversationState.entries,
+      realtimeTalkVideoStream: state.realtimeTalk.snapshot.realtimeTalkVideoStream,
+      realtimeTalkCameraDevices: state.realtimeTalk.snapshot.realtimeTalkCameraDevices,
+      realtimeTalkVideoCapable: state.realtimeTalk.snapshot.realtimeTalkVideoCapable,
+      realtimeTalkVideoPending: state.realtimeTalk.snapshot.realtimeTalkVideoPending,
+      realtimeTalkCameraError: state.realtimeTalk.snapshot.realtimeTalkCameraError,
       connected: state.connected,
       offline: gatewaySnapshot.offlineStable,
       gatewayClient: state.client,
@@ -528,16 +532,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       toolOverrides: selectedSession?.toolOverrides,
       capabilityMenu: catalogKey
         ? undefined
-        : this.composerCapabilities.props(
-            this.context,
-            state,
-            selectedSession,
-            currentAgentId,
-            composerState.capabilityMenuView.startsWith("tools:"),
-            composerState.capabilityMenuOpen &&
-              (composerState.capabilityMenuView === "skills" ||
-                composerState.capabilityMenuView.startsWith("library:")),
-          ),
+        : this.composerCapabilities.props(this.context, state, selectedSession, currentAgentId),
       ...childRoster,
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
@@ -602,7 +597,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         latestFailedRunId: () =>
           chatFailureRunId(state.chatRunError, selectedChatSessionRow(state)),
       }),
-      onUseSystemDefaultMicrophone: state.realtimeTalkUseSystemDefault ?? undefined,
+      onUseSystemDefaultMicrophone:
+        state.realtimeTalk.snapshot.realtimeTalkUseSystemDefault ?? undefined,
       onToggleRealtimeTalk: () => (providerPaused ? undefined : void state.toggleRealtimeTalk()),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),
       onSwitchRealtimeCamera: () => void state.switchRealtimeTalkCamera(),
@@ -612,11 +608,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       },
       onDismissRealtimeTalkError: () => {
         dismissRealtimeTalkError(state);
-        state.requestUpdate?.();
       },
       onDismissRealtimeTalkInputNotice: () => {
-        state.realtimeTalkInputNotice = null;
-        state.requestUpdate?.();
+        state.realtimeTalk.update({ realtimeTalkInputNotice: null });
       },
       ...sessionActionCallbacks,
       onQueueRemove: state.removeQueuedMessage,
@@ -689,7 +683,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         ? undefined
         : {
             read: () => this.composerCapabilities.dialogView(this.context, state, selectedSession),
-            revision: {},
           },
       layout: this.renderChatPaneLayout({
         state,

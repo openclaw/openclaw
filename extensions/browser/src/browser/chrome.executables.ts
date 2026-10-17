@@ -75,7 +75,6 @@ const CHROMIUM_EXE_NAMES = new Set([
   "opera.exe",
   "yandex.exe",
   "yandexbrowser.exe",
-  // mac/linux names
   "google chrome",
   "google chrome canary",
   "brave browser",

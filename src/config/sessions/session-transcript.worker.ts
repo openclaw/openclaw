@@ -665,7 +665,8 @@ serveOwnedWorkerTasks(
           : value.kind === "artifacts" && value.result.kind === "download-response"
             ? value.result.response?.body
             : undefined;
-      return body ? [body.buffer] : [];
+      const deflated = value.kind === "rpc" ? value.page.encodedMessagesDeflate : undefined;
+      return [...(body ? [body.buffer] : []), ...(deflated ? [deflated.buffer] : [])];
     },
     closeResource: (key) => {
       const request = decodeAgentDatabaseReaderRequest(key);

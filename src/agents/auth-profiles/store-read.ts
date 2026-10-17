@@ -318,7 +318,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     return stripRuntimeExternalProfileMetadata(mergeAuthProfileStores(persistedStore, localStore));
   }
 
-  /** @deprecated Use loadAuthProfileStoreWithoutExternalProfilesAsync. Supported through 2026-12-31. */
+  /** @deprecated Use loadAuthProfileStoreWithoutExternalProfilesAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   function loadAuthProfileStoreWithoutExternalProfiles(
     agentDir?: string,
     loadOptions?: Pick<
@@ -401,7 +401,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     return yield* readAuthProfileStoreFromSources(effectiveAgentDir, options, env, true);
   }
 
-  /** @deprecated Use ensureAuthProfileStoreAsync. Supported through 2026-12-31. */
+  /** @deprecated Use ensureAuthProfileStoreAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   function ensureAuthProfileStore(
     agentDir?: string,
     options?: EnsureAuthProfileStoreOptions,
@@ -480,7 +480,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
     return materialized;
   }
 
-  /** @deprecated Use ensureAuthProfileStoreWithoutExternalProfilesAsync. Supported through 2026-12-31. */
+  /** @deprecated Use ensureAuthProfileStoreWithoutExternalProfilesAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   function ensureAuthProfileStoreWithoutExternalProfiles(
     agentDir?: string,
     options?: Omit<
@@ -568,7 +568,7 @@ export function createAuthProfileStoreReadRuntime(host: StoreReadHost) {
         );
   }
 
-  /** @deprecated Use ensureAuthProfileStoreForLocalUpdateAsync. Supported through 2026-12-31. */
+  /** @deprecated Use ensureAuthProfileStoreForLocalUpdateAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthProfileStore {
     warnPluginSdkDeprecation({
       family: "auth-profiles",

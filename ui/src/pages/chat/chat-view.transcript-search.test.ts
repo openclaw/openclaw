@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
@@ -39,7 +40,7 @@ function createPane(paneId = "primary") {
     runActive: true,
     onClearReply,
     onAbort,
-    onRequestUpdate: () => renderChatPropsInto(container, props),
+    onRequestUpdate: vi.fn(),
   });
   renderChatPropsInto(container, props);
   const composer = expectDefined(
@@ -56,8 +57,7 @@ function createPane(paneId = "primary") {
     composer.dispatchEvent(
       new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true }),
     );
-    await Promise.resolve();
-    expect(document.activeElement).toBe(search());
+    await waitForSolid(() => expect(document.activeElement).toBe(search()));
     if (query !== null) {
       search().value = query;
       search().dispatchEvent(new Event("input", { bubbles: true }));

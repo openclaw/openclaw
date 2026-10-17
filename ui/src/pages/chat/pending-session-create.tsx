@@ -5,6 +5,7 @@ import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts"
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -29,57 +30,64 @@ type PendingSessionCreateProps = {
 /** Draft-owned input stays local; real pane controllers mount after acceptance. */
 function PendingSessionCreateContent(props: PendingSessionCreateProps) {
   const composerId = `pending-create-${generateUUID()}`;
-  const [revision, setRevision] = createSignal(0);
+  const sources = createMemo(() => {
+    const context = props.context;
+    return (
+      context && [
+        projectOwner(context.gateway, (owner) => owner.snapshot),
+        projectOwner(context.placementStartup, (owner) => owner),
+        projectOwner(context.theme, (owner) => owner),
+        projectSource(context.chatSubmissions, {
+          read: (owner) => owner,
+          subscribe: (owner, notify) => owner.subscribeCreate(notify),
+          equality: "revision",
+        }),
+      ]
+    );
+  });
+  const [imageRevision, setImageRevision] = createSignal(0);
   let image: ImageLightboxItem | null = null;
-  const notify = () => setRevision((value) => value + 1);
-  const closeImage = () => {
+  const openImage = (item: ImageLightboxItem | null) => {
     image?.release?.();
-    image = null;
-    notify();
-  };
-  const openImage = (item: ImageLightboxItem) => {
-    closeImage();
     image = item;
-    notify();
+    setImageRevision((value) => value + 1);
   };
+  const closeImage = () => openImage(null);
   createEffect(
     () => ({ context: props.context, sessionKey: props.sessionKey }),
     ({ context }) => {
       if (!context) {
         return undefined;
       }
-      const closeAndNotify = () => {
-        closeImage();
-      };
-      const unsubscribe = [
-        context.gateway.subscribe(closeAndNotify),
-        context.chatSubmissions.subscribeCreate(closeAndNotify),
-        context.placementStartup.subscribe(notify),
-        context.theme.subscribe(notify),
-      ];
+      // These events revoke image custody synchronously, even between render commits.
+      const stopGateway = context.gateway.subscribe(closeImage);
+      const stopCreate = context.chatSubmissions.subscribeCreate(closeImage);
       return () => {
-        for (const release of unsubscribe) {
-          release?.();
-        }
+        stopGateway();
+        stopCreate();
       };
     },
   );
   const composerOwner = createMemo(() => {
-    revision();
+    sources()?.forEach((source) => source.read());
     return props.context?.chatSubmissions.readCreateComposer(props.sessionKey);
   });
-  createEffect(composerOwner, (composer) => composer?.subscribe(notify));
+  const composerProjection = createMemo(() => {
+    const owner = composerOwner();
+    return owner && projectOwner(owner, (source) => source);
+  });
   onCleanup(() => {
     image?.release?.();
     resetChatComposerState(composerId);
   });
   const view = createMemo(() => {
-    revision();
+    sources()?.forEach((source) => source.read());
     const context = props.context;
     if (!context) {
       return null;
     }
     const snapshot = context.gateway.snapshot;
+    const submissions = context.chatSubmissions;
     const identity = snapshot.selfUser?.identity;
     const startup = readDeletedSessionStartup(context, props.sessionKey);
     const failed = startup?.phase === "failed";
@@ -111,8 +119,8 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
           },
           "available",
         )
-      : context.chatSubmissions.readCreateMessage(props.sessionKey);
-    const composer = context.chatSubmissions.readCreateComposer(props.sessionKey);
+      : submissions.readCreateMessage(props.sessionKey);
+    const creationComposer = composerProjection()?.read();
     const agentId = parseAgentSessionKey(props.sessionKey)?.agentId ?? "";
     const agent = context.agents.state.agentsList?.agents.find((entry) => entry.id === agentId);
     // Reuse the chat chrome without mounting session controllers or granting
@@ -126,8 +134,8 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
         narrow: props.narrow,
         mergedChrome: props.mergedChrome,
         navDrawerOpen: props.navDrawerOpen,
-        title: context.chatSubmissions.readCreate()?.displayName ?? t("newSession.title"),
-        titlePending: submitting && !context.chatSubmissions.readCreate()?.displayName,
+        title: submissions.readCreate()?.displayName ?? t("newSession.title"),
+        titlePending: submitting && !submissions.readCreate()?.displayName,
         session: undefined,
         incognito: isIncognitoSessionKey(props.sessionKey),
         catalog: false,
@@ -181,8 +189,7 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
         renderDraft: () => <div role="status">{t("connection.reconnecting")}</div>,
         onOpenImage: openImage,
       },
-      creationComposer: composer?.canDisplay() ? composer : undefined,
-      renderRevision: {},
+      creationComposer: creationComposer?.canDisplay() ? creationComposer : undefined,
       composer: {
         paneId: composerId,
         sessionKey: props.sessionKey,
@@ -222,19 +229,10 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
                     <Show
                       when={current().creationComposer}
                       keyed
-                      fallback={
-                        <ChatComposer
-                          {...current().composer}
-                          renderRevision={current().renderRevision}
-                        />
-                      }
+                      fallback={<ChatComposer {...current().composer} />}
                     >
                       {(composer) => (
-                        <CreationComposer
-                          composer={composer}
-                          onOpenImage={openImage}
-                          renderRevision={current().renderRevision}
-                        />
+                        <CreationComposer composer={composer} onOpenImage={openImage} />
                       )}
                     </Show>
                   )}
@@ -246,7 +244,7 @@ function PendingSessionCreateContent(props: PendingSessionCreateProps) {
       </div>
       <ChatImageLightbox
         item={(() => {
-          revision();
+          imageRevision();
           return image;
         })()}
         onClose={closeImage}

@@ -176,7 +176,10 @@ describe("WorktreesPage lifecycle", () => {
       await i18n.setLocale("pt-BR");
       flush();
       expect(i18n.t("tabs.sessions")).not.toBe("Sessions");
-      expect(page.element.querySelector(".page-title")?.textContent).toBe(i18n.t("tabs.sessions"));
+      expect(page.element.querySelector("h1.page-title")?.textContent).toBe(
+        i18n.t("tabs.worktrees"),
+      );
+      expect(page.element.querySelector(".hub-page-header--stacked")).not.toBeNull();
       expect(page.element.querySelector(".page-subtitle")?.textContent).toContain(
         i18n.t("subtitles.worktrees"),
       );

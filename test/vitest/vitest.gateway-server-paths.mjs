@@ -445,6 +445,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/provider-ssh-identity.test.ts",
   "src/gateway/worker-environments/repository-project-access.test.ts",
   "src/gateway/worker-environments/repository-workspace-startup.test.ts",
+  "src/gateway/worker-environments/service-inventory-recovery.test.ts",
   "src/gateway/worker-environments/service-lifetime.test.ts",
   "src/gateway/worker-environments/service-prepare.test.ts",
   "src/gateway/worker-environments/service.plugin-create.test.ts",

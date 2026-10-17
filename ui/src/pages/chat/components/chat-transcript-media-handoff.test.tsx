@@ -77,17 +77,17 @@ function mountTranscriptPane(props: ChatThreadProps) {
       ),
       { container },
     );
-    transcript.hostUpdated();
+    transcript.update();
     flush();
   };
   const setConnected = (connected: boolean) => {
     if (connected) {
       setPresented(true);
       flush();
-      transcript.hostConnected();
-      transcript.hostUpdated();
+      transcript.start();
+      transcript.update();
     } else {
-      transcript.hostDisconnected();
+      transcript.dispose();
       setPresented(false);
     }
     flush();
@@ -95,10 +95,10 @@ function mountTranscriptPane(props: ChatThreadProps) {
   onTestFinished(() => {
     root?.unmount();
     releaseChatMediaResourceSubscriber(renderPane);
-    transcript.hostDisconnected();
+    transcript.dispose();
   });
   renderPane();
-  transcript.hostConnected();
+  transcript.start();
   flush();
   return { container, renderPane, setConnected };
 }

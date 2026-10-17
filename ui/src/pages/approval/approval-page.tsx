@@ -441,6 +441,7 @@ function createApprovalPage(context: ApplicationContext, props: ApprovalPageProp
   let activeDocumentTitle: string | undefined;
   const stopVisibility = listen(document, "visibilitychange", handleVisibilityChange);
   bindApprovalId(true);
+  // Gateway receipts retire decisions and polls and redact approvals synchronously when access changes.
   const stopGateway = context.gateway.subscribe(applyGatewaySnapshot);
   applyGatewaySnapshot(context.gateway.snapshot);
   onCleanup(() => {

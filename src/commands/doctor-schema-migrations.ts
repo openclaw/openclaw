@@ -39,6 +39,7 @@ export async function prepareDoctorDatabaseMigrations(
       path: migration.path,
       env: params.env,
       versionMigrationOnly: true,
+      integrityCheck: params.check ?? "quick",
     });
     if (migrated.warnings.length > 0) {
       throw new Error(migrated.warnings.join("\n"));
@@ -75,6 +76,7 @@ export async function prepareDoctorDatabaseMigrations(
                 path: target.path,
                 env: params.env,
                 versionMigrationOnly: true,
+                integrityCheck: params.check ?? "quick",
                 onMigrationWarning: (warning) => result.warnings.push(warning),
               }),
               {

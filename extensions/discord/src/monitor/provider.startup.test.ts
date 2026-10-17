@@ -104,7 +104,6 @@ describe("Discord provider startup", () => {
       voiceEnabled: false,
       discordConfig: {},
       runtime: createRuntimeSpies(),
-      createClient: (options, handlers, plugins) => new Client(options, handlers, plugins),
       isDisallowedIntentsError: () => false,
       ...overrides,
     });

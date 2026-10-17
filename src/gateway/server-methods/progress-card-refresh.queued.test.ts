@@ -94,7 +94,6 @@ function settledExecution(runId: string): FollowupExecutionResult {
         resolved: { provider: "test", model: "test" },
         fallback: { exhausted: false, attempts: [] },
         autoCompactionCount: 0,
-        didLogHeartbeatStrip: false,
       },
     },
     runStartedAt: Date.now(),

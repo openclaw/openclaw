@@ -1,11 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import {
-  readDiscussionSessionEntry,
-  type ClickClackDiscussionBinding,
-  type ClickClackDiscussionBindingStore,
+import type {
+  ClickClackDiscussionBinding,
+  ClickClackDiscussionBindingStore,
 } from "./binding-store.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
+import { prepareDiscussionSessionEntry } from "./session-authority.js";
 
 export class DetachedDiscussionBindingRetention {
   readonly #runtime: PluginRuntime;
@@ -28,14 +28,7 @@ export class DetachedDiscussionBindingRetention {
       return;
     }
     if (current.detachedAt === undefined) {
-      await this.#store.setIfCurrent(
-        sessionKey,
-        current,
-        { ...current, detachedAt: Date.now() },
-        {
-          assertCurrent: () => this.#assertDetached(sessionKey, current),
-        },
-      );
+      await this.#store.setIfCurrent(sessionKey, current, { ...current, detachedAt: Date.now() });
     }
     while (this.#store.detachedCount() > this.#maxRetained) {
       if (!(await this.#pruneOldest())) {
@@ -56,9 +49,7 @@ export class DetachedDiscussionBindingRetention {
       return current;
     }
     const { detachedAt: _detachedAt, ...retained } = current;
-    const applied = await this.#store.setIfCurrent(sessionKey, current, retained, {
-      assertCurrent: () => this.#assertRoomCurrent(sessionKey, current),
-    });
+    const applied = await this.#store.setIfCurrent(sessionKey, current, retained);
     return applied ? retained : undefined;
   }
 
@@ -78,49 +69,29 @@ export class DetachedDiscussionBindingRetention {
         return false;
       }
       const current = oldest.binding;
-      const entry = await readDiscussionSessionEntry(this.#runtime, oldest.sessionKey);
-      if (entry) {
-        await this.clear(oldest.sessionKey, current);
-        continue;
+      const session = await prepareDiscussionSessionEntry(this.#runtime, oldest.sessionKey);
+      try {
+        if (session.entry) {
+          await this.clear(oldest.sessionKey, current);
+          continue;
+        }
+        const authority = { assertCurrent: session.source };
+        if (
+          !(await markClickClackDiscussionChannelRevoked(
+            this.#runtime,
+            oldest.sessionKey,
+            current,
+            authority,
+          ))
+        ) {
+          continue;
+        }
+        if (await this.#store.deleteIfCurrent(oldest.sessionKey, current, authority)) {
+          return true;
+        }
+      } finally {
+        session.release();
       }
-      const authority = {
-        assertCurrent: () => this.#assertDetached(oldest.sessionKey, current),
-      };
-      if (
-        !(await markClickClackDiscussionChannelRevoked(
-          this.#runtime,
-          oldest.sessionKey,
-          current,
-          authority,
-        ))
-      ) {
-        continue;
-      }
-      if (await this.#store.deleteIfCurrent(oldest.sessionKey, current, authority)) {
-        return true;
-      }
-    }
-  }
-
-  #sameRoom(left: ClickClackDiscussionBinding, right: ClickClackDiscussionBinding): boolean {
-    return (
-      left.serverBaseUrl === right.serverBaseUrl &&
-      left.channelId === right.channelId &&
-      left.externalRef === right.externalRef
-    );
-  }
-
-  #assertRoomCurrent(sessionKey: string, expected: ClickClackDiscussionBinding): void {
-    const current = this.#store.get(sessionKey);
-    if (!current || !this.#sameRoom(current, expected)) {
-      throw new Error("ClickClack discussion binding changed before retention committed");
-    }
-  }
-
-  #assertDetached(sessionKey: string, expected: ClickClackDiscussionBinding): void {
-    this.#assertRoomCurrent(sessionKey, expected);
-    if (this.#runtime.agent.session.getSessionEntry({ sessionKey, readConsistency: "latest" })) {
-      throw new Error("ClickClack discussion session returned before retention committed");
     }
   }
 }

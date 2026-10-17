@@ -79,7 +79,14 @@ function referencePreview(url: string, subtitle: string, title: string) {
 async function openPullPreviewPage(
   deferPreview = false,
   previewResponse: ControlUiLinkReaderPreview = pullPreviewResponse,
-) {
+  detailResponse?: ControlUiLinkReaderPreview & { body: string },
+): Promise<{
+  card: Locator;
+  commentLink: Locator;
+  gateway: Awaited<ReturnType<typeof installMockGateway>>;
+  page: Page;
+  pullLink: Locator;
+}> {
   const context = await newBrowserContext();
   await context.route("https://github.com/**", (route) =>
     route.fulfill({
@@ -95,6 +102,7 @@ async function openPullPreviewPage(
   const gateway = await installPreview(page, {
     deferredMethods: deferPreview ? ["forge.preview"] : [],
     methodResponses: {
+      ...(detailResponse ? { "forge.detail": detailResponse } : {}),
       "forge.preview": {
         cases: [
           {
@@ -154,6 +162,41 @@ async function openPullPreviewPage(
 }
 
 suite.define(() => {
+  it.each([false, true])(
+    "reconciles status and compact metrics (reader first: %s)",
+    async (readerFirst) => {
+      const { card, page, pullLink, gateway } = await openPullPreviewPage(
+        readerFirst,
+        {
+          ...pullPreviewResponse,
+          badge: { label: "Open", tone: "positive" },
+        },
+        {
+          ...pullPreviewResponse,
+          body: "The pull request is merged. This is the current source status.",
+        },
+      );
+      if (!readerFirst) {
+        await pullLink.focus();
+        await expectText(card.locator(".link-reader-hovercard__state"), "Open");
+        await page.keyboard.press("Escape");
+      }
+      await pullLink.click();
+      const panel = page.locator("openclaw-link-reader-panel");
+      await expectText(panel.locator(".lr-state"), "Merged");
+      await page.mouse.move(1, 1);
+      await page.clock.runFor(150);
+      await pullLink.hover();
+      await page.clock.runFor(300);
+      if (readerFirst) {
+        await gateway.resolveDeferred("forge.preview");
+      }
+      await expectText(card.locator(".link-reader-hovercard__state"), "Merged");
+      await expectText(card.locator(".link-reader-hovercard__metadata"), "+101−12");
+      expect((await gateway.getRequests("forge.preview")).length).toBeGreaterThan(0);
+    },
+  );
+
   it("keeps all preview metadata readable with long authors on narrow screens", async () => {
     const metadata: NonNullable<ControlUiLinkReaderPreview["metadata"]> = [
       { label: "", value: "+1077", tone: "positive" },

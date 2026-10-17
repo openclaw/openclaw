@@ -232,7 +232,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
     error: null,
   };
 
-  /* Track whether user has scrolled up in the chat */
   let chatScrollLocked = true;
   let previousMessageCount = 0;
 

@@ -269,10 +269,10 @@ describe("OpenAI-compatible image provider helper", () => {
   });
 
   it("rejects image JSON beyond the generated image download ceiling", async () => {
-    // Edit mode returns at most one image, so the bound is one 32 MB image as base64.
+    // Edit mode returns at most one image, so the bound is one 64 MiB image as base64.
     postMultipartRequestMock.mockResolvedValue(
       jsonResponse({
-        data: [{ b64_json: "x".repeat(45 * 1024 * 1024) }],
+        data: [{ b64_json: "x".repeat(90 * 1024 * 1024) }],
       }),
     );
     const provider = createProvider();

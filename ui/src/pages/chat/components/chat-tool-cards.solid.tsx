@@ -29,7 +29,7 @@ import { resolveSpawnedSubagent, type SpawnedSubagent } from "../chat-spawned-su
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
-import { DiffStatChips } from "./chat-diff-render.solid.tsx";
+import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import { ChatPermissionCard } from "./chat-divider.tsx";
 import type { BrowserTabPreview } from "./chat-tool-cards.ts";
 import { ExpandedToolCardContent } from "./chat-tool-content.solid.tsx";

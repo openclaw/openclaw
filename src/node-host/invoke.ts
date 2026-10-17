@@ -333,8 +333,6 @@ async function dispatchInvoke(
       ? await invokeDeviceApps({
           paramsJSON: frame.paramsJSON,
           sharingEnabled: runtime.installedAppsSharingEnabled === true,
-          ...(runtime.installedAppsPlatform ? { platform: runtime.installedAppsPlatform } : {}),
-          ...(runtime.scanInstalledApps ? { scan: runtime.scanInstalledApps } : {}),
         })
       : undefined;
   if (result) {

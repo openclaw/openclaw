@@ -13,7 +13,7 @@ const CALLERS = [
   ["extensions/irc/src/inbound.ts", "channelIngress: access"],
   ["extensions/line/src/bot-message-context.ts", "channelIngress: params.channelIngress"],
   ["extensions/matrix/src/matrix/monitor/handler-context.ts", "channelIngress,"],
-  ["extensions/msteams/src/monitor-handler/inbound-dispatch.ts", "channelIngress:"],
+  ["extensions/msteams/src/monitor-handler/message-handler.ts", "channelIngress:"],
   ["extensions/nextcloud-talk/src/inbound.ts", "channelIngress: access"],
   ["extensions/qa-channel/src/inbound.ts", "channelIngress: access"],
   ["extensions/raft/src/inbound.ts", 'channelIngress: "unsupported"'],
@@ -81,8 +81,8 @@ const HOST_BUILDERS = [
   ],
   ["extensions/matrix/src/matrix/monitor/handler-context.ts", "core.channel.inbound.buildContext"],
   [
-    "extensions/msteams/src/monitor-handler/inbound-dispatch.ts",
-    "core.channel.inbound.buildContext",
+    "extensions/msteams/src/monitor-handler/message-handler.ts",
+    "dispatchCore.channel.inbound.buildContext",
   ],
   ["extensions/nextcloud-talk/src/inbound.ts", "core.channel.inbound.buildContext"],
   [

@@ -10,6 +10,7 @@ import {
 } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { applicationContext, type ApplicationContextRequest } from "../../app/context.ts";
+import { listen } from "./listener.ts";
 
 /** The existing capability object; providing it never transfers owner lifetimes. */
 const ApplicationContext = createContext<ApplicationContext>();
@@ -20,6 +21,7 @@ export function ApplicationProvider(props: {
   children?: JSX.Element;
   host?: HTMLElement;
 }): JSX.Element {
+  // The native transport belongs to this mounted host; the capability value stays reactive.
   const host = untrack(() => props.host);
   if (host) {
     const subscribers = new Map<
@@ -71,8 +73,8 @@ export function ApplicationProvider(props: {
         }
       }
     };
-    host.addEventListener("context-request", request);
-    host.addEventListener("context-provider", provider);
+    const stopRequest = listen(host, "context-request", request);
+    const stopProvider = listen(host, "context-provider", provider);
     createRenderEffect(
       () => props.value,
       (value) => {
@@ -82,8 +84,8 @@ export function ApplicationProvider(props: {
       },
     );
     onCleanup(() => {
-      host.removeEventListener("context-request", request);
-      host.removeEventListener("context-provider", provider);
+      stopRequest();
+      stopProvider();
       subscribers.clear();
     });
     host.dispatchEvent(
@@ -94,6 +96,7 @@ export function ApplicationProvider(props: {
     );
   }
   return createComponent(ApplicationContext, {
+    // Solid context snapshots this capability; native transport above owns replacements.
     value: untrack(() => props.value),
     get children() {
       return props.children;

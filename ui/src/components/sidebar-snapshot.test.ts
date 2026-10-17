@@ -166,6 +166,7 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
 describe("sidebar snapshot lifecycle", () => {
   const disposers: Array<() => void> = [];
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     vi.stubGlobal("indexedDB", new IDBFactory());
     vi.stubGlobal("localStorage", createStorageMock());
   });
@@ -174,9 +175,15 @@ describe("sidebar snapshot lifecycle", () => {
       dispose();
     }
     await clearStoredChatSnapshots();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+
+  async function capture(controller: ReturnType<typeof createSidebarSnapshot>) {
+    controller.capture();
+    await vi.advanceTimersByTimeAsync(500);
+  }
 
   async function warmFixture() {
     const store = new SessionSnapshotStore();
@@ -376,18 +383,83 @@ describe("sidebar snapshot lifecycle", () => {
     expect(test.gateway.snapshot.phase).toBe("connecting");
     expect(test.snapshotOwner.read().pending).toBe(false);
     test.publish();
-    test.snapshotOwner.capture();
+    await capture(test.snapshotOwner);
     expect(test.host.sidebarSnapshot).toEqual(model);
     const live = { ...model, brand: { ...model.brand, name: "Updated workspace" } };
     const saved = test.settle(live);
     test.snapshotOwner.synchronize();
     expect(test.host.sidebarSnapshot).toBeNull();
     expect(test.capture).not.toHaveBeenCalled();
-    test.snapshotOwner.capture();
+    await capture(test.snapshotOwner);
     await saved;
     expect(
       await test.store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot),
     ).toEqual(live);
+  });
+
+  it.each(["idle", "pagehide", "hidden"] as const)(
+    "coalesces a burst and persists its latest shape on %s for the next reload",
+    async (boundary) => {
+      let idle: IdleRequestCallback | undefined;
+      vi.stubGlobal(
+        "requestIdleCallback",
+        vi.fn((callback: IdleRequestCallback) => {
+          idle = callback;
+          return 1;
+        }),
+      );
+      vi.stubGlobal(
+        "cancelIdleCallback",
+        vi.fn(() => {
+          idle = undefined;
+        }),
+      );
+      const test = fixture();
+      disposers.push(() => test.snapshotOwner.disconnect());
+      test.snapshotOwner.connect();
+      test.publish();
+      void test.settle();
+      for (let index = 0; index < 24; index += 1) {
+        test.snapshotOwner.capture();
+      }
+      expect(test.capture).not.toHaveBeenCalled();
+      const latest = { ...model, entries: ["route:agents"], collapsedSections: ["online"] };
+      const saved = test.settle(latest);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(test.capture).not.toHaveBeenCalled();
+      if (boundary === "idle") {
+        idle?.({ didTimeout: false, timeRemaining: () => 50 });
+      } else if (boundary === "pagehide") {
+        window.dispatchEvent(new Event("pagehide"));
+      } else {
+        vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+      await saved;
+      expect(test.capture).toHaveBeenCalledOnce();
+      const next = fixture();
+      disposers.push(
+        admitSidebarBootScope(next.gateway, { ...scope, scope: scope.gatewayScope }),
+        () => next.snapshotOwner.disconnect(),
+      );
+      next.snapshotOwner.connect();
+      await next.restored;
+      expect(next.host.sidebarSnapshot).toEqual(latest);
+      expect(next.gateway.snapshot.phase).toBe("connecting");
+    },
+  );
+
+  it("cancels pending capture when its account scope retires", async () => {
+    const test = await warmFixture();
+    void test.settle();
+    test.publish();
+    test.snapshotOwner.capture();
+    clearBootRecords(scope.gatewayScope, { recoveryScope: scope.recoveryScope });
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(test.capture).not.toHaveBeenCalled();
+    expect(
+      await test.store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot),
+    ).toBeNull();
   });
 
   it("does not report an unchanged model saved while its write is pending", async () => {
@@ -402,10 +474,10 @@ describe("sidebar snapshot lifecycle", () => {
     disposers.push(() => test.snapshotOwner.disconnect());
     test.publish();
     const saved = test.settle();
-    test.snapshotOwner.capture();
+    await capture(test.snapshotOwner);
     await issued.promise;
     try {
-      test.snapshotOwner.capture();
+      await capture(test.snapshotOwner);
       expect(test.snapshotOwner.read().saved).toBe(false);
     } finally {
       written.resolve(true);
@@ -425,12 +497,12 @@ describe("sidebar snapshot lifecycle", () => {
     test.publish();
     void test.settle({ ...model, peoplePresenceFilter: "all" });
     test.snapshotOwner.synchronize();
-    test.snapshotOwner.capture();
+    await capture(test.snapshotOwner);
     await issued.promise;
     const saved = test.settle(model);
     try {
-      test.snapshotOwner.capture();
-      test.snapshotOwner.capture();
+      await capture(test.snapshotOwner);
+      await capture(test.snapshotOwner);
       expect(test.snapshotOwner.read().saved).toBe(false);
     } finally {
       written.resolve(true);
@@ -530,10 +602,10 @@ describe("sidebar snapshot lifecycle", () => {
     clearBootRecords(scope.gatewayScope, { recoveryScope: scope.recoveryScope });
     const saved = test.settle();
     test.snapshotOwner.synchronize();
-    test.snapshotOwner.capture();
+    await capture(test.snapshotOwner);
     expect(test.capture).not.toHaveBeenCalled();
     test.publish();
-    test.snapshotOwner.capture();
+    await capture(test.snapshotOwner);
     await saved;
     expect(test.snapshotOwner.read().saved).toBe(true);
     expect(
@@ -550,7 +622,7 @@ describe("sidebar snapshot lifecycle", () => {
     test.snapshotOwner.connect();
     test.publish();
     const saved = test.settle();
-    test.snapshotOwner.capture();
+    await capture(test.snapshotOwner);
     await saved;
     const store = new SessionSnapshotStore();
     store.connect();

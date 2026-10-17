@@ -57,14 +57,16 @@ it("preserves exact 64-bit identities, duplicates and cold rows through deletion
         VALUES (9007199254740992, 'other', 'duplicate', 'unrelated searchable', 'user', 11);
     `);
     const insert = createSessionTranscriptFtsInserter(db, "session");
-    insert({ messageId: "duplicate", text: "first searchable", role: "user", timestamp: 10 });
-    insert({
-      messageId: "duplicate",
-      text: "second searchable",
-      role: "assistant",
-      timestamp: "10",
-    });
-    insert({ messageId: null, text: null, role: null, timestamp: null });
+    insert([
+      { messageId: "duplicate", text: "first searchable", role: "user", timestamp: 10 },
+      {
+        messageId: "duplicate",
+        text: "second searchable",
+        role: "assistant",
+        timestamp: "10",
+      },
+      { messageId: null, text: null, role: null, timestamp: null },
+    ]);
   }, options);
   expect(
     database.db
@@ -150,7 +152,10 @@ function projectionFixture(seed = true) {
       message: { role: "user", content: `needle ${eventId}` },
     };
     inserters.get(id)!({ seq, eventJson: JSON.stringify(event), createdAt: seq });
-    expect(appenders.get(id)!({ seq, event, eventId, createdAt: seq })).toBe(false);
+    expect(appenders.get(id)!.append({ seq, event, eventId, createdAt: seq })).toBe(false);
+  }
+  for (const appender of appenders.values()) {
+    appender.flush();
   }
   db.exec("COMMIT");
   return db;

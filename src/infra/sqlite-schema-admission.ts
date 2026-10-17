@@ -52,6 +52,16 @@ export function readSqliteTextEncoding(database: DatabaseSync): string {
   return encoding.encoding;
 }
 
+/** Native catalog projection shared by admission and maintenance. */
+export function readSqliteSchemaObjects(database: DatabaseSync) {
+  return executeWithCachedStatement(
+    database,
+    "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'view', 'index', 'trigger')",
+    [],
+    (s) => s.all(),
+  );
+}
+
 /** Capture the physical catalog for admission or pre-admission schema maintenance. */
 export function captureSqliteSchemaFacts(
   database: DatabaseSync,
@@ -65,12 +75,7 @@ export function captureSqliteSchemaFacts(
     // Validate the captured header before catalog errors can mask its refusal.
     validateUserVersion?.(userVersion);
     const textEncoding = retainedTextEncoding ?? readSqliteTextEncoding(database);
-    const objects = executeWithCachedStatement(
-      database,
-      "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'view', 'index', 'trigger')",
-      [],
-      (s) => s.all(),
-    );
+    const objects = readSqliteSchemaObjects(database);
     const facts = {
       admissionId: randomUUID(),
       revision,

@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { isAgentDeletionBlocked, withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import { prepareSecretsRuntimeSnapshot } from "../secrets/runtime.js";
@@ -8,7 +9,11 @@ import {
   closeAgentWorkAdmissions,
 } from "../sessions/session-lifecycle-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { invalidateAgentDeletionJournalStatus } from "./agent-deletion-journal-status.js";
+import {
+  getPreparedAgentDeletionDiscovery,
+  invalidateAgentDeletionJournalStatus,
+  seedAgentDeletionDiscovery,
+} from "./agent-deletion-journal-status.js";
 import {
   beginAgentDeletionJournalInDatabase,
   completeAgentDeletionJournalInDatabase,
@@ -22,6 +27,27 @@ import {
 } from "./openclaw-state-db.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("denies unprepared authority without native SQL until the worker publishes its status", async () => {
+  await withOpenClawTestState({ label: "deletion-status-cold" }, async (state) => {
+    const options = { env: state.env };
+    const database = openOpenClawStateDatabase(options);
+    const observed = observeHostDataSql();
+    try {
+      expect(isAgentDeletionBlocked("main", options)).toBe(true);
+      expect(observed.queries).toEqual([]);
+      expect(await readAgentDeletionJournalStatusInWorker("main", options)).toBe("absent");
+      observed.queries.length = 0;
+      expect(isAgentDeletionBlocked("main", options)).toBe(false);
+      expect(observed.queries).toEqual([]);
+      invalidateAgentDeletionJournalStatus(database.db, "main");
+      expect(isAgentDeletionBlocked("main", options)).toBe(true);
+      expect(observed.queries).toEqual([]);
+    } finally {
+      observed.restore();
+    }
+  });
+});
 
 it("revokes queued work and refuses the next turn after a worker deletion without rereading the journal", async () => {
   await withOpenClawTestState({ label: "deletion-status-admission" }, async (state) => {
@@ -108,7 +134,13 @@ it("publishes completion and recreation only on commit and reloads a discarded t
     expect(() =>
       runOpenClawStateWriteTransaction((database) => {
         beginAgentDeletionJournalInDatabase(database, input);
-        expect(isAgentDeletionBlocked(input.agentId, options)).toBe(true);
+        const observed = observeHostDataSql();
+        try {
+          expect(isAgentDeletionBlocked(input.agentId, options)).toBe(true);
+          expect(observed.queries).toEqual([]);
+        } finally {
+          observed.restore();
+        }
         throw new Error("rollback");
       }, options),
     ).toThrow("rollback");
@@ -119,11 +151,19 @@ it("publishes completion and recreation only on commit and reloads a discarded t
     }, options);
     expect(await read()).toBe("complete");
     expect(isAgentDeletionBlocked(input.agentId, options)).toBe(true);
-    invalidateAgentDeletionJournalStatus(openOpenClawStateDatabase(options).db, input.agentId);
+    const stateDatabase = openOpenClawStateDatabase(options);
+    invalidateAgentDeletionJournalStatus(stateDatabase.db, input.agentId);
+    seedAgentDeletionDiscovery(stateDatabase.path, {
+      status: "unavailable",
+      cause: "unreadable",
+      reason: "synthetic unavailable read",
+    });
+    expect(getPreparedAgentDeletionDiscovery(stateDatabase.path)).toBeUndefined();
     expect(await read()).toBe("complete");
     expect(() =>
       runOpenClawStateWriteTransaction((database) => {
         deleteAgentDeletionJournalInDatabase(database, input.agentId, input.operationId, true);
+        expect(isAgentDeletionBlocked(input.agentId, options)).toBe(false);
         throw new Error("rollback");
       }, options),
     ).toThrow("rollback");

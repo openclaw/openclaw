@@ -117,8 +117,7 @@ export async function runSessionsSendA2AFlow(params: {
         ((wait.status === "error" && !wait.retryableTransportError) ||
           isTerminalAgentWaitTimeout(wait))
       ) {
-        const error =
-          typeof wait.error === "string" && wait.error.trim() ? `: ${wait.error.trim()}` : "";
+        const error = wait.error?.trim() ? `: ${wait.error.trim()}` : "";
         await deliverRequesterReply({
           ...requesterStepContext,
           sessionKey: params.requesterSessionKey,

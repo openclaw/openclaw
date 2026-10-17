@@ -337,6 +337,14 @@ still activate Memory Core as a dreaming sidecar under the existing loader polic
 Explicitly disabling Memory Core prevents that sidecar. The Dreams UI and file-backed
 maintenance methods do not imply that the selected provider implements dreaming.
 
+## Memory host event diagnostics
+
+`readMemoryHostEventRecords` from `openclaw/plugin-sdk/memory-host-events`
+accepts an optional `type` filter. Storage applies it before `limit`, so a
+diagnostic can request the latest `memory.dream.completed` event with `limit: 1`
+without loading unrelated recall history. Omitting `type` preserves the full
+retained event stream.
+
 ## Bundled Memory Core workers
 
 Memory Core uses the shared `process-runtime` worker pool for lexical retrieval,

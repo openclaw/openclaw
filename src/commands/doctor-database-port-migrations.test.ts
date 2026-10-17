@@ -167,7 +167,7 @@ describe("database port legacy import preflight", () => {
           migration: {
             id: "legacy-import",
             label: "Legacy data",
-            sqliteOnly: { family: "agent" },
+            sqliteOnly: { family: "workboard" },
             doctorOnly: true,
             phase: "after-session-repair",
             detectLegacyState: () => {
@@ -182,9 +182,14 @@ describe("database port legacy import preflight", () => {
       ];
       const before = await fs.readFile(source);
       const configBefore = await fs.readFile(state.configPath);
-      await expect(doctorDatabasePort({ to: "postgres" })).rejects.toThrow(
-        "legacy-owner/legacy-import (Legacy data). Run openclaw doctor --fix first, then retry port.",
-      );
+      for (const family of [undefined, "workboard"] as const) {
+        await expect(doctorDatabasePort({ family, to: "postgres" })).rejects.toThrow(
+          "legacy-owner/legacy-import (Legacy data). Run openclaw doctor --fix first, then retry port.",
+        );
+      }
+      await expect(
+        doctorDatabasePort({ family: "state", to: "postgres", dryRun: true }),
+      ).resolves.toMatchObject({ phase: "preflight" });
       expect(await fs.readFile(source)).toEqual(before);
       expect(await fs.readFile(state.configPath)).toEqual(configBefore);
       await expect(
@@ -241,6 +246,15 @@ describe("database port legacy import preflight", () => {
         to: "postgres",
       });
       expect(detected).toEqual(["workboard", "logbook", "team-reports"]);
+      detected.length = 0;
+      await assertDatabasePortPluginMigrationsComplete({
+        config: { database: { engine: "sqlite" } },
+        env: state.env,
+        stateDir: state.stateDir,
+        to: "postgres",
+        family: "workboard",
+      });
+      expect(detected).toEqual(["workboard"]);
       detected.length = 0;
       await assertDatabasePortPluginMigrationsComplete({
         config: { database: { engine: "postgres" } },

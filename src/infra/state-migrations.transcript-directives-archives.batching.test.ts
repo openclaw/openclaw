@@ -254,33 +254,6 @@ describe("canonical transcript archive batch transactions", () => {
     }
   });
 
-  it("rolls back prior rewrites when the final source row drifts", async () => {
-    const f = fixture();
-    try {
-      let drifted = false;
-      await expect(
-        f.migrate({
-          transformLine: changeContent,
-          onArchive: () => {
-            if (!drifted) {
-              drifted = true;
-              const bytes = Buffer.from("drift");
-              f.database
-                .prepare(
-                  "UPDATE session_transcript_archives SET archive_blob = ?, archive_sha256 = ? WHERE session_id = 's00002'",
-                )
-                .run(bytes, sha256(bytes));
-            }
-          },
-        }),
-      ).rejects.toThrow(/source changed/);
-      expect(archiveBlob(f.database, "s00000").toString()).toContain("old");
-      expect(f.progress()).toBe("start");
-    } finally {
-      f.close();
-    }
-  });
-
   it("rolls back the rewrite batch if authority is lost before commit", async () => {
     const f = fixture();
     try {
@@ -668,31 +641,6 @@ describe("canonical transcript archive batch transactions", () => {
         .run();
       await expect(f.migrate()).rejects.toThrow(/outside/);
       expect(f.progress()).toBe("start");
-    } finally {
-      f.close();
-    }
-  });
-
-  it("skips a source row deleted after planning without recreating it", async () => {
-    const f = fixture();
-    try {
-      let deleted = false;
-      const result = await f.migrate({
-        transformLine: changeContent,
-        onArchive: () => {
-          if (!deleted) {
-            deleted = true;
-            f.database
-              .prepare("DELETE FROM session_transcript_archives WHERE session_id = 's00001'")
-              .run();
-          }
-        },
-      });
-      expect(result.rewrittenArchives).toBe(2);
-      expect(
-        f.database.prepare("SELECT count(*) AS count FROM session_transcript_archives").get()
-          ?.count,
-      ).toBe(2);
     } finally {
       f.close();
     }

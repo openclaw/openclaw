@@ -122,14 +122,16 @@ import {
   hashCliSessionText,
 } from "../cli-session.js";
 import { resetContextWindowCacheForTest } from "../context.test-support.js";
-import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { createContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../harness/gateway-question.js";
 import { withQuestionGateway } from "../harness/gateway-question.test-support.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
 import { createAgentCleanupScope } from "../run-cleanup-timeout.js";
 import type { SandboxWorkspaceInfo } from "../sandbox/types.js";
-import { beginForegroundSessionMaintenance } from "../session-maintenance/coordinator.js";
+import {
+  beginForegroundSessionMaintenance,
+  waitForSessionMaintenance,
+} from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
   captureRoutingDecisionWork,
@@ -2071,7 +2073,7 @@ describe("prepareCliRunContext", () => {
         await maintenanceStarted.promise;
         expect(custody.read()).toBe(42);
         maintenanceGate.resolve();
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
         if (lease) {
           await custody.retirement;
         }
@@ -2081,7 +2083,7 @@ describe("prepareCliRunContext", () => {
       } finally {
         releaseForeground();
         maintenanceGate.resolve();
-        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+        await waitForSessionMaintenance(sessionKey);
         await lease?.dispose();
         if (lease) {
           await custody.retirement;
@@ -4468,13 +4470,12 @@ describe("prepareCliRunContext", () => {
         const runEmbeddedAgent = wrapRunWithTestPreparedAdmission(runEmbeddedAgentImpl);
         const runId = `memory-cli-${scenario}`;
         const maintenance = await import("../embedded-agent-runner/context-engine-maintenance.js");
+        const coordinator = await import("../session-maintenance/coordinator.js");
         const releaseMaintenance = createDeferred();
         const maintenanceStarted = createDeferred();
         const borrowedWait = createDeferred();
         let maintenanceJoined: Promise<void> | undefined;
-        let waitSpy:
-          | MockInstance<typeof maintenance.waitForDeferredTurnMaintenanceForSession>
-          | undefined;
+        let waitSpy: MockInstance<typeof coordinator.waitForSessionMaintenance> | undefined;
         if (scenario === "foreign-maintenance") {
           await maintenance.runContextEngineMaintenance({
             contextEngine: {
@@ -4503,13 +4504,11 @@ describe("prepareCliRunContext", () => {
             },
           });
           await maintenanceStarted.promise;
-          const wait = maintenance.waitForDeferredTurnMaintenanceForSession;
-          waitSpy = vi
-            .spyOn(maintenance, "waitForDeferredTurnMaintenanceForSession")
-            .mockImplementation((key) => {
-              borrowedWait.resolve();
-              return wait(key);
-            });
+          const wait = coordinator.waitForSessionMaintenance;
+          waitSpy = vi.spyOn(coordinator, "waitForSessionMaintenance").mockImplementation((key) => {
+            borrowedWait.resolve();
+            return wait(key);
+          });
         }
         let run: ReturnType<typeof runEmbeddedAgent> | undefined;
         try {

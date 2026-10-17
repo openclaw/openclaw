@@ -260,11 +260,14 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     expect(fs.existsSync(path.join(f.anchor, "candidate"))).toBe(true);
   });
 
-  it.each(["settle", "archive-interrupted"] as const)(
+  it.each(["settle", "archive-interrupted", "journal-mode"] as const)(
     "verifies and preserves the installed candidate: %s",
     async (scenario) => {
       const { root } = fixture.setup();
       const f = await prepareRemountedPublication(fixture, root);
+      if (scenario === "journal-mode") {
+        fs.chmodSync(f.journalPath, 0o644);
+      }
       const liveTree = legacyPackageFingerprint(f.packageRoot);
       const previousTree = legacyPackageFingerprint(path.join(f.anchor, "previous"));
       const liveBytes = fs.readFileSync(path.join(f.packageRoot, "package.json"));
@@ -351,6 +354,7 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
       expect(launcherState()).toEqual(launcher);
       expect(fs.readFileSync(path.join(retained, "previous/package.json"))).toEqual(previousBytes);
       expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helperBytes);
+      expect(fs.statSync(path.join(retained, "control/operation.sqlite")).mode & 0o777).toBe(0o600);
       expect(fs.existsSync(f.journalPath)).toBe(false);
       expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
     },
@@ -436,7 +440,6 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     "journal-inode",
     "journal-device-map",
     "helper",
-    "journal-mode",
     "journal-hardlink",
     "operation",
     "active-lease",
@@ -477,9 +480,6 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     }
     if (scenario === "helper") {
       fs.appendFileSync(resolvePackageActivationHelper(f.anchor), "changed");
-    }
-    if (scenario === "journal-mode") {
-      fs.chmodSync(f.journalPath, 0o644);
     }
     if (scenario === "journal-hardlink") {
       fs.linkSync(f.journalPath, `${f.journalPath}.link`);
@@ -528,8 +528,5 @@ describe.skipIf(process.platform === "win32")("unfinished remounted publication 
     expect(fs.readFileSync(f.journalPath)).toEqual(before);
     expect(fs.existsSync(path.join(f.anchor, "previous"))).toBe(true);
     expect(fs.existsSync(f.packageRoot)).toBe(true);
-    if (scenario === "journal-mode") {
-      fs.chmodSync(f.journalPath, 0o600);
-    }
   });
 });

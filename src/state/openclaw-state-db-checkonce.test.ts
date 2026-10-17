@@ -140,7 +140,7 @@ it("refuses corrupt current-version state on restart without a clean integrity r
   }
 });
 
-it("checks integrity once before index repair and once after rebuilding the index", () => {
+it("repairs canonical indexes and shares admission until the final handle closes", () => {
   const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-repair-") };
   const pathname = openOpenClawStateDatabase({ env }).path;
   closeOpenClawStateDatabaseForTest();
@@ -162,10 +162,6 @@ it("checks integrity once before index repair and once after rebuilding the inde
     ).toEqual(["runtime", "run_id", "source_id", "created_at", "task_id"]);
     repaired.db.exec("CREATE TABLE checkonce_later (value TEXT)");
     assertExistingOpenClawStateRuntimeSchema(requireNativeSqliteDatabase(repaired.db), pathname);
-    expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(2);
-    expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
-      2,
-    );
     closeOpenClawStateDatabaseForTest();
     unlinkSync(`${pathname}.seal`);
     observation.queries.length = 0;

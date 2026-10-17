@@ -1,11 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  GatewayErrorDetailCodes,
-  type ProjectsListResult,
-  type TaskSuggestion,
-  type TaskSuggestionEvent,
-  type TaskSuggestionsAcceptResult,
-  type TaskSuggestionsListResult,
+import { GatewayErrorDetailCodes } from "../../../../packages/gateway-protocol/src/gateway-error-details.js";
+import type {
+  ProjectsListResult,
+  TaskSuggestion,
+  TaskSuggestionEvent,
+  TaskSuggestionsAcceptResult,
+  TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
@@ -117,6 +117,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     this.taskSuggestionSwapGeneration += 1;
     this.invalidate();
     void this.updateComplete.then(() => {
+      // The suggestion renderer owns the active card and its navigation controls.
       const activeCard = [...this.element.querySelectorAll<HTMLElement>(".task-suggestion")].find(
         (card) => card.dataset.taskId === next.id,
       );

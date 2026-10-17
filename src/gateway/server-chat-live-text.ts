@@ -21,6 +21,10 @@ type LiveTextStream = "chat" | "agent";
 
 type LiveTextDelivery = NonNullable<GatewayBroadcastOpts["liveText"]>;
 
+const CHAT_RETRY_REASONS = new Set<string>(
+  ChatStatusEventSchema.properties.retry.properties.reason.anyOf.map((reason) => reason.const),
+);
+
 export function projectChatStatusEvent(
   event: Pick<AgentEventPayload, "seq" | "data">,
   identity: { runId: string; sessionKey: string; agentId?: string; spawnedBy?: string | null },
@@ -35,9 +39,7 @@ export function projectChatStatusEvent(
     ...(event.data.phase === "retrying"
       ? {
           phase: "starting_model",
-          ...(["rate_limit", "overloaded", "server_error", "timeout", "output_limit"].includes(
-            String(event.data.reason),
-          )
+          ...(CHAT_RETRY_REASONS.has(String(event.data.reason))
             ? {
                 retry: {
                   attempt: event.data.attempt,

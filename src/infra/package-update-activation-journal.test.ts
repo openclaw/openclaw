@@ -314,72 +314,63 @@ function createHotJournal(journalPath: string) {
 }
 
 describe.skipIf(process.platform === "win32")("package activation journal", () => {
-  it.each(["journal links", "journal mode", "control mode"] as const)(
-    "keeps unsafe %s details local and reports the code without changing recovery evidence",
-    async (change) => {
-      const f = await fixture();
-      const control = resolvePackageActivationControl(f.anchor);
-      const file = change === "control mode" ? control : f.journalPath;
-      if (change === "journal links") {
-        fs.linkSync(file, path.join(root, "retained-journal.sqlite"));
-      } else {
-        fs.chmodSync(file, change === "control mode" ? 0o750 : 0o640);
-      }
-      const before = journalFiles(f.anchor);
-      const observed = fs.lstatSync(file);
-      let failure: unknown;
-      try {
-        openPackageActivationJournal(f.anchor);
-      } catch (error) {
-        failure = error;
-      }
-      expect(failure).toBeInstanceOf(Error);
-      const fact = createUpdateErrorFact("package-swap", failure);
-      const expected = [
-        `Package recovery ${change === "control mode" ? "control" : "journal"}`,
-        JSON.stringify(path.basename(file)),
-        `mode=0${(observed.mode & 0o777).toString(8)}`,
-        `nlink=${observed.nlink}`,
-        `uid=${observed.uid}`,
-        "expected owner-only mode",
-        ...(change === "control mode" ? [] : ["nlink=1"]),
-        ...(change === "journal links" ? ["openclaw doctor --fix"] : []),
-      ];
-      const report = await prepareUpdateFailureReport(
-        {
-          attemptId: "recovery-permissions",
-          result: {
-            mode: "npm",
-            status: "error",
-            durationMs: 1,
-            steps: [
-              {
-                name: "package-swap",
-                command: "",
-                cwd: "",
-                durationMs: 1,
-                exitCode: 1,
-                failureFacts: [fact],
-              },
-            ],
-          },
+  it("keeps unsafe journal link details local and reports the code without changing recovery evidence", async () => {
+    const f = await fixture();
+    const file = f.journalPath;
+    fs.linkSync(file, path.join(root, "retained-journal.sqlite"));
+    const before = journalFiles(f.anchor);
+    const observed = fs.lstatSync(file);
+    let failure: unknown;
+    try {
+      openPackageActivationJournal(f.anchor);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    const fact = createUpdateErrorFact("package-swap", failure);
+    const expected = [
+      "Package recovery journal",
+      JSON.stringify(file),
+      `mode=0${(observed.mode & 0o777).toString(8)}`,
+      `nlink=${observed.nlink}`,
+      `uid=${observed.uid}`,
+      "expected nlink=1",
+      "openclaw doctor --fix",
+    ];
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "recovery-permissions",
+        result: {
+          mode: "npm",
+          status: "error",
+          durationMs: 1,
+          steps: [
+            {
+              name: "package-swap",
+              command: "",
+              cwd: "",
+              durationMs: 1,
+              exitCode: 1,
+              failureFacts: [fact],
+            },
+          ],
         },
-        { env: {}, stateDir: root },
-      );
-      for (const text of expected) {
-        expect(failure).toMatchObject({ message: expect.stringContaining(text) });
-      }
-      expect(report.body).toContain(
-        "Failing check package-swap (package-recovery-permissions-unsafe)",
-      );
-      expect(report.body).not.toContain(fact.message);
-      expect(fact.message!.length).toBeLessThanOrEqual(200);
-      expect(report.body).not.toContain(root);
-      expect(journalFiles(f.anchor)).toEqual(before);
-      expect(fs.lstatSync(file).nlink).toBe(observed.nlink);
-      expect(fs.lstatSync(file).mode).toBe(observed.mode);
-    },
-  );
+      },
+      { env: {}, stateDir: root },
+    );
+    for (const text of expected) {
+      expect(failure).toMatchObject({ message: expect.stringContaining(text) });
+    }
+    expect(report.body).toContain(
+      "Failing check package-swap (package-recovery-permissions-unsafe)",
+    );
+    expect(report.body).not.toContain(fact.message);
+    expect(fact.message!.length).toBeLessThanOrEqual(200);
+    expect(report.body).not.toContain(root);
+    expect(journalFiles(f.anchor)).toEqual(before);
+    expect(fs.lstatSync(file).nlink).toBe(observed.nlink);
+    expect(fs.lstatSync(file).mode).toBe(observed.mode);
+  });
 
   it.each([false, true])(
     "preserves a hot journal until recovery admission (replaced=%s)",

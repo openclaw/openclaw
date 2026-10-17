@@ -70,7 +70,6 @@ describe("WhatsApp debounce reply quoting boundary", () => {
             config: cfg,
             payloads: [{ text: "plain model answer" }],
             isHeartbeat: false,
-            didLogHeartbeatStrip: false,
             blockStreamingEnabled: false,
             blockReplyPipeline: null,
             replyToMode: "batched",

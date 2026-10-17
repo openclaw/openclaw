@@ -181,7 +181,8 @@ async function appendPreparedSessionTranscriptTurn(
       }
       return !append.workerPreparation || (!append.predicate && !repeated);
     });
-  const inputActor = !nativeReservation && (await getSessionInputActor(resolved));
+  const inputActor =
+    !nativeReservation && (await getSessionInputActor(resolved, options.resolveRuntimeTarget));
   if (
     !nativeReservation &&
     independentPreparation &&

@@ -1,18 +1,21 @@
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { t } from "../../i18n/index.ts";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
+import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
-import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
+import { cancelChatStreamRenderFrame, publishChatRunState } from "./chat-state-render.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
@@ -48,7 +51,7 @@ function transcriptSources(state: ChatPageHost): readonly unknown[] {
     state.chatStreamSegments,
     state.chatReasoning,
     state.guardianNotices,
-    state.realtimeTalkConversationState.entries,
+    state.realtimeTalk.snapshot.realtimeTalkConversationState.entries,
   ];
 }
 
@@ -61,8 +64,33 @@ export function createChatState<TState extends ChatPageHost>(
   onQueuedMessageDiscarded?: (item: ChatQueueItem) => void,
 ) {
   let stateValue: TState | undefined;
-  let attachmentReadsValue = new ChatAttachmentReadLifecycle(() => stateValue?.requestUpdate?.());
-  const composerPersistence = new ChatComposerPersistence(() => stateValue);
+  const emptyMentions: readonly HumanMention[] = [];
+  const composerDraft = createComposerDraftSource(() => ({
+    draft: stateValue?.chatMessage ?? "",
+    mentions: stateValue?.chatMentions ?? emptyMentions,
+    attachments: stateValue?.chatAttachments ?? [],
+    pendingAttachmentReads: attachmentReadsValue.pendingReads,
+    goalDraftMode: stateValue?.chatGoalDraftMode,
+  }));
+  const attachmentChanged = () => {
+    if (disposed) {
+      return;
+    }
+    publishComposerDraft();
+    stateValue?.requestUpdate?.();
+  };
+  let attachmentReadsValue = new ChatAttachmentReadLifecycle(attachmentChanged);
+  let publishedDraft: ReturnType<typeof composerDraft.read> | undefined;
+  const composerPersistence = new ChatComposerPersistence(
+    () => stateValue,
+    () => {
+      if (disposed || !stateValue) {
+        return;
+      }
+      publishComposerDraft();
+      onStateChange?.();
+    },
+  );
   let privateDraftReview: { controller: AbortController; isCurrent: () => boolean } | undefined;
   let previousChatLoading = false;
   let previousTranscriptSources: readonly unknown[] = [];
@@ -72,9 +100,11 @@ export function createChatState<TState extends ChatPageHost>(
   let disposed = false;
   let renderLifecycleScope: ChatRenderLifecycleScope | undefined;
   let backgroundRenderFrame: number | undefined;
+  let releaseRunPublication: (() => void) | undefined;
 
   const api = {
     composerPersistence,
+    composerDraft,
 
     get disposed() {
       return disposed;
@@ -118,14 +148,14 @@ export function createChatState<TState extends ChatPageHost>(
 
     takeAttachmentReads(): ChatAttachmentReadLifecycle {
       const reads = attachmentReadsValue;
-      attachmentReadsValue = new ChatAttachmentReadLifecycle(() => stateValue?.requestUpdate?.());
+      attachmentReadsValue = new ChatAttachmentReadLifecycle(attachmentChanged);
       return reads;
     },
 
     adoptAttachmentReads(reads: ChatAttachmentReadLifecycle, state: TState): void {
       attachmentReadsValue.abortReads();
       attachmentReadsValue = reads;
-      reads.retarget(api.attachmentInputProps(state), () => state.requestUpdate?.());
+      reads.retarget(api.attachmentInputProps(state), attachmentChanged);
     },
 
     attachmentInputProps(state: TState) {
@@ -148,7 +178,7 @@ export function createChatState<TState extends ChatPageHost>(
         },
         onAttachmentsChange: (next: ChatPageHost["chatAttachments"]) => {
           state.chatAttachments = next;
-          state.requestUpdate?.();
+          attachmentChanged();
         },
       };
     },
@@ -166,6 +196,7 @@ export function createChatState<TState extends ChatPageHost>(
     },
 
     attach(state: TState) {
+      releaseRunPublication?.();
       if (stateValue && stateValue !== state) {
         privateDraftReview?.controller.abort();
         disposeSelectedSessionMessageSubscription(stateValue);
@@ -177,12 +208,27 @@ export function createChatState<TState extends ChatPageHost>(
         stopChatRealtimeTalk(stateValue);
       }
       stateValue = state;
+      state.composerDraftChanged = () => {
+        if (stateValue !== state || disposed) {
+          return;
+        }
+        composerPersistence.persistChangedState();
+        publishComposerDraft();
+        onStateChange?.();
+      };
+      publishComposerDraft();
       previousTranscriptSources = transcriptSources(state);
       state.canRestoreComposer = () => stateValue === state && composerPersistence.active;
       previousChatLoading = state.chatLoading;
       previousChatStream = state.chatStream;
+      // Publication also owns persistence and activity/retention effects in parked panes.
+      releaseRunPublication = chatRunPresentation(state).subscribe(publishStateEffects);
       const renderLifecycle = state.renderLifecycle;
       state.requestUpdate = () => renderLifecycle.invalidate();
+      // Queue transitions synchronously update pane retention and shell activity,
+      // independently of whether the pane's projected frame is currently observed.
+      cleanups.push(subscribeChatOutboxQueue(state, () => onStateChange?.()));
+      // Each discarded item has its own completion callback, not a latest-value presentation.
       cleanups.push(
         chatOutboxOwner(state).subscribe(state, (item) => {
           if (stateValue === state) {
@@ -237,15 +283,14 @@ export function createChatState<TState extends ChatPageHost>(
       state.handleChatDraftChange = (next, mentions) => {
         commitDraftChange(next, mentions);
         composerPersistence.schedule();
+        publishComposerDraft();
       };
       const navigateInputHistory = state.handleChatInputHistoryKey;
       state.handleChatInputHistoryKey = (input) => {
         const result = navigateInputHistory(input);
         if (result.handled) {
           composerPersistence.schedule();
-          // A history recall mutates chatMessage directly; without invalidating,
-          // the composer textarea stays empty until an unrelated event re-renders.
-          state.renderLifecycle.invalidate();
+          publishComposerDraft();
         }
         return result;
       };
@@ -286,13 +331,18 @@ export function createChatState<TState extends ChatPageHost>(
       const state = stateValue;
       if (state?.chatStreamRenderFrame != null) {
         cancelChatStreamRenderFrame(state);
-        composerPersistence.persistChangedState();
-        captureRenderLifecycleChanges();
-        onStateChange?.();
+        publishChatRunState(state);
       }
+      // Field projections can schedule a frame without a page-wide invalidation.
+      captureRenderLifecycleChanges();
     },
   };
   return api;
+
+  function publishComposerDraft() {
+    publishedDraft = composerDraft.read();
+    composerDraft.publish();
+  }
 
   function hasPrivateComposerInput(state: TState): boolean {
     return (
@@ -436,16 +486,34 @@ export function createChatState<TState extends ChatPageHost>(
     }
   }
 
-  function requestUpdateForScope(scope: ChatRenderLifecycleScope, background = false): boolean {
-    if (!isRenderLifecycleScopeActive(scope)) {
-      return false;
-    }
+  function publishStateEffects(): void {
     if (privateDraftReview && !privateDraftReview.isCurrent()) {
       privateDraftReview.controller.abort();
     }
     composerPersistence.persistChangedState();
-    captureRenderLifecycleChanges();
+    // Legacy restore writers still signal through the page owner. Ordinary
+    // stream updates must not invalidate the independent composer projection.
+    // Explicit mutation hooks above also cover changes within retained arrays.
+    const draft = composerDraft.read();
+    if (
+      !publishedDraft ||
+      draft.draft !== publishedDraft.draft ||
+      draft.mentions !== publishedDraft.mentions ||
+      draft.attachments !== publishedDraft.attachments ||
+      draft.pendingAttachmentReads !== publishedDraft.pendingAttachmentReads ||
+      draft.goalDraftMode !== publishedDraft.goalDraftMode
+    ) {
+      publishComposerDraft();
+    }
     onStateChange?.();
+  }
+
+  function requestUpdateForScope(scope: ChatRenderLifecycleScope, background = false): boolean {
+    if (!isRenderLifecycleScopeActive(scope)) {
+      return false;
+    }
+    publishStateEffects();
+    captureRenderLifecycleChanges();
     notifyRenderLifecycleForTest(renderer, "invalidate");
     // Only background producers opt in. Draft persistence and scroll ownership
     // are captured above, and transcript changes still commit before paint.
@@ -573,6 +641,8 @@ export function createChatState<TState extends ChatPageHost>(
   }
 
   function stopChatEffects() {
+    releaseRunPublication?.();
+    releaseRunPublication = undefined;
     privateDraftReview?.controller.abort();
     while (cleanups.length > 0) {
       cleanups.pop()?.();

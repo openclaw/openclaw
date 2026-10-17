@@ -20,6 +20,7 @@ let operatorSeamColor: string | undefined;
 let userAccentOverride: string | undefined;
 const systemChromeRevisions = new WeakMap<HTMLElement, string>();
 
+// Project the independently rendered shell into the static document's chrome and head metadata.
 export function syncControlUiSystemChrome(paletteChanged = false): void {
   if (typeof document === "undefined") {
     return;

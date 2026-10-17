@@ -189,6 +189,7 @@ describe("prepared worker schema migration", () => {
           changes: [
             "Recorded prepared worker ownership and one-use lifecycle (v17)",
             "Replaced retained task indexes with ordered cron history indexes (v24)",
+            "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
             "Rebuilt canonical shared-state SQLite indexes (1)",
           ],
           warnings: [],

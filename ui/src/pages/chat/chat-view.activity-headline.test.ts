@@ -23,7 +23,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   disposeChatView(container);
-  transcript.hostDisconnected();
+  transcript.dispose();
   resetChatViewState();
   resetTranscriptTestDom();
   vi.useRealTimers();

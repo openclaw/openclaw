@@ -71,7 +71,11 @@ async function fixture(backend: "local" | "repository" = "local") {
           agentId: "main",
         })
       : f.maintainerSource;
+  const creation = mocks.runCommand.mock.calls.findLast(
+    ([argv]) => argv.includes("POST") && argv.some((arg: string) => arg.endsWith("/pulls")),
+  )!;
   const state = {
+    body: JSON.parse(creation[1]!.input as string).body as string,
     node_id: "PR_fixture",
     title: "Preserve the guest's work",
     html_url: publication.url,
@@ -86,8 +90,9 @@ async function fixture(backend: "local" | "repository" = "local") {
   };
   const writes: { action: string; input: Record<string, unknown> }[] = [];
   let beforeRead: (() => Promise<void>) | undefined;
-  let rejectMerge = false;
+  let rejectMerge: ReturnType<typeof commandResult> | Error | undefined;
   let rejectClose = false;
+  let rejectEdit = false;
   let loseResponse = false;
   const previous = mocks.runCommand.getMockImplementation()!;
   mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
@@ -104,17 +109,34 @@ async function fixture(backend: "local" | "repository" = "local") {
     } else if (argv.some((arg) => arg.endsWith("/merge"))) {
       writes.push({ action: "merge", input: JSON.parse(options!.input!) });
       if (rejectMerge) {
-        return commandResult('{"message":"Required checks have not passed"}', 1);
+        if (rejectMerge instanceof Error) {
+          throw rejectMerge;
+        }
+        return rejectMerge;
       }
       state.merged = true;
       state.state = "closed";
       state.merge_commit_sha = "e".repeat(40);
     } else if (argv.includes("PATCH") && argv.some((arg) => /\/pulls\/\d+$/u.test(arg))) {
-      writes.push({ action: "close", input: JSON.parse(options!.input!) });
-      if (rejectClose) {
-        return commandResult('{"message":"Resource not accessible"}', 1);
+      const input: Record<string, unknown> = JSON.parse(options!.input!);
+      if (input.state === undefined) {
+        writes.push({ action: "edit", input });
+        if (rejectEdit) {
+          return commandResult('{"message":"Resource not accessible"}', 1);
+        }
+        if (typeof input.title === "string") {
+          state.title = input.title;
+        }
+        if (typeof input.body === "string") {
+          state.body = input.body;
+        }
+      } else {
+        writes.push({ action: "close", input });
+        if (rejectClose) {
+          return commandResult('{"message":"Resource not accessible"}', 1);
+        }
+        state.state = "closed";
       }
-      state.state = "closed";
     } else {
       return await previous(argv, options);
     }
@@ -153,7 +175,7 @@ async function fixture(backend: "local" | "repository" = "local") {
       return result as T;
     };
     return await withGatewayToolCallerIdentity({ agentId: "main", sessionKey: source }, () =>
-      createGitHubPublishTool({ callGateway, actionsAvailable: true }).execute(
+      createGitHubPublishTool({ callGateway, actionsAvailable: actor !== "guest" }).execute(
         "publication-action",
         args,
       ),
@@ -170,8 +192,16 @@ async function fixture(backend: "local" | "repository" = "local") {
     onRead(callback: () => Promise<void>) {
       beforeRead = callback;
     },
-    rejectMerge() {
-      rejectMerge = true;
+    rejectMerge(
+      result: ReturnType<typeof commandResult> | Error = commandResult(
+        '{"message":"Required checks have not passed"}',
+        1,
+      ),
+    ) {
+      rejectMerge = result;
+    },
+    rejectEdit() {
+      rejectEdit = true;
     },
     rejectClose() {
       rejectClose = true;
@@ -187,6 +217,201 @@ describe("session PR actions through the agent tool and registered Gateway metho
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+
+  it("edits only a guest PR body without publishing dirty workspace files", async () => {
+    const f = await fixture();
+    const local = f.local!;
+    await fs.writeFile(path.join(local.cwd, "artifact.txt"), "unfinished work\n");
+    await fs.writeFile(path.join(local.cwd, "untracked.sqlite-wal"), "fixture data\n");
+    const before = {
+      head: await local.git("rev-parse", "HEAD"),
+      index: await local.git("write-tree"),
+      diff: await local.git("diff", "--binary"),
+      status: await local.git("status", "--porcelain=v1"),
+      body: f.state.body,
+      title: f.state.title,
+    };
+    const originalSession = loadSessionEntryReadOnly({ agentId: "main", sessionKey: SESSION_KEY });
+    const commandsBefore = mocks.runCommand.mock.calls.length;
+    const checkpointsBefore = checkpoint.mock.calls.length;
+    await expect(f.invoke("guest", { body: "" })).rejects.toThrow(/invalid.*params/iu);
+    expect((await f.invoke("guest", { action: "edit" })).details).toMatchObject({
+      body: before.body,
+      title: before.title,
+      publication: f.publication,
+    });
+    const body = `Fixes #123\n\n${before.body}`;
+    const result = await f.invoke("guest", {
+      action: "edit",
+      ...f.expected,
+      body,
+      expectedBody: before.body,
+    });
+    expect(result.details).toMatchObject({ state: "draft", body, title: before.title });
+    expect(f.writes).toEqual([{ action: "edit", input: { body } }]);
+    expect(
+      mocks.runCommand.mock.calls.slice(commandsBefore).every(([argv]) => argv[0] === "gh"),
+    ).toBe(true);
+    expect(checkpoint.mock.calls.length).toBe(checkpointsBefore);
+    expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey: SESSION_KEY })).toEqual(
+      originalSession,
+    );
+    expect(await local.git("rev-parse", "HEAD")).toBe(before.head);
+    expect(await local.git("write-tree")).toBe(before.index);
+    expect(await local.git("diff", "--binary")).toBe(before.diff);
+    expect(await local.git("status", "--porcelain=v1")).toBe(before.status);
+    expect(await fs.readFile(path.join(local.cwd, "untracked.sqlite-wal"), "utf8")).toBe(
+      "fixture data\n",
+    );
+  });
+
+  it("edits a repository PR title, preserving a human body edit and reconciling a lost response", async () => {
+    const f = await fixture("repository");
+    const expectedTitle = f.state.title;
+    f.state.body = `Human clarification\n\n${f.state.body}`;
+    const body = f.state.body;
+    const args = { action: "edit", ...f.expected, title: "A clearer title", expectedTitle };
+    f.loseResponse();
+    expect((await f.invoke("guest", args)).details).toMatchObject({
+      title: "A clearer title",
+      body,
+      state: "draft",
+    });
+    expect((await f.invoke("guest", args)).details).toMatchObject({
+      title: "A clearer title",
+      body,
+    });
+    expect(f.writes).toEqual([{ action: "edit", input: { title: "A clearer title" } }]);
+  });
+
+  it("preserves the original attribution after an edit appends another publication footer", async () => {
+    const f = await fixture();
+    const original = f.state.body;
+    const replacement = "\n\n## Worked on by\n\n- @other\n\n<!-- openclaw-publication:fake -->";
+    await f.invoke("guest", {
+      action: "edit",
+      ...f.expected,
+      expectedBody: original,
+      body: original + replacement,
+    });
+    await expect(
+      f.invoke("guest", {
+        action: "edit",
+        ...f.expected,
+        expectedBody: original + replacement,
+        body: "Replacement description" + replacement,
+      }),
+    ).rejects.toThrow("attribution");
+    expect(f.state.body).toBe(original + replacement);
+    expect(f.writes).toHaveLength(1);
+  });
+
+  it.each(["local", "repository"] as const)(
+    "edits the existing %s PR after a later source publication fails",
+    async (backend) => {
+      const f = await fixture(backend);
+      const workflow = "name: Later work\non: push\njobs: {}\n";
+      if (f.local) {
+        await fs.mkdir(path.join(f.local.cwd, ".github/workflows"), { recursive: true });
+        await fs.writeFile(path.join(f.local.cwd, ".github/workflows/later.yml"), workflow);
+      } else {
+        await f.repository!.capture("new unpublished work\n", "later-failed", {
+          ".github/workflows/later.yml": workflow,
+        });
+      }
+      const failed = await f.coordinator.requestForSessionV2(f.request(randomUUID(), f.guest));
+      expect(failed).toMatchObject({ status: "failed", code: "github_rejected" });
+      expect((await f.invoke("guest", { action: "edit" })).details).toMatchObject({
+        publication: f.publication,
+      });
+      const expectedTitle = f.state.title;
+      expect(
+        (
+          await f.invoke("guest", {
+            action: "edit",
+            ...f.expected,
+            title: "Clarify the existing PR",
+            expectedTitle,
+          })
+        ).details,
+      ).toMatchObject({ title: "Clarify the existing PR", publication: f.publication });
+      expect(f.writes).toEqual([{ action: "edit", input: { title: "Clarify the existing PR" } }]);
+    },
+  );
+
+  it("rejects stale metadata, altered attribution, changed publication and closed PR edits", async () => {
+    const f = await fixture();
+    const body = f.state.body;
+    const title = f.state.title;
+    const args = {
+      action: "edit",
+      ...f.expected,
+      body: `Description edit\n\n${body}`,
+      expectedBody: body,
+    };
+    f.state.body = `Human clarification\n\n${body}`;
+    await expect(f.invoke("guest", args)).rejects.toThrow("metadata changed");
+    f.state.body = body;
+    f.state.title = "Human title";
+    await expect(
+      f.invoke("guest", { ...args, title: "Agent title", expectedTitle: title }),
+    ).rejects.toThrow("metadata changed");
+    for (const changedBody of ["Removed footer", body.replace("- @alice", "- @someone-else")]) {
+      expect(changedBody).not.toBe(body);
+      await expect(f.invoke("guest", { ...args, body: changedBody })).rejects.toThrow(
+        "attribution",
+      );
+    }
+    await expect(f.invoke("guest", { ...args, requestId: randomUUID() })).rejects.toThrow(
+      "publication changed",
+    );
+    await expect(
+      f.invoke("guest", { ...args, expectedHeadCommit: "f".repeat(40) }),
+    ).rejects.toThrow("publication changed");
+    await expect(f.invoke("guest", { ...args, expectedBody: undefined })).rejects.toThrow(
+      "expectedBody",
+    );
+    await expect(
+      f.invoke("guest", { ...args, publishingSessionKey: "agent:main:other" }),
+    ).rejects.toThrow("current session");
+    f.state.state = "closed";
+    await expect(f.invoke("guest", args)).rejects.toThrow("closed");
+    expect(f.writes).toEqual([]);
+    expect(f.state.body).toBe(body);
+    expect(f.state.title).toBe("Human title");
+  });
+
+  it("rejects an edit after the admitted guest loses authority during the GitHub read", async () => {
+    const f = await fixture();
+    f.onRead(async () => await f.revoke());
+    await expect(
+      f.invoke("guest", {
+        action: "edit",
+        ...f.expected,
+        title: "New title",
+        expectedTitle: f.state.title,
+      }),
+    ).rejects.toThrow();
+    expect(f.writes).toEqual([]);
+  });
+
+  it("reports a rejected edit without a write retry or a publication fallback", async () => {
+    const f = await fixture();
+    f.rejectEdit();
+    await expect(
+      f.invoke("guest", {
+        action: "edit",
+        ...f.expected,
+        title: "New title",
+        expectedTitle: f.state.title,
+      }),
+    ).rejects.toThrow(/not confirmed the metadata edit.*Resource not accessible/u);
+    expect(f.writes).toEqual([{ action: "edit", input: { title: "New title" } }]);
+    expect((await f.invoke("guest", { action: "edit" })).details).toMatchObject({
+      title: f.state.title,
+      state: "draft",
+    });
   });
 
   it.each(["local", "repository"] as const)(
@@ -265,7 +490,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
     const f = await fixture();
     f.rejectClose();
     await expect(f.invoke("admin", { action: "close", ...f.expected })).rejects.toThrow(
-      "GitHub has not confirmed close",
+      /GitHub has not confirmed close.*Resource not accessible/u,
     );
     expect((await f.invoke("admin", { action: "inspect" })).details).toMatchObject({
       state: "draft",
@@ -361,7 +586,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
     f.rejectMerge();
     await expect(
       f.invoke("admin", { action: "merge", ...f.expected, mergeMethod: "merge" }),
-    ).rejects.toThrow("required reviews, checks");
+    ).rejects.toThrow(/required reviews, checks.*gh api exit 1.*Required checks have not passed/u);
     expect(f.state.merged).toBe(false);
     expect(f.writes).toHaveLength(1);
     expect(f.writes[0]?.input).toEqual({ sha: f.publication.headCommit, merge_method: "merge" });
@@ -369,6 +594,44 @@ describe("session PR actions through the agent tool and registered Gateway metho
       "required",
     );
   });
+
+  it.each(["stderr", "transport", "exit zero", "readback", "changed head"])(
+    "reports a bounded, redacted %s failure without retrying",
+    async (kind) => {
+      const f = await fixture();
+      f.state.draft = false;
+      const token = `ghp_${"a".repeat(36)}`;
+      const detail = `HTTP 403: merge refused. Authorization: Bearer ${token}\n${"x".repeat(3000)}`;
+      f.rejectMerge(
+        kind === "transport"
+          ? new Error(detail)
+          : kind === "stderr"
+            ? { ...commandResult("", 1), stderr: Buffer.from(detail) }
+            : commandResult(detail),
+      );
+      if (kind === "readback" || kind === "changed head") {
+        let reads = 0;
+        f.onRead(async () => {
+          if (++reads === 2) {
+            if (kind === "readback") {
+              throw new Error("PR state readback unavailable");
+            }
+            f.state.head.sha = "f".repeat(40);
+          }
+        });
+      }
+      const error = await f
+        .invoke("admin", { action: "merge", ...f.expected, mergeMethod: "squash" })
+        .catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain("HTTP 403: merge refused");
+      expect(String(error)).toContain("Command result:");
+      expect(String(error)).not.toContain(token);
+      expect(String(error).length).toBeLessThan(2300);
+      expect(f.writes).toHaveLength(1);
+      expect(f.state.merged).toBe(false);
+    },
+  );
 
   it("uses an explicitly selected publishing child and rejects an unrelated target", async () => {
     const f = await fixture();
@@ -452,6 +715,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
     await fs.appendFile(path.join(projection, ".git/config"), "\n[credential]\nhelper = !false\n");
     const { runCommandBuffered } =
       await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+    const reviewTransferBytes: number[] = [];
     const sandbox = createSandboxTestContext({
       overrides: {
         sessionKey: f.session.sessionKey,
@@ -467,6 +731,9 @@ describe("session PR actions through the agent tool and registered Gateway metho
             throw new Error("Fixture does not expose arbitrary exec");
           },
           runShellCommand: async ({ script, args, stdin, signal }) => {
+            if (stdin) {
+              reviewTransferBytes.push(Buffer.byteLength(stdin));
+            }
             const result = await runCommandBuffered(
               ["sh", "-c", script, "sandbox-fixture", ...(args ?? [])],
               {
@@ -729,7 +996,149 @@ describe("session PR actions through the agent tool and registered Gateway metho
       status: "current",
       review: { mode: "local", base: baseCommit },
     });
-    await f.revoke();
+    // An unchanged source snapshot must not retransmit repository contents.
+    expect(reviewTransferBytes.at(-1)).toBeLessThanOrEqual(64);
+    const runShellCommand = sandbox.backend!.runShellCommand.bind(sandbox.backend);
+    const missingDonor = vi.spyOn(sandbox.backend!, "runShellCommand").mockResolvedValueOnce({
+      code: 0,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+    });
+    expect(await invoke({ action: "refresh_base" })).toMatchObject({ status: "current" });
+    missingDonor.mockRestore();
+    const fullTransferBytes = reviewTransferBytes.at(-1);
+    expect(fullTransferBytes).toBeGreaterThan(64);
+
+    // An existing but unadvertised host commit cannot become a guest-chosen donor.
+    const hostOnlyCommit = await local.git(
+      "commit-tree",
+      await local.git("rev-parse", `${baseCommit}^{tree}`),
+      "-m",
+      "Host-only donor",
+    );
+    const mismatchedDonor = vi.spyOn(sandbox.backend!, "runShellCommand").mockResolvedValueOnce({
+      code: 0,
+      stdout: Buffer.from(hostOnlyCommit),
+      stderr: Buffer.alloc(0),
+    });
+    expect(await invoke({ action: "refresh_base" })).toMatchObject({ status: "current" });
+    mismatchedDonor.mockRestore();
+    expect(reviewTransferBytes.at(-1)).toBe(fullTransferBytes);
+
+    // Losing retained objects after the availability probe must recover the full
+    // selected source, including omitted blobs that are not delta bases.
+    const packDirectory = path.join(projection, ".git", "objects", "pack");
+    const packs = (await fs.readdir(packDirectory)).filter((file) => file.endsWith(".pack"));
+    const missingBlob = await guestGit("rev-parse", `${baseCommit}:later-upstream.txt`);
+    const retainedObjects = (
+      await guestGit("rev-list", "--objects", "--no-object-names", `${baseCommit}^{tree}`)
+    )
+      .split("\n")
+      .filter((object) => object !== missingBlob);
+    const incompletePack = await runCommandBuffered(
+      ["git", "pack-objects", "--stdout", "--no-reuse-delta", "--window=0"],
+      {
+        cwd: projection,
+        input: [...retainedObjects, baseCommit, ""].join("\n"),
+        timeoutMs: 10_000,
+      },
+    );
+    expect(incompletePack.code).toBe(0);
+    const installedIncomplete = await runCommandBuffered(["git", "index-pack", "--stdin"], {
+      cwd: projection,
+      input: incompletePack.stdout,
+      timeoutMs: 10_000,
+    });
+    expect(installedIncomplete.code).toBe(0);
+    let removedRetained = false;
+    const donorLoss = vi
+      .spyOn(sandbox.backend!, "runShellCommand")
+      .mockImplementation(async (command) => {
+        if (command.stdin && !removedRetained) {
+          removedRetained = true;
+          // Keep the original guest snapshot while making the selected review
+          // snapshot incomplete.
+          for (const pack of packs) {
+            const index = pack.replace(/\.pack$/u, ".idx");
+            const objects = await runCommandBuffered(
+              ["git", "verify-pack", "-v", path.join(packDirectory, index)],
+              {
+                cwd: projection,
+                timeoutMs: 10_000,
+              },
+            );
+            if (objects.stdout.toString().includes(guestHead)) {
+              continue;
+            }
+            await fs.rm(path.join(packDirectory, pack));
+            await fs.rm(path.join(packDirectory, index));
+          }
+          const absent = await runCommandBuffered(["git", "cat-file", "-e", missingBlob], {
+            cwd: projection,
+            timeoutMs: 10_000,
+          });
+          expect(absent.code).not.toBe(0);
+          expect(await guestGit("rev-parse", `${baseCommit}^{tree}`)).not.toBe("");
+        }
+        return await runShellCommand(command);
+      });
+    const beforeLoss = reviewTransferBytes.length;
+    expect(await invoke({ action: "refresh_base" })).toMatchObject({ status: "current" });
+    donorLoss.mockRestore();
+    expect(removedRetained).toBe(true);
+    expect(reviewTransferBytes.slice(beforeLoss)).toHaveLength(2);
+    expect(reviewTransferBytes.at(-1)).toBeGreaterThan(64);
+    expect(await guestGit("show", `${baseCommit}:later-upstream.txt`)).toBe("later upstream only");
+    expect(await guestGit("rev-parse", "HEAD")).toBe(guestHead);
+
+    await local.git("checkout", "main");
+    await fs.writeFile(
+      path.join(local.cwd, "retry-upstream.txt"),
+      "upstream before interrupted import\n",
+    );
+    await local.git("add", "retry-upstream.txt");
+    await local.git("commit", "-m", "Advance before interrupted review import");
+    baseCommit = await local.git("rev-parse", "HEAD");
+    await local.git("checkout", first.branch);
+
+    // A lost acknowledgment after real import must reuse the installed target.
+    const importInterruption = vi
+      .spyOn(sandbox.backend!, "runShellCommand")
+      .mockImplementation(async (command) => {
+        const result = await runShellCommand(command);
+        if (command.stdin) {
+          expect(result.code).toBe(0);
+          throw new Error("interrupted after review-base import");
+        }
+        return result;
+      });
+    await expect(invoke({ action: "refresh_base" })).rejects.toThrow(
+      "interrupted after review-base import",
+    );
+    importInterruption.mockRestore();
+    expect(await invoke({ action: "refresh_base" })).toMatchObject({ status: "current" });
+    expect(reviewTransferBytes.at(-1)).toBeLessThanOrEqual(64);
+    expect(await guestGit("show", `${baseCommit}:retry-upstream.txt`)).toBe(
+      "upstream before interrupted import",
+    );
+    expect(await guestGit("rev-parse", "HEAD")).toBe(guestHead);
+    const transfersBeforeRevocation = reviewTransferBytes.length;
+    let revokedAfterProbe = false;
+    const revokeDuringProbe = vi
+      .spyOn(sandbox.backend!, "runShellCommand")
+      .mockImplementationOnce(async (command) => {
+        expect(command.stdin).toBeUndefined();
+        const result = await runShellCommand(command);
+        expect(result.code).toBe(0);
+        await f.revoke();
+        revokedAfterProbe = true;
+        return result;
+      });
+    await expect(invoke({ action: "refresh_base" })).rejects.toThrow();
+    expect(revokedAfterProbe).toBe(true);
+    expect(revokeDuringProbe).toHaveBeenCalledTimes(1);
+    expect(reviewTransferBytes).toHaveLength(transfersBeforeRevocation);
+    revokeDuringProbe.mockRestore();
     await expect(invoke({ action: "refresh_base" })).rejects.toThrow();
   });
 });

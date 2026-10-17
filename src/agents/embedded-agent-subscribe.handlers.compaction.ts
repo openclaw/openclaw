@@ -153,7 +153,6 @@ export function handleCompactionEnd(
   if (willRetry) {
     ctx.noteCompactionRetry();
     ctx.resetForCompactionRetry();
-    ctx.log.debug(`embedded run compaction retry: runId=${ctx.params.runId}`);
   } else {
     if (outcome.status !== "aborted") {
       ctx.state.livenessState = "working";

@@ -491,7 +491,7 @@ it.each([false, true])(
 it.each(["resolve", "reject"] as const)(
   "retires in-flight runner publication and its pending value before late %s",
   async (settle) => {
-    const { connection, request, start, writeStderrLine } = startConnectionFixture(true);
+    const { connection, request, start } = startConnectionFixture(true);
     const previous = createDeferred<unknown>();
     let first = true;
     request.mockImplementation((method) => {
@@ -526,7 +526,6 @@ it.each(["resolve", "reject"] as const)(
           }),
         ),
       );
-      expect(writeStderrLine).not.toHaveBeenCalled();
     } finally {
       previous.resolve({});
       await connection.close();

@@ -1,9 +1,6 @@
 // Discord tests cover provider plugin behavior.
 import { EventEmitter } from "node:events";
-import {
-  IncognitoSessionSyncAccessError,
-  rethrowIncognitoSessionError,
-} from "openclaw/plugin-sdk/acp-runtime";
+import { IncognitoSessionSyncAccessError } from "openclaw/plugin-sdk/acp-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -34,27 +31,23 @@ const {
   createDiscordMessageHandlerMock,
   createDiscordNativeCommandMock,
   createdBindingManagers,
-  createNoopThreadBindingManagerMock,
   createThreadBindingManagerMock,
   getAcpSessionStatusMock,
   isNativeCommandsExplicitlyDisabledMock,
   listNativeCommandSpecsForConfigMock,
-  prepareSkillCommandsForAgentsMock,
   monitorLifecycleMock,
   reconcileAcpThreadBindingsOnStartupMock,
   resolveDiscordAccountMock,
   resolveNativeCommandsEnabledMock,
-  resolveNativeSkillsEnabledMock,
-  shouldLogVerboseMock,
   voiceRuntimeModuleLoadedMock,
 } = getProviderMonitorTestMocks();
 
-const { voiceAutoJoinMock } = vi.hoisted(() => ({
+const { voiceAutoJoinMock, probeDiscordApplicationIdMock } = vi.hoisted(() => ({
   voiceAutoJoinMock: vi.fn(async () => undefined),
+  probeDiscordApplicationIdMock: vi.fn<typeof import("../probe.js").probeDiscordApplicationId>(),
 }));
 
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
-let providerTesting: typeof import("./provider.test-support.js").discordProviderTestSupport;
 
 function createAcpRuntimeError(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code });
@@ -128,18 +121,6 @@ function expectMockLogNotContains(mock: unknown, expected: string): void {
   expect(mockMessages(mock).join("\n")).not.toContain(expected);
 }
 
-vi.mock("../voice/voice-runtime.js", () => {
-  voiceRuntimeModuleLoadedMock();
-  return {
-    DiscordVoiceManager: function DiscordVoiceManager() {
-      return { autoJoin: voiceAutoJoinMock };
-    },
-    DiscordVoiceGuildCreateListener: function DiscordVoiceGuildCreateListener() {},
-    DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
-    DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
-    DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
-  };
-});
 describe("monitorDiscordProvider", () => {
   type ReconcileHealthProbeParams = {
     cfg: OpenClawConfig;
@@ -174,9 +155,10 @@ describe("monitorDiscordProvider", () => {
       resolveDiscordAccount: (...args: Parameters<typeof resolveDiscordAccountMock>) =>
         resolveDiscordAccountMock(...args),
     }));
-    vi.doMock("../probe.js", () => ({
+    vi.doMock("../probe.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../probe.js")>()),
       fetchDiscordApplicationId: async () => "app-1",
-      probeDiscordApplicationId: async () => ({ kind: "resolved", applicationId: "app-1" }),
+      probeDiscordApplicationId: probeDiscordApplicationIdMock,
       parseApplicationIdFromToken: (token: string) => {
         const segment = token.trim().split(".")[0];
         if (!segment) {
@@ -194,31 +176,16 @@ describe("monitorDiscordProvider", () => {
       normalizeDiscordToken: (value?: string) => value,
     }));
     ({ monitorDiscordProvider } = await import("./provider.js"));
-    ({ discordProviderTestSupport: providerTesting } = await import("./provider.test-support.js"));
   });
 
   beforeEach(() => {
-    providerTesting.reset();
     resetDiscordProviderMonitorMocks();
     voiceAutoJoinMock.mockClear();
-    providerTesting.setProbeDiscordApplicationId(async () => ({
+    probeDiscordApplicationIdMock.mockReset().mockResolvedValue({
       kind: "resolved",
       applicationId: "app-1",
-    }));
-    providerTesting.setCreateDiscordNativeCommand(((
-      ...args: Parameters<typeof providerTesting.setCreateDiscordNativeCommand>[0] extends
-        | ((...inner: infer P) => unknown)
-        | undefined
-        ? P
-        : never
-    ) =>
-      createDiscordNativeCommandMock(
-        ...(args as Parameters<typeof createDiscordNativeCommandMock>),
-      )) as NonNullable<Parameters<typeof providerTesting.setCreateDiscordNativeCommand>[0]>);
-    providerTesting.setRunDiscordGatewayLifecycle((...args) =>
-      monitorLifecycleMock(...(args as Parameters<typeof monitorLifecycleMock>)),
-    );
-    providerTesting.setLoadDiscordVoiceRuntime(async () => {
+    });
+    vi.doMock("../voice/voice-runtime.js", () => {
       voiceRuntimeModuleLoadedMock();
       return {
         DiscordVoiceManager: function DiscordVoiceManager() {
@@ -228,66 +195,9 @@ describe("monitorDiscordProvider", () => {
         DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
         DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
         DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
-      } as never;
-    });
-    providerTesting.setLoadDiscordProviderSessionRuntime(
-      (async () =>
-        ({
-          getAcpSessionManager: () => ({
-            getSessionStatus: getAcpSessionStatusMock,
-          }),
-          isAcpRuntimeError: (error: unknown): error is { code: string } =>
-            error instanceof Error && "code" in error,
-          rethrowIncognitoSessionError,
-          resolveThreadBindingIdleTimeoutMs: () => 24 * 60 * 60 * 1000,
-          resolveThreadBindingMaxAgeMs: () => 7 * 24 * 60 * 60 * 1000,
-          resolveThreadBindingsEnabled: () => true,
-          createDiscordMessageHandler: createDiscordMessageHandlerMock,
-          createNoopThreadBindingManager: createNoopThreadBindingManagerMock,
-          createThreadBindingManager: createThreadBindingManagerMock,
-          reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,
-        }) as never) as NonNullable<
-        Parameters<typeof providerTesting.setLoadDiscordProviderSessionRuntime>[0]
-      >,
-    );
-    providerTesting.setCreateClient((options, handlers, plugins = []) => {
-      clientConstructorOptionsMock(options);
-      const pluginRegistry = [...plugins];
-      return {
-        options,
-        listeners: handlers.listeners ?? [],
-        plugins: pluginRegistry,
-        rest: {
-          options: { timeout: 15_000 },
-          get: vi.fn(async () => undefined),
-          post: vi.fn(async () => undefined),
-          put: vi.fn(async () => undefined),
-          patch: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
-        },
-        deployCommands: async () => await clientDeployCommandsMock(),
-        fetchUser: async (target: string) => await clientFetchUserMock(target),
-        getPlugin: (name: string) =>
-          clientGetPluginMock(name) ?? pluginRegistry.find((plugin) => plugin.id === name),
-      } as never;
+      };
     });
     setActivePluginRegistry(createEmptyPluginRegistry());
-    providerTesting.setResolveDiscordAccount(
-      (...args) => resolveDiscordAccountMock(...args) as never,
-    );
-    providerTesting.setResolveNativeCommandsEnabled((...args) =>
-      resolveNativeCommandsEnabledMock(...args),
-    );
-    providerTesting.setResolveNativeSkillsEnabled((...args) =>
-      resolveNativeSkillsEnabledMock(...args),
-    );
-    providerTesting.setListNativeCommandSpecsForConfig((...args) =>
-      listNativeCommandSpecsForConfigMock(...args),
-    );
-    providerTesting.setPrepareSkillCommandsForAgents(
-      (...args) => prepareSkillCommandsForAgentsMock(...args) as never,
-    );
-    providerTesting.setShouldLogVerbose(() => shouldLogVerboseMock());
   });
 
   function runProvider(overrides: Partial<Parameters<typeof monitorDiscordProvider>[0]> = {}) {
@@ -846,7 +756,7 @@ describe("monitorDiscordProvider", () => {
     "publishes $lifecycle for an application-id $name before gateway startup",
     async ({ result, lifecycle, terminalDisconnect }) => {
       const setStatus = vi.fn();
-      providerTesting.setProbeDiscordApplicationId(async () => result);
+      probeDiscordApplicationIdMock.mockResolvedValueOnce(result);
       resolveDiscordAccountMock.mockReturnValue({
         accountId: "default",
         token: "unparseable.token",

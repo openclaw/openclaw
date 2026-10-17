@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 342000,
-  "reason": "Post-Lit startup measured 340081 B gzip on 9fa4e5618912; retain about 2 KB of headroom.",
-  "updatedAt": "2026-10-16"
+  "startupJsGzipBytes": 338803,
+  "reason": "Integrated main after schema and syntax-highlighting deferrals measures 338803 B at startup; cap at 338900 B with the existing 64 B build-variance allowance.",
+  "updatedAt": "2026-10-17"
 }

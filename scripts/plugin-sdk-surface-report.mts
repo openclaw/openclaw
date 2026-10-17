@@ -282,7 +282,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared auth-patch application replaces manual plugin config merging.
       // +6: packaged Settings placement, snapshot, components, context, view, and
       // DoctorMemoryStatusPayload for the plugin-owned Memory overview.
-      3798,
+      // +2: MemorySearchResponse and AgentsWorkspaceGetResult type-only contracts
+      // for the plugin-owned indexed Memory search presentation.
+      3800,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

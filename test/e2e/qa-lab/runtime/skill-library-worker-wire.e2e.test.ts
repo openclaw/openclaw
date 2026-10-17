@@ -182,7 +182,10 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           const turnHomes = new Map<string, string>();
           const failureContext = async (key: string, marker: string) => {
             const diagnostics: Record<string, unknown> = { providerErrors: provider!.errors };
-            if (instance.logs().includes("Selected skill revision is unavailable")) {
+            if (
+              provider!.errors.length > 0 ||
+              instance.logs().includes("Selected skill revision is unavailable")
+            ) {
               const observe = async (name: string, read: () => Promise<unknown>) => {
                 try {
                   diagnostics[name] = await read();

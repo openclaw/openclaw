@@ -156,3 +156,93 @@ export const completed = (id: string, output: unknown[] = []) => ({
   sequence_number: 99,
   response: { id, status: "completed", output },
 });
+
+export function outputItem(event: "added" | "done", item: Record<string, unknown>, index?: number) {
+  return {
+    type: `response.output_item.${event}`,
+    ...(index === undefined ? {} : { output_index: index }),
+    item,
+  };
+}
+export function message(id: string, text: string, phase?: "commentary" | "final_answer") {
+  return {
+    id,
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    ...(phase ? { phase } : {}),
+    content: [{ type: "output_text", text, annotations: [] }],
+  };
+}
+export function startedMessage(id: string, phase?: "final_answer") {
+  return {
+    id,
+    type: "message",
+    role: "assistant",
+    status: "in_progress",
+    ...(phase ? { phase } : {}),
+    content: [],
+  };
+}
+
+export function reasoning(id: string, text?: string, encrypted_content?: string) {
+  return {
+    id,
+    type: "reasoning",
+    summary: text === undefined ? [] : [{ type: "summary_text", text }],
+    content: [],
+    ...(encrypted_content === undefined ? {} : { encrypted_content }),
+  };
+}
+export function tool(
+  id: string,
+  args: string,
+  status?: "completed" | "incomplete" | "in_progress",
+  name = "lookup",
+) {
+  return {
+    id: `fc_${id}`,
+    call_id: `call_${id}`,
+    type: "function_call",
+    name,
+    arguments: args,
+    ...(status === undefined ? {} : { status }),
+  };
+}
+export function toolCall(
+  id: string,
+  name: string,
+  args: unknown,
+): ParityFixture["canonical"]["content"][number] {
+  return { type: "toolCall", id, name, arguments: args, partialJson: false };
+}
+
+export function textEvents(text: string, contentIndex = 0) {
+  return [
+    { type: "text_start", contentIndex },
+    { type: "text_end", contentIndex, content: text },
+  ];
+}
+
+export function expected(
+  responseId: string | null,
+  events: ParityFixture["canonical"]["events"],
+  content: ParityFixture["canonical"]["content"],
+  outcome: Partial<Pick<ParityFixture["canonical"], "error" | "stopReason">> = {},
+): ParityFixture["canonical"] {
+  return { responseId, events, content, error: null, stopReason: "stop", ...outcome };
+}
+
+export function outputTextDelta(item_id: string, delta: string, output_index = 0) {
+  return { type: "response.output_text.delta", output_index, item_id, content_index: 0, delta };
+}
+
+export function outputTextPart(item_id: string, output_index = 0) {
+  return {
+    type: "response.content_part.added",
+    output_index,
+    item_id,
+    content_index: 0,
+    part: { type: "output_text", text: "", annotations: [] },
+  };
+}

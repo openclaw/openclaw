@@ -91,6 +91,7 @@ export function ActivitySessionGit(props: ActivitySessionGitProps) {
   const gatewayProjection = projectGateway(initial.gateway);
   const projection = projectSource(initial, {
     read: ({ gateway, key }) => sessionPullRequestsForGateway(gateway).get(key),
+    // The projection owns snapshot observation; the effect below owns the session's remote watch.
     subscribe: ({ gateway }, notify) => sessionPullRequestsForGateway(gateway).subscribe(notify),
     equality: "revision",
   });

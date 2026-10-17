@@ -336,6 +336,12 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
         [agent, OPENCLAW_AGENT_SCHEMA_VERSION],
       );
       const pluginRoots: string[] = [];
+      // Descriptor loading precedes publishing the complete plugin fixture config.
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "0");
+      vi.stubEnv(
+        "OPENCLAW_BUNDLED_PLUGINS_DIR",
+        fileURLToPath(new URL("../../../extensions", import.meta.url)),
+      );
       for (const family of families) {
         const id = family.provider.id;
         const sourceRoot = fileURLToPath(new URL(`../../../extensions/${id}`, import.meta.url));

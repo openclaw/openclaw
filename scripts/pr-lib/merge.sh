@@ -755,7 +755,7 @@ merge_run() {
       # still passes both live admin checks before the successor intent is written.
       retired_auto_admin=true
     else
-      provider_rejection=$(printf '%s\n' "$recovery_record" | node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection .local) || return 1
+      provider_rejection=$(printf '%s\n' "$recovery_record" | node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection "$recovery_oid" .local) || return 1
       recovery_artifact_head=$(printf '%s\n' "$recovery_record" | jq -er .head) || return 1
     fi
     qualified_pending_recovery=true
@@ -1218,7 +1218,7 @@ merge_run() {
     crabbox_final_main_sha="$observed_main"
   fi
   if [ -n "$provider_rejection" ] &&
-    [ "$provider_rejection" != "$(printf '%s\n' "$recovery_record" | node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection .local)" ]; then
+    [ "$provider_rejection" != "$(printf '%s\n' "$recovery_record" | node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection "$recovery_oid" .local)" ]; then
     merge_outcome_stop "provider rejection evidence changed during admission"; return 1
   fi
   if [ -n "$stale_head_retirement" ] &&

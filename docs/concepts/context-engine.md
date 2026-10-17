@@ -100,6 +100,26 @@ their caller-owned lifetime.
 
 For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by projecting assembled context into Codex developer instructions and the current turn prompt. Codex still owns its native thread history and native compactor.
 
+### Provider compaction ownership
+
+On direct OpenAI API-key routes using `openai-responses`, when the active context
+engine declares `info.ownsCompaction: true`, OpenClaw disables native compaction
+and stored Responses checkpoint replay by default. Set
+`params.responsesServerCompaction` explicitly to `true` to opt in. Engines that
+do not own compaction, including `legacy`, retain the existing default-on behavior
+on eligible routes. Native ChatGPT sign-in (`openai-chatgpt-responses`), the Codex
+app-server harness, and other providers are unchanged.
+
+Preexisting Responses checkpoints are bypassed while this ownership guard is
+active; their stored data is not deleted. Explicit opt-in allows a matching
+Responses checkpoint to take precedence over the selected engine's assembled
+context. Choose it only when you want provider-managed context to override engine
+assembly for those requests.
+
+On these direct API-key routes, memory-extraction (memory flush) turns always
+disable native compaction and checkpoint replay, even with explicit opt-in, so
+extraction can use the unsummarized history.
+
 ### Subagent lifecycle (optional)
 
 OpenClaw calls two optional subagent lifecycle hooks:

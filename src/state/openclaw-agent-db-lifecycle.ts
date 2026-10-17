@@ -474,7 +474,7 @@ export function closeOpenClawAgentDatabases(rootPath?: string): void {
   }
 }
 
-/** Latch background verification damage so later opens fail without rescanning. */
+/** Latch integrity refusals so later opens fail without rescanning. */
 export function recordOpenClawAgentDatabaseOpenFailure(
   pathname: string,
   error: Error,

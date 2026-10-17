@@ -22,7 +22,6 @@ import {
   listOpenClawRegisteredAgentDatabases,
   registerOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
-import type { ActivateSetupInferenceDeps } from "../system-agent/setup-inference-core.js";
 import { WizardNavigationError, type WizardPrompter, type WizardSelectParams } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
@@ -30,7 +29,7 @@ const mocks = vi.hoisted(() => ({
   currentConfig: undefined as { value: Record<string, unknown> } | undefined,
   provider: undefined as MigrationProviderPlugin | undefined,
   verify: vi.fn(),
-  runEmbedded: vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(),
+  runEmbedded: vi.fn<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>(),
 }));
 
 vi.mock("../plugins/migration-provider-runtime.js", () => ({

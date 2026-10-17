@@ -57,6 +57,11 @@ Renaming, pinning, or editing session metadata retains the existing message
 preview without rereading the transcript. New messages, transcript replacements,
 completed transcript repairs, and cold-storage restoration refresh previews; changes to model selection
 or fallback state refresh the relevant model facts.
+When `sessions.list` requests `includeLastMessage`, rows can also include
+`lastAssistantMessage` with the latest visible assistant text and its timestamp.
+This field uses the same bounded recent transcript window as other previews;
+it is absent when no timestamped assistant text is available in that window.
+The general `lastMessagePreview` can still contain a user message.
 Stopping with `/stop`, deleting, resetting, or archiving a session cancels only that agent's work for
 the selected conversation. Another agent's active turn and queued messages are
 preserved even when the agents use the same session key.
@@ -262,6 +267,9 @@ Startup discovery excludes archived sessions, recovery tombstones, and rows with
 recovery obligations before preparing targets. Completed sessions with pending
 recovery obligations still settle. Other skipped candidates are logged with a
 reason, including when other sessions recover.
+The final pass over exhausted recovery targets prepares one session at a time,
+so a restart cannot flood database queues with background preparation. A failure
+for one target is logged without abandoning the remaining targets.
 Three attempts that fail to start a backend turn exhaust the recovery budget.
 Once a real backend turn starts,
 the budget refreshes, so a later Gateway restart does not consume the old allowance.
@@ -283,6 +291,9 @@ the original caller's permission to run worktree setup scripts.
 
 When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
+Explicit nonfinal message-tool progress (`final: false`) recorded by the same run
+does not close that turn; recovery preserves the visible update without sending it
+back to the model as an answer.
 A restart-aborted embedded response retains its already-streamed text as an
 interrupted assistant message when the transcript writer is still available.
 Unfinished tool calls in that response are discarded before persistence.

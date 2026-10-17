@@ -98,7 +98,6 @@ function fixture() {
     sessionKey: "main",
     settings: loadSettings(),
     ...createInitialChatRealtimeState(),
-    requestUpdate: vi.fn(),
   } as unknown as ChatRealtimeState;
   attachChatRealtimeActions(state);
   return {
@@ -160,13 +159,16 @@ describe("browser voice handoff history", () => {
           f.changeVoice();
           await f.replacementActive.promise;
         }
-        call = expectDefined(f.state.realtimeTalkSession, "active realtime call");
+        call = expectDefined(
+          f.state.realtimeTalk.snapshot.realtimeTalkSession,
+          "active realtime call",
+        );
         expect(call.getTransport()).toBe("webrtc");
         const stopsBeforeReading = transports.stop.mock.calls.length;
         reading = reader.speak(f.client, "Read this assistant message");
         expect(transports.stop).toHaveBeenCalledTimes(stopsBeforeReading + 1);
-        expect(f.state.realtimeTalkSession).toBeNull();
-        expect(f.state.realtimeTalkActive).toBe(false);
+        expect(f.state.realtimeTalk.snapshot.realtimeTalkSession).toBeNull();
+        expect(f.state.realtimeTalk.snapshot.realtimeTalkActive).toBe(false);
       } finally {
         reader.stop();
         f.speech.resolve({ audioBase64: "UklGRg==", mimeType: "audio/wav", provider: "openai" });
@@ -214,16 +216,19 @@ describe("browser voice handoff history", () => {
     try {
       f.transcript.resolve();
       await f.state.toggleRealtimeTalk();
-      original = expectDefined(f.state.realtimeTalkSession, "original realtime call");
+      original = expectDefined(
+        f.state.realtimeTalk.snapshot.realtimeTalkSession,
+        "original realtime call",
+      );
       f.changeVoice();
       await f.closeStarted.promise;
-      expect(f.state.realtimeTalkActive).toBe(true);
-      expect(f.state.realtimeTalkSession).toBeNull();
+      expect(f.state.realtimeTalk.snapshot.realtimeTalkActive).toBe(true);
+      expect(f.state.realtimeTalk.snapshot.realtimeTalkSession).toBeNull();
       reading = reader.speak(f.client, "Read this assistant message");
-      expect(f.state.realtimeTalkActive).toBe(false);
+      expect(f.state.realtimeTalk.snapshot.realtimeTalkActive).toBe(false);
       f.close.resolve();
       await original.stop();
-      expect(f.state.realtimeTalkSession).toBeNull();
+      expect(f.state.realtimeTalk.snapshot.realtimeTalkSession).toBeNull();
       expect(f.snapshots).toHaveLength(1);
     } finally {
       reader.stop();
@@ -239,10 +244,13 @@ describe("browser voice handoff history", () => {
     "drains finalized speech before replacement and honors Stop during %s",
     async (stopDuring) => {
       const f = fixture();
-      let original = f.state.realtimeTalkSession;
+      let original = f.state.realtimeTalk.snapshot.realtimeTalkSession;
       try {
         await f.state.toggleRealtimeTalk();
-        original = expectDefined(f.state.realtimeTalkSession, "initial realtime session");
+        original = expectDefined(
+          f.state.realtimeTalk.snapshot.realtimeTalkSession,
+          "initial realtime session",
+        );
         expectDefined(
           transports.contexts[0],
           "initial realtime transport",
@@ -255,18 +263,18 @@ describe("browser voice handoff history", () => {
         await f.transportStopped.promise;
         expect(transports.stop).toHaveBeenCalledOnce();
         expect(f.snapshots).toEqual([[]]);
-        expect(f.state.realtimeTalkSession).toBeNull();
+        expect(f.state.realtimeTalk.snapshot.realtimeTalkSession).toBeNull();
 
         if (stopDuring === "transcript") {
           await f.state.toggleRealtimeTalk();
-          expect(f.state.realtimeTalkActive).toBe(false);
+          expect(f.state.realtimeTalk.snapshot.realtimeTalkActive).toBe(false);
         }
         f.transcript.resolve();
         await f.closeStarted.promise;
         expect(f.snapshots).toHaveLength(1);
         if (stopDuring === "provider-close") {
           await f.state.toggleRealtimeTalk();
-          expect(f.state.realtimeTalkActive).toBe(false);
+          expect(f.state.realtimeTalk.snapshot.realtimeTalkActive).toBe(false);
         }
         f.close.resolve();
         await original.stop();
@@ -286,7 +294,7 @@ describe("browser voice handoff history", () => {
       } finally {
         f.transcript.resolve();
         f.close.resolve();
-        const active = f.state.realtimeTalkSession;
+        const active = f.state.realtimeTalk.snapshot.realtimeTalkSession;
         stopChatRealtimeTalk(f.state);
         await original?.stop();
         await active?.stop();

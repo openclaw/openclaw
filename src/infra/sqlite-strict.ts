@@ -60,6 +60,7 @@ export type SqliteStrictMigrationOptions = {
   databaseLabel?: string;
   /** The caller owns object creation; an already-STRICT fragment needs no DDL replay. */
   expectedSchema?: SqliteSchemaSource;
+  integrityCheck?: "quick" | "full";
 };
 
 export type SqliteStrictMigrationResult = {
@@ -344,7 +345,10 @@ export function withSqliteForeignKeysDisabled<T>(db: DatabaseSync, fn: () => T):
 export function migrateSqliteSchemaToStrictInTransaction(
   db: DatabaseSync,
   schemaSql: string,
-  options: Pick<SqliteStrictMigrationOptions, "databaseLabel" | "expectedSchema"> = {},
+  options: Pick<
+    SqliteStrictMigrationOptions,
+    "databaseLabel" | "expectedSchema" | "integrityCheck"
+  > = {},
 ): SqliteStrictMigrationResult {
   if (!db.isTransaction) {
     throw new Error("SQLite STRICT schema migration requires an active transaction");
@@ -465,7 +469,10 @@ export function migrateSqliteSchemaToStrictInTransaction(
       db.exec(object.sql);
     }
   }
-  assertSqliteIntegrity(db, options.databaseLabel ?? "SQLite STRICT schema migration");
+  assertSqliteIntegrity(db, options.databaseLabel ?? "SQLite STRICT schema migration", {
+    check: options.integrityCheck ?? "quick",
+    tables: tablesToMigrate.map((table) => table.name),
+  });
   return { migratedTables: tablesToMigrate.map((table) => table.name) };
 }
 

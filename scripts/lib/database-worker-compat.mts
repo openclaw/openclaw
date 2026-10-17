@@ -174,7 +174,6 @@ const nonRuntimeCandidates = new Map<string, readonly string[]>([
       "selectUserProfileIdentityInDatabase",
       "selectUserProfileDisplaysInDatabase",
       "readUserProfileSnapshotCommand",
-      "readUserProfileIdForEmail",
     ],
   ],
   [

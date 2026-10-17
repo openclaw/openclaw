@@ -45,7 +45,6 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
             items: renderSidebarAgentMenuSwitcher({
               activeId: agents[0]!.id,
               allAgentsScope: true,
-              query: "",
               openMode: "hover",
               agents: agents.slice(0, count),
               identities: new Map(),

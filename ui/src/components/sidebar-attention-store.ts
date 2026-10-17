@@ -3,17 +3,18 @@ import type { CronCompactJob, ModelAuthStatusResult } from "../api/types.ts";
 import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
 import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import type {
-  SidebarAttentionStoreController as StoreController,
+  SidebarAttentionStoreOwner as StoreOwner,
   SidebarAttentionStoreSources,
 } from "../app/sidebar-attention-store.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { subscribeChatOutboxAttentionChanges } from "../lib/chat/outbox-owner-registry.ts";
 import { subscribeStoredChatOutboxChanges } from "../lib/chat/outbox-store.ts";
-import { createInitialCronState, loadCronStatus } from "../lib/cron/index.ts";
 import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
+import { createInitialCronState, loadCronStatus } from "../lib/cron/state.ts";
 import { isGatewayAvailable } from "../lib/gateway-availability.ts";
 import { modelAuthEventInvalidates } from "../lib/model-auth-request-state.ts";
 import { loadModelAuthStatus, nextModelAuthStatusRefreshAt } from "../lib/model-auth.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   dismissSidebarAttention,
@@ -76,7 +77,7 @@ function isCronAttentionJob(job: unknown): job is CronAttentionJob {
   );
 }
 
-export class SidebarAttentionStoreController implements StoreController {
+export class SidebarAttentionStoreOwner implements StoreOwner {
   readonly mentions: MentionsCapability;
   private cronJobs: CronAttentionJob[] = [];
   private cronSchedulerEnabled: boolean | null = null;
@@ -128,6 +129,8 @@ export class SidebarAttentionStoreController implements StoreController {
       this.mentions.subscribe(onChange),
       subscribeStoredChatOutboxChanges(onChange),
       subscribeChatOutboxAttentionChanges(onChange),
+      listen(document, "visibilitychange", this.refreshDeferred),
+      listen(globalThis, "storage", this.syncDismissalsFromStorage),
     ];
     // Share the chat owner’s live overlays without putting its send graph in shell startup.
     void import("../pages/chat/chat-outbox-owner.ts")
@@ -142,8 +145,6 @@ export class SidebarAttentionStoreController implements StoreController {
       .catch(() => {
         // Chat retains its existing recovery controls if its lazy runtime cannot load.
       });
-    document.addEventListener("visibilitychange", this.refreshDeferred);
-    globalThis.addEventListener("storage", this.syncDismissalsFromStorage);
     this.synchronizeGateway();
   }
 
@@ -646,7 +647,5 @@ export class SidebarAttentionStoreController implements StoreController {
       stop();
     }
     this.mentions.dispose();
-    document.removeEventListener("visibilitychange", this.refreshDeferred);
-    globalThis.removeEventListener("storage", this.syncDismissalsFromStorage);
   }
 }

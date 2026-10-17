@@ -8,11 +8,6 @@ import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
-vi.mock(import("../../scripts/lib/pinned-bun.mts"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  requirePinnedBun: vi.fn(() => "/fixture/pinned-bun"),
-}));
-
 vi.mock(import("../../scripts/lib/managed-child-process.mts"), async (importOriginal) => ({
   ...(await importOriginal()),
   runManagedCommand: vi.fn(),
@@ -93,6 +88,7 @@ describe("protected Vitest cache collection", () => {
         vi.stubEnv(name, value);
       }
       for (const name of [
+        "OPENCLAW_BUN_PATH",
         "OPENCLAW_NODE_TEST_TARGETS_JSON",
         "OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64",
         "OPENCLAW_NODE_TEST_ENV_JSON",
@@ -175,7 +171,8 @@ describe("protected Vitest cache collection", () => {
       }
       const [bun, node] = uiCollections;
       expect(bun!.env).toMatchObject(BUN_UI_TEST_ENV);
-      expect(bun!.env.OPENCLAW_BUN_PATH).toBe("/fixture/pinned-bun");
+      // CI selects the pinned fork from PATH; a bare command is not a Bun path override.
+      expect(bun!.env.OPENCLAW_BUN_PATH).toBeUndefined();
       expect(bun!.env.OPENCLAW_VITEST_INCLUDE_FILE).toBeUndefined();
       expect(bun!.env.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT).toBe(
         join(cacheRoot, "vitest-cache-bun-0"),

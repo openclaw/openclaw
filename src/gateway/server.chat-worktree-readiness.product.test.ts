@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
@@ -19,6 +20,7 @@ import { areHeartbeatsEnabled, setHeartbeatsEnabled } from "../infra/heartbeat-w
 import type { Deferred } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type ProviderCall = { body: Record<string, unknown>; response: ServerResponse };
@@ -36,15 +38,23 @@ const instruction = "WORKTREE_PROMPT_MARKER: preserve this committed project ins
 const fileContents = "WORKTREE_TOOL_MARKER: the complete checkout is ready.\n";
 const userMessage = "Read src/remaining.txt and report its marker.";
 const partial = "I can start while the workspace finishes.";
+const assistantMessage = {
+  type: "message",
+  id: "msg_readiness",
+  role: "assistant",
+  status: "completed",
+  content: [{ type: "output_text", text: partial, annotations: [] }],
+};
+
+function writeEvent(response: ServerResponse, type: string, fields: Record<string, unknown>) {
+  response.write(`data: ${JSON.stringify({ type: `response.${type}`, ...fields })}\n\n`);
+}
+
+function finishText(response: ServerResponse, text: string, id: string) {
+  writeOpenAiResponsesText(response, { text, messageId: `msg_${id}`, responseId: `resp_${id}` });
+}
 
 function finishWithTool(response: ServerResponse, name: string, args: Record<string, unknown>) {
-  const message = {
-    type: "message",
-    id: "msg_readiness",
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text: partial, annotations: [] }],
-  };
   const item = {
     type: "function_call",
     id: "fc_read_remaining",
@@ -53,67 +63,55 @@ function finishWithTool(response: ServerResponse, name: string, args: Record<str
     arguments: JSON.stringify(args),
     status: "completed",
   };
-  for (const event of [
-    {
-      type: "response.output_text.done",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      text: partial,
+  writeTextEvent(response, "done", { text: partial });
+  writeEvent(response, "output_item.done", { output_index: 0, item: assistantMessage });
+  writeEvent(response, "output_item.added", { output_index: 1, item: { ...item, arguments: "" } });
+  writeEvent(response, "function_call_arguments.done", {
+    item_id: item.id,
+    output_index: 1,
+    arguments: item.arguments,
+  });
+  writeEvent(response, "output_item.done", { output_index: 1, item });
+  writeEvent(response, "completed", {
+    response: {
+      id: "resp_read_remaining",
+      status: "completed",
+      output: [assistantMessage, item],
+      usage: { input_tokens: 20, output_tokens: 8, total_tokens: 28 },
     },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    { type: "response.output_item.added", output_index: 1, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.done",
-      item_id: item.id,
-      output_index: 1,
-      arguments: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 1, item },
-    {
-      type: "response.completed",
-      response: {
-        id: "resp_read_remaining",
-        status: "completed",
-        output: [message, item],
-        usage: { input_tokens: 20, output_tokens: 8, total_tokens: 28 },
-      },
-    },
-  ]) {
-    response.write(`data: ${JSON.stringify(event)}\n\n`);
-  }
+  });
   response.end("data: [DONE]\n\n");
+}
+
+function writeTextEvent(response: ServerResponse, phase: string, fields: Record<string, unknown>) {
+  writeEvent(response, `output_text.${phase}`, {
+    item_id: assistantMessage.id,
+    output_index: 0,
+    content_index: 0,
+    ...fields,
+  });
 }
 
 async function writeRecordingChannel(root: string, captureUrl: string) {
   const id = "readiness-chat";
+  const schema = { type: "object", additionalProperties: false };
   await fs.mkdir(root, { recursive: true });
-  await fs.writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({
-      name: id,
-      version: "1.0.0",
-      openclaw: { extensions: ["./index.cjs"] },
-    }),
-  );
-  await fs.writeFile(
-    path.join(root, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      channels: [id],
-      activation: { onStartup: true },
-      channelConfigs: {
-        [id]: {
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: { enabled: { type: "boolean" } },
-          },
-        },
-      },
-      configSchema: { type: "object", additionalProperties: false },
-    }),
-  );
+  const writeJson = (file: string, value: unknown) =>
+    fs.writeFile(path.join(root, file), JSON.stringify(value));
+  await writeJson("package.json", {
+    name: id,
+    version: "1.0.0",
+    openclaw: { extensions: ["./index.cjs"] },
+  });
+  await writeJson("openclaw.plugin.json", {
+    id,
+    channels: [id],
+    activation: { onStartup: true },
+    channelConfigs: {
+      [id]: { schema: { ...schema, properties: { enabled: { type: "boolean" } } } },
+    },
+    configSchema: schema,
+  });
   await fs.writeFile(
     path.join(root, "index.cjs"),
     `
@@ -179,76 +177,48 @@ it(
     const state = await createOpenClawTestState({
       label: "chat-worktree-readiness",
       env: {
+        ...KERNEL_TEST_ENV,
+        VITEST: process.env.VITEST,
         OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
       },
     });
     const repo = state.workspaceDir;
-    const calls: ProviderCall[] = [];
+    let providerCalls = 0;
     const deliveries: Array<Record<string, unknown>> = [];
     const failures: unknown[] = [];
-    const terminals: Array<{ sessionKey?: string; state?: string; errorMessage?: string }> = [];
+    const terminalErrors: Array<string | undefined> = [];
     let nextCall = createDeferred<ProviderCall>();
     let activeGate: CheckoutGate | undefined;
     const firstDelta = createDeferred();
     const failedTurn = createDeferred();
-    let checkpoint = "gateway startup";
-    const makeGate = (key: string, failure?: Error): CheckoutGate => ({
-      key,
-      failure,
-      entered: createDeferred<PromptFacts>(),
-      release: createDeferred(),
-      toolWaiting: createDeferred(),
-      settled: createDeferred(),
-    });
     // The spy calls this captured method with its original service instance below.
     // eslint-disable-next-line @typescript-eslint/unbound-method
     const create = ManagedWorktreeService.prototype.createWithOutcome;
     const creationObserver = vi.spyOn(ManagedWorktreeService.prototype, "createWithOutcome");
     creationObserver.mockImplementation(function (this: ManagedWorktreeService, params) {
       const gate = activeGate;
-      const onPromptReady = params.onPromptReady;
       if (!gate || params.ownerId !== gate.key) {
         return create.call(this, params);
       }
-      const operation = create.call(
-        this,
-        onPromptReady
-          ? {
-              ...params,
-              onPromptReady: async (facts) => {
-                await onPromptReady(facts);
-                gate.entered.resolve(facts);
-                await gate.release.promise;
-                if (gate.failure) {
-                  throw gate.failure;
-                }
-              },
-            }
-          : params,
-      );
-      void operation.then(
-        () => {
-          gate.entered.reject(
-            new Error(
-              `Checkout did not publish early prompt (callback=${Boolean(onPromptReady)}, sourceOnly=${params.provisionIgnoredFiles === false})`,
-            ),
-          );
-          gate.settled.resolve();
+      const onPromptReady = expectDefined(params.onPromptReady, "early prompt callback");
+      const operation = create.call(this, {
+        ...params,
+        onPromptReady: async (facts) => {
+          await onPromptReady(facts);
+          gate.entered.resolve(facts);
+          await gate.release.promise;
+          if (gate.failure) {
+            throw gate.failure;
+          }
         },
-        (error: unknown) => {
-          gate.entered.reject(error);
-          gate.settled.resolve();
-        },
-      );
+      });
+      void operation
+        .then(
+          () => gate.entered.reject(new Error("Checkout completed without an early prompt")),
+          (error: unknown) => gate.entered.reject(error),
+        )
+        .finally(() => gate.settled.resolve());
       return operation;
     });
     const captureReadiness = workspaceReadiness.captureAgentWorkspaceReadiness;
@@ -269,11 +239,12 @@ it(
       });
     const providerServer = createServer((request, response) => {
       void (async () => {
-        const chunks: Buffer[] = [];
+        request.setEncoding("utf8");
+        let json = "";
         for await (const chunk of request) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          json += chunk;
         }
-        const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        const body: unknown = JSON.parse(json);
         if (!isRecord(body)) {
           throw new Error("Synthetic provider received an invalid request");
         }
@@ -283,7 +254,7 @@ it(
           return;
         }
         const call = { body, response };
-        calls.push(call);
+        providerCalls++;
         nextCall.resolve(call);
       })().catch((error: unknown) => {
         failures.push(error);
@@ -373,116 +344,105 @@ it(
           if (payload.sessionKey === "agent:main:readiness-early" && payload.state === "delta") {
             firstDelta.resolve();
           }
-          if (["final", "error", "aborted"].includes(payload.state ?? "")) {
-            terminals.push({
-              sessionKey: payload.sessionKey,
-              state: payload.state,
-              ...(typeof payload.errorMessage === "string"
-                ? { errorMessage: payload.errorMessage }
-                : {}),
-            });
-            if (payload.sessionKey === "agent:main:readiness-failure") {
-              failedTurn.resolve();
-            }
+          if (
+            payload.sessionKey === "agent:main:readiness-failure" &&
+            ["final", "error", "aborted"].includes(payload.state)
+          ) {
+            terminalErrors.push(
+              typeof payload.errorMessage === "string" ? payload.errorMessage : undefined,
+            );
+            failedTurn.resolve();
           }
         },
       });
-      activeGate = makeGate("agent:main:readiness-early");
-      const early = await gateway.client.request<{
-        key: string;
-        runId: string;
-        runStarted: boolean;
-      }>("sessions.create", {
-        key: activeGate.key,
-        agentId: "main",
-        displayName: "Readiness proof",
-        worktree: true,
-        worktreeName: "readiness-early",
-        worktreeBaseRef: "HEAD",
-        message: userMessage,
-      });
+      const client = gateway.client;
+      const createWorktree = <T>(name: string, params: Record<string, unknown> = {}) =>
+        client.request<T>("sessions.create", {
+          key: `agent:main:${name}`,
+          agentId: "main",
+          displayName: name,
+          worktree: true,
+          worktreeName: name,
+          worktreeBaseRef: "HEAD",
+          ...params,
+        });
+      const expectRun = async (runId: string, status = "ok") =>
+        expect(await client.request("agent.wait", { runId, timeoutMs: 60_000 })).toMatchObject({
+          status,
+        });
+      const expectNoEffects = async (name: string, canary: string) => {
+        expect(deliveries.filter((delivery) => delivery.to === name)).toEqual([]);
+        await expect(fs.access(canary)).rejects.toMatchObject({ code: "ENOENT" });
+      };
+      const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
+      const startCheckout = async (
+        name: string,
+        message: string,
+        failure?: Error,
+        displayName = name,
+      ) => {
+        const gate: CheckoutGate = {
+          key: `agent:main:${name}`,
+          failure,
+          entered: createDeferred<PromptFacts>(),
+          release: createDeferred(),
+          toolWaiting: createDeferred(),
+          settled: createDeferred(),
+        };
+        activeGate = gate;
+        nextCall = createDeferred<ProviderCall>();
+        const started = await createWorktree<{
+          key: string;
+          runId: string;
+          sessionId: string;
+          runStarted: boolean;
+        }>(name, { message, displayName });
+        const facts = await wait(gate.entered.promise);
+        return { gate, started, facts, call: await wait(nextCall.promise) };
+      };
+      const {
+        gate: earlyGate,
+        started: early,
+        facts,
+        call: initial,
+      } = await startCheckout("readiness-early", userMessage, undefined, "Readiness proof");
       expect(early.runStarted).toBe(true);
-      checkpoint = "early prompt preparation";
-      const facts = await withinTest(
-        awaitGateBeforeSettlement(
-          activeGate.entered.promise,
-          activeGate.settled.promise,
-          "Checkout completed without publishing an early prompt",
-        ),
-        signal,
-      );
-      checkpoint = "first model request";
-      const initial = await withinTest(nextCall.promise, signal);
       expect(JSON.stringify(initial.body)).toContain(instruction);
       await expect(fs.access(path.join(facts.path, "src/remaining.txt"))).rejects.toMatchObject({
         code: "ENOENT",
       });
       initial.response.writeHead(200, { "content-type": "text/event-stream" });
-      initial.response.write(
-        `data: ${JSON.stringify({
-          type: "response.output_item.added",
-          output_index: 0,
-          item: {
-            type: "message",
-            id: "msg_readiness",
-            role: "assistant",
-            content: [],
-            status: "in_progress",
-          },
-        })}\n\n`,
-      );
-      initial.response.write(
-        `data: ${JSON.stringify({
-          type: "response.output_text.delta",
-          item_id: "msg_readiness",
-          output_index: 0,
-          content_index: 0,
-          delta: partial,
-        })}\n\n`,
-      );
-      checkpoint = "first text delta";
-      await withinTest(firstDelta.promise, signal);
+      writeEvent(initial.response, "output_item.added", {
+        output_index: 0,
+        item: { ...assistantMessage, content: [], status: "in_progress" },
+      });
+      writeTextEvent(initial.response, "delta", { delta: partial });
+      await wait(firstDelta.promise);
       nextCall = createDeferred<ProviderCall>();
       finishWithTool(initial.response, "read", { path: "src/remaining.txt" });
-      checkpoint = "workspace tool readiness wait";
-      await withinTest(activeGate.toolWaiting.promise, signal);
-      expect(calls).toHaveLength(1);
+      await wait(earlyGate.toolWaiting.promise);
+      expect(providerCalls).toBe(1);
       await expect(fs.access(path.join(facts.path, "src/remaining.txt"))).rejects.toMatchObject({
         code: "ENOENT",
       });
-      activeGate.release.resolve();
-      checkpoint = "workspace tool result";
-      const result = await withinTest(nextCall.promise, signal);
+      earlyGate.release.resolve();
+      const result = await wait(nextCall.promise);
       expect(JSON.stringify(result.body.input)).toContain(fileContents.trim());
-      writeOpenAiResponsesText(result.response, {
-        text: fileContents,
-        messageId: "msg_done",
-        responseId: "resp_done",
-      });
-      expect(
-        await gateway.client.request("agent.wait", { runId: early.runId, timeoutMs: 60_000 }),
-      ).toMatchObject({ status: "ok" });
+      finishText(result.response, fileContents, "done");
+      await expectRun(early.runId);
 
       activeGate = undefined;
-      checkpoint = "prepared-workspace comparison";
-      const normal = await gateway.client.request<{
+      const normal = await createWorktree<{
         key: string;
         worktree: { path: string; branch: string };
-      }>("sessions.create", {
-        key: "agent:main:readiness-normal",
-        agentId: "main",
-        displayName: "Readiness proof",
-        worktree: true,
-        worktreeName: "readiness-normal",
-        worktreeBaseRef: "HEAD",
-      });
+      }>("readiness-normal", { displayName: "Readiness proof" });
       nextCall = createDeferred<ProviderCall>();
       const normalRun = await gateway.client.request<{ runId: string }>("chat.send", {
         sessionKey: normal.key,
         message: userMessage,
         idempotencyKey: "readiness-normal-run",
       });
-      const prepared = await withinTest(nextCall.promise, signal);
+      const prepared = await wait(nextCall.promise);
       const initialPrefix = promptPrefix(initial.body, facts.path, facts.branch, early.key);
       const preparedPrefix = promptPrefix(
         prepared.body,
@@ -490,49 +450,23 @@ it(
         normal.worktree.branch,
         normal.key,
       );
-      const mismatch = initialPrefix
-        .split("")
-        .findIndex((character, index) => character !== preparedPrefix[index]);
-      expect(
-        initialPrefix === preparedPrefix,
-        `Prompt differs at ${mismatch}: ${JSON.stringify({
-          initial: initialPrefix.slice(Math.max(0, mismatch - 60), mismatch + 140),
-          prepared: preparedPrefix.slice(Math.max(0, mismatch - 60), mismatch + 140),
-        })}`,
-      ).toBe(true);
-      writeOpenAiResponsesText(prepared.response, {
-        text: "Prepared prompt matches.",
-        messageId: "msg_normal",
-        responseId: "resp_normal",
-      });
-      expect(
-        await gateway.client.request("agent.wait", { runId: normalRun.runId, timeoutMs: 60_000 }),
-      ).toMatchObject({ status: "ok" });
+      expect(initialPrefix).toBe(preparedPrefix);
+      finishText(prepared.response, "Prepared prompt matches.", "normal");
+      await expectRun(normalRun.runId);
 
       for (const toolName of ["write", "message"] as const) {
         for (const revoked of [false, true]) {
           const name = `readiness-${toolName}-${revoked ? "aborted" : "allowed"}`;
-          checkpoint = name;
-          const gate = makeGate(`agent:main:${name}`);
-          activeGate = gate;
-          nextCall = createDeferred<ProviderCall>();
-          const started = await gateway.client.request<{ runId: string; sessionId: string }>(
-            "sessions.create",
-            {
-              key: gate.key,
-              agentId: "main",
-              displayName: name,
-              worktree: true,
-              worktreeName: name,
-              worktreeBaseRef: "HEAD",
-              message:
-                toolName === "write"
-                  ? "Write a workspace canary."
-                  : "Send the workspace marker attachment.",
-            },
+          const {
+            gate,
+            started,
+            call: request,
+          } = await startCheckout(
+            name,
+            toolName === "write"
+              ? "Write a workspace canary."
+              : "Send the workspace marker attachment.",
           );
-          await withinTest(gate.entered.promise, signal);
-          const request = await withinTest(nextCall.promise, signal);
           // Checkout rollback must not erase evidence of an unauthorized effect.
           const canary = state.path(`effects/${name}.txt`);
           nextCall = createDeferred<ProviderCall>();
@@ -550,16 +484,14 @@ it(
                   media: path.join(repo, "src/remaining.txt"),
                 },
           );
-          await withinTest(
+          await wait(
             awaitGateBeforeSettlement(
               gate.toolWaiting.promise,
               nextCall.promise,
               `${name}: tool finished without waiting for checkout`,
             ),
-            signal,
           );
-          expect(deliveries.filter((delivery) => delivery.to === name)).toEqual([]);
-          await expect(fs.access(canary)).rejects.toMatchObject({ code: "ENOENT" });
+          await expectNoEffects(name, canary);
           const runEnded = waitForEmbeddedAgentRunEnd(started.sessionId, null);
           if (revoked) {
             expect(
@@ -570,9 +502,9 @@ it(
             ).toMatchObject({ aborted: true, runIds: [started.runId] });
           }
           gate.release.resolve();
-          await withinTest(gate.settled.promise, signal);
+          await wait(gate.settled.promise);
           if (!revoked) {
-            const completedTool = await withinTest(nextCall.promise, signal);
+            const completedTool = await wait(nextCall.promise);
             if (toolName === "write") {
               expect(await fs.readFile(canary, "utf8")).toBe("workspace write canary");
             } else {
@@ -580,50 +512,30 @@ it(
                 { to: name, text: name, contents: fileContents },
               ]);
             }
-            writeOpenAiResponsesText(completedTool.response, {
-              text: "Effect completed.",
-              messageId: `msg_${name}`,
-              responseId: `resp_${name}`,
-            });
+            finishText(completedTool.response, "Effect completed.", name);
           }
-          expect(await withinTest(runEnded, signal)).toBe(true);
-          expect(
-            await gateway.client.request("agent.wait", { runId: started.runId, timeoutMs: 60_000 }),
-          ).toMatchObject({ status: revoked ? "error" : "ok" });
+          expect(await wait(runEnded)).toBe(true);
+          await expectRun(started.runId, revoked ? "error" : "ok");
           if (revoked) {
-            await expect(fs.access(canary)).rejects.toMatchObject({ code: "ENOENT" });
-            expect(deliveries.filter((delivery) => delivery.to === name)).toEqual([]);
+            await expectNoEffects(name, canary);
           }
         }
       }
 
       const preparationError = new Error("Synthetic checkout failed; retry the session.");
-      checkpoint = "preparation failure";
-      const failedGate = makeGate("agent:main:readiness-failure", preparationError);
-      activeGate = failedGate;
-      nextCall = createDeferred<ProviderCall>();
-      const failed = await gateway.client.request<{ runId: string }>("sessions.create", {
-        key: activeGate.key,
-        agentId: "main",
-        displayName: "Readiness failure",
-        worktree: true,
-        worktreeName: "readiness-failure",
-        worktreeBaseRef: "HEAD",
-        message: userMessage,
-      });
-      await withinTest(activeGate.entered.promise, signal);
-      await withinTest(nextCall.promise, signal);
-      activeGate.release.resolve();
-      await withinTest(failedTurn.promise, signal);
+      const { gate: failedGate, started: failed } = await startCheckout(
+        "readiness-failure",
+        userMessage,
+        preparationError,
+        "Readiness failure",
+      );
+      failedGate.release.resolve();
+      await wait(failedTurn.promise);
       await gateway.client.request("agent.wait", { runId: failed.runId, timeoutMs: 60_000 });
-      const errors = terminals.filter((event) => event.sessionKey === failedGate.key);
-      expect(errors).toHaveLength(1);
-      expect(JSON.stringify(errors)).toContain(preparationError.message);
+      expect(terminalErrors).toHaveLength(1);
+      expect(JSON.stringify(terminalErrors)).toContain(preparationError.message);
       expect(failures).toEqual([]);
     } finally {
-      if (signal.aborted) {
-        console.error(`Worktree proof stopped at: ${checkpoint}`);
-      }
       activeGate?.release.resolve();
       providerServer.closeAllConnections();
       await new Promise<void>((resolve) => {

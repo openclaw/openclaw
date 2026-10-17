@@ -331,7 +331,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       const diagnostic = formatTuiAbortDiagnostic(evt.errorMessage);
       chatLog.addSystem(diagnostic ? `run aborted: ${diagnostic}` : "run aborted");
-      terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
+      terminateRun({
+        runId: evt.runId,
+        wasActiveRun,
+        status: "aborted",
+        localModelMayStillBeFinishing: evt.localModelMayStillBeFinishing,
+      });
       maybeRefreshHistoryForRun(evt.runId, {
         hasDisplayableFinal: hasDisplayableAbortedText,
       });

@@ -70,18 +70,3 @@ export function resolveDatabaseFamilyEngines(
   }
   return effectiveEngines;
 }
-
-/** Fixed-local stores do not turn the existing PostgreSQL default into a mixed installation. */
-export function assertHomogeneousDatabaseEngines(
-  config: DatabaseEngineConfig,
-  operation: "port" | "backup" | "restore" | "update",
-): void {
-  const engines = new Set(
-    stores.filter((store) => store.postgres).map((store) => selectDatabaseEngine(store, config)),
-  );
-  if (engines.size > 1) {
-    throw new Error(
-      `${operation} for mixed-engine installs is not supported yet; use a single engine for PostgreSQL-capable families, or wait for family-scoped port, backup, and update support. Changing an engine does not migrate existing data.`,
-    );
-  }
-}

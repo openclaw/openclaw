@@ -30,11 +30,11 @@ function webhookCompletionKey(env: NodeJS.ProcessEnv): string {
 }
 
 /** No config bytes changed, so this completion does not depend on config rollback. */
-export function recordUnwrittenWebhookCompletion(
+export function prepareUnwrittenWebhookCompletion(
   snapshot: Pick<ConfigFileSnapshot, "sourceConfig">,
   mutation: ChannelDoctorConfigMutation,
   env: NodeJS.ProcessEnv,
-): boolean {
+) {
   const readOnly = resolveIsConfigReadOnly(env);
   const markerOnly = cloneConfigWithResolutionFacts(snapshot.sourceConfig);
   markerOnly.meta ??= {};
@@ -42,15 +42,25 @@ export function recordUnwrittenWebhookCompletion(
   markerOnly.meta.migrations.webhookListeners = mutation.config.meta?.migrations?.webhookListeners;
   if (!isDeepStrictEqual(markerOnly, mutation.config)) {
     if (!readOnly) {
-      return false;
+      return undefined;
     }
     throw new Error(
       `Webhook listeners need migration in the externally managed config. Add the required legacyWebhook endpoints and meta.migrations.webhookListeners completion marker in that source, then restart.\n${mutation.changes.join("\n")}`,
     );
   }
-  writeConfigMachineState(webhookCompletionKey(env), markerOnly.meta.migrations.webhookListeners, {
-    env,
-  });
+  return { key: webhookCompletionKey(env), value: markerOnly.meta.migrations.webhookListeners };
+}
+
+export function recordUnwrittenWebhookCompletion(
+  snapshot: Pick<ConfigFileSnapshot, "sourceConfig">,
+  mutation: ChannelDoctorConfigMutation,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const completion = prepareUnwrittenWebhookCompletion(snapshot, mutation, env);
+  if (!completion) {
+    return false;
+  }
+  writeConfigMachineState(completion.key, completion.value, { env });
   return true;
 }
 

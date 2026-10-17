@@ -3243,6 +3243,34 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
+  it.each([
+    ["blacksmith", "src/gateway/board-store.test.ts", "blacksmith-16vcpu-ubuntu-2404"],
+    ["hybrid", "src/gateway/board-store.test.ts", "blacksmith-16vcpu-ubuntu-2404"],
+    ["hybrid", "src/gateway/board-http.test.ts", "blacksmith-32vcpu-ubuntu-2404"],
+  ])(
+    "preserves qualified database selection capacity on %s for %s",
+    (runnerBackend, target, runner) => {
+      const plan = expectDefined(
+        createSelectedNodeTestShardBundles([target], { runnerBackend }),
+        "selected database plan",
+      );
+      expect(plan).toHaveLength(1);
+      expect(plan[0]).toMatchObject({
+        runner,
+        planConcurrency: 1,
+        requiresDist: false,
+      });
+      expect(plan[0]!.groups).toHaveLength(1);
+      expect(plan[0]!.groups[0]).toMatchObject({
+        configs: ["test/vitest/vitest.gateway-database-workers.config.ts"],
+        includePatterns: [target],
+        env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+        fallbackMaxWorkers: 2,
+        minTotalMemoryBytes: 28 * 1024 ** 3,
+      });
+    },
+  );
+
   it("keeps selected Gateway and embedded-agent work within its runner capacity", () => {
     const targets = [
       "src/gateway/openai-http.test.ts",
@@ -3506,7 +3534,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         ["src/infra/env.test.ts", "core-runtime-infra-env-auth", 170],
         ["src/infra/os-summary.test.ts", "core-runtime-infra-misc-os", 170],
         ["src/infra/ports-probe.test.ts", "core-runtime-infra-system-runtime", 160],
-        ["src/infra/provider-usage.test.ts", "core-runtime-infra-provider-push", 160],
+        ["src/infra/provider-usage.load.test.ts", "core-runtime-infra-provider-push", 160],
         ["src/infra/channel-runtime-context.test.ts", "core-runtime-infra-channel-plugin", 150],
         ["src/infra/diagnostic-trace-context.test.ts", "core-runtime-infra-diagnostics-state", 150],
       ] as const;

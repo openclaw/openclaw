@@ -10,6 +10,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import { concatGatewayFrame } from "./serialized-json.js";
 import {
   createGatewayLiveTextDelivery,
   type LiveTextPublication,
@@ -36,6 +37,7 @@ import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constan
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { closeGatewayTransportWithGrace } from "./server/connection-transport-close.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { prepareSessionEventMetrics } from "./session-event-metrics.js";
 import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
@@ -161,7 +163,7 @@ function frameWithSequence(
   seq: number,
   payload: FramePayload,
   recipientProfileId?: string,
-): string | Buffer {
+): Buffer {
   const recipient =
     recipientProfileId === undefined
       ? ""
@@ -169,20 +171,14 @@ function frameWithSequence(
   let prefix = `{"type":"event","event":${base.eventJSON}`;
   let suffix = `,"seq":${seq}${base.stateVersionFragment}${recipient}}`;
   if (typeof payload === "string") {
-    return `${prefix}${payload}${suffix}`;
+    return Buffer.from(`${prefix}${payload}${suffix}`);
   }
   const bytes = Buffer.isBuffer(payload) ? payload : payload.message;
   if (!Buffer.isBuffer(payload)) {
     prefix += payload.prefix;
     suffix = payload.suffix + suffix;
   }
-  const frame = Buffer.allocUnsafe(
-    Buffer.byteLength(prefix) + bytes.length + Buffer.byteLength(suffix),
-  );
-  const offset = frame.write(prefix);
-  bytes.copy(frame, offset);
-  frame.write(suffix, offset + bytes.length);
-  return frame;
+  return concatGatewayFrame([Buffer.from(prefix), bytes, Buffer.from(suffix)]);
 }
 
 export function createGatewayBroadcaster(params: {
@@ -254,6 +250,7 @@ export function createGatewayBroadcaster(params: {
       opts?.sessionKeys,
       opts?.agentId,
     );
+    let sessionEventMetrics: ReturnType<typeof prepareSessionEventMetrics> | null = null;
     const sessionSubscriptionVerified = opts?.sessionSubscriptionVerified === true;
     const isSessionSubscriptionEvent = SESSION_SUBSCRIPTION_EVENTS.has(event);
     const sessionMessageSubscribers = params.sessionMessageSubscribers;
@@ -309,10 +306,7 @@ export function createGatewayBroadcaster(params: {
     let skipSourcePayload = false;
     let sessionProjectionPrepared = false;
     let outboundEventLogged = false;
-    const encodedFrames = new Map<
-      FramePayload,
-      Map<string | undefined, Map<number, string | Buffer>>
-    >();
+    const encodedFrames = new Map<FramePayload, Map<string | undefined, Map<number, Buffer>>>();
     const frames: PreparedFrames = retained?.frames ?? {};
     // Private coalescers preserve inputs; identical pending histories can share this merge.
     let mergedFrames: Map<unknown, { payload: unknown; frames: PreparedFrames }> | undefined;
@@ -564,7 +558,7 @@ export function createGatewayBroadcaster(params: {
         useDelta && projection
           ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
           : (frames.snapshot ??= frameBaseFor(payload));
-      let frame: string | Buffer;
+      let frame: Buffer;
       let delivered: (() => void) | undefined;
       try {
         if (!sessionProjectionPrepared) {
@@ -646,6 +640,15 @@ export function createGatewayBroadcaster(params: {
         } else {
           frame = cached;
         }
+        // Preserve frame snapshots before metrics inspect getter-backed payloads.
+        if (sessionEventMetrics === null) {
+          sessionEventMetrics = prepareSessionEventMetrics(
+            event,
+            payload,
+            opts?.sessionEventSubscriptionKeys ?? sessionKeys,
+            params.sessionMessageSubscribers,
+          );
+        }
       } catch (err) {
         log.error(`broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`);
         return;
@@ -682,11 +685,8 @@ export function createGatewayBroadcaster(params: {
         // Publish the baseline before send can reenter; failures retire this transport.
         delivered?.();
         state.socket.batchWrites?.();
-        if (typeof frame === "string") {
-          state.socket.send(frame, sent);
-        } else {
-          state.socket.send(frame, { binary: false }, sent);
-        }
+        state.socket.send(frame, { binary: false }, sent);
+        state.socket.recordEventSent?.(event, frame.byteLength, sessionEventMetrics?.(c.connId));
       } catch (err) {
         sent(err instanceof Error ? err : new Error(String(err)));
       }

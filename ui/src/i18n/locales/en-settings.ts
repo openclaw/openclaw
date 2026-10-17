@@ -1588,27 +1588,6 @@ const enSettings = {
       settings: "Settings",
     },
 
-    memories: {
-      searchLabel: "Search memories",
-      searchPlaceholder: "Search this agent's memories",
-      searchButton: "Search",
-      idle: "Search for a person, project, decision, or anything else this agent remembers.",
-      searching: "Searching memories…",
-      results: "{count} results",
-      empty: "No memories matched “{query}”.",
-      error: "Memory search failed: {message}",
-      retry: "Retry",
-      gatewayUpdateRequired: "Update the gateway to search memories from the Control UI.",
-      hybridSearch: "hybrid search",
-      keywordSearch: "keyword search",
-      lineRange: "lines {start}–{end}",
-      score: "score {score}",
-      sourceMemory: "memory",
-      sourceSessions: "sessions",
-      fileLoading: "Loading the full memory file…",
-      fileError: "Could not load this memory file: {message}",
-      fileUnsupported: "This memory file cannot be shown as text.",
-    },
     engine: {
       title: "Engine",
       description:

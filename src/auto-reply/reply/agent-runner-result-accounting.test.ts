@@ -141,7 +141,6 @@ function createParams(
           ],
         },
         autoCompactionCount: 0,
-        didLogHeartbeatStrip: false,
       },
     },
     runStartedAt: 1,

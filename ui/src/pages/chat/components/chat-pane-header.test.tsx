@@ -7,6 +7,7 @@ import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import {
   activePlacementSession,
@@ -155,22 +156,35 @@ describe("chat pane header", () => {
 
   it("keeps available panels in the narrow Layout menu while omitting split actions", async () => {
     const onTerminal = vi.fn();
-    const { container } = mountHeader({
+    const readShortcut = vi.fn(() => KEYBOARD_SHORTCUT_COMBOS.terminalPanel);
+    const action = (label: string) => ({
+      id: "terminal",
+      label,
+      icon: "copy" as const,
+      onActivate: onTerminal,
+      get shortcut() {
+        return readShortcut();
+      },
+    });
+    const { container, update } = mountHeader({
       narrow: true,
       mergedChrome: true,
-      panelMenuActions: [
-        { id: "terminal", label: "Terminal", icon: "copy", onActivate: onTerminal },
-      ],
+      panelMenuActions: [action("Terminal")],
       sessionMenuAction: chatPaneHeaderSessionMenu(),
       onOpenSplitView: vi.fn(),
       onSplitDown: vi.fn(),
       onSplitRight: vi.fn(),
     });
     const menu = container.querySelector(".chat-pane__layout-menu")!;
+    expect(readShortcut).not.toHaveBeenCalled();
     await openNativeMenu(menu);
-    expect(
-      container.querySelector('.chat-pane__layout-menu [data-value="terminal"]'),
-    ).not.toBeNull();
+    const shortcut = menu.querySelector('[data-value="terminal"] kbd');
+    expect(shortcut).not.toBeNull();
+    update({ panelMenuActions: [action("Open terminal")] });
+    expect(menu.querySelector('[data-value="terminal"] kbd')).toBe(shortcut);
+    expect(menu.querySelector('[data-value="terminal"]')?.getAttribute("aria-label")).toBe(
+      "Open terminal",
+    );
     expect(container.querySelector(".chat-pane__split-down")).toBeNull();
     expect(container.querySelector(".chat-pane__split-right")).toBeNull();
     expect(container.querySelector(".chat-pane__nav-toggle")).not.toBeNull();

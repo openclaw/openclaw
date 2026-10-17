@@ -3031,7 +3031,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     appendSourceReplyMirrorEntry,
     createMainSourceReply,
     setAgentRunReplies,
-    send: (params) => createChatRequestFixture().send(params),
+    send: async (params) => {
+      const { context, send } = createChatRequestFixture();
+      const broadcast = await send(params);
+      if (params.expectBroadcast === false) {
+        expect(context.broadcast).not.toHaveBeenCalled();
+      }
+      return broadcast;
+    },
     sendLate: async ({ runId, payloads, canvas, bufferCurrent }) => {
       const context = createChatContext();
       const run = context.chatRunState.getOrCreate(runId);

@@ -39,6 +39,7 @@ import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
 
@@ -82,90 +83,102 @@ describe("SQLite session deletion receipts", () => {
 
   const seedReceipt = (key = sessionKey) => seedPersonalGitHubDeletionReceipt(key, sessionId);
 
-  it("releases deleted session scopes without reviving old receipts or invalidating another session", async () => {
-    await seed();
-    const unrelatedSessionId = "unrelated-session";
-    await replaceSessionEntry(
-      { sessionKey: baseKey, storePath },
-      { sessionId: unrelatedSessionId, lifecycleRevision: "unrelated-1", updatedAt: Date.now() },
-    );
-    const database = openOpenClawAgentDatabase(
-      toDatabaseOptions(resolveSqliteScope({ sessionKey, storePath })),
-    );
-    const scopes = [sessionKey, sqliteSessionIdWriteScope(sessionId)];
-    const unrelatedScopes = [baseKey, sqliteSessionIdWriteScope(unrelatedSessionId)];
-    readSqliteDatabaseScopedWriteTokenForPath(database.path, scopes);
-    readSqliteDatabaseScopedWriteTokenForPath(database.path, unrelatedScopes);
-    const scopeCount = () =>
-      captureSqliteDatabaseAdmissions().find((record) => record.location === database.path)
-        ?.writeScopes.size;
-    const retainedBefore = scopeCount();
-    expect(retainedBefore).toBeGreaterThanOrEqual(4);
-    const failure = new Error("rollback receipt retirement");
-    expect(() =>
-      runSqliteSessionDeletionTransaction(
-        (current) => {
-          deleteSessionEntryRows(current, sessionKey, { deleteOwnedWindows: true });
-          throw failure;
-        },
+  it.each([false, true])(
+    "releases deleted session scopes without reviving old receipts or invalidating another session (transcript=%s)",
+    async (withTranscript) => {
+      await seed();
+      if (withTranscript) {
+        await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
+          { type: "session", id: sessionId },
+        ]);
+      }
+      const unrelatedSessionId = "unrelated-session";
+      await replaceSessionEntry(
+        { sessionKey: baseKey, storePath },
+        { sessionId: unrelatedSessionId, lifecycleRevision: "unrelated-1", updatedAt: Date.now() },
+      );
+      const database = openOpenClawAgentDatabase(
         toDatabaseOptions(resolveSqliteScope({ sessionKey, storePath })),
-      ),
-    ).toThrow(failure);
-    expect(scopeCount()).toBe(retainedBefore);
-    expect(read()?.sessionId).toBe(sessionId);
-
-    const before = readSqliteDatabaseScopedWriteTokenForPath(database.path, scopes);
-    const unrelated = readSqliteDatabaseScopedWriteTokenForPath(database.path, unrelatedScopes);
-    const stale = structuredClone(
-      captureSqliteDatabaseAdmissions().filter((record) => record.location === database.path),
-    );
-    expect(before).toBeTypeOf("string");
-    expect(unrelated).toBeTypeOf("string");
-
-    let closeRetained: (() => Promise<void>) | undefined;
-    const withWorker = reclamationWorker.withSqliteReclamationWorker;
-    vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
-      (options, source, run, assertRequestCurrent, signal, requestedPath) =>
-        withWorker(
-          options,
-          source,
-          async (worker) => {
-            closeRetained = () => worker.close();
-            return run(worker);
+      );
+      const scopes = [sessionKey, sqliteSessionIdWriteScope(sessionId)];
+      const unrelatedScopes = [baseKey, sqliteSessionIdWriteScope(unrelatedSessionId)];
+      readSqliteDatabaseScopedWriteTokenForPath(database.path, scopes);
+      readSqliteDatabaseScopedWriteTokenForPath(database.path, unrelatedScopes);
+      const scopeCount = () =>
+        captureSqliteDatabaseAdmissions().find((record) => record.location === database.path)
+          ?.writeScopes.size;
+      const retainedBefore = scopeCount();
+      expect(retainedBefore).toBeGreaterThanOrEqual(4);
+      const failure = new Error("rollback receipt retirement");
+      expect(() =>
+        runSqliteSessionDeletionTransaction(
+          (current) => {
+            deleteSessionEntryRows(current, sessionKey, { deleteOwnedWindows: true });
+            throw failure;
           },
-          assertRequestCurrent,
-          signal,
-          requestedPath,
+          toDatabaseOptions(resolveSqliteScope({ sessionKey, storePath })),
         ),
-    );
+      ).toThrow(failure);
+      expect(scopeCount()).toBe(retainedBefore);
+      expect(read()?.sessionId).toBe(sessionId);
 
-    await deleteSessionEntryLifecycle({
-      agentId: "main",
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-      archiveTranscript: false,
-      deleteTranscriptWithoutArchive: true,
-    });
-    const closeWorker = closeRetained;
-    if (!closeWorker) {
-      throw new Error("Expected the deletion's real reclamation Worker");
-    }
-    await closeWorker();
+      const before = readSqliteDatabaseScopedWriteTokenForPath(database.path, scopes);
+      const unrelated = readSqliteDatabaseScopedWriteTokenForPath(database.path, unrelatedScopes);
+      const stale = structuredClone(
+        captureSqliteDatabaseAdmissions().filter((record) => record.location === database.path),
+      );
+      expect(before).toBeTypeOf("string");
+      expect(unrelated).toBeTypeOf("string");
 
-    expect(scopeCount()).toBe(retainedBefore! - 2);
-    installSqliteDatabaseAdmissions(stale);
-    expect(scopeCount()).toBe(retainedBefore! - 2);
-    expect(read()).toBeUndefined();
-    expect(readSqliteDatabaseScopedWriteTokenForPath(database.path, unrelatedScopes)).toBe(
-      unrelated,
-    );
-    await seed();
-    expect(readSqliteDatabaseScopedWriteTokenForPath(database.path, scopes)).not.toBe(before);
-    expect(readSqliteDatabaseScopedWriteTokenForPath(database.path, unrelatedScopes)).toBe(
-      unrelated,
-    );
-    expect(read(baseKey)?.sessionId).toBe(unrelatedSessionId);
-  });
+      let closeRetained: (() => Promise<void>) | undefined;
+      const withWorker = reclamationWorker.withSqliteReclamationWorker;
+      vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
+        (options, source, run, assertRequestCurrent, signal, requestedPath) =>
+          withWorker(
+            options,
+            source,
+            async (worker) => {
+              closeRetained = () => worker.close();
+              return run(worker);
+            },
+            assertRequestCurrent,
+            signal,
+            requestedPath,
+          ),
+      );
+
+      await deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+        archiveTranscript: false,
+        deleteTranscriptWithoutArchive: true,
+      });
+      if (withTranscript) {
+        const closeWorker = closeRetained;
+        if (!closeWorker) {
+          throw new Error("Expected the deletion's real reclamation Worker");
+        }
+        await closeWorker();
+      } else {
+        expect(closeRetained).toBeUndefined();
+      }
+
+      expect(scopeCount()).toBe(retainedBefore! - 2);
+      installSqliteDatabaseAdmissions(stale);
+      expect(scopeCount()).toBe(retainedBefore! - 2);
+      expect(read()).toBeUndefined();
+      expect(readSqliteDatabaseScopedWriteTokenForPath(database.path, unrelatedScopes)).toBe(
+        unrelated,
+      );
+      await seed();
+      expect(readSqliteDatabaseScopedWriteTokenForPath(database.path, scopes)).not.toBe(before);
+      expect(readSqliteDatabaseScopedWriteTokenForPath(database.path, unrelatedScopes)).toBe(
+        unrelated,
+      );
+      expect(read(baseKey)?.sessionId).toBe(unrelatedSessionId);
+    },
+  );
 
   it("retires a replaced legacy key while retaining the transferred window scope", async () => {
     await seed();

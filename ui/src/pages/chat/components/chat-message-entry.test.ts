@@ -55,11 +55,11 @@ function setupEntryTranscript(messages: unknown[] = []) {
   const update = () => {
     view.render(props);
     flush();
-    transcript.hostUpdated();
+    transcript.update();
     flush();
   };
   update();
-  transcript.hostConnected();
+  transcript.start();
   update();
   return {
     props,
@@ -103,7 +103,7 @@ describe("chat transcript entry lifecycle", () => {
       expect(entering(view.container)).toEqual([submitted]);
 
       if (eventType === "disconnect") {
-        view.transcript.hostDisconnected();
+        view.transcript.dispose();
         expect(entering(view.container)).toHaveLength(0);
         return;
       }
@@ -132,7 +132,7 @@ describe("chat transcript entry lifecycle", () => {
       view.remount();
       expect(bubbles(view.container)).toHaveLength(2);
       expect(entering(view.container)).toHaveLength(0);
-      view.transcript.hostDisconnected();
+      view.transcript.dispose();
     },
   );
 
@@ -166,7 +166,7 @@ describe("chat transcript entry lifecycle", () => {
       expect(settledBubbles[0]).toBe(firstBubble);
       expect(settledBubbles[1]).toBe(pendingBubbles[1]);
     } finally {
-      view.transcript.hostDisconnected();
+      view.transcript.dispose();
     }
   });
 
@@ -187,7 +187,7 @@ describe("chat transcript entry lifecycle", () => {
     expect(entering(view.container).map((bubble) => bubble.dataset.messageText)).toEqual([
       "later-prompt",
     ]);
-    view.transcript.hostDisconnected();
+    view.transcript.dispose();
   });
 
   it("keeps asynchronous reply text out of entry animation through terminal and history handoff", () => {
@@ -271,7 +271,7 @@ describe("chat transcript entry lifecycle", () => {
       view.remount();
       expect(entering(view.container)).toHaveLength(0);
     } finally {
-      view.transcript.hostDisconnected();
+      view.transcript.dispose();
     }
   });
 
@@ -338,7 +338,7 @@ describe("chat transcript entry lifecycle", () => {
         )
         .toBe("true");
     } finally {
-      view.transcript.hostDisconnected();
+      view.transcript.dispose();
     }
   });
 
@@ -353,13 +353,13 @@ describe("chat transcript entry lifecycle", () => {
     ];
     view.update();
     expect(entering(view.container)).toHaveLength(0);
-    toggleTranscriptSearch(view.props.paneId, () => {});
+    toggleTranscriptSearch(view.props.paneId);
     view.props.messages = [
       ...view.props.messages,
       { role: "user", content: "while searching", timestamp: 3_000 },
     ];
     view.update();
-    toggleTranscriptSearch(view.props.paneId, () => {});
+    toggleTranscriptSearch(view.props.paneId);
     view.update();
     expect(entering(view.container)).toHaveLength(0);
     view.props.sessionKey = "agent:main:other";
@@ -368,6 +368,6 @@ describe("chat transcript entry lifecycle", () => {
     expect(entering(view.container)).toHaveLength(0);
     // The retired pending-only animation must not bypass session initialization.
     expect(view.container.querySelector(".chat-bubble--user-turn-enter")).toBeNull();
-    view.transcript.hostDisconnected();
+    view.transcript.dispose();
   });
 });

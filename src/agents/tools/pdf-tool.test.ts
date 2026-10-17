@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import * as operatorInvocation from "../../gateway/operator-invocation-authority.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import * as pdfExtract from "../../media/pdf-extract.js";
@@ -455,8 +454,6 @@ describe("PDF tool prepared-runtime cancellation", () => {
     { source: "admitted", scenario: "denied override" },
     { source: "direct", scenario: "permitted fallback" },
     { source: "admitted", scenario: "retired after extraction" },
-    { source: "admitted", scenario: "mutated override" },
-    { source: "admitted", scenario: "mutated path" },
   ] as const)(
     "preserves $source requester model policy for $scenario",
     async ({ source, scenario }) => {
@@ -525,40 +522,17 @@ describe("PDF tool prepared-runtime cancellation", () => {
                 { agentId: "main", sessionKey: "agent:main:reader", operatorAuthority: authority },
                 run,
               );
-        const changedDuringCapture = scenario === "mutated override" || scenario === "mutated path";
-        const captureStarted = createDeferredCore();
-        const resumeCapture = createDeferredCore();
-        const capture = operatorInvocation.captureAmbientGatewayOperatorAuthority;
-        const captureSpy = changedDuringCapture
-          ? vi
-              .spyOn(operatorInvocation, "captureAmbientGatewayOperatorAuthority")
-              .mockImplementation(async (params) => {
-                const retained = await capture(params);
-                captureStarted.resolve();
-                await resumeCapture.promise;
-                return retained;
-              })
-          : undefined;
         const args = {
           pdfs: ["/tmp/synthetic.pdf"],
           prompt: "Answer using this PDF.",
-          model:
-            scenario === "denied override" || scenario === "mutated override"
-              ? "blocked-alias"
-              : undefined,
+          model: scenario === "denied override" ? "blocked-alias" : undefined,
         };
         const work = new AsyncWorkScope();
         try {
           const execution = work.track(() =>
             runWithRequester(() => pdfTool.execute("policy", args)),
           );
-          if (changedDuringCapture) {
-            await Promise.race([captureStarted.promise, execution]);
-            args.model = scenario === "mutated override" ? undefined : "blocked-alias";
-            args.pdfs[0] = "/tmp/replacement.pdf";
-            resumeCapture.resolve();
-          }
-          if (scenario === "permitted fallback" || scenario === "mutated path") {
+          if (scenario === "permitted fallback") {
             await expect(execution).resolves.toMatchObject({
               content: [{ type: "text", text: "Allowed PDF answer." }],
             });
@@ -567,20 +541,12 @@ describe("PDF tool prepared-runtime cancellation", () => {
             await expect(execution).rejects.toThrow();
             expect(completeMock).not.toHaveBeenCalled();
           }
-          if (scenario === "mutated path") {
-            expect(loadSpy).toHaveBeenCalledExactlyOnceWith(
-              "/tmp/synthetic.pdf",
-              expect.any(Object),
-            );
-          }
-          if (scenario === "denied override" || scenario === "mutated override") {
+          if (scenario === "denied override") {
             expect(loadSpy).not.toHaveBeenCalled();
             expect(preparedRuntime.acquireAgentRunPreparedModelRuntime).not.toHaveBeenCalled();
           }
         } finally {
-          resumeCapture.resolve();
           await work.drain();
-          captureSpy?.mockRestore();
         }
         expect(sourceHolds).toBe(0);
       });

@@ -225,6 +225,15 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+A confirmed unavailable child Node runtime follows this same graceful drain when
+the effective native service command's Node can still start. The lifecycle owner
+requests a fresh-process supervisor handoff once; it never uses the in-process
+restart fallback for a broken retained runtime. If the service runtime is also
+broken or the latest shutdown records runtime recovery within five minutes, the
+Gateway stays up with degraded readiness for operator repair. See
+[Runtime health](/gateway/health#http-probes) for the health fields and report-only
+cases. A handoff failure after shutdown begins requires a service-owner restart.
+
 On Linux, shutdown closes idle pooled database readers through IPC before closing
 their spawn broker; active readers retain the existing cancellation grace.
 
@@ -823,10 +832,11 @@ receipts remain intact; recovery uses its normal transcript replay checks.
 
 If a Gateway left a dead writer and an unfinished recovery cycle,
 `sessions.recover` reconciles that writer
-and starts a continuation in the same session. A new Control UI message also reconciles this
-state before admission, so a rejected send cannot trap the conversation in a
-"conversation changed" retry loop. Both paths preserve the session key and
-transcript. A live run or cloud worker still prevents this repair. Tombstoned
+and starts a continuation in the same session. New Control UI and channel messages
+also reconcile this state before admission, so a rejected send cannot trap the
+conversation in a "conversation changed" retry loop. Channel messages wait behind
+live recovery ownership and resume admission when it settles. These paths preserve
+the session key and transcript. A live run or cloud worker still prevents this repair. Tombstoned
 sessions retain their separate recovery path into a new session.
 
 If recovery fails during preparation before the agent starts, the Gateway restores

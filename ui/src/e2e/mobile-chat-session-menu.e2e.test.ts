@@ -83,6 +83,16 @@ suite.define(() => {
             expect(bounds.x).toBeGreaterThanOrEqual(0);
             expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width);
             expect(bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height);
+            // The phone menu opens from its header trigger, not a viewport corner.
+            const anchor = await host.locator("button.chat-pane__layout-trigger").boundingBox();
+            if (!anchor) {
+              throw new Error("Expected a visible Layout trigger");
+            }
+            expect(
+              Math.abs(bounds.x + bounds.width - (anchor.x + anchor.width)),
+            ).toBeLessThanOrEqual(1);
+            expect(bounds.y).toBeGreaterThanOrEqual(anchor.y + anchor.height);
+            expect(bounds.y).toBeLessThanOrEqual(anchor.y + anchor.height + 12);
             expect(
               await menu.evaluate((element) => element.scrollWidth <= element.clientWidth),
             ).toBe(true);

@@ -49,7 +49,6 @@ function fixture(
   const paint = () => {
     renderComposerInto(container, props);
   };
-  props.onRequestUpdate = paint;
   onTestFinished(() => {
     disposeComposer(container);
   });
@@ -93,6 +92,7 @@ it("shows a prediction without changing the draft; Tab accepts but never sends",
   expect(f.input.value).toBe(suggestion);
   expect(f.draft()).toBe(suggestion);
   expect(f.props.onSend).not.toHaveBeenCalled();
+  flush();
   expect(f.container.querySelector(".agent-chat__composer-prediction")).toBeNull();
   f.finish();
   expect(f.predictions()).toHaveLength(1);

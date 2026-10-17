@@ -6,7 +6,6 @@ import type { ApplicationGateway } from "../app/context.ts";
 import { storeSidebarSessionOwnerFilter } from "../components/app-sidebar-session-types.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { disposeSidebarContextLifecycles } from "./app-sidebar-context-lifecycle.ts";
-import { settleLitElements } from "./lit-settle.ts";
 import { createStorageMock } from "./storage.ts";
 
 export function setupSidebarTest() {
@@ -148,8 +147,8 @@ export function setupSidebarTest() {
     await Promise.resolve();
     flush();
     disposeSidebarContextLifecycles();
-    // Disconnection queues Lit updates; finish them before retiring the DOM globals.
-    await settleLitElements(sidebars);
+    // A disconnected Solid sidebar resolves abandoned rendering as false, not another update.
+    await Promise.all(Array.from(sidebars, (sidebar) => sidebar.updateComplete));
     frameChannel?.port1.close();
     frameChannel?.port2.close();
     frameChannel = undefined;

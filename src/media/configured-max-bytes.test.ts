@@ -74,10 +74,10 @@ describe("resolveGeneratedMediaMaxBytes", () => {
 
 describe("resolveGeneratedImageDownloadMaxBytes", () => {
   it("lets providers download images above the default media cap", () => {
-    expect(resolveGeneratedImageDownloadMaxBytes(undefined)).toBe(32 * MB);
+    expect(resolveGeneratedImageDownloadMaxBytes(undefined)).toBe(64 * MB);
   });
 
   it("never drops below a larger configured media cap", () => {
-    expect(resolveGeneratedImageDownloadMaxBytes(configWithMediaMaxMb(64))).toBe(64 * MB);
+    expect(resolveGeneratedImageDownloadMaxBytes(configWithMediaMaxMb(128))).toBe(128 * MB);
   });
 });

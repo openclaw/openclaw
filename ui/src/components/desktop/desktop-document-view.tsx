@@ -7,12 +7,14 @@ import {
   DesktopLoading,
   DesktopPanelContent,
   DesktopSizing,
+  DesktopSurface,
   type DesktopSizingOptions,
 } from "./desktop-panel-view.tsx";
 
 registerEnglishCatalog(registerDesktopEnglish);
 
 type DesktopDocumentViewOptions = Omit<Parameters<typeof DesktopPanelContent>[0], "connection"> & {
+  surfaceRef: (element: HTMLElement | undefined) => void;
   controlling: boolean;
   sizing: DesktopSizingOptions;
   keyboard: DesktopMobileKeyboard;
@@ -30,7 +32,7 @@ export function DesktopDocumentView(props: DesktopDocumentViewOptions) {
         connection={() => (
           <div class="desktop-stage">
             {/* noVNC owns this island; controls remain Solid-owned siblings. */}
-            <div class="desktop-surface" />
+            <DesktopSurface bind={props.surfaceRef} />
             {props.state === "connecting" && (
               <DesktopLoading label={t("desktop.connecting")} overlay />
             )}

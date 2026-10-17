@@ -324,7 +324,7 @@ export function prepareSessionRowScopes(
   };
   return {
     select,
-    physicalPaths(locator: string, agentId?: string) {
+    physicalPaths(this: void, locator: string, agentId?: string) {
       // Resident physical locators were normalized when the topology was prepared.
       const normalized = filenames.has(locator) ? locator : residentPath(path.resolve(locator));
       const owners = aliases.get(normalized);

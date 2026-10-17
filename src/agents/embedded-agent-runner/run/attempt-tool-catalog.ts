@@ -113,13 +113,6 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
         mode: codeModeControlsEnabledForRun ? "code-mode" : "tool-search",
         toolCount: toolSearch.catalogToolCount,
       });
-      log.debug(
-        codeModeControlsEnabledForRun
-          ? `code-mode: cataloged ${toolSearch.catalogToolCount} tools behind exec/wait`
-          : toolSearchConfig.mode === "directory"
-            ? `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact directory surface`
-            : `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact prompt surface`,
-      );
     }
     const deferredDirectoryToolsCallable =
       toolSearchControlsEnabledForRun &&

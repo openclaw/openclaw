@@ -83,6 +83,62 @@ function onlyRecord(value: unknown) {
 }
 
 describe("historical model disclosure", () => {
+  it("skips worker deflation when model projection replaces the serialized history", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const f = fixture();
+      await state.writeConfig(f.cfg);
+      setRuntimeConfigSnapshot(f.cfg);
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:projected-history-compression",
+        sessionId: "projected-history-compression",
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: f.person.id },
+      });
+      const content = "Synthetic projected history. ".repeat(512);
+      await appendTranscriptMessage(scope, {
+        eventId: "projected-history-reply",
+        message: { role: "assistant", provider: "example", model: "allowed", content },
+      });
+      const context = await createHistoryReadContext({
+        getRuntimeConfig: () => f.cfg,
+        getCommittedRuntimeConfig: () => f.cfg,
+      });
+      const read = vi.spyOn(historyPages, "readChatHistoryPage");
+      try {
+        for (const role of ["reader", "staff"] as const) {
+          setUserProfileRole(f.person.id, role);
+          invalidateOperatorRolePolicy(f.person.id);
+          const respond = vi.fn<RespondFn>();
+          await handleChatHistoryRequest({
+            params: { sessionKey: scope.sessionKey, maxChars: 20_000 },
+            client: f.client,
+            context,
+            respond,
+            acceptsSerializedJson: true,
+            acceptsDeflatedSegments: true,
+            req: { type: "req", id: role, method: "chat.history" },
+            isWebchatConnect: () => false,
+            method: "chat.history",
+          });
+          const page = await read.mock.results.at(-1)?.value;
+          expect(Boolean(page?.encodedMessagesDeflate?.byteLength)).toBe(role === "staff");
+          const payload = response(respond);
+          const messages =
+            payload.messages instanceof SerializedJsonArray
+              ? payload.messages.materialize()
+              : payload.messages;
+          expect(onlyRecord(messages)).toMatchObject({ content });
+        }
+      } finally {
+        read.mockRestore();
+      }
+    });
+  });
+
   it("projects concrete tuples while preserving clearing facts, bookkeeping and content", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = fixture();

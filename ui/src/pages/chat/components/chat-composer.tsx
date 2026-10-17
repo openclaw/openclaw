@@ -1,4 +1,13 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createProjection,
+  createSignal,
+  merge,
+  onCleanup,
+  onSettled,
+  untrack,
+} from "solid-js";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { ComposerDictationOwner } from "../composer-dictation.ts";
@@ -7,57 +16,52 @@ import {
   createChatComposerContext,
   createComposerDictationOptions,
 } from "./chat-composer-frame.ts";
+import { createGoalComposer } from "./chat-composer-goal-mode.tsx";
 import { createComposerPrediction } from "./chat-composer-prediction.ts";
 import { createComposerQuestionPanel } from "./chat-composer-question.tsx";
-import { getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
+import { composerDraftKey, getChatComposerState, isChatRunWorking } from "./chat-composer-state.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.tsx";
 
 export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
 
-type ChatComposerInput = ChatComposerProps & { renderRevision?: object };
-
-export function ChatComposer(props: ChatComposerInput) {
+export function ChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(untrack(() => props.paneId));
-  const [revision, setRevision] = createSignal(0);
-  let inputDepth = 0;
-  let inputInvalidated = false;
-  let computingFrame = false;
-  let deferredInvalidation = false;
-  let disposed = false;
-  const requestUpdate = () => {
-    if (disposed) {
-      return;
-    }
-    if (inputDepth > 0) {
-      inputInvalidated = true;
-      return;
-    }
-    if (computingFrame) {
-      if (!deferredInvalidation) {
-        deferredInvalidation = true;
-        queueMicrotask(() => {
-          deferredInvalidation = false;
-          requestUpdate();
-        });
-      }
-      return;
-    }
-    const notifyHost = untrack(() => props.onRequestUpdate);
-    if (notifyHost) {
-      notifyHost();
-    } else {
-      setRevision((value) => value + 1);
-    }
-  };
-  const currentProps = new Proxy(props, {
-    get: (target, key) => (key === "onRequestUpdate" ? requestUpdate : Reflect.get(target, key)),
+  // Unrelated prop updates must preserve the native input's uncommitted IME preview.
+  const compositionDraftKey = createMemo(() => composerDraftKey(props));
+  const [composition, setComposition] = createSignal<{ key: string; value: string } | null>(() => {
+    compositionDraftKey();
+    return null;
   });
+  const interaction = {
+    composition,
+    setComposition,
+    error: () => state.presentation.dictationError,
+    setError: (error: string | null) => {
+      state.updatePresentation((draft) => {
+        draft.dictationError = error;
+      });
+    },
+  };
+  const draft = createMemo(() => {
+    const source = props.draftSource;
+    return source ? projectOwner(source, (owner) => owner.read()) : undefined;
+  });
+  const draftState = createMemo(() => draft()?.read());
+  // Draft edits must not recreate unrelated footer and notice content.
+  const currentProps = merge(
+    props,
+    createProjection(() => draftState() ?? {}, {}, { shallow: true }),
+  );
+  const goalComposer = createGoalComposer(() => currentProps, state);
   const microphonePicker = (state.microphonePicker ??= new ComposerMicrophoneOwner());
   state.dictation ??= new ComposerDictationOwner(
-    untrack(() => createComposerDictationOptions(currentProps, state, microphonePicker)),
+    untrack(() =>
+      createComposerDictationOptions(currentProps, state, microphonePicker, interaction.setError),
+    ),
   );
   const voice = { dictation: state.dictation, picker: microphonePicker };
+  // Dictation admission invalidates edits and dismisses errors before the next input event.
   onCleanup(
     voice.dictation.subscribe(() => {
       if (voice.dictation.locksComposer) {
@@ -99,24 +103,37 @@ export function ChatComposer(props: ChatComposerInput) {
       idle: !isChatRunWorking(currentProps) && !currentProps.sending && !currentProps.queue.length,
     };
   });
-  const questionPanel = createComposerQuestionPanel(() => currentProps, state);
+  const questionPanel = createComposerQuestionPanel(() => currentProps, state, composition);
   const context = createMemo(() => {
+    draftState();
     dictation.read();
     microphone.read();
-    revision();
-    // Lit owners can change local state without changing a prop's identity.
-    void props.renderRevision;
-    computingFrame = true;
-    try {
-      return createChatComposerContext(currentProps, voice, prediction, questionPanel());
-    } finally {
-      computingFrame = false;
-    }
+    return createChatComposerContext(
+      currentProps,
+      interaction,
+      goalComposer,
+      voice,
+      prediction,
+      questionPanel(),
+    );
   });
   createEffect(
-    () => [context().mentionDirectory, context().emojiEnabled, context().draftKey] as const,
-    ([directory, emojiEnabled, draftKey], previous) => {
+    () =>
+      [
+        context().mentionDirectory,
+        context().emojiEnabled,
+        context().draftKey,
+        context().clearSlashMenu,
+        context().clearSkillMenu,
+      ] as const,
+    ([directory, emojiEnabled, draftKey, clearSlash, clearSkill], previous) => {
       state.mentionMenu.syncDirectory(directory);
+      if (clearSlash) {
+        state.slashMenu.reset();
+      }
+      if (clearSkill) {
+        state.skillMenu.reset();
+      }
       if (!emojiEnabled || draftKey !== previous?.[2]) {
         state.emojiMenu.close();
       }
@@ -131,57 +148,5 @@ export function ChatComposer(props: ChatComposerInput) {
     },
   );
   onSettled(() => listen(document, "visibilitychange", () => prediction.sync()));
-  onCleanup(() => {
-    disposed = true;
-    state.textareaRef?.();
-    state.composerInputRef?.();
-  });
-  createEffect(
-    () => [context().clearSlashMenu, context().clearSkillMenu] as const,
-    ([slash, skill]) => {
-      if (slash) {
-        getChatComposerState(props.paneId).slashMenu.reset();
-      }
-      if (skill) {
-        getChatComposerState(props.paneId).skillMenu.reset();
-      }
-    },
-  );
-  const fields = new Map(
-    Object.keys(untrack(context)).map((key) => [
-      key,
-      createMemo(() => Reflect.get(context(), key), {
-        equals: key === "state" || key === "dictation" ? false : undefined,
-      }),
-    ]),
-  );
-  const input =
-    <E extends Event>(read: () => (event: E) => void) =>
-    (event: E) => {
-      inputDepth += 1;
-      try {
-        read()(event);
-      } finally {
-        inputDepth -= 1;
-        if (inputDepth === 0 && inputInvalidated) {
-          inputInvalidated = false;
-          requestUpdate();
-        }
-      }
-    };
-  const handlers = {
-    handleBeforeInput: input(() => context().handleBeforeInput),
-    handleInput: input(() => context().handleInput),
-    handleKeyDown: input(() => context().handleKeyDown),
-    handleSelect: input(() => context().handleSelect),
-    handleCompositionEnd: input(() => context().handleCompositionEnd),
-    handleBlur: input(() => context().handleBlur),
-  };
-  return renderChatComposerView(
-    // SAFETY: Every frame field is served by its projection; handlers are replaced explicitly.
-    new Proxy({} as ReturnType<typeof createChatComposerContext>, {
-      get: (_target, key) =>
-        Object.hasOwn(handlers, key) ? Reflect.get(handlers, key) : fields.get(String(key))?.(),
-    }),
-  );
+  return renderChatComposerView(context, currentProps);
 }

@@ -47,6 +47,7 @@ async function mountImage(item: ImageLightboxItem, deferredClose = false) {
   });
   container.append(viewer);
   await viewer.updateComplete;
+  await expect.poll(() => viewer.querySelector("openclaw-modal-dialog")).not.toBeNull();
   const modal = viewer.querySelector("openclaw-modal-dialog")!;
   await modal.updateComplete;
   const dialog = modal.querySelector("dialog")!;

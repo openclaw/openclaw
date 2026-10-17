@@ -6,9 +6,10 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import "./database-suite-workers.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { runDatabasePortTask as runWorkboardPortTask } from "./port-command.worker.js";
+import { runDatabasePortTask } from "./port-command.worker.js";
 import { loadDatabasePortDescriptor } from "./port-provider-descriptor.js";
 import { inspectDatabasePort, type PortDescriptor } from "./port.worker.js";
+import { loadStatePortDescriptor } from "./state-port-descriptor.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -37,12 +38,31 @@ async function hash(file: string) {
     .digest("hex");
 }
 
+it("preserves Doctor guidance when the port worker inspects an older shared-state schema", async () => {
+  const directory = tempDirs.make("state-port-legacy-");
+  const sourcePath = path.join(directory, "openclaw.sqlite");
+  const legacy = await loadStatePortDescriptor(25);
+  {
+    using db = openNodeSqliteDatabase(sourcePath);
+    db.exec(legacy.sqlite);
+    for (const fragment of legacy.fragments ?? []) {
+      db.exec(fragment.sqlite);
+    }
+    db.exec("PRAGMA user_version = 25");
+  }
+  const original = await hash(sourcePath);
+  await expect(
+    runDatabasePortTask({ operation: "inspect", sourcePath, config: {}, to: "postgres" }, scope),
+  ).rejects.toThrow("run openclaw doctor --fix with the matching version first");
+  expect(await hash(sourcePath)).toBe(original);
+});
+
 describe("workboard port worker", () => {
   it("inspects without writing and refuses changed canonical SQLite data", async () => {
     const { directory, sourcePath } = fixture();
     const original = await hash(sourcePath);
     const before = await fs.readdir(directory);
-    const inspected = await runWorkboardPortTask(
+    const inspected = await runDatabasePortTask(
       { operation: "inspect", sourcePath, config: {}, to: "postgres" },
       scope,
     );
@@ -56,7 +76,7 @@ describe("workboard port worker", () => {
     using changed = openNodeSqliteDatabase(targetPath);
     changed.exec("UPDATE workboard_boards SET name = 'changed'");
     await expect(
-      runWorkboardPortTask(
+      runDatabasePortTask(
         {
           operation: "verify",
           sourcePath: targetPath,
@@ -116,7 +136,7 @@ describe("workboard port worker", () => {
       "PRAGMA foreign_keys = OFF; INSERT INTO workboard_card_labels VALUES ('absent', 1, 'private-payload')",
     );
     const original = await hash(sourcePath);
-    const failure = await runWorkboardPortTask(
+    const failure = await runDatabasePortTask(
       { operation: "inspect", sourcePath, config: {}, to: "postgres" },
       scope,
     ).catch((error: unknown) => error);

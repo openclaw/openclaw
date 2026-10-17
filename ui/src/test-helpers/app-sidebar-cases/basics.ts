@@ -476,11 +476,9 @@ describe("AppSidebar agent chip", () => {
 
     // Main navigation and its unread state belong to the agent header, not a duplicate row.
     expect(sidebar.querySelector('[data-session-key="global"]')).toBeNull();
-    expect(sidebar.querySelector('[data-session-key="agent:main:side-quest"]')).not.toBeNull();
+    expect(sidebar.querySelector('[data-session-key="agent:main:side-quest"]')).toBeNull();
     expect(
-      sidebar.querySelector(
-        '[data-agent-group=main] .sidebar-agent-roster__header [aria-label="Unread"]',
-      ),
+      sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__row'),
     ).not.toBeNull();
   });
 

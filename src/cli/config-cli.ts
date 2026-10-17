@@ -352,7 +352,7 @@ export function registerConfigCli(program: Command) {
     )
     .action(async (opts) => {
       const { configureCommandFromSectionsArg } = await import("../commands/configure.commands.js");
-      await configureCommandFromSectionsArg(opts.section, defaultRuntime);
+      await configureCommandFromSectionsArg(opts.section);
     });
   setCommandJsonMode(cmd, "output", ({ argv }) => isConfigMachineOutput(argv));
 

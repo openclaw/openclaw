@@ -36,6 +36,7 @@ import {
   type UpdateAdmissionContext,
 } from "../../infra/update-admission-contract.js";
 import { channelToNpmTag } from "../../infra/update-channels.js";
+import { assertUpdateDatabaseEngineContexts } from "../../infra/update-database-engine-admission.js";
 import {
   UPDATE_ADMISSION_PROTOCOL,
   type UpdateAdmissionVerdict,
@@ -96,9 +97,9 @@ async function inspectUpdateAdmission(
   return await withArtifactPreservingStateReads(async () => {
     if (
       !path.isAbsolute(context.installation.root) ||
-      context.installation.installKind !== "package"
+      !["package", "git"].includes(context.installation.installKind)
     ) {
-      throw new Error("Candidate admission requires an explicit package installation root.");
+      throw new Error("Candidate admission requires an explicit package or Git installation root.");
     }
     const root = await resolveUpdateRoot({ root: context.installation.root });
     const candidateRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
@@ -247,6 +248,24 @@ async function inspectUpdateAdmission(
         return false;
       };
       if (databaseContext) {
+        if (databaseContext.config.database?.families) {
+          try {
+            const declaration = isRecord(manifest.openclaw) ? manifest.openclaw : {};
+            await assertUpdateDatabaseEngineContexts(
+              [databaseContext],
+              declaration.databaseEngines,
+              declaration.postgresFamilies,
+            );
+            // Protocol 1 already carries extensible named checks. Old candidates cannot
+            // attest that their config parser and providers understand family overrides.
+            checks.set("database-families", { status: "ok" });
+          } catch (error) {
+            if (!(error instanceof UpdatePreMutationError)) {
+              throw error;
+            }
+            refuse("database-families", error.reason, error.message);
+          }
+        }
         schemasAccepted = await checkDatabaseSchemas(databaseContext);
         if (schemasAccepted) {
           const snapshot = databaseContext.configSnapshot;

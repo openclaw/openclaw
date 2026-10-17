@@ -42,7 +42,7 @@ import {
 } from "../../lib/model-catalog-store.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import {
   createDeliveryConversations,
   invalidateStaleDeliveryRoute,
@@ -81,6 +81,9 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     },
     equality: "revision",
   });
+  const agents = projectOwner(context().agents, (source) => source.state);
+  const channels = projectOwner(context().channels, (source) => source.state);
+  const runtimeConfig = projectOwner(context().runtimeConfig, (source) => source.state);
   const runTranscript = createCronRunTranscript(publish, () => {
     const scope = gateway.capture();
     const current = cron;
@@ -135,10 +138,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     ensureInitialData();
     publish();
   });
-  function agentsList() {
-    return context().agents.state.agentsList;
-  }
-
   function canManageCron(): boolean {
     return readGatewayOperatorAccess(context().gateway.snapshot).canAdmin;
   }
@@ -149,6 +148,9 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     const sourceChanged = boundContext !== null && boundContext.gateway !== currentContext.gateway;
     let first = boundContext === null || sourceChanged;
     boundContext = currentContext;
+    agents.replaceSource(currentContext.agents);
+    channels.replaceSource(currentContext.channels);
+    runtimeConfig.replaceSource(currentContext.runtimeConfig);
     if (sourceChanged) {
       gateway.invalidate();
     }
@@ -182,12 +184,10 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       gatewayAvailable = nextAvailable;
       publish();
     };
+    // Gateway receipts retire requests and privileged editor state before reconnecting or losing access.
     cleanups.push(currentContext.gateway.subscribe(applySnapshot));
     applySnapshot();
     cleanups.push(
-      currentContext.agents.subscribe(() => publish()),
-      currentContext.channels.subscribe(() => publish()),
-      currentContext.runtimeConfig.subscribe(() => publish()),
       observeAgentScope(currentContext.agentSelection),
       watchSelectedAgent(currentContext.agentSelection, (agentId) => {
         if (modelSuggestionsRequest?.agentId !== agentId) {
@@ -287,7 +287,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (!canRefreshCron() || !cron.connected || !cron.client) {
       return;
     }
-    if (!agentsList() && !context().agents.state.agentsLoading) {
+    if (!context().agents.state.agentsList && !context().agents.state.agentsLoading) {
       void context().agents.ensureList();
     }
     if (forceRefresh || (!cron.cronStatus && !cron.cronLoading)) {
@@ -727,8 +727,8 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   createEffect(projection.revision, afterRender);
   return {
     context,
+    inventories: { agents, channels, runtimeConfig },
     cron: projection.read,
-    agentsList,
     canManageCron,
     cronModelSuggestions,
     modelSuggestionsError,

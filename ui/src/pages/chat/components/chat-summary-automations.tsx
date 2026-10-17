@@ -4,8 +4,8 @@ import { pathForRoute } from "../../../app-route-paths.ts";
 import { gatewayPresentationScope } from "../../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { createInitialCronState } from "../../../lib/cron/index.ts";
 import { loadCompactCronJobsPage } from "../../../lib/cron/jobs.ts";
+import { createInitialCronState } from "../../../lib/cron/state.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { formatCronSchedule } from "../../../lib/presenter.ts";
@@ -128,6 +128,7 @@ export function ChatSummaryAutomations(props: Props) {
       let identity = JSON.stringify(resolveUiConversationIdentity(source.snapshot, key));
       // Reject obsolete event delivery before queued binding cleanup runs.
       const current = () => untrack(() => props.gateway === source && props.sessionKey === key);
+      // Connection publications retire request scopes before the next cron event is delivered.
       const unsubscribe = source.subscribe((snapshot) => {
         if (!current()) {
           return;

@@ -19,7 +19,11 @@ spend limits, and backend failover without changing OpenClaw config.
     ```
 
     Onboarding prompts for the proxy base URL. Press Enter to keep the `http://localhost:4000`
-    default, or enter your proxy's URL.
+    default, or enter your proxy's URL. After the API key, choose a model returned by the proxy's
+    `/v1/models` endpoint. The first advertised model is selected by default; you can also enter a
+    model ID manually. If discovery fails, onboarding shows the reason and asks for a manual ID.
+    If the configuration changes while credentials are being prepared, setup stops before
+    sending the discovery request. Rerun onboarding with the updated configuration.
 
     For non-interactive setup against a remote proxy, pass the proxy URL explicitly:
 
@@ -74,12 +78,12 @@ spend limits, and backend failover without changing OpenClaw config.
             maxTokens: 64000,
           },
           {
-            id: "gpt-6-astra",
-            name: "GPT-6 Astra",
-            reasoning: true,
-            input: ["text", "image"],
-            contextWindow: 1050000,
-            maxTokens: 128000,
+            id: "local-qwen",
+            name: "Local Qwen",
+            reasoning: false,
+            input: ["text"],
+            contextWindow: 32768,
+            maxTokens: 4096,
           },
         ],
       },
@@ -93,22 +97,26 @@ spend limits, and backend failover without changing OpenClaw config.
 }
 ```
 
-The default model onboarding writes is `litellm/claude-opus-4-6`. Onboarding does not yet select
-from the proxy's live model list. If your proxy does not serve that alias, select one it advertises:
+Interactive onboarding saves the chosen model as `litellm/<model-id>` and keeps authored model
+settings when that ID is already configured. Re-authentication keeps an existing default model
+and makes the selected model available. Non-interactive onboarding retains its
+`litellm/claude-opus-4-6` default. To change it after setup:
 
 ```bash
 openclaw models list --provider litellm --refresh --json
 openclaw models set litellm/your-model-id
 ```
 
-In merge mode, onboarding with an explicit proxy URL preserves any authored provider models and
-otherwise leaves the provider model list empty for discovery. Run
-`openclaw models list --provider litellm --refresh --json` to list the proxy's models.
-With `models.mode: "replace"`, discovery is disabled, so onboarding keeps the documented default
-in the provider model list while preserving existing model definitions.
+Interactive setup records the selected model in both merge and replace modes while preserving
+authored provider models. Non-interactive setup with an explicit proxy URL leaves the model list
+available for discovery in merge mode; replace mode keeps its documented default. Run
+`openclaw models list --provider litellm --refresh --json` to refresh the proxy's model list.
 
 Re-running authentication also combines case-variant provider keys, such as `LiteLLM` and `litellm`,
-into one canonical row while preserving authored provider options and model settings.
+into one canonical row while preserving authored provider options and model settings, including when
+activating a saved sign-in. Non-interactive
+reauthentication without `--custom-base-url` keeps the configured proxy URL, including when the
+existing provider key uses different casing.
 
 ## Image generation
 

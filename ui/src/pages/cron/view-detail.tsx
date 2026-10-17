@@ -88,7 +88,7 @@ function DetailHeader(
   // summary describes unsaved edits, so the two never contradict each other.
   const nextRunAtMs = () => props.selectedJob?.state?.nextRunAtMs;
   const nextRunSuffix = () =>
-    typeof nextRunAtMs() === "number" && Number.isFinite(nextRunAtMs())
+    nextRunAtMs() !== undefined
       ? ` · ${t("cron.jobState.next")} ${formatRelativeTimestamp(nextRunAtMs())}`
       : "";
   const subtitle = () =>

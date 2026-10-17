@@ -1,3 +1,4 @@
+import "./mcp-manager.test-support.js";
 import { ErrorCode, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -6,8 +7,9 @@ import { OpenClawSchema } from "../config/zod-schema.js";
 import { GatewayClient } from "../gateway/client.js";
 import { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
 import { handleInvoke } from "./invoke.js";
-import { startNodeHostMcpManager } from "./mcp.js";
 import { callTool, createClient, okResult, startManager, transport } from "./mcp.test-support.js";
+
+const { startNodeHostMcpManager } = await import("./mcp-manager.test-support.js");
 
 afterEach(useRealTime);
 

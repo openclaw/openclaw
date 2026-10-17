@@ -2,7 +2,7 @@ import { createRenderEffect, onCleanup } from "solid-js";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
-import { ChatPaneRuntimeView } from "./chat-pane-runtime-view.tsx";
+import { createChatPaneView } from "./chat-pane-runtime-view.tsx";
 
 type PaneProperty =
   | "mcpAppLaunch"
@@ -120,6 +120,7 @@ export const ChatPaneView = defineSolidBridge<ChatPaneProps, PaneMethods>(
     ] as const) {
       Object.defineProperty(element, key, { configurable: true, get: () => runtime[key] });
     }
+    // Native callers and pane startup need synchronous input facts before the first render.
     createRenderEffect(
       () =>
         Object.fromEntries(Object.keys(properties).map((key) => [key, Reflect.get(props, key)])),
@@ -134,7 +135,7 @@ export const ChatPaneView = defineSolidBridge<ChatPaneProps, PaneMethods>(
       },
     );
     onCleanup(() => runtimes.delete(element));
-    return <ChatPaneRuntimeView runtime={runtime} />;
+    return createChatPaneView(runtime);
   },
   {
     properties,

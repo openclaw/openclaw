@@ -21,7 +21,7 @@ export type {
   SessionTranscriptReadParams,
 } from "./session-transcript-memory-hit.js";
 
-/** @deprecated Await loadCombinedSessionStoreForGatewayAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Await loadCombinedSessionStoreForGatewayAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function loadCombinedSessionStoreForGateway(
   cfg: OpenClawConfig,
   opts: { agentId?: string; configuredAgentsOnly?: boolean } = {},

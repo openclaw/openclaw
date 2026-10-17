@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../../build-info.ts";
 import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
+import { createSidebarTestRouter } from "../app-sidebar-router.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -80,12 +81,9 @@ describe("AppSidebar gateway footer subtitle", () => {
       if (surface === "online") {
         sidebar.navigationView = "online";
       } else {
-        sidebar.contextualSidebar = {
-          key: "sessions",
-          data: null,
-          loaderPending: false,
-          render: () => null,
-        };
+        const router = createSidebarTestRouter();
+        sidebar.router = router;
+        await router.navigate("systems", {});
       }
       await settleRoster(sidebar);
       const home = sidebar.querySelector(".sidebar-footer-bar__home")!;
@@ -149,7 +147,7 @@ describe("AppSidebar gateway footer subtitle", () => {
       dirty: false,
       release: true,
     });
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-identity-card")?.getAttribute("aria-label")).toBe(
@@ -273,7 +271,7 @@ describe("AppSidebar gateway footer subtitle", () => {
         { instanceId: "old-connection", ts: 1, user: { id: "profile-alex", name: "Alex" } },
       ],
     };
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await sidebar.updateComplete;
     expect(name()).toBe("Owner");
     gateway.publish({ phase: "connected", selfUser: null });

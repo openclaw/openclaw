@@ -10,6 +10,7 @@ import type { MessageActionResult } from "../infra/outbound/message-action-contr
 import type { MessagePollResult, MessageSendResult } from "../infra/outbound/message.js";
 import { normalizeMessageDeliveryStatus } from "./embedded-agent-messaging-status.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { markFinalSourceReplyResult } from "./tool-source-reply-completion.js";
 
 type EmbeddedMessageDeliveryFact = {
   status: "settled" | "suppressed" | "dryRun" | "failed";
@@ -366,7 +367,10 @@ export function attachEmbeddedMessageDeliveryFact(
     const { messageDelivery: _reserved, ...rest } = details;
     return { ...result, details: rest };
   }
-  return { ...result, details: { ...details, messageDelivery: fact } };
+  const delivered = { ...result, details: { ...details, messageDelivery: fact } };
+  return fact.sourceReplyDelivered === true && fact.status === "settled" && !fact.partialDelivery
+    ? markFinalSourceReplyResult(delivered)
+    : delivered;
 }
 
 export function isDeliveredCoreCurrentChannelWidgetResult(params: {

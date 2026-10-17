@@ -33,6 +33,7 @@ export function buildProps(result: SessionsListResult): SessionsProps {
     loading: false,
     refreshing: false,
     agentId: "main",
+    allAgentsScope: true,
     mainKey: "main",
     result,
     error: null,

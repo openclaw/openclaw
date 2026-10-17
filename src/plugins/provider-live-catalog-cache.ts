@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -37,10 +37,6 @@ async function consumeLiveCatalog<T>(entry: LiveCatalogCacheEntry<T>, signal?: A
   return value;
 }
 
-function buildLiveCatalogCacheKey(parts: readonly unknown[]): string {
-  return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
-}
-
 /**
  * Shares pending loads and caches successful values for a short TTL after completion.
  */
@@ -66,7 +62,7 @@ export async function getCachedLiveCatalogValue<T>(params: {
   if (expiresAt === undefined) {
     return await params.load(params.signal);
   }
-  const key = buildLiveCatalogCacheKey(params.keyParts);
+  const key = sha256Hex(JSON.stringify(params.keyParts));
   const refresh = consumeLiveCatalogRefresh(key);
   // SAFETY: Callers reuse key parts only for the same catalog loader and result type.
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;

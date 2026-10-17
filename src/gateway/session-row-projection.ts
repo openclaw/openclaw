@@ -685,6 +685,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
         modelCatalog: catalog.current,
         rowContext: metadata.current,
         scope: scope.select,
+        physicalStorePaths: scope.physicalPaths,
       };
     },
     isCurrent,

@@ -1,4 +1,5 @@
 import { hasNativeBrowserBridge } from "../app/native-browser-host.ts";
+import { listen } from "./reactive/listener.ts";
 
 type SurfaceElements = () => Iterable<Element>;
 const surfaces = new Set<SurfaceElements>();
@@ -112,15 +113,11 @@ export function acquireNativeOverlaySurface(element: HTMLElement): () => void {
   surfaces.add(elements);
   notify();
   trackSurfaceLayout();
-  let active = true;
   return () => {
-    if (!active) {
-      return;
+    if (surfaces.delete(elements)) {
+      notify();
+      trackSurfaceLayout();
     }
-    active = false;
-    surfaces.delete(elements);
-    notify();
-    trackSurfaceLayout();
   };
 }
 
@@ -144,14 +141,14 @@ export function occludeNativeBrowserSurface(element: HTMLElement) {
   };
   const cleanup = () => {
     observer.disconnect();
-    element.removeEventListener("toggle", onClose);
+    stopClose();
     occludingSurfaces.delete(element);
     surfaces.delete(elements);
     notify();
     trackSurfaceLayout();
   };
   occludingSurfaces.add(element);
-  element.addEventListener("toggle", onClose);
+  const stopClose = listen(element, "toggle", onClose);
   // Observe every containing root: document observers cannot see shadow-tree
   // removals, and an outer host can itself be removed while its tree stays intact.
   let root = element.getRootNode();

@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, untrack } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -7,47 +7,6 @@ import type { CheckoutChipOptions } from "./checkout-chip.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
 import { SessionPicker } from "./picker.tsx";
-// Suggestions live in the native popover island; keyboard events update its
-// selection synchronously so consecutive keys need no reactive flush.
-function clearActiveBranchSuggestion(field: Element | null) {
-  field?.querySelector("input")?.removeAttribute("aria-activedescendant");
-  for (const suggestion of field?.querySelectorAll("[data-worktree-suggestion]") ?? []) {
-    suggestion.setAttribute("aria-selected", "false");
-  }
-}
-
-function handleBranchKeydown(target: HTMLElement, event: KeyboardEvent, show: () => void): boolean {
-  const field = target.closest(".new-session-page__branch-field");
-  const suggestions = [
-    ...(field?.querySelectorAll<HTMLButtonElement>("[data-worktree-suggestion]") ?? []),
-  ];
-  if (suggestions.length === 0) {
-    return false;
-  }
-  const activeIndex = suggestions.findIndex(
-    (suggestion) => suggestion.getAttribute("aria-selected") === "true",
-  );
-  if (event.key === "Enter" && !event.isComposing && activeIndex >= 0) {
-    suggestions[activeIndex]!.click();
-    return true;
-  }
-  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
-    return false;
-  }
-  const direction = event.key === "ArrowDown" ? 1 : -1;
-  const nextIndex =
-    activeIndex < 0
-      ? direction === 1
-        ? 0
-        : suggestions.length - 1
-      : (activeIndex + direction + suggestions.length) % suggestions.length;
-  for (const [index, suggestion] of suggestions.entries()) {
-    suggestion.setAttribute("aria-selected", String(index === nextIndex));
-  }
-  target.setAttribute("aria-activedescendant", suggestions[nextIndex]!.id);
-  show();
-  return true;
-}
 
 function WorktreeFields(props: {
   params: CheckoutChipOptions;
@@ -57,16 +16,47 @@ function WorktreeFields(props: {
   const [suggestionsOpen, setSuggestionsOpen] = createSignal(false);
   let baseRef!: HTMLInputElement;
   let nameInput!: HTMLInputElement;
+  const suggestionRefs = new Map<string, HTMLButtonElement>();
+  let activeSuggestion: HTMLButtonElement | undefined;
+  const clearActiveSuggestion = () => {
+    baseRef.removeAttribute("aria-activedescendant");
+    activeSuggestion?.setAttribute("aria-selected", "false");
+    activeSuggestion = undefined;
+  };
   const closeSuggestions = () => {
     setSuggestionsOpen(false);
-    clearActiveBranchSuggestion(baseRef.closest(".new-session-page__branch-field"));
+    clearActiveSuggestion();
+  };
+  // Native selection commits synchronously, including consecutive keys before Solid settles.
+  const handleBranchKeydown = (event: KeyboardEvent) => {
+    const rows = suggestions().flatMap((branch) => suggestionRefs.get(branch.name) ?? []);
+    if (event.currentTarget !== baseRef || rows.length === 0) {
+      return false;
+    }
+    const activeIndex = activeSuggestion ? rows.indexOf(activeSuggestion) : -1;
+    if (event.key === "Enter" && !event.isComposing && activeIndex >= 0) {
+      activeSuggestion!.click();
+      return true;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+      return false;
+    }
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    const nextIndex =
+      activeIndex < 0
+        ? direction === 1
+          ? 0
+          : rows.length - 1
+        : (activeIndex + direction + rows.length) % rows.length;
+    clearActiveSuggestion();
+    activeSuggestion = rows[nextIndex]!;
+    activeSuggestion.setAttribute("aria-selected", "true");
+    baseRef.setAttribute("aria-activedescendant", activeSuggestion.id);
+    setSuggestionsOpen(true);
+    return true;
   };
   const handleFieldKeydown = (event: KeyboardEvent) => {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLElement)) {
-      return;
-    }
-    if (handleBranchKeydown(target, event, () => setSuggestionsOpen(true))) {
+    if (handleBranchKeydown(event)) {
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -106,14 +96,10 @@ function WorktreeFields(props: {
       }
       value={props.params.baseRef}
       onFocus={() => setSuggestionsOpen(true)}
-      onInput={(event: Event) => {
-        if (event.currentTarget instanceof HTMLInputElement) {
-          clearActiveBranchSuggestion(
-            event.currentTarget.closest(".new-session-page__branch-field"),
-          );
-          setSuggestionsOpen(true);
-          props.params.onBaseRefInput(event.currentTarget.value);
-        }
+      onInput={(event) => {
+        clearActiveSuggestion();
+        setSuggestionsOpen(true);
+        props.params.onBaseRefInput(event.currentTarget.value);
       }}
       ref={(node) => {
         baseRef = node;
@@ -128,11 +114,10 @@ function WorktreeFields(props: {
         {suggestions().length ? (
           <div
             class="new-session-page__branch-field"
-            onFocusOut={(event: FocusEvent) => {
-              const field = event.currentTarget;
+            onFocusOut={(event) => {
               if (
-                field instanceof HTMLElement &&
-                (!(event.relatedTarget instanceof Node) || !field.contains(event.relatedTarget))
+                !(event.relatedTarget instanceof Node) ||
+                !event.currentTarget.contains(event.relatedTarget)
               ) {
                 closeSuggestions();
               }
@@ -153,9 +138,18 @@ function WorktreeFields(props: {
                 role="listbox"
                 aria-label={t("newSession.worktreeBaseRef")}
               >
-                {
-                  <For each={suggestions()} keyed={(branch) => branch.name}>
-                    {(branch, index) => (
+                <For each={suggestions()} keyed={(branch) => branch.name}>
+                  {(branch, index) => {
+                    let button: HTMLButtonElement;
+                    // The For key fixes this identity for the row's entire lifetime.
+                    const name = untrack(() => branch().name);
+                    onCleanup(() => {
+                      suggestionRefs.delete(name);
+                      if (activeSuggestion === button) {
+                        clearActiveSuggestion();
+                      }
+                    });
+                    return (
                       <button
                         id={`new-session-worktree-branch-suggestion-${index()}`}
                         type="button"
@@ -165,16 +159,22 @@ function WorktreeFields(props: {
                         data-worktree-suggestion={branch().name}
                         tabindex="-1"
                         onMouseDown={(event: MouseEvent) => event.preventDefault()}
-                        ref={nativeListener("click", () => {
-                          props.params.onBaseRefInput(branch().name);
-                          closeSuggestions();
-                        })}
+                        ref={[
+                          (node) => {
+                            button = node;
+                            suggestionRefs.set(name, node);
+                          },
+                          nativeListener("click", () => {
+                            props.params.onBaseRefInput(branch().name);
+                            closeSuggestions();
+                          }),
+                        ]}
                       >
                         <span class="session-menu__text">{branch().name}</span>
                       </button>
-                    )}
-                  </For>
-                }
+                    );
+                  }}
+                </For>
               </div>
             </Popover>
           </div>
@@ -199,11 +199,7 @@ function WorktreeFields(props: {
               disabled={props.params.submitting || props.params.pendingPlacement}
               placeholder={t("newSession.worktreeNamePlaceholder")}
               value={props.params.worktreeName}
-              onInput={(event: Event) => {
-                if (event.currentTarget instanceof HTMLInputElement) {
-                  props.params.onWorktreeNameInput(event.currentTarget.value);
-                }
-              }}
+              onInput={(event) => props.params.onWorktreeNameInput(event.currentTarget.value)}
               ref={[(node) => (nameInput = node), nativeListener("keydown", handleFieldKeydown)]}
             />
           </label>

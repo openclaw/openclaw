@@ -20,13 +20,16 @@ import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { createAgentCreationWitnessSource } from "../state/openclaw-agent-execution.creation-fixture.test-support.js";
 import * as agentExecution from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { prepareClientVoiceSessionClose } from "./client-voice-session-lifecycle.js";
 import { assertClientVoiceSessionOpen } from "./client-voice-session-read.js";
 import {
+  captureClientVoiceEntrySource,
   captureClientVoiceSessionSourceOptions,
   createClientVoiceSessionSource,
 } from "./client-voice-session-source.js";
@@ -53,6 +56,66 @@ const { useClientVoiceSessionHarness } = await vi.hoisted(
 
 describe("client voice session worker contract", () => {
   const { releaseHeldWrites, sessionTurnMocks } = useClientVoiceSessionHarness();
+
+  it.each(["metadata", "entry"] as const)(
+    "joins pending agent initialization when capturing the Talk %s writer",
+    async (kind) => {
+      const target = { agentId: "main", sessionKey: "agent:main:main" };
+      const options = captureClientVoiceSessionSourceOptions(target.agentId);
+      openOpenClawStateDatabase({ env: options.env });
+      const creator = agentExecution.captureOpenClawAgentDatabaseExecution(options);
+      let operation: Promise<unknown> | undefined;
+      let release: (() => Promise<void>) | undefined;
+      const source = createAgentCreationWitnessSource((request) => {
+        const facts = request.facts;
+        if (
+          !operation &&
+          request.stage === "prepare" &&
+          facts !== null &&
+          typeof facts === "object" &&
+          "kind" in facts &&
+          facts.kind === "shared-owner"
+        ) {
+          operation = (async () => {
+            if (kind === "metadata") {
+              const writer = captureClientVoiceSessionWriter(target);
+              release = () => writer.release();
+              return writer.mutate({
+                ...target,
+                kind: "create",
+                voiceSessionId: "voice-pending-agent",
+                origin: "client",
+                now: 1,
+              });
+            }
+            const selected = await captureClientVoiceEntrySource(target, () => {});
+            release = () => selected.execution.release();
+            await selected.execution.prepare(source);
+            return selected.execution.runExisting(source, (worker) =>
+              worker.execute({
+                type: "session.transcript.initialize",
+                input: { sessionKey: target.sessionKey, sessionId: "voice-entry" },
+              }),
+            );
+          })();
+          void operation.catch(() => {});
+        }
+      });
+      try {
+        await creator.prepare(source);
+        expect(operation).toBeDefined();
+        await expect(operation).resolves.toMatchObject(
+          kind === "metadata"
+            ? { voiceSessionId: "voice-pending-agent", status: "open" }
+            : { kind: "session-transcript-initialized", sessionKey: target.sessionKey },
+        );
+      } finally {
+        await operation?.catch(() => {});
+        await release?.();
+        await creator.release();
+      }
+    },
+  );
 
   it("persists admission, consult effects, transcript bookkeeping, and close off the caller thread", async () => {
     const target = { agentId: "main", sessionKey: "agent:main:main" };
@@ -113,9 +176,9 @@ describe("client voice session worker contract", () => {
           };
         },
       });
-      const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+      const capture = agentExecution.captureOpenClawAgentDatabasePreparationExecution;
       const captureSpy = vi
-        .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
+        .spyOn(agentExecution, "captureOpenClawAgentDatabasePreparationExecution")
         .mockImplementation((...args): ReturnType<typeof capture> => {
           const execution = capture(...args);
           return {

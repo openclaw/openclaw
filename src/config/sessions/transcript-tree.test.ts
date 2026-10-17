@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  createSessionTranscriptTreeScanner,
   isSessionTranscriptLeafControl,
   mergeSessionTranscriptVisiblePathWithOpaqueAppendPath,
   scanSessionTranscriptTree,
@@ -9,33 +8,6 @@ import {
 } from "./transcript-tree.js";
 
 describe("session transcript tree helpers", () => {
-  it("carries branch and reset ancestry across committed append batches", () => {
-    const scanner = createSessionTranscriptTreeScanner<{
-      type: string;
-      id: string;
-      parentId: string | null;
-      firstKeptEntryId?: string;
-      targetId?: string;
-      appendMode?: "side";
-    }>();
-    scanner.append([
-      { type: "message", id: "root", parentId: null },
-      { type: "message", id: "old-tail", parentId: "root" },
-    ]);
-    scanner.append([
-      { type: "message", id: "branch", parentId: "root", appendMode: "side" },
-      { type: "leaf", id: "switch", parentId: "old-tail", targetId: "branch" },
-    ]);
-    const branch = scanner.append([{ type: "message", id: "reply", parentId: "switch" }]);
-    expect(
-      selectSessionTranscriptTreePathNodes(branch, branch.leafId).map((node) => node.id),
-    ).toEqual(["root", "branch", "reply"]);
-    scanner.append([{ type: "reset", id: "reset", parentId: "reply", firstKeptEntryId: "branch" }]);
-    const reset = scanner.append([{ type: "message", id: "after-reset", parentId: "old-tail" }]);
-    expect(reset.byId.get("after-reset")).toMatchObject({ parentId: "reset", index: 6 });
-    expect(reset.leafId).toBe("after-reset");
-  });
-
   it("recognizes only valid leaf controls", () => {
     expect(
       isSessionTranscriptLeafControl({

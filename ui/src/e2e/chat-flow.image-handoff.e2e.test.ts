@@ -29,32 +29,32 @@ suite.define(() => {
     const sessionId = "image-handoff-session";
     const source = "media://inbound/stable-preview.png";
     const prompt = "Keep this image visible while the prompt is accepted.";
-    const metadataGate = createDeferred();
-    const imageGate = createDeferred();
-    let metadataRequested = false;
-    let imageRequested = false;
+    const gates = { metadata: createDeferred(), image: createDeferred() };
+    const requested = new Set<keyof typeof gates>();
     await page.route("**/__openclaw__/assistant-media?**", async (route) => {
       const request = route.request();
       const url = new URL(request.url());
-      expect(url.searchParams.get("source")).toBe(source);
-      if (url.searchParams.get("meta") === "1") {
-        metadataRequested = true;
-        expect(request.headers().authorization).toBe("Bearer e2e-device-token");
-        await metadataGate.promise;
-        await route.fulfill({
-          json: {
-            available: true,
-            mediaTicket: "stable-image-ticket",
-            mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-          },
-        });
-      } else {
-        imageRequested = true;
+      const metadata = url.searchParams.get("meta") === "1";
+      requested.add(metadata ? "metadata" : "image");
+      expect({
+        source: url.searchParams.get("source"),
+        auth: request.headers().authorization,
+      }).toEqual({ source, auth: metadata ? "Bearer e2e-device-token" : undefined });
+      if (!metadata) {
         expect(url.searchParams.get("mediaTicket")).toBe("stable-image-ticket");
-        expect(request.headers().authorization).toBeUndefined();
-        await imageGate.promise;
-        await route.fulfill({ contentType: "image/png", body: imageBytes });
       }
+      await gates[metadata ? "metadata" : "image"].promise;
+      await route.fulfill(
+        metadata
+          ? {
+              json: {
+                available: true,
+                mediaTicket: "stable-image-ticket",
+                mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+              },
+            }
+          : { contentType: "image/png", body: imageBytes },
+      );
     });
     const initialHistory = {
       messages: [],
@@ -139,11 +139,9 @@ suite.define(() => {
         expect(await userImage.count()).toBe(1);
         // Native pending sources may report zero dimensions while the browser
         // still paints the current decoded image. Compare the actual pixels.
-        const currentPixels = await takeControlUiElementScreenshot(page, userImage, [userImage]);
-        expect(
-          currentPixels.equals(initialPixels),
-          `${stage} preserves the displayed image pixels`,
-        ).toBe(true);
+        expect(await takeControlUiElementScreenshot(page, userImage, [userImage]), stage).toEqual(
+          initialPixels,
+        );
         expect(await page.locator(".chat-group.user [aria-busy='true']").count()).toBe(0);
       };
       await expectImageStillVisible("01-submitted");
@@ -179,23 +177,20 @@ suite.define(() => {
         status: "running",
       };
       const custodyHistory = {
-        messages: [],
-        sessionId,
+        ...initialHistory,
         sessionInfo,
         pendingInputs: { items: [pendingInput], total: 1 },
       };
+      const sessionEvent = { sessionKey, sessionId, hasActiveRun: true, session: sessionInfo };
       await gateway.setMethodResponse("chat.history", custodyHistory);
       const histories = (await gateway.getRequests("chat.history")).length;
       await gateway.emitGatewayEvent("sessions.changed", {
-        sessionKey,
-        sessionId,
+        ...sessionEvent,
         reason: "send",
-        hasActiveRun: true,
-        session: sessionInfo,
       });
       await gateway.waitForRequest("chat.history", { after: histories });
       // Custody starts the canonical media read while the send acknowledgment is held.
-      await expect.poll(() => metadataRequested).toBe(true);
+      await expect.poll(() => requested.has("metadata")).toBe(true);
       await expectImageStillVisible("02-custody");
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
       await waitForCommittedState(
@@ -210,13 +205,10 @@ suite.define(() => {
       );
       // The owning run's lifecycle update wakes its custody reconciliation.
       await gateway.emitGatewayEvent("sessions.changed", {
-        sessionKey,
-        sessionId,
+        ...sessionEvent,
         agentId: "main",
         runId,
         reason: "agent.run.started",
-        hasActiveRun: true,
-        session: sessionInfo,
       });
       await gateway.waitForRequest("chat.history", { match: { limit: 1000 } });
 
@@ -255,12 +247,12 @@ suite.define(() => {
       if (order === "event-first") {
         await gateway.resolveDeferred("chat.history", canonicalHistory);
       }
-      await expect.poll(() => metadataRequested).toBe(true);
+      await expect.poll(() => requested.has("metadata")).toBe(true);
       await expectImageStillVisible("03-canonical-metadata-loading");
-      metadataGate.resolve();
-      await expect.poll(() => imageRequested).toBe(true);
+      gates.metadata.resolve();
+      await expect.poll(() => requested.has("image")).toBe(true);
       await expectImageStillVisible("04-canonical-image-loading");
-      imageGate.resolve();
+      gates.image.resolve();
       await expect.poll(() => userImage.getAttribute("src")).toContain("stable-image-ticket");
       await expectDecodedImage();
       await expectImageStillVisible("05-canonical-image-ready");
@@ -269,8 +261,8 @@ suite.define(() => {
       expect(frames.length).toBeGreaterThan(1);
       expect(frames.every(Boolean)).toBe(true);
     } finally {
-      metadataGate.resolve();
-      imageGate.resolve();
+      gates.metadata.resolve();
+      gates.image.resolve();
     }
   });
 });

@@ -65,12 +65,12 @@ import {
 } from "./cron-input-validation.js";
 import {
   assertCronReadCurrent,
-  isLegacyCreatorPromptUpdate,
   resolveCronJobId,
   respondInvalidCronParams,
   respondMissingCronJobId,
   respondCronJobNotFound,
   respondRefusedCronAgent,
+  resolveCronScopedToolEditRefusal,
   scopedCronJobHandler,
 } from "./cron-job-access.js";
 import { cronListHandler } from "./cron-list.js";
@@ -371,12 +371,11 @@ export const cronHandlers: GatewayRequestHandlers = {
           `Cannot authorize toolsAllow: ${patch.payload?.toolsAllow?.join(", ") ?? ""}. Recreate the automation from a fresh authenticated owner turn to capture app authority.`,
         );
       }
-      if (
-        touchesToolRuntime &&
-        requiresExplicitAgentRuntimeToolsAllow({ job: nextJob, callerScope }) &&
-        !isLegacyCreatorPromptUpdate(jobToUpdate, patch, callerScope)
-      ) {
-        throw new TypeError("agent-runtime tool jobs require an explicit payload.toolsAllow cap");
+      const refusal = touchesToolRuntime
+        ? resolveCronScopedToolEditRefusal({ job: jobToUpdate, nextJob, patch, callerScope })
+        : undefined;
+      if (refusal) {
+        throw new TypeError(refusal);
       }
       return nextJob;
     };

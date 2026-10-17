@@ -66,7 +66,6 @@ export async function prepareSetupNativeRuntimeConsent(
       agentId: ctx.routeAgentId,
     },
     pendingPluginInstalls: staged.pendingPluginInstalls,
-    resolvePluginMetadataSnapshot: ctx.deps.resolvePluginMetadataSnapshot,
   });
   throwIfSetupInferenceCancelled(ctx.params);
   const consented = await withPluginRuntimeGenerationScope(generation, async () => {
@@ -98,14 +97,13 @@ export async function prepareSetupVerificationGeneration(
   cache: PluginCache,
   preparedGeneration?: SetupInferencePluginGeneration,
 ): Promise<{ generation?: SetupInferencePluginGeneration; metadata: PluginMetadataSnapshot }> {
-  const { params, deps, routeAgentId } = ctx;
-  const resolveMetadata = deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshotAsync;
+  const { params, routeAgentId } = ctx;
   const generation = preparedGeneration
     ? {
         ...preparedGeneration,
         config: candidate,
         metadataSnapshot: await withPluginCache(cache, () =>
-          resolveMetadata({
+          resolvePluginMetadataSnapshotAsync({
             config: candidate,
             workspaceDir: ctx.workspace,
             env: process.env,
@@ -127,13 +125,16 @@ export async function prepareSetupVerificationGeneration(
               agentId: routeAgentId,
             },
             pendingPluginInstalls: staged.pendingPluginInstalls,
-            resolvePluginMetadataSnapshot: resolveMetadata,
           }),
         )
       : undefined;
   const metadata =
     generation?.metadataSnapshot ??
-    (await resolveMetadata({ config: candidate, workspaceDir: ctx.workspace, env: process.env }));
+    (await resolvePluginMetadataSnapshotAsync({
+      config: candidate,
+      workspaceDir: ctx.workspace,
+      env: process.env,
+    }));
   return { generation, metadata };
 }
 
@@ -164,7 +165,6 @@ export async function verifySetupHarness(params: {
         runtime,
         agentId: route.agentId,
       },
-      resolvePluginMetadataSnapshot: deps.resolvePluginMetadataSnapshot,
     }));
   params.assertCurrent();
   return await withPluginRuntimeGenerationScope(generation, async () => {

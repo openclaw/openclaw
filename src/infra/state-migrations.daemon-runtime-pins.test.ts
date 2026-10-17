@@ -3,7 +3,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import {
   type DaemonRuntimePinDatabase,
   resolveDaemonRuntimePinStorePath,
@@ -14,7 +16,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withDatabaseEngineSelection } from "./database-engine/context.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   initializeFreshDaemonRuntimePinMigration,
   migrateDaemonRuntimePins,
@@ -88,7 +93,13 @@ describe("daemon runtime pin owner migration", () => {
     const completed = receipt();
     const owner = await holdGatewayOwnership();
     try {
-      expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
+      const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+      try {
+        expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
+        expect(observation.queries).toHaveLength(1);
+      } finally {
+        observation.restore();
+      }
       expect(receipt()).toEqual(completed);
       owner.assertCurrent();
     } finally {
@@ -143,6 +154,47 @@ describe("daemon runtime pin owner migration", () => {
       phase: "complete",
       updated_at: expect.any(Number),
     });
+  });
+
+  it("resumes after a crash leaves the local store empty", async () => {
+    const pathname = resolveDaemonRuntimePinStorePath(env);
+    fs.mkdirSync(path.dirname(pathname), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(pathname, "", { mode: 0o600 });
+
+    expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
+    expect(targetRows()).toEqual([]);
+    expect(receipt()).toMatchObject({
+      source_state: resolveOpenClawStateSqlitePath(env),
+      phase: "complete",
+    });
+  });
+
+  it("preserves the persisted unshipped receipt on a PostgreSQL restart", async () => {
+    withDaemonRuntimePinStore(env, true, (db) =>
+      db
+        .prepare(
+          "INSERT INTO daemon_runtime_pin_migration VALUES (1, 'none/unshipped', 'complete', 123)",
+        )
+        .run(),
+    );
+    const completed = receipt();
+    const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      await withDatabaseEngineSelection(
+        {
+          effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+          postgres: { connection: "postgres://unused", schemaPrefix: "pin_restart" },
+        },
+        async () => {
+          expect(await migrateDaemonRuntimePins(env)).toEqual({ changes: [], warnings: [] });
+        },
+      );
+      expect(observation.queries).toHaveLength(1);
+    } finally {
+      observation.restore();
+    }
+    expect(receipt()).toEqual(completed);
+    expect(fs.existsSync(resolveOpenClawStateSqlitePath(env))).toBe(false);
   });
 
   it("completes pre-pin released schemas without changing shared state", () => {
@@ -239,9 +291,8 @@ describe("daemon runtime pin owner migration", () => {
       phase: "copied",
       updated_at: expect.any(Number),
     });
-    runOpenClawStateWriteTransaction(({ db }) => db.exec("DROP TRIGGER interrupt_pin_retirement"), {
-      env,
-    });
+    // Reopening drops the interrupted connection's TEMP trigger, as a restart would.
+    closeOpenClawStateDatabaseForTest();
     expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
     expect(sourceRows()).toEqual([]);
     expect(targetRows()).toEqual([pin]);
@@ -251,6 +302,44 @@ describe("daemon runtime pin owner migration", () => {
       updated_at: expect.any(Number),
     });
   });
+
+  it.skipIf(process.platform === "win32")(
+    "resumes after SIGKILL between target commit and source retirement",
+    async () => {
+      seedSource([pin]);
+      closeOpenClawStateDatabaseForTest();
+      const script = `
+        import { runOpenClawStateWriteTransaction } from ${JSON.stringify(new URL("../state/openclaw-state-db.ts", import.meta.url).href)};
+        import { migrateDaemonRuntimePins } from ${JSON.stringify(new URL("./state-migrations.daemon-runtime-pins.ts", import.meta.url).href)};
+        runOpenClawStateWriteTransaction(({ db }) => {
+          db.function("interrupt_pin_retirement", () => process.kill(process.pid, "SIGKILL"));
+          db.exec(\`CREATE TEMP TRIGGER interrupt_pin_retirement
+            BEFORE DELETE ON config_machine_state
+            WHEN OLD.state_key LIKE 'daemon-runtime-pin:%'
+            BEGIN SELECT interrupt_pin_retirement(); END\`);
+        });
+        await migrateDaemonRuntimePins(process.env);
+      `;
+      const result = await runCliProcessChild({
+        nodeArgs: ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", script],
+        env: {
+          PATH: process.env.PATH,
+          HOME: env.HOME,
+          OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR,
+          NODE_DISABLE_COMPILE_CACHE: "1",
+        },
+      });
+      expect(result.signal, result.stderr).toBe("SIGKILL");
+      expect(sourceRows()).toEqual([pin]);
+      expect(targetRows()).toEqual([pin]);
+      expect(receipt()).toMatchObject({ phase: "copied" });
+
+      expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
+      expect(sourceRows()).toEqual([]);
+      expect(targetRows()).toEqual([pin]);
+      expect(receipt()).toMatchObject({ phase: "complete" });
+    },
+  );
 
   it.each([false, true])(
     "retains an incomplete copy belonging to another source (source rows=%s)",

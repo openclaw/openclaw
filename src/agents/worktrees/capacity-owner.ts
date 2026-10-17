@@ -40,6 +40,8 @@ export function createWorktreeCapacityOwner({
     if (occupied < maxCount) {
       return;
     }
+    // A pending creator can publish during planning; retain its wait/retry target.
+    const pending = (await readPendingWorktrees(env)).find(({ state }) => state === "pending");
     const progress = new WorktreeGcProgress();
     const ranked = new Map<string, WorktreeEvictionCandidate>();
     const repositories = new Map<string, RepositoryInventory>();
@@ -48,7 +50,6 @@ export function createWorktreeCapacityOwner({
       ({ more } = await enforce(maxCount - 1, progress, guard, ranked, repositories));
     } while (progress.result.limitsSatisfied !== true && more);
     if (progress.result.limitsSatisfied !== true) {
-      const pending = (await readPendingWorktrees(env)).find(({ state }) => state === "pending");
       if (pending) {
         throw new WorktreePendingContentionError(pending.record.id);
       }

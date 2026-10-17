@@ -1,3 +1,4 @@
+import { ensureRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
   PluginWebFetchProviderEntry,
@@ -32,18 +33,7 @@ export function providerPluginId(provider: ProviderUnderTest): string {
   }
 }
 
-export function ensureRecord(
-  target: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> {
-  const current = target[key];
-  if (typeof current === "object" && current !== null && !Array.isArray(current)) {
-    return current as Record<string, unknown>;
-  }
-  const next: Record<string, unknown> = {};
-  target[key] = next;
-  return next;
-}
+export { ensureRecord };
 
 function setConfiguredProviderKey(
   configTarget: OpenClawConfig,

@@ -22,8 +22,15 @@ type BackfillParams = SessionRowTranscriptReadParams & {
 /** Runtime alias and selected-model policy remain with the host, not the durable cache. */
 export function presentSessionRowTranscriptFields(
   params: BackfillParams,
-  fields: Pick<SessionRowTranscriptProjection, "lastMessagePreview" | "terminalModel">,
-): { lastMessagePreview?: string; fallbackModel?: { provider: string; model: string } } {
+  fields: Pick<
+    SessionRowTranscriptProjection,
+    "lastMessagePreview" | "lastAssistantMessage" | "terminalModel"
+  >,
+): {
+  lastMessagePreview?: string;
+  lastAssistantMessage?: NonNullable<SessionRowTranscriptProjection["lastAssistantMessage"]>;
+  fallbackModel?: { provider: string; model: string };
+} {
   const { sessionEntry, model, ...scope } = params;
   const terminal = fields.terminalModel;
   const fallback =
@@ -38,6 +45,7 @@ export function presentSessionRowTranscriptFields(
     ...(fields.lastMessagePreview !== null
       ? { lastMessagePreview: fields.lastMessagePreview }
       : {}),
+    ...(fields.lastAssistantMessage ? { lastAssistantMessage: fields.lastAssistantMessage } : {}),
     ...(fallback
       ? { fallbackModel: { provider: fallback.modelProvider, model: fallback.model } }
       : {}),

@@ -242,7 +242,7 @@ describe("native plugin alias preparation", () => {
     },
   );
 
-  it("defers the full map until a workspace alias is demanded", () => {
+  it("loads a workspace alias without reading unrelated SDK artifacts", () => {
     const f = fixture();
     writeFile(f.root, "dist/retry/index.js", 'export const value = "family";');
     writeFile(
@@ -265,7 +265,7 @@ describe("native plugin alias preparation", () => {
     expect(load(f.entry)).toMatchObject({ marker: "metadata" });
     expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
     expect(load(entry)).toMatchObject({ value: "family" });
-    expect(read.mock.calls.some(([target]) => target === f.unused)).toBe(true);
+    expect(read.mock.calls.filter(([target]) => target === f.unused)).toEqual([]);
   });
 
   it("does not prepare aliases for unrelated requests or unregistered parents", async () => {
@@ -559,38 +559,5 @@ describe("native plugin alias preparation", () => {
         }
       }),
     );
-  });
-
-  it("captures explicit aliases before lazy evaluation", () => {
-    const f = fixture();
-    const owner = createPluginCache();
-    const target = writeFile(
-      f.root,
-      "target.ts",
-      'import { value } from "fixture-alias"; export const marker = value;',
-    );
-    const params = {
-      modulePath: target,
-      importerUrl: import.meta.url,
-      tryNative: false,
-      cacheScopeKey: "explicit-aliases",
-    };
-    withPluginCache(owner, () => {
-      const aliases = { "fixture-alias": f.used };
-      const first = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
-      const same = getCachedPluginModuleLoader({ ...params, aliasMap: { ...aliases } });
-      aliases["fixture-alias"] = f.unused;
-      const loaded = first(target);
-      expect(loaded).toMatchObject({ marker: "dist" });
-      expect(same(target)).toBe(loaded);
-      const next = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
-      const nextTarget = writeFile(
-        f.root,
-        "next-target.ts",
-        'import { value } from "fixture-alias"; export const marker = value;',
-      );
-      expect(next(nextTarget)).toMatchObject({ marker: "unused" });
-      expect(first(target)).toBe(loaded);
-    });
   });
 });

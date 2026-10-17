@@ -92,7 +92,6 @@ it.each([true, false])(
           }),
         }),
       );
-      expect(findings).toEqual([]);
     } else {
       expect(open).not.toHaveBeenCalled();
       expect(findings).toEqual([

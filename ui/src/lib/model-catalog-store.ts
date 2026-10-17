@@ -182,10 +182,30 @@ export async function loadModelCatalog(
   signal?.throwIfAborted();
   const params = modelCatalogParams(requestOptions);
   if (!params.refresh) {
+    const snapshot = modelCatalogCache.get(client)?.snapshot;
+    if (
+      snapshot &&
+      (timeoutMs == null || timeoutMs >= 1_000) &&
+      (!snapshot.scope ||
+        modelCatalogKey({
+          ...snapshot.scope,
+          agentId: snapshot.scope.agentId ?? params.agentId,
+        }) === modelCatalogKey(params))
+    ) {
+      // Short URLs acquire their scope from publication; the lookup below still
+      // requires the exact projection before reusing its result.
+      await subscribeToSharedRequest(
+        { promise: snapshot.promise, subscribers: new Set<object>() },
+        {},
+        signal,
+      );
+      signal?.throwIfAborted();
+      if (modelCatalogCache.get(client) !== snapshot.cache) {
+        throw new DOMException("Model catalog connection retired", "AbortError");
+      }
+    }
     const result = peekModelCatalog(client, params);
-    // A connect snapshot can precede native discovery. Explicit catalog reads
-    // must still admit demand; prepared-only projections stay passive.
-    if (result && (params.preparedOnly || !result.pendingProviders?.length)) {
+    if (result) {
       return result;
     }
   }

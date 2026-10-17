@@ -120,13 +120,14 @@ export function applyUnknownConfigKeyStep(params: {
   state: DoctorConfigMutationState;
   shouldRepair: boolean;
   doctorFixCommand: string;
+  preservedPaths?: readonly (readonly string[])[];
 }): {
   state: DoctorConfigMutationState;
   removed: string[];
   repairs: string[];
   warnings: string[];
 } {
-  const unknown = stripUnknownConfigKeys(params.state.candidate);
+  const unknown = stripUnknownConfigKeys(params.state.candidate, params.preservedPaths);
   if (unknown.removed.length === 0) {
     return { state: params.state, removed: [], repairs: [], warnings: [] };
   }

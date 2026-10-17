@@ -403,7 +403,7 @@ it.each([
   const hello = {
     ...gatewayHelloForMethods([]),
     snapshot: {
-      presence: [{ instanceId: current().instanceId, user: { id: "original" } }],
+      presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "original" } }],
     },
   };
   current().opts.onHello?.(hello);

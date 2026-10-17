@@ -5,7 +5,7 @@ import { Icon, type IconName } from "./solid/icon.tsx";
 import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
 import { Menu, type MenuHandle, type MenuItem } from "./solid/menu.tsx";
 
-export type CatalogSessionMenuAction = "viewer" | "import" | "terminal" | "delete";
+type CatalogSessionMenuAction = "viewer" | "import" | "terminal" | "delete";
 type Props = {
   x: number;
   y: number;
@@ -47,7 +47,7 @@ export const CatalogSessionMenu = defineSolidBridge<Props>(
         .map(([action, key, icon]) => ({
           id: action,
           label: t(key),
-          class: `session-menu__item${action === "delete" ? " session-menu__item--destructive" : ""}`,
+          class: ["session-menu__item", { "session-menu__item--destructive": action === "delete" }],
           variant: action === "delete" ? "danger" : undefined,
           disabled: action === "terminal" && props.terminalDisabled,
           attributes: {

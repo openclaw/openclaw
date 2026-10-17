@@ -38,7 +38,6 @@ describe("composer overflow presentation", () => {
   const [presented, setPresented] = createSignal(true);
   type ComposerFixtureProps = {
     input: ChatComposerProps;
-    revision: object;
     thread: boolean;
   };
   let composerView: ReturnType<typeof mountSolidProps<ComposerFixtureProps>> | undefined;
@@ -48,7 +47,7 @@ describe("composer overflow presentation", () => {
     return (
       <ContentPresentation value={presented}>
         {props.thread ? <div class="chat-thread" /> : null}
-        <ChatComposer {...props.input} renderRevision={props.revision} />
+        <ChatComposer {...props.input} />
       </ContentPresentation>
     );
   }
@@ -69,7 +68,7 @@ describe("composer overflow presentation", () => {
   };
 
   function drawComposer(input: ChatComposerProps, thread = false) {
-    const props = { input: { ...input }, revision: {}, thread };
+    const props = { input: { ...input }, thread };
     if (composerView) {
       composerView.update(props);
     } else {
@@ -112,7 +111,6 @@ describe("composer overflow presentation", () => {
       container.className = "";
       container.style.cssText = `position: fixed; bottom: 24px; left: 16px; width: ${Math.min(width - 32, 760)}px`;
       const props = createComposerProps({
-        onRequestUpdate: () => drawComposer(props),
         capabilityMenu: {
           basePath: "",
           skills: [

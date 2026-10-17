@@ -342,7 +342,6 @@ export async function handleToolExecutionEnd(
   if (didDeliverMessagingResult && messageText) {
     ctx.state.messagingToolSentTexts.push(messageText);
     ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(messageText));
-    ctx.log.debug(`Committed messaging text: tool=${toolName} len=${messageText.length}`);
     ctx.trimMessagingToolSent();
   }
   if (didDeliverMessagingResult && confirmedMessageTarget) {
@@ -579,10 +578,6 @@ export async function handleToolExecutionEnd(
       });
     }
   }
-
-  ctx.log.debug(
-    `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
-  );
 
   if (!planUpdate) {
     await emitToolResultOutput({

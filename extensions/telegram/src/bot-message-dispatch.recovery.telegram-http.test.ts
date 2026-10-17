@@ -167,7 +167,6 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
     const { replyPayloads } = await buildReplyPayloads({
       payloads: [first, recoveredAnswer].map((text) => ({ text: "[[reply_to_current]]" + text })),
       isHeartbeat: false,
-      didLogHeartbeatStrip: false,
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       applyReplyToMode: createReplyToModeFilterForChannel("first", "telegram"),

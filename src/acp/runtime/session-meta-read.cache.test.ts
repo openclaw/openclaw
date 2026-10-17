@@ -160,6 +160,9 @@ it("keeps a pinned ACP snapshot and refreshes after it closes", () => {
         expect(readPinned().rows[0]).toMatchObject({
           runtime_session_name: "before",
         });
+        expect(readPublishedAcpSessionRows(pathname, command.entries)?.[0]).toMatchObject({
+          runtime_session_name: "after",
+        });
       } finally {
         db.exec("COMMIT");
       }

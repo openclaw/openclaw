@@ -33,8 +33,8 @@ import type {
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
-import type { SessionOrganizerController } from "./session-organizer-controller.ts";
-import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
+import type { SessionOrganizer } from "./session-organizer.ts";
+import type { SidebarMenus } from "./sidebar-menus.tsx";
 import type { AgentAvatarProps } from "./solid/agent-avatar.tsx";
 import type { ChannelAvatarProps } from "./solid/channel-avatar.tsx";
 import "./tooltip.ts";
@@ -73,7 +73,7 @@ export interface SessionListHost {
   readonly sessionsGrouping: SidebarSessionsGrouping;
   readonly collapsedSessionSections: ReadonlySet<string>;
   readonly sessionOrganizer: Pick<
-    SessionOrganizerController,
+    SessionOrganizer,
     | "draggingSidebarSection"
     | "draggingSessionKey"
     | "isDraggingChildSession"
@@ -97,8 +97,9 @@ export interface SessionListHost {
     | "reorderSidebarSection"
   >;
   readonly sidebarMenus: Pick<
-    SidebarMenusController,
+    SidebarMenus,
     | "catalogMenu"
+    | "catalogMenuView"
     | "catalogViewMenuPosition"
     | "openCatalogViewMenu"
     | "openSessionGroupMenu"
@@ -140,6 +141,10 @@ export interface SessionListHost {
   showMoreChildren(sessionKey: string): void;
   toggleSection(sectionId: string): void;
   expandedAgentId(): string;
+  /** Unadmitted New session handoff; presentation only, never a saved selection. */
+  pendingSessionCreate():
+    | Readonly<{ creation: Readonly<{ sessionKey: string }>; displayName?: string }>
+    | undefined;
   readNewSessionAccess(): SessionMethodAccess;
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void;

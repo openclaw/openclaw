@@ -262,9 +262,7 @@ it("preserves the SQLite maintenance inspection statements byte for byte", () =>
       .toSorted((a, b) => a.order! - b.order!)
       .map(({ sql }) => sql);
     expect(captured).toEqual([
-      "PRAGMA busy_timeout=0",
       "BEGIN",
-      "SELECT rootpage FROM sqlite_schema LIMIT 1",
       "PRAGMA journal_mode",
       "PRAGMA user_version",
       "PRAGMA writable_schema = ON;",

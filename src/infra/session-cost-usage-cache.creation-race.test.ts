@@ -12,11 +12,65 @@ import { historyLane } from "../config/sessions/session-transcript-worker-resour
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { runWithAgentCreationClaim } from "../state/agent-creation-claim.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { createAgentCreationWitnessSource } from "../state/openclaw-agent-execution.creation-fixture.test-support.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
+import { loadSessionCostSummariesFromCache } from "./session-cost-usage.js";
 import * as operationAdmission from "./sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
+
+it("refreshes usage while the lifecycle owner is creating the agent database", async () => {
+  onTestFinished(() => clearRuntimeConfigSnapshot());
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    openOpenClawStateDatabase({ env: state.env });
+    const agentId = "main";
+    const sessionFile = state.path("pending-creation.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "message",
+        message: { role: "assistant", usage: { input: 3, output: 2, totalTokens: 5 } },
+      })}\n`,
+    );
+    const creator = captureOpenClawAgentDatabaseExecution({ agentId, env: state.env });
+    let refresh: Promise<"refreshed" | "busy"> | undefined;
+    try {
+      await creator.prepare(
+        createAgentCreationWitnessSource((request) => {
+          if (
+            !refresh &&
+            request.stage === "prepare" &&
+            isRecord(request.facts) &&
+            request.facts.kind === "shared-owner"
+          ) {
+            expect(creator.fileIdentity).toBeUndefined();
+            refresh = refreshCostUsageCacheForAgent({
+              agentId,
+              env: state.env,
+              sessionFiles: [sessionFile],
+            });
+            void refresh.catch(() => {});
+          }
+        }),
+      );
+      expect(refresh).toBeDefined();
+      await expect(refresh).resolves.toBe("refreshed");
+      expect(
+        await loadSessionCostSummariesFromCache({
+          agentId,
+          sessions: [{ sessionFile }],
+          requestRefresh: false,
+        }),
+      ).toMatchObject({ summaries: [{ totalTokens: 5 }], cacheStatus: { status: "fresh" } });
+    } finally {
+      await refresh?.catch(() => {});
+      await creator.release();
+    }
+  });
+});
 
 it.each(["none", "cleanup", "after-open", "during-open"] as const)(
   "fences a cache creator's reader proof (failure=%s)",

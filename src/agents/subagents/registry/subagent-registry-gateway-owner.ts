@@ -6,6 +6,7 @@ import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
+import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   bindGatewayContextResolver,
@@ -55,9 +56,11 @@ async function restoreSubagentCompletionSource(
   // A refused restoration must leave a restricted row, never a synthetic system caller.
   subagentRuns.requireCompletionAuthority(entry);
   if (
-    entry.execution.status === "terminal" &&
+    (entry.execution.status === "terminal" || !entry.operatorRecoverySource) &&
     !entry.requesterSettleWake &&
-    entry.suppressCompletionDelivery
+    (entry.suppressCompletionDelivery ||
+      (entry.delivery?.status === "suspended" &&
+        entry.delivery.disposition === "intentional_non_delivery"))
   ) {
     return;
   }
@@ -71,11 +74,10 @@ async function restoreSubagentCompletionSource(
     | undefined;
   try {
     const source = entry.operatorRecoverySource;
+    const missingSourceReason =
+      "The original operator source was not saved for this requester continuation";
     if (!source) {
-      unrestorableCompletionSources.set(
-        runtimeKey,
-        "The original operator source was not saved for this requester continuation",
-      );
+      unrestorableCompletionSources.set(runtimeKey, missingSourceReason);
     } else if (
       source.agentId !== entry.requesterAgentId ||
       source.sessionKey !== entry.requesterSessionKey ||
@@ -89,9 +91,6 @@ async function restoreSubagentCompletionSource(
     }
     const gateway = resolver();
     const storePath = entry.requesterStorePath;
-    if (!gateway || !source || !storePath || unrestorableCompletionSources.has(runtimeKey)) {
-      throw new Error("Subagent restart recovery lacks its original operator source");
-    }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const context = captureOpenClawStateWorkerContext();
     const assertCurrent = () => {
@@ -99,6 +98,7 @@ async function restoreSubagentCompletionSource(
       const current = getCurrentSubagentRunOwner(subagentRuns, entry);
       if (
         !current ||
+        !gateway ||
         subagentRuns.isCompletionAuthorityRetired(current) ||
         !isGatewayCurrent() ||
         resolver() !== gateway ||
@@ -111,6 +111,45 @@ async function restoreSubagentCompletionSource(
       }
     };
     assertCurrent();
+    if (!source) {
+      // Legacy wakes and yields may have no recoverable requester cohort or final outcome.
+      // Close their unavailable continuation here; execution keeps its own recovery owner.
+      deferredCompletionSources.add(runtimeKey);
+      // Queue receipts and replaced-store notifications retain their settlement owners.
+      if (
+        entry.delivery?.queueId ||
+        (entry.execution.status === "terminal" &&
+          entry.execution.outcome &&
+          entry.pauseReason !== "sessions_yield" &&
+          entry.expectsCompletionMessage === true &&
+          ["pending", "in_progress"].includes(entry.delivery?.status ?? "") &&
+          entry.delivery?.deliveredAt === undefined &&
+          entry.delivery?.announcedAt === undefined &&
+          !isSystemEventStoreCurrent(entry.requesterSessionKey, storePath, entry.requesterAgentId))
+      ) {
+        return;
+      }
+      if (entry.execution.status === "terminal" || entry.cleanupCompletedAt !== undefined) {
+        const { blockSubagentCompletionDelivery } =
+          await import("../completion/subagent-completion-admission.store.js");
+        if (
+          await blockSubagentCompletionDelivery({
+            subagent: entry,
+            reason: missingSourceReason,
+            disposition: "permanent_failure",
+            operatorAuthorityUnavailable: true,
+            context,
+            assertCurrent,
+          })
+        ) {
+          deferredCompletionSources.delete(runtimeKey);
+          return;
+        }
+      }
+    }
+    if (!gateway || !source || !storePath || unrestorableCompletionSources.has(runtimeKey)) {
+      throw new Error("Subagent restart recovery lacks its original operator source");
+    }
     const [
       { restoreGatewayOperatorSource },
       { captureOperatorToolGatewayContinuationContext },
@@ -149,6 +188,8 @@ async function restoreSubagentCompletionSource(
     continuation = await withPluginRuntimeGatewayRequestScope(
       {
         client: createSyntheticPluginRuntimeClient({
+          // Retried private inputs retain the sender fields included in their accepted hash.
+          authenticatedUserProfile: restored.authenticatedUserProfile,
           operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
           operatorRunAuthority: restored.authority,
           scopes: [...restored.authority.scopes],

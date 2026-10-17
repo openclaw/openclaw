@@ -1,9 +1,13 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, For, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import type { PlaceBrowserOptions } from "./place-browser.ts";
-export function PlaceBrowser(props: { params: PlaceBrowserOptions }) {
+export function PlaceBrowser(props: {
+  params: PlaceBrowserOptions;
+  pathRef?: (node: HTMLInputElement) => void;
+}) {
+  const options = new Map<string, HTMLButtonElement>();
   const view = createMemo(() => ({
     ...props.params.browser.view(),
     highlighted: props.params.browser.highlightedEntry(),
@@ -53,17 +57,19 @@ export function PlaceBrowser(props: { params: PlaceBrowserOptions }) {
           placeholder={props.params.label}
           value={props.params.browser.draft}
           onInput={(event) => props.params.browser.setDraft(event.currentTarget.value)}
-          ref={nativeListener("keydown", (event: KeyboardEvent) => {
+          ref={(node) => props.pathRef?.(node)}
+          onKeyDown={(event) => {
             switch (event.key) {
               case "ArrowDown":
               case "ArrowUp":
                 event.preventDefault();
                 props.params.browser.moveHighlight(event.key === "ArrowDown" ? 1 : -1);
-                requestAnimationFrame(() =>
-                  document
-                    .getElementById(`${props.params.id}-option-${props.params.browser.activeIndex}`)
-                    ?.scrollIntoView({ block: "nearest" }),
-                );
+                requestAnimationFrame(() => {
+                  const path = props.params.browser.highlightedEntry()?.path;
+                  if (path) {
+                    options.get(path)?.scrollIntoView({ block: "nearest" });
+                  }
+                });
                 break;
               case "Enter":
                 event.preventDefault();
@@ -75,7 +81,7 @@ export function PlaceBrowser(props: { params: PlaceBrowserOptions }) {
                 }
                 break;
             }
-          })}
+          }}
         />
         {props.params.browser.loading ? (
           <span class="new-session-page__browser-loading" role="status">
@@ -113,29 +119,40 @@ export function PlaceBrowser(props: { params: PlaceBrowserOptions }) {
           </div>
         ) : undefined}
         <For each={view().entries} keyed={(entry) => entry.path}>
-          {(entry, index) => (
-            <button
-              type="button"
-              role="option"
-              id={`${props.params.id}-option-${index()}`}
-              aria-selected={index() === props.params.browser.activeIndex ? "true" : "false"}
-              class={[
-                "new-session-page__browser-entry",
-                {
-                  "new-session-page__browser-entry--active":
-                    index() === props.params.browser.activeIndex,
-                  "new-session-page__browser-entry--hidden": entry().hidden,
-                },
-              ]}
-              title={entry().hidden ? t("newSession.hiddenFolder") : undefined}
-              ref={nativeListener("click", () => void props.params.browser.navigate(entry().path))}
-            >
-              <span class="new-session-page__target-icon" aria-hidden="true">
-                <Icon name="folder" />
-              </span>
-              <span>{entry().name}</span>
-            </button>
-          )}
+          {(entry, index) => {
+            let option!: HTMLButtonElement;
+            onSettled(() => {
+              const staticPath = entry().path;
+              options.set(staticPath, option);
+              return () => options.delete(staticPath);
+            });
+            return (
+              <button
+                ref={(node) => {
+                  option = node;
+                }}
+                type="button"
+                role="option"
+                id={`${props.params.id}-option-${index()}`}
+                aria-selected={index() === props.params.browser.activeIndex ? "true" : "false"}
+                class={[
+                  "new-session-page__browser-entry",
+                  {
+                    "new-session-page__browser-entry--active":
+                      index() === props.params.browser.activeIndex,
+                    "new-session-page__browser-entry--hidden": entry().hidden,
+                  },
+                ]}
+                title={entry().hidden ? t("newSession.hiddenFolder") : undefined}
+                onClick={() => void props.params.browser.navigate(entry().path)}
+              >
+                <span class="new-session-page__target-icon" aria-hidden="true">
+                  <Icon name="folder" />
+                </span>
+                <span>{entry().name}</span>
+              </button>
+            );
+          }}
         </For>
       </div>
       <div class="new-session-page__browser-actions">

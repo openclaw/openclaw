@@ -134,8 +134,7 @@ export function bindPostgresSearch(
           },
           identity: (index) =>
             /* kysely-allow-raw: The declared source identity is the native numeric row identity. */ sql<number>`${relation(index, index.postgres!.identity)}`,
-          allocatedIdentity(index) {
-            relation(index);
+          allocatedIdentity() {
             throw new Error("PostgreSQL insert identities must use RETURNING");
           },
         }

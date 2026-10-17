@@ -76,6 +76,8 @@ import { startWorktreeMaintenance } from "./worktree-maintenance.js";
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
 // stage-before-row-commit window.
 const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
+// Maintenance phases can run 10s early; keep cleanup beyond the two-minute reconnect wave.
+const MEDIA_CLEANUP_STARTUP_DELAY_MS = 130_000;
 const TELEMETRY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
 
 export function startGatewayMaintenanceTimers(params: {
@@ -282,6 +284,7 @@ export function startGatewayMaintenanceTimers(params: {
   // Queue tombstone expiry and reference-aware media GC share one maintenance
   // cycle even when the general media TTL sweep is disabled.
   const mediaScheduler = params.scheduler.scope();
+  const mediaCleanupAtMs = mediaScheduler.now() + MEDIA_CLEANUP_STARTUP_DELAY_MS;
   const runDeliveryQueueMediaGc =
     params.runDeliveryQueueMediaGc ??
     (async () => {
@@ -295,7 +298,7 @@ export function startGatewayMaintenanceTimers(params: {
   const scheduleMedia = (id: string, run: () => Promise<unknown>) => {
     mediaScheduler.schedule({
       id: `maintenance:${id}`,
-      atMs: mediaScheduler.now(),
+      atMs: mediaCleanupAtMs,
       everyMs: DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS,
       phase: "maintenance",
       run,

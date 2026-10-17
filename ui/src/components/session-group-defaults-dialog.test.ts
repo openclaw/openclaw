@@ -104,6 +104,7 @@ it("clears a saved directory when the agent workspace choice closes the popover"
   trigger.click();
   await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
   const reset = modal.querySelector<HTMLButtonElement>('[data-value="agent-workspace"]')!;
+  expect(document.activeElement).toBe(reset);
   reset.click();
   await waitForSolid(() => {
     expect(reset.getAttribute("aria-pressed")).toBe("true");

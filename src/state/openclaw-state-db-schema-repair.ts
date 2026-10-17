@@ -73,6 +73,7 @@ export const STATE_SCHEMA_MIGRATION_READ_TABLES: Record<StateMigrationKind, read
   "task-run-indexes-v24": [],
   "subagent-operator-recovery-v25": [],
   "session-state-head-layout-v26": [],
+  "state-write-indexes-v27": [],
   "predicate-columns-v21": [
     "meeting_transcript_sessions",
     "meeting_transcript_summaries",
@@ -450,6 +451,9 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   }
   if (userVersion < 26 && tableExists(db, "session_state_heads")) {
     migrations.push({ kind: "session-state-head-layout-v26", path: pathname });
+  }
+  if (userVersion < 27) {
+    migrations.push({ kind: "state-write-indexes-v27", path: pathname });
   }
   if (!hasCanonicalAuditEventsSchema(db)) {
     migrations.push({ kind: "audit-events-v2", path: pathname });

@@ -1,8 +1,4 @@
-import {
-  assertSyncTransactionResult,
-  assertPostgresTransactionUsable,
-  sqlPublicationAnchor,
-} from "../sql-connection.js";
+import { assertSyncTransactionResult, sqlPublicationAnchor } from "../sql-connection.js";
 import type { PostgresSqlConnection } from "../sql-connection.js";
 import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
 import { deferSqliteWorkerCommitReceipt } from "../sqlite-worker-operation-admission.js";
@@ -22,7 +18,6 @@ export function runPostgresTransactionSync<T>(
   readOnly = false,
   reserved = false,
 ): T {
-  assertPostgresTransactionUsable(db);
   assertPostgresOperationCurrent();
   const anchor = sqlPublicationAnchor(db);
   return withSqlitePostCommitPublications(anchor, () => {
@@ -40,7 +35,6 @@ export function runPostgresTransactionSync<T>(
       const mutationRevision = db.mutationRevision;
       const result = operation();
       assertSyncTransactionResult(result);
-      assertPostgresTransactionUsable(db);
       if (nested) {
         db.exec("RELEASE SAVEPOINT openclaw_tx_nested");
       } else {

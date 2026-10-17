@@ -85,7 +85,6 @@ export function prepareCommandSessionRecoveryEntry(
       lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
       ...buildCurrentRunRestartRecoveryClaim({
         deliveryContext: params.deliveryContext,
-        deliveryMediaUrls: opts.internalDeliveryMediaUrls,
         disableMessageTool: opts.disableMessageTool,
         entry,
         forceRestartSafeTools: opts.forceRestartSafeTools,
@@ -99,7 +98,6 @@ export function prepareCommandSessionRecoveryEntry(
               sourceIngress: sourceOptions.sourceIngress ?? operatorSource.snapshot.sourceIngress,
             }
           : {}),
-        suppressTextDelivery: opts.internalDeliverySuppressText,
       }),
     },
   };

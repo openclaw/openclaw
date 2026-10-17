@@ -19,6 +19,7 @@ import type {
 } from "../../../src/plugin-sdk/control-ui.js";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
@@ -76,6 +77,7 @@ export function observePluginProperties<P extends object>(
 
 function MountedContent(props: { mount?: (target: HTMLElement) => () => void }) {
   let container!: HTMLDivElement;
+  // Host-owned content is mounted into the plugin's imperative DOM island.
   createEffect(
     () => props.mount,
     (mount) => mount?.(container),
@@ -228,6 +230,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       fail(failure);
     }
   };
+  // Synchronize the foreign plugin view with live registration and host props.
   createEffect(
     () => {
       runtime.read();
@@ -266,7 +269,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     }
     const abort = new AbortController();
     mountAbort = abort;
-    registration.signal.addEventListener("abort", unmount, { once: true, signal: abort.signal });
+    listen(registration.signal, "abort", unmount, { once: true, signal: abort.signal });
     try {
       viewContext = {
         host: scopeControlUiHost(registration.host, abort.signal, () => host.isConnected),
@@ -299,6 +302,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     }
   };
   function ViewRoot() {
+    // Plugins may mount host Solid content, which must inherit this retained root.
     const viewOwner = getOwner();
     let container!: HTMLDivElement;
     onSettled(() => {
@@ -319,6 +323,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       if (handle?.focus) {
         handle.focus();
       } else {
+        // The plugin owns its markup; focus falls back to its first editable control.
         const input = host.querySelector<HTMLElement>("textarea, input, [contenteditable=true]");
         if (input) {
           input.focus(options);
@@ -383,6 +388,7 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
   presented?: boolean;
   enabled?: boolean;
 }) {
+  // Delegated mounts run later inside a foreign plugin and retain the host's owner.
   const owner = getOwner();
   const context = useOptionalApplication();
   const runtime = projectSource(context?.plugins, {

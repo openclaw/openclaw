@@ -48,10 +48,27 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 24      | Retained task indexes replaced with runtime/run lookup and ordered Cron history indexes                                                                                                                                                                                                                                                        | Unreleased          |
 | 25      | Original operator restriction retained for recovered subagent completions; metadata-only downgrade fence                                                                                                                                                                                                                                       | Unreleased          |
 | 26      | Session state heads stored directly by their composite primary key                                                                                                                                                                                                                                                                             | Unreleased          |
+| 27      | Redundant ACP replay and skill-usage indexes removed; lease-owner index no longer includes the renewal timestamp                                                                                                                                                                                                                               | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 27
+
+Schema 27 removes `idx_acp_replay_events_session_seq` and `idx_skill_usage_key`.
+ACP replay uses its existing `(session_id, seq)` primary key, and skill-usage
+lookups use the `skill_file` primary key. The retained `idx_state_leases_owner`
+index covers only `owner`, avoiding index maintenance when `updated_at` changes.
+All table columns, constraints, lease identities, and retained rows stay unchanged.
+SQLite and PostgreSQL apply the same index changes transactionally.
+
+The declared backup scope is `acp_replay_events`, `skill_usage`, `state_leases`,
+`sqlite_stat1`, and `sqlite_stat4`, plus the schema and content-version metadata
+included by the backup owner. The migration does not backfill table rows;
+it reads lease rows to rebuild only the lease-owner index. Source integrity admission still checks
+the complete database once. Older builds refuse the new version; rollback uses
+the verified pre-upgrade backup and matching build.
 
 ### State schema 26
 

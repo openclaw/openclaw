@@ -566,7 +566,6 @@ it.each(["missing", "empty"])(
       buildInstalledPluginIndexRecords({
         candidates: discovery.candidates,
         registry,
-        config: {},
         diagnostics: [],
         installRecords: {},
       });

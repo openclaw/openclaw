@@ -14,7 +14,7 @@ import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
-import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-controller.ts";
+import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-owner.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
@@ -258,7 +258,7 @@ describe("chat pane pushed pull request state", () => {
       status: "ready" as const,
     };
     emitSnapshot(emitGatewayEvent, state.sessionKey, snapshot);
-    const redraw = vi.spyOn(pane, "requestUpdate");
+    const redraw = vi.spyOn(pane, "invalidate");
     notified.mockClear();
 
     emitSnapshot(emitGatewayEvent, "agent:main:unwatched", snapshot);

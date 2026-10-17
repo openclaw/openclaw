@@ -81,6 +81,7 @@ export function CustodianSetupCard(props: { store: CustodianSessionStore }) {
   const result = () => setup().result;
   const native = projectSource(context.nativeDeviceSettings, {
     read: () => nativeSetupCapability(context),
+    // The projection owns optional native-settings observation for setup capabilities.
     subscribe: (settings, notify) => settings?.subscribe(notify) ?? (() => {}),
     equality: "revision",
   }).read;

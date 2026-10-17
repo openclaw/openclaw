@@ -17,6 +17,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import { reduceChatSessionProjection } from "./history-merge.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import {
   cacheChatSessionSnapshot,
@@ -187,6 +188,24 @@ export function reconcileHistoryTail(options: {
         ? { hasMore: true, nextOffset: retainedDepth, totalMessages: nextTotal }
         : { hasMore: false, totalMessages: nextTotal },
   };
+}
+
+export function applyChatHistoryRefill(state: ChatState, result: ChatHistoryResult): void {
+  // A byte-limited refill can be smaller than the cache. Replace its
+  // window; the projection owner alone retains live and pending rows.
+  const messages = result.messages ?? [];
+  const tail = reconcileHistoryTail({
+    nextMessages: messages,
+    nextPagination: resolveChatHistoryPagination(result),
+    nextSessionId: historySessionId(result),
+    previousMessages: state.chatMessages,
+    previousPagination: state.chatHistoryPagination,
+    previousSessionId: state.currentSessionId ?? null,
+  });
+  reduceChatSessionProjection(state, {
+    type: "snapshotLoaded",
+    messages: tail?.messages ?? messages,
+  });
 }
 
 export function commitCurrentChatHistorySnapshot(

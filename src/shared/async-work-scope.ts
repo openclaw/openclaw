@@ -38,6 +38,9 @@ export class AsyncWorkScope {
 
   private enter<T>(run: () => T): T {
     const owner = currentWorkScope.getStore();
+    if (owner === this) {
+      return run();
+    }
     const ancestry = currentWorkScopeAncestry.getStore();
     const parent = owner ? (ancestry?.scope === owner ? ancestry : { scope: owner }) : undefined;
     return currentWorkScopeAncestry.run({ scope: this, parent }, () =>
@@ -156,6 +159,11 @@ export function captureAsyncWorkTracker(): typeof trackAsyncWork {
 
 /** Starts work its caller does not own, so the caller's scope neither waits for it nor closes under it. */
 export function runOutsideAsyncWorkScope<T>(run: () => T): T {
+  if (currentWorkScope.getStore() === undefined) {
+    return currentWorkScopeAncestry.getStore() === undefined
+      ? run()
+      : currentWorkScopeAncestry.exit(run);
+  }
   return currentWorkScope.exit(() => currentWorkScopeAncestry.exit(run));
 }
 

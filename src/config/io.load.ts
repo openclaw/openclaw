@@ -160,7 +160,6 @@ function* loadConfigWithEffects(
         }),
       async: () =>
         prepareConfigSnapshotValidation({
-          kind: "validate",
           context,
           metadata: pluginMetadata,
           raw: effectiveConfigRaw,

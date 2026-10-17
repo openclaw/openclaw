@@ -1,7 +1,6 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
-import { logVerbose } from "../../globals.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { PartialReplyPayload } from "../get-reply-options.types.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -31,7 +30,6 @@ export function createAgentTurnPresentation(params: {
   turn: AgentTurnParams;
   replyMediaContext: ReplyMediaContext;
   directBlockDeliveries: DirectBlockDelivery[];
-  heartbeatState: { didLogStrip: boolean };
 }) {
   const classifyReplyText = (
     payload: ReplyPayload,
@@ -44,10 +42,6 @@ export function createAgentTurnPresentation(params: {
     }
     if (!params.turn.isHeartbeat && hasHeartbeatToken !== false && text?.includes("HEARTBEAT_OK")) {
       const stripped = stripHeartbeatToken(text, { mode: "message" });
-      if (stripped.didStrip && !params.heartbeatState.didLogStrip) {
-        params.heartbeatState.didLogStrip = true;
-        logVerbose("Stripped stray HEARTBEAT_OK token from reply");
-      }
       if (stripped.shouldSkip && !reply.hasMedia) {
         return { skip: true };
       }

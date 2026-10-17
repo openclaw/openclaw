@@ -551,9 +551,7 @@ describe("handleToolExecutionStart read path checks", () => {
   });
 
   it("warns for a missing read path and accepts the corrected file_path alias", async () => {
-    const { ctx, warn, trace, isEnabled, onBlockReplyFlush, onExecutionPhase } =
-      createTestContext();
-    isEnabled.mockImplementation((level: string) => level === "trace");
+    const { ctx, warn, onBlockReplyFlush, onExecutionPhase } = createTestContext();
 
     const evt: ToolExecutionStartEvent = {
       toolName: "read",
@@ -590,8 +588,6 @@ describe("handleToolExecutionStart read path checks", () => {
       args: { file_path: "/tmp/example.txt" },
     });
     expect(warn).toHaveBeenCalledOnce();
-    expect(trace).toHaveBeenCalledTimes(2);
-    expect(trace.mock.calls[1]?.[1]).not.toHaveProperty("requiredParamsMissing");
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(2);
     expect(onBlockReplyFlush).toHaveBeenCalledWith({
       reason: "tool_start",

@@ -116,6 +116,7 @@ async function applyLocalStatusRpcFallback(params: {
         config: params.cfg,
         configPath: params.configPath,
         method: "status",
+        params: { includeChannelSummary: false, includeCliProjection: true },
         token: params.gatewayProbeAuth.token,
         password: params.gatewayProbeAuth.password,
         timeoutMs,

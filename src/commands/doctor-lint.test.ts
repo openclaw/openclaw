@@ -235,6 +235,62 @@ describe("runDoctorLintCli", () => {
     }
   });
 
+  it.each(["warning", "error"] as const)(
+    "keeps every database store in JSON when findings are filtered at %s",
+    async (severityMin) => {
+      const databaseStores = [
+        { family: "state", observed: "sqlite", mismatch: false },
+        { family: "agent", observed: "unknown", mismatch: null },
+      ];
+      const previousResolveChecks =
+        mocks.resolveDoctorContributionHealthChecks.getMockImplementation();
+      mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
+        {
+          id: "core/doctor/database-engine",
+          kind: "core",
+          description: "Database diagnostics",
+          detect: async () =>
+            databaseStores.map((details, index) => ({
+              checkId: "core/doctor/database-engine",
+              severity: index === 0 ? "info" : "warning",
+              message: details.family,
+              details,
+            })),
+        },
+      ]);
+      const registration = vi
+        .spyOn(bundledHealthChecks, "registerBundledHealthChecks")
+        .mockImplementation(() => []);
+      const stateMode = vi
+        .spyOn(bundledHealthChecks, "resolveBundledHealthCheckPluginStateMode")
+        .mockReturnValue("direct");
+      mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot({}));
+      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      try {
+        await runDoctorLintCli(runtime, {
+          json: true,
+          severityMin,
+          onlyIds: ["core/doctor/database-engine"],
+        });
+        const output = JSON.parse(stdout.mock.calls.map(([line]) => String(line)).join(""));
+        expect(output.databaseStores).toHaveLength(databaseStores.length);
+        expect(output.databaseStores).toEqual(expect.arrayContaining(databaseStores));
+        expect(output.findings).toEqual(
+          severityMin === "warning"
+            ? [expect.objectContaining({ details: databaseStores[1] })]
+            : [],
+        );
+      } finally {
+        stdout.mockRestore();
+        registration.mockRestore();
+        stateMode.mockRestore();
+        if (previousResolveChecks) {
+          mocks.resolveDoctorContributionHealthChecks.mockImplementation(previousResolveChecks);
+        }
+      }
+    },
+  );
+
   it("shares one captured config across registration and checks without freezing the source", async () => {
     const config = { agents: { entries: { main: { name: "original" } } } };
     mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(config));

@@ -3,7 +3,6 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { runSqliteReadOnlyOperation } from "../infra/sqlite-readonly-worker.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -25,7 +24,8 @@ import {
   resolveAuthProfileDatabaseOwnerId,
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
-import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.read-operation.js";
+import { readPluginModelCatalogsInWorker } from "./plugin-model-catalog-read.js";
+import type { PersistedPluginModelCatalog } from "./plugin-model-catalog-read.types.js";
 import type { PluginModelCatalogCredentialOperations } from "./plugin-model-catalog.worker.js";
 
 /** A clean read must follow publication settlement, including another process's uncommitted row. */
@@ -138,7 +138,6 @@ export async function loadPersistedPluginModelCatalogs(
     root.maintenanceScope?.assertAdmission();
     assertExistingDatabaseIdentity(options.path, identity.key, identity.birthtime);
   };
-  assertCurrent();
   const unregisterAgent = registerOpenClawAgentDatabaseAsyncResource({ ...options, revoke, close });
   let unregisterRoot: (() => void) | undefined;
   try {
@@ -149,10 +148,9 @@ export async function loadPersistedPluginModelCatalogs(
         }
       },
     });
-    reading = runSqliteReadOnlyOperation(
-      options.path,
-      { type: "pluginCatalog.read", input: { agentId: options.agentId, pluginIds } },
-      { source: "canonical", expectedIdentity: identity.key, env, signal: controller.signal },
+    reading = readPluginModelCatalogsInWorker(
+      { ...options, pluginIds: pluginIds && [...pluginIds] },
+      controller.signal,
     );
     const catalogs = await reading;
     assertCurrent();

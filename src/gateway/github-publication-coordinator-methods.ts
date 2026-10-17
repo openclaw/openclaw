@@ -467,6 +467,14 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       return row ? { result: publicationResult(row), confirmation: null } : undefined;
     },
 
+    async latestPublishedShared(
+      session: PublicationSessionIdentity,
+      preparedRead: Parameters<typeof readSharedGitHubPublication>[2],
+    ): Promise<SessionGitHubStatusResult | null> {
+      const row = await readSharedGitHubPublication(session, { status: "published" }, preparedRead);
+      return row ? { result: publicationResult(row), confirmation: null } : null;
+    },
+
     async latestShared(
       session: PublicationSessionIdentity,
       idempotencyKey?: string,

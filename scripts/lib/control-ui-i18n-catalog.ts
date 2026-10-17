@@ -184,6 +184,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       palette: registerCommandPaletteEnglish.catalog.palette,
       debug: registerDebugEnglish.catalog.debug,
       desktop: registerDesktopEnglish.catalog.desktop,
+      pluginsPage: registerPluginManagementEnglish.catalog.pluginsPage,
       attention: registerSidebarAttentionEnglish.catalog.attention,
       profilePage: {
         ...en.profilePage,

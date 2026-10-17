@@ -11,11 +11,8 @@ import {
   isExistingOpenClawStateSchema,
 } from "./openclaw-state-db-schema-policy.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
-import type {
-  OpeningAdmission,
-  Store,
-  StoreOperations,
-} from "./openclaw-state-worker-store.types.js";
+import type { OpenClawStateWorkerOperations } from "./openclaw-state-worker-contract.js";
+import type { Store } from "./openclaw-state-worker-store.types.js";
 
 /** A live alias cannot authorize a worker still bound to a vanished opening path. */
 export function assertOpenClawStateWorkerActorPath(
@@ -51,7 +48,7 @@ export function runWithOpenClawStateWorkerStore<T>(
 ): Promise<T> {
   const { admission } = context;
   const actor = getSqliteWorkerActorIdentity(store);
-  return runSqliteWorkerStoreOperation<StoreOperations, T>(
+  return runSqliteWorkerStoreOperation<OpenClawStateWorkerOperations, T>(
     store,
     (scope) =>
       operation(
@@ -81,28 +78,13 @@ export function assertOpenClawStateWorkerSchemaContext(context: OpenClawStateWor
   }
 }
 
-/** Only native opening owns the caller scope; a cached actor must not retain it. */
-export function captureOpenClawStateWorkerOpeningGuard(
-  context: OpenClawStateWorkerContext,
-  assertCurrent?: () => void,
-  signal?: AbortSignal,
-) {
+/** Native opening retains its physical admission, not an individual command's authority. */
+export function captureOpenClawStateWorkerOpeningGuard(context: OpenClawStateWorkerContext) {
   const databaseAdmission = context.admission;
-  const admission: OpeningAdmission = {
-    assertCurrent,
-    signal,
-  };
-  let captured: (() => void) | undefined = AsyncLocalStorage.bind(() => {
-    databaseAdmission.assertCurrent();
-    try {
-      admission.assertCurrent?.();
-    } catch (error) {
-      admission.refusal = { error };
-      throw error;
-    }
-  });
+  let captured: (() => void) | undefined = AsyncLocalStorage.bind(() =>
+    databaseAdmission.assertCurrent(),
+  );
   return {
-    admission,
     assertCurrent: () => {
       if (!captured) {
         throw new Error("Shared-state worker opening admission is closed");
@@ -112,15 +94,8 @@ export function captureOpenClawStateWorkerOpeningGuard(
     async run<T>(open: () => Promise<T>): Promise<T> {
       try {
         return await open();
-      } catch (error) {
-        // Abort reasons may be normalized; settled openings can be retried by independent owners.
-        if (admission.signal?.aborted) {
-          admission.refusal = { error };
-        }
-        throw error;
       } finally {
         captured = undefined;
-        admission.signal = undefined;
       }
     },
   };

@@ -366,6 +366,7 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
 
 export async function updateGitInstall(params: {
   root: string;
+  fullIntegrityCheck?: boolean;
   restart?: boolean;
   sourceRuntimePrepared?: boolean;
   switchToGit: boolean;

@@ -14,9 +14,11 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
       "sqlite_stat1",
       "sqlite_stat4",
     ],
+    29: ["session_nodes", "session_reactions", "sqlite_stat1", "sqlite_stat4"],
   },
   state: {
     [MEETING_TRANSCRIPT_START_TIME_SCHEMA_VERSION]: ["meeting_transcript_sessions"],
     26: ["session_state_heads", "sqlite_stat1", "sqlite_stat4"],
+    27: ["acp_replay_events", "skill_usage", "state_leases", "sqlite_stat1", "sqlite_stat4"],
   },
 };

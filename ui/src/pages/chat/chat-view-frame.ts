@@ -80,6 +80,7 @@ export type ChatProps = Omit<
       itemId?: string,
       sourceMessageId?: string,
     ) => Promise<boolean>;
+    getQueue?: () => readonly ChatQueueItem[];
     presented?: PresentationValue;
     historyState?: ChatState;
     awaitingActivity?: boolean;
@@ -146,6 +147,7 @@ export function createChatViewFrame(props: ChatProps) {
     ? [...pendingInputs.page.items.filter((input) => !input.queued), ...pendingInputs.queuedInputs]
     : undefined;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  // Focus crosses the transcript boundary into either the native or plugin-owned composer.
   const focusComposer = (selector = ".agent-chat__composer-combobox > textarea") =>
     props.transcript.scrollElement
       ?.closest(".chat")
@@ -195,6 +197,8 @@ export function createChatViewFrame(props: ChatProps) {
   const questionState = getTranscriptState(props.paneId);
   const asyncQuestions = createAsyncQuestionPresentation(questionState, {
     ...props,
+    // Question publications can precede the pane's next queue props frame.
+    queue: props.getQueue?.() ?? props.queue,
     onReopen: (itemId, scope) => {
       const composer = getChatComposerState(props.paneId);
       composer.restoreComposerFocus ||= composer.questionTakeoverActive;

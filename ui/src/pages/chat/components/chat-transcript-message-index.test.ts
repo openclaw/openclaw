@@ -896,3 +896,69 @@ describe("subagent handoff", () => {
     expect(framesOf(chain).map((frame) => frame.runId)).toEqual(["run-1", "run-2"]);
   });
 });
+
+describe("system event presentation", () => {
+  const systemMessage = (id: string, runId: string) => ({
+    role: "user",
+    content: "[System] Continue the interrupted turn.",
+    timestamp: 20,
+    provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+    __openclaw: { id, idempotencyKey: runId + ":user" },
+  });
+
+  it("folds only consecutive events after preserving the following run's boundary", () => {
+    const messages = [
+      history[0],
+      systemMessage("recover-a", "run-a"),
+      systemMessage("recover-b", "run-b"),
+      { ...partial, __openclaw: { id: "reply-b", runId: "run-b" } },
+      systemMessage("recover-c", "run-c"),
+      { role: "user", content: "Keep this human message visible.", timestamp: 40 },
+      systemMessage("recover-d", "run-d"),
+    ];
+    const chain = projectTranscriptChain(chatItems({ messages }), { ...chainOptions, messages });
+    expect(chain.transcriptItems.map((item) => item.kind)).toEqual([
+      "group",
+      "system-event-group",
+      "agent-run-frame",
+      "system-event-group",
+      "group",
+      "system-event-group",
+    ]);
+    const first = chain.transcriptItems[1];
+    expect(first?.kind).toBe("system-event-group");
+    if (first?.kind === "system-event-group") {
+      expect(first.events.map((event) => event.key)).toHaveLength(2);
+    }
+    expect(chain.transcriptItems[2]).toMatchObject({
+      kind: "agent-run-frame",
+      runId: "run-b",
+      boundaryId: "send:run-b",
+    });
+    const searched = projectTranscriptChain(chatItems({ messages }), {
+      ...chainOptions,
+      searchActive: true,
+    });
+    expect(searched.transcriptItems.filter((item) => item.kind === "notice")).toHaveLength(4);
+    expect(searched.transcriptItems.some((item) => item.kind === "system-event-group")).toBe(false);
+  });
+
+  it("keeps pending custody and ordinary notices outside the fold", () => {
+    const events = chatItems({
+      messages: [systemMessage("recover-a", "run-a"), systemMessage("recover-b", "run-b")],
+    });
+    const pending = {
+      kind: "notice",
+      key: "pending",
+      text: "Delivery interrupted. Review the saved message.",
+      timestamp: 25,
+    } as const;
+    const chain = projectTranscriptChain([events[0]!, pending, events[1]!], chainOptions);
+    expect(chain.transcriptItems.map((item) => item.kind)).toEqual([
+      "system-event-group",
+      "notice",
+      "system-event-group",
+    ]);
+    expect(chain.transcriptItems[1]).toBe(pending);
+  });
+});

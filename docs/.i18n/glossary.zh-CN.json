@@ -1,5 +1,9 @@
 [
   {
+    "source": "PostgreSQL operator guide",
+    "target": "PostgreSQL 运维指南"
+  },
+  {
     "source": "MCP Events",
     "target": "MCP Events"
   },

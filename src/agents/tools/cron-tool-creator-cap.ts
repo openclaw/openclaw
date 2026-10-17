@@ -41,6 +41,7 @@ const NATIVE_CRON_CREATOR_CAPABILITIES: ReadonlySet<string> = new Set([
   "process",
   "web_search",
   "web_fetch",
+  "ask_user",
 ]);
 
 /** Fails closed on any backend-projected name outside the exact canonical vocabulary. */

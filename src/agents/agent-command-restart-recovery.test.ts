@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import {
   getRestartRecoveryTerminalDeliveryEvidence,
   mergeRestartRecoveryTerminalDeliveryEvidence,
@@ -7,40 +6,43 @@ import {
 import {
   buildCurrentRunRestartRecoveryClaim,
   buildRestartRecoveryTerminalDeliveryEvidence,
-  constrainRestartRecoveryDeliveryPayloads,
 } from "./agent-command-restart-recovery.js";
 import { hasMessagingToolDeliveryToSource } from "./subagents/announce/subagent-announce-completion-delivery.js";
 import { createDirectAnnounceResponseClassifier } from "./subagents/announce/subagent-announce-direct-response.js";
 
 describe("buildCurrentRunRestartRecoveryClaim", () => {
-  const mediaPolicy = {
+  const scopedPolicy = {
     restartRecoveryDisableMessageTool: true,
     restartRecoverySourceIngress: "internal",
     restartRecoverySourceReplyDeliveryMode: "automatic",
     restartRecoveryForceSafeTools: true,
-    restartRecoverySuppressTextDelivery: true,
   } as const;
 
-  it("persists the complete generated-media policy, including an empty allowlist", () => {
+  it("persists a scoped restart-safe policy and clears retired media constraints", () => {
     expect(
       buildCurrentRunRestartRecoveryClaim({
-        deliveryMediaUrls: [],
         disableMessageTool: true,
-        entry: { sessionId: "session-1", updatedAt: 1 },
+        entry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          restartRecoveryDeliveryMediaUrls: ["/tmp/old.png"],
+          restartRecoverySuppressTextDelivery: true,
+        },
         forceRestartSafeTools: true,
-        runId: "media-run",
+        runId: "scoped-run",
         sourceIngress: "internal",
-        sourceRunId: "media-run",
+        sourceRunId: "scoped-run",
         sourceReplyDeliveryMode: "automatic",
-        suppressTextDelivery: true,
       }),
-    ).toEqual({
-      ...mediaPolicy,
-      restartRecoveryDeliveryContext: undefined,
-      restartRecoveryDeliveryMediaUrls: [],
-      restartRecoveryDeliveryRunId: "media-run",
-      restartRecoveryDeliverySourceRunId: "media-run",
-    });
+    ).toStrictEqual(
+      expect.objectContaining({
+        ...scopedPolicy,
+        restartRecoveryDeliveryMediaUrls: undefined,
+        restartRecoverySuppressTextDelivery: undefined,
+        restartRecoveryDeliveryRunId: "scoped-run",
+        restartRecoveryDeliverySourceRunId: "scoped-run",
+      }),
+    );
   });
 
   it("preserves the claimed route when delivery preparation resolves an alias", () => {
@@ -52,7 +54,7 @@ describe("buildCurrentRunRestartRecoveryClaim", () => {
           threadId: 1,
         },
         entry: {
-          ...mediaPolicy,
+          ...scopedPolicy,
           sessionId: "session-1",
           updatedAt: 1,
           restartRecoveryDeliveryRunId: "recovery-run",
@@ -61,7 +63,7 @@ describe("buildCurrentRunRestartRecoveryClaim", () => {
         runId: "recovery-run",
       }),
     ).toMatchObject({
-      ...mediaPolicy,
+      ...scopedPolicy,
       restartRecoveryDeliveryContext: { channel: "telegram", to: "-100123", threadId: 1 },
       restartRecoveryDeliveryRunId: "recovery-run",
     });
@@ -75,66 +77,6 @@ describe("buildCurrentRunRestartRecoveryClaim", () => {
         sourceRunId: "media-run",
       }),
     ).toThrow("restart recovery source ownership is required for a new claim");
-  });
-});
-
-describe("constrainRestartRecoveryDeliveryPayloads", () => {
-  const mediaReply = {
-    text: "ready",
-    mediaUrl: "/tmp/missing.png",
-    mediaUrls: ["/tmp/missing.png"],
-    trustedLocalMedia: true,
-  };
-  const mediaOnly = { mediaUrls: ["/tmp/missing.png"], trustedLocalMedia: true };
-  it.each<{
-    name: string;
-    payloads: ReplyPayload[];
-    media?: string[];
-    expected: ReplyPayload[];
-  }>([
-    {
-      name: "replaces model media with the exact host-owned set",
-      payloads: [
-        {
-          text: "ready",
-          mediaUrl: "/tmp/old.png",
-          mediaUrls: ["/tmp/old-2.png"],
-          trustedLocalMedia: true,
-          audioAsVoice: true,
-          ...({ attachments: [{ url: "/tmp/nested-old.png" }] } as Record<string, unknown>),
-        },
-      ],
-      media: [" /tmp/missing.png ", "/tmp/missing.png"],
-      expected: [mediaReply],
-    },
-    {
-      name: "does not attach host-owned media to commentary, notices, or errors",
-      payloads: [
-        { text: "commentary", isCommentary: true },
-        { text: "status", isStatusNotice: true },
-        { text: "failed attempt", isError: true },
-        { text: "ready" },
-      ],
-      expected: [
-        { text: "commentary", isCommentary: true },
-        { text: "status", isStatusNotice: true },
-        { text: "failed attempt", isError: true },
-        mediaReply,
-      ],
-    },
-    {
-      name: "keeps host-owned media separate when no visible successful reply exists",
-      payloads: [{ text: "failed attempt", isError: true }],
-      expected: [{ text: "failed attempt", isError: true }, mediaOnly],
-    },
-    {
-      name: "strips all model media from a text-only notice",
-      payloads: [{ text: "failed", mediaUrls: ["/tmp/unrelated.png"], sensitiveMedia: true }],
-      media: [],
-      expected: [{ text: "failed" }],
-    },
-  ])("$name", ({ payloads, media = ["/tmp/missing.png"], expected }) => {
-    expect(constrainRestartRecoveryDeliveryPayloads(payloads, media)).toEqual(expected);
   });
 });
 

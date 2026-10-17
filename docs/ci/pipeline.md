@@ -1160,6 +1160,13 @@ sizes. Budget violations do not prevent artifact generation. The separate
 `control-ui-performance` job enforces the budgets without blocking other jobs
 from building or testing the same source.
 
+Every production UI build checks generated protocol validators before building
+or reusing cached output. After changing a schema used by the Control UI, run
+`pnpm ui:validators:gen` and commit the generated
+JavaScript and declarations. The generator compiles the canonical Gateway schemas
+without shipping their compiler or schema builders to the browser;
+`pnpm ui:validators:check` verifies that the output is current.
+
 Startup CSS has a 45 KiB advisory target and a 50 KiB hard ceiling. Growth below
 1 KiB passes; an increase of 1 KiB or more in either startup CSS or the largest
 CSS file fails the comparison. The existing largest-file, JavaScript, request-count,

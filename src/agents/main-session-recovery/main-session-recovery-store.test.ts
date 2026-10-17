@@ -12,7 +12,6 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
-import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import {
   claimMainSessionRecoveryOwner,
   commitMainSessionRecovery,
@@ -690,63 +689,19 @@ describe("main session recovery store", () => {
     },
   );
 
-  it.each([1, 3])(
-    "retries owner release after %s transient store failures",
-    async (failureCount) => {
-      vi.useFakeTimers();
-      try {
-        await write(interruptedEntry());
-        const claim = await claimedRecovery();
-        const replace = sessionAccessor.applySessionEntryReplacements;
-        let failures = 0;
-        const accessorSpy = vi
-          .spyOn(sessionAccessor, "applySessionEntryReplacements")
-          .mockImplementation(async (params) => {
-            if (failures++ < failureCount) {
-              throw new Error("transient session-store failure");
-            }
-            return await replace(params);
-          });
-        const schedulePending =
-          failureCount === 3
-            ? vi
-                .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
-                .mockImplementation(() => {})
-            : undefined;
-        const release = releaseMainSessionRecoveryOwner(claim.lease);
-        const settled =
-          failureCount === 3
-            ? expect(release).rejects.toThrow("transient session-store failure")
-            : expect(release).resolves.toMatchObject({
-                sessionId: "session-1",
-                sessionKey,
-                storePath,
-              });
-        await vi.advanceTimersByTimeAsync(100);
-        await settled;
-        if (failureCount === 3) {
-          expect(read().mainRestartRecovery?.foregroundClaims?.tokens).toEqual([
-            claim.lease.claimId,
-          ]);
-          await vi.advanceTimersByTimeAsync(1_000);
-          await vi.waitFor(() =>
-            expect(schedulePending).toHaveBeenCalledWith({
-              sessionId: "session-1",
-              sessionKey,
-              storePath,
-            }),
-          );
-        } else {
-          expect(accessorSpy).toHaveBeenCalledTimes(2);
-        }
-        await vi.waitFor(() =>
-          expect(read().mainRestartRecovery?.foregroundClaims).toBeUndefined(),
-        );
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
+  it("reports owner release failure without retrying its durable claim", async () => {
+    await write(interruptedEntry());
+    const claim = await claimedRecovery();
+    const accessorSpy = vi
+      .spyOn(sessionAccessor, "applySessionEntryReplacements")
+      .mockRejectedValueOnce(new Error("session-store failure"));
+
+    await expect(releaseMainSessionRecoveryOwner(claim.lease)).rejects.toThrow(
+      "session-store failure",
+    );
+    expect(accessorSpy).toHaveBeenCalledOnce();
+    expect(read().mainRestartRecovery?.foregroundClaims?.tokens).toEqual([claim.lease.claimId]);
+  });
 
   it("leaves interrupted non-main rows to their specialized recovery owner", async () => {
     const subagentKey = "agent:main:subagent:child";

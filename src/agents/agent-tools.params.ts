@@ -160,7 +160,7 @@ export async function normalizeFileToolPathParamsFromKeys<T extends Record<strin
   return normalized ?? record;
 }
 
-export function missingRequiredParamLabels(
+function missingRequiredParamLabels(
   record: Record<string, unknown> | undefined,
   groups: readonly RequiredParamGroup[],
 ): string[] {

@@ -208,7 +208,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       result = host.reconcileList(result, issuedRevision, requestOptions.agentId);
       const currentState = host.readState();
       const mergeWithCurrent =
-        !currentState.resultCached && append && typeof requestOptions.offset === "number";
+        !currentState.resultCached && append && requestOptions.offset !== undefined;
       const currentResult = currentState.resultCached ? null : currentState.result;
       const observed = observations.accept(result, currentState, null, requestOptions.agentId);
       let nextResult =

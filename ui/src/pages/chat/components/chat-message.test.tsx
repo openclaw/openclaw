@@ -2,16 +2,18 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { For, Show } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
 import * as markdown from "../../../components/markdown.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts";
+import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as chatAvatar from "../chat-avatar-view.tsx";
 import { attachHistoryActivity } from "../chat-history-request.ts";
+import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
@@ -2531,6 +2533,9 @@ describe("grouped chat rendering", () => {
   ])(
     "renders a $label inside its assistant bubble",
     async ({ content, overrides, options, bubbleSelector, docId, title, toolSummary }) => {
+      const context = createInitializationContext();
+      const provider = mountSolid(() => <ApplicationProvider value={context} host={view} />, {});
+      onTestFinished(provider.dispose);
       document.body.append(view);
       renderAssistantMessage(createAssistantMessage(content, overrides), options);
       await settleToolBridges(view);

@@ -366,7 +366,7 @@ export class AuthStorage {
     }
   }
 
-  /** @deprecated Use forAgentAsync. Supported through 2026-12-31. */
+  /** @deprecated Use forAgentAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   static forAgent(agentDir: string = getAgentDir(), config?: OpenClawConfig): AuthStorage {
     warnSynchronousAuthStorage("forAgent", "forAgentAsync");
     const scope = createAuthProfileStoreReadScope(agentDir, config);
@@ -464,7 +464,7 @@ export class AuthStorage {
     );
   }
 
-  /** @deprecated Use reloadAsync. Supported through 2026-12-31. */
+  /** @deprecated Use reloadAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   reload(): void {
     warnSynchronousAuthStorage("reload", "reloadAsync");
     this.loadFromStorage();
@@ -569,7 +569,7 @@ export class AuthStorage {
     return isAuthStorageOAuthRefreshFence(provider, credential) ? undefined : credential;
   }
 
-  /** @deprecated Use setAsync. Supported through 2026-12-31. */
+  /** @deprecated Use setAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   set(provider: string, credential: AuthCredential): void {
     warnSynchronousAuthStorage("set", "setAsync");
     this.persistProviderChange(provider, credential);
@@ -579,7 +579,7 @@ export class AuthStorage {
     return this.persistProviderChangeAsync(provider, credential);
   }
 
-  /** @deprecated Use removeAsync. Supported through 2026-12-31. */
+  /** @deprecated Use removeAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   remove(provider: string): void {
     warnSynchronousAuthStorage("remove", "removeAsync");
     this.persistProviderChange(provider, undefined);
@@ -658,7 +658,7 @@ export class AuthStorage {
     await this.setAsync(providerId, { type: "oauth", ...credentials });
   }
 
-  /** @deprecated Use logoutAsync. Supported through 2026-12-31. */
+  /** @deprecated Use logoutAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   logout(provider: string): void {
     warnSynchronousAuthStorage("logout", "logoutAsync");
     this.remove(provider);

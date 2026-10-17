@@ -324,7 +324,6 @@ describe("plugin runtime refresh admission", () => {
       messageProvider: "telegram",
       originatingTo: "telegram:123",
       isHeartbeat: false,
-      didLogHeartbeatStrip: false,
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       replyToMode: "off",

@@ -90,6 +90,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       !this.presented ||
       this.onboarding ||
       document.openClawModalLayers?.size ||
+      // Shell modal DOM owns keyboard admission outside this pane.
       document.querySelector(".shell-nav[aria-modal='true']")
     ) {
       return true;
@@ -540,6 +541,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     this.headerRenameValue = this.headerRenameInitialValue;
     this.invalidate();
     void this.updateComplete.then(() => {
+      // The native pane transfers focus into the independently rendered header.
       const input = this.element.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
       input?.focus();
       input?.select();

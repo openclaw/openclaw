@@ -182,11 +182,18 @@ export async function settleCorrelatedSubagentDelivery(
     return latest;
   };
   if (outcome !== "recovered") {
+    const { getUnrestorableSubagentCompletionSourceReason } =
+      await import("../registry/subagent-registry-gateway-owner.js");
+    const unavailableSource = current.requesterSettleWake
+      ? undefined
+      : getUnrestorableSubagentCompletionSourceReason(current);
     await blockSubagentCompletionDelivery({
       context: queueContext,
       subagent: current,
-      reason: queued.lastError ?? "completion delivery failed",
-      suspendedReason: "permanent_failure",
+      reason: unavailableSource ?? queued.lastError ?? "completion delivery failed",
+      suspendedReason: unavailableSource ? undefined : "permanent_failure",
+      disposition: unavailableSource ? "permanent_failure" : undefined,
+      operatorAuthorityUnavailable: unavailableSource ? true : undefined,
     });
     return;
   }

@@ -23,8 +23,10 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
-import { readPersistedQuarantineRow } from "../state/openclaw-quarantine-store.test-support.js";
+import {
+  readPersistedQuarantineRow,
+  seedOpenClawDatabaseQuarantine,
+} from "../state/openclaw-quarantine-store.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -78,14 +80,12 @@ describe("runDoctorSessionSqlite", () => {
         expect(cleanup.freelistBeforePages).toBeGreaterThan(0);
         expect(cleanup.reclaimedBytes).toBeGreaterThan(0);
       }
-      expect(
-        recordOpenClawDatabaseQuarantine({
-          env: store.env,
-          kind: "agent",
-          path: sqlitePath,
-          reason: "corrupt index",
-        }),
-      ).toBe(true);
+      seedOpenClawDatabaseQuarantine({
+        env: store.env,
+        kind: "agent",
+        path: sqlitePath,
+        reason: "corrupt index",
+      });
       const externalStorePath = path.join(store.tempDir, "external-sessions.json");
       if (process.platform !== "win32") {
         fs.writeFileSync(store.storePath, "{}\n", { mode: 0o600 });
@@ -236,14 +236,12 @@ describe("runDoctorSessionSqlite", () => {
       expect(compact.totals.issues).toBe(0);
       expect(compact.targets[0]?.compact?.skipped).toBe(false);
       createCanonicalCacheIndexDrift(sqlitePath);
-      expect(
-        recordOpenClawDatabaseQuarantine({
-          env: store.env,
-          kind: "agent",
-          path: sqlitePath,
-          reason: "canonical cache index drift",
-        }),
-      ).toBe(true);
+      seedOpenClawDatabaseQuarantine({
+        env: store.env,
+        kind: "agent",
+        path: sqlitePath,
+        reason: "canonical cache index drift",
+      });
 
       const report = await runDoctorSessionSqlite({
         ...selection,
@@ -287,14 +285,12 @@ describe("runDoctorSessionSqlite", () => {
     const laterBytes = Buffer.from("synthetic corrupt database\n");
     fs.writeFileSync(laterPath, laterBytes, { mode: 0o600 });
     for (const databasePath of [sqlitePath, laterPath]) {
-      expect(
-        recordOpenClawDatabaseQuarantine({
-          env: store.env,
-          kind: "agent",
-          path: databasePath,
-          reason: "synthetic recovery quarantine",
-        }),
-      ).toBe(true);
+      seedOpenClawDatabaseQuarantine({
+        env: store.env,
+        kind: "agent",
+        path: databasePath,
+        reason: "synthetic recovery quarantine",
+      });
     }
     const quarantineBefore = [sqlitePath, laterPath].map((databasePath) =>
       readPersistedQuarantineRow(databasePath, { env: store.env }),
@@ -422,14 +418,12 @@ describe("runDoctorSessionSqlite", () => {
   it("rejects stale secondary indexes before compacting and quarantines them in recovery", async () => {
     const { sqlitePath, store } = await createImportedStoreForCompaction();
     createUnsafeIndexDrift(sqlitePath);
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env: store.env,
-        kind: "agent",
-        path: sqlitePath,
-        reason: "stale secondary index",
-      }),
-    ).toBe(true);
+    seedOpenClawDatabaseQuarantine({
+      env: store.env,
+      kind: "agent",
+      path: sqlitePath,
+      reason: "stale secondary index",
+    });
 
     const report = await runDoctorSessionSqlite({
       env: store.env,

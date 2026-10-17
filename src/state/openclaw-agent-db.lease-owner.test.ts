@@ -11,6 +11,7 @@ import {
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
   readActiveOpenClawAgentDatabaseLeasesReadOnly,
 } from "./openclaw-agent-db-lease.js";
+import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   borrowOpenClawAgentDatabase,
@@ -20,7 +21,6 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
-  recordOpenClawAgentDatabaseOpenFailure,
   settleOpenClawAgentDatabaseWorkerClose,
   withOpenClawAgentDatabaseAdmission,
   withOpenClawAgentDatabaseAsync,

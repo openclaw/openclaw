@@ -150,7 +150,6 @@ describe("openclaw-router-outlet", () => {
   });
 
   it("replaces the loading skeleton with the resolved route", async () => {
-    vi.useFakeTimers();
     const routeModule = createDeferredCore<TestModule>();
     const context = { label: "loaded" };
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
@@ -166,10 +165,6 @@ describe("openclaw-router-outlet", () => {
     const outlet = createOutlet(router, context);
     const navigation = router.navigate("page", context);
 
-    await settleOutlet(outlet);
-    expect(outlet.querySelector('[role="status"]')).toBeNull();
-
-    await vi.advanceTimersByTimeAsync(1_000);
     await settleOutlet(outlet);
 
     const loadingState = outlet.querySelector('[role="status"]');

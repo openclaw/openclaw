@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
-import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -14,10 +14,7 @@ import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { resolvePluginCapabilityConsent } from "./capability-consent.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { enablePluginWithCapabilityConsent } from "./enable.js";
-import {
-  commitConfigWithPendingPluginInstalls,
-  commitConfigWriteWithPendingPluginInstalls,
-} from "./install-record-commit.js";
+import { commitConfigWithPendingPluginInstalls } from "./install-record-commit.js";
 import { writePersistedInstalledPluginIndexInstallRecordsWithLease } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index.js";
@@ -136,8 +133,8 @@ describe("plugin install record commit rollback", () => {
           expect(enabled.enabled).toBe(true);
           if (legacy) {
             let commits = 0;
-            await commitConfigWriteWithPendingPluginInstalls({
-              nextConfig: {
+            await commitConfigWithPendingPluginInstalls({
+              sourceConfig: {
                 plugins: {
                   ...config.plugins,
                   installs: {
@@ -145,9 +142,10 @@ describe("plugin install record commit rollback", () => {
                   },
                 },
               },
-              commit: async (nextConfig) => {
-                commits += 1;
-                return await replaceConfigFile({ sourceConfig: nextConfig });
+              writeOptions: {
+                beforeCommit: () => {
+                  commits += 1;
+                },
               },
             });
             expect(commits).toBe(1);
@@ -164,19 +162,18 @@ describe("plugin install record commit rollback", () => {
             );
           });
           let commits = 0;
-          const commit = async (nextConfig: OpenClawConfig) => {
+          const beforeCommit = () => {
             commits += 1;
-            return await replaceConfigFile({ sourceConfig: nextConfig });
           };
           await expect(
-            commitConfigWriteWithPendingPluginInstalls({
-              nextConfig: pendingRecords
+            commitConfigWithPendingPluginInstalls({
+              sourceConfig: pendingRecords
                 ? {
                     ...enabled.config,
                     plugins: { ...enabled.config.plugins, installs: { [pluginId]: oldRecord } },
                   }
                 : enabled.config,
-              commit,
+              writeOptions: { beforeCommit },
             }),
           ).rejects.toMatchObject({ capabilityConsent: { pluginId } });
           expect(commits).toBe(0);
@@ -193,7 +190,10 @@ describe("plugin install record commit rollback", () => {
               ),
             },
           });
-          await commitConfigWriteWithPendingPluginInstalls({ nextConfig: enabled.config, commit });
+          await commitConfigWithPendingPluginInstalls({
+            sourceConfig: enabled.config,
+            writeOptions: { beforeCommit },
+          });
           expect(commits).toBe(1);
         });
       });
@@ -213,12 +213,12 @@ describe("plugin install record commit rollback", () => {
         `
           import fs from "node:fs";
           import { setTimeout as delay } from "node:timers/promises";
-          import { commitConfigWriteWithPendingPluginInstalls } from ${JSON.stringify(commitModuleUrl)};
+          import { commitConfigWithPendingPluginInstalls } from ${JSON.stringify(commitModuleUrl)};
           const [stateDir, pluginId, enteredPath, releasePath] = process.argv.slice(2);
           process.env.OPENCLAW_STATE_DIR = stateDir;
           process.send?.("ready");
           try {
-            await commitConfigWriteWithPendingPluginInstalls({
+            await commitConfigWithPendingPluginInstalls({
               nextConfig: {
                 plugins: {
                   installs: {
@@ -231,21 +231,23 @@ describe("plugin install record commit rollback", () => {
                   },
                 },
               },
-              commit: async () => {
-                await fs.promises.writeFile(enteredPath, "entered");
-                process.send?.("entered");
-                while (true) {
-                  try {
-                    await fs.promises.access(releasePath);
-                    break;
-                  } catch (error) {
-                    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-                      throw error;
+              writeOptions: {
+                beforeCommit: async () => {
+                  await fs.promises.writeFile(enteredPath, "entered");
+                  process.send?.("entered");
+                  while (true) {
+                    try {
+                      await fs.promises.access(releasePath);
+                      break;
+                    } catch (error) {
+                      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+                        throw error;
+                      }
                     }
+                    await delay(10);
                   }
-                  await delay(10);
-                }
-                throw new Error("config failed " + pluginId);
+                  throw new Error("config failed " + pluginId);
+                },
               },
             });
             throw new Error("config commit unexpectedly succeeded");

@@ -92,6 +92,31 @@ it("does not bootstrap a first page that already overflows", async () => {
   expect(request).not.toHaveBeenCalled();
 });
 
+it("keeps a bounded snapshot refill for reader intent even in a short settled window", async () => {
+  vi.useFakeTimers();
+  const { intersect, pane, state, thread, request } = setup(true);
+  state.chatHistoryPagination = { hasMore: true, nextOffset: 0, totalMessages: 1_100 };
+  request.mockResolvedValue({ messages: [nativeHistoryMessage(1)], hasMore: false, nextOffset: 1 });
+  try {
+    await intersect();
+    await intersect();
+    expect(request).not.toHaveBeenCalled();
+    expect(state.chatHistoryPagination).toEqual({
+      hasMore: true,
+      nextOffset: 0,
+      totalMessages: 1_100,
+    });
+    thread.addEventListener("wheel", (event) => pane.handleTranscriptHistoryIntent(event));
+    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+    await pane.loadOlderMessages();
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]?.[1].offset).toBe(0);
+  } finally {
+    pane.resetOlderMessagesViewport();
+    vi.useRealTimers();
+  }
+});
+
 it.each([
   "placement",
   "programmatic",

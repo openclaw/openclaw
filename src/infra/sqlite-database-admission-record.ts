@@ -27,17 +27,43 @@ export const SqliteDatabaseGenerationSlot = {
 } as const;
 const SQLITE_DATABASE_GENERATION_LENGTH = Object.keys(SqliteDatabaseGenerationSlot).length;
 
-export type AdmissionFact = {
+const decodedValue = Symbol.for("openclaw.sqliteDatabaseAdmission.decodedValue");
+
+export type AdmissionFactValue = {
   value: unknown;
+  // Structured cloning drops symbol properties, so each receiver admits the wire value once.
+  [decodedValue]?: { value: unknown };
+};
+
+export function readSqliteDatabaseAdmissionFact<T>(
+  fact: AdmissionFactValue,
+  key: SqliteDatabaseAdmissionKey<T>,
+): T | undefined {
+  fact[decodedValue] ??= { value: key.read(fact.value) };
+  // SAFETY: A private key name identifies one value type, decoded by that key at admission.
+  return fact[decodedValue].value as T | undefined;
+}
+
+export function admitSqliteDatabaseFactValue<T>(
+  key: SqliteDatabaseAdmissionKey<T>,
+  value: T,
+): AdmissionFactValue {
+  const fact: AdmissionFactValue = { value };
+  readSqliteDatabaseAdmissionFact(fact, key);
+  return fact;
+}
+
+export type AdmissionFact = AdmissionFactValue & {
   revision: number;
   schemaDependent: boolean;
   lifetime?: "process";
   publication: string;
   current: SharedArrayBuffer;
 };
-export type StagedAdmissionFact = Pick<AdmissionFact, "value" | "revision" | "schemaDependent"> & {
-  ddlRevision: number;
-};
+export type StagedAdmissionFact = AdmissionFactValue &
+  Pick<AdmissionFact, "revision" | "schemaDependent"> & {
+    ddlRevision: number;
+  };
 export type ScopedWriteRevision = {
   identity: string;
   // The revision and retirement flag share custody across all admission snapshots.
@@ -122,7 +148,7 @@ export function advanceSqliteDatabaseGeneration(
 export function publishSqliteDatabaseFact(
   record: Admission,
   key: { name: string; schemaDependent?: boolean; lifetime?: "process"; writer?: "host" },
-  value: unknown,
+  value: AdmissionFactValue,
   revision: number,
   publication: string,
 ): boolean {
@@ -143,7 +169,7 @@ export function publishSqliteDatabaseFact(
   const current = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
   Atomics.store(new Int32Array(current), 0, 1);
   record.facts.set(key.name, {
-    value,
+    ...value,
     revision,
     schemaDependent: key.schemaDependent === true,
     lifetime: key.lifetime,

@@ -1,10 +1,9 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { onCleanup } from "solid-js";
-import {
-  validateSessionReactionEvent,
-  type SessionSuggestionEvent,
-  type SessionTypingEvent,
-  type TaskSuggestionEvent,
+import type {
+  SessionSuggestionEvent,
+  SessionTypingEvent,
+  TaskSuggestionEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
@@ -17,6 +16,7 @@ import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
 import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
+import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
 import { listen } from "../../lib/reactive/listener.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
@@ -66,7 +66,7 @@ import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation.ts";
+import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation-view.tsx";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { retainCreatedIncognitoComposerScope } from "./composer-persistence-state.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
@@ -165,6 +165,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       return;
     }
     this.announceCommandPaletteTarget(this.handleCommandPaletteSlashCommand);
+    // Native draft commands must pass through the synchronous editing owner in order.
     this.nativeDraftCleanup = this.context.nativeChatDrafts.subscribe((draft) => {
       const state = this.state;
       if (!state || !this.active || !this.presented) {
@@ -187,14 +188,17 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
 
   /** Receives one complete browser annotation without mixing generated context into the user's draft. */
   protected receiveBrowserAnnotation(event: Event): void {
+    const state = this.state;
     if (
+      !state ||
       !admitBrowserAnnotation(
-        this.state,
+        state,
         this.active && this.presented,
         event,
         this.chatState.attachmentReads.pendingBytes(
-          resolveChatAttachmentLimits(this.state?.hello?.policy),
+          resolveChatAttachmentLimits(state.hello?.policy),
         ),
+        this.chatState.attachmentInputProps(state).onAttachmentsChange,
       )
     ) {
       return;
@@ -224,7 +228,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     const shortcut = Object.values(SIDEBAR_PANEL_SHORTCUTS).find(
       (entry) => entry && matchesShortcutCombo(entry.combo, event),
     );
-    const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
+    const discussionState = this.sessionDiscussion.snapshot.states.get(state.sessionKey.trim());
     if (
       shortcut?.available({
         state,
@@ -368,6 +372,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         pageState.requestUpdate?.();
       }),
     );
+    // Identity publications start scoped loads even when this retained pane is hidden.
     chatState.addCleanup(
       this.context.agentIdentity.subscribe(() => void pageState.loadAssistantIdentity()),
     );
@@ -398,6 +403,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     }
     const handleBrowserAnnotation = (event: Event) => this.receiveBrowserAnnotation(event);
     chatState.addCleanup(listen(window, BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation));
+    // Each connection edge retires media custody and transcript subscriptions synchronously.
     chatState.addCleanup(
       this.context.gateway.subscribe((next) => {
         this.applyGatewaySnapshot(next);
@@ -405,6 +411,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         this.synchronizeForegroundTranscript();
       }),
     );
+    // Chat actions read these synchronous owner settings before any render commits.
     chatState.addCleanup(
       this.context.theme.subscribe(() => {
         pageState.settings = {
@@ -414,6 +421,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         pageState.requestUpdate();
       }),
     );
+    // Agent changes retire scoped owners and subscriptions before admitting another action.
     chatState.addCleanup(
       this.context.agentSelection.subscribe((next) => {
         const previousAgentId = this.state?.assistantAgentId;
@@ -489,7 +497,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           if (event.event === "session.suggestion" && event.payload) {
             this.handleSessionSuggestionEvent(event.payload as SessionSuggestionEvent);
           }
-          if (event.event === "session.reaction" && validateSessionReactionEvent(event.payload)) {
+          if (event.event === "session.reaction" && isSessionReactionEvent(event.payload)) {
             this.handleSessionReactionEvent(event.payload);
           }
           if (event.event === "session.typing" && event.payload) {
@@ -504,8 +512,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       }),
     );
     this.applyApplicationConfig(this.context.config.current);
+    // Apply execution/media policy at publication, not at Solid's deferred render boundary.
     chatState.addCleanup(this.context.config.subscribe(this.applyApplicationConfig.bind(this)));
     this.applySessionsState(this.context.sessions.state);
+    // Roster receipts also evict deleted history, settle pending aborts, and admit queued sends.
     chatState.addCleanup(this.context.sessions.subscribe(this.applySessionsState.bind(this)));
     chatState.addCleanup(subscribeChatPaneStartup(this.context, () => this.state));
     chatState.addCleanup(
@@ -555,7 +565,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       if (nextSessionKey) {
         // Availability belongs to one activation. The replacement probe starts
         // after its transcript commit in deferSessionHydrationUntilTranscript.
-        this.sessionDiscussionStates.delete(nextSessionKey);
+        this.sessionDiscussion.forgetState(nextSessionKey);
       }
       if (catalogKey && this.catalogRequestedSessionKey !== this.sessionKey) {
         this.catalogLoadGeneration += 1;
@@ -640,7 +650,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       isPresented: () => this.presented && this.visuallyPresented,
       commit: (layout, automaticResource) =>
         this.commitSidebarLayout(layout, { persist: false, automaticResource }),
-      requestUpdate: () => this.invalidate(),
     });
     if (this.state) {
       const layout = this.initializeBrowserSidebarLayout(this.state.sidebarLayout);

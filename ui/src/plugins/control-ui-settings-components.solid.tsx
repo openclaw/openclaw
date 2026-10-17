@@ -12,6 +12,7 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../components/solid/settings-ui.tsx";
+import { listen } from "../lib/reactive/listener.ts";
 
 export function createControlUiSettingsComponents(
   signal: AbortSignal,
@@ -35,10 +36,10 @@ export function createControlUiSettingsComponents(
         return;
       }
       active = false;
-      signal.removeEventListener("abort", dispose);
+      stopAbort();
       stop();
     };
-    signal.addEventListener("abort", dispose, { once: true });
+    const stopAbort = listen(signal, "abort", dispose, { once: true });
     return {
       update(next) {
         signal.throwIfAborted();

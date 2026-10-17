@@ -13,7 +13,6 @@ import {
   truncateToolSchemaDepth,
 } from "@openclaw/ai/internal/tool-schema";
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
-// Provider tool helpers expose shared tool-call payload contracts for provider plugins.
 import type { TSchema } from "typebox";
 import {
   mergeLiteralSchemas,

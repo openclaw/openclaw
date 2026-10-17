@@ -131,11 +131,23 @@ describe("registered plugin factory bindings", () => {
             assert(update);
             return () => update("counter", (current) => (current ?? 0) + 1);
           });
-          expect(emitWarning).not.toHaveBeenCalled();
+          if (kind === "sync") {
+            expect(emitWarning).toHaveBeenCalledExactlyOnceWith(
+              expect.stringContaining(`Plugin ${pluginId}: api.runtime.state.openSyncKeyedStore`),
+              expect.objectContaining({ type: "DeprecationWarning", code: "DEP_PLUGIN_SDK" }),
+            );
+          } else {
+            expect(emitWarning).not.toHaveBeenCalled();
+          }
           await useLegacyStore();
           await useLegacyStore();
-          expect(emitWarning).toHaveBeenCalledExactlyOnceWith(
-            expect.stringContaining(`Plugin ${pluginId}:`),
+          const warningCount = kind === "sync" ? 2 : 1;
+          const method =
+            kind === "sync" ? "PluginStateSyncKeyedStore.lookup" : "PluginStateKeyedStore.update";
+          expect(emitWarning).toHaveBeenCalledTimes(warningCount);
+          expect(emitWarning).toHaveBeenNthCalledWith(
+            warningCount,
+            expect.stringContaining(`Plugin ${pluginId}: ${method}`),
             expect.objectContaining({ type: "DeprecationWarning", code: "DEP_PLUGIN_SDK" }),
           );
         } finally {

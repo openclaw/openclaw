@@ -141,7 +141,7 @@ function attachAdapterExecutionPreparer<T extends ToolDefinition>(definition: T)
   );
 }
 
-const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
+export const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
 export function findClientToolNameConflicts(params: {
   tools: ClientToolDefinition[];
@@ -175,10 +175,6 @@ export function findClientToolNameConflicts(params: {
     seenClientNames.set(normalizedName, rawName);
   }
   return Array.from(conflicts);
-}
-
-export function createClientToolNameConflictError(conflicts: string[]): Error {
-  return new Error(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} ${conflicts.join(", ")}`);
 }
 
 /** Detect client tool conflict errors without depending on object identity. */

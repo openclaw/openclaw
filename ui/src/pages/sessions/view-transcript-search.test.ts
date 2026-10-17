@@ -32,30 +32,59 @@ describe("sessions transcript search view", () => {
       await Promise.resolve();
 
       const rosterFilter = container.querySelector<HTMLInputElement>(
-        '.sessions-filter-bar input[type="text"]',
+        '.sessions-filter-popover__search input[type="text"]',
       );
-      const transcriptInput = container.querySelector<HTMLInputElement>(
-        '.sessions-transcript-search input[type="search"]',
+      const transcriptTrigger = container.querySelector<HTMLButtonElement>(
+        ".sessions-transcript-search__trigger",
       );
       expect(rosterFilter?.value).toBe("agent label");
       expect(rosterFilter?.getAttribute("aria-label")).toBe("Filter by key, agent, label, kind…");
-      expect(transcriptInput?.value).toBe(available ? "  exact phrase  " : "hidden");
-      expect(transcriptInput?.disabled).toBe(!available);
+      expect(transcriptTrigger?.getAttribute("aria-label")).toBe(
+        available ? "Search transcripts" : "Connect to the Gateway to search transcripts.",
+      );
+      expect(transcriptTrigger?.disabled).toBe(!available);
+      expect(container.querySelector(".sessions-transcript-search__input input")).toBeNull();
+      expect(container.querySelector('.settings-section__desc [role="status"]')?.textContent).toBe(
+        available ? undefined : "Connect to the Gateway to search transcripts.",
+      );
       if (available) {
+        transcriptTrigger!.click();
+        await Promise.resolve();
+        const transcriptInput = container.querySelector<HTMLInputElement>(
+          '.sessions-transcript-search__input input[type="search"]',
+        );
+        expect(transcriptInput?.value).toBe("  exact phrase  ");
         transcriptInput!.value = "different words";
         transcriptInput!.dispatchEvent(new Event("input", { bubbles: true }));
         expect(onTranscriptSearchChange).toHaveBeenCalledWith("different words");
         expect(onTranscriptSearch).not.toHaveBeenCalled();
+        container
+          .querySelector(".sessions-transcript-search__form")
+          ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        expect(onTranscriptSearch).toHaveBeenCalledTimes(1);
       } else {
-        expect(container.textContent).toContain("Transcript search requires a newer Gateway.");
+        expect(transcriptTrigger?.closest("openclaw-tooltip")).toBeNull();
       }
-
-      container
-        .querySelector(".sessions-transcript-search__form")
-        ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       expect(onTranscriptSearch).toHaveBeenCalledTimes(available ? 1 : 0);
     },
   );
+
+  it("removes the connection explanation when transcript search becomes available", async () => {
+    const container = document.createElement("div");
+    const props = buildProps(buildMultiResult([]));
+    renderSessionsView({ ...props, transcriptSearchAvailable: false }, container);
+    await Promise.resolve();
+    expect(container.querySelector('.settings-section__desc [role="status"]')?.textContent).toBe(
+      "Connect to the Gateway to search transcripts.",
+    );
+
+    renderSessionsView({ ...props, transcriptSearchAvailable: true }, container);
+    await Promise.resolve();
+    expect(container.querySelector('.settings-section__desc [role="status"]')).toBeNull();
+    expect(
+      container.querySelector<HTMLButtonElement>(".sessions-transcript-search__trigger")?.disabled,
+    ).toBe(false);
+  });
 
   it("renders transcript provenance and opens the matching session", async () => {
     const container = document.createElement("div");
@@ -136,7 +165,10 @@ describe("Sessions query clearing", () => {
       });
       try {
         renderSessionsView({ ...props, onSearchChange }, container);
-        const input = container.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
+        container.querySelector<HTMLButtonElement>(".sessions-filter-popover__trigger")!.click();
+        const input = container.querySelector<HTMLInputElement>(
+          ".sessions-filter-popover__search input",
+        )!;
         expect(input.getAttribute("aria-label")).toBe("Filter by key, agent, label, kind…");
         const clear = container.querySelector<HTMLButtonElement>(
           'button[aria-label="Clear search"]',
@@ -177,7 +209,10 @@ describe("Sessions query clearing", () => {
           cancelable: true,
         });
         input.dispatchEvent(emptyEscape);
-        expect(emptyEscape.defaultPrevented).toBe(false);
+        expect(emptyEscape.defaultPrevented).toBe(true);
+        expect(container.querySelector(".sessions-filter-popover")?.matches(":popover-open")).toBe(
+          false,
+        );
         expect(onSearchChange).toHaveBeenCalledTimes(1);
         container.querySelector<HTMLButtonElement>(".data-table-empty-state button")!.click();
         expect(props.onClearFilters).toHaveBeenCalledOnce();
@@ -205,7 +240,10 @@ describe("Sessions query clearing", () => {
     let overlayOwner: Overlay | undefined;
     try {
       renderSessionsView(props, container);
-      const input = container.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
+      container.querySelector<HTMLButtonElement>(".sessions-filter-popover__trigger")!.click();
+      const input = container.querySelector<HTMLInputElement>(
+        ".sessions-filter-popover__search input",
+      )!;
       if (owner !== "unfocused") {
         input.focus();
       }
@@ -241,7 +279,9 @@ describe("Sessions query clearing", () => {
       input.dispatchEvent(event);
       expect(onSearchChange).not.toHaveBeenCalled();
       expect(input.value).toBe("keep me");
-      expect(event.defaultPrevented).toBe(owner === "prevented");
+      if (owner === "prevented") {
+        expect(event.defaultPrevented).toBe(true);
+      }
     } finally {
       overlayOwner?.dispose();
       overlay?.removeAttribute("open");
