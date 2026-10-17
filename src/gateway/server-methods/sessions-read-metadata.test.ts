@@ -34,6 +34,19 @@ afterEach(() => vi.restoreAllMocks());
 
 const prompt = "saved prompt not needed for search or previews ".repeat(2048);
 const owner = { type: "human", source: "profile", id: "owner@example.com" } as const;
+const sessionKey = (name: string) => `agent:main:${name}`;
+
+function expectedPreview(key: string, text?: unknown) {
+  return {
+    key,
+    status: text === undefined ? "missing" : "ok",
+    items: text === undefined ? [] : [{ role: "user", text }],
+  };
+}
+
+function previewResponse(previews: ReturnType<typeof expectedPreview>[]) {
+  return { ok: true, payload: { previews } };
+}
 
 async function seedMetadataReads(prepareProjection = false) {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
@@ -51,12 +64,7 @@ async function seedMetadataReads(prepareProjection = false) {
   let cfg: OpenClawConfig = {
     agents: { defaults: { sessionStore: { agentId: "main" } }, entries: { main: {}, work: {} } },
     session: { store: storePath },
-    gateway: {
-      roles: {
-        default: "reader",
-        definitions,
-      },
-    },
+    gateway: { roles: { default: "reader", definitions } },
   };
   setRuntimeConfigSnapshot(cfg);
   for (const [agentId, name, visibility, incognito, content] of [
@@ -91,10 +99,7 @@ async function seedMetadataReads(prepareProjection = false) {
     restrictRuntimeConfig: () => {
       cfg = { ...cfg, gateway: { roles: { default: "restricted", definitions } } };
     },
-    opts: {
-      client: identifiedClient(viewer.id),
-      context,
-    },
+    opts: { client: identifiedClient(viewer.id), context },
   };
 }
 
@@ -103,16 +108,17 @@ test.each([
   {
     method: "sessions.search",
     scope: "explicit keys",
-    sessionKeys: ["first", "second", "draft", "private", "missing", "first"].map(
-      (name) => `agent:main:${name}`,
-    ),
+    sessionKeys: ["first", "second", "draft", "private", "missing", "first"].map(sessionKey),
   },
   { method: "sessions.preview", scope: "explicit keys", sessionKeys: undefined },
 ] as const)(
   "$method ($scope) retains visible results without decoding saved prompts",
-  async ({ method, sessionKeys }) => {
-    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+  ({ method, sessionKeys }) =>
+    withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const { opts, storePath } = await seedMetadataReads(method === "sessions.preview");
+      const request = <T = unknown>(params: Record<string, unknown>) =>
+        directSessionReq<T>(method, params, opts);
+      const search = { query: "needle", ...(sessionKeys ? { sessionKeys } : {}) };
       const parse = JSON.parse;
       let decodedPromptBytes = 0;
       const parsed = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
@@ -123,47 +129,24 @@ test.each([
       });
       try {
         if (method === "sessions.search") {
-          const all = await directSessionReq<{ results: Array<{ sessionKey: string }> }>(
-            method,
-            { query: "needle", ...(sessionKeys ? { sessionKeys } : {}) },
-            opts,
-          );
+          const all = await request<{ results: Array<{ sessionKey: string }> }>(search);
           expect(all.ok, all.error?.message).toBe(true);
-          expect(all.payload?.results.map((hit) => hit.sessionKey)).toEqual([
-            "agent:main:first",
-            "agent:main:second",
-          ]);
-          expect(
-            await directSessionReq(
-              method,
-              { query: "needle", limit: 1, ...(sessionKeys ? { sessionKeys } : {}) },
-              opts,
-            ),
-          ).toMatchObject({
+          expect(all.payload?.results.map((hit) => hit.sessionKey)).toEqual(
+            ["first", "second"].map(sessionKey),
+          );
+          expect(await request({ ...search, limit: 1 })).toMatchObject({
             ok: true,
             payload: { results: [all.payload?.results[0]], truncated: true },
           });
         } else {
-          expect(
-            await directSessionReq(
-              method,
-              { keys: ["agent:main:first", "agent:main:draft", "agent:main:private"] },
-              opts,
-            ),
-          ).toMatchObject({
-            ok: true,
-            payload: {
-              previews: [
-                {
-                  key: "agent:main:first",
-                  status: "ok",
-                  items: [{ role: "user", text: "needle alpha" }],
-                },
-                { key: "agent:main:draft", status: "missing", items: [] },
-                { key: "agent:main:private", status: "missing", items: [] },
-              ],
-            },
-          });
+          const response = await request({ keys: ["first", "draft", "private"].map(sessionKey) });
+          expect(response).toMatchObject(
+            previewResponse([
+              expectedPreview("agent:main:first", "needle alpha"),
+              expectedPreview("agent:main:draft"),
+              expectedPreview("agent:main:private"),
+            ]),
+          );
         }
         expect(decodedPromptBytes).toBe(0);
       } finally {
@@ -173,99 +156,76 @@ test.each([
         { agentId: "main", sessionKey: "agent:main:first", storePath },
         { visibility: "draft" },
       );
-      const after = await directSessionReq(
-        method,
-        method === "sessions.search"
-          ? { query: "needle", ...(sessionKeys ? { sessionKeys } : {}) }
-          : { keys: ["agent:main:first"] },
-        opts,
+      const after = await request(
+        method === "sessions.search" ? search : { keys: [sessionKey("first")] },
       );
       expect(after).toMatchObject({
         ok: true,
         payload:
           method === "sessions.search"
             ? { results: [expect.objectContaining({ sessionKey: "agent:main:second" })] }
-            : { previews: [{ key: "agent:main:first", status: "missing", items: [] }] },
+            : { previews: [expectedPreview("agent:main:first")] },
       });
-    });
-  },
+    }),
 );
 
 test.each([
-  ...(
-    [
-      ["unread draft", "second", { visibility: "draft" }, false],
-      ["buffered draft", "first", { visibility: "draft" }, false],
-      ["buffered incognito", "first", { incognito: true }, false],
-      ["replaced session", "first", { sessionId: "replacement-session" }, false],
-      ["replaced lifecycle", "first", { lifecycleRevision: "replacement-lifecycle" }, false],
-      ["ordinary metadata", "first", { label: "Renamed session" }, true],
-    ] as const
-  ).map(([change, name, patch, visible]) => ({
-    change,
-    key: `agent:main:${name}`,
-    patch,
-    visible,
-  })),
-  ...(["profile", "config"] as const).map((restrict) => ({
-    change: `the ${restrict} losing other-session access`,
-    key: undefined,
-    visible: false,
-    restrict,
-  })),
-] as const)("sessions.preview rechecks $change before publishing the batch", async (scenario) => {
-  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-    const { opts, storePath, viewerId, restrictRuntimeConfig } = await seedMetadataReads(true);
-    const firstRead = createDeferred();
-    const read = transcriptPreview.readSessionPreviewItemsFromTranscriptAsync;
-    vi.spyOn(transcriptPreview, "readSessionPreviewItemsFromTranscriptAsync").mockImplementation(
-      async (...args) => {
-        const result = await read(...args);
-        if (args[0].sessionKey === "agent:main:first") {
-          firstRead.resolve();
+  ["unread draft", "second", { visibility: "draft" }, false],
+  ["buffered draft", "first", { visibility: "draft" }, false],
+  ["buffered incognito", "first", { incognito: true }, false],
+  ["replaced session", "first", { sessionId: "replacement-session" }, false],
+  ["replaced lifecycle", "first", { lifecycleRevision: "replacement-lifecycle" }, false],
+  ["ordinary metadata", "first", { label: "Renamed session" }, true],
+  ["profile revocation", undefined, "profile", false],
+  ["config revocation", undefined, "config", false],
+] as const)(
+  "sessions.preview rechecks %s before publishing the batch",
+  (_change, name, patch, visible) =>
+    withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const { opts, storePath, viewerId, restrictRuntimeConfig } = await seedMetadataReads(true);
+      const key = name ? `agent:main:${name}` : undefined;
+      const firstRead = createDeferred();
+      const read = transcriptPreview.readSessionPreviewItemsFromTranscriptAsync;
+      vi.spyOn(transcriptPreview, "readSessionPreviewItemsFromTranscriptAsync").mockImplementation(
+        async (...args) => {
+          const result = await read(...args);
+          if (args[0].sessionKey === "agent:main:first") {
+            firstRead.resolve();
+          }
+          return result;
+        },
+      );
+      const keys = ["agent:main:first", "agent:main:second"];
+      const pending = directSessionReq("sessions.preview", { keys }, opts);
+      await firstRead.promise;
+      if (typeof patch === "string") {
+        if (patch === "profile") {
+          setUserProfileRole(viewerId, "restricted");
+          invalidateOperatorRolePolicy(viewerId);
+        } else {
+          restrictRuntimeConfig();
         }
-        return result;
-      },
-    );
-    const keys = ["agent:main:first", "agent:main:second"];
-    const pending = directSessionReq("sessions.preview", { keys }, opts);
-    await firstRead.promise;
-    if ("restrict" in scenario) {
-      if (scenario.restrict === "profile") {
-        setUserProfileRole(viewerId, "restricted");
-        invalidateOperatorRolePolicy(viewerId);
       } else {
-        restrictRuntimeConfig();
+        const scope = { agentId: "main", sessionKey: `agent:main:${name}`, storePath };
+        const entry = loadSessionEntryReadOnly(scope);
+        if (!entry) {
+          throw new Error(`Missing seeded session ${key}`);
+        }
+        replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, ...patch });
       }
-    } else {
-      const scope = { agentId: "main", sessionKey: scenario.key, storePath };
-      const entry = loadSessionEntryReadOnly(scope);
-      if (!entry) {
-        throw new Error(`Missing seeded session ${scenario.key}`);
-      }
-      replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, ...scenario.patch });
-    }
-    expect(await pending).toMatchObject({
-      ok: true,
-      payload: {
-        previews: keys.map((previewKey) =>
-          !scenario.visible && (scenario.key === undefined || previewKey === scenario.key)
-            ? { key: previewKey, status: "missing", items: [] }
-            : {
-                key: previewKey,
-                status: "ok",
-                items: [
-                  {
-                    role: "user",
-                    text:
-                      previewKey === "agent:main:first"
-                        ? "needle alpha"
-                        : expect.stringContaining("needle beta"),
-                  },
-                ],
-              },
+      expect(await pending).toMatchObject(
+        previewResponse(
+          keys.map((previewKey) =>
+            !visible && (key === undefined || previewKey === key)
+              ? expectedPreview(previewKey)
+              : expectedPreview(
+                  previewKey,
+                  previewKey === "agent:main:first"
+                    ? "needle alpha"
+                    : expect.stringContaining("needle beta"),
+                ),
+          ),
         ),
-      },
-    });
-  });
-});
+      );
+    }),
+);

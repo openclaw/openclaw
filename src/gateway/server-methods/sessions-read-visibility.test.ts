@@ -18,6 +18,7 @@ import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import { rolePolicyConfig } from "../session-sharing.test-utils.js";
+import type { GatewaySessionRow } from "../session-utils.types.js";
 import {
   directSessionReq,
   seedLinearSessionTranscript,
@@ -46,6 +47,26 @@ function roleConfig(
       },
     },
   };
+}
+
+async function seedTranscript(
+  agentId: string,
+  sessionKey: string,
+  sessionId: string,
+  ownerId: string,
+  contents: string[],
+  overrides: Partial<SessionEntry> = {},
+) {
+  const scope = { agentId, sessionKey, storePath: resolveStorePath(undefined, { agentId }) };
+  await replaceSessionEntry(scope, {
+    sessionId,
+    updatedAt: Date.now(),
+    visibility: "shared",
+    createdActor: { type: "human", source: "profile", id: ownerId },
+    ...overrides,
+  });
+  await seedLinearSessionTranscript({ ...scope, sessionId, contents });
+  return scope;
 }
 
 setupGatewaySessionsHandlerTestHarness();
@@ -91,19 +112,17 @@ test("projects recap eligibility from current sharing authority, including cappe
       request: { includeActivitySummary: true },
     });
     const sessions = new Map(result.sessions.map((session) => [session.key, session]));
-    expect(sessions.get("agent:main:recap-own")).toMatchObject({
-      sharingRole: "owner",
-      activitySummary: { canEnsure: true },
-    });
-    expect(sessions.get("agent:main:recap-member")).toMatchObject({
-      sharingRole: "member",
-      activitySummary: { canEnsure: true },
-    });
-    expect(sessions.get("agent:main:recap-viewer")).toMatchObject({
-      sharingRole: "viewer",
-      visibility: "shared",
-      activitySummary: { canEnsure: !capped },
-    });
+    for (const [name, sharingRole, canEnsure] of [
+      ["own", "owner", true],
+      ["member", "member", true],
+      ["viewer", "viewer", !capped],
+    ] as const) {
+      expect(sessions.get(`agent:main:recap-${name}`)).toMatchObject({
+        sharingRole,
+        activitySummary: { canEnsure },
+      });
+    }
+    expect(sessions.get("agent:main:recap-viewer")?.visibility).toBe("shared");
     for (const includeActivitySummary of [undefined, false]) {
       const ordinary = await listSessions({ client, context, request: { includeActivitySummary } });
       expect(ordinary.sessions).toEqual(
@@ -132,25 +151,15 @@ test.each([
       },
     };
     setRuntimeConfigSnapshot(cfg);
-    const storePath = resolveStorePath(undefined, { agentId: "research" });
     const sessionId = `aggregate-${sessionKey}`;
-    await replaceSessionEntry(
-      { agentId: "research", sessionKey, storePath },
-      {
-        sessionId,
-        updatedAt: Date.now(),
-        displayName: "Research transcript title",
-        visibility: "draft",
-        createdActor: { type: "human", source: "profile", id: ownerId },
-      },
-    );
-    await seedLinearSessionTranscript({
-      agentId: "research",
+    await seedTranscript(
+      "research",
       sessionKey,
       sessionId,
-      storePath,
-      contents: ["Research transcript title", "Research latest message"],
-    });
+      ownerId,
+      ["Research transcript title", "Research latest message"],
+      { displayName: "Research transcript title", visibility: "draft" },
+    );
     const client = identifiedClient(ownerId);
     const context = requestContext(cfg);
     const request = {
@@ -209,29 +218,12 @@ test("a hidden-foreign role cannot discover sessions through search, batch previ
   const ownerId = ensureProfileForEmail("role-viewer@example.com").id;
   const foreignKey = "agent:main:foreign-role-read";
   const ownKey = "agent:main:own-role-read";
-  const storePath = resolveStorePath(undefined, { agentId: "main" });
   for (const [sessionKey, actorId] of [
     [foreignKey, "foreign-owner@example.com"],
     [ownKey, ownerId],
   ] as const) {
     const sessionId = `session-${sessionKey.split(":").at(-1)}`;
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey, storePath },
-      {
-        sessionId,
-        // Post-write age-retention maintenance archives expired rows out of default lists.
-        updatedAt: Date.now(),
-        createdActor: { type: "human", source: "profile", id: actorId },
-        visibility: "shared",
-      },
-    );
-    await seedLinearSessionTranscript({
-      agentId: "main",
-      contents: ["hidden role search needle"],
-      sessionId,
-      sessionKey,
-      storePath,
-    });
+    await seedTranscript("main", sessionKey, sessionId, actorId, ["hidden role search needle"]);
   }
   const client = identifiedClient(ownerId);
   const options = { client, context: { getRuntimeConfig: () => cfg } };
@@ -283,24 +275,10 @@ test.each(["research", "ops"] as const)(
       research: ensureProfileForEmail("search-research@example.test").id,
     };
     for (const agentId of ["ops", "research"] as const) {
-      const storePath = resolveStorePath(undefined, { agentId });
       const sessionId = `global-search-${agentId}`;
-      await replaceSessionEntry(
-        { agentId, sessionKey: "global", storePath },
-        {
-          sessionId,
-          updatedAt: Date.now(),
-          createdActor: { type: "human", source: "profile", id: profiles[agentId] },
-          visibility: "shared",
-        },
-      );
-      await seedLinearSessionTranscript({
-        agentId,
-        sessionKey: "global",
-        sessionId,
-        storePath,
-        contents: ["global owner search needle"],
-      });
+      await seedTranscript(agentId, "global", sessionId, profiles[agentId], [
+        "global owner search needle",
+      ]);
     }
     const catalog = await prepareUserProfileCatalog();
     onTestFinished(catalog.release);
@@ -327,8 +305,14 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
   const profileClient = (name: string) => identifiedClient(profileId(name));
   const ownerId = profileId("draft-owner");
   const memberId = profileId("draft-member");
-  const storePath = resolveStorePath(undefined, { agentId: "main" });
-  const scope = { agentId: "main", sessionKey, storePath };
+  const scope = await seedTranscript(
+    "main",
+    sessionKey,
+    sessionId,
+    ownerId,
+    ["foreign draft transcript"],
+    { visibility: "draft" },
+  );
   const writeSession = (patch: Partial<SessionEntry>) =>
     replaceSessionEntry(scope, {
       sessionId,
@@ -337,64 +321,39 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
       visibility: "shared",
       ...patch,
     });
-  await writeSession({ visibility: "draft" });
-  await seedLinearSessionTranscript({
-    agentId: "main",
-    contents: ["foreign draft transcript"],
-    sessionId,
-    sessionKey,
-    storePath,
-  });
-  expect(
-    addSessionMember(scope, { identityId: memberId, addedBy: ownerId, addedAt: 1 }).inserted,
-  ).toBe(true);
+  addSessionMember(scope, { identityId: memberId, addedBy: ownerId, addedAt: 1 });
   for (let index = 0; index < 5; index += 1) {
-    expect(
-      recordSessionParticipant(scope, {
-        identity: { type: "profile", id: `participant-${index}` },
-        promptedAt: index + 1,
-      }),
-    ).toBe("inserted");
+    recordSessionParticipant(scope, {
+      identity: { type: "profile", id: `participant-${index}` },
+      promptedAt: index + 1,
+    });
   }
   const admin = profileClient("draft-admin");
   admin.connect!.scopes = ["operator.admin"];
   const missingProfile = profileClient("draft-missing-profile");
-  const cases = (
-    [
-      ["view", profileClient("draft-viewer"), "view", true, "viewer"],
-      ["suggest", profileClient("draft-suggester"), "suggest", true, "viewer"],
-      ["write", profileClient("draft-writer"), "write", true, "member"],
-      ["member", identifiedClient(memberId), "view", true, "member"],
-      ["missing profile", missingProfile, "view", true, null],
-      ["owner", identifiedClient(ownerId), "view", false, "owner"],
-      ["admin", admin, "view", false, "admin"],
-      ["no roles", profileClient("draft-outsider"), undefined, false, "viewer"],
-    ] as const
-  ).map(([name, client, role, hidden, sharedRole]) => ({
-    name,
-    client,
-    cfg: role ? roleConfig(role) : {},
-    hidden,
-    sharedRole,
-  }));
+  const cases = [
+    ["view", profileClient("draft-viewer"), roleConfig("view"), true, "viewer"],
+    ["suggest", profileClient("draft-suggester"), roleConfig("suggest"), true, "viewer"],
+    ["write", profileClient("draft-writer"), roleConfig("write"), true, "member"],
+    ["member", identifiedClient(memberId), roleConfig("view"), true, "member"],
+    ["missing profile", missingProfile, roleConfig("view"), true, null],
+    ["owner", identifiedClient(ownerId), roleConfig("view"), false, "owner"],
+    ["admin", admin, roleConfig("view"), false, "admin"],
+    ["no roles", profileClient("draft-outsider"), {}, false, "viewer"],
+  ] as const;
+  const [, viewerClient, viewerConfig] = cases[0];
   delete missingProfile.authenticatedUserProfile;
   delete missingProfile.preparedSessionProfile;
 
-  type Description = {
-    session: {
-      participants?: unknown[];
-      expandedParticipants?: unknown[];
-      sharingRole?: string;
-      visibility?: string;
-    } | null;
-  };
+  type Description = { session: GatewaySessionRow | null };
   type Transcript = { messages: Array<{ content?: unknown }> };
-  for (const { name, client, cfg, hidden, sharedRole } of cases) {
-    const described = await directSessionReq<Description>(
-      "sessions.describe",
-      { key: sessionKey },
-      { client, context: { getRuntimeConfig: () => cfg } },
-    );
+  const read = <T>(
+    method: "sessions.describe" | "sessions.get",
+    client: ReturnType<typeof identifiedClient>,
+    getRuntimeConfig: () => OpenClawConfig,
+  ) => directSessionReq<T>(method, { key: sessionKey }, { client, context: { getRuntimeConfig } });
+  for (const [name, client, cfg, hidden, sharedRole] of cases) {
+    const described = await read<Description>("sessions.describe", client, () => cfg);
     expect(described.ok, name).toBe(true);
     if (hidden) {
       expect(described.payload?.session, name).toBeNull();
@@ -405,11 +364,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
       expect(described.payload?.session?.participants, name).toHaveLength(4);
       expect(described.payload?.session?.expandedParticipants, name).toHaveLength(5);
     }
-    const transcript = await directSessionReq<Transcript>(
-      "sessions.get",
-      { key: sessionKey },
-      { client, context: { getRuntimeConfig: () => cfg } },
-    );
+    const transcript = await read<Transcript>("sessions.get", client, () => cfg);
     expect(transcript.ok, name).toBe(true);
     expect(
       transcript.payload?.messages.map((message) => message.content),
@@ -420,12 +375,8 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
   await patchSessionEntryCore(scope, () => ({
     visibility: "shared",
   }));
-  for (const { name, client, cfg, sharedRole } of cases) {
-    const described = await directSessionReq<Description>(
-      "sessions.describe",
-      { key: sessionKey },
-      { client, context: { getRuntimeConfig: () => cfg } },
-    );
+  for (const [name, client, cfg, , sharedRole] of cases) {
+    const described = await read<Description>("sessions.describe", client, () => cfg);
     expect(described.ok, name).toBe(true);
     if (sharedRole === null) {
       expect(described.payload?.session, name).toBeNull();
@@ -448,7 +399,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
     "sessions.describe",
     { key: sessionKey },
     {
-      client: cases[0]!.client,
+      client: viewerClient,
       context: {
         getRuntimeConfig: () => describeCfg,
         readPreparedGatewayModelCatalog: readCatalog,
@@ -462,55 +413,28 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
   });
 
   const originalRead = sessionHistoryWorkers.readSessionHistoryPageInWorker;
-  for (const mutation of [
-    { name: "visibility change", sessionId, visibility: "draft" as const },
+  for (const scenario of [
+    { name: "visibility change", patch: { sessionId, visibility: "draft" as const } },
     {
       name: "session replacement",
-      sessionId: `${sessionId}-replacement`,
-      visibility: "shared" as const,
+      patch: { sessionId: `${sessionId}-replacement`, visibility: "shared" as const },
     },
+    { name: "role/config change", patch: undefined },
   ]) {
-    await writeSession({});
-    const readSpy = vi
+    await writeSession(scenario.patch ? {} : { updatedAt: 44 });
+    let currentCfg = viewerConfig;
+    using _ = vi
       .spyOn(sessionHistoryWorkers, "readSessionHistoryPageInWorker")
       .mockImplementationOnce(async (...args) => {
-        await writeSession({
-          sessionId: mutation.sessionId,
-          updatedAt: 43,
-          visibility: mutation.visibility,
-        });
+        if (scenario.patch) {
+          await writeSession({ ...scenario.patch, updatedAt: 43 });
+        } else {
+          currentCfg = roleConfig("none");
+        }
         return await originalRead(...args);
       });
-    try {
-      const transcript = await directSessionReq<Transcript>(
-        "sessions.get",
-        { key: sessionKey },
-        { client: cases[0]!.client, context: { getRuntimeConfig: () => cases[0]!.cfg } },
-      );
-      expect(transcript.ok, mutation.name).toBe(true);
-      expect(transcript.payload?.messages, mutation.name).toEqual([]);
-    } finally {
-      readSpy.mockRestore();
-    }
-  }
-
-  await writeSession({ updatedAt: 44 });
-  let currentCfg = roleConfig("view");
-  const roleDriftRead = vi
-    .spyOn(sessionHistoryWorkers, "readSessionHistoryPageInWorker")
-    .mockImplementationOnce(async (...args) => {
-      currentCfg = roleConfig("none");
-      return await originalRead(...args);
-    });
-  try {
-    const transcript = await directSessionReq<Transcript>(
-      "sessions.get",
-      { key: sessionKey },
-      { client: cases[0]!.client, context: { getRuntimeConfig: () => currentCfg } },
-    );
-    expect(transcript.ok, "role/config change").toBe(true);
-    expect(transcript.payload?.messages, "role/config change").toEqual([]);
-  } finally {
-    roleDriftRead.mockRestore();
+    const transcript = await read<Transcript>("sessions.get", viewerClient, () => currentCfg);
+    expect(transcript.ok, scenario.name).toBe(true);
+    expect(transcript.payload?.messages, scenario.name).toEqual([]);
   }
 });
