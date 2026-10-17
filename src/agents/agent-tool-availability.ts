@@ -1,5 +1,6 @@
 import { createToolExecutionMatcher } from "./tool-policy-shared.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { textResult } from "./tools/tool-results.js";
 
 type ToolDefinition = Pick<AnyAgentTool, "name" | "parameters" | "description">;
 
@@ -46,6 +47,25 @@ export function markAgentToolExecutionUnavailable<T extends object>(tool: T): T 
     availabilityBindings.set(tool, { ...metadata, executionDenied: true });
   }
   return tool;
+}
+
+/**
+ * Keeps a tool's definition, so every turn of a session shares one prompt prefix,
+ * while this turn may not run it.
+ */
+export function gateAgentToolExecution<T extends AnyAgentTool>(tool: T, message: string): T {
+  return markAgentToolExecutionUnavailable(
+    copyAgentToolAvailability(tool, {
+      ...tool,
+      // Preparation can perform work too; a denied call must not enter the source path.
+      prepareArguments: undefined,
+      prepareBeforeToolCallParams: undefined,
+      finalizeBeforeToolCallParams: undefined,
+      // A denial is guidance for the model, not a tool failure that fails the run;
+      // a failure-like `status` detail would reclassify it as an error.
+      execute: async () => textResult(message, { gated: true }),
+    }),
+  );
 }
 
 /** Finalize owner-controlled affordances after filtering; never rebind or grant tools. */

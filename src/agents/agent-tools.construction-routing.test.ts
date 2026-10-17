@@ -47,6 +47,7 @@ vi.mock("./openclaw-tools.js", async (importOriginal) => {
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "./agent-tools.js";
+import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import {
@@ -108,7 +109,7 @@ describe("createOpenClawCodingTools cron scope", () => {
     },
   );
 
-  it("keeps self-scoped automation inspection available without sender ownership", () => {
+  it("keeps self-scoped automation inspection available without sender ownership", async () => {
     const tools = createOpenClawCodingTools({
       trigger: "cron",
       jobId: "job-current",
@@ -116,7 +117,7 @@ describe("createOpenClawCodingTools cron scope", () => {
     });
 
     expect(tools.map((tool) => tool.name)).toContain(AUTOMATIONS_TOOL_NAME);
-    expect(tools.map((tool) => tool.name)).not.toContain("gateway");
+    await expectOwnerGated(tools, "gateway");
     expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
   });
 
@@ -132,9 +133,9 @@ describe("createOpenClawCodingTools cron scope", () => {
 
   it.each([{ trigger: "cron" as const }, { jobId: "job-current" }])(
     "does not expose automation controls for an incomplete scheduled context: %j",
-    (context) => {
+    async (context) => {
       const tools = createOpenClawCodingTools({ ...context, senderIsOwner: false });
-      expect(tools.map((tool) => tool.name)).not.toContain(AUTOMATIONS_TOOL_NAME);
+      await expectOwnerGated(tools, AUTOMATIONS_TOOL_NAME);
     },
   );
 
@@ -175,7 +176,7 @@ describe("createOpenClawCodingTools cron scope", () => {
     );
     const names = tools.map((tool) => tool.name);
     expect(names).toContain(AUTOMATIONS_TOOL_NAME);
-    expect(names).not.toContain("gateway");
+    await expectOwnerGated(tools, "gateway");
   });
 });
 

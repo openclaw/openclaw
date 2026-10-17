@@ -81,10 +81,9 @@ describe("portal tool", () => {
       senderIsOwner: false,
       sessionPortalTarget: target,
     })[0]!;
-    expect(Value.Check(tool.parameters, { action: "open", port: 3000 })).toBe(true);
-    expect(
-      Value.Check(tool.parameters, { action: "open", port: 3000, environmentId: "other" }),
-    ).toBe(false);
+    // The session target keeps the host definition so the prompt prefix stays stable;
+    // the bound target refuses host or alternate selection when the call runs.
+    expect(tool.parameters).toEqual(createAvailablePortalTools()[0]!.parameters);
     for (const action of ["open", "list", "close"]) {
       await tool.execute(action, { action, port: 3000, id: "p3000" });
     }
