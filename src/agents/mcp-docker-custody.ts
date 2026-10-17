@@ -109,7 +109,12 @@ async function engineFor(
   // its endpoint. A later `docker context use` must not redirect this launch.
   const pinnedEnv = { ...env };
   if (!env.DOCKER_CONTEXT && !env.DOCKER_HOST) {
-    pinnedEnv.DOCKER_CONTEXT = await command(initial, ["context", "show"]);
+    pinnedEnv.DOCKER_CONTEXT = await command(initial, [
+      "context",
+      "inspect",
+      "--format",
+      "{{.Name}}",
+    ]);
     if (!pinnedEnv.DOCKER_CONTEXT) {
       throw new Error("Docker MCP daemon context is unknown");
     }
