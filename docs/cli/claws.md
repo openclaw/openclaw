@@ -28,6 +28,23 @@ The CLI accepts a local package directory, `CLAW.md`, or grouped JSON manifest.
 Publishing and searching Claws through ClawHub use the separate registry
 surface. The Control UI can browse official Claws from **Agents**.
 
+For a local package on a running Gateway host, use the same Add preview and
+apply RPCs used by the Control UI. Local paths must be absolute and refer to
+the Gateway host's filesystem; both calls require `operator.admin`:
+
+```bash
+openclaw gateway call claws.add.plan --json --params '{"source":{"localPath":"/path/to/imported-claw"}}'
+openclaw gateway call claws.add.apply --json --params '{"source":{"localPath":"/path/to/imported-claw"},"planIntegrity":"<planIntegrity from preview>"}'
+```
+
+Review the preview's actions, blockers, capability reviews, and readiness before
+applying. Pass any required plugin or skill acknowledgements through their
+normal Add fields. If package content or reviewed access changes, preview again.
+The Gateway creates the agent and copies declared workspace files, including
+its avatar, through the normal Add lifecycle. It does not start a conversation;
+use the returned `agentId` to chat with the new agent. Official ClawHub sources
+continue to use `{ "packageName": "@openclaw/example", "version": "1.0.0" }`.
+
 ## Author locally
 
 Create a minimal project, validate its inputs, preview it without mutation,

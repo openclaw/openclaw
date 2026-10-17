@@ -15,6 +15,7 @@ import {
   ClawGatewayPlanChangedError,
 } from "../../claws/gateway-add-apply.js";
 import { planClawAddForGateway } from "../../claws/gateway-add-plan.js";
+import { ClawLocalSourceError } from "../../claws/gateway-add-source.js";
 import { ClawGatewayConsentError } from "../../claws/gateway-plugin-consent.js";
 import { ClawSkillConsentError } from "../../claws/gateway-skill-consent.js";
 import { assertClawsLabsEnabled, ClawsLabsDisabledError } from "../../claws/labs-gate.js";
@@ -29,17 +30,24 @@ import type { PluginInstallBatchReload } from "../../plugins/install-runtime-bat
 import { reloadManagedPlugin } from "../../plugins/management-mutations.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { deleteAgentConfigEntry } from "./agents-config-mutations.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const log = createSubsystemLogger("gateway/claws-add");
 
 export const clawsAddHandlers: GatewayRequestHandlers = {
-  "claws.add.plan": async ({ params, respond, context }) => {
+  "claws.add.plan": async (options) => {
+    const { params, respond, context } = options;
     if (!assertValidParams(params, validateClawsAddPlanParams, "claws.add.plan", respond)) {
       return;
     }
+    const assertLocalAuthority = () => {
+      if ("localPath" in params.source) {
+        assertClawAddAuthority(options);
+      }
+    };
     try {
+      assertLocalAuthority();
       assertClawsLabsEnabled(context.getRuntimeConfig());
       const config = await readCurrentConfigForPolicyCheckAsync({
         configPath: resolveConfigPath(),
@@ -50,25 +58,36 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
       if (!listedMcp.ok) {
         throw new Error(listedMcp.error);
       }
+      assertLocalAuthority();
       const plan = await planClawAddForGateway({
         source: params.source,
         ...(params.agentId ? { agentId: params.agentId } : {}),
         config,
         sourceMcpServers: listedMcp.mcpServers,
       });
+      assertLocalAuthority();
       assertClawsLabsEnabled(context.getRuntimeConfig());
       respond(true, plan);
     } catch (error) {
-      if (error instanceof ClawsLabsDisabledError) {
+      if (error instanceof ClawsLabsDisabledError || error instanceof ClawGatewayAuthorityError) {
         respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
         return;
       }
       log.error(`claws.add.plan failed: ${error instanceof Error ? error.message : String(error)}`);
       const message =
-        error instanceof ClawHubSourceError
+        error instanceof ClawHubSourceError || error instanceof ClawLocalSourceError
           ? error.message
           : "Claw Add preview is unavailable. Review Gateway logs.";
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+      respond(
+        false,
+        undefined,
+        errorShape(
+          error instanceof ClawLocalSourceError
+            ? ErrorCodes.INVALID_REQUEST
+            : ErrorCodes.UNAVAILABLE,
+          message,
+        ),
+      );
     }
   },
   "claws.add.apply": async ({
@@ -86,18 +105,13 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
     const configPath = resolveConfigPath();
     const configEnv = process.env;
     const assertCurrent = () => {
-      signal?.throwIfAborted();
-      sessionMutationCommitGuard?.();
-      if (
-        hasCurrentClientAuthority?.() === false ||
-        (client &&
-          (client.invalidated ||
-            (client.connect.role ?? "operator") !== "operator" ||
-            !client.connect.scopes?.includes(ADMIN_SCOPE))) ||
-        (!client && !context.localEmbedded)
-      ) {
-        throw new ClawGatewayAuthorityError("Claw installation authority is no longer active.");
-      }
+      assertClawAddAuthority({
+        context,
+        client,
+        signal,
+        sessionMutationCommitGuard,
+        hasCurrentClientAuthority,
+      });
     };
     try {
       assertClawsLabsEnabled(context.getRuntimeConfig());
@@ -251,6 +265,7 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
               error instanceof ClawGatewayPlanBlockedError ||
               error instanceof ClawGatewayConsentError ||
               error instanceof ClawSkillConsentError ||
+              error instanceof ClawLocalSourceError ||
               (error instanceof ClawHubSourceError &&
                 error.code === "clawhub_risk_acknowledgement_required")
             ? ErrorCodes.INVALID_REQUEST
@@ -262,7 +277,8 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
         error instanceof ClawSkillConsentError ||
         error instanceof ClawGatewayPlanBlockedError ||
         error instanceof ClawGatewayPlanChangedError ||
-        error instanceof ClawHubSourceError
+        error instanceof ClawHubSourceError ||
+        error instanceof ClawLocalSourceError
           ? error.message
           : "Could not add this Claw. Review Gateway logs before retrying.";
       respond(
@@ -292,6 +308,30 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
     }
   },
 };
+
+function assertClawAddAuthority({
+  context,
+  client,
+  signal,
+  sessionMutationCommitGuard,
+  hasCurrentClientAuthority,
+}: Pick<
+  GatewayRequestHandlerOptions,
+  "context" | "client" | "signal" | "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
+>): void {
+  signal?.throwIfAborted();
+  sessionMutationCommitGuard?.();
+  if (
+    hasCurrentClientAuthority?.() === false ||
+    (client &&
+      (client.invalidated ||
+        (client.connect.role ?? "operator") !== "operator" ||
+        !client.connect.scopes?.includes(ADMIN_SCOPE))) ||
+    (!client && !context.localEmbedded)
+  ) {
+    throw new ClawGatewayAuthorityError("Claw installation authority is no longer active.");
+  }
+}
 
 class ClawGatewayAuthorityError extends Error {
   constructor(message: string) {

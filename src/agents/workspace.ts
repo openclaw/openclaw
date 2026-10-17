@@ -347,9 +347,12 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   const beforeFileMutation = createWorkspaceFileMutationGuard(params.guard);
   const { bootstrapExists } = params;
 
+  // Profile edits can complete the stock onboarding ritual. A package's custom
+  // setup may still be required after its profiles, memory, and skills are imported.
   if (
     bootstrapExists
-      ? !(await workspaceProfileLooksConfigured({ dir: params.dir }))
+      ? (await fileContentDiffersFromTemplate(params.dir, DEFAULT_BOOTSTRAP_FILENAME)) ||
+        !(await workspaceProfileLooksConfigured({ dir: params.dir }))
       : !params.state.bootstrapSeededAt
   ) {
     return { repaired: false, bootstrapExists, state: params.state };

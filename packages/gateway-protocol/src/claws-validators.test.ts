@@ -14,6 +14,22 @@ import {
 } from "./index.js";
 
 describe("Claws Gateway contract", () => {
+  it("accepts a local Add source without changing catalog or update coordinates", () => {
+    const source = { localPath: "/tmp/imported-claw" };
+    expect(validateClawsAddPlanParams({ source })).toBe(true);
+    expect(validateClawsAddApplyParams({ source, planIntegrity: "sha256:reviewed" })).toBe(true);
+    expect(validateClawsAddPlanParams({ source: { localPath: "" } })).toBe(false);
+    expect(
+      validateClawsAddPlanParams({
+        source: { ...source, packageName: "@openclaw/claw", version: "1.0.0" },
+      }),
+    ).toBe(false);
+    expect(validateClawsCatalogDetailParams(source)).toBe(false);
+    expect(
+      validateClawsUpdateApplyParams({ agentId: "bot", source, planIntegrity: "sha256:reviewed" }),
+    ).toBe(false);
+  });
+
   it("allows the starter catalog before a search query and only official Add coordinates", () => {
     expect(validateClawsCatalogSearchParams({})).toBe(true);
     expect(validateClawsCatalogSearchParams({ query: "workflow", limit: 30 })).toBe(true);

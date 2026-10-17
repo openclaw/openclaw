@@ -3,6 +3,10 @@ import { dirname, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { claimCompletedAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
+import {
+  deleteWorkspaceState,
+  prepareWorkspaceStateDeletion,
+} from "../agents/workspace-state-store.js";
 import { pruneAgentConfig } from "../commands/agents.config.js";
 import { readConfigFileSnapshotForWrite, transformConfigFileWithRetry } from "../config/config.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
@@ -277,8 +281,12 @@ export async function stageClawAddHostRequirementsStateless(
         ) {
           throw new Error("Workspace changed after the agent became available; left it in place.");
         }
+        const stateDeletion = prepareWorkspaceStateDeletion(workspace);
         await rm(workspace, { recursive: true, force: false });
         workspaceCreated = false;
+        // A retry may allocate this path again. Its deleted bootstrap was rolled
+        // back, not consumed by the user, so retire the setup marker with it.
+        await deleteWorkspaceState(stateDeletion, { assertCurrent: options.assertCurrent });
       } catch (error) {
         errors.push(`workspace cleanup failed: ${coerceErrorMessage(error)}`);
       }

@@ -15,10 +15,10 @@ import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { selectNextClawAgentId } from "./add-agent-id.js";
 import {
-  withResolvedClawHubSource,
-  type ClawHubClawTrust,
-  type ClawHubCoordinate,
-} from "./clawhub-source.js";
+  withResolvedGatewayClawAddSource,
+  type GatewayClawAddSource,
+  type GatewayClawSourceTrust,
+} from "./gateway-add-source.js";
 import { bindClawLifecycleTrust, projectClawAddPlan } from "./gateway-plan-projection.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { preflightClawPackage } from "./packages.js";
@@ -116,7 +116,7 @@ export async function buildGatewayClawAddPlan(
 export function projectGatewayClawAddPlan(
   plan: ClawAddPlan,
   sourceRootOrSource: string | VerifiedClawSource,
-  trust: ClawHubClawTrust,
+  trust: GatewayClawSourceTrust,
   config: OpenClawConfig,
 ): ClawLifecyclePlanResult {
   const source = typeof sourceRootOrSource === "string" ? undefined : sourceRootOrSource;
@@ -134,11 +134,11 @@ export function projectGatewayClawAddPlan(
 export async function planClawAddForGateway(
   input: GatewayClawAddPlanningContext &
     ClawHubFetchOptions & {
-      source: ClawHubCoordinate;
+      source: GatewayClawAddSource;
     },
 ): Promise<ClawLifecyclePlanResult> {
-  const resolved = await withResolvedClawHubSource({
-    coordinate: input.source,
+  const resolved = await withResolvedGatewayClawAddSource({
+    source: input.source,
     mode: "preview",
     ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
     ...(input.token ? { token: input.token } : {}),

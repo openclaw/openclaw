@@ -704,7 +704,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["claws.catalog.search", "claws", "operator.read", "2026.10"],
   ["claws.catalog.detail", "claws", "operator.read", "2026.10"],
   ["claws.catalog.preview", "claws", "operator.read", "2026.10"],
-  ["claws.add.plan", "claws-add", "operator.read", "2026.10"],
+  ["claws.add.plan", "claws-add", "dynamic", "2026.10"],
   ["claws.add.apply", "claws-add", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["worktrees.recoverRemoval", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["worktrees.retireSnapshot", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],

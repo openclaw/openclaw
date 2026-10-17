@@ -193,12 +193,12 @@ export const ClawSkillAcknowledgementSchema = closedObject({
 });
 
 export const ClawsAddPlanParamsSchema = closedObject({
-  source: ClawCatalogCoordinateSchema,
+  source: Type.Union([ClawCatalogCoordinateSchema, closedObject({ localPath: NonEmptyString })]),
   agentId: Type.Optional(NonEmptyString),
 });
 
 export const ClawsAddApplyParamsSchema = closedObject({
-  source: ClawCatalogCoordinateSchema,
+  source: ClawsAddPlanParamsSchema.properties.source,
   agentId: Type.Optional(NonEmptyString),
   planIntegrity: Type.Optional(NonEmptyString),
   acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
@@ -377,13 +377,17 @@ export const ClawActionEffectSchema = Type.Union([
   }),
 ]);
 
+const ClawManifestSourceDetails = {
+  version: NonEmptyString,
+  integrity: Type.String({ pattern: "^sha256:[a-f0-9]{64}$" }),
+  byteLength: Type.Integer({ minimum: 1 }),
+};
+
 export const ClawManifestDisclosureSchema = closedObject({
-  source: closedObject({
-    packageName: OfficialClawName,
-    version: NonEmptyString,
-    integrity: Type.String({ pattern: "^sha256:[a-f0-9]{64}$" }),
-    byteLength: Type.Integer({ minimum: 1 }),
-  }),
+  source: Type.Union([
+    closedObject({ packageName: OfficialClawName, ...ClawManifestSourceDetails }),
+    closedObject({ localName: NonEmptyString, ...ClawManifestSourceDetails }),
+  ]),
   manifestJson: NonEmptyString,
   openClawProfileJson: Type.Optional(NonEmptyString),
 });
