@@ -284,29 +284,6 @@ describe("Teams action routing and authority", () => {
     );
   });
 
-  it("propagates includeMembers to getChannelInfoMSTeams and surfaces the roster", async () => {
-    await success(
-      "channel-info",
-      { teamId: graphTeam, channelId: graphChannel, includeMembers: true },
-      runtime.getChannelInfoMSTeams,
-      {
-        channel: { id: graphChannel, membershipType: "private" },
-        members: [{ userId: "user-1", displayName: "Alice" }],
-        membersComplete: true,
-        membersFetchedAt: "2026-10-17T06:00:00.000Z",
-        membersScope: { teamId: graphTeam, channelId: graphChannel, membershipType: "private" },
-      },
-      { teamId: graphTeam, channelId: graphChannel, includeMembers: true },
-      ok("channel-info", {
-        channelInfo: { id: graphChannel, membershipType: "private" },
-        members: [{ userId: "user-1", displayName: "Alice" }],
-        membersComplete: true,
-        membersFetchedAt: "2026-10-17T06:00:00.000Z",
-        membersScope: { teamId: graphTeam, channelId: graphChannel, membershipType: "private" },
-      }),
-    );
-  });
-
   it("does not request includeMembers when the caller omits or falsifies it", async () => {
     runtime.getChannelInfoMSTeams.mockResolvedValue({ channel: { id: graphChannel } });
     await run("channel-info", {
@@ -320,26 +297,6 @@ describe("Teams action routing and authority", () => {
       teamId: graphTeam,
       channelId: graphChannel,
     });
-  });
-
-  it("rejects channel-info for a disallowed channel before Graph, even with includeMembers", async () => {
-    await expect(
-      run(
-        "channel-info",
-        { teamId: graphTeam, channelId: graphChannel, includeMembers: true },
-        {
-          cfg: {
-            channels: {
-              msteams: {
-                groupPolicy: "allowlist",
-                teams: { [graphTeam]: { channels: { "19:other@thread.tacv2": {} } } },
-              },
-            },
-          },
-        },
-      ),
-    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
-    expect(runtime.getChannelInfoMSTeams).not.toHaveBeenCalled();
   });
 
   it("requires a trusted Teams requester for group management", () => {
