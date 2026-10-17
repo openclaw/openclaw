@@ -1526,7 +1526,6 @@ describe("finalizeSetupWizard", () => {
   it("uses the setup token for health checks to avoid local env token drift", async () => {
     probeGatewayReachable.mockResolvedValue({ ok: true });
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
-    const prompter = createLaterPrompter();
 
     await finalize("quickstart", {
       opts: { skipHealth: false, skipUi: true },
@@ -1539,7 +1538,6 @@ describe("finalizeSetupWizard", () => {
           },
         },
       },
-      prompter,
     });
 
     expect(requireMockArg(healthCommand)).toMatchObject({
@@ -1568,14 +1566,23 @@ describe("finalizeSetupWizard", () => {
     expect(prompter.outro).toHaveBeenCalledWith(expect.stringContaining("health check failed"));
   });
 
-  it.each(["return", "reject"] as const)(
-    "joins the temporary Gateway after TUI %s in containers without systemd",
-    async (outcome) => {
+  it.each([
+    ["return", false],
+    ["reject", false],
+    ["return", true],
+    ["reject", true],
+  ] as const)(
+    "joins the temporary Gateway after TUI %s in containers (skipHealth=%s)",
+    async (outcome, skipHealth) => {
       await withPlatform("linux", async () => {
         isSystemdUserServiceAvailable.mockResolvedValue(false);
         isContainerEnvironment.mockReturnValue(true);
-        waitForGatewayReachable.mockResolvedValue({ ok: true });
-        probeGatewayReachable.mockResolvedValue({ ok: true });
+        const probeStarted = createDeferred();
+        const reachable = createDeferred<{ ok: boolean }>();
+        waitForGatewayReachable.mockImplementationOnce(() => {
+          probeStarted.resolve();
+          return reachable.promise;
+        });
         const closeStarted = createDeferred();
         const allowClose = createDeferred();
         const sessionGateway = {
@@ -1594,29 +1601,24 @@ describe("finalizeSetupWizard", () => {
 
         const finalizing = finalizeSetupWizard(
           createFinalizeArgs("quickstart", {
-            opts: { installDaemon: undefined, skipHealth: false },
+            opts: { installDaemon: undefined, skipHealth },
             settings: { gatewayToken: "test-token" },
-            nextConfig: {
-              gateway: {
-                auth: {
-                  mode: "token",
-                  token: "test-token",
-                },
-              },
-            },
             prompter,
           }),
         );
+        await awaitGateBeforeSettlement(
+          probeStarted.promise,
+          closeStarted.promise,
+          "wizard launched the TUI before waiting for its temporary Gateway",
+        );
+        expect(runTui).not.toHaveBeenCalled();
+        reachable.resolve({ ok: true });
 
         let finalized = false;
-        const settled = finalizing.then(
-          () => {
-            finalized = true;
-          },
-          () => {
-            finalized = true;
-          },
-        );
+        const markFinalized = () => {
+          finalized = true;
+        };
+        const settled = finalizing.then(markFinalized, markFinalized);
         try {
           await awaitGateBeforeSettlement(
             closeStarted.promise,

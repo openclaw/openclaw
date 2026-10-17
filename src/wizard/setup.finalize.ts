@@ -480,7 +480,7 @@ export async function finalizeSetupWizard(
   }
 
   try {
-    if (!opts.skipHealth) {
+    if (!opts.skipHealth || sessionGateway) {
       const showHealthCheckHelp = () =>
         prompter.note(
           [
@@ -523,7 +523,7 @@ export async function finalizeSetupWizard(
             }),
           ])
         : readiness);
-      if (gatewayProbe.ok) {
+      if (gatewayProbe.ok && !opts.skipHealth) {
         try {
           const healthConfig: OpenClawConfig =
             settings.authMode === "token" && settings.gatewayToken
@@ -560,7 +560,7 @@ export async function finalizeSetupWizard(
           }
           await showHealthCheckHelp();
         }
-      } else if (gateway.status !== "skipped") {
+      } else if (!gatewayProbe.ok && gateway.status !== "skipped") {
         runtime.error(
           formatHealthCheckFailure(
             new Error(
@@ -577,7 +577,7 @@ export async function finalizeSetupWizard(
           }).detail,
           "Gateway",
         );
-      } else {
+      } else if (!gatewayProbe.ok) {
         await prompter.note(
           buildGatewayRecoveryProjection({ gateway, reachable: false }).detail,
           "Gateway",
@@ -606,7 +606,7 @@ export async function finalizeSetupWizard(
     };
     const displayLinks = await resolveAdvertisedControlUiLinks(controlUiLinkOptions);
     const probeLinks = resolveLocalControlUiProbeLinks(controlUiLinkOptions);
-    if (opts.skipHealth || (!gatewayProbe.ok && gateway.status !== "failed")) {
+    if ((opts.skipHealth && !sessionGateway) || (!gatewayProbe.ok && gateway.status !== "failed")) {
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
