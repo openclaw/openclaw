@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
@@ -309,14 +310,35 @@ function parseWikiSearchEnumOption<T extends string>(
   throw invalidCliArgument(`Invalid ${label}: ${value}. Expected one of: ${allowed.join(", ")}`);
 }
 
+function failWikiCli(message: string): never {
+  // Surface the operator-facing reason on stderr. Throw a commander parse-exit so
+  // run-main sets exitCode without the generic "The CLI command failed." title.
+  console.error(message);
+  throw invalidCliArgument(message);
+}
+
 async function resolveWikiApplyBody(params: { body?: string; bodyFile?: string }): Promise<string> {
   if (params.body?.trim()) {
     return params.body;
   }
   if (params.bodyFile?.trim()) {
-    return await fs.readFile(params.bodyFile, "utf8");
+    const bytes = await fs.readFile(params.bodyFile);
+    // Reject before mutation: blank files would wipe an existing synthesis, and
+    // replacement decoding would turn Latin-1 bytes into U+FFFD in the vault.
+    if (!isUtf8(bytes)) {
+      return failWikiCli(
+        `wiki apply synthesis --body-file must be valid UTF-8: ${params.bodyFile}. Save the file as UTF-8, then retry.`,
+      );
+    }
+    const text = bytes.toString("utf8");
+    if (!text.trim()) {
+      return failWikiCli(
+        `wiki apply synthesis --body-file is empty: ${params.bodyFile}. Supply nonempty UTF-8 text (or use --body), then retry.`,
+      );
+    }
+    return text;
   }
-  throw new Error("wiki apply synthesis requires --body or --body-file.");
+  return failWikiCli("wiki apply synthesis requires --body or --body-file.");
 }
 
 function formatJsonOrText<T>(
