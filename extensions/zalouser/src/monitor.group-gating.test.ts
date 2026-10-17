@@ -1,4 +1,3 @@
-// Zalouser tests cover monitor.group gating plugin behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -37,7 +36,9 @@ import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 
 const withMonitorIngressQueue = useZalouserMonitorTestQueue();
 
-function createAccount(): ResolvedZalouserAccount {
+function createAccount(
+  config: Partial<ResolvedZalouserAccount["config"]> = {},
+): ResolvedZalouserAccount {
   return {
     accountId: "default",
     enabled: true,
@@ -47,9 +48,8 @@ function createAccount(): ResolvedZalouserAccount {
       dmPolicy: "open",
       allowFrom: ["*"],
       groupPolicy: "open",
-      groups: {
-        "*": { requireMention: true },
-      },
+      groups: { "*": { requireMention: true } },
+      ...config,
     },
   };
 }
@@ -69,7 +69,7 @@ function createConfig(): OpenClawConfig {
   };
 }
 
-const createRuntimeEnv = () => createZalouserRuntimeEnv();
+const createRuntimeEnv = createZalouserRuntimeEnv;
 
 type DispatchReplyCallArg = {
   ctx?: {
@@ -100,17 +100,19 @@ function dispatchReplyCall(mock: unknown, index = 0): DispatchReplyCallArg {
   return mockCallArg(mock, "dispatch reply", index) as DispatchReplyCallArg;
 }
 
-function installRuntime(params: {
-  commandAuthorized?: boolean;
-  replyPayload?: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
-  replyKind?: "block" | "tool";
-  resolveCommandAuthorizedFromAuthorizers?: (params: {
-    useAccessGroups: boolean;
-    authorizers: Array<{ configured: boolean; allowed: boolean }>;
-  }) => boolean;
-}) {
+function installRuntime(
+  params: {
+    commandAuthorized?: boolean;
+    replyPayload?: { text?: string; mediaUrl?: string; mediaUrls?: string[] };
+    replyKind?: "block" | "tool";
+    resolveCommandAuthorizedFromAuthorizers?: (params: {
+      useAccessGroups: boolean;
+      authorizers: Array<{ configured: boolean; allowed: boolean }>;
+    }) => boolean;
+  } = {},
+) {
   const deliveryErrors: unknown[] = [];
-  const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions, ctx }) => {
+  const dispatchReply = vi.fn(async ({ dispatcherOptions, ctx }) => {
     await dispatcherOptions.typingCallbacks?.onReplyStart?.();
     if (params.replyPayload) {
       const info = { kind: params.replyKind ?? "block" };
@@ -151,25 +153,13 @@ function installRuntime(params: {
   );
   const readAllowFromStore = vi.fn(async () => []);
   type TurnPlan = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
-  const recordInboundSession = vi.fn(async (_params: unknown) => {});
   const dispatch = vi.fn(async (plan: TurnPlan) => {
     const turn = {
       ...plan,
       agentId: plan.route.agentId,
       routeSessionKey: plan.route.sessionKey,
-      storePath: "/tmp",
-      recordInboundSession,
-      dispatchReplyWithBufferedBlockDispatcher,
+      dispatchReply,
     };
-    await turn.recordInboundSession({
-      storePath: turn.storePath,
-      sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
-      ctx: turn.ctxPayload,
-      groupResolution: turn.record?.groupResolution,
-      createIfMissing: turn.record?.createIfMissing,
-      updateLastRoute: turn.record?.updateLastRoute,
-      onRecordError: turn.record?.onRecordError ?? (() => undefined),
-    });
     const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
       cfg: turn.cfg,
       agentId: turn.agentId,
@@ -177,7 +167,7 @@ function installRuntime(params: {
       accountId: turn.accountId,
       ...turn.replyPipeline,
     });
-    const dispatchResult = await turn.dispatchReplyWithBufferedBlockDispatcher({
+    const dispatchResult = await turn.dispatchReply({
       ctx: turn.ctxPayload,
       cfg: turn.cfg,
       dispatcherOptions: {
@@ -252,34 +242,11 @@ function installRuntime(params: {
           (input) => input.explicit?.isExplicitlyMentioned === true,
         ),
       },
-      groups: {
-        resolveRequireMention: vi.fn((input) => {
-          const cfg = input.cfg as OpenClawConfig;
-          const groupCfg = cfg.channels?.zalouser?.groups ?? {};
-          const typedGroupCfg = groupCfg as Record<string, { requireMention?: boolean }>;
-          const groupEntry = input.groupId ? typedGroupCfg[input.groupId] : undefined;
-          const defaultEntry = typedGroupCfg["*"];
-          if (typeof groupEntry?.requireMention === "boolean") {
-            return groupEntry.requireMention;
-          }
-          if (typeof defaultEntry?.requireMention === "boolean") {
-            return defaultEntry.requireMention;
-          }
-          return true;
-        }),
-      },
       routing: {
         resolveAgentRoute,
       },
-      session: {
-        resolveStorePath: vi.fn(() => "/tmp"),
-        recordInboundSession,
-      },
       reply: {
-        resolveEnvelopeFormatOptions: vi.fn(() => undefined),
-        formatAgentEnvelope: vi.fn(({ body }) => body),
-        finalizeInboundContext: vi.fn((ctx) => ctx),
-        dispatchReplyWithBufferedBlockDispatcher,
+        dispatchReplyWithBufferedBlockDispatcher: dispatchReply,
       },
       inbound: {
         ingress: createPluginRuntimeMock().channel.inbound.ingress,
@@ -292,14 +259,13 @@ function installRuntime(params: {
         convertMarkdownTables: vi.fn((text: string) => text),
         resolveChunkMode: vi.fn(() => "length"),
         resolveTextChunkLimit: vi.fn(() => 1200),
-        chunkMarkdownTextWithMode: vi.fn((text: string) => [text]),
       },
     },
   } as unknown as PluginRuntime);
 
   return {
     deliveryErrors,
-    dispatchReplyWithBufferedBlockDispatcher,
+    dispatchReply,
     resolveAgentRoute,
     resolveCommandAuthorizedFromAuthorizers,
     readAllowFromStore,
@@ -316,19 +282,20 @@ function installGroupCommandAuthRuntime() {
 async function processMessageThroughMonitor(params: {
   message?: ZaloInboundMessage;
   messages?: ZaloInboundMessage[];
-  account: ResolvedZalouserAccount;
-  config: OpenClawConfig;
-  runtime: ReturnType<typeof createZalouserRuntimeEnv>;
+  account?: ResolvedZalouserAccount;
+  config?: OpenClawConfig;
+  runtime?: ReturnType<typeof createZalouserRuntimeEnv>;
   historyState?: { historyLimit?: number };
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }): Promise<void> {
   const messages = params.messages ?? (params.message ? [params.message] : []);
+  const baseAccount = params.account ?? createAccount();
   const account = params.historyState?.historyLimit
     ? {
-        ...params.account,
-        config: { ...params.account.config, historyLimit: params.historyState.historyLimit },
+        ...baseAccount,
+        config: { ...baseAccount.config, historyLimit: params.historyState.historyLimit },
       }
-    : params.account;
+    : baseAccount;
   await withMonitorIngressQueue(async (ingressQueue) => {
     const abortController = new AbortController();
     const { promise: processed, resolve: resolveProcessed } = Promise.withResolvers<void>();
@@ -346,8 +313,8 @@ async function processMessageThroughMonitor(params: {
     });
     const run = monitorZalouserProvider({
       account,
-      config: params.config,
-      runtime: params.runtime,
+      config: params.config ?? createConfig(),
+      runtime: params.runtime ?? createRuntimeEnv(),
       abortSignal: abortController.signal,
       statusSink: params.statusSink,
       ingressQueue,
@@ -379,8 +346,6 @@ async function processGroupControlCommand(params: {
       wasExplicitlyMentioned: true,
     }),
     account: params.account,
-    config: createConfig(),
-    runtime: createRuntimeEnv(),
   });
 }
 
@@ -398,49 +363,24 @@ describe("zalouser monitor group mention gating", () => {
     startZaloListenerMock.mockResolvedValue({ stop: vi.fn() });
   });
 
-  async function processMessageWithDefaults(params: {
-    message: ZaloInboundMessage;
-    account?: ResolvedZalouserAccount;
-    historyState?: {
-      historyLimit: number;
-      groupHistories: Map<
-        string,
-        Array<{ sender: string; body: string; timestamp?: number; messageId?: string }>
-      >;
-    };
-  }) {
-    await processMessageThroughMonitor({
-      message: params.message,
-      account: params.account ?? createAccount(),
-      config: createConfig(),
-      runtime: createZalouserRuntimeEnv(),
-      historyState: params.historyState,
-    });
-  }
-
   async function expectSkippedGroupMessage(message?: Partial<ZaloInboundMessage>) {
-    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
-      commandAuthorized: false,
-    });
-    await processMessageWithDefaults({
+    const { dispatchReply } = installRuntime();
+    await processMessageThroughMonitor({
       message: createGroupMessage(message),
     });
-    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(dispatchReply).not.toHaveBeenCalled();
     expect(sendTypingZalouserMock).not.toHaveBeenCalled();
   }
 
   async function startMonitorForStartupResolution(
     accountConfig: ResolvedZalouserAccount["config"],
   ) {
-    installRuntime({ commandAuthorized: false });
+    installRuntime();
     const abortController = new AbortController();
     abortController.abort();
     await withMonitorIngressQueue(async (ingressQueue) => {
       await monitorZalouserProvider({
-        account: {
-          ...createAccount(),
-          config: accountConfig,
-        },
+        account: createAccount(accountConfig),
         config: createConfig(),
         runtime: createRuntimeEnv(),
         abortSignal: abortController.signal,
@@ -453,27 +393,21 @@ describe("zalouser monitor group mention gating", () => {
     accountConfig: ResolvedZalouserAccount["config"];
     expectedCommandAuthorized: boolean;
   }) {
-    const { dispatchReplyWithBufferedBlockDispatcher, resolveCommandAuthorizedFromAuthorizers } =
+    const { dispatchReply, resolveCommandAuthorizedFromAuthorizers } =
       installGroupCommandAuthRuntime();
     await processGroupControlCommand({
-      account: {
-        ...createAccount(),
-        config: params.accountConfig,
-      },
+      account: createAccount(params.accountConfig),
     });
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(dispatchReply).toHaveBeenCalledTimes(1);
     expect(resolveCommandAuthorizedFromAuthorizers).not.toHaveBeenCalled();
-    const callArg = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
+    const callArg = dispatchReplyCall(dispatchReply);
     expect(callArg?.ctx?.CommandAuthorized).toBe(params.expectedCommandAuthorized);
   }
 
   async function processOpenDmMessage(params?: { message?: Partial<ZaloInboundMessage> }) {
-    const runtime = installRuntime({
-      commandAuthorized: false,
-    });
-    await processMessageWithDefaults({
+    const runtime = installRuntime();
+    await processMessageThroughMonitor({
       message: createDmMessage(params?.message),
-      account: createAccount(),
     });
     return runtime;
   }
@@ -482,10 +416,8 @@ describe("zalouser monitor group mention gating", () => {
     dangerouslyAllowNameMatching?: boolean;
     expectedDispatches: number;
   }) {
-    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
-      commandAuthorized: false,
-    });
-    await processMessageWithDefaults({
+    const { dispatchReply } = installRuntime();
+    await processMessageThroughMonitor({
       message: createGroupMessage({
         threadId: "g-attacker-001",
         groupName: "Trusted Team",
@@ -494,44 +426,36 @@ describe("zalouser monitor group mention gating", () => {
         wasExplicitlyMentioned: true,
         content: "ping @bot",
       }),
-      account: {
-        ...createAccount(),
-        config: {
-          ...createAccount().config,
-          ...(params.dangerouslyAllowNameMatching ? { dangerouslyAllowNameMatching: true } : {}),
-          groupPolicy: "allowlist",
-          groupAllowFrom: ["*"],
-          groups: {
-            "group:g-trusted-001": { enabled: true },
-            "Trusted Team": { enabled: true },
-          },
+      account: createAccount({
+        ...(params.dangerouslyAllowNameMatching ? { dangerouslyAllowNameMatching: true } : {}),
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["*"],
+        groups: {
+          "group:g-trusted-001": { enabled: true },
+          "Trusted Team": { enabled: true },
         },
-      },
+      }),
     });
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
-      params.expectedDispatches,
-    );
-    return dispatchReplyWithBufferedBlockDispatcher;
+    expect(dispatchReply).toHaveBeenCalledTimes(params.expectedDispatches);
+    return dispatchReply;
   }
 
   async function dispatchGroupMessage(params: {
     commandAuthorized: boolean;
     message: Partial<ZaloInboundMessage>;
   }) {
-    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
+    const { dispatchReply } = installRuntime({
       commandAuthorized: params.commandAuthorized,
     });
-    await processMessageWithDefaults({
+    await processMessageThroughMonitor({
       message: createGroupMessage(params.message),
     });
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-    return dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
+    expect(dispatchReply).toHaveBeenCalledTimes(1);
+    return dispatchReplyCall(dispatchReply);
   }
 
   it("logs missing mentions once with the authored scope after group-name resolution", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
-      commandAuthorized: false,
-    });
+    const { dispatchReply } = installRuntime();
     const runtime = { ...createRuntimeEnv(), log: vi.fn() };
     const account = createAccount();
     account.config = {
@@ -548,7 +472,7 @@ describe("zalouser monitor group mention gating", () => {
       config,
       runtime,
     });
-    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(dispatchReply).not.toHaveBeenCalled();
     expect(sendTypingZalouserMock).not.toHaveBeenCalled();
     const diagnostics = runtime.log.mock.calls.filter(([line]) => line.includes("drop no mention"));
     expect(diagnostics).toEqual([
@@ -558,9 +482,7 @@ describe("zalouser monitor group mention gating", () => {
   });
 
   it("blocks mentioned group messages by default when groupPolicy is omitted", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
-      commandAuthorized: false,
-    });
+    const { dispatchReply } = installRuntime();
     const cfg: OpenClawConfig = {
       channels: {
         zalouser: {
@@ -578,11 +500,10 @@ describe("zalouser monitor group mention gating", () => {
       }),
       account,
       config: cfg,
-      runtime: createRuntimeEnv(),
     });
 
     expect(account.config.groupPolicy).toBe("allowlist");
-    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(dispatchReply).not.toHaveBeenCalled();
   });
 
   it("fails closed when requireMention=true but mention detection is unavailable", async () => {
@@ -615,9 +536,6 @@ describe("zalouser monitor group mention gating", () => {
 
     await processMessageThroughMonitor({
       message: createDmMessage(),
-      account: createAccount(),
-      config: createConfig(),
-      runtime: createRuntimeEnv(),
       statusSink,
     });
 
@@ -682,8 +600,6 @@ describe("zalouser monitor group mention gating", () => {
 
     await processMessageThroughMonitor({
       message: createDmMessage(),
-      account: createAccount(),
-      config: createConfig(),
       runtime,
       statusSink,
     });
@@ -722,19 +638,13 @@ describe("zalouser monitor group mention gating", () => {
   });
 
   it("allows DM senders from static access groups", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
-      commandAuthorized: false,
-    });
+    const { dispatchReply } = installRuntime();
     await processMessageThroughMonitor({
       message: createDmMessage({ senderId: "321" }),
-      account: {
-        ...createAccount(),
-        config: {
-          ...createAccount().config,
-          dmPolicy: "allowlist",
-          allowFrom: ["accessGroup:operators"],
-        },
-      },
+      account: createAccount({
+        dmPolicy: "allowlist",
+        allowFrom: ["accessGroup:operators"],
+      }),
       config: {
         ...createConfig(),
         accessGroups: {
@@ -744,10 +654,9 @@ describe("zalouser monitor group mention gating", () => {
           },
         },
       },
-      runtime: createRuntimeEnv(),
     });
 
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(dispatchReply).toHaveBeenCalledTimes(1);
   });
 
   it("uses commandContent for mention-prefixed control commands", async () => {
@@ -760,14 +669,12 @@ describe("zalouser monitor group mention gating", () => {
         wasExplicitlyMentioned: true,
       },
     });
-    expect(callArg?.ctx?.CommandBody).toBe("/new");
-    expect(callArg?.ctx?.BodyForCommands).toBe("/new");
+    expect(callArg?.ctx).toMatchObject({ CommandBody: "/new", BodyForCommands: "/new" });
   });
 
   it("allows group control commands when only allowFrom is configured", async () => {
     await expectGroupCommandAuthorizers({
       accountConfig: {
-        ...createAccount().config,
         allowFrom: ["123"],
       },
       expectedCommandAuthorized: true,
@@ -775,9 +682,7 @@ describe("zalouser monitor group mention gating", () => {
   });
 
   it("blocks routed allowlist groups without an explicit group sender allowlist", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
-      commandAuthorized: false,
-    });
+    const { dispatchReply } = installRuntime();
     await processMessageThroughMonitor({
       message: createGroupMessage({
         content: "ping @bot",
@@ -785,28 +690,20 @@ describe("zalouser monitor group mention gating", () => {
         wasExplicitlyMentioned: true,
         senderId: "456",
       }),
-      account: {
-        ...createAccount(),
-        config: {
-          ...createAccount().config,
-          groupPolicy: "allowlist",
-          allowFrom: ["123"],
-          groups: {
-            "group:g-1": { enabled: true, requireMention: true },
-          },
+      account: createAccount({
+        groupPolicy: "allowlist",
+        allowFrom: ["123"],
+        groups: {
+          "group:g-1": { enabled: true, requireMention: true },
         },
-      },
-      config: createConfig(),
-      runtime: createRuntimeEnv(),
+      }),
     });
 
-    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(dispatchReply).not.toHaveBeenCalled();
   });
 
   it("allows group senders from static access groups", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
-      commandAuthorized: false,
-    });
+    const { dispatchReply } = installRuntime();
     await processMessageThroughMonitor({
       message: createGroupMessage({
         content: "ping @bot",
@@ -814,14 +711,10 @@ describe("zalouser monitor group mention gating", () => {
         wasExplicitlyMentioned: true,
         senderId: "123",
       }),
-      account: {
-        ...createAccount(),
-        config: {
-          ...createAccount().config,
-          groupPolicy: "allowlist",
-          groupAllowFrom: ["accessGroup:operators"],
-        },
-      },
+      account: createAccount({
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["accessGroup:operators"],
+      }),
       config: {
         ...createConfig(),
         accessGroups: {
@@ -831,36 +724,27 @@ describe("zalouser monitor group mention gating", () => {
           },
         },
       },
-      runtime: createRuntimeEnv(),
     });
 
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(dispatchReply).toHaveBeenCalledTimes(1);
   });
 
   it("blocks group messages when sender is not in groupAllowFrom", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
-      commandAuthorized: false,
-    });
+    const { dispatchReply } = installRuntime();
     await processMessageThroughMonitor({
       message: createGroupMessage({
         content: "ping @bot",
         hasAnyMention: true,
         wasExplicitlyMentioned: true,
       }),
-      account: {
-        ...createAccount(),
-        config: {
-          ...createAccount().config,
-          groupPolicy: "allowlist",
-          allowFrom: ["999"],
-          groupAllowFrom: ["999"],
-        },
-      },
-      config: createConfig(),
-      runtime: createRuntimeEnv(),
+      account: createAccount({
+        groupPolicy: "allowlist",
+        allowFrom: ["999"],
+        groupAllowFrom: ["999"],
+      }),
     });
 
-    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(dispatchReply).not.toHaveBeenCalled();
   });
 
   it("does not accept a different group id by matching only the mutable group name by default", async () => {
@@ -868,11 +752,11 @@ describe("zalouser monitor group mention gating", () => {
   });
 
   it("accepts mutable group-name matches only when dangerouslyAllowNameMatching is enabled", async () => {
-    const dispatchReplyWithBufferedBlockDispatcher = await expectDangerousNameMatching({
+    const dispatchReply = await expectDangerousNameMatching({
       dangerouslyAllowNameMatching: true,
       expectedDispatches: 1,
     });
-    const callArg = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
+    const callArg = dispatchReplyCall(dispatchReply);
     expect(callArg?.ctx?.To).toBe("zalouser:group:g-attacker-001");
   });
 
@@ -881,7 +765,6 @@ describe("zalouser monitor group mention gating", () => {
     listZaloGroupsMock.mockResolvedValue([{ groupId: "g-other", name: "Trusted Team" }]);
 
     await startMonitorForStartupResolution({
-      ...createAccount().config,
       dmPolicy: "allowlist",
       allowFrom: ["Alice"],
       groupPolicy: "allowlist",
@@ -900,7 +783,6 @@ describe("zalouser monitor group mention gating", () => {
     listZaloGroupsMock.mockResolvedValue([{ groupId: "g-trusted", name: "Trusted Team" }]);
 
     await startMonitorForStartupResolution({
-      ...createAccount().config,
       dangerouslyAllowNameMatching: true,
       dmPolicy: "allowlist",
       allowFrom: ["Alice"],
@@ -918,7 +800,6 @@ describe("zalouser monitor group mention gating", () => {
   it("allows group control commands when sender is in groupAllowFrom", async () => {
     await expectGroupCommandAuthorizers({
       accountConfig: {
-        ...createAccount().config,
         allowFrom: ["999"],
         groupAllowFrom: ["123"],
       },
@@ -927,19 +808,20 @@ describe("zalouser monitor group mention gating", () => {
   });
 
   it("surfaces quote metadata in inbound reply context", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher, resolveAgentRoute } =
-      await processOpenDmMessage({
-        message: {
-          quotedGlobalMsgId: "987654321234",
-          quotedOwnerId: "555444333",
-          quotedBody: "Previous bot message content",
-        },
-      });
+    const { dispatchReply, resolveAgentRoute } = await processOpenDmMessage({
+      message: {
+        quotedGlobalMsgId: "987654321234",
+        quotedOwnerId: "555444333",
+        quotedBody: "Previous bot message content",
+      },
+    });
 
-    const callArg = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
-    expect(callArg?.ctx?.ReplyToId).toBe("987654321234");
-    expect(callArg?.ctx?.ReplyToBody).toBe("Previous bot message content");
-    expect(callArg?.ctx?.ReplyToIsQuote).toBe(true);
+    const callArg = dispatchReplyCall(dispatchReply);
+    expect(callArg?.ctx).toMatchObject({
+      ReplyToId: "987654321234",
+      ReplyToBody: "Previous bot message content",
+      ReplyToIsQuote: true,
+    });
     const routeInput = mockCallArg(resolveAgentRoute, "resolve agent route") as {
       peer?: unknown;
     };
@@ -948,11 +830,7 @@ describe("zalouser monitor group mention gating", () => {
   });
 
   it("includes skipped group messages as InboundHistory on the next processed message", async () => {
-    const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
-      commandAuthorized: false,
-    });
-    const account = createAccount();
-    const config = createConfig();
+    const { dispatchReply } = installRuntime();
     await processMessageThroughMonitor({
       messages: [
         createGroupMessage({
@@ -975,13 +853,10 @@ describe("zalouser monitor group mention gating", () => {
           wasExplicitlyMentioned: true,
         }),
       ],
-      account,
-      config,
-      runtime: createRuntimeEnv(),
       historyState: { historyLimit: 5 },
     });
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
-    const firstDispatch = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
+    expect(dispatchReply).toHaveBeenCalledTimes(2);
+    const firstDispatch = dispatchReplyCall(dispatchReply);
     expect(firstDispatch?.ctx?.InboundHistory).toEqual([
       {
         sender: "Alice",
@@ -992,7 +867,7 @@ describe("zalouser monitor group mention gating", () => {
     ]);
     expect(firstDispatch?.ctx?.Body ?? "").toContain("first unmentioned line");
 
-    const secondDispatch = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher, 1);
+    const secondDispatch = dispatchReplyCall(dispatchReply, 1);
     expect(secondDispatch?.ctx?.InboundHistory).toStrictEqual([]);
   });
 });

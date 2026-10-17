@@ -1,11 +1,10 @@
-import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSendHarness,
   encryptResponse,
   imageUrl,
   serviceUrl,
-  useAudioFixture,
+  useMediaFixture,
   type SendHarness,
 } from "./send.handoff.test-support.js";
 import { createZalouserTool } from "./tool.js";
@@ -60,13 +59,9 @@ describe("Zalouser registered send handoff", () => {
       const preparation = harness.gate();
       const response = harness.gate();
       const caller = new AbortController();
-      effectGate.prepare = async () => {
-        preparation.entered.resolve();
-        await preparation.release.promise;
-      };
+      effectGate.prepare = preparation.wait;
       harness.response = async () => {
-        response.entered.resolve();
-        await response.release.promise;
+        await response.wait();
         return encryptResponse({ msgId: "prepared-send" });
       };
       const sending = harness.send("message.text", { signal: caller.signal }).then(
@@ -126,13 +121,7 @@ describe("Zalouser registered send handoff", () => {
             throw new Error("caller retired");
           }
         },
-        onPlatformSendDispatch:
-          stage === "dispatch notification"
-            ? async () => {
-                wait.entered.resolve();
-                await wait.release.promise;
-              }
-            : undefined,
+        onPlatformSendDispatch: stage === "dispatch notification" ? wait.wait : undefined,
       });
       await wait.entered.promise;
       current = false;
@@ -164,8 +153,7 @@ describe("Zalouser registered send handoff", () => {
       signal: caller.signal,
       onDeliveryResult: async (result) => {
         ids.push(result.messageId);
-        progress.entered.resolve();
-        await progress.release.promise;
+        await progress.wait();
       },
     });
     await progress.entered.promise;
@@ -194,20 +182,11 @@ describe("Zalouser registered send handoff", () => {
     await expect(canceled).rejects.toThrow("caller A canceled");
     expect(allowed.messageId).toBe("message-2");
     expect(harness.api).toBe(api);
-    expect(harness.requests).toEqual([
-      expect.objectContaining({
-        params: expect.objectContaining({ message: "allowed B", toid: "202" }),
-      }),
-    ]);
+    expect(harness.requests).toMatchObject([{ params: { message: "allowed B", toid: "202" } }]);
   });
 
   it("retires cookie-waiting upload requests when a parallel SDK request fails", async () => {
-    vi.mocked(loadOutboundMediaFromUrl).mockResolvedValue({
-      buffer: Buffer.alloc(2048),
-      kind: "image",
-      contentType: "image/png",
-      fileName: "photo.png",
-    });
+    useMediaFixture("image", Buffer.alloc(2048));
     const cookie = harness.holdCookie();
     harness.response = () => new Response(null, { status: 503 });
     const send = harness.send("message.media", { text: "" });
@@ -217,11 +196,8 @@ describe("Zalouser registered send handoff", () => {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    expect(harness.requests).toEqual([
-      expect.objectContaining({
-        path: "/api/message/photo_original/upload",
-        params: expect.objectContaining({ chunkId: 2 }),
-      }),
+    expect(harness.requests).toMatchObject([
+      { path: "/api/message/photo_original/upload", params: { chunkId: 2 } },
     ]);
   });
 
@@ -260,7 +236,7 @@ describe("Zalouser registered send handoff", () => {
     "does not mark %s as visible delivery or send after its wait",
     async (stage) => {
       if (stage !== "image upload") {
-        useAudioFixture();
+        useMediaFixture("audio");
       }
       const wait = harness.gate();
       const caller = new AbortController();
@@ -272,8 +248,7 @@ describe("Zalouser registered send handoff", () => {
           if (
             stage === "image upload" ? request.path.endsWith("/upload") : request.method === "HEAD"
           ) {
-            wait.entered.resolve();
-            await wait.release.promise;
+            await wait.wait();
           }
           return harness.respond(request);
         };
@@ -301,7 +276,7 @@ describe("Zalouser registered send handoff", () => {
   );
 
   it("delivers allowed audio after the SDK upload callback and HEAD", async () => {
-    useAudioFixture();
+    useMediaFixture("audio");
     let visibleDispatch = false;
     const dispatchAtRequest: Array<{ path: string; visibleDispatch: boolean }> = [];
     harness.response = (request) => {
@@ -324,7 +299,7 @@ describe("Zalouser registered send handoff", () => {
   });
 
   it("preserves audio caption visibility on upload failure", async () => {
-    useAudioFixture();
+    useMediaFixture("audio");
     const captionId = "accepted-caption";
     const ids: Array<string | undefined> = [];
     harness.response = (request) =>

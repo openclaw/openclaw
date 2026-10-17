@@ -60,6 +60,7 @@ const voiceUrl = "https://zalo.test/voice.aac";
 type Gate = {
   entered: ReturnType<typeof createDeferred<void>>;
   release: ReturnType<typeof createDeferred<void>>;
+  wait: () => Promise<void>;
 };
 export type SendRoute = "message.text" | "message.media" | "sendText" | "sendMedia" | "sendPayload";
 type SendInput = Pick<
@@ -154,7 +155,14 @@ export class SendHarness {
   private nextMessage = 0;
 
   gate(): Gate {
-    const gate = { entered: createDeferred<void>(), release: createDeferred<void>() };
+    const gate = {
+      entered: createDeferred<void>(),
+      release: createDeferred<void>(),
+      wait: async () => {
+        gate.entered.resolve();
+        await gate.release.promise;
+      },
+    };
     this.gates.push(gate);
     return gate;
   }
@@ -215,8 +223,7 @@ export class SendHarness {
       void this.track(
         this.uploadEvents.runInAsyncScope(async () => {
           if (this.uploadWait) {
-            this.uploadWait.entered.resolve();
-            await this.uploadWait.release.promise;
+            await this.uploadWait.wait();
           }
           await callback({ fileId, fileUrl: voiceUrl });
           uploads.delete(fileId);
@@ -242,28 +249,21 @@ export class SendHarness {
 
   send(route: SendRoute, input: SendInput = {}) {
     const ctx = { cfg: this.cfg, to: "user:200", text: "hello", ...input };
+    const media = { ...ctx, mediaUrl: input.mediaUrl ?? imageUrl };
+    const message = zalouserPlugin.message?.send;
+    const outbound = zalouserPlugin.outbound;
     switch (route) {
       case "message.text":
-        return this.track(required(zalouserPlugin.message?.send?.text)(ctx));
+        return this.track(required(message?.text)(ctx));
       case "message.media":
-        return this.track(
-          required(zalouserPlugin.message?.send?.media)({
-            ...ctx,
-            mediaUrl: input.mediaUrl ?? imageUrl,
-          }),
-        );
+        return this.track(required(message?.media)(media));
       case "sendText":
-        return this.track(required(zalouserPlugin.outbound?.sendText)(ctx));
+        return this.track(required(outbound?.sendText)(ctx));
       case "sendMedia":
-        return this.track(
-          required(zalouserPlugin.outbound?.sendMedia)({
-            ...ctx,
-            mediaUrl: input.mediaUrl ?? imageUrl,
-          }),
-        );
+        return this.track(required(outbound?.sendMedia)(media));
       case "sendPayload":
         return this.track(
-          required(zalouserPlugin.outbound?.sendPayload)({
+          required(outbound?.sendPayload)({
             ...ctx,
             payload: { text: ctx.text, ...(input.mediaUrl ? { mediaUrl: input.mediaUrl } : {}) },
           }),
@@ -311,21 +311,19 @@ export function createSendHarness(options: { mediaFixture?: boolean } = {}): Sen
   }));
   vi.mocked(clearStoredZaloCredentials).mockResolvedValue(true);
   if (options.mediaFixture !== false) {
-    vi.mocked(loadOutboundMediaFromUrl).mockResolvedValue({
-      buffer: Buffer.from("fixture"),
-      kind: "image",
-      contentType: "image/png",
-      fileName: "photo.png",
-    });
+    useMediaFixture();
   }
   return harness;
 }
 
-export function useAudioFixture() {
+export function useMediaFixture(
+  kind: "image" | "audio" = "image",
+  buffer = Buffer.from(kind === "image" ? "fixture" : "fixture-audio"),
+) {
   vi.mocked(loadOutboundMediaFromUrl).mockResolvedValue({
-    buffer: Buffer.from("fixture-audio"),
-    kind: "audio",
-    contentType: "audio/aac",
-    fileName: "voice.aac",
+    buffer,
+    kind,
+    contentType: kind === "image" ? "image/png" : "audio/aac",
+    fileName: kind === "image" ? "photo.png" : "voice.aac",
   });
 }

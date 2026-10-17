@@ -12,85 +12,55 @@ vi.mock("./zalo-js.js", async (importOriginal) => ({
 
 const mockSendText = vi.mocked(sendZaloTextMessage);
 
-function sendResult(
-  messageId: string,
-  threadId = "thread",
-): {
-  messageId: string;
-  receipt: ReturnType<typeof createZalouserSendReceipt>;
-} {
+function sendResult(messageId: string, threadId = "thread") {
   return {
     messageId,
     receipt: createZalouserSendReceipt({ messageId, threadId, kind: "text" }),
   };
 }
 
-function requireSendTextCall(callIndex: number) {
-  const call = mockSendText.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected send text call ${callIndex + 1}`);
-  }
-  return call;
+function expectTextCall(
+  index: number,
+  thread: string,
+  text: unknown,
+  options: Record<string, unknown>,
+) {
+  expect(mockSendText.mock.calls[index]?.slice(0, 3)).toEqual([
+    thread,
+    text,
+    expect.objectContaining(options),
+  ]);
 }
 
-function requireSendTextOptions(callIndex: number) {
-  const options = requireSendTextCall(callIndex)[2];
-  if (!options) {
-    throw new Error(`expected send text call ${callIndex + 1} options`);
-  }
-  return options;
-}
-
-function expectSendTextOptions(callIndex: number, fields: Record<string, unknown>) {
-  expect(requireSendTextOptions(callIndex)).toEqual(expect.objectContaining(fields));
-}
+const imageOptions = { profile: "p2", isGroup: false, textMode: "markdown" as const };
+const imageUrl = "https://example.com/a.png";
 
 describe("zalouser send helpers", () => {
   beforeEach(() => {
     mockSendText.mockReset();
   });
 
-  it("formats image captions in markdown mode", async () => {
-    mockSendText.mockResolvedValueOnce(sendResult("mid-2", "thread-2"));
-
-    await sendImageZalouser("thread-2", "https://example.com/a.png", {
-      profile: "p2",
+  it.each([
+    {
+      name: "formats image captions in markdown mode",
       caption: "_cap_",
-      isGroup: false,
-      textMode: "markdown",
-    });
-
-    expect(requireSendTextCall(0)[0]).toBe("thread-2");
-    expect(requireSendTextCall(0)[1]).toBe("cap");
-    expectSendTextOptions(0, {
-      profile: "p2",
-      caption: undefined,
-      isGroup: false,
-      mediaUrl: "https://example.com/a.png",
-      textMode: "markdown",
-      textStyles: [{ start: 0, len: 3, st: TextStyle.Italic }],
-    });
-  });
-
-  it("does not keep the raw markdown caption as a media fallback after formatting", async () => {
-    mockSendText.mockResolvedValueOnce(sendResult("mid-2b", "thread-2"));
-
-    await sendImageZalouser("thread-2", "https://example.com/a.png", {
-      profile: "p2",
+      text: "cap",
+      styles: [{ start: 0, len: 3, st: TextStyle.Italic }],
+    },
+    {
+      name: "does not retain an empty raw markdown caption",
       caption: "```\n```",
-      isGroup: false,
-      textMode: "markdown",
-    });
-
-    expect(requireSendTextCall(0)[0]).toBe("thread-2");
-    expect(requireSendTextCall(0)[1]).toBe("");
-    expectSendTextOptions(0, {
-      profile: "p2",
+      text: "",
+      styles: undefined,
+    },
+  ])("$name", async ({ caption, text, styles }) => {
+    mockSendText.mockResolvedValueOnce(sendResult("mid-2", "thread-2"));
+    await sendImageZalouser("thread-2", imageUrl, { ...imageOptions, caption });
+    expectTextCall(0, "thread-2", text, {
+      ...imageOptions,
       caption: undefined,
-      isGroup: false,
-      mediaUrl: "https://example.com/a.png",
-      textMode: "markdown",
-      textStyles: undefined,
+      mediaUrl: imageUrl,
+      textStyles: styles,
     });
   });
 
@@ -167,18 +137,14 @@ describe("zalouser send helpers", () => {
 
     expect(mockSendText).toHaveBeenCalledTimes(2);
     expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(formatted.text);
-    expect(requireSendTextCall(0)[0]).toBe("thread-2d-2");
-    expect(requireSendTextCall(0)[1]).toBe(`${"a".repeat(1995)}\n\n`);
-    expectSendTextOptions(0, {
+    expectTextCall(0, "thread-2d-2", `${"a".repeat(1995)}\n\n`, {
       profile: "p2d-2",
       isGroup: false,
       textMode: "markdown",
       textChunkMode: "newline",
       textStyles: [{ start: 0, len: 1995, st: TextStyle.Bold }],
     });
-    expect(requireSendTextCall(1)[0]).toBe("thread-2d-2");
-    expect(requireSendTextCall(1)[1]).toBe("second paragraph");
-    expectSendTextOptions(1, {
+    expectTextCall(1, "thread-2d-2", "second paragraph", {
       profile: "p2d-2",
       isGroup: false,
       textMode: "markdown",
@@ -204,18 +170,14 @@ describe("zalouser send helpers", () => {
 
     expect(mockSendText).toHaveBeenCalledTimes(2);
     expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(formatted.text);
-    expect(requireSendTextCall(0)[0]).toBe("thread-2e");
-    expect(typeof requireSendTextCall(0)[1]).toBe("string");
-    expectSendTextOptions(0, {
+    expectTextCall(0, "thread-2e", expect.any(String), {
       profile: "p2e",
       caption: undefined,
       isGroup: false,
       mediaUrl: "https://example.com/long.png",
       textMode: "markdown",
     });
-    expect(requireSendTextCall(1)[0]).toBe("thread-2e");
-    expect(typeof requireSendTextCall(1)[1]).toBe("string");
-    expect(requireSendTextOptions(1).mediaUrl).toBeUndefined();
+    expectTextCall(1, "thread-2e", expect.any(String), { mediaUrl: undefined });
     expect(result).toMatchObject({ messageId: "mid-2e-2" });
   });
 });
