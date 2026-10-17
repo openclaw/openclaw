@@ -14,63 +14,6 @@ import { NewSessionDraftPersistence } from "./draft-persistence.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { PALETTE_PREFERENCE_KEY, PREFS_MIGRATION_KEY } from "./preferences.ts";
 
-const ORDINARY_KEY = "new-session.v1:main";
-const task = "Palette task";
-const remembered = (agentId = "other") => ({
-  agentId,
-  selection: { folder: agentId === "main" ? "/workspace" : "/other", worktree: false },
-});
-const agents = (workspaceGit = false) =>
-  ["main", "other"].map((id) => ({
-    id,
-    workspace: id === "main" ? "/workspace" : "/other",
-    workspaceGit,
-    model: { primary: `example/${id}` },
-  }));
-
-function required<T extends HTMLElement = HTMLElement>(
-  host: Pick<ParentNode, "querySelector">,
-  selector: string,
-) {
-  return expectDefined(host.querySelector<T>(selector), selector);
-}
-function setting<T extends HTMLElement = HTMLElement>(
-  host: Pick<ParentNode, "querySelector">,
-  suffix: string,
-) {
-  return host.querySelector<T>(`.palette-session-settings${suffix}`);
-}
-function control<T extends HTMLElement = HTMLButtonElement>(
-  host: PaletteDraftHost,
-  suffix: string,
-) {
-  return expectDefined(setting<T>(host, `__${suffix}`), suffix);
-}
-const agentSelect = (host: PaletteDraftHost) =>
-  required<AgentSelectElement>(host, "openclaw-agent-select");
-async function choose(host: PaletteDraftHost, agentId: string) {
-  agentSelect(host).onSelect(agentId);
-  await host.updateComplete;
-}
-function changeOwner(context: Awaited<ReturnType<typeof mount>>["context"], user?: string) {
-  const { snapshot } = context.gateway;
-  const hello = expectDefined(snapshot.hello, "Gateway hello");
-  snapshot.hello = { ...hello, auth: { ...hello.auth!, recoveryScope: "principal-b" } };
-  Object.assign(snapshot.client!, { recoveryScope: "principal-b" });
-  if (user) {
-    Object.assign(snapshot, { selfUser: { id: user } });
-  }
-}
-function reopen(host: PaletteDraftHost) {
-  host.draft.close();
-  host.draft.open();
-}
-async function submit(host: PaletteDraftHost, message: string) {
-  host.draft.setMessage(message);
-  await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
-  await host.draft.submit();
-}
-
 afterEach(() => {
   cleanupSolid();
   document.body.replaceChildren();
@@ -114,13 +57,16 @@ describe("PaletteSessionDraft", () => {
     await context.agents.refreshList();
     host.requestUpdate();
     await host.coldOutcome.promise;
-    expect(host.draft).toMatchObject({ submitting: true, error: null });
+    expect(host.draft.submitting).toBe(true);
+    expect(host.draft.error).toBeNull();
     await submitted.promise;
-    expect(context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    expect(context.sessions.createResult).toHaveBeenCalledWith(
       expect.objectContaining({ message: "", worktree: true, worktreeSource: "empty" }),
       { reconciliation: "background" },
     );
-    expect(context.placementStartup.start).toHaveBeenCalledExactlyOnceWith(
+    expect(context.placementStartup.start).toHaveBeenCalledOnce();
+    expect(context.placementStartup.start).toHaveBeenCalledWith(
       expect.objectContaining({
         recovery: expect.objectContaining({
           message: "Carry my cold Send into the required worker",
@@ -133,24 +79,39 @@ describe("PaletteSessionDraft", () => {
 
   it("omits the worktree setting for a non-Git workspace", async () => {
     const { host } = await mount();
-    await vi.waitFor(() => expect(setting(host, "__workspace")).not.toBeNull());
+    await vi.waitFor(() =>
+      expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
+    );
     expect(host.querySelector('[role="switch"][aria-label="New worktree"]')).toBeNull();
   });
 
   it("loads identities for every open agent-menu row and only the selection after closing", async () => {
-    const { host, context } = await mount({ agents: agents() });
-    const picker = required<AgentSelectElement>(host, "openclaw-agent-select");
+    const { host, context } = await mount({
+      agents: [
+        { id: "main", workspace: "/workspace" },
+        { id: "other", workspace: "/other" },
+      ],
+    });
+    const picker = expectDefined(
+      host.querySelector<AgentSelectElement>("openclaw-agent-select"),
+      "palette agent picker",
+    );
     await picker.updateComplete;
     for (const item of picker.querySelectorAll<HTMLElement>('[role="menuitemradio"]')) {
       item.scrollIntoView = vi.fn();
     }
-    const trigger = required<HTMLButtonElement>(picker, ".agent-select__trigger");
+    const trigger = expectDefined(
+      picker.querySelector<HTMLButtonElement>(".agent-select__trigger"),
+      "agent picker trigger",
+    );
     const menu = expectDefined(picker.querySelector(".agent-select__menu"), "agent menu");
     const ensure = vi.mocked(context.agentIdentity.ensure);
     await waitForSolid(() => expect(ensure).toHaveBeenLastCalledWith(["main"]));
 
-    setting<HTMLButtonElement>(host, "__trigger")!.click();
-    await waitForSolid(() => expect(setting(host, "")?.matches(":popover-open")).toBe(true));
+    host.querySelector<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
+    await waitForSolid(() =>
+      expect(host.querySelector(".palette-session-settings")?.matches(":popover-open")).toBe(true),
+    );
     ensure.mockClear();
     trigger.click();
     await waitForSolid(() => {
@@ -198,29 +159,50 @@ describe("PaletteSessionDraft", () => {
           : {},
     });
     const select = async (machine: string, project = "") => {
-      await vi.waitFor(() => expect(setting(host, "__workspace")).not.toBeNull());
-      control(host, "workspace").click();
+      await vi.waitFor(() =>
+        expect(host.querySelector(".palette-session-settings__workspace")).not.toBeNull(),
+      );
+      expectDefined(
+        host.querySelector<HTMLButtonElement>(".palette-session-settings__workspace"),
+        "workspace picker",
+      ).click();
       await host.updateComplete;
-      const selector = `[data-machine="${machine}"][data-project="${project}"]`;
-      await vi.waitFor(() => expect(host.querySelector(selector)).not.toBeNull());
-      required<HTMLButtonElement>(host, selector).click();
+      await vi.waitFor(() =>
+        expect(
+          host.querySelector('[data-machine="' + machine + '"][data-project="' + project + '"]'),
+        ).not.toBeNull(),
+      );
+      const row = host.querySelector<HTMLButtonElement>(
+        '[data-machine="' + machine + '"][data-project="' + project + '"]',
+      );
+      expectDefined(row, "environment choice").click();
       await host.updateComplete;
     };
 
     await select("local", "registered");
     await select("runtime:agentsapi");
-    expect(setting(host, "__workspace")?.textContent).toContain("Hosted workspace");
-    expect(setting(host, "__workspace")?.textContent).toContain("OpenAI (Agents API)");
-    expect(setting(host, "__worktree")).toBeNull();
+    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
+      "Hosted workspace",
+    );
+    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
+      "OpenAI (Agents API)",
+    );
+    expect(host.querySelector(".palette-session-settings__worktree")).toBeNull();
     await select("local", "registered");
-    expect(setting(host, "__workspace")?.textContent).toContain("Local project");
-    expect(setting(host, "__workspace")?.textContent).not.toContain("Agents API");
+    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
+      "Local project",
+    );
+    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).not.toContain(
+      "Agents API",
+    );
     await select("runtime:agentsapi");
     vi.mocked(context.sessions.createResult).mockResolvedValue({
       key: "agent:main:hosted-palette",
       initialRun: { status: "idle" },
     });
-    await submit(host, "Analyze my attachment");
+    host.draft.setMessage("Analyze my attachment");
+    await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
+    await host.draft.submit();
     const payload = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
     expect(payload).toMatchObject({
       model: "openai/gpt-5.6-luna",
@@ -262,14 +244,20 @@ describe("PaletteSessionDraft", () => {
           host.draft.close();
           host.paletteOpen = true;
           host.draft.open();
-          expect(host.draft).toMatchObject({ message: "Hold my creation", submitting: true });
+          expect(host.draft.message).toBe("Hold my creation");
+          expect(host.draft.submitting).toBe(true);
           host.draft.setMessage("must not replace the submitted intent");
           expect(host.draft.message).toBe("Hold my creation");
         } else {
           if (change === "connection") {
             Object.assign(context.gateway, { connectionRevision: 2 });
           } else {
-            changeOwner(context, "another-user");
+            const hello = expectDefined(context.gateway.snapshot.hello, "connected Gateway hello");
+            Object.assign(context.gateway.snapshot, {
+              selfUser: { id: "another-user" },
+              hello: { ...hello, auth: { ...hello.auth, recoveryScope: "another-owner" } },
+            });
+            Object.assign(context.gateway.snapshot.client!, { recoveryScope: "another-owner" });
           }
           publish();
           await host.updateComplete;
@@ -290,36 +278,45 @@ describe("PaletteSessionDraft", () => {
     },
   );
 
-  it.each(["idle", "started", "rejected", "same-owner", "gateway-object", "disconnected"] as const)(
-    "reports background creation and owner-bound recovery: %s",
-    async (outcome) => {
+  it.each([
+    { status: "idle" as const },
+    { status: "started" as const },
+    { status: "rejected" as const, error: "First message rejected" },
+  ])(
+    "reports accepted $status creation without changing the foreground selection",
+    async (initialRun) => {
       const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
-      const { host, context, publish } = await mount({ agents: agents() });
-      await choose(host, "other");
-      const initialRun =
-        outcome === "idle" || outcome === "started"
-          ? { status: outcome }
-          : { status: "rejected" as const, error: "First message rejected" };
+      const { host, context } = await mount({
+        agents: [
+          { id: "main", workspace: "/workspace", model: { primary: "example/main" } },
+          { id: "other", workspace: "/other", model: { primary: "example/other" } },
+        ],
+      });
+      const select = host.querySelector("openclaw-agent-select") as HTMLElement & {
+        onSelect: (id: string) => void;
+      };
+      select.onSelect("other");
+      host.draft.setMessage("Create with this explicit agent");
       vi.mocked(context.sessions.createResult).mockResolvedValue({
         key: "agent:other:dashboard:created",
         initialRun,
       });
-      await submit(host, task);
+      await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
+      await host.draft.submit();
       expect(context.sessions.createResult).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId: "other", message: task }),
+        expect.objectContaining({ agentId: "other", message: "Create with this explicit agent" }),
         { reconciliation: "background" },
       );
       if (initialRun.status === "rejected") {
         expect(host.started).not.toHaveBeenCalled();
-        expect(host.draft).toMatchObject({
-          message: task,
-          error: initialRun.error,
-          canSubmit: false,
-        });
+        expect(host.draft.message).toBe("Create with this explicit agent");
+        expect(host.draft.error).toBe(initialRun.error);
+        expect(host.draft.canSubmit).toBe(false);
         await host.draft.submit();
         expect(context.sessions.createResult).toHaveBeenCalledOnce();
-        reopen(host);
-        expect(host.draft.message).toBe(task);
+        host.draft.close();
+        host.draft.open();
+        expect(host.draft.message).toBe("Create with this explicit agent");
       } else {
         expect(host.started).toHaveBeenCalledOnce();
         expect(host.draft.message).toBe("");
@@ -329,36 +326,50 @@ describe("PaletteSessionDraft", () => {
       expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
       const notice = showToast.mock.calls.at(-1)?.[0];
       expect(notice?.actionLabel).toBeTruthy();
-      const reconnect = !["idle", "started", "rejected"].includes(outcome);
-      if (reconnect) {
-        expect(notice?.onAction).toBeTypeOf("function");
-        context.gateway.snapshot.phase = "reconnecting";
-        publish();
-        context.gateway.snapshot.client = createDraftFixture().context.gateway.snapshot.client;
-        context.gateway.snapshot.phase = outcome === "disconnected" ? "reconnecting" : "connected";
-        if (outcome === "gateway-object") {
-          Object.assign(context, { gateway: { ...context.gateway } });
-        }
-        publish();
-        await host.updateComplete;
+      notice?.onAction?.();
+      expect(context.gateway.setSessionKey).toHaveBeenCalledWith("agent:other:dashboard:created");
+      expect(context.navigate).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["same-owner", "gateway-object", "disconnected"])(
+    "keeps rejected-session recovery bound to its owner after %s reconnect",
+    async (reconnect) => {
+      const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+      const { host, context, publish } = await mount();
+      host.draft.setMessage("Keep the rejected task recoverable");
+      vi.mocked(context.sessions.createResult).mockResolvedValue({
+        key: "agent:main:dashboard:rejected",
+        initialRun: { status: "rejected", error: "Initial turn rejected" },
+      });
+      await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
+      await host.draft.submit();
+      const open = showToast.mock.calls.at(-1)?.[0].onAction;
+      expect(open).toBeTypeOf("function");
+      context.gateway.snapshot.phase = "reconnecting";
+      publish();
+      context.gateway.snapshot.client = createDraftFixture().context.gateway.snapshot.client;
+      context.gateway.snapshot.phase = reconnect === "disconnected" ? "reconnecting" : "connected";
+      if (reconnect === "gateway-object") {
+        Object.assign(context, { gateway: { ...context.gateway } });
       }
-      if (outcome === "same-owner") {
-        expect(host.draft).toMatchObject({ message: task, canSubmit: false });
+      publish();
+      await host.updateComplete;
+      if (reconnect === "same-owner") {
+        expect(host.draft.message).toBe("Keep the rejected task recoverable");
+        expect(host.draft.canSubmit).toBe(false);
         const recovery = [...host.querySelectorAll("button")].find(
           (button) => button.textContent?.trim() === "Open session",
         );
         expect(recovery).toBeDefined();
         recovery?.click();
+        expect(context.gateway.setSessionKey).toHaveBeenCalledWith("agent:main:dashboard:rejected");
+        expect(context.navigate).toHaveBeenCalledOnce();
         expect(host.started).toHaveBeenCalledOnce();
       } else {
-        notice?.onAction?.();
-      }
-      if (outcome === "gateway-object" || outcome === "disconnected") {
+        open?.();
         expect(context.navigate).not.toHaveBeenCalled();
         expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
-      } else {
-        expect(context.gateway.setSessionKey).toHaveBeenCalledWith("agent:other:dashboard:created");
-        expect(context.navigate).toHaveBeenCalledOnce();
       }
       expect(context.sessions.createResult).toHaveBeenCalledOnce();
     },
@@ -393,7 +404,7 @@ describe("PaletteSessionDraft", () => {
     expect(route).not.toHaveBeenCalled();
     expect(sessionStorage.length).toBe(1);
     expect(host.querySelector(".new-session-page__where-popover")).toBeNull();
-    const settingsTrigger = setting(host, "__trigger");
+    const settingsTrigger = host.querySelector(".palette-session-settings__trigger");
     expect(settingsTrigger?.id).toMatch(/^palette-session-\d+-settings-trigger$/);
     expect(settingsTrigger?.getAttribute("aria-controls")).toBe(
       host.querySelector(".oc-popover.palette-session-settings")?.id,
@@ -402,15 +413,20 @@ describe("PaletteSessionDraft", () => {
 
   it("clears another credential owner's text and keeps a failed create unaccepted", async () => {
     const { host, context, publish } = await mount();
+    host.draft.setMessage("Only for the first owner");
     vi.mocked(context.sessions.createResult).mockResolvedValue(null);
     Object.assign(context.sessions.state, { error: "Creation denied" });
-    await submit(host, task);
+    await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
+    await host.draft.submit();
     expect(host.started).not.toHaveBeenCalled();
-    expect(host.draft).toMatchObject({
-      message: task,
-      error: "Creation denied",
-    });
-    changeOwner(context);
+    expect(host.draft.message).toBe("Only for the first owner");
+    expect(host.draft.error).toBe("Creation denied");
+    const hello = context.gateway.snapshot.hello!;
+    context.gateway.snapshot.hello = {
+      ...hello,
+      auth: { ...hello.auth!, recoveryScope: "principal-b" },
+    };
+    Object.assign(context.gateway.snapshot.client!, { recoveryScope: "principal-b" });
     publish();
     expect(host.draft.message).toBe("");
   });
@@ -419,10 +435,19 @@ describe("PaletteSessionDraft", () => {
 async function mountPreferences(initial: Record<string, unknown> = {}) {
   const entries: Record<string, unknown> = { [PREFS_MIGRATION_KEY]: true, ...initial };
   const writes: Record<string, unknown>[] = [];
-  const save = { reject: false, before: async (_patch: Record<string, unknown>) => {} };
-  const f = await mount({
+  let reject = false;
+  let beforeSave = async (_patch: Record<string, unknown>) => {};
+  const fixture = await mount({
     selfUser: { id: "alice" },
-    agents: agents(true),
+    agents: [
+      {
+        id: "main",
+        workspace: "/workspace",
+        workspaceGit: true,
+        model: { primary: "example/main" },
+      },
+      { id: "other", workspace: "/other", workspaceGit: true, model: { primary: "example/other" } },
+    ],
     methods: [
       "sessions.create",
       "users.prefs.get",
@@ -439,10 +464,10 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
           throw new Error("Expected preference entries");
         }
         writes.push(params.entries);
-        if (save.reject) {
+        if (reject) {
           throw new Error("Preference save failed");
         }
-        await save.before(params.entries);
+        await beforeSave(params.entries);
         for (const [key, value] of Object.entries(params.entries)) {
           if (value === null) {
             delete entries[key];
@@ -469,141 +494,161 @@ async function mountPreferences(initial: Record<string, unknown> = {}) {
       return {};
     },
   });
-  const { host, context, publish } = f;
-  const remember = () => control<HTMLInputElement>(host, "remember input");
-  const select = () => agentSelect(host);
-  const worktree = () => required<HTMLButtonElement>(host, '[role="switch"]');
-  const error = () => setting(host, '__error[role="alert"]');
-  const expectSaved = (agentId?: string) => {
-    if (agentId) {
-      expect(entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId });
-    } else {
-      expect(entries[PALETTE_PREFERENCE_KEY]).toBeUndefined();
-    }
-  };
-  await host.settingsReady.promise;
+  const remember = () =>
+    expectDefined(
+      fixture.host.querySelector<HTMLInputElement>(".palette-session-settings__remember input"),
+      "palette remember checkbox",
+    );
+  const select = () =>
+    expectDefined(
+      fixture.host.querySelector<AgentSelectElement>("openclaw-agent-select"),
+      "palette agent select",
+    );
+  const worktree = () =>
+    expectDefined(
+      fixture.host.querySelector<HTMLButtonElement>('[role="switch"]'),
+      "palette worktree switch",
+    );
+  // Wait out cold preference imports, then flush their queued presentation updates.
+  await fixture.host.settingsReady.promise;
   await waitForSolid(() => {
     expect(remember().disabled).toBe(false);
     expect(worktree().disabled).toBe(false);
   });
   return {
-    ...f,
+    ...fixture,
     entries,
     writes,
-    save,
     remember,
     select,
     worktree,
-    expectSaved,
-    saved: (agentId?: string) => vi.waitFor(() => expectSaved(agentId)),
-    error,
-    retry: () => control(host, "error button").click(),
-    choose: (agentId: string) => choose(host, agentId),
-    prompt: async (message: string) => {
-      host.draft.setMessage(message);
-      await host.updateComplete;
-      const input = required<HTMLTextAreaElement>(host, "textarea");
-      input.focus();
-      input.setSelectionRange(5, 9);
-      return input;
+    setReject: (value: boolean) => {
+      reject = value;
     },
-    reconnect: async () => {
-      context.gateway.snapshot.phase = "reconnecting";
-      publish();
-      await host.updateComplete;
-      context.gateway.snapshot.phase = "connected";
-      context.gateway.snapshot.hello = {
-        ...expectDefined(context.gateway.snapshot.hello, "Gateway hello"),
-      };
-      publish();
-      await host.updateComplete;
-      await vi.waitFor(() => expect(remember().disabled).toBe(false));
+    setBeforeSave: (callback: (patch: Record<string, unknown>) => Promise<void>) => {
+      beforeSave = callback;
     },
   };
 }
 
-function holdSave(f: Awaited<ReturnType<typeof mountPreferences>>, key = PALETTE_PREFERENCE_KEY) {
+function holdPaletteSave(fixture: Awaited<ReturnType<typeof mountPreferences>>) {
   const saving = createDeferred();
   const held = createDeferred();
   let heldOnce = false;
-  f.save.before = async (patch) => {
-    if (Object.hasOwn(patch, key) && !heldOnce) {
+  fixture.setBeforeSave(async (patch) => {
+    if (Object.hasOwn(patch, PALETTE_PREFERENCE_KEY) && !heldOnce) {
       heldOnce = true;
       saving.resolve();
       await held.promise;
     }
-  };
+  });
   return { saving: saving.promise, release: held.resolve };
 }
 
 describe("palette-only remembered settings", () => {
   it("never borrows or consumes the foreground draft's one-use worktree name", async () => {
     const ordinary = { folder: "/workspace", worktree: true, worktreeName: "foreground-task" };
-    const f = await mountPreferences({
-      [ORDINARY_KEY]: ordinary,
+    const fixture = await mountPreferences({
+      "new-session.v1:main": ordinary,
       [PALETTE_PREFERENCE_KEY]: {
         agentId: "main",
         selection: { folder: "/workspace", worktree: true, worktreeName: "old-palette-name" },
       },
     });
-    await vi.waitFor(() => expect(f.place.worktreeName).toBe("foreground-task"));
-    await submit(f.host, task);
-    const params = vi.mocked(f.context.sessions.createResult).mock.calls[0]?.[0];
-    expect(params).toMatchObject({ worktree: true, message: task });
+    await vi.waitFor(() => expect(fixture.place.worktreeName).toBe("foreground-task"));
+    fixture.host.draft.setMessage("A separate background worktree task");
+    await vi.waitFor(() => expect(fixture.host.draft.canSubmit).toBe(true));
+    await fixture.host.draft.submit();
+    const params = vi.mocked(fixture.context.sessions.createResult).mock.calls[0]?.[0];
+    expect(params).toMatchObject({
+      worktree: true,
+      message: "A separate background worktree task",
+    });
     expect(params).not.toHaveProperty("worktreeName");
-    expect(f.place.worktreeName).toBe("foreground-task");
-    expect(f.entries[ORDINARY_KEY]).toEqual(ordinary);
-    expect(f.writes).toEqual([]);
+    expect(fixture.place.worktreeName).toBe("foreground-task");
+    expect(fixture.entries["new-session.v1:main"]).toEqual(ordinary);
+    expect(fixture.writes).toEqual([]);
   });
 
   it("uses a confirmed ordinary default after its initiating surface is disposed", async () => {
-    const f = await mountPreferences();
-    const { saving, release } = holdSave(f, ORDINARY_KEY);
-    f.place.applyFolder("/confirmed");
+    const fixture = await mountPreferences();
+    const saving = createDeferred();
+    const held = createDeferred();
+    fixture.setBeforeSave(async (patch) => {
+      const preference = patch["new-session.v1:main"];
+      if (isRecord(preference) && preference.folder === "/confirmed-after-disposal") {
+        saving.resolve();
+        await held.promise;
+      }
+    });
+    fixture.place.applyFolder("/confirmed-after-disposal");
     try {
-      await saving;
-      f.gateway.disconnect();
-      release();
+      await saving.promise;
+      fixture.gateway.disconnect();
+      held.resolve();
       await vi.waitFor(() =>
-        expect(f.entries[ORDINARY_KEY]).toMatchObject({ folder: "/confirmed" }),
+        expect(fixture.entries["new-session.v1:main"]).toMatchObject({
+          folder: "/confirmed-after-disposal",
+        }),
       );
-      reopen(f.host);
-      await f.host.updateComplete;
-      expect(setting(f.host, "__workspace")?.textContent).toContain("confirmed");
+      fixture.host.draft.close();
+      fixture.host.draft.open();
+      await fixture.host.updateComplete;
+      expect(
+        fixture.host.querySelector(".palette-session-settings__workspace")?.textContent,
+      ).toContain("confirmed-after-disposal");
     } finally {
-      release();
+      held.resolve();
     }
   });
 
   it.each([false, true])(
     "refreshes confirmed remount settings without overriding edited choices (edited=%s)",
     async (edited) => {
-      const f = await mountPreferences();
-      const { saving, release } = holdSave(f);
-      await f.choose("main");
-      f.remember().click();
+      const fixture = await mountPreferences();
+      const { saving, release } = holdPaletteSave(fixture);
+      fixture.select().onSelect("main");
+      await fixture.host.updateComplete;
+      fixture.remember().click();
       let replacement: PaletteDraftHost | undefined;
       try {
         await saving;
-        await f.choose("other");
-        f.host.remove();
-        replacement = new PaletteDraftHost(f.context);
+        fixture.select().onSelect("other");
+        await fixture.host.updateComplete;
+        fixture.host.remove();
+        replacement = new PaletteDraftHost(fixture.context);
         replacement.draft.open();
         const current = replacement;
         await vi.waitFor(() =>
-          expect(setting<HTMLInputElement>(current, "__remember input")?.disabled).toBe(false),
+          expect(
+            current.querySelector<HTMLInputElement>(".palette-session-settings__remember input")
+              ?.disabled,
+          ).toBe(false),
         );
         if (edited) {
-          await choose(current, "other");
-          await choose(current, "main");
+          const select = expectDefined(
+            current.querySelector<AgentSelectElement>("openclaw-agent-select"),
+            "replacement agent",
+          );
+          select.onSelect("other");
+          await current.updateComplete;
+          select.onSelect("main");
+          await current.updateComplete;
         }
         release();
-        await f.saved("other");
-        expect(f.writes).toHaveLength(2);
         await vi.waitFor(() =>
-          expect(setting<HTMLInputElement>(current, "__remember input")?.checked).toBe(!edited),
+          expect(fixture.entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId: "other" }),
         );
-        expect(agentSelect(current).value).toBe(edited ? "main" : "other");
+        expect(fixture.writes).toHaveLength(2);
+        await vi.waitFor(() =>
+          expect(
+            current.querySelector<HTMLInputElement>(".palette-session-settings__remember input")
+              ?.checked,
+          ).toBe(!edited),
+        );
+        expect(current.querySelector<AgentSelectElement>("openclaw-agent-select")?.value).toBe(
+          edited ? "main" : "other",
+        );
       } finally {
         release();
         replacement?.remove();
@@ -614,34 +659,60 @@ describe("palette-only remembered settings", () => {
   it.each(["selection", "deletion"] as const)(
     "surfaces an unconfirmed queued %s after reconnect and retries the latest intent",
     async (intent) => {
-      const f = await mountPreferences();
-      const { saving, release } = holdSave(f);
-      const prompt = await f.prompt(task);
-      await f.choose("other");
-      f.remember().click();
+      const fixture = await mountPreferences();
+      const { saving, release } = holdPaletteSave(fixture);
+      fixture.host.draft.setMessage("Keep this exact reconnect prompt");
+      await fixture.host.updateComplete;
+      const prompt = expectDefined(fixture.host.querySelector("textarea"), "palette prompt");
+      prompt.focus();
+      prompt.setSelectionRange(5, 9);
+      fixture.select().onSelect("other");
+      await fixture.host.updateComplete;
+      fixture.remember().click();
       try {
         await saving;
-        await f.host.updateComplete;
+        await fixture.host.updateComplete;
         if (intent === "selection") {
-          f.select().onSelect("main");
+          fixture.select().onSelect("main");
         } else {
-          f.remember().click();
+          fixture.remember().click();
         }
-        await f.host.updateComplete;
-        await f.reconnect();
-        expect(f.error()).not.toBeNull();
-        expect(f.remember()).toMatchObject({ checked: false });
-        expect(f.select()).toMatchObject({ value: "main" });
-        expect(f.host.draft.message).toBe(task);
+        await fixture.host.updateComplete;
+        fixture.context.gateway.snapshot.phase = "reconnecting";
+        fixture.publish();
+        await fixture.host.updateComplete;
+        fixture.context.gateway.snapshot.phase = "connected";
+        fixture.context.gateway.snapshot.hello = {
+          ...expectDefined(fixture.context.gateway.snapshot.hello, "Gateway hello"),
+        };
+        fixture.publish();
+        await vi.waitFor(() => expect(fixture.remember().disabled).toBe(false));
+        expect(
+          fixture.host.querySelector('.palette-session-settings__error[role="alert"]'),
+        ).not.toBeNull();
+        expect(fixture.remember().checked).toBe(false);
+        expect(fixture.select().value).toBe("main");
+        expect(fixture.host.draft.message).toBe("Keep this exact reconnect prompt");
         expect([prompt.selectionStart, prompt.selectionEnd]).toEqual([5, 9]);
         release();
-        await f.saved("other");
-        f.retry();
+        await vi.waitFor(() =>
+          expect(fixture.entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId: "other" }),
+        );
+        expectDefined(
+          fixture.host.querySelector<HTMLButtonElement>(".palette-session-settings__error button"),
+          "retry remembered settings",
+        ).click();
         await vi.waitFor(() => {
-          f.expectSaved(intent === "selection" ? "main" : undefined);
-          expect(f.error()).toBeNull();
+          if (intent === "selection") {
+            expect(fixture.entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId: "main" });
+          } else {
+            expect(fixture.entries[PALETTE_PREFERENCE_KEY]).toBeUndefined();
+          }
+          expect(
+            fixture.host.querySelector('.palette-session-settings__error[role="alert"]'),
+          ).toBeNull();
         });
-        expect(f.remember().checked).toBe(intent === "selection");
+        expect(fixture.remember().checked).toBe(intent === "selection");
       } finally {
         release();
       }
@@ -649,102 +720,164 @@ describe("palette-only remembered settings", () => {
   );
 
   it("keeps one-off choices out of normal defaults and resets on reopen", async () => {
-    const ordinary = { folder: "/workspace", worktree: true };
-    const f = await mountPreferences({ [ORDINARY_KEY]: ordinary });
-    await vi.waitFor(() => expect(f.worktree().getAttribute("aria-checked")).toBe("true"));
-    await f.choose("other");
-    expect(f.select().value).toBe("other");
-    expect(f.writes).toEqual([]);
-    reopen(f.host);
-    await vi.waitFor(() => expect(f.select().value).toBe("main"));
-    expect(f.entries[ORDINARY_KEY]).toEqual(ordinary);
-    f.expectSaved();
+    const { host, entries, writes, select, worktree } = await mountPreferences({
+      "new-session.v1:main": { folder: "/workspace", worktree: true },
+    });
+    await vi.waitFor(() => expect(worktree().getAttribute("aria-checked")).toBe("true"));
+    select().onSelect("other");
+    await host.updateComplete;
+    expect(select().value).toBe("other");
+    expect(writes).toEqual([]);
+    host.draft.close();
+    host.draft.open();
+    await vi.waitFor(() => expect(select().value).toBe("main"));
+    expect(entries["new-session.v1:main"]).toEqual({ folder: "/workspace", worktree: true });
+    expect(entries[PALETTE_PREFERENCE_KEY]).toBeUndefined();
   });
 
-  it("remembers only the palette and restores defaults without touching prompt/caret", async () => {
-    const f = await mountPreferences();
-    await f.choose("other");
-    f.remember().click();
-    await f.saved("other");
-    expect(f.entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ selection: { folder: "/other" } });
-    expect(Object.keys(f.writes[0] ?? {})).toEqual([PALETTE_PREFERENCE_KEY]);
-    reopen(f.host);
-    await vi.waitFor(() => expect(f.select().value).toBe("other"));
-    expect(f.remember().checked).toBe(true);
-    f.place.applyFolder("/updated-default");
+  it("remembers only the palette and disabling restores current defaults without touching prompt/caret", async () => {
+    const { host, entries, writes, select, remember, gateway, place } = await mountPreferences();
+    select().onSelect("other");
+    await host.updateComplete;
+    remember().click();
     await vi.waitFor(() =>
-      expect(f.gateway.readPreference("main")?.folder).toBe("/updated-default"),
+      expect(entries[PALETTE_PREFERENCE_KEY]).toMatchObject({
+        agentId: "other",
+        selection: { folder: "/other" },
+      }),
     );
-    f.expectSaved("other");
-    const prompt = await f.prompt(task);
-    f.remember().click();
-    await f.host.updateComplete;
-    expect(f.select().value).toBe("main");
-    expect(setting(f.host, "__workspace")?.textContent).toContain("updated-default");
-    expect(f.host.draft.message).toBe(task);
-    expect(f.host.querySelector("textarea")).toBe(prompt);
+    expect(Object.keys(writes[0] ?? {})).toEqual([PALETTE_PREFERENCE_KEY]);
+    host.draft.close();
+    host.draft.open();
+    await vi.waitFor(() => expect(select().value).toBe("other"));
+    expect(remember().checked).toBe(true);
+    // The concurrently mounted full-page owner keeps writing only its ordinary key.
+    place.applyFolder("/updated-default");
+    await vi.waitFor(() => expect(gateway.readPreference("main")?.folder).toBe("/updated-default"));
+    expect(entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId: "other" });
+    host.draft.setMessage("Keep this exact prompt");
+    await host.updateComplete;
+    const prompt = expectDefined(host.querySelector("textarea"), "palette prompt");
+    prompt.focus();
+    prompt.setSelectionRange(5, 9);
+    remember().click();
+    await host.updateComplete;
+    expect(select().value).toBe("main");
+    expect(host.querySelector(".palette-session-settings__workspace")?.textContent).toContain(
+      "updated-default",
+    );
+    expect(host.draft.message).toBe("Keep this exact prompt");
+    expect(host.querySelector("textarea")).toBe(prompt);
     expect([prompt.selectionStart, prompt.selectionEnd]).toEqual([5, 9]);
-    await f.saved();
-    expect(f.entries[ORDINARY_KEY]).toMatchObject({ folder: "/updated-default" });
-    expect(f.writes.at(-1)).toEqual({ [PALETTE_PREFERENCE_KEY]: null });
+    await vi.waitFor(() => expect(entries[PALETTE_PREFERENCE_KEY]).toBeUndefined());
+    expect(entries["new-session.v1:main"]).toMatchObject({ folder: "/updated-default" });
+    expect(writes.at(-1)).toEqual({ [PALETTE_PREFERENCE_KEY]: null });
   });
 
   it.each([false, true])("retries failed preference writes (deletion=%s)", async (deleting) => {
-    const f = await mountPreferences(deleting ? { [PALETTE_PREFERENCE_KEY]: remembered() } : {});
+    const saved = { agentId: "other", selection: { folder: "/other", worktree: false } };
+    const { host, entries, remember, select, setReject } = await mountPreferences(
+      deleting ? { [PALETTE_PREFERENCE_KEY]: saved } : {},
+    );
     if (deleting) {
-      await vi.waitFor(() => expect(f.select().value).toBe("other"));
-      f.host.draft.setMessage(task);
+      await vi.waitFor(() => expect(select().value).toBe("other"));
+      host.draft.setMessage("Keep this task");
     } else {
-      f.select().onSelect("other");
+      select().onSelect("other");
     }
-    f.save.reject = true;
-    f.remember().click();
-    await f.host.updateComplete;
+    setReject(true);
+    remember().click();
+    await host.updateComplete;
     if (deleting) {
-      expect(f.select().value).toBe("main");
-      expect(f.host.draft.message).toBe(task);
+      expect(select().value).toBe("main");
+      expect(host.draft.message).toBe("Keep this task");
     }
-    await vi.waitFor(() => expect(f.error()).not.toBeNull());
-    f.expectSaved(deleting ? "other" : undefined);
-    expect(f.remember().checked).toBe(false);
-    expect(f.select().value).toBe(deleting ? "main" : "other");
+    await vi.waitFor(() =>
+      expect(host.querySelector('.palette-session-settings__error[role="alert"]')).not.toBeNull(),
+    );
+    if (deleting) {
+      expect(entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId: "other" });
+    } else {
+      expect(entries[PALETTE_PREFERENCE_KEY]).toBeUndefined();
+    }
+    expect(remember().checked).toBe(false);
+    expect(select().value).toBe(deleting ? "main" : "other");
     if (!deleting) {
-      reopen(f.host);
-      await f.host.updateComplete;
-      expect(f.error()).not.toBeNull();
+      host.draft.close();
+      host.draft.open();
+      await host.updateComplete;
+      expect(host.querySelector('.palette-session-settings__error[role="alert"]')).not.toBeNull();
     }
-    f.save.reject = false;
-    f.retry();
-    await f.saved(deleting ? undefined : "other");
+    setReject(false);
+    expectDefined(
+      host.querySelector<HTMLButtonElement>(".palette-session-settings__error button"),
+      "retry settings save",
+    ).click();
+    await vi.waitFor(() => {
+      if (deleting) {
+        expect(entries[PALETTE_PREFERENCE_KEY]).toBeUndefined();
+      } else {
+        expect(entries[PALETTE_PREFERENCE_KEY]).toMatchObject({ agentId: "other" });
+      }
+    });
     if (deleting) {
-      expect(f.select().value).toBe("main");
+      expect(select().value).toBe("main");
     } else {
-      await vi.waitFor(() => expect(f.remember().checked).toBe(true));
+      await vi.waitFor(() => expect(remember().checked).toBe(true));
     }
   });
 
-  it("keeps local choices on same-user reconnect but rejects another owner's override", async () => {
-    const f = await mountPreferences({ [PALETTE_PREFERENCE_KEY]: remembered() });
-    await vi.waitFor(() => expect(f.select().value).toBe("other"));
-    f.remember().click();
-    await f.saved();
-    f.select().onSelect("other");
-    await f.reconnect();
-    expect(f.select().value).toBe("other");
-    changeOwner(f.context, "bob");
-    f.publish();
-    await vi.waitFor(() => expect(f.select().value).toBe("main"));
-    expect(f.remember().checked).toBe(false);
+  it("keeps local selections through same-user reconnect but never adopts another owner's override", async () => {
+    const { host, context, publish, entries, select, remember } = await mountPreferences({
+      [PALETTE_PREFERENCE_KEY]: {
+        agentId: "other",
+        selection: { folder: "/other", worktree: false },
+      },
+    });
+    await vi.waitFor(() => expect(select().value).toBe("other"));
+    remember().click();
+    await vi.waitFor(() => expect(entries[PALETTE_PREFERENCE_KEY]).toBeUndefined());
+    select().onSelect("other");
+    context.gateway.snapshot.phase = "reconnecting";
+    publish();
+    await host.updateComplete;
+    context.gateway.snapshot.phase = "connected";
+    context.gateway.snapshot.hello = {
+      ...expectDefined(context.gateway.snapshot.hello, "Gateway hello"),
+    };
+    publish();
+    await host.updateComplete;
+    await vi.waitFor(() => expect(remember().disabled).toBe(false));
+    expect(select().value).toBe("other");
+    const hello = expectDefined(context.gateway.snapshot.hello, "Gateway hello");
+    context.gateway.snapshot.hello = {
+      ...hello,
+      auth: {
+        ...expectDefined(hello.auth, "Gateway authentication"),
+        recoveryScope: "principal-b",
+      },
+    };
+    Object.assign(context.gateway.snapshot, { selfUser: { id: "bob" } });
+    Object.assign(context.gateway.snapshot.client!, { recoveryScope: "principal-b" });
+    publish();
+    await vi.waitFor(() => expect(select().value).toBe("main"));
+    expect(remember().checked).toBe(false);
   });
 
   it.each([{ isComposing: true }, { keyCode: 229 }])(
     "leaves workspace-search composition keys untouched: %j",
     async (composition) => {
       const { host } = await mountPreferences();
-      control(host, "trigger").click();
-      control(host, "workspace").click();
+      host.querySelector<HTMLButtonElement>(".palette-session-settings__trigger")!.click();
+      expectDefined(
+        host.querySelector<HTMLButtonElement>(".palette-session-settings__workspace"),
+        "workspace picker",
+      ).click();
       await host.updateComplete;
-      const search = control<HTMLInputElement>(host, "search");
+      const search = expectDefined(
+        host.querySelector<HTMLInputElement>(".palette-session-settings__search"),
+        "workspace search",
+      );
       search.focus();
       for (const key of ["Escape", "ArrowDown", "ArrowUp"]) {
         const event = new KeyboardEvent("keydown", {
@@ -756,7 +889,7 @@ describe("palette-only remembered settings", () => {
         search.dispatchEvent(event);
         await host.updateComplete;
         expect(event.defaultPrevented).toBe(false);
-        expect(setting(host, "__search")).toBe(search);
+        expect(host.querySelector(".palette-session-settings__search")).toBe(search);
         expect(document.activeElement).toBe(search);
       }
     },

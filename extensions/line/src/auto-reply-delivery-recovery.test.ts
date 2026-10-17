@@ -1,3 +1,4 @@
+// LINE auto-reply tests cover HTTP rejection recovery and replay safety.
 import { HTTPFetchError, type messagingApi } from "@line/bot-sdk";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,31 +18,6 @@ import {
   stubLineApiFetch,
 } from "./probe.test-support.js";
 import { runLinePushWithRetries } from "./send-retry.js";
-
-type DeliveryParams = Parameters<typeof deliverLineAutoReply>[0];
-function deliver(
-  payload: DeliveryParams["payload"],
-  lineData: DeliveryParams["lineData"] = {},
-  overrides: Partial<DeliveryParams> = {},
-) {
-  return deliverLineAutoReply({ ...baseDeliveryParams, payload, lineData, ...overrides });
-}
-
-function expectPush(
-  mock: ReturnType<typeof createDeps>["pushMessagesLine"],
-  nth: number,
-  messages: messagingApi.Message[],
-) {
-  expect(mock).toHaveBeenNthCalledWith(nth, "line:user:1", messages, {
-    cfg: LINE_TEST_CFG,
-    accountId: "acc",
-  });
-}
-
-const richData = (quickReplies?: string[]) => ({
-  flexMessage: { altText: "Card", contents: { type: "bubble" as const } },
-  ...(quickReplies ? { quickReplies } : {}),
-});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -66,7 +42,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     });
 
   const createRejectRichBatch = () =>
-    vi.fn<LineAutoReplyDeps["pushMessagesLine"]>(async (_to, messages) => {
+    vi.fn(async (_to: string, messages: messagingApi.Message[]) => {
       if (messages.some((message) => message.type === "flex")) {
         throw createRichRejection();
       }
@@ -86,11 +62,13 @@ describe("deliverLineAutoReply HTTP recovery", () => {
         }) as LineAutoReplyDeps["pushMessagesLine"],
       });
 
-      delivered = deliver(
-        { text: "an answer nobody will see" },
-        {},
-        { ...LINE_QUOTA_ACCOUNT, replyTokenUsed: true },
-      );
+      delivered = deliverLineAutoReply({
+        ...baseDeliveryParams,
+        ...LINE_QUOTA_ACCOUNT,
+        replyTokenUsed: true,
+        payload: { text: "an answer nobody will see" },
+        lineData: {},
+      });
       const settled = expect(delivered).rejects.toThrow("429 - provider rejected the request");
       await vi.advanceTimersByTimeAsync(2_500);
       await settled;
@@ -111,11 +89,11 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     },
   ])("$label", async ({ used, expected }) => {
     const rejection = createHttpError(429);
-    const pushMessagesLine = vi
-      .fn<LineAutoReplyDeps["pushMessagesLine"]>()
-      .mockRejectedValue(rejection);
+    const pushMessagesLine = vi.fn(async () => {
+      throw rejection;
+    });
     createDeps({
-      pushMessagesLine,
+      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
     });
     const fetchMock = stubLineApiFetch(
       Response.json({ type: "limited", value: 200 }),
@@ -123,11 +101,13 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     );
 
     await expect(
-      deliver(
-        { text: "an answer nobody will see" },
-        {},
-        { ...LINE_QUOTA_ACCOUNT, replyTokenUsed: true },
-      ),
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
+        ...LINE_QUOTA_ACCOUNT,
+        replyTokenUsed: true,
+        payload: { text: "an answer nobody will see" },
+        lineData: {},
+      }),
     ).rejects.toThrow(expected);
     expect(pushMessagesLine).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -146,15 +126,20 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     },
   ])("does not replay a possibly accepted reply after $label", async ({ error }) => {
     const onReplyError = vi.fn();
-    const replyMessageLine = vi
-      .fn<LineAutoReplyDeps["replyMessageLine"]>()
-      .mockRejectedValue(error);
+    const replyMessageLine = vi.fn(async () => {
+      throw error;
+    });
     const { pushMessagesLine } = createDeps({
-      replyMessageLine,
+      replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
     });
 
     await expect(
-      deliver({ text: "do not duplicate this reply" }, {}, { onReplyError }),
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { text: "do not duplicate this reply" },
+        lineData: {},
+        onReplyError,
+      }),
     ).rejects.toBe(error);
     expect(replyMessageLine).toHaveBeenCalledOnce();
     expect(onReplyError).not.toHaveBeenCalled();
@@ -170,15 +155,20 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     },
   ])("keeps the push fallback after $label", async ({ error }) => {
     const onReplyError = vi.fn();
-    const replyMessageLine = vi
-      .fn<LineAutoReplyDeps["replyMessageLine"]>()
-      .mockRejectedValue(error);
+    const replyMessageLine = vi.fn(async () => {
+      throw error;
+    });
     const { pushMessagesLine } = createDeps({
-      replyMessageLine,
+      replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
     });
 
     await expect(
-      deliver({ text: "preserve the reply" }, {}, { onReplyError }),
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
+        payload: { text: "preserve the reply" },
+        lineData: {},
+        onReplyError,
+      }),
     ).resolves.toMatchObject({
       status: "delivered",
       replyTokenUsed: true,
@@ -198,15 +188,20 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       new Error("activity store unavailable"),
       { messageIds: ["line-reply-final"], visibleReplySent: true },
     );
-    const replyMessageLine = vi
-      .fn<LineAutoReplyDeps["replyMessageLine"]>()
-      .mockRejectedValue(acceptedError);
+    const replyMessageLine = vi.fn(async () => {
+      throw acceptedError;
+    });
     const onReplyError = vi.fn();
     const { pushMessagesLine } = createDeps({
-      replyMessageLine,
+      replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
     });
 
-    const result = await deliver({ text: "already delivered" }, {}, { onReplyError });
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "already delivered" },
+      lineData: {},
+      onReplyError,
+    });
 
     expect(result).toMatchObject({
       status: "partial",
@@ -255,14 +250,19 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       new Error("activity store unavailable"),
       { messageIds: ["line-push-final"], visibleReplySent: true },
     );
-    const pushMessagesLine = vi
-      .fn<LineAutoReplyDeps["pushMessagesLine"]>()
-      .mockRejectedValue(acceptedError);
+    const pushMessagesLine = vi.fn(async () => {
+      throw acceptedError;
+    });
     const { replyMessageLine } = createDeps({
-      pushMessagesLine,
+      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
     });
 
-    const result = await deliver({ text: "already delivered" }, {}, { replyToken: undefined });
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      replyToken: undefined,
+      payload: { text: "already delivered" },
+      lineData: {},
+    });
 
     expect(result).toMatchObject({
       status: "partial",
@@ -275,23 +275,29 @@ describe("deliverLineAutoReply HTTP recovery", () => {
   });
 
   it("does not retry a mixed push after a quota failure", async () => {
-    const lineData = richData(["A"]);
+    const lineData = {
+      flexMessage: { altText: "Card", contents: { type: "bubble" } },
+      quickReplies: ["A"],
+    };
     const quotaError = new HTTPFetchError("429 - Too Many Requests", {
       status: 429,
       statusText: "Too Many Requests",
       headers: new Headers(),
       body: "quota exceeded",
     });
-    const pushMessagesLine = vi
-      .fn<LineAutoReplyDeps["pushMessagesLine"]>()
-      .mockRejectedValue(quotaError);
+    const pushMessagesLine = vi.fn(async () => {
+      throw quotaError;
+    });
     createDeps({
-      pushMessagesLine,
+      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
     });
 
     await expect(
-      deliver({ text: "Choose one", channelData: { line: lineData } }, lineData, {
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
         replyToken: undefined,
+        payload: { text: "Choose one", channelData: { line: lineData } },
+        lineData,
       }),
     ).rejects.toBe(quotaError);
     expect(pushMessagesLine).toHaveBeenCalledTimes(1);
@@ -314,95 +320,134 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       vi.useRealTimers();
     }
 
-    const lineData = richData();
-    const pushMessagesLine = vi
-      .fn<LineAutoReplyDeps["pushMessagesLine"]>()
-      .mockRejectedValue(ambiguousFailure);
+    const lineData = {
+      flexMessage: { altText: "Card", contents: { type: "bubble" } },
+    };
+    const pushMessagesLine = vi.fn(async () => {
+      throw ambiguousFailure;
+    });
     createDeps({
-      pushMessagesLine,
+      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
     });
 
     await expect(
-      deliver({ text: "do not duplicate", channelData: { line: lineData } }, lineData, {
+      deliverLineAutoReply({
+        ...baseDeliveryParams,
         replyToken: undefined,
+        payload: { text: "do not duplicate", channelData: { line: lineData } },
+        lineData,
       }),
     ).rejects.toBe(ambiguousFailure);
     expect(pushMessagesLine).toHaveBeenCalledOnce();
   });
 
   it("recovers quick replies from a rejected rich-only push", async () => {
-    const lineData = richData(["A"]);
-    const pushMessagesLine = vi.fn<LineAutoReplyDeps["pushMessagesLine"]>(async (_to, messages) => {
+    const lineData = {
+      flexMessage: { altText: "Card", contents: { type: "bubble" } },
+      quickReplies: ["A"],
+    };
+    const pushMessagesLine = vi.fn(async (_to: string, messages: messagingApi.Message[]) => {
       if (messages[0]?.type === "flex") {
         throw createRichRejection();
       }
       return lineResult("push", "u1");
     });
     createDeps({
-      pushMessagesLine,
+      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
     });
 
-    const result = await deliver({ channelData: { line: lineData } }, lineData, {
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
       replyToken: undefined,
+      payload: { channelData: { line: lineData } },
+      lineData,
     });
 
     expect(result).toMatchObject({ status: "partial", visibleReplySent: true });
-    expectPush(pushMessagesLine, 2, [
-      { type: "text", text: "Options:\n- A", quickReply: createQuickReply("A") },
-    ]);
+    expect(pushMessagesLine).toHaveBeenNthCalledWith(
+      2,
+      "line:user:1",
+      [{ type: "text", text: "Options:\n- A", quickReply: createQuickReply("A") }],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
   });
 
   it("retries only text from the failed mixed overflow batch", async () => {
-    const lineData = richData();
+    const lineData = {
+      flexMessage: { altText: "Card", contents: { type: "bubble" } },
+    };
     const chunks = ["c1", "c2", "c3", "c4", "c5", "c6"];
     const pushMessagesLine = createRejectRichBatch();
     createDeps({
       chunkMarkdownText: () => chunks,
-      pushMessagesLine,
+      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
     });
 
-    const result = await deliver(
-      { text: "six chunks", channelData: { line: lineData } },
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      replyToken: undefined,
+      payload: { text: "six chunks", channelData: { line: lineData } },
       lineData,
-      { replyToken: undefined },
-    );
+    });
 
     expect(result).toMatchObject({ status: "partial", visibleReplySent: true });
-    expectPush(
-      pushMessagesLine,
+    expect(pushMessagesLine).toHaveBeenNthCalledWith(
       1,
+      "line:user:1",
       chunks.slice(0, 5).map((text) => ({ type: "text", text })),
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
-    expectPush(pushMessagesLine, 2, [
-      { type: "text", text: "c6" },
-      createFlexMessage("Card", { type: "bubble" }),
-    ]);
-    expectPush(pushMessagesLine, 3, [{ type: "text", text: "c6" }]);
+    expect(pushMessagesLine).toHaveBeenNthCalledWith(
+      2,
+      "line:user:1",
+      [{ type: "text", text: "c6" }, createFlexMessage("Card", { type: "bubble" })],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
+    expect(pushMessagesLine).toHaveBeenNthCalledWith(
+      3,
+      "line:user:1",
+      [{ type: "text", text: "c6" }],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
   });
 
   it("recovers text after definitive reply and push rejections", async () => {
-    const lineData = richData();
+    const lineData = {
+      flexMessage: { altText: "Card", contents: { type: "bubble" } },
+    };
     const replyMessageLine = vi.fn(async () => {
       throw createRichRejection();
     });
     const pushMessagesLine = createRejectRichBatch();
     createDeps({
-      replyMessageLine,
-      pushMessagesLine,
+      replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
+      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
     });
 
-    const result = await deliver({ text: "hello", channelData: { line: lineData } }, lineData);
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "hello", channelData: { line: lineData } },
+      lineData,
+    });
 
     expect(result).toMatchObject({
       status: "partial",
       replyTokenUsed: true,
       visibleReplySent: true,
     });
-    expectPush(pushMessagesLine, 2, [{ type: "text", text: "hello" }]);
+    expect(pushMessagesLine).toHaveBeenNthCalledWith(
+      2,
+      "line:user:1",
+      [{ type: "text", text: "hello" }],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
   });
 
   it("recovers only unattempted overflow after an ambiguous reply failure", async () => {
-    const lineData = richData(["A"]);
+    const lineData = {
+      flexMessage: { altText: "Card", contents: { type: "bubble" } },
+      quickReplies: ["A"],
+    };
     const chunks = ["c1", "c2", "c3", "c4", "c5", "c6"];
     const replyMessageLine = vi.fn(async () => {
       throw new Error("reply transport failed");
@@ -410,54 +455,81 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     const pushMessagesLine = createRejectRichBatch();
     createDeps({
       chunkMarkdownText: () => chunks,
-      replyMessageLine,
-      pushMessagesLine,
+      replyMessageLine: replyMessageLine as LineAutoReplyDeps["replyMessageLine"],
+      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
     });
 
-    const result = await deliver({ text: "six chunks", channelData: { line: lineData } }, lineData);
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "six chunks", channelData: { line: lineData } },
+      lineData,
+    });
 
     expect(result).toMatchObject({
       status: "partial",
       replyTokenUsed: true,
       visibleReplySent: true,
     });
-    expectPush(pushMessagesLine, 1, [
-      createFlexMessage("Card", { type: "bubble" }),
-      ...chunks.slice(0, 4).map((text) => ({ type: "text", text })),
-    ]);
-    expectPush(pushMessagesLine, 2, [
-      { type: "text", text: "c5" },
-      { type: "text", text: "c6", quickReply: createQuickReply("A") },
-    ]);
+    expect(pushMessagesLine).toHaveBeenNthCalledWith(
+      1,
+      "line:user:1",
+      [
+        createFlexMessage("Card", { type: "bubble" }),
+        ...chunks.slice(0, 4).map((text) => ({ type: "text", text })),
+      ],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
+    expect(pushMessagesLine).toHaveBeenNthCalledWith(
+      2,
+      "line:user:1",
+      [
+        { type: "text", text: "c5" },
+        { type: "text", text: "c6", quickReply: createQuickReply("A") },
+      ],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
   });
 
   it("retries text and quick replies from the unattempted push tail", async () => {
-    const lineData = richData(["A"]);
+    const lineData = {
+      flexMessage: { altText: "Card", contents: { type: "bubble" } },
+      quickReplies: ["A"],
+    };
     const chunks = ["c1", "c2", "c3", "c4", "c5", "c6"];
     const pushMessagesLine = createRejectRichBatch();
     createDeps({
       chunkMarkdownText: () => chunks,
-      pushMessagesLine,
+      pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
     });
 
-    const result = await deliver(
-      { text: "six chunks", channelData: { line: lineData } },
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      replyToken: undefined,
+      payload: { text: "six chunks", channelData: { line: lineData } },
       lineData,
-      { replyToken: undefined },
-    );
+    });
 
     expect(result).toMatchObject({ status: "partial", visibleReplySent: true });
-    expectPush(pushMessagesLine, 1, [
-      createFlexMessage("Card", { type: "bubble" }),
-      ...chunks.slice(0, 4).map((text) => ({ type: "text", text })),
-    ]);
-    expectPush(
-      pushMessagesLine,
-      2,
-      chunks.slice(0, 5).map((text) => ({ type: "text", text })),
+    expect(pushMessagesLine).toHaveBeenNthCalledWith(
+      1,
+      "line:user:1",
+      [
+        createFlexMessage("Card", { type: "bubble" }),
+        ...chunks.slice(0, 4).map((text) => ({ type: "text", text })),
+      ],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
-    expectPush(pushMessagesLine, 3, [
-      { type: "text", text: "c6", quickReply: createQuickReply("A") },
-    ]);
+    expect(pushMessagesLine).toHaveBeenNthCalledWith(
+      2,
+      "line:user:1",
+      chunks.slice(0, 5).map((text) => ({ type: "text", text })),
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
+    expect(pushMessagesLine).toHaveBeenNthCalledWith(
+      3,
+      "line:user:1",
+      [{ type: "text", text: "c6", quickReply: createQuickReply("A") }],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
   });
 });

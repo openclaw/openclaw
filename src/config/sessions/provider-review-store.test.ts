@@ -45,7 +45,7 @@ const original = {
 function compare(
   selected: Target,
   nextReview: SessionProviderReview | undefined,
-  expectedReview: SessionProviderReview | undefined = undefined,
+  expectedReview?: SessionProviderReview,
   assertCurrent = assertAuthority,
 ) {
   return compareSessionProviderReview(selected, { expectedReview, nextReview, assertCurrent });

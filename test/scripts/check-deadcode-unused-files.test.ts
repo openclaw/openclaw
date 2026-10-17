@@ -228,7 +228,7 @@ it.each([
   },
 );
 
-it.skipIf(process.platform === "win32").each(["timeout", "parent SIGTERM"])(
+it.skipIf(process.platform === "win32").for(["timeout", "parent SIGTERM"])(
   "cleans Knip descendants after %s",
   async (mode, { signal }) => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-knip-group-"));

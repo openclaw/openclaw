@@ -396,7 +396,7 @@ it("keeps async node step failure output bounded", async () => {
   expect(fullOutput.length).toBeLessThan(600_000);
 }, 30_000);
 
-it.skipIf(process.platform === "win32").each(["timeout", "sibling abort"])(
+it.skipIf(process.platform === "win32").for(["timeout", "sibling abort"])(
   "waits for async node step descendants after %s",
   async (mode, context) => {
     const root = tempRoots.make("openclaw-extension-tsc-group-");

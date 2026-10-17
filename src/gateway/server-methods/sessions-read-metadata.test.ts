@@ -116,8 +116,9 @@ test.each([
   ({ method, sessionKeys }) =>
     withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const { opts, storePath } = await seedMetadataReads(method === "sessions.preview");
-      const request = <T = unknown>(params: Record<string, unknown>) =>
-        directSessionReq<T>(method, params, opts);
+      const request = <T = unknown>(
+        params: Record<string, unknown>,
+      ): ReturnType<typeof directSessionReq<T>> => directSessionReq<T>(method, params, opts);
       const search = { query: "needle", ...(sessionKeys ? { sessionKeys } : {}) };
       const parse = JSON.parse;
       let decodedPromptBytes = 0;

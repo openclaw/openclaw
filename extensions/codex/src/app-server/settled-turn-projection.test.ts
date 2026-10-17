@@ -21,27 +21,13 @@ function toolCall(id = "call-1"): AgentMessage {
 function toolResult(
   id = "call-1",
   content: unknown = [{ type: "text", text: "Message sent." }],
-  overrides: Record<string, unknown> = {},
 ): AgentMessage {
   return message({
     role: "toolResult",
     toolCallId: id,
     toolName: "message",
     content,
-    ...overrides,
   });
-}
-
-function projectResult(content: unknown, overrides: Record<string, unknown> = {}) {
-  return projectSettledCodexMessages([toolCall(), toolResult("call-1", content, overrides)]).at(-1);
-}
-
-function projectWithUser(user: AgentMessage) {
-  return projectSettledCodexMessages([user, toolCall(), toolResult()]);
-}
-
-function output(text: string) {
-  return { type: "function_call_output", call_id: "call-1", output: text };
 }
 
 describe("projectSettledCodexMessages", () => {
@@ -86,12 +72,20 @@ describe("projectSettledCodexMessages", () => {
       projectSettledCodexMessages([
         toolCall(),
         toolResult("call-1", [
-          { type: "toolResult", toolCallId: "call-1", content: "Telegram delivery complete." },
+          {
+            type: "toolResult",
+            toolCallId: "call-1",
+            content: "Telegram delivery complete.",
+          },
         ]),
       ]),
     ).toEqual([
       expect.objectContaining({ type: "function_call", call_id: "call-1" }),
-      output("Telegram delivery complete."),
+      {
+        type: "function_call_output",
+        call_id: "call-1",
+        output: "Telegram delivery complete.",
+      },
     ]);
   });
 
@@ -123,22 +117,49 @@ describe("projectSettledCodexMessages", () => {
           role: "assistant",
           content: [{ type: "toolCall", id: "call-1", name: "bad tool", arguments: {} }],
         }),
-        toolResult("call-1", [{ type: "text", text: "failed" }], { toolName: "bad tool" }),
+        message({
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "bad tool",
+          content: [{ type: "text", text: "failed" }],
+        }),
       ]),
     ).toThrowError(new CodexHistoryRejection("invalid_content"));
   });
 
   it("preserves an empty failed tool result as failure evidence", () => {
-    expect(projectResult([], { isError: true })).toEqual(
-      output("[Tool result status: error]\nTool failed without textual output."),
-    );
+    expect(
+      projectSettledCodexMessages([
+        toolCall(),
+        message({
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "message",
+          isError: true,
+          content: [],
+        }),
+      ]).at(-1),
+    ).toEqual({
+      type: "function_call_output",
+      call_id: "call-1",
+      output: "[Tool result status: error]\nTool failed without textual output.",
+    });
   });
 
   it("does not charge the synthetic failure marker against the source text limit", () => {
     const resultText = "x".repeat(64 * 1024);
-    expect(projectResult([{ type: "text", text: resultText }], { isError: true })).toEqual(
-      output(`[Tool result status: error]\n${resultText}`),
-    );
+    const output = projectSettledCodexMessages([
+      toolCall(),
+      message({
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "message",
+        isError: true,
+        content: [{ type: "text", text: resultText }],
+      }),
+    ]).at(-1) as { output?: string };
+
+    expect(output.output).toBe(`[Tool result status: error]\n${resultText}`);
   });
 
   it("preserves exact whitespace in projected transcript text", () => {
@@ -161,7 +182,11 @@ describe("projectSettledCodexMessages", () => {
         content: [{ type: "output_text", text: "\tassistant output\n" }],
       },
       expect.objectContaining({ type: "function_call", call_id: "call-1" }),
-      output("  tool output\n"),
+      {
+        type: "function_call_output",
+        call_id: "call-1",
+        output: "  tool output\n",
+      },
     ]);
   });
 
@@ -207,12 +232,14 @@ describe("projectSettledCodexMessages", () => {
 
   it("rejects upstream user text above the projection limit", () => {
     expect(() =>
-      projectWithUser(
+      projectSettledCodexMessages([
         attachUpstreamUserText(
           message({ role: "user", content: "[Telegram metadata] decorated prompt" }),
           "x".repeat(512 * 1024 + 1),
         ),
-      ),
+        toolCall(),
+        toolResult(),
+      ]),
     ).toThrow("field_limit");
   });
 
@@ -233,7 +260,7 @@ describe("projectSettledCodexMessages", () => {
 
   it("does not let provenance hide non-text user content", () => {
     expect(() =>
-      projectWithUser(
+      projectSettledCodexMessages([
         message({
           role: "user",
           content: [
@@ -242,7 +269,9 @@ describe("projectSettledCodexMessages", () => {
           ],
           __openclaw: { upstreamUserText: "Send the notice." },
         }),
-      ),
+        toolCall(),
+        toolResult(),
+      ]),
     ).toThrow("unsupported_user_image");
   });
 
@@ -254,7 +283,12 @@ describe("projectSettledCodexMessages", () => {
       name: "tool-name mismatch",
       messages: [
         toolCall(),
-        toolResult("call-1", [{ type: "text", text: "done" }], { toolName: "different" }),
+        message({
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "different",
+          content: [{ type: "text", text: "done" }],
+        }),
       ],
     },
   ])("fails closed for $name", ({ messages }) => {
@@ -265,6 +299,7 @@ describe("projectSettledCodexMessages", () => {
     {
       name: "unknown role",
       value: { role: "future-role", content: "unknown" },
+      reason: "unsupported_content",
     },
     {
       name: "custom image evidence",
@@ -285,25 +320,37 @@ describe("projectSettledCodexMessages", () => {
         display: false,
         content: [{ type: "future-block" }],
       },
+      reason: "unsupported_content",
     },
-  ])("rejects $name instead of dropping it during context conversion", ({ value }) => {
-    expect(() => projectWithUser(message(value))).toThrow(
-      expect.objectContaining({ reason: "unsupported_content" }),
+  ])("rejects $name instead of dropping it during context conversion", ({ value, reason }) => {
+    expect(() => projectSettledCodexMessages([message(value), toolCall(), toolResult()])).toThrow(
+      expect.objectContaining({ reason }),
     );
   });
 
   it("preserves valid image tool results as bounded non-vision evidence", () => {
     expect(
-      projectResult([
-        { type: "text", text: "Generated the requested asset." },
-        { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
-      ]),
-    ).toEqual(output("Generated the requested asset.\n[Image tool result: image/png]"));
+      projectSettledCodexMessages([
+        toolCall(),
+        toolResult("call-1", [
+          { type: "text", text: "Generated the requested asset." },
+          { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+        ]),
+      ]).at(-1),
+    ).toEqual({
+      type: "function_call_output",
+      call_id: "call-1",
+      output: "Generated the requested asset.\n[Image tool result: image/png]",
+    });
   });
 
   it("rejects oversized text instead of truncating it", () => {
     expect(() =>
-      projectWithUser(message({ role: "user", content: "x".repeat(64 * 1024 + 1) })),
+      projectSettledCodexMessages([
+        message({ role: "user", content: "x".repeat(64 * 1024 + 1) }),
+        toolCall(),
+        toolResult(),
+      ]),
     ).toThrow("field_limit");
   });
 });
