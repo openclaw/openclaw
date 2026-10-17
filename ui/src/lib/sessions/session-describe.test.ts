@@ -85,6 +85,36 @@ describe("session descriptor reads", () => {
     expect(h.read).toHaveBeenCalledTimes(10);
   });
 
+  it("expires completed descriptors while continuing to join pending reads", async () => {
+    const h = harness();
+    await h.sessions.describe({ key });
+    await vi.advanceTimersByTimeAsync(30_000);
+    const pending = createDeferred<{ session: GatewaySessionRow }>();
+    h.read.mockReturnValueOnce(pending.promise);
+    const expired = h.sessions.describe({ key });
+    await vi.advanceTimersByTimeAsync(30_000);
+    const joined = h.sessions.describe({ key });
+    expect(h.read).toHaveBeenCalledTimes(2);
+    pending.resolve({ session: initial });
+    expect(await joined).toEqual(await expired);
+  });
+
+  it.each([{ snapshotAt: 2 }, { lifecycleRevision: "2" }])(
+    "invalidates a descriptor when its observed clock changes: %j",
+    async (clock) => {
+      const h = harness();
+      const first = { ...initial, snapshotAt: 1, lifecycleRevision: "1" };
+      h.setRow(first);
+      await h.sessions.refresh({ agentId: "main" });
+      await h.sessions.describe({ key });
+      const next = { ...first, ...clock, label: "Updated without a recency change" };
+      h.setRow(next);
+      h.sessions.captureReconcile()(next);
+      expect(await h.sessions.describe({ key })).toEqual({ session: next });
+      expect(h.read).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it.each([
     { cause: "observed revision", phase: "completed" },
     { cause: "sessions.changed", phase: "pending" },

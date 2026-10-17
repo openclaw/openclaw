@@ -245,7 +245,7 @@ export type SessionCapability = {
   captureConnectionScope: () => SessionConnectionScope | null;
   /** Whether a captured read-only request still belongs to the active connection. */
   isConnectionScopeCurrent: (scope: SessionConnectionScope) => boolean;
-  /** Shares descriptor reads, including agent-implied scopes, until the session changes; refresh supersedes earlier reads. */
+  /** Shares pending and recent descriptor reads within this connection; row changes or explicit refresh supersede them. */
   describe: (
     params: SessionsDescribeParams,
     options?: { refresh?: boolean; timeoutMs?: number; client?: SessionRequestClient },
