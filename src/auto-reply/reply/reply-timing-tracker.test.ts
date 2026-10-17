@@ -1,4 +1,3 @@
-// Tests reply profiler flag detection and timing tracker output.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { createReplyHotPathTimingTracker } from "./dispatch-from-config.timing.js";
@@ -6,11 +5,15 @@ import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing
 
 const subsystemWarn = vi.hoisted(() => vi.fn());
 const subsystemInfo = vi.hoisted(() => vi.fn());
+const identity = { runId: "run-1", sessionId: "session-1", sessionKey: "agent:main" };
+let nowMs: number;
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: subsystemWarn, info: subsystemInfo }),
 }));
 
 beforeEach(() => {
+  nowMs = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => nowMs);
   subsystemWarn.mockReset();
   subsystemInfo.mockReset();
 });
@@ -19,8 +22,6 @@ afterEach(() => vi.restoreAllMocks());
 describe("createReplyTimingTracker", () => {
   it("reports slow preparation without profiling while keeping fast replies quiet", async () => {
     const warn = vi.fn();
-    let nowMs = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const tracker = createReplyTimingTracker({ log: { warn }, enabled: false });
 
     expect(tracker.measureSync("sync", () => 42)).toBe(42);
@@ -41,8 +42,6 @@ describe("createReplyTimingTracker", () => {
 
   it("records and logs spans when the profiler flag is enabled", () => {
     const warn = vi.fn();
-    let nowMs = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const tracker = createReplyTimingTracker({
       log: { warn },
       enabled: isReplyProfilerEnabled({ env: { OPENCLAW_DIAGNOSTICS: "reply.profiler" } }),
@@ -68,7 +67,6 @@ describe("createReplyTimingTracker", () => {
   it("keeps agent milestones repeatable without reopening the terminal log", () => {
     vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(1_500);
     const tracker = createAgentTurnTimingTracker({ profilerEnabled: true });
-    const identity = { runId: "run-1", sessionId: "session-1", sessionKey: "agent:main" };
 
     tracker.logMilestoneIfSlow({ ...identity, milestone: "model_started" });
     tracker.logMilestoneIfSlow({ ...identity, milestone: "" });
@@ -131,11 +129,8 @@ describe("createReplyTimingTracker", () => {
   });
 
   it("keeps ordinary model and tool execution out of default terminal warnings", async () => {
-    let nowMs = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const agentTiming = createAgentTurnTimingTracker();
     const dispatchTiming = createReplyHotPathTimingTracker();
-    const identity = { runId: "run-1", sessionId: "session-1", sessionKey: "agent:main" };
 
     agentTiming.logMilestoneIfSlow({ ...identity, milestone: "before_embedded_run" });
     agentTiming.logExecutionPhaseIfSlow({ ...identity, phase: "turn_accepted" });
@@ -155,8 +150,6 @@ describe("createReplyTimingTracker", () => {
   });
 
   it("reports slow dispatch preparation and early cancellation without profiling", async () => {
-    let nowMs = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const tracker = createReplyHotPathTimingTracker();
     await tracker.measure("reply.load_reply_resolver", async () => {
       nowMs += 5_000;
@@ -184,10 +177,7 @@ describe("createReplyTimingTracker", () => {
   });
 
   it("records the first slow execution phases without profiling or repeated tool logs", () => {
-    let nowMs = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const tracker = createAgentTurnTimingTracker();
-    const identity = { runId: "run-1", sessionId: "session-1", sessionKey: "agent:main" };
 
     tracker.logExecutionPhaseIfSlow({ ...identity, phase: "runner_entered" });
     expect(subsystemWarn).not.toHaveBeenCalled();
