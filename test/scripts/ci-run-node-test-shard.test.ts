@@ -42,6 +42,8 @@ import * as groupOwner from "../../scripts/vitest-process-group.mts";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
+const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
+
 const nativeQualificationFixtures = vi.hoisted(() => ({
   first: "packages/markdown-core/src/chunk-text.test.ts",
   second: "src/utils/chunk-items.test.ts",
@@ -74,25 +76,10 @@ vi.mock("node:fs/promises", async (importOriginal) => ({
 
 const scratchDirs: string[] = [];
 const bunConfig = "test/vitest/vitest.unit-fast.config.ts";
-const unitConfig = "test/vitest/vitest.unit.config.ts";
-const unitSrcConfig = "test/vitest/vitest.unit-src.config.ts";
-const graphemeTarget = "packages/normalization-core/src/grapheme.test.ts";
-const libraryTarget = "src/library.test.ts";
-const workerQuiescenceTarget = "src/node-host/node-worker-workspace-quiescence.acceptance.test.ts";
-const workerClosingWindowTarget = "src/worker/worker-connection-closing-window.test.ts";
 const bunTarget = nativeQualificationFixtures.first;
 const vitestBunTarget = "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts";
 const nativeBunTarget = nativeQualificationFixtures.second;
 const nodeTarget = "src/cli/cli-process-diagnostics.test.ts";
-const agentsSupportConfig = "test/vitest/vitest.agents-support.config.ts";
-const worktreeRecoveryTarget = "src/agents/worktrees/service.removal-recovery.test.ts";
-const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
-const gatewayClientConfig = "test/vitest/vitest.gateway-client.config.ts";
-const gatewayClientTarget = "src/gateway/talk/handlers/client-native-control.test.ts";
-const gatewayWorkspaceHashTarget = "src/gateway/worker-environments/workspace-hash-memo.test.ts";
-const memoryConfig = "test/vitest/vitest.extension-memory.config.ts";
-const memoryTarget = "extensions/memory-lancedb/config.test.ts";
-const memoryIncludes = ["extensions/memory-lancedb", "extensions/memory-wiki"];
 
 function makeScratchDir(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-shard-test-"));
@@ -414,297 +401,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     );
   });
 
-  it("preserves selected UI discovery before runtime partitioning under bun-compatible", async () => {
-    vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
-    const includePatterns = [
-      "ui/src/pages/chat/chat-pane-history.test.ts",
-      "ui/src/pages/chat/chat-thread-retention.test.ts",
-    ];
-    const seen: Array<{ runtime: string | undefined; membership?: string[] }> = [];
-    await expect(
-      runShardPlans(
-        [
-          {
-            kind: "group",
-            name: "selected-ui",
-            plan: { configs: ["ui/vitest.config.ts"], includePatterns },
-          },
-        ],
-        {
-          env: {
-            OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible",
-            OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--shard=1/3"]),
-          },
-          scratchDir: makeScratchDir(),
-          runChild: async (_args, env) => {
-            expect(JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8"))).toEqual(
-              includePatterns,
-            );
-            seen.push({
-              runtime: env.OPENCLAW_VITEST_RUNTIME,
-              membership: env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE
-                ? JSON.parse(readFileSync(env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE, "utf8"))
-                : undefined,
-            });
-            return 0;
-          },
-        },
-      ),
-    ).resolves.toBe(0);
-    expect(seen).toEqual([{ runtime: "bun", membership: includePatterns }]);
-  });
-
-  it("preserves complete process envelopes under bun-compatible", async () => {
-    const persistentRoot = makeScratchDir();
-    const seen: Array<{
-      label: string;
-      runtime: string | undefined;
-      args: string[];
-      cache: string | undefined;
-    }> = [];
-    let active = 0;
-    let peakActive = 0;
-    const groups = resolveShardPlans({
-      OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
-        { configs: [bunConfig], shard_name: "eligible", includePatterns: [bunTarget] },
-        { configs: [bunConfig, "unknown.config.ts"], shard_name: "mixed" },
-        { configs: ["unknown.config.ts"], shard_name: "unknown" },
-        {
-          configs: [gatewayClientConfig],
-          shard_name: "gateway-client",
-          includePatterns: [gatewayClientTarget],
-        },
-        {
-          configs: [memoryConfig],
-          shard_name: "memory",
-          includePatterns: memoryIncludes,
-          env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
-        },
-      ]),
-    });
-    const exitCode = await runShardPlans(
-      [
-        ...groups,
-        { kind: "target", name: bunTarget, target: bunTarget },
-        { kind: "target", name: memoryTarget, target: memoryTarget },
-      ],
-      {
-        concurrency: 1,
-        env: {
-          OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible",
-          OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: persistentRoot,
-          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--maxWorkers=1"]',
-        },
-        scratchDir: makeScratchDir(),
-        runChild: async (args, env, label) => {
-          active += 1;
-          peakActive = Math.max(peakActive, active);
-          seen.push({
-            label,
-            runtime: env.OPENCLAW_VITEST_RUNTIME,
-            args,
-            cache: env.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT,
-          });
-          if (label.endsWith("eligible")) {
-            expect(JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8"))).toEqual([
-              bunTarget,
-            ]);
-          }
-          if (label.endsWith("gateway-client")) {
-            expect(JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8"))).toEqual([
-              gatewayClientTarget,
-            ]);
-          }
-          if (label.endsWith("memory")) {
-            expect(JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8"))).toEqual(
-              memoryIncludes,
-            );
-            expect(env.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
-          }
-          await Promise.resolve();
-          active -= 1;
-          return 0;
-        },
-      },
-    );
-    expect(exitCode).toBe(0);
-    expect(peakActive).toBe(1);
-    expect(seen.map(({ label }) => label)).toEqual([
-      "bun:eligible",
-      "mixed",
-      "unknown",
-      "bun:gateway-client",
-      "bun:memory",
-      `bun:${bunTarget}`,
-      `bun:${memoryTarget}`,
-    ]);
-    for (const { label, runtime, args, cache } of seen) {
-      const bun = label.startsWith("bun:");
-      expect(runtime).toBe(bun ? "bun" : "node");
-      expect(cache).toBe(path.join(persistentRoot, bun ? "vitest-cache-bun-0" : "vitest-cache-0"));
-      const targets = label.endsWith("eligible")
-        ? [bunConfig]
-        : label === "mixed"
-          ? [bunConfig, "unknown.config.ts"]
-          : label === "unknown"
-            ? ["unknown.config.ts"]
-            : label.endsWith("gateway-client")
-              ? [gatewayClientConfig]
-              : label.endsWith("memory")
-                ? [memoryConfig]
-                : label.endsWith(memoryTarget)
-                  ? [memoryTarget]
-                  : [bunTarget];
-      expect(args).toEqual([...targets, "--", "--maxWorkers=1"]);
-    }
-  });
-
-  it.each(["bun-compatible", "dual"] as const)(
-    "preserves Gateway config coverage and execution budgets under %s",
-    async (policy) => {
-      const configs = [gatewayCoreConfig, gatewayClientConfig];
-      for (const includePatterns of [
-        undefined,
-        ["src/gateway/auth.test.ts", gatewayClientTarget],
-        [gatewayClientTarget],
-        [gatewayWorkspaceHashTarget],
-        [gatewayWorkspaceHashTarget, gatewayClientTarget],
-        [gatewayWorkspaceHashTarget, "src/gateway/auth.test.ts", gatewayClientTarget],
-      ]) {
-        const qualifiedCore =
-          includePatterns?.length === 1 && includePatterns[0] === gatewayWorkspaceHashTarget;
-        const selectedCore =
-          !includePatterns || includePatterns.includes(gatewayWorkspaceHashTarget);
-        const expected = [
-          ...(policy === "dual"
-            ? [{ runtime: "node", configs, prefix: "", includePatterns }]
-            : qualifiedCore
-              ? []
-              : [
-                  {
-                    runtime: "node",
-                    configs: [gatewayCoreConfig],
-                    prefix: "node-subset:",
-                    includePatterns,
-                  },
-                ]),
-          ...(qualifiedCore || (policy === "dual" && selectedCore)
-            ? [
-                {
-                  runtime: "bun",
-                  configs: [gatewayCoreConfig],
-                  prefix: "bun:",
-                  includePatterns: [gatewayWorkspaceHashTarget],
-                },
-              ]
-            : []),
-          { runtime: "bun", configs: [gatewayClientConfig], prefix: "bun:", includePatterns },
-        ];
-        const group = {
-          configs,
-          includePatterns,
-          shard_name: "gateway",
-          timing_key: "gateway#include-original",
-          env: { OPENCLAW_VITEST_MAX_WORKERS: "2", OWNER: "gateway" },
-        };
-        const persistentRoot = makeScratchDir();
-        const seen: Array<{
-          runtime: string | undefined;
-          args: string[];
-          label: string;
-          timing: string;
-        }> = [];
-        let active = 0;
-        let peakActive = 0;
-        const jobEnv = { OPENCLAW_TEST_PROJECTS_PARALLEL: "2" };
-        expect(ciTestShardRequiresBun({ env: jobEnv, groups: [group] }, policy)).toBe(true);
-        await expect(
-          runShardPlans(
-            resolveShardPlans({ OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([group]) }),
-            {
-              concurrency: 1,
-              env: {
-                ...jobEnv,
-                OPENCLAW_CI_TEST_RUNTIME_POLICY: policy,
-                OPENCLAW_VITEST_MAX_WORKERS: "3",
-                OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: persistentRoot,
-                OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--hookTimeout=10000"]',
-              },
-              scratchDir: makeScratchDir(),
-              runChild: async (args, env, label, timing) => {
-                active += 1;
-                peakActive = Math.max(peakActive, active);
-                const runtime = env.OPENCLAW_VITEST_RUNTIME;
-                seen.push({ runtime, args, label, timing });
-                expect(env.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
-                expect(env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("1");
-                expect(env.OPENCLAW_VITEST_SHARD_NAME).toBe("gateway");
-                expect(env.OWNER).toBe("gateway");
-                expect(env.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT).toBe(
-                  path.join(
-                    persistentRoot,
-                    runtime === "bun" ? "vitest-cache-bun-0" : "vitest-cache-0",
-                  ),
-                );
-                expect(
-                  env.OPENCLAW_VITEST_INCLUDE_FILE
-                    ? JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE, "utf8"))
-                    : undefined,
-                ).toEqual(expected[seen.length - 1]?.includePatterns);
-                await Promise.resolve();
-                active -= 1;
-                return 0;
-              },
-            },
-          ),
-        ).resolves.toBe(0);
-        expect(peakActive).toBe(1);
-        expect(seen).toEqual(
-          expected.map(({ runtime, configs: selectedConfigs, prefix }) => ({
-            runtime,
-            args: [...selectedConfigs, "--", "--hookTimeout=10000"],
-            label: `${prefix}gateway`,
-            timing: `${prefix}gateway#include-original`,
-          })),
-        );
-      }
-    },
-  );
-
-  it("keeps an explicitly parallel Gateway pair on Node under both Bun policies", async () => {
-    const configs = [gatewayCoreConfig, gatewayClientConfig];
-    const group = {
-      configs,
-      includePatterns: [gatewayWorkspaceHashTarget],
-      shard_name: "gateway",
-      env: { OPENCLAW_TEST_PROJECTS_PARALLEL: "2" },
-    };
-    for (const policy of ["bun-compatible", "dual"] as const) {
-      const runChild = vi.fn(async () => 0);
-      expect(ciTestShardRequiresBun({ groups: [group] }, policy)).toBe(false);
-      await expect(
-        runShardPlans(
-          resolveShardPlans({ OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([group]) }),
-          {
-            env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
-            scratchDir: makeScratchDir(),
-            runChild,
-          },
-        ),
-      ).resolves.toBe(0);
-      expect(runChild).toHaveBeenCalledTimes(1);
-      expect(runChild).toHaveBeenCalledWith(
-        configs,
-        expect.objectContaining({
-          OPENCLAW_TEST_PROJECTS_PARALLEL: "2",
-          OPENCLAW_VITEST_RUNTIME: "node",
-        }),
-        "gateway",
-        "gateway",
-      );
-    }
-  });
-
   it("finishes every release engine after ordinary test failures", async () => {
     const runChild = vi.fn(async (_args: string[], _env: NodeJS.ProcessEnv) => 1);
     await expect(
@@ -721,7 +417,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         }),
         {
           concurrency: 1,
-          env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual" },
+          env: { CI: "true", OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all" },
           scratchDir: makeScratchDir(),
           runChild,
         },
@@ -730,6 +426,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(runChild.mock.calls.map(([, env]) => env.OPENCLAW_VITEST_RUNTIME)).toEqual([
       "node",
       "bun",
+      "bun",
+      "node",
       "bun",
     ]);
     expect(
@@ -770,170 +468,14 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(runChild).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { policy: "bun-compatible", vitestArgs: [] },
-    { policy: "dual", vitestArgs: [] },
-    { policy: "dual", vitestArgs: ["--testNamePattern=(?!)", "--maxWorkers=1"] },
-  ] as const)(
-    "preserves runtime inventories under $policy with $vitestArgs",
-    async ({ policy, vitestArgs }) => {
-      const skippedOnBun = "src/process/spawn-broker/cleanup.test.ts";
-      const workerMemoryTest = "src/infra/worker-task-pool.memory.test.ts";
-      const pluginRetentionTest = "src/plugins/runtime.retention.test.ts";
-      const nodeHistoryBenchmark = "test/scripts/bench-session-history.test.ts";
-      const nativeCompilerTest = "test/scripts/native-typescript.test.ts";
-      const compilerGraphTest = "test/scripts/ts-topology.test.ts";
-      const mixedCompilerTest = "src/plugin-sdk/provider-tools.test.ts";
-      const bunVitestFiles = [
-        "packages/markdown-core/src/render-aware-chunking.test.ts",
-        workerMemoryTest,
-        "src/shared/account-enabled.test.ts",
-        vitestBunTarget,
-        nativeCompilerTest,
-        compilerGraphTest,
-        mixedCompilerTest,
-        pluginRetentionTest,
-        "src/process/spawn-broker/proxy-retention.test.ts",
-        "src/infra/main-thread-stall.test.ts",
-        "src/auto-reply/reply/get-reply.imports.test.ts",
-        "src/plugin-sdk/provider-catalog-shared.cancellation.test.ts",
-      ].toSorted();
-      const nodeFiles = [skippedOnBun, nodeHistoryBenchmark, nodeTarget];
-      const nativeFiles = vitestArgs.length ? [] : [bunTarget, nativeBunTarget];
-      const bunFiles = nativeFiles.length
-        ? bunVitestFiles
-        : [bunTarget, ...bunVitestFiles, nativeBunTarget].toSorted();
-      const includePatterns = [bunTarget, ...bunVitestFiles, nativeBunTarget, ...nodeFiles];
-      const shard = {
-        configs: [bunConfig],
-        includePatterns,
-        shard_name: "partition",
-        env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(vitestArgs) },
-      };
-      const seen: Array<{
-        runtime: string | undefined;
-        includes: string[];
-        label: string;
-        timing: string;
-      }> = [];
-      expect(ciTestShardRequiresBun(shard, policy)).toBe(true);
-      await expect(
-        runShardPlans(
-          resolveShardPlans({
-            OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([shard]),
-          }),
-          {
-            concurrency: 1,
-            env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
-            scratchDir: makeScratchDir(),
-            runChild: async (args, env, label, timing) => {
-              const native = label.startsWith("bun-native:");
-              expect(args).toEqual(
-                native
-                  ? ["--native-bun", ...nativeFiles.map((file) => `./${file}`)]
-                  : [bunConfig, ...(vitestArgs.length ? ["--", ...vitestArgs] : [])],
-              );
-              seen.push({
-                runtime: env.OPENCLAW_VITEST_RUNTIME,
-                includes: native
-                  ? args.slice(1).map((file) => file.slice(2))
-                  : JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8")),
-                label,
-                timing,
-              });
-              return 0;
-            },
-          },
-        ),
-      ).resolves.toBe(0);
-      const nodePrefix = policy === "dual" ? "" : "node-subset:";
-      expect(seen).toEqual([
-        {
-          runtime: "node",
-          includes: policy === "dual" ? includePatterns : nodeFiles.toSorted(),
-          label: `${nodePrefix}partition`,
-          timing: `${nodePrefix}partition`,
-        },
-        { runtime: "bun", includes: bunFiles, label: "bun:partition", timing: "bun:partition" },
-        ...(nativeFiles.length
-          ? [
-              {
-                runtime: "bun",
-                includes: nativeFiles,
-                label: "bun-native:partition",
-                timing: "bun-native:partition",
-              },
-            ]
-          : []),
-      ]);
-      expect(new Set(seen.flatMap(({ includes }) => includes))).toEqual(new Set(includePatterns));
-    },
-  );
-
-  it.each(["bun-compatible", "dual"] as const)(
-    "runs qualified process coverage on Bun while retaining process siblings on Node under %s",
-    async (policy) => {
-      const bunFiles = [
-        "src/process/spawn-broker/event-order.test.ts",
-        "src/process/spawn-broker/group-custody.test.ts",
-        "src/process/spawn-broker/context.test.ts",
-        "src/process/spawn-broker/startup.test.ts",
-        "src/process/terminal-pty.test.ts",
-        "src/process/terminal-pty-bun.test.ts",
-      ].toSorted();
-      const nodeFiles = [
-        "src/process/spawn-broker/cleanup.test.ts",
-        "src/process/spawn-broker/execa.test.ts",
-        "src/process/supervisor/service-child-relay-host.retirement.test.ts",
-      ];
-      const includePatterns = [...bunFiles, ...nodeFiles];
-      const seen: Array<{ runtime: string | undefined; includes: string[] }> = [];
-      await expect(
-        runShardPlans(
-          [
-            {
-              kind: "group",
-              name: "process",
-              plan: {
-                configs: ["test/vitest/vitest.process.config.ts"],
-                includePatterns,
-              },
-            },
-          ],
-          {
-            env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
-            scratchDir: makeScratchDir(),
-            runChild: async (_args, env) => {
-              seen.push({
-                runtime: env.OPENCLAW_VITEST_RUNTIME,
-                includes: JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8")),
-              });
-              return 0;
-            },
-          },
-        ),
-      ).resolves.toBe(0);
-      expect(seen).toEqual([
-        { runtime: "node", includes: policy === "dual" ? includePatterns : nodeFiles },
-        { runtime: "bun", includes: bunFiles },
-      ]);
-      for (const bunFile of bunFiles) {
-        expect(resolveCiTestRuntimeSelections({ targets: [bunFile] }, policy)).toEqual([
-          ...(policy === "dual" ? [{ runtime: "node" }] : []),
-          { runtime: "bun" },
-        ]);
-      }
-    },
-  );
-
   it("keeps exact native admission and Vitest-only arguments separate", () => {
     const selection = { targets: [nativeBunTarget] };
     expect(resolveCiTestRuntimeSelections(selection, "node")).toEqual([{ runtime: "node" }]);
-    expect(resolveCiTestRuntimeSelections(selection, "dual")).toEqual([
+    expect(resolveCiTestRuntimeSelections(selection, "dual-all")).toEqual([
       { runtime: "node" },
       { runtime: "bun", engine: "bun-test", files: [nativeBunTarget] },
     ]);
-    expect(ciTestShardRequiresBun(selection, "bun-compatible")).toBe(true);
+    expect(ciTestShardRequiresBun(selection, "bun-all")).toBe(true);
     for (const vitestArgs of [
       ["--testNamePattern=(?!)"],
       ["--maxWorkers=1"],
@@ -941,16 +483,16 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       ["--hookTimeout=180000"],
       [`--exclude=${nativeBunTarget}`],
     ]) {
-      expect(
-        resolveCiTestRuntimeSelections({ ...selection, vitestArgs }, "bun-compatible"),
-      ).toEqual([{ runtime: "bun" }]);
+      expect(resolveCiTestRuntimeSelections({ ...selection, vitestArgs }, "bun-all")).toEqual([
+        { runtime: "bun" },
+      ]);
     }
     expect(
       resolveCiTestRuntimeSelections(
         {
           targets: [nativeBunTarget, vitestBunTarget],
         },
-        "bun-compatible",
+        "bun-all",
       ),
     ).toEqual([{ runtime: "bun" }]);
     expect(
@@ -959,9 +501,9 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           configs: [bunConfig],
           includePatterns: ["src/infra/plain-object.test.ts"],
         },
-        "bun-compatible",
+        "bun-all",
       ),
-    ).toEqual([{ runtime: "bun", includePatterns: ["src/infra/plain-object.test.ts"] }]);
+    ).toEqual([{ runtime: "bun" }]);
   });
 
   it("keeps changed qualification inputs on Vitest without dropping their coverage", () => {
@@ -976,285 +518,38 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       copyInput(file);
     }
     const selection = { configs: [bunConfig], includePatterns: files };
-    expect(resolveCiTestRuntimeSelections(selection, "bun-compatible", cwd)).toEqual([
+    expect(resolveCiTestRuntimeSelections(selection, "bun-all", cwd)).toEqual([
       { runtime: "bun", engine: "bun-test", files },
     ]);
     writeFileSync(path.join(cwd, "src/utils/chunk-items.ts"), "export const changed = true;\n");
-    expect(resolveCiTestRuntimeSelections(selection, "bun-compatible", cwd)).toEqual([
+    expect(resolveCiTestRuntimeSelections(selection, "bun-all", cwd)).toEqual([
       { runtime: "bun", engine: "bun-test", files },
     ]);
     writeFileSync(path.join(cwd, nativeBunTarget), `${readFileSync(nativeBunTarget, "utf8")}\n`);
-    expect(resolveCiTestRuntimeSelections(selection, "dual", cwd)).toEqual([
+    expect(resolveCiTestRuntimeSelections(selection, "dual-all", cwd)).toEqual([
       { runtime: "node" },
       { runtime: "bun", includePatterns: [nativeBunTarget] },
       { runtime: "bun", engine: "bun-test", files: [bunTarget, helperTest] },
     ]);
     writeFileSync(path.join(cwd, helper), "// changed fixture helper\n");
-    expect(resolveCiTestRuntimeSelections(selection, "dual", cwd)).toEqual([
+    expect(resolveCiTestRuntimeSelections(selection, "dual-all", cwd)).toEqual([
       { runtime: "node" },
       { runtime: "bun", includePatterns: [helperTest, nativeBunTarget] },
       { runtime: "bun", engine: "bun-test", files: [bunTarget] },
     ]);
     writeFileSync(path.join(cwd, setup), "// changed setup\n");
-    expect(resolveCiTestRuntimeSelections(selection, "dual", cwd)).toEqual([
+    expect(resolveCiTestRuntimeSelections(selection, "dual-all", cwd)).toEqual([
       { runtime: "node" },
-      { runtime: "bun", includePatterns: files },
+      { runtime: "bun" },
     ]);
   });
 
-  it.each([
-    {
-      policy: "bun-compatible",
-      config: unitConfig,
-      nodeFiles: ["packages/acp-core/src/error-format.test.ts"],
-    },
-    {
-      policy: "bun-compatible",
-      config: unitSrcConfig,
-      nodeFiles: [],
-    },
-  ] as const)(
-    "admits qualified unit coverage while preserving $config siblings under $policy",
-    async ({ policy, config, nodeFiles }) => {
-      const bunFiles = [
-        ...(config === unitConfig ? [graphemeTarget] : []),
-        "src/audit/audit-config.test.ts",
-        libraryTarget,
-        workerQuiescenceTarget,
-        "src/node-host/node-worker-workspace-processes.test.ts",
-        workerClosingWindowTarget,
-        "src/worker/worker-deploy-entry.test.ts",
-      ].toSorted();
-      const includePatterns = [...bunFiles, ...nodeFiles];
-      const seen: Array<{ runtime: string | undefined; includes: string[] }> = [];
-      await expect(
-        runShardPlans(
-          [{ kind: "group", name: "unit", plan: { configs: [config], includePatterns } }],
-          {
-            env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
-            scratchDir: makeScratchDir(),
-            runChild: async (_args, env) => {
-              seen.push({
-                runtime: env.OPENCLAW_VITEST_RUNTIME,
-                includes: JSON.parse(readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8")),
-              });
-              return 0;
-            },
-          },
-        ),
-      ).resolves.toBe(0);
-      expect(seen).toEqual([
-        ...(nodeFiles.length ? [{ runtime: "node", includes: nodeFiles }] : []),
-        { runtime: "bun", includes: bunFiles },
-      ]);
-      expect(new Set(seen.flatMap(({ includes }) => includes))).toEqual(new Set(includePatterns));
-      for (const targets of [bunFiles, ...bunFiles.map((file) => [file])]) {
-        expect(resolveCiTestRuntimeSelections({ targets }, policy)).toEqual([{ runtime: "bun" }]);
-      }
-      for (const nodeFile of nodeFiles) {
-        expect(resolveCiTestRuntimeSelections({ targets: [nodeFile] }, policy)).toEqual([
-          { runtime: "node" },
-        ]);
-      }
-      const full = resolveCiTestRuntimeSelections({ configs: [config] }, policy);
-      expect(full).toEqual([
-        ...(nodeFiles.length
-          ? [{ runtime: "node", includePatterns: expect.arrayContaining([...nodeFiles]) }]
-          : []),
-        { runtime: "bun", includePatterns: expect.arrayContaining(bunFiles) },
-      ]);
-      const nodeIncludes = full.find((entry) => entry.runtime === "node")?.includePatterns ?? [];
-      const bunIncludes = full.find((entry) => entry.runtime === "bun")?.includePatterns ?? [];
-      for (const file of bunFiles) {
-        expect(nodeIncludes).not.toContain(file);
-      }
-      expect(nodeIncludes).not.toContain(bunTarget);
-      if (config === unitSrcConfig) {
-        expect(bunIncludes.every((file) => file.startsWith("src/"))).toBe(true);
-        expect(
-          bunIncludes.some(
-            (file) => file.startsWith("src/acp/") || file.startsWith("src/security/"),
-          ),
-        ).toBe(false);
-      }
-      if (config === unitSrcConfig) {
-        expect(
-          resolveCiTestRuntimeSelections(
-            { configs: [config], includePatterns: [graphemeTarget] },
-            policy,
-          ),
-        ).toEqual([{ runtime: "node" }]);
-      }
-      expect(ciTestShardRequiresBun({ configs: [config] }, policy)).toBe(true);
-    },
-  );
-
-  it.each([
-    {
-      config: "test/vitest/vitest.commands.config.ts",
-      ownerIncludePatterns: ["src/commands/**/*.test.ts"],
-      targets: [
-        "src/commands/doctor-sqlite-nocow.test.ts",
-        "src/commands/doctor-config-preflight.process.test.ts",
-      ],
-      otherOwner: "src/commands/doctor-security.test.ts",
-    },
-    {
-      config: "test/vitest/vitest.gateway-methods.config.ts",
-      ownerIncludePatterns: ["src/gateway/server-methods/**/*.test.ts"],
-      targets: [
-        "test/plugins/crabbox-allocation-authority.gateway.test.ts",
-        "test/plugins/team-reports-http.gateway.test.ts",
-      ],
-      otherOwner: "src/gateway/server-methods/transcripts.test.ts",
-    },
-  ])("admits the complete $config owner without changing adjacent ownership", (row) => {
-    for (const policy of ["node", "bun-compatible", "dual"] as const) {
-      const expected =
-        policy === "node"
-          ? [{ runtime: "node" }]
-          : policy === "dual"
-            ? [{ runtime: "node" }, { runtime: "bun" }]
-            : [{ runtime: "bun" }];
-      for (const selection of [
-        { configs: [row.config] },
-        { configs: [row.config], includePatterns: row.targets },
-        { configs: [row.config], includePatterns: row.ownerIncludePatterns },
-        { targets: row.targets },
-        ...row.targets.map((target) => ({ targets: [target] })),
-      ]) {
-        expect(resolveCiTestRuntimeSelections(selection, policy)).toEqual(expected);
-        expect(ciTestShardRequiresBun(selection, policy)).toBe(policy !== "node");
-        expect(
-          resolveCiTestRuntimeSelections({ ...selection, vitestArgs: ["--shard=1/2"] }, policy),
-        ).toEqual([{ runtime: "node" }]);
-      }
-      expect(resolveCiTestRuntimeSelections({ targets: [row.otherOwner] }, policy)).toEqual([
-        { runtime: "node" },
-      ]);
-    }
-  });
-
-  it.each([
-    {
-      config: "test/vitest/vitest.extension-database-workers.config.ts",
-      dir: "extensions",
-      targets: [
-        "extensions/codex/src/session-catalog-native-performance.test.ts",
-        "extensions/team-reports/src/render/theme.test.ts",
-      ],
-      sibling: "extensions/team-reports/src/render/site.test.ts",
-      glob: "**/*.test.ts",
-    },
-    {
-      config: "test/vitest/vitest.infra.config.ts",
-      dir: ".",
-      targets: [
-        "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
-        "src/cli/admin-state-owner.process.test.ts",
-        "src/infra/update-managed-service-handoff-reclamation.test.ts",
-        "src/infra/worker-cpu.test.ts",
-        "src/state/openclaw-state-lease.retention.test.ts",
-      ],
-      sibling: "src/state/openclaw-state-ownership.test.ts",
-      glob: "**/*.test.ts",
-    },
-  ])("admits only the qualified complete selections in $config", (row) => {
-    for (const policy of ["node", "bun-compatible", "dual"] as const) {
-      const expected =
-        policy === "node"
-          ? [{ runtime: "node" }]
-          : policy === "dual"
-            ? [{ runtime: "node" }, { runtime: "bun" }]
-            : [{ runtime: "bun" }];
-      for (const targets of [row.targets, ...row.targets.map((target) => [target])]) {
-        for (const selection of [
-          { targets },
-          { configs: [row.config], includePatterns: targets },
-          {
-            configs: [row.config],
-            includePatterns: targets.map((target) =>
-              row.dir && row.dir !== "." ? target.slice(row.dir.length + 1) : target,
-            ),
-          },
-        ]) {
-          expect(resolveCiTestRuntimeSelections(selection, policy)).toEqual(expected);
-          expect(ciTestShardRequiresBun(selection, policy)).toBe(policy !== "node");
-          expect(
-            resolveCiTestRuntimeSelections({ ...selection, vitestArgs: ["--shard=1/2"] }, policy),
-          ).toEqual([{ runtime: "node" }]);
-        }
-      }
-      for (const includePatterns of [undefined, [], [row.glob]]) {
-        const selection = { configs: [row.config], includePatterns };
-        expect(resolveCiTestRuntimeSelections(selection, policy)).toEqual([
-          { runtime: "node" },
-          ...(policy === "dual" ? [{ runtime: "bun", includePatterns: row.targets }] : []),
-        ]);
-        expect(ciTestShardRequiresBun(selection, policy)).toBe(policy === "dual");
-      }
-      for (const target of row.targets) {
-        const selection = { configs: [row.config], includePatterns: [target, row.sibling] };
-        expect(resolveCiTestRuntimeSelections(selection, policy)).toEqual([
-          { runtime: "node" },
-          ...(policy === "dual" ? [{ runtime: "bun", includePatterns: [target] }] : []),
-        ]);
-        expect(ciTestShardRequiresBun(selection, policy)).toBe(policy === "dual");
-      }
-      for (const selection of [
-        { targets: [row.sibling] },
-        { targets: [...row.targets, row.sibling] },
-        { configs: [row.config], includePatterns: [row.sibling] },
-        { configs: [row.config], includePatterns: ["src/infra/worker-task-pool.memory.test.ts"] },
-      ]) {
-        expect(resolveCiTestRuntimeSelections(selection, policy)).toEqual([{ runtime: "node" }]);
-      }
-    }
-  });
-
-  it.each([
-    { env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "invalid" } },
-
-    { targets: ["packages/markdown-core/src/*.test.ts"] },
-  ])("keeps ambiguous selection contracts on Node: %s", (selection) => {
-    const shard = { configs: [bunConfig], ...selection };
-    expect(resolveCiTestRuntimeSelections(shard, "bun-compatible")).toEqual([{ runtime: "node" }]);
-    expect(resolveCiTestRuntimeSelections(shard, "dual")).toEqual([{ runtime: "node" }]);
-    const qualifiedShard = {
-      configs: [agentsSupportConfig],
-      includePatterns: [worktreeRecoveryTarget],
-      ...selection,
-    };
-    expect(resolveCiTestRuntimeSelections(qualifiedShard, "bun-compatible")).toEqual([
-      { runtime: "node" },
-    ]);
-    expect(resolveCiTestRuntimeSelections(qualifiedShard, "dual")).toEqual([{ runtime: "node" }]);
-    for (const configs of [
-      [gatewayClientConfig],
-      [gatewayCoreConfig, gatewayClientConfig],
-      [unitConfig],
-      [unitSrcConfig],
-      ["test/vitest/vitest.unit-fast-isolated.config.ts"],
-    ]) {
-      const configSelection = { configs, ...selection };
-      expect(resolveCiTestRuntimeSelections(configSelection, "bun-compatible")).toEqual([
-        { runtime: "node" },
-      ]);
-      expect(resolveCiTestRuntimeSelections(configSelection, "dual")).toEqual([
-        { runtime: "node" },
-      ]);
-    }
-    if (!selection.targets) {
-      expect(ciTestShardRequiresBun(shard, "dual")).toBe(false);
-    }
-  });
-
-  it("applies the UI runtime policy only to the Bun child under dual", async () => {
+  it("applies the UI runtime policy only to the Bun child under dual-all", async () => {
     vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
     const seen: Array<Record<string, string | undefined>> = [];
     await expect(
       runShardPlans([{ kind: "group", name: "ui", plan: { configs: ["ui/vitest.config.ts"] } }], {
-        env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual" },
+        env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all" },
         scratchDir: makeScratchDir(),
         runChild: async (_args, env) => {
           if (env.OPENCLAW_VITEST_RUNTIME === "node") {
@@ -1291,21 +586,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       },
     ];
     expect(seen).toEqual(expected);
-  });
-
-  it.each([
-    { vitestArgs: ["--config", "another.config.ts"] },
-
-    { vitestArgs: ["--reporter=custom.mts"] },
-    { vitestArgs: ["--maxWorkers"] },
-    { targets: ["ui/src/pages/skills/view.test.ts"] },
-  ])("keeps unproven UI execution envelopes on Node: %s", (overrides) => {
-    const selection = {
-      configs: ["ui/vitest.config.ts"],
-      ...overrides,
-    };
-    expect(resolveCiTestRuntimeSelections(selection, "dual")).toEqual([{ runtime: "node" }]);
-    expect(ciTestShardRequiresBun(selection, "bun-compatible")).toBe(false);
   });
 
   it.each([
@@ -1355,7 +635,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           CI: "1",
           RUNNER_ENVIRONMENT: "self-hosted",
           FROZEN_TARGET: "false",
-          OPENCLAW_CI_TEST_RUNTIME_POLICY: scenario.policy ?? "bun-compatible",
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: scenario.policy ?? "node",
           ...(scenario.callerLeaf
             ? {
                 OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: scratchDir,
@@ -1422,7 +702,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
               CI: "1",
               RUNNER_ENVIRONMENT: "self-hosted",
               FROZEN_TARGET: "false",
-              OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible",
+              OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
               OPENCLAW_VITEST_MAX_WORKERS: "2",
             },
             scratchDir: makeScratchDir(),
@@ -1439,7 +719,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         FROZEN_TARGET: "false",
         LANG: "C.UTF-8",
         LC_ALL: "C.UTF-8",
-        OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible",
+        OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
         RAYON_NUM_THREADS: "1",
         TOKIO_WORKER_THREADS: "1",
       });
@@ -1762,7 +1042,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       }),
       {
         concurrency: 1,
-        env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual" },
+        env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all" },
         runChild: async (_args, _childEnv, label, spanKey) => {
           lines.push(`2026-08-27T23:00:00Z [shard:${spanKey}] begin`);
           lines.push(`2026-08-27T23:00:01Z [shard:${label}] child output`);
