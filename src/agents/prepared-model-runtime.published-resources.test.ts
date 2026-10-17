@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
 import {
@@ -18,17 +19,17 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import { runBtwSideQuestion } from "./btw.js";
+import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
 import { acquireReadOnlyPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
-const selectedSource = vi.hoisted(() => {
-  const state: {
+const selectedSource = vi.hoisted(
+  (): {
     input?: PreparedModelRuntimeInput;
     acquisition?: { entered: () => void; completion: Promise<void> };
-  } = {};
-  return state;
-});
+  } => ({}),
+);
 
 // Exercise BTW against an already-owned source without enabling configured producer disposal.
 vi.mock("./prepared-model-runtime.js", async (importOriginal) => {
@@ -158,26 +159,12 @@ module.exports = {
             models: { [`${pluginId}/model`]: { agentRuntime: { id: pluginId } } },
           },
         },
-        models: {
-          providers: {
-            [pluginId]: {
-              api: "openai-completions",
-              apiKey: "synthetic-btw-fixture",
-              baseUrl: "https://fixture.invalid/v1",
-              models: [
-                {
-                  id: "model",
-                  name: "Fixture model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 1024,
-                },
-              ],
-            },
-          },
-        },
+        ...providerConfig(pluginId, {
+          api: "openai-completions",
+          apiKey: "synthetic-btw-fixture",
+          baseUrl: "https://fixture.invalid/v1",
+          models: [modelDefinition("model", { reasoning: false })],
+        }),
         plugins: {
           load: { paths: [pluginRoot] },
           slots: { memory: "none" },
@@ -240,22 +227,20 @@ module.exports = {
               }),
             );
             if (mode === "BTW parent close during acquisition") {
-              await Promise.race([
+              await awaitGateBeforeSettlement(
                 acquisitionEntered.promise,
-                sideQuestion.then(() => {
-                  throw new Error("BTW did not enter acquisition");
-                }),
-              ]);
+                sideQuestion,
+                "BTW did not enter acquisition",
+              );
               owner.beginClose(cancellationReason);
               expect(original.disposals).toBe(0);
               acquisitionFinish.resolve();
             }
-            await Promise.race([
+            await awaitGateBeforeSettlement(
               bridge.entered.promise,
-              sideQuestion.then(() => {
-                throw new Error("BTW did not enter the acquired harness");
-              }),
-            ]);
+              sideQuestion,
+              "BTW did not enter the acquired harness",
+            );
             if (mode === "BTW parent close") {
               owner.beginClose(cancellationReason);
             }
@@ -275,16 +260,14 @@ module.exports = {
             bridge.cleanupFinish.resolve();
             expect(await sideQuestion).toEqual({ text: "42" });
             await bridge.abortObserved.promise;
-            expect(bridge.abortRegistry.current === first.snapshot.pluginRegistry).toBe(true);
+            expect(bridge.abortRegistry.current).toBe(first.snapshot.pluginRegistry);
             await owner.drain();
             await expect.poll(() => original.disposals).toBe(1);
             expect(original.database.isOpen).toBe(false);
             expect(successor.database.isOpen).toBe(true);
-            const reopened = new DatabaseSync(original.file, { readOnly: true });
-            try {
+            {
+              using reopened = new DatabaseSync(original.file, { readOnly: true });
               expect(reopened.prepare("SELECT value FROM answer").get()?.value).toBe(42);
-            } finally {
-              reopened.close();
             }
             await replacement[Symbol.asyncDispose]();
             await expect.poll(() => successor.disposals).toBe(1);

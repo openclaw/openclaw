@@ -22,6 +22,16 @@ const route = {
 const tiers = { requestedTier: "ultrafast", responseTier: "priority" };
 const observation = { ...route, ...tiers };
 
+function deferredDiscovery() {
+  const entered = createDeferred();
+  const release = createDeferred<[]>();
+  const load = vi.fn(() => {
+    entered.resolve();
+    return release.promise;
+  });
+  return { entered, release, load };
+}
+
 describe("prepared account catalog observations", () => {
   beforeEach(() => {
     // These cases describe prepared auth facts, not credentials from the host shell.
@@ -43,11 +53,7 @@ describe("prepared account catalog observations", () => {
   it("retains account discovery across request projections until explicit refresh or identity replacement", async () => {
     const retirement = new AbortController();
     const owner = createPreparedAccountCatalogAccess(() => true, retirement.signal);
-    const tokenCredential = {
-      type: "token",
-      provider: "openai",
-      token: "synthetic-account-token",
-    } as const;
+    const tokenCredential = { type: "token", provider: "openai", token: "first" } as const;
     const load = vi.fn(async () => [
       { provider: "openai", profileId: "account", status: "ready" as const },
     ]);
@@ -72,21 +78,16 @@ describe("prepared account catalog observations", () => {
     expect((await owner.acquire(request)).outcomes).toEqual(refreshed.outcomes);
     expect(refreshed.isCurrent()).toBe(true);
     expect(load).toHaveBeenCalledTimes(3);
-    const entered = createDeferred();
-    const release = createDeferred();
-    load.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return [];
-    });
+    const { entered, release, load: discover } = deferredDiscovery();
+    load.mockImplementationOnce(discover);
     const superseded = owner.acquire({ ...request, refresh: true });
     await entered.promise;
     const replacement = await owner.acquire({
       ...request,
-      credential: { ...tokenCredential, token: "synthetic-replacement-token" },
+      credential: { ...tokenCredential, token: "replacement" },
     });
     expect(refreshed.isCurrent()).toBe(false);
-    release.resolve();
+    release.resolve([]);
     await expect(superseded).rejects.toThrow("changed");
     expect(replacement.isCurrent()).toBe(true);
     expect(load).toHaveBeenCalledTimes(5);
@@ -108,12 +109,7 @@ describe("prepared account catalog observations", () => {
         },
       });
       record(observation);
-      const entered = createDeferred();
-      const release = createDeferred<[]>();
-      const load = vi.fn(() => {
-        entered.resolve();
-        return release.promise;
-      });
+      const { entered, release, load } = deferredDiscovery();
       const request = { profileId: "account", credential, load, allowDiscovery: true };
       const cold = owner.acquire(request);
       await entered.promise;

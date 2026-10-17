@@ -46,6 +46,7 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { AsyncWorkScope, isAsyncWorkScopeActiveHere } from "../shared/async-work-scope.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./auth-profiles/path-resolve.native.js";
 import type { RuntimeAuthProfileStore } from "./auth-profiles/types.js";
+import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
 import { PreparedModelRuntimeAuthPublicationOwner } from "./prepared-model-runtime-auth-publication.js";
 import {
   getPreparedModelRuntimePluginGeneration,
@@ -54,11 +55,11 @@ import {
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   advancePreparedModelRuntimeConfig,
-  loadPublishedGatewayReplyDispatchRuntime,
-  markPreparedModelRuntimeSnapshotsStale,
-  prepareModelRuntimeSnapshot,
-  publishPreparedModelRuntimeSnapshot,
-  refreshPreparedModelRuntimeSnapshots,
+  loadPublishedGatewayReplyDispatchRuntime as loadPublishedDispatch,
+  markPreparedModelRuntimeSnapshotsStale as markStale,
+  prepareModelRuntimeSnapshot as prepare,
+  publishPreparedModelRuntimeSnapshot as publish,
+  refreshPreparedModelRuntimeSnapshots as refresh,
   registerPreparedModelRuntimePublicationListener,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
@@ -71,7 +72,7 @@ import * as pluginLifetime from "./prepared-model-runtime.plugin-lifetime.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "auth-generation-recovery" });
 const { mocks } = fixture;
-const loadDispatch = () => loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+const loadDispatch = () => loadPublishedDispatch({ agentId: "default" });
 
 function registeredInstance(id: string) {
   const registry = createEmptyPluginRegistry();
@@ -87,12 +88,12 @@ async function publishOwner(
 ) {
   mocks.configuredAgentIds = agentIds;
   mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
-  await refreshPreparedModelRuntimeSnapshots(config, {
+  await refresh(config, {
     gatewayLifecycle: true,
     catalogMode: "static",
   });
   const input = fixture.agentInput("default", config);
-  const snapshot = await prepareModelRuntimeSnapshot(input);
+  const snapshot = await prepare(input);
   return { config, input, snapshot, registry };
 }
 
@@ -140,56 +141,39 @@ describe("configured plugin generation recovery", () => {
   it("retains exact thinking policy until borrowed Gateway registry replacement", async () => {
     const provider = "stale-policy-fixture";
     const entry = { provider, id: "reasoner", name: "Reasoner", reasoning: true };
+    const policy = (label: string, defaultLevel: "low" | "high") => ({
+      id: provider,
+      label,
+      auth: [],
+      resolveThinkingProfile: () => ({
+        levels: [{ id: "off" as const }, { id: defaultLevel }],
+        defaultLevel,
+      }),
+    });
     const { registry, record, instance } = registeredInstance(provider);
     registry.providers.push({
       pluginId: record.id,
       source: "test",
-      provider: instance.wrap({
-        id: provider,
-        label: "Captured policy",
-        auth: [],
-        resolveThinkingProfile: () => ({
-          levels: [{ id: "off" as const }, { id: "low" as const }],
-          defaultLevel: "low" as const,
-        }),
-      }),
+      provider: instance.wrap(policy("Captured policy", "low")),
     });
     // An activated Gateway registry has no prepared-owned disposal lifetime.
     const gateway = createPluginRegistryOwner(registry);
     markPluginRegistryActive(registry);
-    const { snapshot } = await publishOwner(["default"], registry, {
-      models: {
-        providers: {
-          [provider]: {
-            baseUrl: "https://policy.invalid/v1",
-            models: [
-              {
-                ...entry,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 8_192,
-                maxTokens: 1_024,
-              },
-            ],
-          },
-        },
-      },
-    });
+    const { snapshot } = await publishOwner(
+      ["default"],
+      registry,
+      providerConfig(provider, {
+        baseUrl: "https://policy.invalid/v1",
+        models: [modelDefinition(entry.id, { ...entry, contextWindow: 8_192, maxTokens: 1_024 })],
+      }),
+    );
     const generation = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot)!.pluginGeneration!;
     const release = retainPreparedPluginGeneration(generation);
     const ambient = createEmptyPluginRegistry();
     ambient.providers.push({
       pluginId: "ambient-policy",
       source: "test",
-      provider: {
-        id: provider,
-        label: "Ambient policy",
-        auth: [],
-        resolveThinkingProfile: () => ({
-          levels: [{ id: "off" }, { id: "high" }],
-          defaultLevel: "high",
-        }),
-      },
+      provider: policy("Ambient policy", "high"),
     });
     const previousActive = captureActivePluginRegistrySnapshot();
     setActivePluginRegistry(ambient);
@@ -201,7 +185,7 @@ describe("configured plugin generation recovery", () => {
       });
     try {
       expect(readThinking()?.defaultLevel).toBe("low");
-      markPreparedModelRuntimeSnapshotsStale("scoped policy refresh", {
+      markStale("scoped policy refresh", {
         agentIds: new Set(["default"]),
         waitForReplacement: true,
       });
@@ -245,7 +229,7 @@ describe("configured plugin generation recovery", () => {
         }
         expect(snapshot.isCurrent()).toBe(false);
         expect(instance.acceptingCalls).toBe(false);
-        await expect(prepareModelRuntimeSnapshot(input)).rejects.toThrow(
+        await expect(prepare(input)).rejects.toThrow(
           "Prepared model runtime plugin generation retired",
         );
         expect(events).not.toHaveBeenCalled();
@@ -320,14 +304,14 @@ describe("configured plugin generation recovery", () => {
         const dispatch = loadDispatch();
         if (fails) {
           await expect(dispatch).rejects.toBe(failure);
-          await expect(prepareModelRuntimeSnapshot(input)).rejects.toBe(failure);
+          await expect(prepare(input)).rejects.toBe(failure);
           expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(1);
           expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
             expect.stringContaining("fresh registry acquisition failed"),
           );
         } else {
           await expect(dispatch).resolves.toBeDefined();
-          const replacement = await prepareModelRuntimeSnapshot(input);
+          const replacement = await prepare(input);
           expect(replacement.pluginRegistry).toBe(nextRegistry);
           expect(replacement.isCurrent()).toBe(true);
           expect(snapshot.isCurrent()).toBe(false);
@@ -397,12 +381,12 @@ describe("auth publication generation recovery", () => {
       phases.push(phase),
     );
     let retirement: Promise<unknown> | undefined;
-    const publish = pluginLifetime.publishPreparedPluginGeneration;
+    const publishGeneration = pluginLifetime.publishPreparedPluginGeneration;
     const publication = cache
       ? vi
           .spyOn(pluginLifetime, "publishPreparedPluginGeneration")
           .mockImplementationOnce((owner, generation) => {
-            publish(owner, generation);
+            publishGeneration(owner, generation);
             retirement = retirePluginCache(cache);
             expect(owner.pluginGeneration).toBeUndefined();
             bindPluginMetadataSnapshotCache(mocks.pluginMetadataSnapshot, currentCache);
@@ -425,7 +409,7 @@ describe("auth publication generation recovery", () => {
         mutate();
       }
       await expect(loadDispatch()).resolves.toBeDefined();
-      const replacement = await prepareModelRuntimeSnapshot(input);
+      const replacement = await prepare(input);
       expect(replacement.pluginRegistry).toBe(currentRegistry);
       expect(replacement.isCurrent()).toBe(true);
       await listModels(config);
@@ -465,7 +449,7 @@ describe("auth publication generation recovery", () => {
       agentDir: fixture.state.agentDir("worker"),
       affectsInheritedStores: false,
     });
-    const waiting = loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
+    const waiting = loadPublishedDispatch({ agentId: "worker" });
     void waiting.catch(() => {});
     try {
       await started.promise;
@@ -473,7 +457,7 @@ describe("auth publication generation recovery", () => {
       finish.resolve();
       await expect(waiting).resolves.toBeDefined();
       for (const agentId of ["default", "worker"]) {
-        const published = await prepareModelRuntimeSnapshot(fixture.agentInput(agentId, config));
+        const published = await prepare(fixture.agentInput(agentId, config));
         expect(published.pluginRegistry).toBe(currentRegistry);
         expect(published.isCurrent()).toBe(true);
       }
@@ -512,9 +496,8 @@ describe("auth publication generation recovery", () => {
       await rejected;
       expect(recorded.cause).toBe(failure);
       expect(owner.refreshError).toBe(recorded);
-      expect(owner.pending).toBeUndefined();
-      expect(owner.needsRefresh).toBe(true);
-      await expect(prepareModelRuntimeSnapshot(input)).rejects.toBe(recorded);
+      expect(owner).toMatchObject({ pending: undefined, needsRefresh: true });
+      await expect(prepare(input)).rejects.toBe(recorded);
       expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
       expect(phases.filter((phase) => phase === "failed")).toHaveLength(1);
       expect(mocks.warn).toHaveBeenCalledExactlyOnceWith(
@@ -539,37 +522,34 @@ describe("prepared model auth publication", () => {
     };
     prepareSharedAuthStoreOwnershipForNative(fixture.state.env);
     snapshots.setRuntimeAuthProfileStoreSnapshot(store, agentDir);
-    const initial = await publishPreparedModelRuntimeSnapshot(input);
+    const initial = await publish(input);
     const events = vi.fn();
     const unregisterEvents = registerPreparedModelRuntimePublicationListener(events);
     const unregisterAuth = snapshots.registerRuntimeAuthProfileStoreMutationListener((event) => {
       mocks.mutationListener?.(event);
     });
     try {
-      snapshots.updateRuntimeAuthProfileStoreSnapshot(
-        {
-          ...store,
-          runtimeInheritsMainState: true,
-          usageStats: {
-            "test:primary": { lastUsed: 2, errorCount: 1, failureCounts: { timeout: 1 } },
+      for (const availabilityChanged of [false, true]) {
+        snapshots.updateRuntimeAuthProfileStoreSnapshot(
+          {
+            ...store,
+            ...(!availabilityChanged ? { runtimeInheritsMainState: true } : {}),
+            usageStats: {
+              "test:primary": availabilityChanged
+                ? { cooldownUntil: Date.now() + 60_000 }
+                : { lastUsed: 2, errorCount: 1, failureCounts: { timeout: 1 } },
+            },
           },
-        },
-        agentDir,
-      );
-      expect(await prepareModelRuntimeSnapshot(input)).toBe(initial);
-      expect(events).not.toHaveBeenCalled();
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
-
-      snapshots.updateRuntimeAuthProfileStoreSnapshot(
-        {
-          ...store,
-          usageStats: { "test:primary": { cooldownUntil: Date.now() + 60_000 } },
-        },
-        agentDir,
-      );
-      expect(await prepareModelRuntimeSnapshot(input)).not.toBe(initial);
-      expect(events).toHaveBeenCalledWith({ phase: "invalidated" });
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+          agentDir,
+        );
+        expect((await prepare(input)) === initial).toBe(!availabilityChanged);
+        if (availabilityChanged) {
+          expect(events).toHaveBeenCalledWith({ phase: "invalidated" });
+        } else {
+          expect(events).not.toHaveBeenCalled();
+        }
+        expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(availabilityChanged ? 2 : 1);
+      }
     } finally {
       unregisterAuth();
       unregisterEvents();

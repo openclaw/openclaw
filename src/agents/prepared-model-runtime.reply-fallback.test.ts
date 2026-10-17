@@ -24,9 +24,9 @@ import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { getPreparedModelRuntimePluginGeneration } from "./prepared-model-runtime-generation-scope.js";
 import {
-  acquireAgentRunPreparedModelRuntime,
-  loadPublishedGatewayReplyDispatchRuntime,
-  refreshPreparedModelRuntimeSnapshots,
+  acquireAgentRunPreparedModelRuntime as acquireRun,
+  loadPublishedGatewayReplyDispatchRuntime as loadPublishedDispatch,
+  refreshPreparedModelRuntimeSnapshots as refresh,
 } from "./prepared-model-runtime.js";
 
 const reply = vi.hoisted(() => ({ context: vi.fn(), execute: vi.fn() }));
@@ -41,6 +41,31 @@ vi.mock("../auto-reply/reply/get-reply-run-execute.js", () => ({
 }));
 
 const { mocks } = usePreparedModelRuntimeHarness();
+
+async function prepareReply(
+  config: OpenClawConfig,
+  metadata: ReturnType<typeof createPluginMetadataSnapshot>,
+  agentId = "default",
+  thinkingRuntime?: "openclaw",
+) {
+  await refresh(config, {
+    gatewayLifecycle: true,
+    catalogMode: "static",
+    allowGatewaySubagentBinding: true,
+    pluginMetadataSnapshot: metadata,
+  });
+  const dispatch = (await loadPublishedDispatch({ agentId }))!;
+  const { agentDir, workspaceDir } = dispatch;
+  reply.context.mockResolvedValue({
+    kind: "run",
+    workspaceDir,
+    ...(thinkingRuntime ? { thinkingRuntime } : {}),
+  });
+  return {
+    dispatch,
+    input: { config, agentId, agentDir, workspaceDir, allowGatewaySubagentBinding: true },
+  };
+}
 
 describe("prepared reply fallback ownership", () => {
   beforeEach(async () => {
@@ -74,10 +99,10 @@ describe("prepared reply fallback ownership", () => {
         repairHint: "Quarantine the cleaner copy and restart.",
       },
     ]);
-    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
-    await expect(
-      loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" }),
-    ).resolves.toMatchObject({ agentId: "main" });
+    await refresh({}, { gatewayLifecycle: true });
+    await expect(loadPublishedDispatch({ agentId: "main" })).resolves.toMatchObject({
+      agentId: "main",
+    });
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
   });
 
@@ -98,18 +123,7 @@ describe("prepared reply fallback ownership", () => {
     mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() =>
       createEmptyPluginRegistry(),
     );
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-      allowGatewaySubagentBinding: true,
-      pluginMetadataSnapshot: metadata,
-    });
-    const dispatch = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "secondary" }))!;
-    reply.context.mockResolvedValue({
-      kind: "run",
-      workspaceDir: dispatch.workspaceDir,
-      thinkingRuntime: "openclaw",
-    });
+    const { dispatch, input } = await prepareReply(config, metadata, "secondary", "openclaw");
     const warning = vi.fn();
     reply.execute.mockImplementation(async () => {
       const pluginGeneration = getPreparedModelRuntimePluginGeneration()!;
@@ -122,17 +136,13 @@ describe("prepared reply fallback ownership", () => {
         warn: warning,
       });
       try {
-        expect(contextEngine.effectiveEngineId).toBe("legacy");
-        expect(contextEngine.degradedReason).toBe(
-          'context engine "unavailable-context" is not registered',
-        );
-        await using nested = await acquireAgentRunPreparedModelRuntime(
+        expect(contextEngine).toMatchObject({
+          effectiveEngineId: "legacy",
+          degradedReason: 'context engine "unavailable-context" is not registered',
+        });
+        await using nested = await acquireRun(
           {
-            config,
-            agentId: dispatch.agentId,
-            agentDir: dispatch.agentDir,
-            workspaceDir: dispatch.workspaceDir,
-            allowGatewaySubagentBinding: true,
+            ...input,
             runtimePluginSelections: [
               { provider: "selected", modelId: "model", runtime: "openclaw" },
             ],
@@ -168,33 +178,30 @@ describe("prepared reply fallback ownership", () => {
     async (scenario) => {
       const { scope, source, locked } = scenario;
       const failedHarness = "failedHarness" in scenario ? scenario.failedHarness : undefined;
+      const fallbacks = ["fallback/model"];
+      const subagentModel = {
+        fallbacks,
+        ...(scope === "per-agent subagent" ? { primary: "selected/model" } : {}),
+      };
+      const entry =
+        scope === "per-agent subagent" || scope === "fallback-only subagent"
+          ? { subagents: { model: subagentModel } }
+          : {};
       const config: OpenClawConfig = {
         agents: {
-          entries: {
-            default:
-              scope === "per-agent subagent" || scope === "fallback-only subagent"
-                ? {
-                    subagents: {
-                      model: {
-                        ...(scope === "per-agent subagent" ? { primary: "selected/model" } : {}),
-                        fallbacks: ["fallback/model"],
-                      },
-                    },
-                  }
-                : {},
-          },
+          entries: { default: entry },
           defaults: {
             ...(failedHarness
               ? { models: { [failedHarness]: { agentRuntime: { id: "broken-harness" } } } }
               : {}),
             model: {
               primary: "initial/model",
-              fallbacks: scope === "agent" ? ["fallback/model"] : [],
+              fallbacks: scope === "agent" ? fallbacks : [],
             },
             subagents: {
               model: {
                 primary: "selected/model",
-                fallbacks: scope === "per-agent subagent" ? [] : ["fallback/model"],
+                fallbacks: scope === "per-agent subagent" ? [] : fallbacks,
               },
             },
           },
@@ -257,18 +264,9 @@ describe("prepared reply fallback ownership", () => {
         );
         return registry;
       });
-      await refreshPreparedModelRuntimeSnapshots(config, {
-        gatewayLifecycle: true,
-        catalogMode: "static",
-        allowGatewaySubagentBinding: true,
-        pluginMetadataSnapshot: metadata,
-      });
-      const dispatch = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+      const { dispatch, input } = await prepareReply(config, metadata);
       const run = {
-        config,
-        agentId: "default",
-        agentDir: dispatch.agentDir,
-        workspaceDir: dispatch.workspaceDir,
+        ...input,
         provider: "selected",
         model: "model",
         sessionKey: scope === "agent" ? "agent:default:main" : "agent:default:subagent:test",
@@ -277,7 +275,6 @@ describe("prepared reply fallback ownership", () => {
         modelSelectionLocked: locked,
         hasAutoFallbackProvenance: true,
       } as FollowupRun["run"];
-      reply.context.mockResolvedValue({ kind: "run", workspaceDir: dispatch.workspaceDir });
       reply.execute.mockImplementation(async () => {
         const pluginGeneration = getPreparedModelRuntimePluginGeneration()!;
         const candidates = resolveModelCandidateChain({
@@ -287,13 +284,9 @@ describe("prepared reply fallback ownership", () => {
         expect(candidates.map((candidate) => candidate.provider)).toEqual(
           source === "user" || locked ? ["selected"] : ["selected", "fallback"],
         );
-        const nested = await acquireAgentRunPreparedModelRuntime(
+        const nested = await acquireRun(
           {
-            config,
-            agentId: run.agentId,
-            agentDir: run.agentDir,
-            workspaceDir: run.workspaceDir,
-            allowGatewaySubagentBinding: true,
+            ...input,
             runtimePluginSelections: candidates.map((candidate) => ({
               provider: candidate.provider,
               modelId: candidate.model,
