@@ -198,7 +198,7 @@ describe("plugins search command", () => {
       {
         score: 9,
         package: {
-          name: "evil\u001b]0;x\u0007SEARCH_NAME_MARKER",
+          name: "pkg\u001b]0;x\u0007SEARCH_NAME_MARKER",
           family: "code-plugin",
           latestVersion: "1.0.0",
           summary: "desc\u001b]0;y\u0007SEARCH_SUMMARY_MARKER",
@@ -219,10 +219,10 @@ describe("plugins search command", () => {
       },
     ]);
 
-    await runPluginsSearchCommand(["evil"], {}, mocks.runtime);
+    await runPluginsSearchCommand(["plugin"], {}, mocks.runtime);
 
     const raw = mocks.logs.join("\n");
-    expect(raw).not.toContain("evil\u001b]0;x\u0007SEARCH_NAME_MARKER");
+    expect(raw).not.toContain("pkg\u001b]0;x\u0007SEARCH_NAME_MARKER");
     expect(raw).not.toContain("desc\u001b]0;y\u0007SEARCH_SUMMARY_MARKER");
     expect(raw).not.toContain("\u0007");
     expect(raw).toContain("SEARCH_NAME_MARKER");
