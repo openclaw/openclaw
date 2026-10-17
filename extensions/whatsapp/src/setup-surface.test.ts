@@ -74,17 +74,19 @@ async function runFinalizeWithHarness(params: {
   accountId?: string;
   options?: Parameters<NonNullable<typeof whatsappSetupWizard.finalize>>[0]["options"];
 }) {
-  return expectFinalizeResult(
-    await runSetupWizardFinalize({
-      finalize: whatsappSetupWizard.finalize,
-      cfg: params.cfg ?? {},
-      accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
-      runtime: params.runtime ?? createRuntimeSpies(),
-      prompter: params.harness.prompter,
-      options: params.options,
-      forceAllowFrom: params.forceAllowFrom ?? false,
-    }),
-  );
+  const result = await runSetupWizardFinalize({
+    finalize: whatsappSetupWizard.finalize,
+    cfg: params.cfg ?? {},
+    accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
+    runtime: params.runtime ?? createRuntimeSpies(),
+    prompter: params.harness.prompter,
+    options: params.options,
+    forceAllowFrom: params.forceAllowFrom ?? false,
+  });
+  if (!result || typeof result !== "object" || !("cfg" in result) || !result.cfg) {
+    throw new Error("Expected WhatsApp finalize result with cfg");
+  }
+  return result as { cfg: OpenClawConfig };
 }
 
 function createSeparatePhoneHarness(selectValues: string[]) {
@@ -95,15 +97,6 @@ function workConfig(
   extra: { defaultAccount?: string; accounts?: Record<string, { authDir: string }> } = {},
 ) {
   return { channels: { whatsapp: { accounts: { work: { authDir: "/tmp/work" } }, ...extra } } };
-}
-
-function expectFinalizeResult(result: Awaited<ReturnType<typeof runSetupWizardFinalize>>): {
-  cfg: OpenClawConfig;
-} {
-  if (!result || typeof result !== "object" || !("cfg" in result) || !result.cfg) {
-    throw new Error("Expected WhatsApp finalize result with cfg");
-  }
-  return result as { cfg: OpenClawConfig };
 }
 
 describe("whatsapp setup wizard", () => {
