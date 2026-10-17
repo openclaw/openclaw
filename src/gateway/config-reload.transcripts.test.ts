@@ -162,8 +162,6 @@ it.for([false, true])(
           const reloader = startGatewayConfigReloader({
             ...(await ownedConfigReloadOptions(snapshot, configPath)),
             initialAuthoredConfig: initial,
-            initialSnapshotValid: true,
-            initialSnapshotIssues: [],
             readSnapshot: () => io.readConfigFileSnapshot(),
             onNoopConfigCommit: commit,
             onHotReload: hotReload,

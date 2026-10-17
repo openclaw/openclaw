@@ -183,22 +183,14 @@ async function request(
     omitAgent?: boolean;
   } = {},
 ) {
-  const query = new URLSearchParams({ source });
-  if (!options.unscoped) {
-    query.set("sessionKey", options.sessionKey ?? sessionKey);
-  }
-  if (!options.omitAgent) {
-    query.set("agentId", options.agentId ?? "main");
-  }
-  if (!options.bytes) {
-    query.set("meta", "1");
-  }
-  if (options.ticket) {
-    query.set("mediaTicket", options.ticket);
-  }
-  if (options.allow) {
-    query.set("allow", "1");
-  }
+  const query = new URLSearchParams({
+    source,
+    ...(!options.unscoped && { sessionKey: options.sessionKey ?? sessionKey }),
+    ...(!options.omitAgent && { agentId: options.agentId ?? "main" }),
+    ...(!options.bytes && { meta: "1" }),
+    ...(options.ticket && { mediaTicket: options.ticket }),
+    ...(options.allow && { allow: "1" }),
+  });
   const response = makeMockHttpResponse();
   const chunks: Buffer[] = [];
   response.res.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
@@ -223,17 +215,45 @@ async function request(
   };
 }
 
+type RequestOptions = NonNullable<Parameters<typeof request>[1]>;
+async function expectMetadata(
+  source: string,
+  expected: Record<string, unknown>,
+  options?: RequestOptions,
+) {
+  const response = await request(source, options);
+  expect(response.payload).toMatchObject(expected);
+  return response;
+}
+async function mediaTicket(source: string, options?: RequestOptions) {
+  const { payload } = await expectMetadata(
+    source,
+    { available: true, mediaTicket: expect.any(String) },
+    options,
+  );
+  return String(payload!.mediaTicket);
+}
+async function expectWithheld(source: string, options?: RequestOptions) {
+  const denied = await request(source, options);
+  expect(denied.res.statusCode).toBe(404);
+  expect(denied.bytes).not.toEqual(PNG);
+}
+async function expectBytes(source: string, options: RequestOptions, bytes = PNG, mime?: string) {
+  const served = await request(source, { ...options, bytes: true });
+  expect(served.res.statusCode).toBe(200);
+  expect(served.bytes).toEqual(bytes);
+  if (mime) {
+    expect(served.setHeader).toHaveBeenCalledWith("Content-Type", mime);
+  }
+  return served;
+}
+
 it("binds relative media tickets to the execution directory within the session root", async () => {
   const first = path.join(project, "first");
   const second = path.join(project, "second");
-  for (const directory of [first, second]) {
-    await fs.mkdir(directory);
-    await fs.writeFile(path.join(directory, "image.png"), PNG);
-  }
+  await Promise.all([first, second].map((directory) => image("image.png", directory)));
   entry.spawnedCwd = first;
-  const metadata = (await request("image.png")).payload;
-  expect(metadata).toMatchObject({ available: true });
-  const ticket = String(metadata!.mediaTicket);
+  const ticket = await mediaTicket("image.png");
   entry.spawnedCwd = second;
   expect((await request("image.png", { ticket, bytes: true })).res.statusCode).toBe(404);
   expect((await request("image.png")).payload).toMatchObject({ available: true });
@@ -247,9 +267,7 @@ it.each(["metadata", "bytes"] as const)(
     onOpen(source, () => {
       entry.spawnedCwd = path.join(project, "another-directory");
     });
-    const denied = await request("image.png", { bytes: operation === "bytes" });
-    expect(denied.res.statusCode).toBe(404);
-    expect(denied.bytes).not.toEqual(PNG);
+    await expectWithheld("image.png", { bytes: operation === "bytes" });
   },
 );
 
@@ -257,52 +275,42 @@ it("uses configured protection when there is no explicit session mode", async ()
   delete entry.permissionMode;
   cfg.tools = { fs: { workspaceOnly: false } };
   const source = await image("outside.png", temp);
-  expect((await request(source)).payload).toMatchObject({ available: true });
+  await expectMetadata(source, { available: true });
   cfg.tools.fs!.workspaceOnly = true;
-  expect((await request(source)).payload).toMatchObject({ available: false, canAllow: true });
+  await expectMetadata(source, { available: false, canAllow: true });
 });
 
 it("offers an explicit exact-image grant and renews it without granting siblings", async () => {
   const source = await image("outside.png", temp);
   const sibling = await image("sibling.png", temp);
-  expect((await request(source)).payload).toMatchObject({
+  await expectMetadata(source, {
     available: false,
     code: "outside-allowed-folders",
     canAllow: true,
     retryable: false,
   });
-  const allowed = (await request(source, { allow: true })).payload!;
-  expect(allowed).toMatchObject({ available: true, mediaTicket: expect.any(String) });
-  const ticket = String(allowed.mediaTicket);
-  expect((await request(source, { ticket })).payload).toMatchObject({ available: true });
-  expect((await request(sibling, { ticket })).payload).toMatchObject({ available: false });
-  const bytes = await request(source, { ticket, bytes: true });
-  expect(bytes.res.statusCode).toBe(200);
-  expect(bytes.bytes).toEqual(PNG);
-  expect(bytes.setHeader).toHaveBeenCalledWith("Content-Type", "image/png");
+  const ticket = await mediaTicket(source, { allow: true });
+  await expectMetadata(source, { available: true }, { ticket });
+  await expectMetadata(sibling, { available: false }, { ticket });
+  await expectBytes(source, { ticket }, PNG, "image/png");
 });
 
 it("does not let a reader grant outside access or renew an administrator's allowance", async () => {
   const source = await image("outside.png", temp);
-  const allowed = (await request(source, { allow: true })).payload!;
+  const ticket = await mediaTicket(source, { allow: true });
   state.auth.mockResolvedValue({ authMethod: "device-token", operatorScopes: ["operator.read"] });
   expect((await request(source)).payload).not.toHaveProperty("canAllow", true);
   expect((await request(source, { allow: true })).res.statusCode).toBe(403);
-  expect((await request(source, { ticket: String(allowed.mediaTicket) })).payload).toMatchObject({
-    available: false,
-  });
+  await expectMetadata(source, { available: false }, { ticket });
 });
 
 it("rejects a replaced file and a replaced session when replaying an exact-image ticket", async () => {
   const source = await image("outside.png", temp);
-  const ticket = String((await request(source, { allow: true })).payload!.mediaTicket);
+  const ticket = await mediaTicket(source, { allow: true });
   await fs.rename(source, `${source}.old`);
   await fs.writeFile(source, PNG);
   expect((await request(source, { ticket, bytes: true })).res.statusCode).toBe(404);
-  expect((await request(source, { ticket })).payload).toMatchObject({
-    available: false,
-    canAllow: true,
-  });
+  await expectMetadata(source, { available: false, canAllow: true }, { ticket });
   await fs.rm(source);
   await fs.rename(`${source}.old`, source);
   entry.sessionId = "replacement";
@@ -311,37 +319,31 @@ it("rejects a replaced file and a replaced session when replaying an exact-image
 
 it("does not grant an outside text file or a symlink escape under a protected project", async () => {
   const source = await image("outside.png", temp, "not an image");
-  expect((await request(source, { allow: true })).payload).toMatchObject({ available: false });
+  await expectMetadata(source, { available: false }, { allow: true });
   await fs.writeFile(source, PNG);
   const link = path.join(project, "link.png");
   await fs.symlink(source, link);
-  expect((await request(link)).payload).toMatchObject({ available: false, canAllow: true });
+  await expectMetadata(link, { available: false, canAllow: true });
 });
 
 it("does not interpret execNode session paths as Gateway-local image paths", async () => {
   entry.execNode = "remote-workspace";
   const source = await image();
-  expect((await request(source)).payload).toMatchObject({
-    available: false,
-    code: "blocked-local-file",
-  });
+  await expectMetadata(source, { available: false, code: "blocked-local-file" });
 });
 it("keeps device-folder Full Access off Gateway-local image paths", async () => {
   entry.permissionMode = "full";
   entry.deviceFolder = { deviceId: "paired-device", path: project };
   const source = await image();
   for (const options of [{}, { allow: true }]) {
-    expect((await request(source, options)).payload).toMatchObject({
-      available: false,
-      code: "blocked-local-file",
-    });
+    await expectMetadata(source, { available: false, code: "blocked-local-file" }, options);
   }
 });
 
 it("keeps repository Full Access and Allow from exposing the configured Gateway workspace", async () => {
   entry.permissionMode = "full";
   const source = await image("unrelated.png", path.join(temp, "agent"));
-  const ticket = String((await request(source)).payload!.mediaTicket);
+  const ticket = await mediaTicket(source);
   entry.repositoryWorkspaceId = "repository-workspace";
   delete entry.spawnedCwd;
   delete entry.sessionRoot;
@@ -354,19 +356,16 @@ it("keeps repository Full Access and Allow from exposing the configured Gateway 
 });
 it("keeps protected project images separate from the unrelated configured agent workspace", async () => {
   const source = await image("unrelated.png", path.join(temp, "agent"));
-  expect((await request(source)).payload).toMatchObject({ available: false, canAllow: true });
+  await expectMetadata(source, { available: false, canAllow: true });
 });
 
 it("rechecks full-to-workspace changes for existing byte tickets and metadata renewal", async () => {
   const source = await image("outside.png", temp);
   entry.permissionMode = "full";
-  const ticket = String((await request(source)).payload!.mediaTicket);
+  const ticket = await mediaTicket(source);
   entry.permissionMode = "workspace";
   expect((await request(source, { ticket, bytes: true })).res.statusCode).toBe(404);
-  expect((await request(source, { ticket })).payload).toMatchObject({
-    available: false,
-    canAllow: true,
-  });
+  await expectMetadata(source, { available: false, canAllow: true }, { ticket });
 });
 
 it("recognizes real outside SVG images in workspace mode", async () => {
@@ -375,14 +374,16 @@ it("recognizes real outside SVG images in workspace mode", async () => {
     temp,
     '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>',
   );
-  const result = await request(source, { allow: true });
-  expect(result.payload).toMatchObject({ available: true, mimeType: "image/svg+xml" });
-  const bytes = await request(source, {
-    ticket: String(result.payload!.mediaTicket),
-    bytes: true,
-  });
-  expect(bytes.res.statusCode).toBe(200);
-  expect(bytes.bytes).toEqual(await fs.readFile(source));
+  const result = await expectMetadata(
+    source,
+    { available: true, mimeType: "image/svg+xml" },
+    { allow: true },
+  );
+  const bytes = await expectBytes(
+    source,
+    { ticket: String(result.payload!.mediaTicket) },
+    await fs.readFile(source),
+  );
   expect(bytes.setHeader).toHaveBeenCalledWith(
     "content-security-policy",
     expect.stringContaining("sandbox"),
@@ -395,16 +396,11 @@ it("denies incognito images to a named profile while preserving administrator ac
   state.auth.mockResolvedValue({
     authMethod: "trusted-proxy",
     operatorScopes: ["operator.read"],
-    authenticatedUserProfile: {
-      profileId: "reader",
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 0,
-    },
+    authenticatedUserProfile: { profileId: "reader" },
   });
   expect((await request(source)).res.statusCode).toBe(404);
   state.auth.mockResolvedValue({ authMethod: "token", operatorScopes: ["operator.admin"] });
-  expect((await request(source)).payload).toMatchObject({ available: true });
+  await expectMetadata(source, { available: true });
 });
 
 it("keeps unscoped readers on the default static roots even when a query selects a full-access agent", async () => {
@@ -412,9 +408,7 @@ it("keeps unscoped readers on the default static roots even when a query selects
   cfg.agents!.entries!.other = { workspace: project };
   const source = await image("private.png");
   state.auth.mockResolvedValue({ authMethod: "device-token", operatorScopes: ["operator.read"] });
-  expect((await request(source, { unscoped: true, agentId: "other" })).payload).toMatchObject({
-    available: false,
-  });
+  await expectMetadata(source, { available: false }, { unscoped: true, agentId: "other" });
   expect((await request(source, { unscoped: true, allow: true })).res.statusCode).toBe(403);
 });
 
@@ -428,17 +422,17 @@ it("selects the scoped session's agent when its optional agent parameter is omit
     entry,
   }));
   const source = await image();
-  expect(
-    (await request(source, { sessionKey: "agent:other:dashboard:media", omitAgent: true })).payload,
-  ).toMatchObject({ available: true });
+  await expectMetadata(
+    source,
+    { available: true },
+    { sessionKey: "agent:other:dashboard:media", omitAgent: true },
+  );
 });
 
 it("does not accept GET consent or move an allowed image ticket to another session", async () => {
   const source = await image("outside.png", temp);
-  expect((await request(source, { allow: true, method: "GET" })).payload).toMatchObject({
-    available: false,
-  });
-  const ticket = String((await request(source, { allow: true })).payload!.mediaTicket);
+  await expectMetadata(source, { available: false }, { allow: true, method: "GET" });
+  const ticket = await mediaTicket(source, { allow: true });
   expect(
     (await request(source, { ticket, bytes: true, sessionKey: `${sessionKey}-other` })).res
       .statusCode,
@@ -453,14 +447,7 @@ it("keeps Gateway-owned inbound images available in a repository session", async
   const file = path.join(resolveStateDir(), "media", "inbound", id);
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, PNG);
-  const metadata = await request(source);
-  expect(metadata.payload).toMatchObject({ available: true });
-  const served = await request(source, {
-    ticket: String(metadata.payload!.mediaTicket),
-    bytes: true,
-  });
-  expect(served.res.statusCode).toBe(200);
-  expect(served.bytes).toEqual(PNG);
+  await expectBytes(source, { ticket: await mediaTicket(source) });
 });
 it("keeps merged-profile media tickets bound to the canonical person's current plugin access", async () => {
   const pluginId = "media-reader-access";
@@ -480,9 +467,7 @@ it("keeps merged-profile media tickets bound to the canonical person's current p
       viewer: { ...viewerRole, accessPolicyPlugin: pluginId },
     });
     const source = await image("shared.png");
-    const metadata = await request(source);
-    expect(metadata.payload).toMatchObject({ available: true });
-    const ticket = String(metadata.payload!.mediaTicket);
+    const ticket = await mediaTicket(source);
     mergeProfiles(profile.id, canonical.id);
     expect((await request(source, { ticket, bytes: true })).bytes).toEqual(PNG);
     expect(authorize.mock.calls.at(-1)?.[0].profile.profileId).toBe(canonical.id);
@@ -501,9 +486,7 @@ it.each(["role assignment", "role definition"] as const)(
       denied: { ...viewerRole, sessions: { others: "none" } },
     });
     const source = await image("shared.png");
-    const metadata = await request(source);
-    expect(metadata.payload).toMatchObject({ available: true });
-    const ticket = String(metadata.payload!.mediaTicket);
+    const ticket = await mediaTicket(source);
     if (change === "role assignment") {
       setUserProfileRole(profile.id, "denied");
       invalidateOperatorRolePolicy(profile.id);
@@ -512,9 +495,7 @@ it.each(["role assignment", "role definition"] as const)(
     }
     await fs.rename(source, `${source}.old`);
     await fs.writeFile(source, PNG);
-    const denied = await request(source, { ticket, bytes: true });
-    expect(denied.res.statusCode).toBe(404);
-    expect(denied.bytes).not.toEqual(PNG);
+    await expectWithheld(source, { ticket, bytes: true });
   },
 );
 
@@ -528,24 +509,18 @@ it.each(
     let current = true;
     await namedReader("yielding-media-reader@example.test", undefined, () => current);
     const source = await image("shared.png");
-    const ticket = String((await request(source)).payload!.mediaTicket);
-    const openSpy = onOpen(source, () => {
+    const ticket = await mediaTicket(source);
+    onOpen(source, () => {
       if (authority === "session") {
         entry.visibility = "draft";
       } else {
         current = false;
       }
     });
-    try {
-      const denied = await request(source, {
-        ...(authority === "session" ? { ticket } : {}),
-        bytes: operation === "bytes",
-      });
-      expect(denied.res.statusCode).toBe(404);
-      expect(denied.bytes).not.toEqual(PNG);
-    } finally {
-      openSpy.mockRestore();
-    }
+    await expectWithheld(source, {
+      ...(authority === "session" ? { ticket } : {}),
+      bytes: operation === "bytes",
+    });
   },
 );
 
@@ -559,9 +534,8 @@ it.each([
     const placements = await placementStore();
     entry.permissionMode = "full";
     const source = await image("gateway-only.png", temp);
-    const metadata = await request(source);
+    const metadata = await expectMetadata(source, { mediaTicket: expect.any(String) });
     expect(metadata.res.statusCode).toBe(200);
-    expect(metadata.payload?.mediaTicket).toEqual(expect.any(String));
     const ticket = String(metadata.payload!.mediaTicket);
     const databasePath = resolveOpenClawStateSqlitePath();
     const originalInode =
@@ -622,10 +596,7 @@ it("preserves legacy Full Access PDF attachments under the configured agent work
   const content = "%PDF-1.7\nexisting report\n";
   entry.permissionMode = "full";
   const source = await image(name, path.join(temp, "agent"), content);
-  const served = await request(source, { bytes: true });
-  expect(served.res.statusCode).toBe(200);
-  expect(served.bytes).toEqual(Buffer.from(content));
-  expect(served.setHeader).toHaveBeenCalledWith("Content-Type", "application/pdf");
+  await expectBytes(source, {}, Buffer.from(content), "application/pdf");
   const outside = path.join(temp, name);
   await fs.writeFile(outside, content);
   expect((await request(outside, { bytes: true })).res.statusCode).toBe(404);

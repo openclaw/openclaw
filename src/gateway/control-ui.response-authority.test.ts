@@ -510,60 +510,74 @@ describe("saved message attachment response authority", () => {
     expect((await request({ ...query, messageId: "user-directive", meta: "1" })).status).toBe(404);
   });
 
-  it("reads queued and stopped inputs, including automation, and withholds bytes after withdrawal", async () => {
-    for (const [stopped, forwarded] of [
-      [false, false],
-      [true, false],
-      [false, true],
-    ] as const) {
-      const runId = `attachment-pending-${stopped}-${forwarded}`;
-      const receipt = await stageSessionPendingInput(scope, {
-        runId,
-        assertCurrent: () => {},
-        message: {
-          role: "user",
-          content: "Saved pending comment",
-          timestamp: 1,
-          idempotencyKey: `${runId}:user`,
-          ...(forwarded ? { provenance: cronProvenance } : {}),
-          __openclaw: { media: [{ url: source, contentType: "text/plain" }] },
-        },
-      });
-      expect(receipt).toBeDefined();
+  it.each(["queued", "stopped", "forwarded", "saved"] as const)(
+    "rechecks the %s attachment association after preparing bytes",
+    async (kind) => {
+      const runId = `attachment-pending-${kind}`;
+      const receipt =
+        kind === "saved"
+          ? undefined
+          : await stageSessionPendingInput(scope, {
+              runId,
+              assertCurrent: () => {},
+              message: {
+                role: "user",
+                content: "Saved pending comment",
+                timestamp: 1,
+                idempotencyKey: `${runId}:user`,
+                ...(kind === "forwarded" ? { provenance: cronProvenance } : {}),
+                __openclaw: { media: [{ url: source, contentType: "text/plain" }] },
+              },
+            });
+      if (kind !== "saved") {
+        expect(receipt).toBeDefined();
+      }
       try {
-        if (stopped) {
+        if (kind === "stopped") {
           receipt!.finish("cancelled");
           await receipt!.settled?.();
         }
-        const query = { messageId: `pending:${receipt!.inputId}` };
+        const query: Record<string, string> = receipt
+          ? { messageId: `pending:${receipt.inputId}` }
+          : {};
         const mediaTicket = await metadata(query);
-        const preview = await request({ ...query, mediaTicket }, { ticketOnly: true });
-        expect([preview.status, await preview.text()]).toEqual([200, text]);
+        const ticketed = { ...query, mediaTicket };
+        if (receipt) {
+          const preview = await request(ticketed, { ticketOnly: true });
+          expect([preview.status, await preview.text()]).toEqual([200, text]);
+        }
         const file = state.statePath("media", "inbound", "selection-comment.txt");
         const open = fs.open;
-        let withdrawn = false;
-        const spy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+        let changed = false;
+        using _ = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
           const handle = await open(filePath, flags, mode);
-          if (filePath === file && !withdrawn) {
-            withdrawn = await discardSessionPendingInput(scope, runId, () => {});
+          if (filePath === file && !changed) {
+            if (receipt) {
+              changed = await discardSessionPendingInput(scope, runId, () => {});
+            } else {
+              changed = true;
+              await seed(ordinary);
+            }
           }
           return handle;
         });
-        try {
-          const response = await request({ ...query, mediaTicket }, { ticketOnly: true });
-          expect(withdrawn).toBe(true);
-          expect(response.status).toBe(404);
-          expect(await response.text()).not.toContain(text);
-          expect((await request({ ...query, meta: "1" })).status).toBe(404);
-        } finally {
-          spy.mockRestore();
-        }
+        const response = await request(ticketed, { ticketOnly: true });
+        expect(changed).toBe(true);
+        expect(response.status).toBe(404);
+        expect(await response.text()).not.toContain(text);
+        const followup = receipt
+          ? await request({ ...query, meta: "1" })
+          : await request(ticketed, { ticketOnly: true });
+        expect(followup.status).toBe(404);
       } finally {
-        receipt!.finish("cancelled");
-        await receipt!.settled?.();
+        receipt?.finish("cancelled");
+        await receipt?.settled?.();
+        if (!receipt) {
+          await seed();
+        }
       }
-    }
-  });
+    },
+  );
 
   it("rechecks session and role access for issued tickets and metadata refresh", async () => {
     const mediaTicket = await metadata({}, { viewer: true });
@@ -585,31 +599,6 @@ describe("saved message attachment response authority", () => {
     } finally {
       config = before;
       setRuntimeConfigSnapshot(config, config);
-    }
-  });
-
-  it("withholds prepared bytes and old tickets when a saved attachment association is replaced", async () => {
-    const mediaTicket = await metadata();
-    const file = state.statePath("media", "inbound", "selection-comment.txt");
-    const open = fs.open;
-    let changed = false;
-    const spy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-      const handle = await open(filePath, flags, mode);
-      if (filePath === file && !changed) {
-        changed = true;
-        await seed(ordinary);
-      }
-      return handle;
-    });
-    try {
-      const response = await request({ mediaTicket }, { ticketOnly: true });
-      expect(changed).toBe(true);
-      expect(response.status).toBe(404);
-      expect(await response.text()).not.toContain(text);
-      expect((await request({ mediaTicket }, { ticketOnly: true })).status).toBe(404);
-    } finally {
-      spy.mockRestore();
-      await seed();
     }
   });
 });

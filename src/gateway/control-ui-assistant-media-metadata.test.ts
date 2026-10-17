@@ -102,13 +102,6 @@ async function createBlockedMedia(count: number, codec = "pcm_s16le") {
     active--;
     return audioProbe("1", codec);
   });
-  const probes = {
-    started: started.promise,
-    release: gate.resolve,
-    get peak() {
-      return peak;
-    },
-  };
   const root = tempDirs.make("ui-media-meta-", resolvePreferredOpenClawTmpDir());
   const paths = Array.from({ length: count }, (_, index) =>
     path.join(root, `${index}.${codec === "mp3" ? "mp3" : "caf"}`),
@@ -119,16 +112,25 @@ async function createBlockedMedia(count: number, codec = "pcm_s16le") {
     ),
   );
   const requests: ReturnType<typeof startMediaRequest>[] = [];
+  const start = (...args: Parameters<typeof startMediaRequest>) => {
+    const request = startMediaRequest(...args);
+    requests.push(request);
+    return request;
+  };
   return {
     paths: await Promise.all(paths.map((filePath) => fs.realpath(filePath))),
     requests,
-    probes,
+    start,
+    release: gate.resolve,
+    get peak() {
+      return peak;
+    },
     async occupySlots() {
-      requests.push(...paths.slice(0, 2).map((filePath) => startMediaRequest(filePath)));
-      await probes.started;
+      paths.slice(0, 2).forEach((filePath) => start(filePath));
+      await started.promise;
     },
     async [Symbol.asyncDispose]() {
-      probes.release();
+      gate.resolve();
       await Promise.allSettled(requests.map(({ handled }) => handled));
     },
   };
@@ -193,44 +195,43 @@ it("shares audio metadata probes, retries failures, and reinspects replacements"
 
 it("retains exotic playback metadata while distinct files fill the inspection slots", async () => {
   await using batch = await createBlockedMedia(3);
-  const { paths, requests, probes } = batch;
+  const { paths, requests } = batch;
   const queuedPath = paths[2]!;
   const openedFiles = observeOpenedFiles();
   await batch.occupySlots();
   const observed = observeMetadataRequests();
-  requests.push(startMediaRequest(paths[2]!), startMediaRequest(paths[2]!));
+  batch.start(paths[2]!);
+  batch.start(paths[2]!);
   await observed(2);
   expect(runFfprobe).toHaveBeenCalledTimes(2);
   for (const opened of openedFiles.filter((entry) => entry.realPath === queuedPath)) {
     expect(opened.handle.fd).toBe(-1);
   }
-  probes.release();
+  batch.release();
   await expectPlaybackResponses(requests, { ...transcodeMetadata, mimeType: "audio/x-caf" });
   expect(runFfprobe).toHaveBeenCalledTimes(3);
-  expect(probes.peak).toBe(2);
+  expect(batch.peak).toBe(2);
 });
 
 it.each(["overflow", "abandoned"] as const)(
   "bounds and reclaims a full %s inspection queue",
   async (queue) => {
     await using batch = await createBlockedMedia(35);
-    const { paths, requests, probes } = batch;
+    const { paths, requests } = batch;
     await batch.occupySlots();
     const observed = observeMetadataRequests();
-    const queued = paths.slice(2, 34).map((filePath) => startMediaRequest(filePath));
-    requests.push(...queued);
+    const queued = paths.slice(2, 34).map((filePath) => batch.start(filePath));
     await observed(32);
     if (queue === "abandoned") {
       await abandon(queued);
       await Promise.all(queued.map(({ handled }) => handled));
     } else {
-      requests.push(startMediaRequest(paths[2]!));
+      batch.start(paths[2]!);
     }
-    const later = startMediaRequest(paths[34]!);
-    requests.push(later);
+    const later = batch.start(paths[34]!);
     await observed(queue === "abandoned" ? 33 : 34);
     expect(runFfprobe).toHaveBeenCalledTimes(2);
-    probes.release();
+    batch.release();
     if (queue === "abandoned") {
       await expectPlaybackResponses([...requests.slice(0, 2), later]);
       expect(runFfprobe).toHaveBeenCalledTimes(3);
@@ -257,7 +258,7 @@ it.each(["meta", "playback"] as const)(
   async (mode) => {
     const metadata = mode === "meta";
     await using batch = await createBlockedMedia(metadata ? 5 : 4, metadata ? "pcm_s16le" : "mp3");
-    const { paths, requests, probes } = batch;
+    const { paths, requests } = batch;
     await batch.occupySlots();
     const playbackRequested = createDeferred();
     if (!metadata) {
@@ -269,25 +270,22 @@ it.each(["meta", "playback"] as const)(
       });
     }
     const observed = observeMetadataRequests();
-    const abandoned = startMediaRequest(paths[2]!, mode);
+    const abandoned = batch.start(paths[2]!, mode);
     const retired = [abandoned];
-    requests.push(abandoned);
     const live = requests.slice(0, 2);
     if (metadata) {
-      const sharedAbandoned = startMediaRequest(paths[3]!);
-      const sharedLive = startMediaRequest(paths[3]!);
+      const sharedAbandoned = batch.start(paths[3]!);
+      const sharedLive = batch.start(paths[3]!);
       retired.push(sharedAbandoned);
       live.push(sharedLive);
-      requests.push(sharedAbandoned, sharedLive);
     } else {
       await playbackRequested.promise;
     }
-    const later = startMediaRequest(paths.at(-1)!);
-    requests.push(later);
+    const later = batch.start(paths.at(-1)!);
     live.push(later);
     await observed(metadata ? 4 : 1);
     await abandon(retired);
-    probes.release();
+    batch.release();
     await expectPlaybackResponses(live, {
       ...transcodeMetadata,
       playback: metadata ? "transcode" : "native",
@@ -305,7 +303,7 @@ it.each(["while queued", "during safe-open"] as const)(
   "rechecks reader authority %s and retains work for an authorized shared viewer",
   async (revocation) => {
     await using batch = await createBlockedMedia(5);
-    const { paths: realPaths, requests, probes } = batch;
+    const { paths: realPaths, requests } = batch;
     const revokedRequests = new Set<IncomingMessage>();
     const authorize = httpAuth.authorizeControlUiReadRequestOrReply;
     vi.spyOn(httpAuth, "authorizeControlUiReadRequestOrReply").mockImplementation(
@@ -331,11 +329,10 @@ it.each(["while queued", "during safe-open"] as const)(
     });
     await batch.occupySlots();
     const observed = observeMetadataRequests();
-    const allowed = startMediaRequest(realPaths[2]!);
-    const revoked = startMediaRequest(realPaths[3]!);
-    const sharedRevoked = startMediaRequest(realPaths[4]!);
-    const sharedAllowed = startMediaRequest(realPaths[4]!);
-    requests.push(allowed, revoked, sharedRevoked, sharedAllowed);
+    const allowed = batch.start(realPaths[2]!);
+    const revoked = batch.start(realPaths[3]!);
+    const sharedRevoked = batch.start(realPaths[4]!);
+    const sharedAllowed = batch.start(realPaths[4]!);
     await observed(4);
     revokedRequests.add(sharedRevoked.res.req);
     const revoke = () => revokedRequests.add(revoked.res.req);
@@ -344,7 +341,7 @@ it.each(["while queued", "during safe-open"] as const)(
     } else {
       revokeDuringOpen = revoke;
     }
-    probes.release();
+    batch.release();
     await expectPlaybackResponses([...requests.slice(0, 2), allowed, sharedAllowed]);
     for (const request of [revoked, sharedRevoked]) {
       expect(await request.handled).toBe(true);
