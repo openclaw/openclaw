@@ -10,7 +10,6 @@ import type {
   AgentToolResultMiddlewareScope,
 } from "./agent-tool-result-middleware-types.js";
 import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
-import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationSource } from "./config-activation-shared.js";
 import type { EmbeddingProviderAdapter } from "./embedding-provider-types.js";
@@ -208,10 +207,6 @@ export type PluginOwnedProviderRegistration<T> = PluginRegistrationOwner & {
   provider: T;
 };
 
-type PluginCodexAppServerExtensionFactoryRegistration = PluginRegistrationOwner & {
-  rawFactory: CodexAppServerExtensionFactory;
-  factory: CodexAppServerExtensionFactory;
-};
 export type PluginAgentToolResultMiddlewareRegistration = PluginRegistrationOwner & {
   rawHandler: AgentToolResultMiddleware;
   handler: AgentToolResultMiddleware;
@@ -401,7 +396,6 @@ export type PluginRegistry = {
   workerProviders: Map<string, PluginOwnedProviderRegistration<WorkerProvider>>;
   storageProviders: Map<string, PluginOwnedProviderRegistration<StorageProvider>>;
   migrationProviders: PluginOwnedProviderRegistration<MigrationProviderPlugin>[];
-  codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   agentToolResultMiddlewareOwners: PluginAgentToolResultMiddlewareOwner[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];

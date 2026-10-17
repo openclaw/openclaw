@@ -1258,37 +1258,16 @@ describe("createCodexDynamicToolBridge", () => {
     const config = { session: { store: "/tmp/openclaw-session-store.json" } };
     const registry = createEmptyPluginRegistry();
     const middlewareContexts: Record<string, unknown>[] = [];
-    const legacyContexts: Record<string, unknown>[] = [];
     const middleware = vi.fn(async (eventValue: unknown, ctx: Record<string, unknown>) => {
       middlewareContexts.push(ctx);
       return undefined;
     });
-    const factory = async (codex: {
-      on: (
-        event: "tool_result",
-        handler: (
-          event: unknown,
-          ctx: Record<string, unknown>,
-        ) => Promise<{ result: AgentToolResult<unknown> } | void>,
-      ) => void;
-    }) => {
-      codex.on("tool_result", async (eventValue, ctx) => {
-        legacyContexts.push(ctx);
-      });
-    };
     registry.agentToolResultMiddlewares.push({
       pluginId: "tokenjuice",
       pluginName: "Tokenjuice",
       rawHandler: middleware,
       handler: middleware,
       runtimes: ["codex"],
-      source: "test",
-    });
-    registry.codexAppServerExtensionFactories.push({
-      pluginId: "legacy",
-      pluginName: "Legacy",
-      rawFactory: factory,
-      factory,
       source: "test",
     });
     setActivePluginRegistry(registry);
@@ -1316,14 +1295,6 @@ describe("createCodexDynamicToolBridge", () => {
       runId: "run-1",
     });
     expect(middlewareContexts[0]).not.toHaveProperty("config");
-    expect(legacyContexts).toHaveLength(1);
-    expectContextFields(legacyContexts[0], {
-      agentId: "agent-1",
-      sessionId: "session-1",
-      sessionKey: "agent:agent-1:session-1",
-      runId: "run-1",
-    });
-    expect(legacyContexts[0]).not.toHaveProperty("config");
   });
 
   it.each([false, true])(

@@ -10,7 +10,6 @@ import {
   PROTOCOL_VERSION,
   validatePluginsUiDescriptorsResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { createCodexAppServerToolResultExtensionRunner } from "../../agents/harness/codex-app-server-extensions.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../../config/sessions.js";
 import {
   clearPluginOwnedSessionState,
@@ -40,7 +39,6 @@ import type {
   AgentToolResultMiddlewareContext,
   AgentToolResultMiddlewareEvent,
 } from "../agent-tool-result-middleware-types.js";
-import type { CodexAppServerExtensionFactory } from "../codex-app-server-extension-types.js";
 import { registerPluginCommandInRegistry } from "../command-registration.js";
 import { executePluginCommand } from "../commands.js";
 import { createHookRunner } from "../hooks.js";
@@ -337,52 +335,6 @@ describe("host-hook fixture plugin contract", () => {
       ["exec", "codex"],
       ["apply_patch", "openclaw"],
     ]);
-  });
-
-  it("fences handlers from a retired managed Codex factory without claiming caller-owned factories", async () => {
-    const { config, registry } = createPluginRegistryFixture();
-    const managedHandler = vi.fn(() => undefined);
-    const callerHandler = vi.fn(() => undefined);
-    const factory = vi.fn<CodexAppServerExtensionFactory>((runtime) => {
-      runtime.on("tool_result", managedHandler);
-    });
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "managed-factory",
-        origin: "bundled",
-        contracts: { embeddedExtensionFactories: ["codex-app-server"] },
-      }),
-      register(api) {
-        api.registerCodexAppServerExtensionFactory(factory);
-        api.registerCodexAppServerExtensionFactory(factory);
-      },
-    });
-    const runner = createCodexAppServerToolResultExtensionRunner({}, [
-      ...registry.registry.codexAppServerExtensionFactories.map((entry) => entry.factory),
-      (runtime) => runtime.on("tool_result", callerHandler),
-    ]);
-    const event = {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      toolCallId: "call-1",
-      toolName: "read",
-      args: {},
-      result: { content: [{ type: "text" as const, text: "ok" }], details: {} },
-    };
-    try {
-      await expect(runner.applyToolResultExtensions(event)).resolves.toEqual(event.result);
-      expect(factory).toHaveBeenCalledOnce();
-      expect(managedHandler).toHaveBeenCalledOnce();
-      expect(callerHandler).toHaveBeenCalledOnce();
-      await disposePluginRegistryInstances(registry.registry);
-      await expect(runner.applyToolResultExtensions(event)).resolves.toEqual(event.result);
-      expect(managedHandler).toHaveBeenCalledOnce();
-      expect(callerHandler).toHaveBeenCalledTimes(2);
-    } finally {
-      await disposePluginRegistryInstances(registry.registry);
-    }
   });
 
   it.each([

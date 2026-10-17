@@ -24,7 +24,6 @@ import type {
   WorkerProvider,
 } from "./capability-provider.types.js";
 import type { CliBackendPlugin, PluginTextTransforms } from "./cli-backend.types.js";
-import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginConversationBindingResolvedEvent } from "./conversation-binding.types.js";
 import type { PluginGatewayAccessPolicy } from "./gateway-access-policy.types.js";
 import type {
@@ -389,12 +388,6 @@ export type OpenClawPluginApi = {
   registerAgentHarness: (harness: AgentHarness, options?: AgentHarnessRegistrationOptions) => void;
   /** Register this plugin's executor controller, selected by the owning plugin ID. */
   registerAgentExecutorController: (controller: AgentExecutorController) => void;
-  /**
-   * Register a Codex app-server extension factory for Codex harness tool-result
-   * middleware. Only bundled plugins may use this seam, and
-   * `contracts.embeddedExtensionFactories` must include `"codex-app-server"`.
-   */
-  registerCodexAppServerExtensionFactory: (factory: CodexAppServerExtensionFactory) => void;
   /**
    * Register runtime-neutral tool-result middleware. Declare
    * `contracts.agentToolResultMiddleware` for every targeted runtime.

@@ -31,6 +31,31 @@ const AGENT_HARNESS_TOOL_CONSTRUCTION_COMPAT_RECORD = {
 export const AGENT_HARNESS_COMPAT_RECORDS = [
   AGENT_HARNESS_TOOL_CONSTRUCTION_COMPAT_RECORD,
   {
+    code: "codex-app-server-standalone-extension-runner",
+    status: "active",
+    owner: "agent-runtime",
+    introduced: "2026-10-17",
+    replacement:
+      "Register transforms with api.registerAgentToolResultMiddleware and contracts.agentToolResultMiddleware. Retain the standalone runner and its types until supported published Codex packages no longer import it; @openclaw/codex@2026.10.4 still calls the default empty runner.",
+    docsPath: "/plugins/sdk-migration/removed-surfaces#codex-app-server-extension-factories",
+    surfaces: [
+      "openclaw/plugin-sdk/agent-harness.createCodexAppServerToolResultExtensionRunner",
+      "openclaw/plugin-sdk/agent-harness-runtime.createCodexAppServerToolResultExtensionRunner",
+      "openclaw/plugin-sdk/agent-harness-runtime.CodexAppServerExtensionContext",
+      "openclaw/plugin-sdk/agent-harness-runtime.CodexAppServerExtensionFactory",
+      "openclaw/plugin-sdk/agent-harness-runtime.CodexAppServerExtensionRuntime",
+      "openclaw/plugin-sdk/agent-harness-runtime.CodexAppServerToolResultEvent",
+      "openclaw/plugin-sdk/agent-harness-runtime.CodexAppServerToolResultHandlerResult",
+    ],
+    diagnostics: ["plugin SDK compatibility registry and migration guide"],
+    tests: [
+      "src/agents/codex-app-server.extensions.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "The unused bundled-only factory registration and manifest contract are removed. Published Codex plugins retain the standalone runner, including caller-supplied factories and the default pass-through result.",
+  },
+  {
     code: "agent-harness-tool-argument-redaction",
     status: "removed",
     owner: "agent-runtime",

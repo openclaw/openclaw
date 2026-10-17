@@ -15,7 +15,6 @@ import {
 } from "./agent-tool-result-middleware.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { resolveCapabilityProviderRegistration } from "./capability-catalog.js";
-import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import type {
   PluginAgentEventSubscriptionRegistration,
@@ -95,7 +94,6 @@ export function createCapturedPluginRegistration(params?: {
     cliRegistrars: new Array<CapturedPluginCliRegistration>(),
     cliBackends: new Array<CliBackendPlugin>(),
     textTransforms: new Array<PluginTextTransformRegistration>(),
-    codexAppServerExtensionFactories: new Array<CodexAppServerExtensionFactory>(),
     agentToolResultMiddlewares: new Array<PluginAgentToolResultMiddlewareRegistration>(),
     embeddingProviders: new Array<EmbeddingProviderAdapter>(),
     speechProviders: new Array<SpeechProviderPlugin>(),
@@ -188,9 +186,6 @@ export function createCapturedPluginRegistration(params?: {
         registerSessionCatalog: captureInto(captured.sessionCatalogs),
         registerAgentHarness: captureInto(captured.agentHarnesses),
         registerAgentExecutorController: captureInto(captured.agentExecutorControllers),
-        registerCodexAppServerExtensionFactory: captureInto(
-          captured.codexAppServerExtensionFactories,
-        ),
         registerAgentToolResultMiddleware(
           handler: AgentToolResultMiddleware,
           options?: AgentToolResultMiddlewareOptions,

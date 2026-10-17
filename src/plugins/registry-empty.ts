@@ -25,7 +25,6 @@ export const pluginArrays = [
   "webFetchProviders",
   "webSearchProviders",
   "migrationProviders",
-  "codexAppServerExtensionFactories",
   "agentToolResultMiddlewareOwners",
   "agentToolResultMiddlewares",
   "agentHarnesses",

@@ -7,7 +7,6 @@ import {
   createCodexAppServerToolResultExtensionRunner,
 } from "../plugin-sdk/agent-harness.js";
 import { listAgentToolResultMiddlewares } from "../plugins/agent-tool-result-middleware.js";
-import { listCodexAppServerExtensionFactories } from "../plugins/codex-app-server-extension-factory.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -277,137 +276,20 @@ describe("agent tool result middleware", () => {
   });
 });
 
-describe("Codex app-server extension factories", () => {
-  it("includes plugin-registered Codex app-server extension factories and restores them from cache", async () => {
-    const tmp = createBundledTempDir();
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
-
-    writeTempPlugin({
-      dir: tmp,
-      id: "codex-ext",
-      filename: "index.mjs",
-      manifest: {
-        contracts: {
-          embeddedExtensionFactories: ["codex-app-server"],
-        },
-      },
-      body: `export default { id: "codex-ext", register(api) {
-  api.registerCodexAppServerExtensionFactory((codex) => {
-    codex.on("tool_result", async (event) => ({
-      result: { ...event.result, content: [{ type: "text", text: "compacted" }] }
-    }));
-  });
-} };`,
-    });
-
-    const options = {
-      config: {
-        plugins: {
-          entries: {
-            "codex-ext": {
-              enabled: true,
-            },
-          },
-        },
-      },
-      onlyPluginIds: ["codex-ext"],
-    };
-
-    setRuntimeConfigSnapshot(options.config);
-    loadOpenClawPlugins(options);
-    expect(listCodexAppServerExtensionFactories()).toHaveLength(1);
-
-    resetActivePluginRegistryForTest();
-    expect(listCodexAppServerExtensionFactories()).toHaveLength(0);
-
-    // Factories are cached like middleware so app-server startup can recover
-    // them after registry resets without reinterpreting arbitrary paths.
-    loadOpenClawPlugins(options);
-    const runner = createCodexAppServerToolResultExtensionRunner({});
-    const result = await runner.applyToolResultExtensions({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      toolCallId: "call-1",
-      toolName: "exec",
-      args: { command: "git status" },
-      result: { content: [{ type: "text", text: "raw" }], details: {} },
-    });
-
-    expect(result.content).toEqual([{ type: "text", text: "compacted" }]);
-  });
-
-  it("rejects Codex app-server extension factories from non-bundled plugins even when they declare the contract", () => {
-    const tmp = createTempDir();
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
-
-    const pluginFile = writeTempPlugin({
-      dir: tmp,
-      id: "codex-ext",
-      manifest: {
-        contracts: {
-          embeddedExtensionFactories: ["codex-app-server"],
-        },
-      },
-      body: `export default { id: "codex-ext", register(api) {
-  api.registerCodexAppServerExtensionFactory(() => undefined);
-} };`,
-    });
-
-    // Embedded app-server hooks are core-facing: external plugin paths cannot
-    // install factories even with a matching manifest contract.
-    const registry = loadOpenClawPlugins({
-      workspaceDir: tmp,
-      onlyPluginIds: ["codex-ext"],
-      config: {
-        plugins: {
-          load: { paths: [pluginFile] },
-          allow: ["codex-ext"],
-        },
-      },
-    });
-
-    const diagnostic = findDiagnostic(
-      registry.diagnostics,
-      "codex-ext",
-      "only bundled plugins can register Codex app-server extension factories",
-    );
-    expect(diagnostic?.level).toBe("error");
-    expect(listCodexAppServerExtensionFactories()).toHaveLength(0);
-  });
-
-  it("rejects bundled plugins that omit the Codex app-server extension contract", () => {
-    const tmp = createBundledTempDir();
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
-
-    writeTempPlugin({
-      dir: tmp,
-      id: "codex-ext",
-      filename: "index.mjs",
-      body: `export default { id: "codex-ext", register(api) {
-  api.registerCodexAppServerExtensionFactory(() => undefined);
-} };`,
-    });
-
-    const registry = loadOpenClawPlugins({
-      onlyPluginIds: ["codex-ext"],
-      config: {
-        plugins: {
-          entries: {
-            "codex-ext": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    });
-
-    const diagnostic = findDiagnostic(
-      registry.diagnostics,
-      "codex-ext",
-      'plugin must declare contracts.embeddedExtensionFactories: ["codex-app-server"] to register Codex app-server extension factories',
-    );
-    expect(diagnostic?.level).toBe("error");
-    expect(listCodexAppServerExtensionFactories()).toHaveLength(0);
+describe("standalone Codex tool result extension runner", () => {
+  it("preserves tool output when published Codex plugins omit factories", async () => {
+    const runner = createCodexAppServerToolResultExtensionRunner({ sessionKey: "agent:main:test" });
+    const result = { content: [{ type: "text" as const, text: "tool output" }], details: {} };
+    await expect(
+      runner.applyToolResultExtensions({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        toolCallId: "call-1",
+        toolName: "exec",
+        args: { command: "git status" },
+        result,
+      }),
+    ).resolves.toBe(result);
   });
 
   it("initializes async Codex app-server extension factories in registration order", async () => {

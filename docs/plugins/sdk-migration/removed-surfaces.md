@@ -46,6 +46,21 @@ subpaths, including older published `@openclaw/discord` packages. Upgrade affect
 plugins before upgrading the host. Not every export has a path-only replacement;
 see the [per-surface mappings](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades).
 
+### Codex app-server extension factories
+
+The unused bundled-only `api.registerCodexAppServerExtensionFactory(...)` method
+and `contracts.embeddedExtensionFactories` manifest family have been removed.
+Register tool-result transforms with `api.registerAgentToolResultMiddleware(...)`
+and declare `contracts.agentToolResultMiddleware: ["codex"]` for Codex-only
+middleware. The supported middleware also covers `openclaw` and `agentsapi`.
+
+The standalone `createCodexAppServerToolResultExtensionRunner` export remains
+available from `agent-harness` and `agent-harness-runtime`, together with its
+`CodexAppServer*` types. Published `@openclaw/codex@2026.10.4` still imports and
+calls this helper. Explicit factory arrays retain their ordered initialization;
+omitting factories returns tool output unchanged. No removal date is set for
+these exports; their published consumers must migrate first.
+
 ### Retroactively recorded shipped exports
 
 The following exports shipped in `v2026.9.8` and were removed without a
