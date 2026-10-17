@@ -33,16 +33,22 @@ const wizardTestMocks = vi.hoisted(() => {
       }) => {
         params.writeOptions?.assertConfigPathForWrite?.();
         await writeConfigFile(params.nextConfig);
-        return committedConfigFiles.write(params.nextConfig);
+        return committedConfigFiles.write(params.nextConfig as OpenClawConfig);
       },
     ),
     resolveGatewayPort: vi.fn(),
+    createClackPrompter: vi.fn(),
     note: vi.fn(),
+    printWizardHeader: vi.fn(),
     probeGatewayReachable: vi.fn(),
     waitForGatewayReachable: vi.fn(async () => ({ ok: true })),
     resolveAdvertisedControlUiLinks: vi.fn(),
+    resolveControlUiLinks: vi.fn(),
     resolveLocalControlUiProbeLinks: vi.fn(),
+    inspectWindowsGatewayFirewall: vi.fn(),
+    summarizeExistingConfig: vi.fn(),
     healthCommand: vi.fn(),
+    formatHealthCheckFailure: vi.fn<typeof import("./health-format.js").formatHealthCheckFailure>(),
     maybeInstallDaemon: vi.fn<typeof import("./configure.daemon.js").maybeInstallDaemon>(),
     promptAuthConfig: vi.fn(),
     promptGatewayConfig: vi.fn(),
@@ -62,7 +68,10 @@ const wizardTestMocks = vi.hoisted(() => {
 
 vi.mock("../runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../runtime.js")>();
-  return { ...actual, defaultRuntime: { ...actual.defaultRuntime, ...wizardTestMocks.runtime } };
+  return {
+    ...actual,
+    defaultRuntime: { ...actual.defaultRuntime, ...wizardTestMocks.runtime },
+  };
 });
 
 vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
@@ -84,27 +93,29 @@ vi.mock("../flows/memory-setup.js", async (importOriginal) => ({
   runMemorySetupFlow: wizardTestMocks.runMemorySetupFlow,
 }));
 
-async function snapshotForWrite(extra = {}) {
-  return {
+vi.mock("../config/config.js", () => ({
+  CONFIG_PATH: "~/.openclaw/openclaw.json",
+  createConfigIO: () => ({
+    readConfigFileSnapshotForWrite: async () => ({
+      snapshot: await wizardTestMocks.readConfigFileSnapshot(),
+      writeOptions: {
+        assertConfigPathForWrite: wizardTestMocks.assertConfigPathForWrite,
+        expectedConfigPath: "/tmp/openclaw.json",
+        ownedConfigPathForWrite: "/tmp/openclaw.json",
+      },
+    }),
+  }),
+  readConfigFileSnapshot: wizardTestMocks.readConfigFileSnapshot,
+  readConfigFileSnapshotForWrite: async () => ({
     snapshot: await wizardTestMocks.readConfigFileSnapshot(),
     writeOptions: {
       assertConfigPathForWrite: wizardTestMocks.assertConfigPathForWrite,
-      expectedConfigPath: "/tmp/openclaw.json",
-      ownedConfigPathForWrite: "/tmp/openclaw.json",
-      ...extra,
-    },
-  };
-}
-
-vi.mock("../config/config.js", () => ({
-  CONFIG_PATH: "~/.openclaw/openclaw.json",
-  createConfigIO: () => ({ readConfigFileSnapshotForWrite: () => snapshotForWrite() }),
-  readConfigFileSnapshot: wizardTestMocks.readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite: () =>
-    snapshotForWrite({
       envSnapshotForRestore: { SECRET: "resolved-secret" },
+      expectedConfigPath: "/tmp/openclaw.json",
       includeFileHashesForWrite: { "/tmp/plugins.json5": "stale-hash" },
-    }),
+      ownedConfigPathForWrite: "/tmp/openclaw.json",
+    },
+  }),
   resolveConfigWriteAfterWrite: (afterWrite?: { mode: string }) => afterWrite ?? { mode: "auto" },
   transformConfigFileWithRetry: async (
     params: Parameters<typeof import("../config/config.js").transformConfigFileWithRetry>[0],
@@ -149,6 +160,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
+  inspectWindowsGatewayFirewall: wizardTestMocks.inspectWindowsGatewayFirewall,
   formatWindowsGatewayFirewallGuidance: (params: { bind?: string }) =>
     params.bind === "lan"
       ? [
@@ -157,19 +169,25 @@ vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
       : [],
 }));
 
-vi.mock("../wizard/clack-prompter.js", () => ({ createClackPrompter: () => ({}) }));
+vi.mock("../wizard/clack-prompter.js", () => ({
+  createClackPrompter: wizardTestMocks.createClackPrompter,
+}));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: wizardTestMocks.note }));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
+  note: wizardTestMocks.note,
+}));
 
 vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "~/.openclaw/workspace",
   applyWizardMetadata: (cfg: OpenClawConfig) => cfg,
   ensureWorkspaceAndSessions: wizardTestMocks.ensureWorkspaceAndSessions,
   guardCancel: wizardTestMocks.guardCancel,
+  printWizardHeader: wizardTestMocks.printWizardHeader,
   probeGatewayReachable: wizardTestMocks.probeGatewayReachable,
   resolveAdvertisedControlUiLinks: wizardTestMocks.resolveAdvertisedControlUiLinks,
+  resolveControlUiLinks: wizardTestMocks.resolveControlUiLinks,
   resolveLocalControlUiProbeLinks: wizardTestMocks.resolveLocalControlUiProbeLinks,
-  summarizeExistingConfig: () => "",
+  summarizeExistingConfig: wizardTestMocks.summarizeExistingConfig,
   waitForGatewayReachable: wizardTestMocks.waitForGatewayReachable,
 }));
 
@@ -177,6 +195,12 @@ vi.mock("./health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./health.js")>()),
   healthCommandNonExiting: wizardTestMocks.healthCommand,
 }));
+
+vi.mock("./health-format.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./health-format.js")>();
+  wizardTestMocks.formatHealthCheckFailure = vi.fn(actual.formatHealthCheckFailure);
+  return { ...actual, formatHealthCheckFailure: wizardTestMocks.formatHealthCheckFailure };
+});
 
 vi.mock("./configure.gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./configure.gateway.js")>()),
@@ -196,7 +220,9 @@ vi.mock("./onboard-remote.js", async (importOriginal) => ({
   promptRemoteGatewayConfig: wizardTestMocks.promptRemoteGatewayConfig,
 }));
 
-vi.mock("./onboard-skills.js", () => ({ setupSkills: wizardTestMocks.setupSkills }));
+vi.mock("./onboard-skills.js", () => ({
+  setupSkills: wizardTestMocks.setupSkills,
+}));
 
 vi.mock("../wizard/setup.plugin-config.js", () => ({
   configurePluginConfig: wizardTestMocks.setupPluginConfig,
@@ -227,8 +253,20 @@ export { runConfigureWizard, wizardTestMocks };
 export function setupWizardTestDefaults() {
   wizardTestMocks.isTerminalInteractive.mockReturnValue(true);
   committedConfigFiles.clear();
+  wizardTestMocks.assertConfigPathForWrite.mockImplementation(() => {});
   wizardTestMocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
-  wizardTestMocks.resolveSearchProviderOptions.mockReturnValue([{ id: "firecrawl" }]);
+  wizardTestMocks.resolveSearchProviderOptions.mockReturnValue([
+    {
+      id: "firecrawl",
+      label: "Firecrawl Search",
+      hint: "Structured results with optional result scraping",
+      credentialLabel: "Firecrawl API key",
+      envVars: ["FIRECRAWL_API_KEY"],
+      placeholder: "fc-...",
+      signupUrl: "https://www.firecrawl.dev/",
+      credentialPath: "plugins.entries.firecrawl.config.webSearch.apiKey",
+    },
+  ]);
   wizardTestMocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => ({
     outcome: "completed",
     config: cfg,
@@ -238,23 +276,54 @@ export function setupWizardTestDefaults() {
     config: cfg,
     port: 18789,
   }));
+  wizardTestMocks.guardCancel.mockImplementation((value: unknown) => value);
   wizardTestMocks.setupPluginConfig.mockImplementation(async ({ config }) => config);
   wizardTestMocks.setupSkills.mockImplementation(async (config) => config);
 }
 
-export const EMPTY_CONFIG_SNAPSHOT = { exists: false, valid: true, config: {}, issues: [] };
+export const EMPTY_CONFIG_SNAPSHOT = {
+  exists: false,
+  valid: true,
+  config: {},
+  issues: [],
+};
+
+export function createWizardTestRuntime() {
+  return wizardTestMocks.runtime;
+}
 
 export function setupBaseWizardTestState(config: OpenClawConfig = {}) {
   wizardTestMocks.runMemorySetupFlow.mockImplementation(async (candidate) => candidate);
   wizardTestMocks.readConfigFileSnapshot.mockResolvedValue({ ...EMPTY_CONFIG_SNAPSHOT, config });
   wizardTestMocks.resolveGatewayPort.mockReturnValue(18789);
   wizardTestMocks.probeGatewayReachable.mockResolvedValue({ ok: false });
-  const links = {
+  wizardTestMocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+  wizardTestMocks.resolveLocalControlUiProbeLinks.mockReturnValue({
     httpUrl: "http://127.0.0.1:18789/",
     wsUrl: "ws://127.0.0.1:18789",
-  };
-  wizardTestMocks.resolveLocalControlUiProbeLinks.mockReturnValue({ ...links });
-  wizardTestMocks.resolveAdvertisedControlUiLinks.mockResolvedValue({ ...links });
+  });
+  wizardTestMocks.resolveAdvertisedControlUiLinks.mockResolvedValue({
+    httpUrl: "http://127.0.0.1:18789/",
+    wsUrl: "ws://127.0.0.1:18789",
+  });
+  wizardTestMocks.inspectWindowsGatewayFirewall.mockResolvedValue({
+    applies: false,
+    severity: "info",
+    code: "windows_firewall_not_applicable",
+    message: "Windows LAN firewall diagnostics do not apply.",
+    details: [],
+  });
+  wizardTestMocks.summarizeExistingConfig.mockReturnValue("");
+  wizardTestMocks.createClackPrompter.mockReturnValue({
+    intro: vi.fn(async () => {}),
+    outro: vi.fn(async () => {}),
+    note: vi.fn(async () => {}),
+    select: vi.fn(async () => "firecrawl"),
+    multiselect: vi.fn(async () => []),
+    text: vi.fn(async () => ""),
+    confirm: vi.fn(async () => true),
+    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+  });
 }
 
 export function queueWizardTestPrompts(params: {
@@ -267,4 +336,6 @@ export function queueWizardTestPrompts(params: {
   wizardTestMocks.clackSelect.mockImplementation(async () => selectQueue.shift());
   wizardTestMocks.clackConfirm.mockImplementation(async () => confirmQueue.shift());
   wizardTestMocks.clackText.mockResolvedValue(params.text ?? "");
+  wizardTestMocks.clackIntro.mockResolvedValue(undefined);
+  wizardTestMocks.clackOutro.mockResolvedValue(undefined);
 }
