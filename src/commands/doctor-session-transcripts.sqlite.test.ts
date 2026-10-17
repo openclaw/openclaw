@@ -118,6 +118,15 @@ const preparedPostSessionPluginMigration: PreparedPostSessionPluginMigration = {
 describe("doctor session transcript repair", () => {
   let root: string;
   const maintenanceAuthority = { assertCurrent() {} };
+  const doctor = (overrides: Partial<Parameters<typeof noteSessionTranscriptHealth>[0]> = {}) =>
+    noteSessionTranscriptHealth({
+      cfg: {},
+      env: { ...process.env, OPENCLAW_STATE_DIR: root },
+      shouldRepair: true,
+      ...overrides,
+    });
+  const expectNote = (text: string) =>
+    expect(note).toHaveBeenCalledWith(expect.stringContaining(text), "Session SQLite");
 
   beforeEach(async () => {
     note.mockClear();
@@ -183,11 +192,7 @@ describe("doctor session transcript repair", () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
     const cfg = {};
 
-    await noteSessionTranscriptHealth({
-      cfg,
-      env,
-      shouldRepair: true,
-    });
+    await doctor({ cfg, env });
 
     expect(runDoctorSessionSqlite).toHaveBeenCalledWith(
       { allAgents: true, cfg, env, mode: "import" },
@@ -198,27 +203,16 @@ describe("doctor session transcript repair", () => {
       env,
       mode: "doctor-fix",
     });
-    expect(repairLegacySessionWorktreeWorkspaces).toHaveBeenCalledWith({
-      apply: true,
-      cfg,
-      env,
-      targets: [],
-    });
     expect(repairCanonicalSessionKeys.mock.invocationCallOrder[0]).toBeLessThan(
       repairLegacySessionWorktreeWorkspaces.mock.invocationCallOrder[0]!,
     );
-    expect(repairReservedIncognitoSessionKeys).toHaveBeenCalledWith({
-      apply: true,
-      cfg,
-      env,
-      targets: [],
-    });
-    expect(repairCanonicalSessionResolvedSkills).toHaveBeenCalledWith({
-      apply: true,
-      cfg,
-      env,
-      targets: [],
-    });
+    for (const repair of [
+      repairLegacySessionWorktreeWorkspaces,
+      repairReservedIncognitoSessionKeys,
+      repairCanonicalSessionResolvedSkills,
+    ]) {
+      expect(repair).toHaveBeenCalledWith({ apply: true, cfg, env, targets: [] });
+    }
     expectCalledBefore(runDoctorSessionSqlite, migrateLegacyMainSessionKeys);
     expectCalledBefore(migrateLegacyMainSessionKeys, repairCanonicalSessionKeys);
     expectCalledBefore(repairCanonicalSessionKeys, repairCanonicalSessionResolvedSkills);
@@ -237,14 +231,8 @@ describe("doctor session transcript repair", () => {
       operation: "session SQLite import",
       run: expect.any(Function),
     });
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Legacy entries: 1"),
-      "Session SQLite",
-    );
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Archived 2 legacy transcript artifact(s)."),
-      "Session SQLite",
-    );
+    expectNote("Legacy entries: 1");
+    expectNote("Archived 2 legacy transcript artifact(s).");
   });
 
   it("defers workspace writes while legacy-main source cleanup is incomplete", async () => {
@@ -280,21 +268,11 @@ describe("doctor session transcript repair", () => {
       scannedStores: 1,
     });
 
-    await noteSessionTranscriptHealth({
-      cfg: {},
-      env: { ...process.env, OPENCLAW_STATE_DIR: root },
-      shouldRepair: true,
-    });
+    await doctor();
 
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Logical SQLite pages are freed"),
-      "Session SQLite",
-    );
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'shrinking the on-disk database requires "openclaw doctor --session-sqlite compact --session-sqlite-all-agents"',
-      ),
-      "Session SQLite",
+    expectNote("Logical SQLite pages are freed");
+    expectNote(
+      'shrinking the on-disk database requires "openclaw doctor --session-sqlite compact --session-sqlite-all-agents"',
     );
   });
 
@@ -317,16 +295,7 @@ describe("doctor session transcript repair", () => {
     const originalIssues = structuredClone(issues);
     runDoctorSessionSqlite.mockResolvedValueOnce({
       targets: [{ storePath, issues }],
-      totals: {
-        archivedTranscriptFiles: 0,
-        archivedUnreferencedJsonlFiles: 0,
-        importedTranscriptEvents: 0,
-        issues: issues.length,
-        legacyEntries: 1,
-        sqliteEntries: 0,
-        unreferencedJsonlFiles: 0,
-        validatedTranscriptEvents: 0,
-      },
+      totals: sessionSqliteReport({ issues: issues.length, legacyEntries: 1 }).totals,
     });
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
     const cfg = {};
@@ -375,17 +344,11 @@ describe("doctor session transcript repair", () => {
       env,
       maintenanceAuthority: undefined,
     });
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Inspect with "openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents".',
-      ),
-      "Session SQLite",
+    expectNote(
+      'Inspect with "openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents".',
     );
     for (const warning of warnings.slice(0, 5)) {
-      expect(note).toHaveBeenCalledWith(
-        expect.stringContaining(`${storePath}: [${code}] ${warning}`),
-        "Session SQLite",
-      );
+      expectNote(`${storePath}: [${code}] ${warning}`);
     }
     expect(issues).toEqual(originalIssues);
     expect(ctx.updateWarnings).toContain(
@@ -449,7 +412,7 @@ describe("doctor session transcript repair", () => {
       onStepReceipt: recordReceipt,
     };
 
-    const first = await noteSessionTranscriptHealth(params);
+    const first = await doctor(params);
     const replay = await noteSessionTranscriptHealth(params);
 
     expect(runPostSessionPluginDoctorStateRepairs).toHaveBeenNthCalledWith(1, {
@@ -476,10 +439,7 @@ describe("doctor session transcript repair", () => {
     runPostSessionPluginDoctorStateRepairs.mockRejectedValueOnce(new Error("writer failed"));
     const receipts: unknown[] = [];
 
-    const receipt = await noteSessionTranscriptHealth({
-      cfg: {},
-      env: { ...process.env, OPENCLAW_STATE_DIR: root },
-      shouldRepair: true,
+    const receipt = await doctor({
       postSessionPluginMigration: preparedPostSessionPluginMigration,
       onStepReceipt: (entry) => receipts.push(entry),
     });
@@ -498,9 +458,7 @@ describe("doctor session transcript repair", () => {
     runDoctorSessionSqlite.mockResolvedValue(sessionSqliteReport());
     const receipts: unknown[] = [];
 
-    const receipt = await noteSessionTranscriptHealth({
-      cfg: {},
-      env: { ...process.env, OPENCLAW_STATE_DIR: root },
+    const receipt = await doctor({
       shouldRepair: false,
       postSessionPluginMigration: preparedPostSessionPluginMigration,
       onStepReceipt: (entry) => receipts.push(entry),
@@ -527,9 +485,8 @@ describe("doctor session transcript repair", () => {
       reversibility: "not-applicable",
     };
     const receipts: unknown[] = [];
-    const receipt = await noteSessionTranscriptHealth({
+    const receipt = await doctor({
       cfg: { plugins: { enabled: false } },
-      env: { ...process.env, OPENCLAW_STATE_DIR: root },
       shouldRepair: false,
       postSessionPluginMigration: { step, plannedActions: [] },
       onStepReceipt: (entry) => receipts.push(entry),
@@ -543,10 +500,8 @@ describe("doctor session transcript repair", () => {
     runDoctorSessionSqlite.mockResolvedValue(sessionSqliteReport());
     const receipts: unknown[] = [];
 
-    await noteSessionTranscriptHealth({
+    await doctor({
       cfg: { plugins: { entries: { external: { enabled: true } } } },
-      env: { ...process.env, OPENCLAW_STATE_DIR: root },
-      shouldRepair: true,
       postSessionPluginMigrationPlanBound: true,
       onStepReceipt: (receipt) => receipts.push(receipt),
     });
@@ -566,23 +521,14 @@ describe("doctor session transcript repair", () => {
       new DoctorSqliteMaintenanceLockUnavailableError("session SQLite import", cause),
     );
 
-    await expect(
-      noteSessionTranscriptHealth({
-        cfg: {},
-        env,
-        shouldRepair: true,
-      }),
-    ).resolves.toBeUndefined();
+    await expect(doctor({ env })).resolves.toBeUndefined();
 
     expect(runDoctorSessionSqlite).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledWith(expect.stringContaining(cause.message), "Session SQLite");
+    expectNote(cause.message);
     if (cause.cause) {
-      expect(note).toHaveBeenCalledWith(expect.stringContaining("ENOSYS"), "Session SQLite");
+      expectNote("ENOSYS");
     }
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining('run "openclaw doctor --fix" for session-store maintenance'),
-      "Session SQLite",
-    );
+    expectNote('run "openclaw doctor --fix" for session-store maintenance');
   });
 
   it("keeps non-lock session SQLite import failures fatal", async () => {
@@ -590,10 +536,7 @@ describe("doctor session transcript repair", () => {
     const receipts: unknown[] = [];
 
     await expect(
-      noteSessionTranscriptHealth({
-        cfg: {},
-        env: { ...process.env, OPENCLAW_STATE_DIR: root },
-        shouldRepair: true,
+      doctor({
         postSessionPluginMigration: preparedPostSessionPluginMigration,
         onStepReceipt: (receipt) => receipts.push(receipt),
       }),

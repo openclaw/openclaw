@@ -1,4 +1,3 @@
-// Doctor repairs incident-scale Codex plugin state only after durable session convergence.
 import { createHash } from "node:crypto";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -77,16 +76,22 @@ describe("doctor incident-scale Codex binding repair", () => {
     setRuntimeConfigSnapshot(config);
 
     const rows: Parameters<typeof seedPluginStateEntriesForTests>[0] = [];
+    const activeBinding = (sessionId: string, threadId = `thread-${sessionId}`) => ({
+      version: 1,
+      state: "active",
+      sessionId,
+      binding: { threadId, cwd: "/workspace" },
+    });
+    const capacity = () => getPluginStateCapacity("codex", env).liveEntries;
+    const doctor = (shouldRepair: boolean) =>
+      noteSessionTranscriptHealth({ cfg: config, env, shouldRepair });
     const retain = (key: string, sessionId: string, extra: Record<string, unknown> = {}) => {
       rows.push({
         pluginId: "codex",
         namespace: BINDING_NAMESPACE,
         key,
         value: {
-          version: 1,
-          state: "active",
-          sessionId,
-          binding: { threadId: `thread-${sessionId}`, cwd: "/workspace" },
+          ...activeBinding(sessionId),
           ...extra,
         },
       });
@@ -149,12 +154,7 @@ describe("doctor incident-scale Codex binding repair", () => {
             : stableKey(`agent:main:run:${index}`),
         value:
           index % 2 === 0
-            ? {
-                version: 1,
-                state: "active",
-                sessionId,
-                binding: { threadId: `incident-thread-${index}`, cwd: "/workspace" },
-              }
+            ? activeBinding(sessionId, `incident-thread-${index}`)
             : { version: 1, state: "cleared", sessionId, retired: true },
       });
     }
@@ -173,25 +173,14 @@ describe("doctor incident-scale Codex binding repair", () => {
     }
     seedPluginStateEntriesForTests(rows);
 
-    expect(getPluginStateCapacity("codex", env).liveEntries).toBe(INCIDENT_ROW_COUNT);
+    expect(capacity()).toBe(INCIDENT_ROW_COUNT);
 
-    const runActualDoctorRepair = () =>
-      noteSessionTranscriptHealth({
-        cfg: config,
-        env,
-        shouldRepair: true,
-      });
-
-    await noteSessionTranscriptHealth({
-      cfg: config,
-      env,
-      shouldRepair: false,
-    });
+    await doctor(false);
     expect(note.mock.calls.flat().join("\n")).toContain("orphaned session ownership");
-    expect(getPluginStateCapacity("codex", env).liveEntries).toBe(INCIDENT_ROW_COUNT);
+    expect(capacity()).toBe(INCIDENT_ROW_COUNT);
     note.mockClear();
 
-    await runActualDoctorRepair();
+    await doctor(true);
 
     expect(readCurrentOwners()).toEqual(currentOwners);
     const bindingRows = ["session-key:", "session:", "conversation:"].flatMap((prefix) =>
@@ -203,18 +192,12 @@ describe("doctor incident-scale Codex binding repair", () => {
         env,
       }),
     );
-    expect(
-      bindingRows
-        .map((row) => ({ key: row.key, value: row.value }))
-        .toSorted((a, b) => a.key.localeCompare(b.key)),
-    ).toEqual(
-      retainedBindings
-        .map((row) => ({ key: row.key, value: row.value }))
-        .toSorted((a, b) => a.key.localeCompare(b.key)),
-    );
-    expect(getPluginStateCapacity("codex", env).liveEntries).toBe(
-      ADVISORY_MANAGED_THREAD_COUNT + retainedBindings.length,
-    );
+    const sorted = (entries: ReadonlyArray<{ key: string; value: unknown }>) =>
+      entries
+        .map(({ key, value }) => ({ key, value }))
+        .toSorted((a, b) => a.key.localeCompare(b.key));
+    expect(sorted(bindingRows)).toEqual(sorted(retainedBindings));
+    expect(capacity()).toBe(ADVISORY_MANAGED_THREAD_COUNT + retainedBindings.length);
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining(`Removed ${orphanCount} orphaned Codex`),
       expect.any(String),
@@ -246,11 +229,9 @@ describe("doctor incident-scale Codex binding repair", () => {
     await bindings.delete("conversation:recovered-headroom");
 
     note.mockClear();
-    await runActualDoctorRepair();
+    await doctor(true);
 
-    expect(getPluginStateCapacity("codex", env).liveEntries).toBe(
-      ADVISORY_MANAGED_THREAD_COUNT + retainedBindings.length,
-    );
+    expect(capacity()).toBe(ADVISORY_MANAGED_THREAD_COUNT + retainedBindings.length);
     expect(await managedThreads.entries()).toHaveLength(ADVISORY_MANAGED_THREAD_COUNT);
     expect(note.mock.calls.flat().join("\n")).not.toContain("orphaned Codex");
   }, 120_000);

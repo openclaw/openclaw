@@ -47,6 +47,40 @@ function write(filePath: string, content: string) {
   fs.writeFileSync(filePath, content);
 }
 
+function fixture(label: string, options: { opsOnly?: boolean; workspace?: boolean } = {}) {
+  const root = tempDirs.make(`openclaw-retire-${label}-`);
+  const stateDir = path.join(root, "state");
+  const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
+  const mainDir = path.join(root, "main-agent");
+  const opsDir = path.join(root, "ops-agent");
+  const opsWorkspace = path.join(root, "ops-workspace");
+  const config: OpenClawConfig = {
+    agents: {
+      entries: {
+        ...(!options.opsOnly ? { main: { agentDir: mainDir } } : {}),
+        ops: { agentDir: opsDir, ...(options.workspace ? { workspace: opsWorkspace } : {}) },
+      },
+    },
+  };
+  const proposalsDir = path.join(stateDir, "skill-workshop", "proposals");
+  const exportsFor = (agentDir: string) =>
+    path.join(agentDir, "workshop-skills", ".archive", ".retired-proposals");
+  const skillDir = path.join(opsWorkspace, "skills", "deploy");
+  return {
+    root,
+    env,
+    mainDir,
+    opsDir,
+    opsWorkspace,
+    config,
+    proposalsDir,
+    mainExports: exportsFor(mainDir),
+    opsExports: exportsFor(opsDir),
+    skillDir,
+    skillFile: path.join(skillDir, "SKILL.md"),
+  };
+}
+
 function retiredTableNames(env: NodeJS.ProcessEnv) {
   return openOpenClawStateDatabase({ env })
     .db.prepare(
@@ -57,17 +91,7 @@ function retiredTableNames(env: NodeJS.ProcessEnv) {
 }
 
 it("exports pending drafts from retired tables and legacy files, then drops the tables once", async () => {
-  const root = tempDirs.make("openclaw-retire-proposals-");
-  const stateDir = path.join(root, "state");
-  const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
-  const mainDir = path.join(root, "main-agent");
-  const opsDir = path.join(root, "ops-agent");
-  const config: OpenClawConfig = {
-    agents: { entries: { main: { agentDir: mainDir }, ops: { agentDir: opsDir } } },
-  };
-  const proposalsDir = path.join(stateDir, "skill-workshop", "proposals");
-  const mainExports = path.join(mainDir, "workshop-skills", ".archive", ".retired-proposals");
-  const opsExports = path.join(opsDir, "workshop-skills", ".archive", ".retired-proposals");
+  const { env, config, proposalsDir, mainExports, opsExports } = fixture("proposals");
 
   openOpenClawStateDatabase({ env }).db.exec(`
     ${RETIRED_TABLES}
@@ -122,21 +146,9 @@ it("exports pending drafts from retired tables and legacy files, then drops the 
 });
 
 it("keeps legacy bundles without a provable owner, record, or draft until every bundle is exported", async () => {
-  const root = tempDirs.make("openclaw-retire-legacy-proposals-");
-  const stateDir = path.join(root, "state");
-  const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
-  const opsDir = path.join(root, "ops-agent");
-  const opsWorkspace = path.join(root, "ops-workspace");
-  const config: OpenClawConfig = {
-    agents: {
-      entries: {
-        main: { agentDir: path.join(root, "main-agent") },
-        ops: { agentDir: opsDir, workspace: opsWorkspace },
-      },
-    },
-  };
-  const proposalsDir = path.join(stateDir, "skill-workshop", "proposals");
-  const opsExports = path.join(opsDir, "workshop-skills", ".archive", ".retired-proposals");
+  const { env, config, proposalsDir, opsWorkspace, opsExports } = fixture("legacy-proposals", {
+    workspace: true,
+  });
   const bundle = (id: string, record?: object) => {
     write(path.join(proposalsDir, id, "PROPOSAL.md"), `# ${id}\n`);
     if (record) {
@@ -236,13 +248,9 @@ it.each([
 });
 
 it("undoes an apply that stopped before SKILL.md, then retires its rollback", async () => {
-  const root = tempDirs.make("openclaw-retire-unfinished-apply-");
-  const stateDir = path.join(root, "state");
-  const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
-  const opsDir = path.join(root, "ops-agent");
-  const config: OpenClawConfig = { agents: { entries: { ops: { agentDir: opsDir } } } };
-  const skillDir = path.join(root, "ops-workspace", "skills", "deploy");
-  const skillFile = path.join(skillDir, "SKILL.md");
+  const { env, config, proposalsDir, skillDir, skillFile } = fixture("unfinished-apply", {
+    opsOnly: true,
+  });
   const record = {
     draftFile: "PROPOSAL.md",
     target: { skillDir, skillFile },
@@ -268,7 +276,7 @@ it("undoes an apply that stopped before SKILL.md, then retires its rollback", as
         ('deploy-procedure-1', '2026-01-01T00:00:00.000Z', ?, 'update', ?, '# Before\n', ?)`,
     )
     .run(skillFile, sha256Hex("# Before\n"), JSON.stringify(rollbackSupport));
-  const bundleDir = path.join(stateDir, "skill-workshop", "proposals", "deploy-procedure-1");
+  const bundleDir = path.join(proposalsDir, "deploy-procedure-1");
   write(path.join(bundleDir, "PROPOSAL.md"), "# Draft\n");
   write(path.join(bundleDir, "references", "replaced.md"), "new replaced\n");
   write(path.join(bundleDir, "references", "added.md"), "new added\n");
@@ -293,14 +301,7 @@ it("undoes an apply that stopped before SKILL.md, then retires its rollback", as
 });
 
 it("frees the skill name when it undoes a create that stopped before SKILL.md", async () => {
-  const root = tempDirs.make("openclaw-retire-unfinished-create-");
-  const stateDir = path.join(root, "state");
-  const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
-  const config: OpenClawConfig = {
-    agents: { entries: { ops: { agentDir: path.join(root, "ops-agent") } } },
-  };
-  const skillDir = path.join(root, "ops-workspace", "skills", "deploy");
-  const skillFile = path.join(skillDir, "SKILL.md");
+  const { env, config, skillDir, skillFile } = fixture("unfinished-create", { opsOnly: true });
   const record = {
     target: { skillDir, skillFile },
     supportFiles: [{ path: "references/notes.md", hash: sha256Hex("proposed\n") }],
@@ -327,14 +328,7 @@ it("frees the skill name when it undoes a create that stopped before SKILL.md", 
 });
 
 async function retireUnfinishedApply(live: { skill: string; support: string }) {
-  const root = tempDirs.make("openclaw-retire-unfinished-apply-");
-  const stateDir = path.join(root, "state");
-  const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
-  const config: OpenClawConfig = {
-    agents: { entries: { ops: { agentDir: path.join(root, "ops-agent") } } },
-  };
-  const skillDir = path.join(root, "ops-workspace", "skills", "deploy");
-  const skillFile = path.join(skillDir, "SKILL.md");
+  const { env, config, skillDir, skillFile } = fixture("unfinished-apply", { opsOnly: true });
   const supportFile = path.join(skillDir, "references", "notes.md");
   const record = {
     target: { skillDir, skillFile },
