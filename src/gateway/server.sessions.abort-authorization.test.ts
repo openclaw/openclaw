@@ -13,6 +13,7 @@ import {
 import type { RawData } from "ws";
 import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
 import {
   clearActiveEmbeddedRun,
@@ -186,6 +187,27 @@ async function startNativeRun(owner: Awaited<ReturnType<typeof openOperator>>, n
   }
 }
 
+async function subscribe(ws: Awaited<ReturnType<typeof openOperator>>["ws"]) {
+  expect(await rpcReq(ws, "sessions.subscribe", {})).toMatchObject({
+    ok: true,
+    payload: { subscribed: true },
+  });
+}
+
+async function finishRun(
+  run: Awaited<ReturnType<typeof startNativeRun>>,
+  ...operators: Awaited<ReturnType<typeof openOperator>>[]
+) {
+  await runQaGatewayFixture(
+    run.finish,
+    ...operators.map(
+      ({ ws }) =>
+        () =>
+          ws.close(),
+    ),
+  );
+}
+
 describe("native sessions.abort requester authorization over WebSocket", () => {
   test("rejects a foreign write-only device without cancellation effects", async () => {
     const owner = await openOperator("owner", ["operator.read", "operator.write"]);
@@ -193,10 +215,7 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
     expect(foreign.hello.server.connId).not.toBe(owner.hello.server.connId);
     expect(foreign.deviceId).not.toBe(owner.deviceId);
     const run = await startNativeRun(owner, "foreign");
-    expect(await rpcReq(owner.ws, "sessions.subscribe", {})).toMatchObject({
-      ok: true,
-      payload: { subscribed: true },
-    });
+    await subscribe(owner.ws);
     const events: string[] = [];
     const record = (data: RawData) => {
       const frame = JSON.parse(rawDataToString(data)) as {
@@ -239,10 +258,7 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
       });
       // Drain the real publisher, then cross a same-socket response barrier.
       await flushPendingSessionsChangedEvents();
-      expect(await rpcReq(owner.ws, "sessions.subscribe", {})).toMatchObject({
-        ok: true,
-        payload: { subscribed: true },
-      });
+      await subscribe(owner.ws);
       expect
         .soft(result)
         .toMatchObject({ ok: false, error: { code: "INVALID_REQUEST", message: "unauthorized" } });
@@ -259,27 +275,15 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
       expect(
         await rpcReq(owner.ws, "sessions.abort", { key: run.sessionKey, runId: run.runId }),
       ).toMatchObject({ ok: true, payload: { status: "aborted", abortedRunId: run.runId } });
-      // Join the real publisher and cross a same-socket response barrier
-      // before asserting that this subscription received the abort event.
+      // Join the publisher and cross a same-socket response barrier.
       await flushPendingSessionsChangedEvents();
-      expect(await rpcReq(owner.ws, "sessions.subscribe", {})).toMatchObject({
-        ok: true,
-        payload: { subscribed: true },
-      });
+      await subscribe(owner.ws);
       expect(events).toContain("sessions.changed");
     } finally {
       owner.ws.off("message", record);
       clearFollowupQueue(run.sessionKey);
       clearFollowupDrainCallback(run.sessionKey);
-      try {
-        await run.finish();
-      } finally {
-        try {
-          owner.ws.close();
-        } finally {
-          foreign.ws.close();
-        }
-      }
+      await finishRun(run, owner, foreign);
     }
   });
 
@@ -313,15 +317,7 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
       expect(run.entry.controller.signal.aborted).toBe(true);
       expect(run.nativeAbort).toHaveBeenCalledTimes(1);
     } finally {
-      try {
-        await run.finish();
-      } finally {
-        try {
-          owner.ws.close();
-        } finally {
-          stopper.ws.close();
-        }
-      }
+      await finishRun(run, owner, stopper);
     }
   });
 
@@ -355,11 +351,7 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
         expect(run.entry.controller.signal.aborted).toBe(true);
         expect(run.nativeAbort).toHaveBeenCalledTimes(1);
       } finally {
-        try {
-          await run.finish();
-        } finally {
-          owner.ws.close();
-        }
+        await finishRun(run, owner);
       }
     },
   );

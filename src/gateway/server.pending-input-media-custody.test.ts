@@ -24,6 +24,13 @@ import { agentCommandMock, dispatchInboundMessageMock } from "./test-helpers.js"
 
 type Outcome = "unknown" | "refused" | "accepted" | "reply lost";
 
+function expectAdmissionError(response: unknown, message: string) {
+  expect(response).toMatchObject({
+    ok: false,
+    error: { message: expect.stringContaining(message) },
+  });
+}
+
 // Lose evidence only after the real pending-input or actor transaction commits.
 // The ordinary reply alone cannot establish custody; never synthesize the row.
 function observeInputAdmission(
@@ -111,20 +118,18 @@ function observeInputAdmission(
                   isRecord(command.input) ? command.input : undefined,
                   "real input admission command",
                 );
-                expect(owned.committed).toMatchObject(
+                expect(owned.committed?.facts).toMatchObject(
                   actor
                     ? {
-                        facts: {
-                          kind: "committed",
-                          receipt: {
-                            phase: "acceptInput",
-                            commandId: input.commandId,
-                            phaseId: input.phaseId,
-                            postimage: { target: { sessionKey } },
-                          },
+                        kind: "committed",
+                        receipt: {
+                          phase: "acceptInput",
+                          commandId: input.commandId,
+                          phaseId: input.phaseId,
+                          postimage: { target: { sessionKey } },
                         },
                       }
-                    : { facts: { kind: "pending-input-settlement", operation: "stage" } },
+                    : { kind: "pending-input-settlement", operation: "stage" },
                 );
                 expect(owned.settlement?.kind).toBe("completed");
                 if (outcome === "unknown") {
@@ -308,12 +313,6 @@ describe("Gateway pending-input media custody", () => {
         const pending = await sessionAccessor.listSessionPendingInputs(f.scope);
         const transcript = sessionAccessor.loadTranscriptEventsSync(f.scope);
         if (goal && outcome === "unknown") {
-          expect(response).toMatchObject({
-            ok: false,
-            error: {
-              message: expect.stringContaining("Synthetic input reply lost after native commit"),
-            },
-          });
           expect(pending.total).toBe(0);
           expect(sessionAccessor.loadSessionEntry(f.scope)?.goal?.objective).toBe(request.message);
           expect(transcript.slice(0, f.before.length)).toEqual(f.before);
@@ -331,12 +330,7 @@ describe("Gateway pending-input media custody", () => {
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         }
         if (outcome === "refused") {
-          expect(response).toMatchObject({
-            ok: false,
-            error: {
-              message: expect.stringContaining("Synthetic refusal before native input commit"),
-            },
-          });
+          expectAdmissionError(response, "Synthetic refusal before native input commit");
           expect(pending.total).toBe(0);
           expect(transcript).toEqual(f.before);
           if (goal) {
@@ -347,16 +341,12 @@ describe("Gateway pending-input media custody", () => {
           expect(await fs.readFile(media.path)).toEqual(bytes);
           expect(deleteObserver).not.toHaveBeenCalledWith(media.id, "inbound");
           if (outcome === "unknown") {
-            expect(response).toMatchObject({
-              ok: false,
-              error: {
-                message: expect.stringContaining(
-                  chat
-                    ? "Synthetic input reply lost after native commit"
-                    : "commitment is unknown; do not replay",
-                ),
-              },
-            });
+            expectAdmissionError(
+              response,
+              chat
+                ? "Synthetic input reply lost after native commit"
+                : "commitment is unknown; do not replay",
+            );
             // UNKNOWN never publishes a live input owner. The public history
             // read reconciles that committed, ownerless row to interrupted.
             if (!goal) {

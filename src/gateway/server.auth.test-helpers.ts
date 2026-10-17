@@ -1,49 +1,30 @@
-// Shared auth suite helpers provide WebSocket clients, signed device payloads,
-// pairing utilities, and gateway harness setup for auth-mode tests.
 import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
 import { WebSocket } from "ws";
 import { buildDeviceAuthPayload } from "../../packages/gateway-client/src/device-auth.js";
-import {
-  MIN_PROBE_PROTOCOL_VERSION,
-  PROTOCOL_VERSION,
-} from "../../packages/gateway-protocol/src/index.js";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import {
   connectReq,
   getTrackedConnectChallengeNonce,
-  installGatewayTestHooks,
   onceMessage,
-  rpcReq,
-  startTestGatewayServer,
-  startServer,
   startServerWithClient,
   trackConnectChallengeNonce,
-  testTailscaleWhois,
   testState,
-  withGatewayServer,
 } from "./test-helpers.js";
 
 let authIdentityPathSeq = 0;
 
 function nextAuthIdentityPath(prefix: string): string {
   const poolId = process.env.VITEST_POOL_ID ?? "0";
-  const fileName =
-    prefix +
-    "-" +
-    String(process.pid) +
-    "-" +
-    poolId +
-    "-" +
-    String(authIdentityPathSeq++) +
-    ".sqlite";
+  const fileName = `${prefix}-${process.pid}-${poolId}-${authIdentityPathSeq++}.sqlite`;
   return path.join(os.tmpdir(), fileName);
 }
 
-async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean> {
+export async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean> {
   if (ws.readyState === WebSocket.CLOSED) {
     return true;
   }
@@ -56,7 +37,7 @@ async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean
   });
 }
 
-const openWs = async (port: number, headers?: Record<string, string>) => {
+export const openWs = async (port: number, headers?: Record<string, string>) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, headers ? { headers } : undefined);
   trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve) => {
@@ -65,7 +46,7 @@ const openWs = async (port: number, headers?: Record<string, string>) => {
   return ws;
 };
 
-const readConnectChallengeNonce = async (ws: WebSocket) => {
+export const readConnectChallengeNonce = async (ws: WebSocket) => {
   const cached = getTrackedConnectChallengeNonce(ws);
   if (cached) {
     return cached;
@@ -80,7 +61,7 @@ const readConnectChallengeNonce = async (ws: WebSocket) => {
   return String(nonce);
 };
 
-const openTailscaleWs = async (
+export const openTailscaleWs = async (
   endpoint: GatewayTailscaleIngressEndpoint,
   headers?: Record<string, string>,
 ) => {
@@ -101,9 +82,9 @@ const openTailscaleWs = async (
   return ws;
 };
 
-const originForPort = (port: number) => `http://127.0.0.1:${port}`;
+export const originForPort = (port: number) => `http://127.0.0.1:${port}`;
 
-function restoreGatewayToken(prevToken: string | undefined) {
+export function restoreGatewayToken(prevToken: string | undefined) {
   if (prevToken === undefined) {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
   } else {
@@ -111,67 +92,60 @@ function restoreGatewayToken(prevToken: string | undefined) {
   }
 }
 
-async function withRuntimeVersionEnv<T>(
+export async function withRuntimeVersionEnv<T>(
   env: Record<string, string | undefined>,
   run: () => Promise<T>,
 ): Promise<T> {
   return withEnvAsync(env, run);
 }
 
-const TEST_OPERATOR_CLIENT = {
+export const TEST_OPERATOR_CLIENT = {
   id: GATEWAY_CLIENT_NAMES.TEST,
   version: "1.0.0",
   platform: "test",
   mode: GATEWAY_CLIENT_MODES.TEST,
 };
 
-const CONTROL_UI_CLIENT = {
+export const CONTROL_UI_CLIENT = {
   id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
   version: "1.0.0",
   platform: "web",
   mode: GATEWAY_CLIENT_MODES.WEBCHAT,
 };
 
-const TRUSTED_PROXY_CONTROL_UI_HEADERS = {
+export const TRUSTED_PROXY_CONTROL_UI_HEADERS = {
   origin: "https://localhost",
   "x-forwarded-for": "203.0.113.10",
   "x-forwarded-proto": "https",
   "x-forwarded-user": "peter@example.com",
 } as const;
 
-const NODE_CLIENT = {
+export const NODE_CLIENT = {
   id: GATEWAY_CLIENT_NAMES.NODE_HOST,
   version: "1.0.0",
   platform: "test",
   mode: GATEWAY_CLIENT_MODES.NODE,
 };
 
-const BACKEND_GATEWAY_CLIENT = {
+export const BACKEND_GATEWAY_CLIENT = {
   id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
   version: "1.0.0",
   platform: "node",
   mode: GATEWAY_CLIENT_MODES.BACKEND,
 };
 
-async function expectHelloOkServerVersion(port: number, expectedVersion: string) {
+export async function expectHelloOkServerVersion(port: number, expectedVersion: string) {
   const ws = await openWs(port);
   try {
     const res = await connectReq(ws);
     expect(res.ok).toBe(true);
-    const payload = res.payload as
-      | {
-          type?: unknown;
-          server?: { version?: string };
-        }
-      | undefined;
-    expect(payload?.type).toBe("hello-ok");
-    expect(payload?.server?.version).toBe(expectedVersion);
+    expect(res.payload).toMatchObject({ type: "hello-ok", server: { version: expectedVersion } });
   } finally {
     ws.close();
   }
 }
 
-async function createSignedDevice(params: {
+export async function createSignedDevice(params: {
   token?: string | null;
   scopes: string[];
   clientId: string;
@@ -210,7 +184,7 @@ async function createSignedDevice(params: {
   };
 }
 
-function resolveGatewayTokenOrEnv(): string {
+export function resolveGatewayTokenOrEnv(): string {
   const token =
     typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
       ? ((testState.gatewayAuth as { token?: string }).token ?? undefined)
@@ -234,7 +208,7 @@ async function approvePendingPairingIfNeeded() {
   });
 }
 
-async function configureTrustedProxyControlUiAuth() {
+export async function configureTrustedProxyControlUiAuth() {
   const { replaceConfigFile } = await import("../config/config.js");
   testState.gatewayAuth = undefined;
   testState.gatewayControlUi = {
@@ -271,7 +245,7 @@ function isConnectResMessage(id: string) {
   };
 }
 
-async function sendRawConnectReq(
+export async function sendRawConnectReq(
   ws: WebSocket,
   params: {
     id: string;
@@ -328,7 +302,7 @@ async function resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath: strin
   return { identity: { deviceId: identity.deviceId }, deviceToken };
 }
 
-async function startRateLimitedTokenServerWithPairedDeviceToken() {
+export async function startRateLimitedTokenServerWithPairedDeviceToken() {
   testState.gatewayAuth = {
     mode: "token",
     token: "secret",
@@ -356,7 +330,7 @@ async function startRateLimitedTokenServerWithPairedDeviceToken() {
   }
 }
 
-async function ensurePairedDeviceTokenForCurrentIdentity(ws: WebSocket): Promise<{
+export async function ensurePairedDeviceTokenForCurrentIdentity(ws: WebSocket): Promise<{
   identity: { deviceId: string };
   deviceToken: string;
   deviceIdentityPath: string;
@@ -369,46 +343,25 @@ async function ensurePairedDeviceTokenForCurrentIdentity(ws: WebSocket): Promise
   }
   const { identity, deviceToken } =
     await resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath);
-  return {
-    identity,
-    deviceToken,
-    deviceIdentityPath,
-  };
+  return { identity, deviceToken, deviceIdentityPath };
 }
 
 export {
-  BACKEND_GATEWAY_CLIENT,
-  configureTrustedProxyControlUiAuth,
   connectReq,
-  CONTROL_UI_CLIENT,
-  createSignedDevice,
-  ensurePairedDeviceTokenForCurrentIdentity,
-  expectHelloOkServerVersion,
   installGatewayTestHooks,
-  MIN_PROBE_PROTOCOL_VERSION,
-  NODE_CLIENT,
   onceMessage,
-  openTailscaleWs,
-  openWs,
-  originForPort,
-  readConnectChallengeNonce,
-  resolveGatewayTokenOrEnv,
-  restoreGatewayToken,
   rpcReq,
-  sendRawConnectReq,
   startTestGatewayServer,
-  startRateLimitedTokenServerWithPairedDeviceToken,
   startServer,
   startServerWithClient,
-  TEST_OPERATOR_CLIENT,
-  TRUSTED_PROXY_CONTROL_UI_HEADERS,
   testState,
   testTailscaleWhois,
-  waitForWsClose,
   withGatewayServer,
-  withRuntimeVersionEnv,
-};
+} from "./test-helpers.js";
 export { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 export { resolvePreauthHandshakeTimeoutMs } from "../../packages/gateway-client/src/timeouts.js";
-export { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+export {
+  MIN_PROBE_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/index.js";
 export { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";

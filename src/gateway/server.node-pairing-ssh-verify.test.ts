@@ -1,7 +1,6 @@
-// SSH-verified node pairing e2e: real gateway server on the LAN self-connect
-// harness, with the SSH probe runtime mocked at the module boundary.
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { writeConfigFile } from "../config/config.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { GatewayNodePairingConfig } from "../config/types.gateway.js";
@@ -143,6 +142,12 @@ function createSshVerifyConfig(lanIp: string, overrides: SshVerifyConfig = {}): 
   return { cidrs: [`${lanIp}/32`], ...overrides };
 }
 
+async function pendingFor(deviceId: string) {
+  return (await devicePairing.listDevicePairing()).pending.filter(
+    (entry) => entry.deviceId === deviceId,
+  );
+}
+
 describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve", (attempt) => {
   const attemptWithSshVerify: typeof attempt = async (params) => {
     const configure = params.configure;
@@ -189,6 +194,13 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
           await lockWork;
         });
         const approval = work.approval;
+        const matched: NodeIdentityProbeResult = {
+          status: "ok",
+          stdout: JSON.stringify({
+            deviceId: loaded.identity.deviceId,
+            publicKey: loaded.publicKey,
+          }),
+        };
         probeMock.mockImplementation(() => probe.promise);
         try {
           const first = await connectNode();
@@ -200,13 +212,7 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
               await lock.promise;
             });
             await locked.promise;
-            probe.resolve({
-              status: "ok",
-              stdout: JSON.stringify({
-                deviceId: loaded.identity.deviceId,
-                publicKey: loaded.publicKey,
-              }),
-            });
+            probe.resolve(matched);
             await work.waitForApproval();
             expect(approval).toHaveBeenCalledOnce();
           }
@@ -224,13 +230,7 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
               },
             },
           });
-          probe.resolve({
-            status: "ok",
-            stdout: JSON.stringify({
-              deviceId: loaded.identity.deviceId,
-              publicKey: loaded.publicKey,
-            }),
-          });
+          probe.resolve(matched);
           lock.resolve();
           await lockWork;
           const { result } = await work.waitForApproval();
@@ -262,8 +262,7 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
           stdout: `motd noise\n{"deviceId":"${loaded.identity.deviceId}","publicKey":"${loaded.publicKey}"}\n`,
         };
         probeMock.mockImplementation(() => probe.promise);
-        let bodyFailure: { error: unknown } | undefined;
-        try {
+        await runQaGatewayFixture(async () => {
           const first = await connectNode();
           expect(probeMock).toHaveBeenCalledOnce();
           expect(first.ok).toBe(false);
@@ -294,26 +293,7 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
           const record = await devicePairing.getPairedDevice(loaded.identity.deviceId);
           expect(record?.nodeSurface).toBeDefined();
           expect(record?.pendingNodeSurface).toBeUndefined();
-        } catch (error) {
-          bodyFailure = { error };
-        }
-        // Release a failed assertion's probe and join the real approval tail
-        // before the next case resets configuration or pairing state.
-        try {
-          await work.close();
-        } catch (cleanupError) {
-          if (bodyFailure) {
-            throw new AggregateError(
-              [bodyFailure.error, cleanupError],
-              "SSH pairing fixture and cleanup failed",
-              { cause: cleanupError },
-            );
-          }
-          throw cleanupError;
-        }
-        if (bodyFailure) {
-          throw bodyFailure.error;
-        }
+        }, work.close);
       },
     });
   });
@@ -322,10 +302,7 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
     await attemptWithSshVerify({
       identityName: "ssh-verify-scoped-refresh",
       run: async ({ loaded, connectNode }) => {
-        // Seed a scoped pending request (as an earlier interactive attempt
-        // would). The scopeless reconnect below refreshes this same request in
-        // place, so approving it would smuggle the scope past the fresh
-        // scopeless boundary. A matching probe would approve if reached.
+        // A scopeless reconnect must not smuggle the earlier request's scopes.
         await devicePairing.requestDevicePairing({
           deviceId: loaded.identity.deviceId,
           publicKey: loaded.publicKey,
@@ -341,9 +318,7 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
         const res = await connectNode();
         expect(res.ok).toBe(false);
 
-        // The scoped pending request disqualifies ssh-verify entirely: no probe
-        // runs and the device is never auto-approved.
-        // Probe eligibility is decided before this handshake response.
+        // Eligibility is decided before the handshake response.
         expect(probeMock).not.toHaveBeenCalled();
         expect(await devicePairing.getPairedDevice(loaded.identity.deviceId)).toBeNull();
       },
@@ -354,8 +329,6 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
     await attemptWithSshVerify({
       identityName: "ssh-verify-key-mismatch",
       run: async ({ loaded, connectNode }) => {
-        // A different key than the pending request: assembled from words so the
-        // fixture is not a high-entropy blob (keeps review bundlers happy).
         const wrongKey = ["not", "the", "expected", "device", "key"].join("-");
         probeMock.mockImplementation(async () => ({
           status: "ok",
@@ -378,10 +351,7 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
           });
           await work.settle();
           expect(await devicePairing.getPairedDevice(loaded.identity.deviceId)).toBeNull();
-          const pending = (await devicePairing.listDevicePairing()).pending.filter(
-            (entry) => entry.deviceId === loaded.identity.deviceId,
-          );
-          expect(pending).toHaveLength(1);
+          expect(await pendingFor(loaded.identity.deviceId)).toHaveLength(1);
         } finally {
           await work.close();
         }
@@ -401,9 +371,7 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
         const res = await connectNode();
         expect(res.ok).toBe(false);
         expect(res.error?.message).toContain("pairing required");
-        const pending = (await devicePairing.listDevicePairing()).pending.filter(
-          (entry) => entry.deviceId === loaded.identity.deviceId,
-        );
+        const pending = await pendingFor(loaded.identity.deviceId);
         expect(pending).toHaveLength(1);
         expect(pending[0]?.silent).toBe(false);
         const details = res.error?.details as PairingRequiredDetails | undefined;
