@@ -116,7 +116,6 @@ export async function handleSendChat(
     return undefined;
   }
   if (opts?.intent && chatProviderReviewRow(host)?.sendDisabledReason) {
-    host.requestUpdate?.();
     return undefined;
   }
   const previousDraft = host.chatMessage;
@@ -314,7 +313,6 @@ export async function handleSendChat(
       (!parsed?.command.executeLocal || forwardModel) &&
       chatProviderReviewRow(host)?.sendDisabledReason
     ) {
-      host.requestUpdate?.();
       return undefined;
     }
     host.chatRunError = null;
@@ -348,7 +346,6 @@ export async function handleSendChat(
     if (parsed?.command.executeLocal && !forwardModel) {
       if (shouldQueueLocalSlashCommand(parsed.command.key)) {
         if (chatSendHoldReason(host, submittedSessionKey)) {
-          host.requestUpdate?.();
           return undefined;
         }
         const submitKey = chatSubmitKey(host, "local", message, attachmentsToSend);
@@ -532,8 +529,6 @@ export async function handleSendChat(
         ? chatSendHoldReason(host, submittedSessionKey, false, submittedAgentId)
         : chatSendAdmissionHoldReason(host, submittedSessionKey, submittedAgentId);
     if (admissionHoldReason()) {
-      // The composer owns transient recovery notices, including their removal.
-      host.requestUpdate?.();
       return;
     }
     let pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
@@ -597,9 +592,7 @@ export async function handleSendChat(
       const hold = admissionHoldReason();
       if (hold || (intent && (isChatBusy(host) || hasDirectSessionRun(host)))) {
         retireOutboxPayload(queued);
-        if (hold) {
-          host.requestUpdate?.();
-        } else {
+        if (!hold) {
           setChatError(host, t("chat.goals.busy"));
         }
         return;

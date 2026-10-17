@@ -121,13 +121,11 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element 
             host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)
           }
           onMenuPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
-          onContextMenu={(event) => {
+          onContextMenu={(trigger, event) => {
             event.preventDefault();
             if (host.sidebarMenus.agentMenuPosition !== null) {
               return;
             }
-            const card = event.currentTarget;
-            const trigger = card.querySelector<HTMLElement>(".sidebar-agent-card__main") ?? card;
             host.sidebarMenus.toggleAgentMenu(trigger);
           }}
         />
@@ -323,12 +321,10 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
                       ),
                     }).leadingIndicator
                   }
-                  {
-                    <SessionRowBadges
-                      outboxAttentionCount={session().outboxAttentionCount}
-                      hasComposerDraft={session().hasComposerDraft}
-                    />
-                  }
+                  <SessionRowBadges
+                    outboxAttentionCount={session().outboxAttentionCount}
+                    hasComposerDraft={session().hasComposerDraft}
+                  />
                 </>
               )}
             </Show>

@@ -1,8 +1,10 @@
 import type { EnvironmentsListResult } from "@openclaw/gateway-protocol";
+import { createEffect, createRoot, createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { SessionRowObservation } from "../../lib/sessions/session-capability.ts";
 import { ChatPaneActiveResources, type ActiveResourceOwner } from "./chat-pane-active-resources.ts";
 import { normalizeSidebarLayout } from "./sidebar-layout-normalize.ts";
@@ -115,7 +117,6 @@ function fixture() {
     browserTab: selection,
     layout: () => layout,
     commit,
-    requestUpdate: vi.fn(),
     isCurrent: () => live,
   };
   const controller = new ChatPaneActiveResources();
@@ -137,6 +138,76 @@ function fixture() {
 }
 
 describe("session active resource discovery", () => {
+  it("projects verified desktop changes and releases the view on disposal", async () => {
+    const f = fixture();
+    f.owner.browserAvailable = false;
+    const sources: Array<string | null | undefined> = [];
+    let refreshBinding: () => void = () => {};
+    const dispose = createRoot((release) => {
+      const [binding, setBinding] = createSignal(0);
+      refreshBinding = () => setBinding((value) => value + 1);
+      const resources = projectOwner(f.controller, (owner) =>
+        owner.desktopSource(f.owner.client, key, f.owner.agentId, f.owner.connectionEpoch, f.owner),
+      );
+      createEffect(
+        () => {
+          binding();
+          return resources.read();
+        },
+        (source) => {
+          sources.push(source);
+        },
+      );
+      return release;
+    });
+    try {
+      flush();
+      expect(sources).toEqual([undefined]);
+      f.controller.sync(f.owner);
+      await settle();
+      flush();
+      expect(sources).toEqual([undefined, "worker-1"]);
+
+      f.owner.observation.isCurrent = () => false;
+      refreshBinding();
+      flush();
+      expect(sources).toEqual([undefined, "worker-1", null]);
+      f.controller.sync({
+        ...f.owner,
+        observation: { ...f.owner.observation, isCurrent: () => true },
+      });
+      await settle();
+      flush();
+      expect(sources).toEqual([undefined, "worker-1", null, "worker-1"]);
+
+      const respond = f.request.getMockImplementation()!;
+      f.request.mockImplementation((method, params) =>
+        method === "environments.status"
+          ? Promise.resolve({ ...environment, status: "unavailable" })
+          : respond(method, params),
+      );
+      // Revalidation discovers retirement without a renderer scheduling another sync.
+      f.controller.reconcileObservation();
+      await settle();
+      flush();
+      expect(sources).toEqual([undefined, "worker-1", null, "worker-1", null]);
+
+      dispose();
+      f.request.mockImplementation(respond);
+      f.controller.invalidate();
+      f.controller.sync({
+        ...f.owner,
+        observation: { ...f.owner.observation, isCurrent: () => true },
+      });
+      await settle();
+      flush();
+      expect(f.desktopSource()).toBe("worker-1");
+      expect(sources).toEqual([undefined, "worker-1", null, "worker-1", null]);
+    } finally {
+      dispose();
+    }
+  });
+
   it("retains a visible verified Desktop when another resource is dismissed", async () => {
     const f = fixture();
     f.controller.sync(f.owner);
@@ -377,7 +448,7 @@ describe("session active resource discovery", () => {
         f.setLayout(openSlot(openSlot(f.owner.layout(), "desktop"), "workspace"));
         f.controller.sync(f.owner);
         await settle();
-        f.controller.reconcileObservation({ requestUpdate: () => {}, updated: async () => {} });
+        f.controller.reconcileObservation();
         await settle();
         expect(f.request).not.toHaveBeenCalled();
         expect(sidebarActivePanel(f.owner.layout())?.slot).toBe("workspace");

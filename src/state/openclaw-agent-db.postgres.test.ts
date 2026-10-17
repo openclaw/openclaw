@@ -437,7 +437,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
         schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
       },
     });
-    expect(inspector.processCount).toBe(0);
+    expect(inspector.snapshotCount).toBe(0);
   });
 
   it("appends and hydrates plain transcript JSON and drains interleaved turns through the agent worker in FIFO order", async () => {
@@ -527,7 +527,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
           schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
         },
       });
-      expect(inspector.processCount).toBe(0);
+      expect(inspector.snapshotCount).toBe(0);
     }
     const payloads = await client.query<{ event_json: string; event_zstd: Buffer | null }>(
       `SELECT event_json, event_zstd FROM "${facts.namespace}".transcript_events ORDER BY seq`,

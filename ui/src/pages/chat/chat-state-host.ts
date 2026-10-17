@@ -38,6 +38,7 @@ export type ChatPageHost = ChatHost &
   ChatRealtimeState &
   PullRequestRefreshHost &
   SessionWorkspaceHost & {
+    requestUpdate: () => void;
     reviewQueuedMessageEdit?: () => void;
     captureComposerRecoveryReload?: () => () => Promise<boolean>;
     chatMetadataIsPresented?: () => boolean;

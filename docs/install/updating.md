@@ -671,6 +671,18 @@ package publication, and `retire` removes only its recorded obsolete objects.
 These commands do not replace post-update plugin, migration or service recovery.
 Keep other package managers stopped while recovering the operation.
 
+If an updater-owned recovery directory, helper, or journal gains group or other
+permissions, the updater restores owner-only access and warns with the path,
+observed mode, and link count. On Linux, this also clears the effective POSIX ACL
+mask; named ACL entries can remain but no longer grant access. When `getfacl` is
+available, the warning identifies detected ACL entries. Foreign ownership,
+symlinks, unexpected object types, multiply linked files, and permissions that
+cannot be repaired still require intervention. Repairing these private objects
+does not change package-content fingerprints or authorize recovery of modified
+package files.
+If recovery still refuses, automatic update and managed-service handoff reports
+retain its reason code and diagnostic message in the failed phase.
+
 On FreeBSD, `repair` and `retire` read process identity through the recorded
 installation's own `@openclaw/proc-safe` dependency and its FreeBSD platform
 addon: the live package, or the copy the operation retains beside it during

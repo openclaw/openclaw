@@ -127,7 +127,11 @@ it.each(["replacement", "reset"])(
       "sessions.changed",
       expect.objectContaining({ sessionKey: keys[0], reason: "rename" }),
       new Set(["viewer"]),
-      { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
+      {
+        dropIfSlow: true,
+        sessionEventSubscriptionKeys: [keys[0]],
+        prepareSessionProjection: expect.any(Function),
+      },
     );
   },
 );
@@ -177,7 +181,11 @@ it("publishes lifecycle rows after their producer drains and before publication 
       session: expect.objectContaining({ sessionId: "lifecycle-session", label: "Collector A" }),
     }),
     new Set(["viewer"]),
-    { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
+    {
+      dropIfSlow: true,
+      sessionEventSubscriptionKeys: [sessionKey],
+      prepareSessionProjection: expect.any(Function),
+    },
   );
   expect(order).toEqual(["publication", "drained"]);
 });

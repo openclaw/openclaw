@@ -586,6 +586,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         agentId: "ops",
         dropIfSlow: true,
         sessionKeys: ["agent:ops:global"],
+        sessionEventSubscriptionKeys: ["agent:ops:global"],
       },
     );
     expectPrivateSessionInvalidation(broadcastToConnIds.mock.calls[0]?.[1]);

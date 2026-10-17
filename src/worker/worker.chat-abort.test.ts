@@ -183,10 +183,14 @@ it.each([
     });
     let stdout = "";
     let cancelWorker: (() => void) | undefined;
+    let cancelRequestedAt: number | undefined;
     let command: Promise<void> | undefined;
     try {
       const worker = await workers.launch({ descriptor, signal });
-      cancelWorker = () => worker.cancel();
+      cancelWorker = () => {
+        cancelRequestedAt = performance.now();
+        worker.cancel();
+      };
       owner.signal.addEventListener("abort", cancelWorker, { once: true });
       command = worker.finish().then((exit) => {
         stdout = exit.stdout;
@@ -196,11 +200,31 @@ it.each([
       });
       // Register the rejection handler before waiting for worker lifecycle events.
       void command.catch(() => undefined);
-      const waitFor = (gate: PromiseLike<void>, boundary: string) =>
-        withinTest(
-          awaitGateBeforeSettlement(gate, command!, `worker command completed before ${boundary}`),
-          signal,
-        );
+      const waitFor = async (gate: PromiseLike<void>, boundary: string) => {
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              gate,
+              command!,
+              `worker command completed before ${boundary}`,
+            ),
+            signal,
+          );
+        } catch (error) {
+          throw new Error(
+            `Worker abort fixture stopped before ${boundary}: ${JSON.stringify({
+              cancelElapsedMs:
+                cancelRequestedAt === undefined
+                  ? null
+                  : Math.round(performance.now() - cancelRequestedAt),
+              previewReached: previewGate?.claimed ?? false,
+              finishingReached: finishingGate.claimed,
+              transcriptRequests: harness.requestParams("worker.transcript.commit").length,
+            })}`,
+            { cause: error },
+          );
+        }
+      };
       await waitFor(liveStarted.promise, "live start");
       await waitFor(
         previewGate?.entered.promise ?? providerStarted.promise,

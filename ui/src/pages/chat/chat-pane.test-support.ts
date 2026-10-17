@@ -131,6 +131,7 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   readonly element: HTMLElement;
   render: ChatPaneRuntime["render"];
   readonly transcript: ChatTranscript;
+  readonly sessionDiscussion: ChatPaneRuntime["sessionDiscussion"];
   catalogMessages: unknown[];
   active: boolean;
   presented: boolean;

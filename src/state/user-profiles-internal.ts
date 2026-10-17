@@ -1,6 +1,7 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { expressionBuilder, type Compilable, type SelectQueryBuilder } from "kysely";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -9,7 +10,7 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
@@ -294,14 +295,16 @@ const metadataReader = createSqliteQueryCache((db: EngineConnection) =>
       .select((eb) => [
         "id",
         "display_name",
-        // Preserve native conversion errors for non-BLOB values in damaged profile rows.
-        eb
-          .case()
-          .when(eb.fn<string>("typeof", ["avatar"]), "=", "blob")
-          .then(null)
-          .else(eb.ref("avatar"))
-          .end()
-          .as("avatar"),
+        // PostgreSQL enforces bytea; SQLite must preserve conversion errors for damaged rows.
+        isPostgresSqlConnection(db)
+          ? eb.val(null).as("avatar")
+          : eb
+              .case()
+              .when(eb.fn<string>("typeof", ["avatar"]), "=", "blob")
+              .then(null)
+              .else(eb.ref("avatar"))
+              .end()
+              .as("avatar"),
         "avatar_mime",
         "avatar_sha256",
         "merged_into",
@@ -355,11 +358,13 @@ export function formatUserProfileAvatarEtag(sha256: string, mime: UserProfileAva
 }
 
 function selectProfileAvatarMetadata(db: EngineConnection, profileId: string) {
-  const schema = getAdmittedSqliteSchemaFacts(db);
+  const schema = isPostgresSqlConnection(db)
+    ? getPostgresPhysicalFacts(db)
+    : getAdmittedSqliteSchemaFacts(db);
   if (!schema) {
     throw new Error("Profile avatar reads require admitted schema facts");
   }
-  if (!schema.tableSql.get("user_profiles")) {
+  if (!tableExists(db, "user_profiles")) {
     return undefined;
   }
   return selectResolvedUserProfile(

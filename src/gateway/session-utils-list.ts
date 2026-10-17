@@ -25,6 +25,7 @@ import {
   addSessionOwnerFacetIdentity,
   sortSessionOwnerFacet,
 } from "./session-identity-projection.js";
+import { getSessionListBaseMiss, retainSessionListBaseMiss } from "./session-list-diagnostics.js";
 import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js";
 import {
   filterSessionEntries,
@@ -199,7 +200,11 @@ function buildSessionsListResult(
           client,
           metadataSnapshot,
         })?.forAgent(defaultsAgentId, defaultsCatalog);
-  return {
+  const sharedRows =
+    opts.rowMode === "sidebar"
+      ? shareSidebarSessionRows(sessions, opts.ifRowsRevision, rowHistory)
+      : { sessions };
+  const result = {
     ts: list.now,
     path: list.storePath,
     count: sessions.length,
@@ -221,10 +226,10 @@ function buildSessionsListResult(
         }
       : {}),
     defaults: policy ? policy.defaults(defaults) : defaults,
-    ...(opts.rowMode === "sidebar"
-      ? shareSidebarSessionRows(sessions, opts.ifRowsRevision, rowHistory)
-      : { sessions }),
+    ...sharedRows,
   };
+  retainSessionListBaseMiss(result, getSessionListBaseMiss(sharedRows));
+  return result;
 }
 
 const sentinel = (key: string) => key === "global" || key === "unknown";

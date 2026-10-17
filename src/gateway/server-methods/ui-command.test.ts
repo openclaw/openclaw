@@ -51,6 +51,38 @@ function client(
   } as GatewayClient;
 }
 
+function participant(profileId: string, name: string) {
+  return {
+    profileId,
+    name,
+    senderId: `${profileId}-sender`,
+    gatewayUiCommandTarget: { connId: `${profileId}-tab`, profileId },
+  };
+}
+
+type CommandResult = Awaited<ReturnType<typeof call>>;
+
+function expectRejected(result: CommandResult, message?: string, code = "INVALID_REQUEST") {
+  expect(result.respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      code,
+      ...(message ? { message: expect.stringContaining(message) } : {}),
+    }),
+  );
+  expect(result.broadcastToConnIds).not.toHaveBeenCalled();
+}
+
+function expectTarget(result: CommandResult, connId: string) {
+  expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
+  expect(result.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+    "ui.command",
+    { command: { kind: "sidebar", visible: false } },
+    new Set([connId]),
+  );
+}
+
 describe("ui.command gateway method", () => {
   it("rejects invalid params", async () => {
     const result = await call({ command: { kind: "sidebar", visible: "yes" } }, []);
@@ -161,18 +193,8 @@ describe("ui.command gateway method", () => {
   ] as const)(
     "routes personal screen requests only to the selected accepted $backendKind turn participant (hidden question: $hiddenQuestion)",
     async ({ backendKind, hiddenQuestion }) => {
-      const owner = {
-        profileId: "alice",
-        senderId: "alice-sender",
-        name: "Alice",
-        gatewayUiCommandTarget: { connId: "alice-tab", profileId: "alice" },
-      };
-      const steerer = {
-        profileId: "bob",
-        senderId: "bob-sender",
-        name: "Bob",
-        gatewayUiCommandTarget: { connId: "bob-tab", profileId: "bob" },
-      };
+      const owner = participant("alice", "Alice");
+      const steerer = participant("bob", "Bob");
       const recipients = [
         client("alice-tab", undefined, undefined, owner.profileId),
         client("bob-tab", undefined, undefined, steerer.profileId),
@@ -192,26 +214,6 @@ describe("ui.command gateway method", () => {
         await screen.execute("screen", { action: "sidebar_hide", ...(user ? { user } : {}) });
         return expectDefined(results.at(-1), "screen handler result");
       };
-      const expectTarget = (result: Awaited<ReturnType<typeof call>>, connId: string) => {
-        expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
-        expect(result.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-          "ui.command",
-          { command: { kind: "sidebar", visible: false } },
-          new Set([connId]),
-        );
-      };
-      const expectRejected = (result: Awaited<ReturnType<typeof call>>, message?: string) => {
-        expect(result.respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "INVALID_REQUEST",
-            ...(message ? { message: expect.stringContaining(message) } : {}),
-          }),
-        );
-        expect(result.broadcastToConnIds).not.toHaveBeenCalled();
-      };
-
       await withPersonalToolTurn({ owner, backendKind, hiddenQuestion }, async (turn) => {
         const { resolve } = expectDefined(
           turn.operation.personalToolParticipants,
@@ -267,18 +269,8 @@ describe("ui.command gateway method", () => {
   );
 
   it("resolves an identity-only request through its exact registered turn participant owner", async () => {
-    const owner = {
-      profileId: "alice",
-      senderId: "alice-sender",
-      name: "Alice",
-      gatewayUiCommandTarget: { connId: "alice-tab", profileId: "alice" },
-    };
-    const steerer = {
-      profileId: "bob",
-      senderId: "bob-sender",
-      name: "Bob",
-      gatewayUiCommandTarget: { connId: "bob-tab", profileId: "bob" },
-    };
+    const owner = participant("alice", "Alice");
+    const steerer = participant("bob", "Bob");
     const recipients = [
       client("alice-tab", undefined, undefined, "alice"),
       client("bob-tab", undefined, undefined, "bob"),
@@ -312,12 +304,7 @@ describe("ui.command gateway method", () => {
       ]) {
         runtimeClient.internal.agentRuntimeIdentity = { ...turn.runtimeIdentity, ...mismatch };
         const rejected = await request();
-        expect(rejected.respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "INVALID_REQUEST" }),
-        );
-        expect(rejected.broadcastToConnIds).not.toHaveBeenCalled();
+        expectRejected(rejected);
       }
       runtimeClient.internal.agentRuntimeIdentity = turn.runtimeIdentity;
       expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
@@ -332,12 +319,7 @@ describe("ui.command gateway method", () => {
       expect(ambiguous.broadcastToConnIds).not.toHaveBeenCalled();
       turn.complete();
       const ended = await request();
-      expect(ended.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
-      expect(ended.broadcastToConnIds).not.toHaveBeenCalled();
+      expectRejected(ended);
     });
   });
 
@@ -374,12 +356,7 @@ describe("ui.command gateway method", () => {
       state === "missing" ? undefined : requester,
     );
 
-    expect(result.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
-    expect(result.broadcastToConnIds).not.toHaveBeenCalled();
+    expectRejected(result, undefined, "UNAVAILABLE");
   });
 
   it("rejects caller-supplied browser targeting in RPC params", async () => {
@@ -393,12 +370,7 @@ describe("ui.command gateway method", () => {
       requester,
     );
 
-    expect(result.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-    expect(result.broadcastToConnIds).not.toHaveBeenCalled();
+    expectRejected(result);
   });
 });
 

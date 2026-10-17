@@ -202,10 +202,10 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
     },
   );
   createEffect(
-    () => [props.activePath, props.query, props.files] as const,
+    () => [props.activePath, props.query, props.files, props.layout] as const,
     (next, previous) => {
       activeItem()?.scrollIntoView?.({ block: "nearest" });
-      if (!previous || (props.layout === "document" && next[0] !== previous[0])) {
+      if (!previous || (next[3] === "document" && next[0] !== previous[0])) {
         focusModal();
       }
     },

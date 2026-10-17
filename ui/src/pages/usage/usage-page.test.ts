@@ -19,6 +19,31 @@ import {
 afterEach(cleanupUsagePageTest);
 
 describe("UsagePage cache convergence", () => {
+  it("shows an exhausted empty page as partial and clears its message after refresh", async () => {
+    vi.useFakeTimers();
+    focusDocument();
+    const message =
+      "Usage request exceeded its 15-second budget; narrow the date range or select a session.";
+    let result: SessionsUsageResult = {
+      ...cacheSnapshot("partial").result,
+      partial: { reason: "time-budget", message },
+    };
+    const request = vi.fn(async (method: string) =>
+      method === "usage.status" ? { updatedAt: 1, providers: [] } : result,
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = await createPage(client, true, contextWithClient(client));
+    await preloadUsage(page);
+    expect(page.querySelector(".callout.danger")?.textContent).toBe(message);
+    expect(page.textContent).not.toContain("Select a date range and click Refresh");
+
+    result = cacheSnapshot("fresh").result;
+    refreshButton(page).click();
+    await vi.advanceTimersByTimeAsync(0);
+    await page.updateComplete;
+    expect(page.querySelector(".callout.danger")).toBeNull();
+  });
+
   it.each([false, true])(
     "retains committed totals and coalesces publications (hidden: %s)",
     async (hidden) => {

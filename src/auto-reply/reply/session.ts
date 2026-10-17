@@ -6,7 +6,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
@@ -904,10 +903,6 @@ async function initSessionStateAttemptLocked(
       onError: (error) => log.warn("failed to record session participant", { error }),
     });
   }
-  clearBootstrapSnapshotOnSessionBoundary({
-    boundaryAppended: resetBoundary !== undefined,
-    sessionKey,
-  });
   if (!entry) {
     await recordSessionCreated(cfg, { sessionKey, agentId, entry: sessionEntry });
   }

@@ -1,5 +1,4 @@
-// Tests ACP event projection into session updates and reply payloads.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js";
@@ -10,7 +9,6 @@ function createProjectorHarness(
   cfgOverrides?: Parameters<typeof createCfg>[0],
   opts?: {
     onProgress?: () => void;
-    shouldSendToolSummaries?: boolean;
     shouldSendToolSummariesNow?: () => boolean;
     shouldSendFullToolDetails?: boolean;
     getConversationContext?: () => string | undefined;
@@ -19,8 +17,7 @@ function createProjectorHarness(
   const deliveries: Delivery[] = [];
   const projector = createAcpReplyProjector({
     cfg: createCfg(cfgOverrides),
-    shouldSendToolSummaries: async () =>
-      opts?.shouldSendToolSummariesNow?.() ?? opts?.shouldSendToolSummaries ?? true,
+    shouldSendToolSummaries: async () => opts?.shouldSendToolSummariesNow?.() ?? true,
     shouldSendFullToolDetails: async () => opts?.shouldSendFullToolDetails ?? false,
     deliver: async (kind, payload) => {
       deliveries.push({ kind, text: payload.text });
@@ -45,12 +42,9 @@ function createStreamHarness(
   );
 }
 
-function blockDeliveries(deliveries: Delivery[]) {
-  return deliveries.filter((entry) => entry.kind === "block");
-}
-
 function combinedBlockText(deliveries: Delivery[]) {
-  return blockDeliveries(deliveries)
+  return deliveries
+    .filter((entry) => entry.kind === "block")
     .map((entry) => entry.text ?? "")
     .join("");
 }
@@ -60,24 +54,9 @@ function expectToolCallSummary(delivery: Delivery | undefined) {
   expect(delivery?.text).toContain("Tool Call");
 }
 
-const statusAndToolTagVisibility = { available_commands_update: true, tool_call: true };
-
-function createFinalOnlyStatusToolHarness(opts?: Parameters<typeof createProjectorHarness>[1]) {
-  return createStreamHarness("final_only", { tagVisibility: statusAndToolTagVisibility }, opts);
-}
-
-function createLiveToolLifecycleHarness(params?: {
-  repeatSuppression?: boolean;
-  includeStatus?: boolean;
-}) {
-  const { includeStatus = false, ...streamOverrides } = params ?? {};
+function createLiveToolLifecycleHarness() {
   return createStreamHarness("live", {
-    ...streamOverrides,
-    tagVisibility: {
-      ...(includeStatus ? { available_commands_update: true } : {}),
-      tool_call: true,
-      tool_call_update: true,
-    },
+    tagVisibility: { tool_call: true, tool_call_update: true },
   });
 }
 
@@ -102,70 +81,40 @@ function emitStatus(
   return projector.onEvent({ type: "status", text, tag, ...overrides });
 }
 
-function emitTool(projector: Projector, event: Omit<EventOf<"tool_call">, "type">) {
-  return projector.onEvent({ type: "tool_call", ...event });
+function emitUsage(projector: Projector, used: number) {
+  return emitStatus(projector, `usage updated: ${used}/100`, "usage_update", { used, size: 100 });
 }
 
-async function runHiddenBoundaryCase(params: {
-  streamOverrides?: Record<string, unknown>;
-  toolCallId: string;
-  includeNonTerminalUpdate?: boolean;
-  firstText?: string;
-  secondText?: string;
-  expectedText: string;
-}) {
-  const { deliveries, projector } = createStreamHarness("live", params.streamOverrides);
-  await emitText(projector, params.firstText ?? "fallback.");
-  await emitTool(projector, {
-    tag: "tool_call",
-    toolCallId: params.toolCallId,
-    status: "in_progress",
-    title: "Run test",
-    text: "Run test (in_progress)",
-  });
-  if (params.includeNonTerminalUpdate) {
-    await emitTool(projector, {
-      tag: "tool_call_update",
-      toolCallId: params.toolCallId,
-      status: "in_progress",
-      title: "Run test",
-      text: "Run test (in_progress)",
-    });
-  }
-  await emitText(projector, params.secondText ?? "I don't");
-  await projector.flush();
-
-  expect(combinedBlockText(deliveries)).toBe(params.expectedText);
+function emitTool(projector: Projector, event: Partial<Omit<EventOf<"tool_call">, "type">> = {}) {
+  const {
+    tag = "tool_call",
+    toolCallId = "call_1",
+    status = "in_progress",
+    title = "Run test",
+    text = `${title} (${status})`,
+    ...rest
+  } = event;
+  return projector.onEvent({ type: "tool_call", tag, toolCallId, status, title, text, ...rest });
 }
 
 describe("createAcpReplyProjector", () => {
-  it("shows execute details only in full verbose mode", async () => {
-    const summary = createLiveToolLifecycleHarness();
-    await emitTool(summary.projector, {
-      tag: "tool_call",
-      toolCallId: "call_execute_summary",
-      kind: "execute",
-      status: "in_progress",
-      title: "exec: cat /private/operator-file",
-      text: "exec: cat /private/operator-file (in_progress)",
-    });
-    expect(summary.deliveries[0]?.text).not.toContain("cat /private/operator-file");
-    expect(summary.deliveries[0]?.text).toContain("status=in_progress");
-
-    const full = createStreamHarness(
+  afterEach(() => vi.useRealTimers());
+  it.each([false, true])("shows execute details only in full verbose mode: %s", async (verbose) => {
+    const { deliveries, projector } = createStreamHarness(
       "live",
       { tagVisibility: { tool_call: true } },
-      { shouldSendFullToolDetails: true },
+      { shouldSendFullToolDetails: verbose },
     );
-    await emitTool(full.projector, {
-      tag: "tool_call",
-      toolCallId: "call_execute_full",
+    await emitTool(projector, {
       kind: "execute",
-      status: "in_progress",
       title: "exec: cat /private/operator-file",
-      text: "exec: cat /private/operator-file (in_progress)",
     });
-    expect(full.deliveries[0]?.text).toContain("cat /private/operator-file");
+    if (verbose) {
+      expect(deliveries[0]?.text).toContain("cat /private/operator-file");
+    } else {
+      expect(deliveries[0]?.text).not.toContain("cat /private/operator-file");
+      expect(deliveries[0]?.text).toContain("status=in_progress");
+    }
   });
 
   it("reports progress for ACP runtime events before delivery filtering", async () => {
@@ -174,9 +123,6 @@ describe("createAcpReplyProjector", () => {
 
     await emitText(projector, "hidden reasoning", { stream: "thought" });
     await emitTool(projector, {
-      tag: "tool_call",
-      toolCallId: "tool-1",
-      status: "in_progress",
       title: "Run command",
       text: "Run command",
     });
@@ -184,37 +130,26 @@ describe("createAcpReplyProjector", () => {
     expect(onProgress).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["live"] as const)(
-    "bounds output and reports truncation once in %s mode",
-    async (deliveryMode) => {
-      vi.useFakeTimers();
-      try {
-        const { deliveries, projector } = createStreamHarness(deliveryMode);
-        const inputText = Array.from({ length: 4_001 }, (_, index) =>
-          String(index).padStart(6, "0"),
-        ).join("");
-        await emitText(projector, inputText);
-        await emitText(projector, "discarded after the limit");
-        await projector.flush();
+  it("bounds output and reports truncation once in live mode", async () => {
+    vi.useFakeTimers();
+    const { deliveries, projector } = createStreamHarness("live");
+    const inputText = Array.from({ length: 4_001 }, (_, index) =>
+      String(index).padStart(6, "0"),
+    ).join("");
+    await emitText(projector, inputText);
+    await emitText(projector, "discarded after the limit");
+    await projector.flush();
 
-        const output = deliveries.filter(({ kind }) => kind !== "tool");
-        expect(output.map(({ text }) => text).join("")).toBe(inputText.slice(0, 24_000));
-        if (deliveryMode === "live") {
-          for (const { kind, text } of output) {
-            expect(kind).toBe("block");
-            expect(text?.length).toBeLessThanOrEqual(1800);
-          }
-        } else {
-          expect(output).toHaveLength(1);
-        }
-        expect(deliveries.filter(({ kind }) => kind === "tool")).toEqual([
-          { kind: "tool", text: prefixSystemMessage("output truncated") },
-        ]);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
+    const output = deliveries.filter(({ kind }) => kind !== "tool");
+    expect(output.map(({ text }) => text).join("")).toBe(inputText.slice(0, 24_000));
+    for (const { kind, text } of output) {
+      expect(kind).toBe("block");
+      expect(text?.length).toBeLessThanOrEqual(1800);
+    }
+    expect(deliveries.filter(({ kind }) => kind === "tool")).toEqual([
+      { kind: "tool", text: prefixSystemMessage("output truncated") },
+    ]);
+  });
 
   it.each(["live", "final_only"] as const)(
     "uses finalized and refreshed owner context to redact split private prompts in %s mode",
@@ -246,22 +181,12 @@ describe("createAcpReplyProjector", () => {
     let allowToolSummaries = true;
     const { deliveries, projector } = createStreamHarness(
       "final_only",
-      {
-        tagVisibility: {
-          tool_call: true,
-        },
-      },
+      { tagVisibility: { tool_call: true } },
       { shouldSendToolSummariesNow: () => allowToolSummaries },
     );
 
     await emitText(projector, "fallback.");
-    await emitTool(projector, {
-      tag: "tool_call",
-      toolCallId: "tool-dropped-before-flush",
-      status: "in_progress",
-      title: "Run test",
-      text: "Run test (in_progress)",
-    });
+    await emitTool(projector);
     await emitText(projector, "I don't");
     allowToolSummaries = false;
 
@@ -272,40 +197,32 @@ describe("createAcpReplyProjector", () => {
 
   it("does not flush short live fragments mid-phrase on idle", async () => {
     vi.useFakeTimers();
-    try {
-      const { deliveries, projector } = createStreamHarness("live");
+    const { deliveries, projector } = createStreamHarness("live");
 
-      await emitText(projector, "Yes. Send me the term(s), and I’ll run ");
+    await emitText(projector, "Yes. Send me the term(s), and I’ll run ");
 
-      await vi.advanceTimersByTimeAsync(1200);
-      expect(deliveries).toStrictEqual([]);
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(deliveries).toStrictEqual([]);
 
-      await emitText(projector, "`wd-cli` searches right away. ");
-      await projector.flush();
+    await emitText(projector, "`wd-cli` searches right away. ");
+    await projector.flush();
 
-      expect(deliveries).toEqual([
-        {
-          kind: "block",
-          text: "Yes. Send me the term(s), and I’ll run `wd-cli` searches right away. ",
-        },
-      ]);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(deliveries).toEqual([
+      {
+        kind: "block",
+        text: "Yes. Send me the term(s), and I’ll run `wd-cli` searches right away. ",
+      },
+    ]);
   });
 
   it("supports deliveryMode=final_only by buffering all projected output until done", async () => {
-    const { deliveries, projector } = createFinalOnlyStatusToolHarness();
+    const { deliveries, projector } = createStreamHarness("final_only", {
+      tagVisibility: { available_commands_update: true, tool_call: true },
+    });
 
     await emitText(projector, "What");
     await emitStatus(projector, "available commands updated (7)", "available_commands_update");
-    await emitTool(projector, {
-      tag: "tool_call",
-      toolCallId: "call_1",
-      status: "in_progress",
-      title: "List files",
-      text: "List files (in_progress)",
-    });
+    await emitTool(projector, { title: "List files" });
     await emitText(projector, " now?");
     expect(deliveries).toStrictEqual([]);
 
@@ -321,30 +238,16 @@ describe("createAcpReplyProjector", () => {
 
   it("suppresses usage_update by default and allows deduped usage when tag-visible", async () => {
     const { deliveries: hidden, projector: hiddenProjector } = createProjectorHarness();
-    await emitStatus(hiddenProjector, "usage updated: 10/100", "usage_update", {
-      used: 10,
-      size: 100,
-    });
+    await emitUsage(hiddenProjector, 10);
     expect(hidden).toStrictEqual([]);
 
     const { deliveries: shown, projector: shownProjector } = createStreamHarness("live", {
-      tagVisibility: {
-        usage_update: true,
-      },
+      tagVisibility: { usage_update: true },
     });
 
-    await emitStatus(shownProjector, "usage updated: 10/100", "usage_update", {
-      used: 10,
-      size: 100,
-    });
-    await emitStatus(shownProjector, "usage updated: 10/100", "usage_update", {
-      used: 10,
-      size: 100,
-    });
-    await emitStatus(shownProjector, "usage updated: 11/100", "usage_update", {
-      used: 11,
-      size: 100,
-    });
+    await emitUsage(shownProjector, 10);
+    await emitUsage(shownProjector, 10);
+    await emitUsage(shownProjector, 11);
 
     expect(shown).toEqual([
       { kind: "tool", text: prefixSystemMessage("usage updated: 10/100") },
@@ -352,76 +255,32 @@ describe("createAcpReplyProjector", () => {
     ]);
   });
 
-  it("dedupes repeated tool lifecycle updates when repeatSuppression is enabled", async () => {
-    const { deliveries, projector } = createLiveToolLifecycleHarness();
+  it.each([
+    { title: "List files", text: "Tool Call: List files · status=in_progress" },
+    {
+      title:
+        "Run an intentionally long command title that truncates before lifecycle status is visible",
+      text: expect.stringContaining("Tool Call"),
+    },
+  ])(
+    "dedupes lifecycle updates without dropping the terminal update: $title",
+    async ({ title, text }) => {
+      const { deliveries, projector } = createLiveToolLifecycleHarness();
+      await emitTool(projector, { title });
+      await emitTool(projector, { tag: "tool_call_update", title });
+      await emitTool(projector, { tag: "tool_call_update", status: "completed", title });
+      await emitTool(projector, { tag: "tool_call_update", status: "completed", title });
 
-    await emitTool(projector, {
-      tag: "tool_call",
-      toolCallId: "call_1",
-      status: "in_progress",
-      title: "List files",
-      text: "List files (in_progress)",
-    });
-    await emitTool(projector, {
-      tag: "tool_call_update",
-      toolCallId: "call_1",
-      status: "in_progress",
-      title: "List files",
-      text: "List files (in_progress)",
-    });
-    await emitTool(projector, {
-      tag: "tool_call_update",
-      toolCallId: "call_1",
-      status: "completed",
-      title: "List files",
-      text: "List files (completed)",
-    });
-    await emitTool(projector, {
-      tag: "tool_call_update",
-      toolCallId: "call_1",
-      status: "completed",
-      title: "List files",
-      text: "List files (completed)",
-    });
-
-    expect(deliveries.length).toBe(2);
-    expect(deliveries[0]).toEqual({
-      kind: "tool",
-      text: "Tool Call: List files · status=in_progress",
-    });
-    expectToolCallSummary(deliveries[1]);
-  });
-
-  it("keeps terminal tool updates even when rendered summaries are truncated", async () => {
-    const { deliveries, projector } = createLiveToolLifecycleHarness({});
-
-    const longTitle =
-      "Run an intentionally long command title that truncates before lifecycle status is visible";
-    await emitTool(projector, {
-      tag: "tool_call",
-      toolCallId: "call_truncated_status",
-      status: "in_progress",
-      title: longTitle,
-      text: `${longTitle} (in_progress)`,
-    });
-    await emitTool(projector, {
-      tag: "tool_call_update",
-      toolCallId: "call_truncated_status",
-      status: "completed",
-      title: longTitle,
-      text: `${longTitle} (completed)`,
-    });
-
-    expect(deliveries.length).toBe(2);
-    expectToolCallSummary(deliveries[0]);
-    expectToolCallSummary(deliveries[1]);
-  });
+      expect(deliveries).toEqual([
+        { kind: "tool", text },
+        { kind: "tool", text: expect.stringContaining("Tool Call") },
+      ]);
+    },
+  );
 
   it("suppresses exact duplicate status updates when repeatSuppression is enabled", async () => {
     const { deliveries, projector } = createStreamHarness("live", {
-      tagVisibility: {
-        available_commands_update: true,
-      },
+      tagVisibility: { available_commands_update: true },
     });
 
     await emitStatus(projector, "available commands updated (7)", "available_commands_update");
@@ -436,25 +295,14 @@ describe("createAcpReplyProjector", () => {
 
   it("supports tagVisibility overrides for tool updates", async () => {
     const { deliveries, projector } = createStreamHarness("live", {
-      tagVisibility: {
-        tool_call: true,
-        tool_call_update: false,
-      },
+      tagVisibility: { tool_call: true, tool_call_update: false },
     });
 
-    await emitTool(projector, {
-      tag: "tool_call",
-      toolCallId: "c1",
-      status: "in_progress",
-      title: "Run tests",
-      text: "Run tests (in_progress)",
-    });
+    await emitTool(projector, { title: "Run tests" });
     await emitTool(projector, {
       tag: "tool_call_update",
-      toolCallId: "c1",
       status: "completed",
       title: "Run tests",
-      text: "Run tests (completed)",
     });
 
     expect(deliveries.length).toBe(1);
@@ -464,25 +312,14 @@ describe("createAcpReplyProjector", () => {
   it("preserves hidden boundary when the dynamic tool-summary gate hides a visible tool event", async () => {
     const { deliveries, projector } = createStreamHarness(
       "live",
+      { tagVisibility: { tool_call: true } },
       {
-        tagVisibility: {
-          tool_call: true,
-        },
-      },
-      {
-        shouldSendToolSummaries: false,
         shouldSendToolSummariesNow: () => false,
       },
     );
 
     await emitText(projector, "fallback.");
-    await emitTool(projector, {
-      tag: "tool_call",
-      toolCallId: "call_dynamic_hidden",
-      status: "in_progress",
-      title: "Run test",
-      text: "Run test (in_progress)",
-    });
+    await emitTool(projector);
     await emitText(projector, "I don't");
     await projector.flush();
 
@@ -491,16 +328,14 @@ describe("createAcpReplyProjector", () => {
   });
 
   it("preserves hidden boundary across nonterminal hidden tool updates", async () => {
-    await runHiddenBoundaryCase({
-      streamOverrides: {
-        tagVisibility: {
-          tool_call: false,
-          tool_call_update: false,
-        },
-      },
-      toolCallId: "hidden_boundary_1",
-      includeNonTerminalUpdate: true,
-      expectedText: "fallback. I don't",
+    const { deliveries, projector } = createStreamHarness("live", {
+      tagVisibility: { tool_call: false, tool_call_update: false },
     });
+    await emitText(projector, "fallback.");
+    await emitTool(projector);
+    await emitTool(projector, { tag: "tool_call_update" });
+    await emitText(projector, "I don't");
+    await projector.flush();
+    expect(combinedBlockText(deliveries)).toBe("fallback. I don't");
   });
 });

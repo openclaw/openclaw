@@ -24,12 +24,15 @@ import { deriveSessionPredicateColumns } from "../../../config/sessions/session-
 import { stripRuntimeOnlySessionSkillsFields } from "../../../config/sessions/store-entry-shape.js";
 import { assertSupportedSessionStoreEntry } from "../../../config/sessions/supported-session-store.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import { withEngineStoreAdmission } from "../../../infra/database-engine/admission-scope.js";
 import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../../infra/sql-connection.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   type DatabaseFileIdentity,
 } from "../../../infra/sqlite-worker-identity.js";
+import { agentEngineInput } from "../../../state/openclaw-agent-db-engine.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly.js";
 import {
@@ -64,8 +67,15 @@ export function scanDoctorSessionEntryRecords(
         .selectFrom("session_nodes")
         .select(["session_key", "entry_json"])
         .where(
-          /* kysely-allow-raw: coarse key filtering bounds parsing; JSON.parse owns duplicate-key precedence. */
-          sql<boolean>`CASE WHEN json_valid(entry_json) THEN EXISTS (
+          isPostgresSqlConnection(database.db)
+            ? /* kysely-allow-raw: native JSON filtering bounds parsing; JSON.parse owns duplicate-key precedence. */ sql<boolean>`CASE WHEN entry_json IS JSON OBJECT THEN EXISTS (
+                SELECT 1 FROM json_each(entry_json::json)
+                WHERE key IN (${sql.join(LEGACY_SESSION_ENTRY_STATE_FIELDS)})
+                  OR key IN ('provider', 'lastProvider', 'room')
+                  OR (key = 'pendingFinalDelivery' AND json_typeof(value) = 'boolean')
+                  OR (key = 'status' AND value #>> '{}' IN ('running', 'queued'))
+              ) WHEN entry_json IS JSON THEN FALSE ELSE TRUE END`
+            : /* kysely-allow-raw: native JSON filtering bounds parsing; JSON.parse owns duplicate-key precedence. */ sql<boolean>`CASE WHEN json_valid(entry_json) THEN EXISTS (
             SELECT 1 FROM json_each(entry_json)
             WHERE key IN (${sql.join(LEGACY_SESSION_ENTRY_STATE_FIELDS)})
               OR key IN ('provider', 'lastProvider', 'room')
@@ -94,36 +104,46 @@ export async function repairLegacySessionRunOutcomes(
   assertCurrent();
   const expectedIdentity = readDatabasePathIdentitySync(scope.storePath);
   const sessionKeys: string[] = [];
-  scanDoctorSessionEntryRecords(
-    scope,
-    ({ entry, sessionKey }) => {
-      if (entry.status === "running" || entry.status === "queued") {
-        sessionKeys.push(sessionKey);
-      }
-    },
-    expectedIdentity,
+  withEngineStoreAdmission(() =>
+    scanDoctorSessionEntryRecords(
+      scope,
+      ({ entry, sessionKey }) => {
+        if (entry.status === "running" || entry.status === "queued") {
+          sessionKeys.push(sessionKey);
+        }
+      },
+      expectedIdentity,
+    ),
   );
   assertCurrent();
-  return sessionKeys.length === 0
-    ? 0
+  if (sessionKeys.length === 0) {
+    return 0;
+  }
+  const assertRepairCurrent = () => {
+    assertCurrent();
+    assertExistingDatabaseIdentity(
+      scope.storePath,
+      expectedIdentity.key,
+      expectedIdentity.birthtime,
+    );
+  };
+  const repair = () =>
+    withEngineStoreAdmission(() => {
+      assertRepairCurrent();
+      return rewriteDoctorSessionEntries({
+        scope,
+        sessionKeys,
+        rawTransform: migrateLegacySessionRunOutcome,
+        expectedIdentity,
+        assertCurrent,
+      });
+    });
+  return agentEngineInput()
+    ? repair()
     : withOpenClawAgentDatabaseAsync(
         toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey: "" })),
-        () =>
-          rewriteDoctorSessionEntries({
-            scope,
-            sessionKeys,
-            rawTransform: migrateLegacySessionRunOutcome,
-            expectedIdentity,
-            assertCurrent,
-          }),
-        () => {
-          assertCurrent();
-          assertExistingDatabaseIdentity(
-            scope.storePath,
-            expectedIdentity.key,
-            expectedIdentity.birthtime,
-          );
-        },
+        repair,
+        assertRepairCurrent,
       );
 }
 
@@ -212,11 +232,18 @@ export function rewriteDoctorSessionEntries(
                 continue;
               }
               const jsonPath = `$.${JSON.stringify(key)}`;
-              // SQLite preserves untouched numeric tokens and opaque values outside this repair.
-              patched =
-                value === undefined
-                  ? /* kysely-allow-raw: migration removes only changed top-level JSON fields. */ sql<string>`json_remove(${patched}, ${jsonPath})`
-                  : /* kysely-allow-raw: migration changes only owned top-level JSON fields. */ sql<string>`json_set(${patched}, ${jsonPath}, json(${value}))`;
+              // Keep untouched numeric values in SQL instead of rounding them through JSON.parse.
+              if (isPostgresSqlConnection(database.db)) {
+                patched =
+                  value === undefined
+                    ? /* kysely-allow-raw: migration removes one bound top-level member. */ sql<string>`(${patched}::jsonb - ${key}::text)::text`
+                    : /* kysely-allow-raw: a bound text[] names one exact member, including dots and quotes. */ sql<string>`jsonb_set(${patched}::jsonb, ARRAY[${key}]::text[], ${value}::jsonb)::text`;
+              } else {
+                patched =
+                  value === undefined
+                    ? /* kysely-allow-raw: migration removes only changed top-level JSON fields. */ sql<string>`json_remove(${patched}, ${jsonPath})`
+                    : /* kysely-allow-raw: migration changes only owned top-level JSON fields. */ sql<string>`json_set(${patched}, ${jsonPath}, json(${value}))`;
+              }
             }
             entryJson = executeSqliteQuerySync(
               database.db,

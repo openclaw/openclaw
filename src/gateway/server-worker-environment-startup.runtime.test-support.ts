@@ -58,7 +58,7 @@ export function createWorkerStartupRuntime(
   });
 }
 
-export function workerStartupReceipt() {
+function workerStartupReceipt() {
   return {
     bundleHash: "a".repeat(64),
     openclawVersion: "2026.8.14",
