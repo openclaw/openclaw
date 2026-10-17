@@ -84,7 +84,12 @@ suite.define(() => {
           const gateway = await installMockGateway(page, { sessionKey: old.key, sessions: [old] });
           await page.goto(new URL(controlUiSessionPath(old.key), suite.server.baseUrl).href);
           const oldRow = page.locator('[data-session-key="' + old.key + '"]');
-          await oldRow.locator('.sidebar-recent-session__link[aria-current="page"]').waitFor();
+          if (mode === "chip") {
+            await oldRow.locator('.sidebar-recent-session__link[aria-current="page"]').waitFor();
+          } else {
+            await page.locator('.sidebar-agent-roster__group[data-agent-group="main"]').waitFor();
+            expect(await oldRow.count()).toBe(0);
+          }
           await navigateInApp(page, "new-session", "?agent=main");
           await page
             .locator(".new-session-page__message")
@@ -121,9 +126,13 @@ suite.define(() => {
             row
               .locator(".sidebar-recent-session__text")
               .evaluate((element) => Math.round(element.getBoundingClientRect().left));
-          expect(await titleInset(provisional)).toBe(await titleInset(oldRow));
+          if (mode === "chip") {
+            expect(await titleInset(provisional)).toBe(await titleInset(oldRow));
+          }
           expect(await provisional.locator('[aria-current="page"]').count()).toBe(1);
-          expect(await oldRow.locator('[aria-current="page"]').count()).toBe(0);
+          if (mode === "chip") {
+            expect(await oldRow.locator('[aria-current="page"]').count()).toBe(0);
+          }
           expect(await provisional.locator("button, a[href]").count()).toBe(0);
           expect(await provisional.locator(".session-title-placeholder").count()).toBe(1);
           const blob = provisional.locator(".session-title-placeholder > span");
@@ -154,7 +163,13 @@ suite.define(() => {
           );
           await navigateInApp(page, "chat");
           await waitForCommittedChatRoute(page);
-          await oldRow.locator('[aria-current="page"]').waitFor();
+          if (mode === "chip") {
+            await oldRow.locator('[aria-current="page"]').waitFor();
+          } else {
+            expect(
+              await page.locator('.sidebar-agent-roster__group[data-agent-group="main"]').count(),
+            ).toBe(1);
+          }
         },
       );
     },

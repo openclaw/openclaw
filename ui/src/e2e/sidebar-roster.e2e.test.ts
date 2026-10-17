@@ -125,7 +125,7 @@ suite.define(() => {
         await captureSidebarUiProof(suite, page, "sidebar-agent-only-roster.png");
 
         const forge = sidebar.locator('[data-agent-group="forge"]');
-        await forge.locator(".sidebar-agent-roster__row").click();
+        await forge.locator(".sidebar-agent-roster__avatar").click();
         await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/forge" });
         const menu = forge.locator(".sidebar-agent-roster__menu");
         await menu.getByRole("button", { name: "Options for Forge" }).click();

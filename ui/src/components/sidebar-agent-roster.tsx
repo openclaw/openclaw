@@ -322,13 +322,6 @@ export function SidebarAgentRoster(props: RosterProps) {
                       { "sidebar-agent-roster__header--current": active() },
                     ]}
                   >
-                    <span class="sidebar-agent-roster__avatar" aria-hidden="true">
-                      <SessionGlyph
-                        circular
-                        content={<AgentIdentityAvatar agent={card()} />}
-                        running={card().activeNow}
-                      />
-                    </span>
                     <a
                       class="sidebar-agent-roster__row"
                       data-agent-id={card().id}
@@ -341,6 +334,13 @@ export function SidebarAgentRoster(props: RosterProps) {
                         }
                       }}
                     >
+                      <span class="sidebar-agent-roster__avatar" aria-hidden="true">
+                        <SessionGlyph
+                          circular
+                          content={<AgentIdentityAvatar agent={card()} />}
+                          running={card().activeNow}
+                        />
+                      </span>
                       <span class="sidebar-agent-roster__copy">
                         <span class="sidebar-agent-roster__name">{card().name}</span>
                         <Show when={card().assistantPreview}>

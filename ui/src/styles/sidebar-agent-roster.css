@@ -23,7 +23,7 @@ openclaw-sidebar-agent-roster {
   background: var(--bg-hover);
 }
 
-.sidebar-agent-roster__header > .sidebar-agent-roster__avatar {
+.sidebar-agent-roster__row > .sidebar-agent-roster__avatar {
   grid-column: 1;
   justify-self: end;
 }
@@ -112,7 +112,11 @@ openclaw-sidebar-agent-roster {
 }
 
 .sidebar-agent-roster__row {
-  grid-area: 1 / 2;
+  grid-area: 1 / 1 / 2 / -1;
+  display: grid;
+  grid-template-columns: var(--roster-avatar-size) minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
   flex: 1;
   align-self: stretch;
   padding: 0;

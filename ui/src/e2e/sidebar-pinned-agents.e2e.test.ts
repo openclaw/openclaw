@@ -148,7 +148,7 @@ suite.define(() => {
             await captureSidebarUiProof(suite, page, `row-${width}-${state}.png`);
           }
           await menu.press("ArrowDown");
-          const viewSessions = sidebar.getByRole("menuitem", { name: "View sessions (2)" });
+          const viewSessions = sidebar.getByRole("menuitem", { name: "Sessions", exact: true });
           const settings = sidebar.getByRole("menuitem", { name: "Settings", exact: true });
           const deleteAgent = sidebar.getByRole("menuitem", { name: "Delete", exact: true });
           expect(await sidebar.getByRole("menuitem", { name: "Create new session" }).count()).toBe(
