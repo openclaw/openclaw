@@ -37,13 +37,63 @@ function prepareThread(
   client: ReturnType<typeof createClientHarness>["client"],
   effectiveConfig?: CodexConfigReadResponse,
 ) {
-  return prepareCodexInferenceThreadConfig({
+  return prepareCodexInferenceThreadConfig(threadParams(client, { effectiveConfig }));
+}
+function threadParams(
+  client: ReturnType<typeof createClientHarness>["client"],
+  overrides: Partial<Parameters<typeof prepareCodexInferenceThreadConfig>[0]> = {},
+) {
+  return {
     client,
     binding: undefined,
     clientId: "fixture-native-client",
     cwd: "/workspace",
-    effectiveConfig,
     assertCurrent: () => {},
+    ...overrides,
+  };
+}
+function modelBinding(
+  client: ReturnType<typeof createClientHarness>["client"],
+  overrides: Pick<Parameters<typeof createCodexInferenceModelBinding>[0], "captureModelSource"> &
+    Partial<Parameters<typeof createCodexInferenceModelBinding>[0]>,
+) {
+  return createCodexInferenceModelBinding({
+    client,
+    provider: "fixture",
+    assertCurrent: () => {},
+    memoryConfigured: () => false,
+    resolveModelThreadId: () => undefined,
+    ...overrides,
+  });
+}
+const modelRequest = (
+  signal: AbortSignal,
+  overrides: Partial<Parameters<ReturnType<typeof createCodexInferenceModelBinding>>[0]> = {},
+): Parameters<ReturnType<typeof createCodexInferenceModelBinding>>[0] => ({
+  path: "/responses",
+  body: { model: "a" },
+  metadata: { requestKind: "turn", threadId: "root", turnId: "turn" },
+  headers: {},
+  transport: "http" as const,
+  signal,
+  ...overrides,
+});
+type RouteArgs = Parameters<typeof assertCodexInferenceRouteConfig>;
+function routeCheck(client: RouteArgs[0], route: RouteArgs[1]) {
+  return (config: RouteArgs[2], provider?: RouteArgs[3], providers?: RouteArgs[4]) => () =>
+    assertCodexInferenceRouteConfig(client, route, config, provider, providers);
+}
+function accountHarness(type: string | null = "apiKey", snapshot?: CodexConfigReadResponse) {
+  return harness({
+    onWrite(line, send) {
+      const request = JSON.parse(line);
+      if (request.method === "config/read" && snapshot) {
+        send({ id: request.id, result: snapshot });
+      } else {
+        expect(request.method).toBe("account/read");
+        send({ id: request.id, result: { account: type === null ? null : { type } } });
+      }
+    },
   });
 }
 
@@ -145,15 +195,13 @@ describe("managed inference route ownership", () => {
       });
       ownCodexInferenceClient(h.client);
       const protect = vi.spyOn(h.client, "protectPrivateTransportSecret");
-      const prepared = await prepareCodexInferenceThreadConfig({
-        client: h.client,
-        binding: undefined,
-        clientId: "fixture-native-client",
-        cwd: "/workspace",
-        ...(preparedConfig ? { effectiveConfig: { config: {}, origins: {} } } : {}),
-        assertCurrent: authority.assertCurrent,
-        authority,
-      });
+      const prepared = await prepareCodexInferenceThreadConfig(
+        threadParams(h.client, {
+          ...(preparedConfig ? { effectiveConfig: { config: {}, origins: {} } } : {}),
+          assertCurrent: authority.assertCurrent,
+          authority,
+        }),
+      );
       expect(prepared?.route).toBeDefined();
       expect(protect).toHaveBeenCalledOnce();
       expect(retained).toBe(false);
@@ -189,15 +237,11 @@ describe("managed inference route ownership", () => {
       });
       ownCodexInferenceClient(h.client);
       const protect = vi.spyOn(h.client, "protectPrivateTransportSecret");
-      const input = {
-        client: h.client,
-        binding: undefined,
-        clientId: "fixture-native-client",
-        cwd: "/workspace",
+      const input = threadParams(h.client, {
         effectiveConfig: { config: { features: { memories: true } }, origins: {} },
         assertCurrent: authority.assertCurrent,
         authority,
-      };
+      });
       await expect(prepareCodexInferenceThreadConfig(input)).rejects.toBe(failure);
       expect(protect).not.toHaveBeenCalled();
       expect(h.writes).toHaveLength(1);
@@ -220,12 +264,8 @@ describe("managed inference route ownership", () => {
     async (configured) => {
       const h = harness();
       const captureModelSource = vi.fn(async () => undefined);
-      const bind = createCodexInferenceModelBinding({
-        client: h.client,
-        provider: "fixture",
-        assertCurrent: () => {},
+      const bind = modelBinding(h.client, {
         memoryConfigured: () => configured,
-        resolveModelThreadId: () => undefined,
         captureModelSource,
       });
       // Stock detached extraction omits nested thread identity and has no phase2 subagent tag.
@@ -249,14 +289,12 @@ describe("managed inference route ownership", () => {
       };
       const metadata = readCodexInferenceMetadata(body);
       expect(metadata.subagent).toBeUndefined();
-      const pending = bind({
-        path: "/responses",
-        body,
-        metadata,
-        headers: {},
-        transport: "http",
-        signal: new AbortController().signal,
-      });
+      const pending = bind(
+        modelRequest(new AbortController().signal, {
+          body,
+          metadata,
+        }),
+      );
       if (configured) {
         const execution = await pending;
         execution.assertCurrent();
@@ -269,13 +307,7 @@ describe("managed inference route ownership", () => {
   );
 
   it("keeps the selected provider when excess optional routes fill the client budget", async () => {
-    const h = harness({
-      onWrite(line, send) {
-        const request = JSON.parse(line);
-        expect(request.method).toBe("account/read");
-        send({ id: request.id, result: { account: null } });
-      },
-    });
+    const h = accountHarness(null);
     ownCodexInferenceClient(h.client);
     const effectiveConfig: CodexConfigReadResponse = {
       config: {
@@ -289,15 +321,10 @@ describe("managed inference route ownership", () => {
       },
       origins: {},
     };
-    const input = {
-      client: h.client,
-      clientId: "fixture-native-client",
-      binding: undefined,
-      cwd: "/workspace",
+    const input = threadParams(h.client, {
       effectiveConfig,
       operatorBacked: true,
-      assertCurrent: () => {},
-    };
+    });
     const prepared = await prepareCodexInferenceThreadConfig(input);
     if (!prepared) {
       throw new Error("expected the selected provider to remain routable");
@@ -337,25 +364,18 @@ describe("managed inference route ownership", () => {
         nativeReviewRequired: false,
         recordNativeReviewRequirement: () => {},
       }));
-      const bind = createCodexInferenceModelBinding({
-        client: h.client,
-        provider: "fixture",
-        assertCurrent: () => {},
-        memoryConfigured: () => false,
+      const bind = modelBinding(h.client, {
         resolveModelThreadId,
         captureModelSource,
       });
       const image = path.startsWith("/images/");
-      const request = {
+      const request = modelRequest(controller.signal, {
         path,
         body: { model: "allowed" },
         metadata: image
           ? { nativeImageTurnId: "native-turn" }
           : { requestKind: "turn", threadId: "root", turnId: "native-turn" },
-        headers: {},
-        transport: "http" as const,
-        signal: controller.signal,
-      };
+      });
       const execution = await bind(request);
       execution.assertCurrent();
       expect(captureModelSource).toHaveBeenCalledWith(
@@ -404,12 +424,7 @@ describe("managed inference route ownership", () => {
           throw privateFailure;
         }
       };
-      const bind = createCodexInferenceModelBinding({
-        client: h.client,
-        provider: "fixture",
-        assertCurrent: () => {},
-        memoryConfigured: () => false,
-        resolveModelThreadId: () => undefined,
+      const bind = modelBinding(h.client, {
         captureModelSource: () => {
           if (stage === "capture") {
             throw privateFailure;
@@ -434,14 +449,7 @@ describe("managed inference route ownership", () => {
           });
         },
       });
-      const pending = bind({
-        path: "/responses",
-        body: { model: "a" },
-        metadata: { requestKind: "turn", threadId: "root", turnId: "turn" },
-        headers: {},
-        transport: "http",
-        signal: controller.signal,
-      });
+      const pending = bind(modelRequest(controller.signal));
       if (stage === "before forwarding") {
         const execution = await pending;
         stale = true;
@@ -483,27 +491,14 @@ describe("managed inference route ownership", () => {
         },
       };
       const original = structuredClone({ snapshot, config });
-      const h = harness({
-        onWrite(line, send) {
-          const request = JSON.parse(line);
-          if (request.method === "config/read") {
-            send({ id: request.id, result: snapshot });
-          } else {
-            expect(request.method).toBe("account/read");
-            send({ id: request.id, result: { account: { type: "apiKey" } } });
-          }
-        },
-      });
+      const h = accountHarness("apiKey", snapshot);
       ownCodexInferenceClient(h.client);
-      const prepared = await prepareCodexInferenceThreadConfig({
-        client: h.client,
-        clientId: "fixture-native-client",
-        binding: undefined,
-        cwd: "/workspace",
-        config,
-        operatorBacked,
-        assertCurrent: () => {},
-      });
+      const prepared = await prepareCodexInferenceThreadConfig(
+        threadParams(h.client, {
+          config,
+          operatorBacked,
+        }),
+      );
       if (!prepared) {
         throw new Error("expected a qualified selected provider");
       }
@@ -520,24 +515,15 @@ describe("managed inference route ownership", () => {
         ...config["model_providers.flat"],
         base_url: prepared.providers?.get("flat")?.baseUrl ?? "https://flat.example/v1",
       });
-      expect(() =>
-        assertCodexInferenceRouteConfig(
-          h.client,
-          prepared.route,
-          prepared.config,
-          "current",
-          prepared.providers,
-        ),
-      ).not.toThrow();
+      const check = routeCheck(h.client, prepared.route);
+      expect(check(prepared.config, "current", prepared.providers)).not.toThrow();
       bindCodexInferenceThread(h.client, "parent", prepared.route, prepared.providers);
       const captured = getCodexInferenceThreadQualification(h.client, "parent");
       expect(captured?.hasProvider("restored")).toBe(operatorBacked);
       expect(captured?.hasProvider("signed")).toBe(false);
       if (operatorBacked) {
-        expect(() =>
-          assertCodexInferenceRouteConfig(
-            h.client,
-            prepared.route,
+        expect(
+          check(
             { ...prepared.config, "model_providers.restored.base_url": "https://bypass.example" },
             "current",
             prepared.providers,
@@ -587,30 +573,15 @@ describe("managed inference route ownership", () => {
     expect(route.upstream).toBe("https://chatgpt.com/backend-api/codex");
     expect(new URL(route.baseUrl).pathname.endsWith("/backend-api/codex")).toBe(true);
     const config = { openai_base_url: route.baseUrl };
-    expect(() => assertCodexInferenceRouteConfig(h.client, route, config)).not.toThrow();
-    expect(() =>
-      assertCodexInferenceRouteConfig(h.client, route, config, "different-provider"),
-    ).toThrow("overridden");
-    expect(() =>
-      assertCodexInferenceRouteConfig(h.client, route, {
-        ...config,
-        model_provider: "different-provider",
-      }),
-    ).toThrow("overridden");
-    expect(() =>
-      assertCodexInferenceRouteConfig(h.client, route, {
-        ...config,
-        "features.respect_system_proxy": true,
-      }),
-    ).toThrow("overridden");
+    const check = routeCheck(h.client, route);
+    expect(check(config)).not.toThrow();
+    expect(check(config, "different-provider")).toThrow("overridden");
+    expect(check({ ...config, model_provider: "different-provider" })).toThrow("overridden");
+    expect(check({ ...config, "features.respect_system_proxy": true })).toThrow("overridden");
     expect(() => assertCodexInferenceRouteConfig(h.client, { ...route }, config)).toThrow(
       "overridden",
     );
-    expect(() =>
-      assertCodexInferenceRouteConfig(h.client, route, {
-        openai_base_url: "http://127.0.0.1:1/v1",
-      }),
-    ).toThrow("overridden");
+    expect(check({ openai_base_url: "http://127.0.0.1:1/v1" })).toThrow("overridden");
     bindCodexInferenceThread(h.client, "root", route);
     expect(getCodexInferenceThread(h.client, "root")).toBe(route);
     bindCodexInferenceThread(h.client, "peer", route);
@@ -624,7 +595,7 @@ describe("managed inference route ownership", () => {
     });
     expect(await prepare(h, type)).toBe(route);
     h.client.close();
-    expect(() => assertCodexInferenceRouteConfig(h.client, route, config)).toThrow();
+    expect(check(config)).toThrow();
   });
 
   it("preserves an explicit native upstream and revokes routes on account-mode changes", async () => {
@@ -697,19 +668,16 @@ describe("managed inference route ownership", () => {
         query_params: { "api-version": "synthetic", region: "synthetic" },
         supports_websockets: true,
       };
-      const prepared = await prepareCodexInferenceThreadConfig({
-        client: h.client,
-        clientId: "fixture-native-client",
-        binding: undefined,
-        cwd: "/workspace",
-        modelProvider: "configured",
-        config:
-          shape === "nested"
-            ? { model_providers: { configured: definition } }
-            : { "model_providers.configured": definition },
-        effectiveConfig: { config: { model_provider: "openai" }, origins: {} },
-        assertCurrent: () => {},
-      });
+      const prepared = await prepareCodexInferenceThreadConfig(
+        threadParams(h.client, {
+          modelProvider: "configured",
+          config:
+            shape === "nested"
+              ? { model_providers: { configured: definition } }
+              : { "model_providers.configured": definition },
+          effectiveConfig: { config: { model_provider: "openai" }, origins: {} },
+        }),
+      );
       if (!prepared) {
         throw new Error("expected an owned custom provider route");
       }
@@ -727,12 +695,9 @@ describe("managed inference route ownership", () => {
               "model_providers.configured": { ...definition, base_url: prepared.route.baseUrl },
             },
       );
-      expect(() =>
-        assertCodexInferenceRouteConfig(h.client, prepared.route, prepared.config, "configured"),
-      ).not.toThrow();
-      expect(() =>
-        assertCodexInferenceRouteConfig(h.client, prepared.route, prepared.config, "openai"),
-      ).toThrow("overridden");
+      const check = routeCheck(h.client, prepared.route);
+      expect(check(prepared.config, "configured")).not.toThrow();
+      expect(check(prepared.config, "openai")).toThrow("overridden");
     },
   );
 
@@ -777,13 +742,7 @@ describe("managed inference route ownership", () => {
       for (const [key, value] of Object.entries(env)) {
         vi.stubEnv(key, value);
       }
-      const h = harness({
-        onWrite(line, send) {
-          const request = JSON.parse(line);
-          expect(request.method).toBe("account/read");
-          send({ id: request.id, result: { account: { type: "apiKey" } } });
-        },
-      });
+      const h = accountHarness();
       ownCodexInferenceClient(h.client);
       const prepared = await prepareThread(h.client, { config: {}, origins: {} });
       expect(prepared !== undefined).toBe(supported);

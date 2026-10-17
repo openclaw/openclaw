@@ -31,14 +31,15 @@ describe.skipIf(process.platform === "win32")("Codex model discovery process lif
   it("authenticates catalog discovery with environment keys and explicit profiles", async () => {
     const root = dirs.make();
     const executable = path.join(root, "catalog.mjs");
+    const nativeHome = path.join(root, "native-home");
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-    vi.stubEnv("CODEX_HOME", path.join(root, "native-home"));
+    vi.stubEnv("CODEX_HOME", nativeHome);
     vi.stubEnv("CODEX_ACCESS_TOKEN", "");
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "synthetic-environment-key");
-    await fs.mkdir(path.join(root, "native-home"), { recursive: true });
+    await fs.mkdir(nativeHome, { recursive: true });
     await fs.writeFile(
-      path.join(root, "native-home", "auth.json"),
+      path.join(nativeHome, "auth.json"),
       JSON.stringify({ OPENAI_API_KEY: "synthetic-native-home-key" }),
       { mode: 0o600 },
     );
@@ -155,33 +156,26 @@ process.stdin.on("end", () => process.exit(0));
             ...(mode === "native-home" ? { homeScope: "user" } : {}),
           },
         };
-        const catalogHome =
-          mode === "native-home"
-            ? path.join(root, "native-home")
-            : path.join(agentDir, "codex-home");
+        const catalogHome = mode === "native-home" ? nativeHome : path.join(agentDir, "codex-home");
         await fs.mkdir(catalogHome, { recursive: true });
         const readAccount = async () =>
           JSON.parse(await fs.readFile(path.join(catalogHome, "catalog-account.json"), "utf8"));
         const catalog = createCodexAppServerModelCatalog("codex");
+        const params = { config, agentId: "main", agentDir, workspaceDir: root };
+        const check = (value: unknown, label: string = mode) => expect.soft(value, label);
         try {
-          const result = await catalog.load(
-            { config, agentId: "main", agentDir, workspaceDir: root },
-            pluginConfig,
-          );
+          const result = await catalog.load(params, pluginConfig);
           const readiness = catalog.read(
             {
-              config,
-              agentId: "main",
-              agentDir,
-              workspaceDir: root,
+              ...params,
               provider: "openai",
               modelId: "synthetic-model",
             },
             pluginConfig,
           );
           if (mode === "account-change") {
-            expect.soft(result, mode).toEqual({ entries: [] });
-            expect.soft(readiness, mode).toBeUndefined();
+            check(result).toEqual({ entries: [] });
+            check(readiness).toBeUndefined();
             continue;
           }
           const accountType =
@@ -192,16 +186,12 @@ process.stdin.on("end", () => process.exit(0));
                   existing
                 ? "chatgpt"
                 : "apiKey";
-          expect.soft(readiness?.accountType, mode).toBe(accountType);
-          expect
-            .soft(result.outcomes, mode)
-            .toEqual([
-              { provider: "openai", status: mode === "absent-key" ? "unavailable" : "ready" },
-            ]);
-          expect
-            .soft(result.entries, mode)
-            .toContainEqual(expect.objectContaining({ id: "synthetic-model" }));
-          expect.soft(await readAccount(), mode).toEqual({
+          check(readiness?.accountType).toBe(accountType);
+          check(result.outcomes).toEqual([
+            { provider: "openai", status: mode === "absent-key" ? "unavailable" : "ready" },
+          ]);
+          check(result.entries).toContainEqual(expect.objectContaining({ id: "synthetic-model" }));
+          check(await readAccount()).toEqual({
             account: accountType ? { type: accountType } : null,
             requiresOpenaiAuth: true,
             logins: mode === "absent-key" || existing ? 0 : 1,
@@ -209,13 +199,12 @@ process.stdin.on("end", () => process.exit(0));
           });
           if (mode === "environment") {
             vi.stubEnv("OPENAI_API_KEY", "synthetic-rotated-key");
-            await catalog.load(
-              { config, agentId: "main", agentDir, workspaceDir: root },
-              pluginConfig,
-            );
-            expect
-              .soft(await readAccount(), "rotated environment key")
-              .toMatchObject({ account: { type: "apiKey" }, logins: 1, keyVersion: "rotated" });
+            await catalog.load(params, pluginConfig);
+            check(await readAccount(), "rotated environment key").toMatchObject({
+              account: { type: "apiKey" },
+              logins: 1,
+              keyVersion: "rotated",
+            });
           }
         } finally {
           catalog.dispose();
