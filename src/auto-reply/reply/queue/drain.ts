@@ -38,6 +38,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
+import { dropAbortedFollowups } from "./aborted-followups.js";
 import { resolveCollectedRun } from "./collected-run.js";
 import {
   assertSingleAdmissionOwner,
@@ -71,6 +72,9 @@ import {
   type FollowupRun,
   type InternalFollowupRun,
 } from "./types.js";
+
+// Enqueue and drain-boundary module mocks reach the cancellation sweep here.
+export { dropAbortedFollowups };
 
 // Persists the most recent runFollowup callback per queue key so that
 // enqueueFollowupRun can restart a drain that finished and deleted the queue.
@@ -145,7 +149,7 @@ export function prepareStaleFollowupDrainRetirement(key: string): (() => void) |
     consumeQueueSummaryDelivery(
       queue,
       { droppedCount: activeSummarySources.length, sources: activeSummarySources },
-      false,
+      "retained",
     );
     const replacement = {
       ...queue,
@@ -562,7 +566,7 @@ async function runQueueSummaryDelivery(
 ): Promise<boolean> {
   const aggregate = createAggregateDelivery(
     delivery.sources,
-    () => consumeQueueSummaryDelivery(queue, delivery, false),
+    () => consumeQueueSummaryDelivery(queue, delivery, "retained"),
     () => completeFollowupRuns(delivery.sources),
   );
   for (const source of delivery.sources) {
@@ -588,10 +592,7 @@ async function runQueueSummaryDelivery(
     if (!aggregate.admitted) {
       const canceledSources = delivery.sources.filter(isFollowupRunAborted);
       if (canceledSources.length > 0) {
-        consumeQueueSummaryDelivery(queue, {
-          ...delivery,
-          sources: canceledSources,
-        });
+        consumeQueueSummaryDelivery(queue, { ...delivery, sources: canceledSources }, "cancelled");
         return false;
       }
       consumeQueueSummaryDelivery(queue, delivery);
@@ -611,40 +612,6 @@ async function runQueueSummaryDelivery(
     }
     trimSummaryElisionsToCap(queue);
   }
-}
-
-export async function dropAbortedFollowups(
-  queue: FollowupQueueSummaryState & Pick<FollowupQueueState, "items">,
-  runFollowup: (run: FollowupRun) => Promise<void>,
-): Promise<number> {
-  // Waiting reservations are cancellable; started injections retain custody until their outcome.
-  const canDrop = (run: FollowupRun) =>
-    run.steerPending?.phase !== "injecting" &&
-    isFollowupRunAborted(run) &&
-    !queue.inFlight.has(run) &&
-    !queue.activeSummarySources.has(run);
-  const pending = queue.items.filter(canDrop);
-  const summaries = [
-    ...queue.summarySources,
-    ...queue.summaryElisions.flatMap((entry) => entry.sources),
-  ].filter(canDrop);
-  // Detach identities and release both dedupe owners before ingress can retry.
-  removeQueuedItemsByRef(queue.items, pending);
-  consumeQueueSummaryDelivery(queue, { sources: summaries, droppedCount: summaries.length }, false);
-  completeFollowupRuns([...pending, ...summaries], (error) => {
-    defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
-  });
-  await Promise.all(
-    [...pending, ...summaries].map(async (item) => {
-      try {
-        await runFollowup(item);
-      } catch (error) {
-        // Aborted work cannot run again; report failed presentation cleanup without restoring it.
-        defaultRuntime.error?.(`followup queue cancellation cleanup failed: ${String(error)}`);
-      }
-    }),
-  );
-  return pending.length + summaries.length;
 }
 
 function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string } {
@@ -1026,7 +993,7 @@ export function scheduleFollowupDrain(
             const canceledSources = activeGroupItems.filter(isFollowupRunAborted);
             if (canceledSources.length > 0) {
               removeQueuedItemsByRef(queue.items, canceledSources);
-              completeFollowupRuns(canceledSources);
+              completeFollowupRuns(canceledSources, undefined, "cancelled");
               const survivors = activeGroupItems.filter((item) => !canceledSources.includes(item));
               if (!reserveOptions.shouldRestoreOnError()) {
                 completeFollowupRuns(survivors);

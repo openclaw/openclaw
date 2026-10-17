@@ -1,3 +1,4 @@
+import { defaultRuntime } from "../../../runtime.js";
 import type { TurnAdoptionLifecycle } from "../../get-reply-options.types.js";
 import { FollowupRunDeferredError, type FollowupRun } from "./types.js";
 
@@ -131,6 +132,30 @@ export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
   return true;
 }
 
+/**
+ * Dedupe owners must free their entry before durable ingress retries the turn.
+ * Cancellation and abandonment are both pre-retry releases, so hook whichever
+ * terminal callbacks this lifecycle actually exposes.
+ */
+export function releaseBeforeTurnAdoptionRetry(
+  lifecycle: TurnAdoptionLifecycle,
+  release: () => void,
+): void {
+  const onAbandoned = lifecycle.onAbandoned;
+  // Hand the callback's result back so core can contain an async rejection.
+  lifecycle.onAbandoned = () => {
+    release();
+    return onAbandoned?.();
+  };
+  const onCancelled = lifecycle.onCancelled;
+  if (onCancelled) {
+    lifecycle.onCancelled = () => {
+      release();
+      return onCancelled();
+    };
+  }
+}
+
 export function retireFollowupRunCancellation(run: FollowupLifecycleRun): void {
   const lifecycle = run.turnAdoptionLifecycle;
   if (!lifecycle) {
@@ -179,7 +204,7 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
 
 export function completeFollowupRunLifecycle(
   run: FollowupLifecycleRun,
-  disposition?: "consumed",
+  disposition?: "consumed" | "cancelled",
 ): void {
   try {
     run.steerPending?.settle(false);
@@ -191,12 +216,30 @@ export function completeFollowupRunLifecycle(
       if (!state.completed) {
         state.completed = true;
         stopFollowupRunPreAdoptionHeartbeat(lifecycle);
+        // Terminal callbacks start synchronously and onSettled runs right after,
+        // even after a synchronous throw. Async adapter work is not awaited, so its
+        // rejection is contained here instead of escaping as an unhandled rejection.
+        const containSettlement = (settlement: unknown, label: string) => {
+          void Promise.resolve(settlement).catch((error: unknown) => {
+            defaultRuntime.error?.(`followup queue ${label} failed: ${String(error)}`);
+          });
+        };
         const finish = () => {
-          // Async onAbandoned work must contain its own rejections; core guarantees a
-          // non-rejecting promise. onSettled must still run after a synchronous throw.
           try {
             if (disposition !== "consumed" && !state.admitted) {
-              lifecycle.onAbandoned?.();
+              // Cancellation ended ownership before the reply lane, so it settles
+              // through the cancel callback and leaves the retry budget untouched.
+              // An explicit "cancelled" disposition and an already-aborted signal
+              // are the same end of ownership, so either takes the cancel path.
+              if (
+                (disposition === "cancelled" || lifecycle.abortSignal?.aborted) &&
+                lifecycle.onCancelled
+              ) {
+                containSettlement(lifecycle.onCancelled(), "cancellation");
+              } else {
+                // Typed void, but channel adapters may still return a promise.
+                containSettlement(lifecycle.onAbandoned?.(), "abandonment");
+              }
             }
           } finally {
             lifecycle.onSettled?.();
@@ -220,10 +263,11 @@ export function completeFollowupRunLifecycle(
 export function completeFollowupRuns(
   items: Iterable<FollowupLifecycleRun>,
   onError?: (error: unknown) => void,
+  disposition?: "consumed" | "cancelled",
 ): void {
   for (const item of items) {
     try {
-      completeFollowupRunLifecycle(item);
+      completeFollowupRunLifecycle(item, disposition);
     } catch (error) {
       if (!onError) {
         throw error;

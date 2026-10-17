@@ -269,15 +269,15 @@ export function fanInChannelIngressLifecycles(
       }
     }
   };
-  const supportsCancellation = lifecycles.every((lifecycle) => lifecycle.onCancelled !== undefined);
   const deferredHeartbeatIntervals = lifecycles
     .map((lifecycle) => lifecycle.deferredHeartbeatIntervalMs)
     .filter(
       (interval): interval is number =>
         interval !== undefined && Number.isFinite(interval) && interval > 0,
     );
-  // Omit aggregate cancellation unless every durable source supports it. Callers
-  // can then use settle/abandon without an acknowledged-but-unsettled claim.
+  // The aggregate always offers cancellation so a reply-lane consumer can settle
+  // every source budget-free. A source that predates onCancelled only knows
+  // abandonment, which the drain now bounds: one attempt, never a stranded claim.
   const cancelAll = () =>
     settleOnce(() =>
       fanOut((lifecycle) =>
@@ -317,14 +317,10 @@ export function fanInChannelIngressLifecycles(
         handedOff = true;
         await failAll(error);
       },
-      ...(supportsCancellation
-        ? {
-            onCancelled: async () => {
-              handedOff = true;
-              await cancelAll();
-            },
-          }
-        : {}),
+      onCancelled: async () => {
+        handedOff = true;
+        await cancelAll();
+      },
       onAbandoned: async () => {
         handedOff = true;
         await abandonAll();

@@ -130,7 +130,7 @@ export function prepareSessionFollowupCleanup(params: {
       consumeQueueSummaryDelivery(
         queue,
         { sources: summaries, droppedCount: summaries.length },
-        false,
+        "retained",
       );
       const detached = new Set([...pending, ...summaries]);
       removed += detached.size;
@@ -149,7 +149,8 @@ export function prepareSessionFollowupCleanup(params: {
           }
         }
       }
-      completeFollowupRuns(detached, onSettlementError);
+      // Stop relinquishes queued turns on purpose: cancellation, not abandonment.
+      completeFollowupRuns(detached, onSettlementError, "cancelled");
       if (
         FOLLOWUP_QUEUES.get(key) === queue &&
         !queue.draining &&
