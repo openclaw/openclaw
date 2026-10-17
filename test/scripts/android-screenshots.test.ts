@@ -9,6 +9,7 @@ const LINUX_SIPS_ADAPTER = "scripts/android-sips-linux.sh";
 const IMAGEMAGICK_CONVERT = "/usr/bin/convert";
 const IMAGEMAGICK_IDENTIFY = "/usr/bin/identify";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const command = (file: string, args: string[]) => spawnSync(file, args, { encoding: "utf8" });
 
 function runAndroidScreenshots(args: string[], env: NodeJS.ProcessEnv = {}, script = SCRIPT) {
   return spawnSync("bash", [script, ...args], {
@@ -17,38 +18,31 @@ function runAndroidScreenshots(args: string[], env: NodeJS.ProcessEnv = {}, scri
   });
 }
 
-function copyScreenshotScript(root: string): string {
-  const script = path.join(root, SCRIPT);
-  mkdirSync(path.dirname(script), { recursive: true });
-  copyFileSync(SCRIPT, script);
-  return script;
-}
-
-function runLinuxSipsAdapter(args: string[]) {
-  return spawnSync("bash", [LINUX_SIPS_ADAPTER, ...args], {
-    encoding: "utf8",
-    env: process.env,
-  });
-}
-
 function convertJpeg(input: string, output: string) {
-  return runLinuxSipsAdapter([
-    "-s",
-    "format",
-    "jpeg",
-    "-s",
-    "formatOptions",
-    "best",
-    input,
-    "--out",
-    output,
-  ]);
+  const options = "-s format jpeg -s formatOptions best".split(" ");
+  return command("bash", [LINUX_SIPS_ADAPTER, ...options, input, "--out", output]);
 }
 
 function executable(root: string, name: string, source: string) {
   const file = path.join(root, name);
-  writeFileSync(file, source, { mode: 0o755 });
+  writeFileSync(file, `#!/bin/bash\nset -euo pipefail\n${source}`, { mode: 0o755 });
   return file;
+}
+
+function captureFixture(formFactor: "phone" | "wear") {
+  const root = tempDirs.make("openclaw-android-screenshot-");
+  const script = path.join(root, SCRIPT);
+  mkdirSync(path.dirname(script), { recursive: true });
+  copyFileSync(SCRIPT, script);
+  return {
+    root,
+    run: (env: NodeJS.ProcessEnv) =>
+      runAndroidScreenshots(
+        ["--form-factor", formFactor, "--skip-build", "--skip-install"],
+        env,
+        script,
+      ),
+  };
 }
 
 describe("android screenshots script", () => {
@@ -85,33 +79,21 @@ describe("android screenshots script", () => {
   });
 
   it("rejects a physical device selected during screenshot discovery", () => {
-    const root = tempDirs.make("openclaw-android-screenshot-adb-");
-    const script = copyScreenshotScript(root);
+    const { root, run } = captureFixture("phone");
     const adb = executable(
       root,
       "adb",
-      `#!/usr/bin/env bash
-if [[ "$1" == "devices" ]]; then
-  printf 'List of devices attached\\nphysical-serial\\tdevice\\n'
-  exit 0
-fi
-if [[ "$1" == "-s" && "$2" == "physical-serial" && "$3" == "emu" && "$4" == "avd" && "$5" == "name" ]]; then
-  exit 1
-fi
-if [[ "$1" == "-s" && "$2" == "physical-serial" && "$3" == "shell" && "$4" == "getprop" && "$5" == "ro.kernel.qemu" ]]; then
-  printf '0\\n'
-  exit 0
-fi
+      `case "$*" in
+  devices) printf 'List of devices attached\\nphysical-serial\\tdevice\\n'; exit 0 ;;
+  '-s physical-serial emu avd name') exit 1 ;;
+  '-s physical-serial shell getprop ro.kernel.qemu') printf '0\\n'; exit 0 ;;
+esac
 printf 'unexpected adb invocation: %s\\n' "$*" >&2
 exit 97
 `,
     );
 
-    const result = runAndroidScreenshots(
-      ["--form-factor", "phone", "--skip-build", "--skip-install"],
-      { ADB: adb },
-      script,
-    );
+    const result = run({ ADB: adb });
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
@@ -123,30 +105,22 @@ exit 97
   });
 
   it("retains emulator diagnostics and the failing status when startup stops before screenshots", () => {
-    const root = tempDirs.make("openclaw-android-screenshot-startup-");
-    const script = copyScreenshotScript(root);
+    const { root, run } = captureFixture("wear");
     const readyPipe = path.join(root, "emulator-ready");
-    const fifo = spawnSync("mkfifo", [readyPipe], { encoding: "utf8" });
+    const fifo = command("mkfifo", [readyPipe]);
     expect(fifo.status, fifo.stderr).toBe(0);
     const adb = executable(
       root,
       "adb",
-      `#!/bin/bash
-set -euo pipefail
+      `
 if [[ "$1" == "devices" ]]; then
   printf 'List of devices attached\\n'
-  if [[ ! -e "$FIXTURE_ADB_DISCOVERED" ]]; then
-    touch "$FIXTURE_ADB_DISCOVERED"
-    exit 0
-  fi
+  [[ -e "$FIXTURE_ADB_DISCOVERED" ]] || { touch "$FIXTURE_ADB_DISCOVERED"; exit 0; }
   read -r ready < "$FIXTURE_EMULATOR_READY"
   printf 'emulator-5554\\tdevice\\n'
   exit 0
 fi
-if [[ "$*" == '-s emulator-5554 wait-for-device' ]]; then
-  echo 'Synthetic ADB startup failure' >&2
-  exit 42
-fi
+[[ "$*" != '-s emulator-5554 wait-for-device' ]] || { echo 'Synthetic ADB startup failure' >&2; exit 42; }
 printf 'unexpected adb invocation: %s\\n' "$*" >&2
 exit 97
 `,
@@ -154,39 +128,29 @@ exit 97
     const emulator = executable(
       root,
       "emulator",
-      `#!/bin/bash
-set -euo pipefail
-if [[ "$1" == "-list-avds" ]]; then
-  printf 'OpenClaw_Wear_Screenshots_API34\\n'
-  exit 0
-fi
+      `if [[ "$1" == "-list-avds" ]]; then printf 'OpenClaw_Wear_Screenshots_API34\\n'; exit 0; fi
 printf 'Synthetic Wear emulator startup diagnostic\\n' >&2
 printf 'ready\\n' > "$FIXTURE_EMULATOR_READY"
 `,
     );
-    const result = runAndroidScreenshots(
-      ["--form-factor", "wear", "--skip-build", "--skip-install"],
-      {
-        ADB: adb,
-        ANDROID_EMULATOR: emulator,
-        ANDROID_WEAR_SCREENSHOT_DEVICE: "",
-        ANDROID_WEAR_SCREENSHOT_AVD: "OpenClaw_Wear_Screenshots_API34",
-        FIXTURE_ADB_DISCOVERED: path.join(root, "adb-discovered"),
-        FIXTURE_EMULATOR_READY: readyPipe,
-      },
-      script,
-    );
+    const result = run({
+      ADB: adb,
+      ANDROID_EMULATOR: emulator,
+      ANDROID_WEAR_SCREENSHOT_DEVICE: "",
+      ANDROID_WEAR_SCREENSHOT_AVD: "OpenClaw_Wear_Screenshots_API34",
+      FIXTURE_ADB_DISCOVERED: path.join(root, "adb-discovered"),
+      FIXTURE_EMULATOR_READY: readyPipe,
+    });
     expect(result.status, result.stderr).toBe(42);
     expect(result.stderr).toContain("Synthetic ADB startup failure");
     expect(result.stderr).not.toContain("unexpected adb invocation");
     const artifacts = path.join(root, ".artifacts/android-screenshots/latest/wear");
-    expect(readFileSync(path.join(artifacts, "emulator.log"), "utf8")).toBe(
-      "Synthetic Wear emulator startup diagnostic\n",
-    );
-    expect(readFileSync(path.join(artifacts, "emulator-args.txt"), "utf8")).toContain(
+    const artifact = (name: string) => readFileSync(path.join(artifacts, name), "utf8");
+    expect(artifact("emulator.log")).toBe("Synthetic Wear emulator startup diagnostic\n");
+    expect(artifact("emulator-args.txt")).toContain(
       "-avd OpenClaw_Wear_Screenshots_API34 -no-window -no-audio -no-boot-anim",
     );
-    expect(readFileSync(path.join(artifacts, "process-status.txt"), "utf8")).toContain(
+    expect(artifact("process-status.txt")).toContain(
       "exit_status=42\nform_factor=wear\navd=OpenClaw_Wear_Screenshots_API34\n",
     );
   });
@@ -226,51 +190,37 @@ printf 'ready\\n' > "$FIXTURE_EMULATOR_READY"
           size,
           `gradient:#000000-${grayscale ? "#ffffff" : color}`,
         ];
-        const fixture = spawnSync(
-          IMAGEMAGICK_CONVERT,
-          [
-            ...gradient(dimensions, "#ff0000"),
-            ")",
-            ...gradient(`${height}x${width}`, "#00ff00"),
-            "-transpose",
-            ")",
-            "-compose",
-            "plus",
-            "-composite",
-            "-alpha",
-            "set",
-            "-channel",
-            "A",
-            "-evaluate",
-            "set",
-            "60%",
-            "+channel",
-            input,
-          ],
-          { encoding: "utf8" },
-        );
+        const fixture = command(IMAGEMAGICK_CONVERT, [
+          ...gradient(dimensions, "#ff0000"),
+          ")",
+          ...gradient(`${height}x${width}`, "#00ff00"),
+          ..."-transpose ) -compose plus -composite -alpha set -channel A -evaluate set 60% +channel".split(
+            " ",
+          ),
+          input,
+        ]);
         expect(fixture.status, fixture.stderr).toBe(0);
 
         const result = convertJpeg(input, output);
         expect(result.status, result.stderr).toBe(0);
 
-        const description = spawnSync(
-          IMAGEMAGICK_IDENTIFY,
-          ["+ping", "-format", "%m|%wx%h|%[colorspace]|%z|%[channels]|%Q", output],
-          { encoding: "utf8" },
-        );
+        const description = command(IMAGEMAGICK_IDENTIFY, [
+          "+ping",
+          "-format",
+          "%m|%wx%h|%[colorspace]|%z|%[channels]|%Q",
+          output,
+        ]);
         expect(description.status, description.stderr).toBe(0);
         const [format, size, colorspace, depth, channels, quality] = description.stdout.split("|");
-        if (!colorspace || !channels) {
-          throw new Error("Expected JPEG colorspace and channel metadata");
-        }
-        expect(format).toBe("JPEG");
-        expect(size).toBe(dimensions);
-        expect(colorspace.toLowerCase()).toBe("srgb");
-        expect(depth).toBe("8");
-        expect(channels.toLowerCase()).toMatch(/^srgb(?:[ \t]+3\.0)?$/);
+        expect([format, size, colorspace?.toLowerCase(), depth, channels?.toLowerCase()]).toEqual([
+          "JPEG",
+          dimensions,
+          "srgb",
+          "8",
+          expect.stringMatching(/^srgb(?:[ \t]+3\.0)?$/),
+        ]);
         expect(Number(quality)).toBeGreaterThanOrEqual(90);
-        const encoding = spawnSync("/usr/bin/file", [output], { encoding: "utf8" });
+        const encoding = command("/usr/bin/file", [output]);
         expect(encoding.status, encoding.stderr).toBe(0);
         expect(encoding.stdout).toContain("precision 8");
         expect(encoding.stdout).toContain("components 3");

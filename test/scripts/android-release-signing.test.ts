@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -29,6 +29,11 @@ const gitIdentity = {
   GIT_CONFIG_KEY_0: "commit.gpgsign",
   GIT_CONFIG_VALUE_0: "false",
 };
+const sourceProperties = {
+  OPENCLAW_ANDROID_STORE_PASSWORD: STORE_PASSWORD,
+  OPENCLAW_ANDROID_KEY_ALIAS: "openclaw-upload",
+  OPENCLAW_ANDROID_KEY_PASSWORD: KEY_PASSWORD,
+};
 
 function expectNoSecrets(text: string) {
   expect(text).not.toContain(STORE_PASSWORD);
@@ -41,49 +46,20 @@ function expectSuccess(result: ReturnType<typeof runNode>) {
 }
 
 function runNode(args: string[], env: NodeJS.ProcessEnv = {}) {
-  try {
-    const stdout = execFileSync(process.execPath, [SCRIPT, ...args], {
-      env: { ...process.env, ...env },
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    return { ok: true, stdout, stderr: "" };
-  } catch (error) {
-    const e = error as { stdout?: unknown; stderr?: unknown };
-    return {
-      ok: false,
-      stdout: formatProcessOutput(e.stdout),
-      stderr: formatProcessOutput(e.stderr),
-    };
-  }
-}
-
-function formatProcessOutput(value: unknown): string {
-  if (Buffer.isBuffer(value)) {
-    return value.toString("utf8");
-  }
-  return typeof value === "string" ? value : "";
+  const result = spawnSync(process.execPath, [SCRIPT, ...args], {
+    env: { ...process.env, ...env },
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return { ok: result.status === 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
 function runGit(args: string[], cwd?: string, env: NodeJS.ProcessEnv = {}) {
   execFileSync("git", args, {
     cwd,
-    env: {
-      ...process.env,
-      ...gitIdentity,
-      ...env,
-    },
+    env: { ...process.env, ...gitIdentity, ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
-}
-
-function commandAvailable(command: string): boolean {
-  try {
-    execFileSync(command, ["version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function createSigningRepo(tempRoot: string): string {
@@ -102,25 +78,21 @@ function writeManifest(tempRoot: string, signingRepo: string): string {
   const manifestPath = path.join(tempRoot, "ReleaseSigning.json");
   fs.writeFileSync(
     manifestPath,
-    `${JSON.stringify(
-      {
-        signingRepo,
-        signingBranch: "main",
-        assetPath: "android/openclaw",
-        uploadKeystoreEncryptedFile: "upload-keystore.jks.enc",
-        gradlePropertiesEncryptedFile: "gradle.properties.enc",
-        apkCertificateSha256: APK_CERTIFICATE_SHA256,
-        materializedRoot: "unused-by-test",
-        gradlePropertyNames: [
-          "OPENCLAW_ANDROID_STORE_FILE",
-          "OPENCLAW_ANDROID_STORE_PASSWORD",
-          "OPENCLAW_ANDROID_KEY_ALIAS",
-          "OPENCLAW_ANDROID_KEY_PASSWORD",
-        ],
-      },
-      null,
-      2,
-    )}\n`,
+    JSON.stringify({
+      signingRepo,
+      signingBranch: "main",
+      assetPath: "android/openclaw",
+      uploadKeystoreEncryptedFile: "upload-keystore.jks.enc",
+      gradlePropertiesEncryptedFile: "gradle.properties.enc",
+      apkCertificateSha256: APK_CERTIFICATE_SHA256,
+      materializedRoot: "unused-by-test",
+      gradlePropertyNames: [
+        "OPENCLAW_ANDROID_STORE_FILE",
+        "OPENCLAW_ANDROID_STORE_PASSWORD",
+        "OPENCLAW_ANDROID_KEY_ALIAS",
+        "OPENCLAW_ANDROID_KEY_PASSWORD",
+      ],
+    }),
   );
   return manifestPath;
 }
@@ -131,14 +103,32 @@ function writeSigningSources(tempRoot: string) {
   fs.writeFileSync(keystorePath, "fake keystore bytes\n");
   fs.writeFileSync(
     propertiesPath,
-    [
-      `OPENCLAW_ANDROID_STORE_PASSWORD=${STORE_PASSWORD}`,
-      "OPENCLAW_ANDROID_KEY_ALIAS=openclaw-upload",
-      `OPENCLAW_ANDROID_KEY_PASSWORD=${KEY_PASSWORD}`,
-      "",
-    ].join("\n"),
+    Object.entries(sourceProperties)
+      .map(([key, value]) => `${key}=${value}\n`)
+      .join(""),
   );
   return { keystorePath, propertiesPath };
+}
+
+function signingFixture(remote = false) {
+  const root = tempRoots.make("openclaw-android-signing-");
+  const repo = remote ? createSigningRepo(root) : path.join(root, "apps-signing.git");
+  const manifest = writeManifest(root, repo);
+  const { keystorePath, propertiesPath } = writeSigningSources(root);
+  const materializedDir = path.join(root, "materialized");
+  const run = (mode: string, extra: string[] = [], env: NodeJS.ProcessEnv = {}) =>
+    runNode(
+      ["--mode", mode, "--manifest", manifest, "--materialized-dir", materializedDir, ...extra],
+      env,
+    );
+  return {
+    root,
+    repo,
+    manifest,
+    materializedDir,
+    run,
+    sourceArgs: ["--keystore", keystorePath, "--properties", propertiesPath],
+  };
 }
 
 describe("scripts/android-release-signing.mjs", () => {
@@ -201,34 +191,18 @@ describe("scripts/android-release-signing.mjs", () => {
   ])("rejects missing values for %s before release signing work", (...args) => {
     const result = runNode(args);
 
-    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ ok: false, stdout: "" });
     expect(result.stderr).toContain(`Missing value for ${args[0]}.`);
     expect(result.stderr).not.toContain("ENOENT");
-    expect(result.stdout).toBe("");
   });
 
-  it.runIf(commandAvailable("openssl"))(
+  it.runIf(spawnSync("openssl", ["version"], { stdio: "ignore" }).status === 0)(
     "encrypts, pulls, and materializes Android signing assets without printing secrets",
     () => {
-      const tempRoot = tempRoots.make("openclaw-android-signing-");
-      const signingRepo = createSigningRepo(tempRoot);
-      const manifestPath = writeManifest(tempRoot, signingRepo);
-      const { keystorePath, propertiesPath } = writeSigningSources(tempRoot);
-      const materializedDir = path.join(tempRoot, "materialized");
+      const fixture = signingFixture(true);
+      const { root: tempRoot, repo: signingRepo, materializedDir } = fixture;
       const env = { MATCH_PASSWORD, ...gitIdentity };
-      const run = (mode: string, extra: string[] = []) =>
-        runNode(
-          [
-            "--mode",
-            mode,
-            "--manifest",
-            manifestPath,
-            "--materialized-dir",
-            materializedDir,
-            ...extra,
-          ],
-          env,
-        );
+      const run = (mode: string, extra: string[] = []) => fixture.run(mode, extra, env);
       const pullWorkspace = ["--workspace", path.join(materializedDir, "pull-workspace")];
       const keystore = path.join(materializedDir, "upload-keystore.jks");
       const properties = path.join(materializedDir, "gradle.properties");
@@ -236,10 +210,7 @@ describe("scripts/android-release-signing.mjs", () => {
         run("sync-push", [
           "--workspace",
           path.join(materializedDir, "apps-signing"),
-          "--keystore",
-          keystorePath,
-          "--properties",
-          propertiesPath,
+          ...fixture.sourceArgs,
         ]),
       );
 
@@ -258,26 +229,19 @@ describe("scripts/android-release-signing.mjs", () => {
       expect(fs.readFileSync(keystore, "utf8")).toBe("fake keystore bytes\n");
 
       const materializedProperties = fs.readFileSync(properties, "utf8");
-      expect(materializedProperties).toContain(`OPENCLAW_ANDROID_STORE_FILE=${keystore}`);
-      expect(materializedProperties).toContain(`OPENCLAW_ANDROID_STORE_PASSWORD=${STORE_PASSWORD}`);
-      expect(materializedProperties).toContain("OPENCLAW_ANDROID_KEY_ALIAS=openclaw-upload");
-      expect(materializedProperties).toContain(`OPENCLAW_ANDROID_KEY_PASSWORD=${KEY_PASSWORD}`);
+      for (const [key, value] of Object.entries({
+        ...sourceProperties,
+        OPENCLAW_ANDROID_STORE_FILE: keystore,
+      })) {
+        expect(materializedProperties).toContain(`${key}=${value}`);
+      }
       if (process.platform !== "win32") {
         for (const file of [properties, keystore]) {
           expect(fs.statSync(file).mode & 0o777).toBe(0o600);
         }
       }
 
-      expect(
-        runNode([
-          "--mode",
-          "check",
-          "--manifest",
-          manifestPath,
-          "--materialized-dir",
-          materializedDir,
-        ]).ok,
-      ).toBe(true);
+      expect(fixture.run("check").ok).toBe(true);
       fs.rmSync(keystore);
       fs.rmSync(properties);
       expect(run("materialize", pullWorkspace).ok).toBe(true);
@@ -286,20 +250,8 @@ describe("scripts/android-release-signing.mjs", () => {
   );
 
   it("requires MATCH_PASSWORD before pushing encrypted signing assets", () => {
-    const tempRoot = tempRoots.make("openclaw-android-signing-");
-    const manifestPath = writeManifest(tempRoot, path.join(tempRoot, "apps-signing.git"));
-    const { keystorePath, propertiesPath } = writeSigningSources(tempRoot);
-
-    const result = runNode([
-      "--mode",
-      "sync-push",
-      "--manifest",
-      manifestPath,
-      "--keystore",
-      keystorePath,
-      "--properties",
-      propertiesPath,
-    ]);
+    const fixture = signingFixture();
+    const result = fixture.run("sync-push", fixture.sourceArgs);
 
     expect(result.ok).toBe(false);
     expect(result.stderr).toContain("MATCH_PASSWORD is required");

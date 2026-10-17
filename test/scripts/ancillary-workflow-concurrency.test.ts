@@ -36,49 +36,37 @@ const WORKFLOWS: WorkflowPolicy[] = [
     ["macos-periphery", "macos-periphery-macOS Periphery Dead Code"],
     ["shared-openclawkit-periphery", "shared-openclawkit-periphery"],
     ["linux-app", "linux-app-Linux App"],
-  ].map(([name, prefix]) => ({
+    ["node-runtime-conformance", "node-runtime-conformance", "-pull_request", "-workflow_dispatch"],
+  ].map(([name, prefix, prSuffix = "", manualSuffix = ""]) => ({
     file: workflowPath(name!),
-    prGroup: `${prefix}-123`,
+    prGroup: `${prefix}${prSuffix}-123`,
     convertToDraft: true as const,
-    manual: { mode: "same-SHA cancels" as const, group: `${prefix}-${fixtureSha}` },
+    manual: { mode: "same-SHA cancels" as const, group: `${prefix}${manualSuffix}-${fixtureSha}` },
   })),
   {
-    file: workflowPath("node-runtime-conformance"),
-    prGroup: "node-runtime-conformance-pull_request-123",
-    convertToDraft: true,
-    manual: {
-      mode: "same-SHA cancels",
-      group: `node-runtime-conformance-workflow_dispatch-${fixtureSha}`,
-    },
-  },
-  {
-    file: ".github/workflows/website-installer-sync.yml",
+    file: workflowPath("website-installer-sync"),
     prGroup: "website-installer-sync-refs/pull/123/merge",
     convertToDraft: true,
     manual: { mode: "isolated per-run", group: "website-installer-sync-201" },
     manualAdmission: "sync-website",
   },
   {
-    file: ".github/workflows/opengrep-precise.yml",
+    file: workflowPath("opengrep-precise"),
     prGroup: "opengrep-pr-diff-OpenGrep — PR Diff-123",
     manual: { mode: "absent" },
   },
-  {
-    file: ".github/workflows/sandbox-common-smoke.yml",
-    prGroup: "Sandbox Common Smoke-123",
-    convertToDraft: true,
-    manual: {
-      mode: "same-ref queues",
-      group: "Sandbox Common Smoke-workflow_dispatch-refs/heads/main",
-    },
-    push: { group: "Sandbox Common Smoke-push-refs/heads/main", cancel: true },
-  },
-  {
-    file: ".github/workflows/plugin-init-scaffold-validation.yml",
-    prGroup: "Plugin Init Scaffold Validation-123",
-    manual: { mode: "same-ref queues", group: "Plugin Init Scaffold Validation-refs/heads/main" },
-    push: { group: "Plugin Init Scaffold Validation-push-refs/heads/main", cancel: false },
-  },
+  ...(
+    [
+      ["sandbox-common-smoke", "Sandbox Common Smoke", "-workflow_dispatch", true],
+      ["plugin-init-scaffold-validation", "Plugin Init Scaffold Validation", "", false],
+    ] as const
+  ).map(([name, label, suffix, cancel]) => ({
+    file: workflowPath(name),
+    prGroup: `${label}-123`,
+    manual: { mode: "same-ref queues" as const, group: `${label}${suffix}-refs/heads/main` },
+    push: { group: `${label}-push-refs/heads/main`, cancel },
+    convertToDraft: cancel ? (true as const) : undefined,
+  })),
 ];
 
 type Job = {
@@ -86,8 +74,6 @@ type Job = {
   concurrency?: Concurrency;
   outputs?: Record<string, string>;
   steps: {
-    id?: string;
-    name?: string;
     if?: string;
     uses?: string;
     env?: Record<string, string>;
@@ -132,7 +118,6 @@ type Github = {
       author_association?: string;
     };
     issue?: { number: number; author_association?: string };
-    comment?: { user?: { type?: string } };
     changes?: Record<string, unknown>;
   };
 };
@@ -146,13 +131,33 @@ function pr(
   number = 123,
 ): Github {
   return {
-    workflow: workflow.name,
-    repository: "openclaw/openclaw",
+    ...refEvent(workflow, "workflow_dispatch", runId, "e", `refs/pull/${number}/merge`),
     event_name: "pull_request",
-    run_id: runId,
-    sha: "e".repeat(40),
-    ref: `refs/pull/${number}/merge`,
     event: { action, pull_request: { number, draft, head: { sha: head.repeat(40) } } },
+  };
+}
+
+function targetEvent(
+  workflow: Workflow,
+  runId: number,
+  action: string,
+  changes?: Github["event"]["changes"],
+  draft = false,
+): Github {
+  const github = pr(workflow, runId, action, draft);
+  return {
+    ...github,
+    event_name: "pull_request_target",
+    actor: "contributor",
+    event: {
+      ...github.event,
+      changes,
+      pull_request: {
+        ...github.event.pull_request!,
+        user: { login: "contributor", type: "User" },
+        author_association: "NONE",
+      },
+    },
   };
 }
 
@@ -200,13 +205,11 @@ type Admission = Awaited<ReturnType<typeof admission>>;
 const groupsOf = (runs: Admission[]) => runs.map(({ group }) => group);
 const cancellations = (runs: Admission[]) => runs.map(({ cancel }) => cancel);
 const uniqueGroups = (values: string[]) => new Set(values.map((group) => group.toLowerCase())).size;
+const nonScopeJobs = (result: Admission) =>
+  Object.entries(result.eligibility.jobs).filter(([id]) => id !== "scope");
 
-// Like ci-workflow-guards, this uses VM evaluation, not a general Actions parser.
-// Supported here: typed primitive ==/!=/!/&&/||, parentheses, property lookup,
-// format, JSON/string helpers, always()/cancelled(), and embedded interpolation. Missing
-// properties are empty strings; hyphenated property names are single lookups.
-// Expression fixtures avoid coercion/case-folding and escaped strings, where JS
-// differs. Admission separately normalizes concurrency group names to lowercase.
+// Evaluate the fixtures' Actions subset; missing properties are empty strings.
+// Fixtures avoid JS/Actions coercion differences; admission folds group case.
 function expression(source: string, context: Record<string, unknown>): unknown {
   return runInNewContext(
     source.replace(
@@ -361,20 +364,15 @@ async function admission(workflow: Workflow, github: Github, vars: Record<string
 }
 
 function expectDraftSkipped(result: Admission) {
-  for (const [id, eligible] of Object.entries(result.eligibility.jobs)) {
-    if (id !== "scope") {
-      expect(eligible, id).toBe(false);
-    }
+  for (const [id, eligible] of nonScopeJobs(result)) {
+    expect(eligible, id).toBe(false);
   }
-  expect(result.eligibility.diffCalls).toBe(0);
-  expect(result.eligibility.checkouts).toBe(0);
+  expect(result.eligibility).toMatchObject({ diffCalls: 0, checkouts: 0 });
 }
 
 function expectUseful(...results: Admission[]) {
   for (const result of results) {
-    expect(
-      Object.entries(result.eligibility.jobs).some(([id, eligible]) => id !== "scope" && eligible),
-    ).toBe(true);
+    expect(nonScopeJobs(result).some(([, eligible]) => eligible)).toBe(true);
   }
 }
 
@@ -390,10 +388,8 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
     expect(cancellations([ready, newer, other])).toEqual([true, true, true]);
     expect(other.group).not.toBe(prGroup);
     expectUseful(ready, newer, other);
-    for (const [id, eligible] of Object.entries(ready.eligibility.jobs)) {
-      if (id !== "scope") {
-        expect(eligible, id).toBe(id !== policy.manualAdmission);
-      }
+    for (const [id, eligible] of nonScopeJobs(ready)) {
+      expect(eligible, id).toBe(id !== policy.manualAdmission);
     }
     const passiveGroups: string[] = [];
     for (const [index, action] of [
@@ -461,11 +457,7 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
       expectUseful(enabled, newer, hourly, laterHourly, manualRun);
       expect(laterHourly.group).toBe(hourly.group);
       expect([hourly.cancel, laterHourly.cancel, manualRun.cancel]).toEqual([false, false, false]);
-      expect(
-        Object.entries(skipped.eligibility.jobs)
-          .filter(([id]) => id !== "scope")
-          .every(([, eligible]) => !eligible),
-      ).toBe(true);
+      expect(nonScopeJobs(skipped).every(([, eligible]) => !eligible)).toBe(true);
     });
   }
 });
@@ -491,13 +483,7 @@ describe("Labeler admission", () => {
     changes?: Github["event"]["changes"],
     draft = false,
   ): Github {
-    const github = pr(workflow, runId, action, draft);
-    return {
-      ...github,
-      event_name: "pull_request_target",
-      ref: "refs/heads/main",
-      event: { ...github.event, changes },
-    };
+    return { ...targetEvent(workflow, runId, action, changes, draft), ref: "refs/heads/main" };
   }
 
   it.each([
@@ -508,9 +494,11 @@ describe("Labeler admission", () => {
     "admits useful $action replacement for $changes without admitting ignored edits",
     async ({ action, changes }) => {
       const useful = await admission(workflow, event(100, action, changes, true));
-      expect(useful.group).toBe("Labeler-123");
-      expect(useful.cancel).toBe(true);
-      expect(useful.eligibility.jobs.label).toBe(true);
+      expect(useful).toMatchObject({
+        group: "Labeler-123",
+        cancel: true,
+        eligibility: { jobs: { label: true } },
+      });
       for (const ignored of [bodyChange, undefined]) {
         const rejected = await admission(workflow, event(101, "edited", ignored));
         expect(rejected.group).toBe("");
@@ -558,19 +546,8 @@ describe("Labeler admission", () => {
 
 describe("PR context admission", () => {
   const workflow = readWorkflow(workflowPath("real-behavior-proof"));
-  const event = (runId: number, action: string, changes?: Github["event"]["changes"]): Github => ({
-    ...pr(workflow, runId, action),
-    event_name: "pull_request_target",
-    event: {
-      action,
-      changes,
-      pull_request: {
-        ...pr(workflow, runId, action).event.pull_request!,
-        user: { login: "contributor", type: "User" },
-        author_association: "NONE",
-      },
-    },
-  });
+  const event = (runId: number, action: string, changes?: Github["event"]["changes"]) =>
+    targetEvent(workflow, runId, action, changes);
 
   it.each([
     ["contributor", "User", "NONE"],
@@ -608,19 +585,8 @@ describe("PR context admission", () => {
 
 describe("Auto response admission", () => {
   const workflow = readWorkflow(workflowPath("auto-response"));
-  const event = (runId: number, action: string, changes?: Github["event"]["changes"]): Github => ({
-    ...pr(workflow, runId, action),
-    event_name: "pull_request_target",
-    actor: "contributor",
-    event: {
-      action,
-      changes,
-      pull_request: {
-        ...pr(workflow, runId, action).event.pull_request!,
-        author_association: "NONE",
-      },
-    },
-  });
+  const event = (runId: number, action: string, changes?: Github["event"]["changes"]) =>
+    targetEvent(workflow, runId, action, changes);
 
   it.each(["OWNER", "MEMBER", "COLLABORATOR"])(
     "rejects the owner's known %s exemption before allocation",

@@ -29,11 +29,7 @@ function targetResult(
 function rounds(text = probeText): Round[] {
   return [
     { name: "tool_search", args: { query: target.name, limit: 1 }, value: [{ ...target }] },
-    {
-      name: "tool_describe",
-      args: { id: target.id },
-      value: described(),
-    },
+    { name: "tool_describe", args: { id: target.id }, value: described() },
     { name: "dispatch_action", args: { id: target.id, args: {} }, value: targetResult(text) },
   ];
 }
@@ -58,6 +54,12 @@ function request(completed = rounds()) {
   return { tools: controls.map((name) => ({ type: "function", name })), input };
 }
 
+function expectFailure(body: ReturnType<typeof request>, reason = "unexpected-tool-output") {
+  expect(resolveAgentPluginBundleResponse(body)).toEqual({
+    text: `AGENT_BUNDLE_MCP_FAIL ${reason}`,
+  });
+}
+
 describe("Agent Plugins bundle mock response", () => {
   it.each([
     [String.raw`C:\Fixture User\plugin=one; two`, String.raw`C:\Fixture User\data=one; two`],
@@ -68,18 +70,16 @@ describe("Agent Plugins bundle mock response", () => {
       const completed = rounds(
         `probe ok; PLUGIN_ROOT=${pluginRoot}; PLUGIN_DATA=${pluginData}; PROBE_MODE=live`,
       );
-      expect(resolveAgentPluginBundleResponse(request([]))).toEqual({
-        tool: { name: "tool_search", args: { query: target.name, limit: 1 } },
-      });
-      expect(resolveAgentPluginBundleResponse(request(completed.slice(0, 1)))).toEqual({
-        tool: { name: "tool_describe", args: { id: target.id } },
-      });
-      expect(resolveAgentPluginBundleResponse(request(completed.slice(0, 2)))).toEqual({
-        tool: { name: "dispatch_action", args: { id: target.id, args: {} } },
-      });
-      expect(resolveAgentPluginBundleResponse(request(completed))).toEqual({
-        text: "AGENT_BUNDLE_MCP_OK",
-      });
+      expect(
+        [0, 1, 2, 3].map((count) =>
+          resolveAgentPluginBundleResponse(request(completed.slice(0, count))),
+        ),
+      ).toEqual([
+        { tool: { name: "tool_search", args: { query: target.name, limit: 1 } } },
+        { tool: { name: "tool_describe", args: { id: target.id } } },
+        { tool: { name: "dispatch_action", args: { id: target.id, args: {} } } },
+        { text: "AGENT_BUNDLE_MCP_OK" },
+      ]);
     },
   );
 
@@ -87,9 +87,7 @@ describe("Agent Plugins bundle mock response", () => {
     const body = request([]);
     body.tools = body.tools.filter((tool) => tool.name !== missing);
     body.input.push({ role: "assistant", content: JSON.stringify({ name: missing }) });
-    expect(resolveAgentPluginBundleResponse(body)).toEqual({
-      text: "AGENT_BUNDLE_MCP_FAIL tool-not-declared",
-    });
+    expectFailure(body, "tool-not-declared");
   });
 
   it.each([
@@ -159,48 +157,23 @@ describe("Agent Plugins bundle mock response", () => {
     } else {
       completed[index] = { ...completed[index]!, ...patch };
     }
-    expect(resolveAgentPluginBundleResponse(request(completed))).toEqual({
-      text: "AGENT_BUNDLE_MCP_FAIL unexpected-tool-output",
-    });
+    expectFailure(request(completed));
   });
 
   it.each<[string, (body: ReturnType<typeof request>) => void]>([
     ...[0, 1, 2].map((index): [string, (body: ReturnType<typeof request>) => void] => [
       `unframed ${controls[index]} output`,
-      (body) => {
-        body.input[2 + index * 2]!.output = JSON.stringify(rounds()[index]!.value);
-      },
+      ({ input }) =>
+        Object.assign(input[2 + index * 2]!, { output: JSON.stringify(rounds()[index]!.value) }),
     ]),
     [
       "description issued before search completion",
-      (body) => {
-        body.input.splice(1, 3, body.input[3]!, body.input[1]!, body.input[2]!);
-      },
+      ({ input }) => input.splice(1, 3, input[3]!, input[1]!, input[2]!),
     ],
-    [
-      "unpaired output",
-      (body) => {
-        body.input[6]!.call_id = "unrelated";
-      },
-    ],
-    [
-      "result before its call",
-      (body) => {
-        [body.input[5], body.input[6]] = [body.input[6]!, body.input[5]!];
-      },
-    ],
-    [
-      "duplicate call identity",
-      (body) => {
-        body.input.splice(5, 0, { ...body.input[5]! });
-      },
-    ],
-    [
-      "outer error",
-      (body) => {
-        body.input[6]!.isError = true;
-      },
-    ],
+    ["unpaired output", ({ input }) => Object.assign(input[6]!, { call_id: "unrelated" })],
+    ["result before its call", ({ input }) => input.splice(5, 2, input[6]!, input[5]!)],
+    ["duplicate call identity", ({ input }) => input.splice(5, 0, { ...input[5]! })],
+    ["outer error", ({ input }) => Object.assign(input[6]!, { isError: true })],
     [
       "mismatched external boundary",
       (body) => {
@@ -214,8 +187,6 @@ describe("Agent Plugins bundle mock response", () => {
   ])("rejects %s", (_label, corrupt) => {
     const body = request();
     corrupt(body);
-    expect(resolveAgentPluginBundleResponse(body)).toEqual({
-      text: "AGENT_BUNDLE_MCP_FAIL unexpected-tool-output",
-    });
+    expectFailure(body);
   });
 });

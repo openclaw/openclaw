@@ -12,15 +12,14 @@ function createFixture(): string {
   const fixtureRoot = tempDirs.make("openclaw-android-fastlane-");
   mkdirSync(path.join(fixtureRoot, "apps/android"), { recursive: true });
   mkdirSync(path.join(fixtureRoot, "recovery"));
-  writeFileSync(path.join(fixtureRoot, "package.json"), '{"version":"2026.9.2"}\n');
-  writeFileSync(
-    path.join(fixtureRoot, "apps/android/version.json"),
-    '{"version":"2026.8.2","versionCode":2026080201}\n',
-  );
-  writeFileSync(
-    path.join(fixtureRoot, ".gitignore"),
-    "scripts\nFastfile\norigin.git/\nrecovery/\napps/android/build/\napps/android/fastlane/\n",
-  );
+  for (const [file, contents] of Object.entries({
+    "package.json": '{"version":"2026.9.2"}\n',
+    "apps/android/version.json": '{"version":"2026.8.2","versionCode":2026080201}\n',
+    ".gitignore":
+      "scripts\nFastfile\norigin.git/\nrecovery/\napps/android/build/\napps/android/fastlane/\n",
+  })) {
+    writeFileSync(path.join(fixtureRoot, file), contents);
+  }
   symlinkSync(path.join(rootDir, "scripts"), path.join(fixtureRoot, "scripts"), "dir");
   copyFileSync(fastfilePath, path.join(fixtureRoot, "Fastfile"));
   for (const args of [
@@ -66,10 +65,7 @@ else
 end
 module TestUI
   def self.user_error!(message); raise FastlaneCore::Interface::FastlaneError.new, message; end
-  def self.success(message); end
-  def self.message(message); end
-  def self.important(message); end
-  def self.header(message); end
+  %i(success message important header).each { |name| define_singleton_method(name) { |message| } }
 end
 class FastfileFixture
   UI = TestUI
@@ -200,6 +196,12 @@ def track(name, status, *codes)
   release = AndroidPublisher::TrackRelease.new(status: status, version_codes: codes, name: "Editable label, not a version")
   AndroidPublisher::Track.new(track: name, releases: [release])
 end
+def scenario_result(scenario, public_tracks: [], output: nil)
+  $scenario, $public_tracks, $events, $tracks, $edits, $client, $committed_config, $committed_query = scenario, public_tracks, [], {}, 0, Supply::Client.new, nil, nil
+  yield
+rescue => error
+  { error: error.message, events: $events, tracks: $tracks, output_exists: output && File.exist?(output) }
+end
 fastfile.instance_eval do
 def sh(command); fixture_sh(command); end
 def repo_root; $root; end
@@ -207,7 +209,8 @@ def android_root; File.join($root, "apps", "android"); end
 def play_metadata_path; File.join(android_root, "fastlane", "metadata", "android"); end
 `;
 
-function runRuby(fixtureRoot: string, source: string): unknown {
+function runRuby(source: string): LaneResult[] {
+  const fixtureRoot = createFixture();
   const useBundle = process.env.OPENCLAW_TEST_FASTLANE_BUNDLE === "1";
   const rubyArgs = [
     "-e",
@@ -263,13 +266,12 @@ const release = (code: number, text: string) => [
     notes: [{ language: "en-US", text }],
   },
 ];
+const eventCount = (result: LaneResult | undefined, event: string) =>
+  result?.events.filter((entry) => entry === event).length;
 
 describe("Android Fastlane release upload gates", () => {
   it("revalidates the saved plan before cutover and atomically uploads the explicit phone/Wear pair", () => {
-    const fixtureRoot = createFixture();
-    const results = runRuby(
-      fixtureRoot,
-      String.raw`
+    const results = runRuby(String.raw`
 %w(phoneScreenshots wearScreenshots).each do |kind|
   directory = File.join(play_metadata_path, "en-US", "images", kind)
   FileUtils.mkdir_p(directory)
@@ -286,8 +288,7 @@ $scenario, $events, $edits, $client = "plan", [], 0, Supply::Client.new
 $run_lane.call(:release_plan, output_path: plan_path)
 ENV["OPENCLAW_ANDROID_RELEASE_PLAN"] = plan_path
 results = %w(invalid-destination invalid-notes changed-baseline changed-code initialize-failure validate-only upload closed-testing internal).map do |scenario|
-  $scenario, $events, $tracks, $edits, $client, $committed_config = scenario, [], {}, 0, Supply::Client.new, nil
-  $committed_query = nil
+  scenario_result(scenario) do
   ENV["SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW"] = "true"
   ENV["SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW"] = "false"
   ENV["GOOGLE_PLAY_TRACK"] = scenario == "closed-testing" ? "beta" : "internal"
@@ -299,7 +300,6 @@ results = %w(invalid-destination invalid-notes changed-baseline changed-code ini
     ENV["SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW"] = "true"
     FileUtils.rm_rf(File.join(play_metadata_path, "en-US", "images"))
   end
-  begin
     options = case scenario
               when "internal" then { destination: "internal" }
               when "invalid-destination" then { destination: "production" }
@@ -307,13 +307,10 @@ results = %w(invalid-destination invalid-notes changed-baseline changed-code ini
               end
     $run_lane.call(:release_upload, options)
     { events: $events, tracks: $tracks, pinned_notes: File.read(notes_path), wear_code: ENV["ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_WEAR_VERSION_CODE"], committed_config: $committed_config, committed_query: $committed_query }
-  rescue => error
-    { error: error.message, events: $events, tracks: $tracks }
   end
 end
 STDOUT.puts JSON.generate(results)
-`,
-    ) as LaneResult[];
+`);
     const [
       invalidDestination,
       rejected,
@@ -325,11 +322,12 @@ STDOUT.puts JSON.generate(results)
       closedTesting,
       internal,
     ] = results;
-    expect(internal?.error).toBeUndefined();
-    expect(invalidDestination?.error).toContain("destination must be play-store or internal");
-    expect(invalidDestination?.events).toEqual([]);
-    expect(rejected?.error).toContain("Saved release notes do not match source/build");
-    expect(rejected?.events).toEqual([]);
+    for (const [result, error] of [
+      [invalidDestination, "destination must be play-store or internal"],
+      [rejected, "Saved release notes do not match source/build"],
+    ] as const) {
+      expect(result).toMatchObject({ error: expect.stringContaining(error), events: [] });
+    }
     for (const rejectedPlan of [changedBaseline, changedCode]) {
       expect(rejectedPlan?.error).toContain("changed after preparation");
       expectAbsent(rejectedPlan, "upload", "ref:initialize-android");
@@ -342,15 +340,21 @@ STDOUT.puts JSON.generate(results)
     expect(validated?.events).toContain("validate-edit");
     expectAbsent(validated, "commit", "ref:initialize-android", "ref:record");
     expect(validated?.events.at(-1)).toBe("abort");
-    expect(uploaded?.error).toBeUndefined();
-    expect(uploaded?.tracks).toEqual({
+    const tracks = {
       internal: release(2026080254, "Phone chat improvements."),
       "wear:internal": release(2026080255, "Wear voice fixes."),
-    });
+    };
+    for (const result of [uploaded, internal]) {
+      expect(result?.error).toBeUndefined();
+      expect(result?.tracks).toEqual(tracks);
+      expect(result).toMatchObject({
+        pinned_notes: "Pinned archive notes stay unchanged.\n",
+        committed_config: reviewConfig(null),
+      });
+      expect([eventCount(result, "commit"), eventCount(result, "upload")]).toEqual([1, 2]);
+    }
     const events = uploaded!.events;
-    expect(events.filter((event) => event === "commit")).toHaveLength(1);
-    expect(events.filter((event) => event === "upload")).toHaveLength(2);
-    expect(events.filter((event) => event === "planner:validate")).toHaveLength(2);
+    expect(eventCount(uploaded, "planner:validate")).toBe(2);
     expect(events.indexOf("ref:preflight")).toBeLessThan(events.lastIndexOf("planner:validate"));
     expect(events.lastIndexOf("planner:validate")).toBeLessThan(
       events.indexOf("ref:initialize-android"),
@@ -366,18 +370,11 @@ STDOUT.puts JSON.generate(results)
       ":app:validateSigningPlayRelease :wear:validateSigningRelease",
     );
     expect(uploaded?.wear_code).toBe("2026080255");
-    expect(uploaded?.pinned_notes).toBe("Pinned archive notes stay unchanged.\n");
     expect(events).toContain("listing");
     expect(events).toContain("screenshots");
-    expect(internal?.tracks).toEqual(uploaded?.tracks);
-    expect(internal?.events.filter((event) => event === "upload")).toHaveLength(2);
-    expect(internal?.events.filter((event) => event === "commit")).toHaveLength(1);
     expectAbsent(internal, "listing", "screenshots", "image");
     expect(internal?.events.at(-1)).toBe("ref:record");
     expect(internal?.events.some((event) => event.includes("android-screenshots.sh"))).toBe(false);
-    expect(internal?.pinned_notes).toBe("Pinned archive notes stay unchanged.\n");
-    expect(uploaded?.committed_config).toMatchObject(reviewConfig(null));
-    expect(internal?.committed_config).toMatchObject(reviewConfig(null));
     expect(closedTesting?.error).toBeUndefined();
     expect(closedTesting?.tracks).toMatchObject({
       beta: [{ codes: [2026080254] }],
@@ -393,10 +390,7 @@ STDOUT.puts JSON.generate(results)
   });
 
   it("passes both artifact inventories and public tracks to the planner and aborts read edits on every outcome", () => {
-    const fixtureRoot = createFixture();
-    const results = runRuby(
-      fixtureRoot,
-      String.raw`
+    const results = runRuby(String.raw`
 cases = [
   ["public", [track("production", "completed", "2026080203"), track("wear:production", "completed", "2026080253"), track("internal", "completed", "2026090204")]],
   ["staged", [track("production", "inProgress", "2026080203")]],
@@ -404,18 +398,14 @@ cases = [
   ["inventory-failure", []]
 ]
 results = cases.each_with_index.map do |(scenario, tracks), index|
-  $scenario, $public_tracks, $events, $edits, $client = scenario, tracks, [], 0, Supply::Client.new
   output = File.join($root, "recovery", "plan-#{index}.json")
-  begin
+  scenario_result(scenario, public_tracks: tracks, output: output) do
     $run_lane.call(:release_plan, output_path: output)
     { plan: JSON.parse(File.read(output)), events: $events }
-  rescue => error
-    { error: error.message, output_exists: File.exist?(output), events: $events }
   end
 end
 STDOUT.puts JSON.generate(results)
-`,
-    ) as LaneResult[];
+`);
     expect(results[0]?.error).toBeUndefined();
     expect(results[0]?.plan).toMatchObject({
       schemaVersion: 2,
@@ -423,19 +413,14 @@ STDOUT.puts JSON.generate(results)
       versionCode: 2026080254,
       wearVersionCode: 2026080255,
       releaseNotesBaselines: [
-        {
-          audience: "phone",
-          version: "2026.8.2",
-          build: "2026080203",
-          sourceRef: "refs/openclaw/mobile-releases/android/2026.8.2-2026080203",
-        },
-        {
-          audience: "wear",
-          version: "2026.8.2",
-          build: "2026080253",
-          sourceRef: "refs/openclaw/mobile-releases/android/2026.8.2-2026080203",
-        },
-      ],
+        ["phone", "2026080203"],
+        ["wear", "2026080253"],
+      ].map(([audience, build]) => ({
+        audience,
+        build,
+        version: "2026.8.2",
+        sourceRef: "refs/openclaw/mobile-releases/android/2026.8.2-2026080203",
+      })),
     });
     expect(results[0]?.events).toEqual([
       "begin",

@@ -4,7 +4,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { URL } from "node:url";
 import { fetch, Headers, Response, type RequestInit } from "undici";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAndroidFirebaseDistribution } from "../../scripts/lib/android-firebase-distribution.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -16,21 +16,13 @@ vi.mock("node:timers/promises", () => ({ setTimeout: vi.fn(async () => undefined
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const key = generateKeyPairSync("rsa", { modulusLength: 2048 });
-const appId = "1:123456789:android:abcdef123456";
-const appName = `projects/123456789/apps/${appId}`;
-const clientEmail = "publisher@synthetic-project.iam.gserviceaccount.com";
+const appId = "1:1:android:a";
+const appName = `projects/1/apps/${appId}`;
+const clientEmail = "x@x.iam.gserviceaccount.com";
 const configuration = { appId, groupAliases: ["android-daily"] };
 type Audience = "wear" | "phone";
-type Receipt = {
-  binding: { artifacts: Record<Audience, { sha256: string }> };
-  releases: Record<Audience, { state: string; operation?: string; release?: { name: string } }>;
-};
-type Call = {
-  method: string;
-  url: string;
-  body: RequestInit["body"];
-  dispatcher: RequestInit["dispatcher"];
-};
+type Receipt = { releases: Record<Audience, { state: string }> };
+type Call = Pick<RequestInit, "body" | "dispatcher"> & { method: string; url: string };
 type Failure = number | Error | Response;
 const preflightUrl = `https://firebaseappdistribution.googleapis.com/v1/${appName}/aabInfo`;
 const transportError = (code: string) =>
@@ -43,7 +35,13 @@ const rateLimit = (seconds: string) =>
     status: 429,
     headers: { "Retry-After": seconds },
   });
+let test: ReturnType<typeof fixture>;
+beforeEach(() => {
+  test = fixture();
+});
 const silenceWarnings = () => vi.spyOn(console, "warn").mockImplementation(() => {});
+const distribute = () => test.client().distribute(test.options);
+const preflight = () => test.client().preflight();
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -51,9 +49,7 @@ afterEach(() => {
   vi.mocked(delay).mockReset().mockResolvedValue(undefined);
 });
 
-function sha256(text: string | Buffer): string {
-  return createHash("sha256").update(text).digest("hex");
-}
+const sha256 = (text: string | Buffer) => createHash("sha256").update(text).digest("hex");
 
 function fixture() {
   const directory = tempDirs.make("openclaw-firebase-distribution-");
@@ -105,8 +101,9 @@ function fixture() {
   const receipt = () => JSON.parse(fs.readFileSync(options.receiptPath, "utf8")) as Receipt;
   const calls: Call[] = [];
   const failures = new Map<string, Failure | Failure[]>();
-  let integrationState = "INTEGRATED";
-  let responseBuildOverride: string | undefined;
+  const state: { integrationState: string; responseBuild?: string } = {
+    integrationState: "INTEGRATED",
+  };
   vi.mocked(fetch).mockImplementation(async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const method = init?.method ?? "GET";
@@ -124,18 +121,12 @@ function fixture() {
       return new Response("Synthetic provider failure with private data", { status: failure });
     }
     if (url === "https://oauth2.googleapis.com/token") {
-      const assertion = new URLSearchParams(await new Response(init?.body).text()).get(
-        "assertion",
-      )!;
+      const form = new URLSearchParams(await new Response(init?.body).text());
+      const assertion = form.get("assertion")!;
       const [header, payload, signature] = assertion.split(".");
-      expect(
-        verify(
-          "RSA-SHA256",
-          Buffer.from(`${header}.${payload}`),
-          key.publicKey,
-          Buffer.from(signature!, "base64url"),
-        ),
-      ).toBe(true);
+      const unsigned = Buffer.from(`${header}.${payload}`);
+      const signed = Buffer.from(signature!, "base64url");
+      expect(verify("RSA-SHA256", unsigned, key.publicKey, signed)).toBe(true);
       expect(JSON.parse(Buffer.from(payload!, "base64url").toString())).toMatchObject({
         iss: clientEmail,
         aud: "https://oauth2.googleapis.com/token",
@@ -145,10 +136,10 @@ function fixture() {
     }
     expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer synthetic-access-token");
     if (url.endsWith("/aabInfo")) {
-      return Response.json({ integrationState });
+      return Response.json({ integrationState: state.integrationState });
     }
     if (url.endsWith("/groups/android-daily")) {
-      return Response.json({ name: "projects/123456789/groups/android-daily" });
+      return Response.json({ name: "projects/1/groups/android-daily" });
     }
     if (url.endsWith("/releases:upload")) {
       const filename = new Headers(init?.headers).get("X-Goog-Upload-File-Name")!;
@@ -161,12 +152,11 @@ function fixture() {
       return Response.json({
         done: true,
         response: {
-          result: "RELEASE_CREATED",
           release: {
             name: `${appName}/releases/${audience}`,
             displayVersion: plan.version,
             buildVersion:
-              responseBuildOverride ??
+              state.responseBuild ??
               String(audience === "wear" ? plan.wearVersionCode : plan.versionCode),
             createTime: "2026-10-01T03:23:12.646944Z",
             binaryDownloadUri: "https://private.example.invalid/signed-download",
@@ -194,13 +184,8 @@ function fixture() {
       calls.filter((call) => call.url.includes("firebaseappdistribution") && call.method !== "GET"),
     failures,
     receipt,
+    state,
     client: () => createAndroidFirebaseDistribution({ env }),
-    setIntegrationState: (value: string) => {
-      integrationState = value;
-    },
-    setResponseBuild: (value: string) => {
-      responseBuildOverride = value;
-    },
   };
 }
 
@@ -210,12 +195,11 @@ describe("Android Firebase distribution", () => {
     ["preflight connection reset", preflightUrl, (): Failure => reset(), 500],
     ["preflight rate limit", preflightUrl, (): Failure => rateLimit("3"), 3000],
   ] as const)(
-    "retries a transient %s before completing distribution",
+    "retries transient %s before distribution",
     async (_label, url, failure, minimumDelay) => {
-      const test = fixture();
       const warnings = silenceWarnings();
       test.failures.set(`${url.endsWith("/token") ? "POST" : "GET"} ${url}`, [failure()]);
-      const result = await test.client().distribute(test.options);
+      const result = await distribute();
       expect(result.releases.phone.state).toBe("distributed");
       expect(test.requests(url)).toHaveLength(2);
       expect(vi.mocked(delay).mock.calls[0]![0]).toBeGreaterThanOrEqual(minimumDelay);
@@ -226,11 +210,10 @@ describe("Android Firebase distribution", () => {
     },
   );
 
-  it("stops after four failed reads and reports safe error codes and attempt counts", async () => {
-    const test = fixture();
+  it("bounds read retries and redacts diagnostics", async () => {
     const warnings = silenceWarnings();
     test.failures.set(`GET ${preflightUrl}`, reset());
-    await expect(test.client().preflight()).rejects.toThrow(/ECONNRESET.*attempt 4\/4/);
+    await expect(preflight()).rejects.toThrow(/ECONNRESET.*attempt 4\/4/);
     expect(test.requests(preflightUrl)).toHaveLength(4);
     expect(delay).toHaveBeenCalledTimes(3);
     expect(JSON.stringify(warnings.mock.calls)).not.toMatch(
@@ -239,19 +222,13 @@ describe("Android Firebase distribution", () => {
     expect(warnings.mock.calls[0]![0]).toMatch(/ECONNRESET.*2\/4/);
   });
 
-  it.each<[string, () => Failure, string]>([
-    ["HTTP 403", () => 403, "HTTP 403"],
-    ...["CERT_HAS_EXPIRED", "private-unrecognized-code"].map(
-      (code): [string, () => Failure, string] => [
-        code,
-        () => transportError(code),
-        code === "CERT_HAS_EXPIRED" ? code : "REQUEST_FAILED",
-      ],
-    ),
-  ])("does not retry or disclose permanent rejection %s", async (_label, failure, message) => {
-    const test = fixture();
+  it.each<[string, () => Failure]>([
+    ["HTTP 403", () => 403],
+    ["CERT_HAS_EXPIRED", () => transportError("CERT_HAS_EXPIRED")],
+    ["REQUEST_FAILED", () => transportError("private-unrecognized-code")],
+  ])("does not retry or disclose permanent rejection %s", async (message, failure) => {
     test.failures.set(`GET ${preflightUrl}`, failure());
-    const result = test.client().preflight();
+    const result = preflight();
     await expect(result).rejects.toThrow(message);
     await expect(result).rejects.not.toThrow(/private/);
     expect(test.requests(preflightUrl)).toHaveLength(1);
@@ -261,7 +238,6 @@ describe("Android Firebase distribution", () => {
   it.each(["Retry-After", "elapsed backoff"])(
     "stops at the read deadline imposed by %s",
     async (mode) => {
-      const test = fixture();
       const response = mode === "Retry-After" ? rateLimit("180") : undefined;
       if (!response) {
         let now = Date.now();
@@ -272,7 +248,7 @@ describe("Android Firebase distribution", () => {
         });
       }
       test.failures.set(`GET ${preflightUrl}`, response ?? reset());
-      await expect(test.client().preflight()).rejects.toThrow(
+      await expect(preflight()).rejects.toThrow(
         response ? /HTTP 429.*attempt 1\/4/ : /ECONNRESET.*attempt 1\/4/,
       );
       expect(test.requests(preflightUrl)).toHaveLength(1);
@@ -283,8 +259,7 @@ describe("Android Firebase distribution", () => {
     },
   );
 
-  it("closes preflight connections and uses fresh connections for publishing and failure cleanup", async () => {
-    const test = fixture();
+  it("closes preflight and failed publishing connections independently", async () => {
     const client = test.client();
     await client.preflight();
     const preflightDispatcher = test.calls[0]!.dispatcher;
@@ -297,9 +272,8 @@ describe("Android Firebase distribution", () => {
     expect(publishingDispatcher).toMatchObject({ closed: true, destroyed: true });
   });
 
-  it("uploads the retained signed Wear bytes before Phone, labels notes, and does not repeat completed notifications", async () => {
-    const test = fixture();
-    const result = await test.client().distribute(test.options);
+  it("publishes Wear before Phone with signed bytes, labeled notes, and idempotent notifications", async () => {
+    const result = await distribute();
     const effects = test.effects();
     expect(effects.map((call) => `${call.method} ${call.url.split("/releases")[1]}`)).toEqual([
       "POST :upload",
@@ -327,78 +301,63 @@ describe("Android Firebase distribution", () => {
     );
     expect(test.receipt().releases.phone.state).toBe("distributed");
     test.calls.length = 0;
-    await test.client().distribute(test.options);
+    await distribute();
     expect(test.effects()).toEqual([]);
   });
 
   it("resumes a partial pair without uploading or emailing Wear again", async () => {
-    const test = fixture();
     const phoneDistribution = `POST https://firebaseappdistribution.googleapis.com/v1/${appName}/releases/phone:distribute`;
     test.failures.set(phoneDistribution, 403);
-    await expect(test.client().distribute(test.options)).rejects.toThrow("HTTP 403");
+    await expect(distribute()).rejects.toThrow("HTTP 403");
     expect(test.receipt().releases.wear.state).toBe("distributed");
     expect(test.receipt().releases.phone.state).toBe("notes-updated");
     test.failures.clear();
     test.calls.length = 0;
-    await test.client().distribute(test.options);
+    await distribute();
     expect(test.effects().map((call) => `${call.method} ${call.url}`)).toEqual([phoneDistribution]);
   });
 
   it.each([503, new Error("synthetic transport interruption")])(
-    "fences an ambiguous notification response instead of resending emails (%s)",
+    "fences ambiguous notifications (%s)",
     async (failure) => {
-      const test = fixture();
       test.failures.set(
         `POST https://firebaseappdistribution.googleapis.com/v1/${appName}/releases/wear:distribute`,
         failure,
       );
-      await expect(test.client().distribute(test.options)).rejects.toThrow(
-        "Firebase wear distribution",
-      );
+      await expect(distribute()).rejects.toThrow("Firebase wear distribution");
       expect(test.calls.filter((call) => call.url.endsWith("/wear:distribute"))).toHaveLength(1);
       expect(delay).not.toHaveBeenCalled();
       expect(test.receipt().releases.wear.state).toBe("distribution-pending");
       test.failures.clear();
       test.calls.length = 0;
-      await expect(test.client().distribute(test.options)).rejects.toThrow(
-        "will not resend emails",
-      );
+      await expect(distribute()).rejects.toThrow("will not resend emails");
       expect(test.calls).toEqual([]);
     },
   );
 
   it("rejects an incomplete Play integration during read-only preflight", async () => {
-    const test = fixture();
-    test.setIntegrationState("ADHOC_SHARING_KEY_NOT_REGISTERED");
-    await expect(test.client().preflight()).rejects.toThrow(
-      "register its Internal App Sharing certificate",
-    );
+    test.state.integrationState = "ADHOC_SHARING_KEY_NOT_REGISTERED";
+    await expect(preflight()).rejects.toThrow("register its Internal App Sharing certificate");
     expect(test.calls.some((call) => call.url.includes("releases"))).toBe(false);
   });
 
-  it("refuses changed retained artifacts, notes, and Firebase destination on recovery", async () => {
-    const test = fixture();
-    await test.client().distribute(test.options);
+  it("rejects changed artifacts, notes, and destination on recovery", async () => {
+    await distribute();
     test.calls.length = 0;
     fs.writeFileSync(test.files.phone!, "different AAB");
-    await expect(test.client().distribute(test.options)).rejects.toThrow("SHA-256 sidecar");
+    await expect(distribute()).rejects.toThrow("SHA-256 sidecar");
     fs.writeFileSync(test.files.phone!, test.bytes.phone);
     test.options.notes.entries[0]!.text = "different notes";
     test.options.notes.entries[0]!.textSha256 = sha256("different notes");
-    await expect(test.client().distribute(test.options)).rejects.toThrow("receipt does not match");
+    await expect(distribute()).rejects.toThrow("receipt does not match");
     test.env.FIREBASE_TESTER_GROUPS = "another-group";
-    await expect(test.client().distribute(test.options)).rejects.toThrow(
-      "saved internal Android plan",
-    );
+    await expect(distribute()).rejects.toThrow("saved internal Android plan");
     expect(test.calls).toEqual([]);
   });
 
-  it("rejects a different processed build and never sends its notes or notifications", async () => {
-    const test = fixture();
-    test.setResponseBuild("9999");
-    await expect(test.client().distribute(test.options)).rejects.toThrow(
-      "release identity differs",
-    );
+  it("rejects a different processed build before publishing", async () => {
+    test.state.responseBuild = "9999";
+    await expect(distribute()).rejects.toThrow("release identity differs");
     expect(
       test.calls.some((call) => call.method === "PATCH" || call.url.endsWith(":distribute")),
     ).toBe(false);
