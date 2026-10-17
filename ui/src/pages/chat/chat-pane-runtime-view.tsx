@@ -23,6 +23,7 @@ import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.t
 import { chatGoalOperations } from "./chat-goals.ts";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
+import { lazySidebarElements } from "./chat-pane-sidebar-layout.ts";
 import {
   ChatProviderReviewDialog,
   createChatProviderReview,
@@ -117,10 +118,20 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   function MountedPane() {
     const context = runtime.context;
     const gateway = projectGateway(context.gateway);
+    const composerCapabilities = projectOwner(runtime.composerCapabilities, (owner) => owner);
+    const realtimeOwner = createMemo(() => {
+      revision();
+      return runtime.realtimeTalk;
+    });
+    const realtime = createMemo(() => {
+      const owner = realtimeOwner();
+      return owner && projectOwner(owner, (source) => source.snapshot);
+    });
     const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
     // Startup attaches one host for this mounted pane's lifetime.
     const state = runtime.readProviderReviewState();
     const goals = state && projectOwner(chatGoalOperations(state), (owner) => owner);
+    const resources = projectOwner(runtime.activeSessionResources, (owner) => owner);
     const discussion = projectOwner(runtime.sessionDiscussion, (owner) => owner.snapshot);
     const boardProvider = createMemo(() => {
       revision();
@@ -175,6 +186,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       runtime.context.plugins,
       runtime.context.navigation,
       nativeGatewaysCapability(),
+      lazySidebarElements,
     ].map((source) => source && projectOwner(source, (capability) => capability));
     onSettled(() => installChatComposerPickerDismissal(runtime.element.ownerDocument));
     // Relative labels tick only while this retained pane is presented.
@@ -185,8 +197,11 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       read: () => {
         revision();
         progress.read();
+        composerCapabilities.read();
+        realtime()?.read();
         projects.read();
         goals?.read();
+        resources.read();
         discussion.read();
         board().forEach((source) => source.read());
         i18nRevision();

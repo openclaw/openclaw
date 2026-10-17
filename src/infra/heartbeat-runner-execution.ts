@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { clearBootstrapSnapshotOnSessionRollover } from "../agents/bootstrap-cache.js";
 import {
   listActiveEmbeddedRunSessionKeys,
   resolveActiveEmbeddedRunSessionId,
@@ -587,10 +586,6 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
               forceNew: true,
               lifecycleTimestamps: {},
               store: currentEntry ? { [isolatedSessionKey]: currentEntry } : {},
-            });
-            clearBootstrapSnapshotOnSessionRollover({
-              sessionKey: isolatedSessionKey,
-              previousSessionId: cronSession.previousSessionId,
             });
             const nextEntry = {
               ...cronSession.sessionEntry,

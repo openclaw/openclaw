@@ -368,7 +368,7 @@ export abstract class ChatPaneStateOwner {
   get runActivity() {
     return this.chatState.projectRunActivity(this.state);
   }
-  protected readonly composerCapabilities = new ChatComposerCapabilityHost(() => this.invalidate());
+  readonly composerCapabilities = new ChatComposerCapabilityHost();
   protected readonly transcript = createChatTranscript(
     () => this.invalidate(),
     () => this.paneId,

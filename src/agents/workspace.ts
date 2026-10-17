@@ -83,7 +83,6 @@ export {
 } from "./workspace-bootstrap-policy.js";
 export {
   getWorkspaceFileSourceRelativePath,
-  workspaceFileSourceIdentitiesMatch,
   workspaceFilesShareSourceIdentity,
 } from "./workspace-file-read.js";
 export { WORKSPACE_VANISHED_ERROR_CODE } from "./workspace-state-identity.js";

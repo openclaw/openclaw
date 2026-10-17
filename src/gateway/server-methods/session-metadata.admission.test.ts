@@ -1,7 +1,7 @@
 import { existsSync, renameSync } from "node:fs";
 import { backup } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import {
@@ -107,270 +107,215 @@ function invoke(
   return { done, respond, errors };
 }
 
-describe("session metadata writer admission", () => {
-  it.each(["shared", "read-only", "suggest"] as const)(
-    "preserves write-scoped viewer assignment for a %s session",
-    async (visibility) => {
-      await withOpenClawTestState(
-        { scenario: "minimal", prepareProfileCatalog: true },
-        async (state) => {
-          const { scope, owner, other } = await seedMetadata(state);
-          replaceSessionEntrySync(scope, { ...loadSessionEntry(scope)!, visibility });
-          const viewer = identifiedClient(other.id);
-          const target = (await resolveSessionSharingTargetAsync({
-            cfg: {},
-            sessionKey: scope.sessionKey,
-            agentId: scope.agentId,
-          }))!;
-          expect(
-            resolveSessionSharingRole({
-              cfg: {},
-              client: viewer,
-              target,
-              isMember: (await readSessionMembersInWorker(scope)).members.some(
-                (member) => member.identityId === other.id,
-              ),
-            }),
-          ).toBe("viewer");
-          const context = sessionSharingTestContext(vi.fn());
-          await initializeSessionReadContext(context);
-          const request = invoke(
-            "sessions.assignOwner",
-            { key: scope.sessionKey, owner: { type: "human", id: other.id } },
-            viewer,
-            context,
-          );
-          await request.done;
-          expect(request.errors).toEqual([]);
-          expect(request.respond.mock.calls[0]?.[0]).toBe(true);
-          expect(loadSessionEntry(scope)?.owner?.actor).toEqual({ type: "human", id: other.id });
-          const current = (await resolveSessionSharingTargetAsync({
-            cfg: {},
-            sessionKey: scope.sessionKey,
-            agentId: scope.agentId,
-          }))!;
-          expect(current.entry.createdActor?.id).toBe(owner.id);
-          expect(
-            resolveSessionSharingRole({
-              cfg: {},
-              client: viewer,
-              target: current,
-              isMember: (await readSessionMembersInWorker(scope)).members.some(
-                (member) => member.identityId === other.id,
-              ),
-            }),
-          ).toBe("viewer");
-        },
-      );
-    },
-  );
-
-  it.each(["sessions.assignOwner", "session.members.add", "session.suggestions.add"] as const)(
-    "rejects %s before recreating its retired store after admission waits",
-    async (method) => {
-      await withOpenClawTestState(
-        { scenario: "minimal", prepareProfileCatalog: true },
-        async (state) => {
-          const { scope, owner, other, database, options } = await seedMetadata(state);
-          const replacement = { ...scope, storePath: state.path("replacement-store.sqlite") };
-          const retired = { ...scope, storePath: state.path("retired-store.sqlite") };
-          const originalEntry = loadSessionEntry(scope)!;
-          // A future store exists on disk, but joins discovery only after the config switch.
-          await backup(requireNativeSqliteDatabase(database.db), replacement.storePath);
-          let cfg: OpenClawConfig = { session: { store: options.path } };
-          const context = sessionSharingTestContext(vi.fn());
-          context.getRuntimeConfig = () => cfg;
-          setRuntimeConfigSnapshot(cfg);
-          await initializeSessionReadContext(context);
-          const entered = createDeferredCore();
-          const release = createDeferredCore();
-          const reservation = runOpenClawAgentWorkerWrite(options, async () => {
-            entered.resolve();
-            await release.promise;
-          });
-          await entered.promise;
-          const params =
-            method === "sessions.assignOwner"
-              ? { key: scope.sessionKey, owner: { type: "human", id: other.id } }
-              : method === "session.members.add"
-                ? { sessionKey: scope.sessionKey, identityId: other.id }
-                : { sessionKey: scope.sessionKey, text: "must not follow a replacement store" };
-          const request = invoke(method, params, identifiedClient(owner.id), context);
-          try {
-            await setImmediate();
-            expect(request.respond).not.toHaveBeenCalled();
-            // External retirement must not inherit the writer whose waiting mutation it revokes.
-            cfg = { session: { store: replacement.storePath } };
-            setRuntimeConfigSnapshot(cfg);
-            expect(await disposeOpenClawAgentDatabaseByPath(options.path, { env: state.env })).toBe(
-              true,
-            );
-            renameSync(options.path, retired.storePath);
-            release.resolve();
-            await Promise.all([reservation, request.done]);
-            expect(request.respond.mock.calls.some(([ok]) => ok)).toBe(false);
-            expect(
-              request.errors.length === 1 || request.respond.mock.calls[0]?.[0] === false,
-            ).toBe(true);
-            expect(existsSync(options.path)).toBe(false);
-            for (const target of [retired, replacement]) {
-              expect(loadSessionEntry(target)).toEqual(originalEntry);
-              expect((await readSessionMembersInWorker(target)).members).toEqual([]);
-              expect(await listSessionSuggestions(target)).toEqual([]);
-            }
-          } finally {
-            release.resolve();
-            await Promise.allSettled([reservation, request.done]);
-          }
-        },
-      );
-    },
-  );
-
-  it.each(methods)("keeps %s behind the native writer reservation", async (method) => {
-    await withOpenClawTestState(
-      { scenario: "minimal", prepareProfileCatalog: true },
-      async (state) => {
-        const fixture = await seedMetadata(state);
-        const { scope, owner, other, options } = fixture;
-        if (method === "session.members.remove") {
-          await addSessionMember(scope, { identityId: other.id, addedBy: owner.id });
-        }
-        if (method === "session.suggestions.resolve") {
-          await addSessionSuggestion(scope, {
-            id: "pending",
-            authorId: owner.id,
-            text: "synthetic suggestion",
-          });
-        }
-        const params =
-          method === "sessions.assignOwner"
-            ? { key: scope.sessionKey, owner: { type: "human", id: other.id } }
-            : method === "session.suggestions.resolve"
-              ? { sessionKey: scope.sessionKey, id: "pending", resolution: "dismiss" }
-              : method === "session.suggestions.add"
-                ? { sessionKey: scope.sessionKey, text: "synthetic suggestion" }
-                : { sessionKey: scope.sessionKey, identityId: other.id };
-        const read = async () => ({
-          owner: loadSessionEntry(scope)?.owner,
-          members: (await readSessionMembersInWorker(scope)).members,
-          suggestions: await listSessionSuggestions(scope),
-        });
-        const before = structuredClone(await read());
-        const context = sessionSharingTestContext(vi.fn());
-        await initializeSessionReadContext(context);
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
-        const reservation = runOpenClawAgentWorkerWrite(options, async () => {
-          entered.resolve();
-          await release.promise;
-        });
-        await entered.promise;
-        const request = invoke(method, params, identifiedClient(owner.id), context);
-        try {
-          await setImmediate();
-          expect(request.respond).not.toHaveBeenCalled();
-          expect(await read()).toEqual(before);
-          release.resolve();
-          await Promise.all([reservation, request.done]);
-          expect(request.errors).toEqual([]);
-          expect(request.respond.mock.calls[0]?.[0]).toBe(true);
-          if (method === "sessions.assignOwner") {
-            expect(loadSessionEntry(scope)?.owner?.actor).toEqual({ type: "human", id: other.id });
-          } else if (method.startsWith("session.members")) {
-            expect(
-              (await readSessionMembersInWorker(scope)).members.map((member) => member.identityId),
-            ).toEqual(method === "session.members.add" ? [other.id] : []);
-          } else {
-            expect(await listSessionSuggestions(scope)).toEqual([
-              expect.objectContaining({
-                state: method === "session.suggestions.add" ? "pending" : "dismissed",
-              }),
-            ]);
-          }
-        } finally {
-          release.resolve();
-          await Promise.allSettled([reservation, request.done]);
-        }
-      },
-    );
+async function reserve(options: Fixture["options"], beforeRelease = () => {}) {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const reservation = runOpenClawAgentWorkerWrite(options, async () => {
+    entered.resolve();
+    await release.promise;
+    beforeRelease();
   });
+  await entered.promise;
+  return { release, reservation };
+}
 
-  it.each(["owner", "visibility", "config"] as const)(
-    "rejects a mutation after %s authority changes in the earlier writer",
-    async (kind) => {
-      await withOpenClawTestState(
-        { scenario: "minimal", prepareProfileCatalog: true },
-        async (state) => {
-          const { scope, owner, other, options } = await seedMetadata(state);
-          let cfg: OpenClawConfig =
-            kind === "owner" ? { agents: { entries: { main: {}, research: {} } } } : {};
-          const context = sessionSharingTestContext(vi.fn());
-          context.getRuntimeConfig = () => cfg;
-          setRuntimeConfigSnapshot(cfg);
-          await initializeSessionReadContext(context);
-          const entered = createDeferredCore();
-          const release = createDeferredCore();
-          const reservation = runOpenClawAgentWorkerWrite(options, async () => {
-            entered.resolve();
-            await release.promise;
-            if (kind === "owner") {
-              cfg = { agents: { entries: { main: {} } } };
-              setRuntimeConfigSnapshot(cfg);
-              expect(cfg.agents?.entries).not.toHaveProperty("research");
-            } else if (kind === "config") {
-              cfg = {
-                gateway: {
-                  roles: {
-                    default: "viewer",
-                    definitions: {
-                      viewer: {
-                        sessions: { others: "view" },
-                        agents: "*",
-                        scopes: ["operator.read", "operator.write"],
-                      },
-                    },
-                  },
-                },
-              };
-              setRuntimeConfigSnapshot(cfg);
-            } else {
-              const entry = loadSessionEntry(scope)!;
-              replaceSessionEntrySync(scope, {
-                ...entry,
-                visibility: "draft",
-              });
-              expect(loadSessionEntry(scope)?.visibility).toBe("draft");
-            }
-          });
-          await entered.promise;
-          const request = invoke(
-            kind === "owner" ? "sessions.assignOwner" : "session.suggestions.add",
-            kind === "owner"
-              ? { key: scope.sessionKey, owner: { type: "agent", id: "research" } }
-              : { sessionKey: scope.sessionKey, text: "must not persist after revocation" },
-            identifiedClient(kind === "config" ? other.id : owner.id),
-            context,
-          );
-          try {
-            await setImmediate();
-            release.resolve();
-            await Promise.all([reservation, request.done]);
-            expect(request.respond.mock.calls.some(([ok]) => ok)).toBe(false);
-            expect(
-              request.errors.length === 1 || request.respond.mock.calls[0]?.[0] === false,
-            ).toBe(true);
-            expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
-            expect(await listSessionSuggestions(scope)).toEqual([]);
-            if (kind === "owner") {
-              expect(loadSessionEntry(scope)?.owner).toBeUndefined();
-            }
-          } finally {
-            release.resolve();
-            await Promise.allSettled([reservation, request.done]);
-          }
-        },
-      );
-    },
+function expectRejected(request: ReturnType<typeof invoke>) {
+  expect(request.respond.mock.calls.some(([ok]) => ok)).toBe(false);
+  expect(request.errors.length === 1 || request.respond.mock.calls[0]?.[0] === false).toBe(true);
+}
+
+async function sharingRole(scope: Fixture["scope"], viewer: GatewayClient, identityId: string) {
+  const target = (await resolveSessionSharingTargetAsync({
+    cfg: {},
+    sessionKey: scope.sessionKey,
+    agentId: scope.agentId,
+  }))!;
+  const { members } = await readSessionMembersInWorker(scope);
+  const role = resolveSessionSharingRole({
+    cfg: {},
+    client: viewer,
+    target,
+    isMember: members.some((member) => member.identityId === identityId),
+  });
+  return { target, role };
+}
+
+type Fixture = Awaited<ReturnType<typeof seedMetadata>>;
+
+async function withMetadata(run: (fixture: Fixture, state: OpenClawTestState) => Promise<void>) {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) =>
+    run(await seedMetadata(state), state),
   );
+}
+
+async function readContext(getConfig?: () => OpenClawConfig) {
+  const context = sessionSharingTestContext(vi.fn());
+  if (getConfig) {
+    context.getRuntimeConfig = getConfig;
+    setRuntimeConfigSnapshot(getConfig());
+  }
+  await initializeSessionReadContext(context);
+  return context;
+}
+
+function paramsFor(method: MetadataMethod, key: string, identityId: string) {
+  if (method === "sessions.assignOwner") {
+    return { key, owner: { type: "human", id: identityId } };
+  }
+  if (method === "session.suggestions.resolve") {
+    return { sessionKey: key, id: "pending", resolution: "dismiss" };
+  }
+  if (method === "session.suggestions.add") {
+    return { sessionKey: key, text: "synthetic suggestion" };
+  }
+  return { sessionKey: key, identityId };
+}
+
+it.each(["shared", "read-only", "suggest"] as const)(
+  "preserves write-scoped viewer assignment for a %s session",
+  async (visibility) => {
+    await withMetadata(async ({ scope, owner, other }) => {
+      replaceSessionEntrySync(scope, { ...loadSessionEntry(scope)!, visibility });
+      const viewer = identifiedClient(other.id);
+      expect((await sharingRole(scope, viewer, other.id)).role).toBe("viewer");
+      const context = await readContext();
+      const request = invoke(
+        "sessions.assignOwner",
+        { key: scope.sessionKey, owner: { type: "human", id: other.id } },
+        viewer,
+        context,
+      );
+      await request.done;
+      expect(request.errors).toEqual([]);
+      expect(request.respond.mock.calls[0]?.[0]).toBe(true);
+      expect(loadSessionEntry(scope)?.owner?.actor).toEqual({ type: "human", id: other.id });
+      const current = await sharingRole(scope, viewer, other.id);
+      expect(current.target.entry.createdActor?.id).toBe(owner.id);
+      expect(current.role).toBe("viewer");
+    });
+  },
+);
+
+it.each([
+  ["commit", "session.members.add"],
+  ["commit", "session.members.remove"],
+  ["commit", "session.suggestions.add"],
+  ["commit", "session.suggestions.resolve"],
+  ["commit", "sessions.assignOwner"],
+  ["retired", "sessions.assignOwner"],
+  ["retired", "session.members.add"],
+  ["retired", "session.suggestions.add"],
+  ["owner", "sessions.assignOwner"],
+  ["visibility", "session.suggestions.add"],
+  ["config", "session.suggestions.add"],
+] as const)("%s: %s respects writer admission", async (kind, method) => {
+  await withMetadata(async ({ scope, owner, other, database, options }, state) => {
+    const replacement = { ...scope, storePath: state.path("replacement-store.sqlite") };
+    const retired = { ...scope, storePath: state.path("retired-store.sqlite") };
+    const originalEntry = loadSessionEntry(scope)!;
+    if (kind === "retired") {
+      // This copy joins discovery only after the config switch.
+      await backup(requireNativeSqliteDatabase(database.db), replacement.storePath);
+    }
+    if (method === "session.members.remove") {
+      await addSessionMember(scope, { identityId: other.id, addedBy: owner.id });
+    }
+    if (method === "session.suggestions.resolve") {
+      await addSessionSuggestion(scope, {
+        id: "pending",
+        authorId: owner.id,
+        text: "synthetic suggestion",
+      });
+    }
+    const read = async () => ({
+      owner: loadSessionEntry(scope)?.owner,
+      members: (await readSessionMembersInWorker(scope)).members,
+      suggestions: await listSessionSuggestions(scope),
+    });
+    const before = kind === "commit" ? structuredClone(await read()) : undefined;
+    let cfg: OpenClawConfig =
+      kind === "owner"
+        ? { agents: { entries: { main: {}, research: {} } } }
+        : kind === "retired"
+          ? { session: { store: options.path } }
+          : {};
+    const context = await readContext(kind === "commit" ? undefined : () => cfg);
+    const { release, reservation } = await reserve(options, () => {
+      if (kind === "owner") {
+        cfg = { agents: { entries: { main: {} } } };
+        setRuntimeConfigSnapshot(cfg);
+        expect(cfg.agents?.entries).not.toHaveProperty("research");
+      } else if (kind === "config") {
+        const viewer = {
+          sessions: { others: "view" as const },
+          agents: "*" as const,
+          scopes: ["operator.read" as const, "operator.write" as const],
+        };
+        cfg = { gateway: { roles: { default: "viewer", definitions: { viewer } } } };
+        setRuntimeConfigSnapshot(cfg);
+      } else if (kind === "visibility") {
+        replaceSessionEntrySync(scope, { ...loadSessionEntry(scope)!, visibility: "draft" });
+        expect(loadSessionEntry(scope)?.visibility).toBe("draft");
+      }
+    });
+    const params =
+      kind === "owner"
+        ? { key: scope.sessionKey, owner: { type: "agent", id: "research" } }
+        : paramsFor(method, scope.sessionKey, other.id);
+    const client = identifiedClient(kind === "config" ? other.id : owner.id);
+    const request = invoke(method, params, client, context);
+    try {
+      await setImmediate();
+      expect(request.respond).not.toHaveBeenCalled();
+      if (kind === "commit") {
+        expect(await read()).toEqual(before);
+      } else if (kind === "retired") {
+        // Retiring externally must not inherit the waiting mutation's writer.
+        cfg = { session: { store: replacement.storePath } };
+        setRuntimeConfigSnapshot(cfg);
+        expect(await disposeOpenClawAgentDatabaseByPath(options.path, { env: state.env })).toBe(
+          true,
+        );
+        renameSync(options.path, retired.storePath);
+      }
+      release.resolve();
+      await Promise.all([reservation, request.done]);
+      if (kind === "commit") {
+        expect(request.errors).toEqual([]);
+        expect(request.respond.mock.calls[0]?.[0]).toBe(true);
+        if (method === "sessions.assignOwner") {
+          expect(loadSessionEntry(scope)?.owner?.actor).toEqual({ type: "human", id: other.id });
+        } else if (method.startsWith("session.members")) {
+          expect(
+            (await readSessionMembersInWorker(scope)).members.map((member) => member.identityId),
+          ).toEqual(method === "session.members.add" ? [other.id] : []);
+        } else {
+          expect(await listSessionSuggestions(scope)).toEqual([
+            expect.objectContaining({
+              state: method === "session.suggestions.add" ? "pending" : "dismissed",
+            }),
+          ]);
+        }
+      } else {
+        expectRejected(request);
+        if (kind === "retired") {
+          expect(existsSync(options.path)).toBe(false);
+          for (const target of [retired, replacement]) {
+            expect(loadSessionEntry(target)).toEqual(originalEntry);
+            expect((await readSessionMembersInWorker(target)).members).toEqual([]);
+            expect(await listSessionSuggestions(target)).toEqual([]);
+          }
+        } else {
+          expect((await readSessionMembersInWorker(scope)).members).toEqual([]);
+          expect(await listSessionSuggestions(scope)).toEqual([]);
+          if (kind === "owner") {
+            expect(loadSessionEntry(scope)?.owner).toBeUndefined();
+          }
+        }
+      }
+    } finally {
+      release.resolve();
+      await Promise.allSettled([reservation, request.done]);
+    }
+  });
 });
