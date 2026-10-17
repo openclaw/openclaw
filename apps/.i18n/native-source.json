@@ -4734,7 +4734,6 @@
     {"path":"apps/macos/Sources/OpenClaw/GatewayEnvironment.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.bcde0c4847796da9","source":" (local: \\(projectEntrypoint ?? \"unknown\"))"},
     {"path":"apps/macos/Sources/OpenClaw/GatewayEnvironment.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.c0ee5ec5749bb1bc","source":"(\\(gatewayLabel))"},
     {"path":"apps/macos/Sources/OpenClaw/DeviceMicrophonePanel.swift","kind":"ui-call","surface":"apple","id":"native.apple.ce6ebe9aace3e6ab","source":"Live level"},
-    {"path":"apps/macos/Sources/OpenClaw/DeviceMicrophonePanel.swift","kind":"ui-call","surface":"apple","id":"native.apple.ca1b7a6ae6b20636","source":"Voice Wake requires macOS 26 or newer"},
     {"path":"apps/macos/Sources/OpenClaw/DeviceMicrophonePanel.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.8f37555919219a6f","source":"Stopped"},
     {"path":"apps/macos/Sources/OpenClaw/DeviceMicrophonePanel.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.157405ba1aef8ef5","source":"Timeout: no trigger heard"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarComponents.kt","kind":"conditional-branch","surface":"android","id":"native.android.41f2026b4f9e19f9","source":"Not pinned"},
