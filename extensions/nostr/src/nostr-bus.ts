@@ -489,6 +489,7 @@ export async function startNostrBus(options: NostrBusOptions) {
       pool,
       relays,
       filter: dmFilter,
+      replayLookbackSec: STARTUP_LOOKBACK_SEC,
       abort: relayAbort.signal,
       onEvent: (event) => {
         const task = handleRelayEvent(event);
@@ -511,7 +512,10 @@ export async function startNostrBus(options: NostrBusOptions) {
       },
       onClose: (relay, reasons) => {
         options.onDisconnect?.(relay);
-        onError?.(new Error(`Subscription closed: ${reasons.join(", ")}`), "subscription");
+        onError?.(
+          new Error(`Subscription closed: ${reasons.join(", ")}; resubscribing`),
+          "subscription",
+        );
       },
     });
     relaySubscriptions.start();

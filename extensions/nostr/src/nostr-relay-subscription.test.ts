@@ -4,7 +4,7 @@ import { createNostrRelaySubscriptionGroup } from "./nostr-relay-subscription.js
 
 type RelayHandlers = Parameters<SimplePool["subscribeMany"]>[2];
 
-function createHarness() {
+function createHarness(filter: Parameters<SimplePool["subscribeMany"]>[1] = { kinds: [4] }) {
   const handlers: RelayHandlers[] = [];
   const abortController = new AbortController();
   const subscribeMany = vi.fn(
@@ -35,7 +35,8 @@ function createHarness() {
   const group = createNostrRelaySubscriptionGroup({
     pool: { subscribeMany } as unknown as SimplePool,
     relays: ["wss://one.example", "wss://two.example"],
-    filter: { kinds: [4] },
+    filter,
+    replayLookbackSec: 120,
     abort: abortController.signal,
     onEvent: (_event: Event) => {},
     onBackfillComplete,
@@ -101,5 +102,71 @@ describe("Nostr relay subscriptions", () => {
 
     expect(onClose).toHaveBeenCalledWith("wss://one.example", ["relay unavailable"]);
     await group.close("test complete");
+  });
+
+  it("resubscribes a relay whose subscription closes unexpectedly", async () => {
+    vi.useFakeTimers();
+    const { group, handlers, onClose, subscribeMany } = createHarness();
+
+    handlers[1]?.onclose?.([{ url: "wss://two.example", reason: "relay connection failed" }]);
+    expect(onClose).toHaveBeenCalledWith("wss://two.example", ["relay connection failed"]);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(subscribeMany).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(subscribeMany).toHaveBeenCalledTimes(3);
+    expect(subscribeMany.mock.calls[2]?.[0]).toEqual(["wss://two.example"]);
+    await group.close("test complete");
+  });
+
+  it("resubscribes with a bounded replay window that keeps the skew lookback", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(10_000_000);
+    const { group, handlers, subscribeMany } = createHarness({ kinds: [4], since: 1_000 });
+
+    handlers[0]?.onevent?.({ created_at: 9_000 } as Event); // stored, before EOSE: ignored
+    handlers[0]?.oneose?.();
+    handlers[1]?.oneose?.();
+    await Promise.resolve();
+    handlers[0]?.onevent?.({ created_at: 2_000 } as Event);
+    handlers[1]?.onevent?.({ created_at: 1_050 } as Event);
+    handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay connection failed" }]);
+    handlers[1]?.onclose?.([{ url: "wss://two.example", reason: "relay connection failed" }]);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const resubscribed = new Map(
+      subscribeMany.mock.calls.slice(2).map(([relays, filter]) => [relays[0], filter]),
+    );
+    // A DM stamped 1_990 by a sender whose clock is behind still matches; older history is not replayed.
+    expect(resubscribed.get("wss://one.example")).toEqual({ kinds: [4], since: 1_880 });
+    // Never earlier than the startup baseline.
+    expect(resubscribed.get("wss://two.example")).toEqual({ kinds: [4], since: 1_000 });
+    await group.close("test complete");
+  });
+
+  it("clamps a far-future event before it moves the replay window", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(2_000_000);
+    const { group, handlers, subscribeMany } = createHarness({ kinds: [4], since: 1_000 });
+
+    handlers[1]?.oneose?.();
+    await Promise.resolve();
+    handlers[1]?.onevent?.({ created_at: 9_999_999 } as Event);
+    handlers[1]?.onclose?.([{ url: "wss://two.example", reason: "relay connection failed" }]);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(subscribeMany.mock.calls[2]?.[1]).toEqual({ kinds: [4], since: 1_880 });
+    await group.close("test complete");
+  });
+
+  it("does not resubscribe once the group is closing", async () => {
+    vi.useFakeTimers();
+    const { group, handlers, subscribeMany } = createHarness();
+
+    handlers[1]?.onclose?.([{ url: "wss://two.example", reason: "relay connection failed" }]);
+    await group.close("closed by caller");
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(subscribeMany).toHaveBeenCalledTimes(2);
   });
 });
