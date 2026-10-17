@@ -4,6 +4,14 @@ import { describe, expect, it, vi } from "vitest";
 import { stripInvisibleUnicode } from "../../infra/unicode-visibility.js";
 import { sanitizeHtml } from "./web-fetch-visibility.js";
 
+async function expectVisible(html: string, visible = ["Visible sibling"]) {
+  const result = await sanitizeHtml(html);
+  expect(result).not.toContain("Secret");
+  for (const text of visible) {
+    expect(result).toContain(text);
+  }
+}
+
 describe("sanitizeHtml", () => {
   it.each(["meta\u00a0"])(
     "retains visible contents in the complete ordinary name %s",
@@ -132,9 +140,7 @@ describe("sanitizeHtml", () => {
   it.each(['[class]="state" aria-hidden="true"', '[style] = "state" style="display:none"'])(
     "reads visibility after framework attributes: %s",
     async (attrs) => {
-      const result = await sanitizeHtml(`<div ${attrs}>Secret</div><p>Visible sibling</p>`);
-      expect(result).not.toContain("Secret");
-      expect(result).toContain("Visible sibling");
+      await expectVisible(`<div ${attrs}>Secret</div><p>Visible sibling</p>`);
     },
   );
 
@@ -147,18 +153,14 @@ describe("sanitizeHtml", () => {
     "<ul><li hidden>Secret outer<svg><foreignObject><li>Secret inner</li></foreignObject></svg>Secret tail</li><li>Visible sibling</li></ul>",
     "<div hidden>Secret before</span>Secret after</div><p>Visible sibling</p>",
   ])("preserves the hidden owner across nested and unmatched tags: %s", async (html) => {
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Secret");
-    expect(result).toContain("Visible sibling");
+    await expectVisible(html);
   });
 
-  it.each(["ul"])("closes omitted list items within their %s owner", async (list) => {
-    const result = await sanitizeHtml(
-      `<${list}><li hidden><span>Secret<li>Visible sibling</${list}><p>Article after</p>`,
-    );
-    expect(result).not.toContain("Secret");
-    expect(result).toContain("Visible sibling");
-    expect(result).toContain("Article after");
+  it("closes omitted list items within their ul owner", async () => {
+    await expectVisible(`<ul><li hidden><span>Secret<li>Visible sibling</ul><p>Article after</p>`, [
+      "Visible sibling",
+      "Article after",
+    ]);
   });
 
   it.each([
@@ -170,94 +172,71 @@ describe("sanitizeHtml", () => {
     "<dl><dd hidden>Secret</dl><p>Visible sibling</p>",
     "<table><tr><td><p hidden>Secret</table><p>Visible sibling</p>",
   ])("closes optional elements only within their owning scope: %s", async (html) => {
-    const result = await sanitizeHtml(html + "<p>Article after</p>");
-    expect(result).not.toContain("Secret");
-    expect(result).toContain("Visible sibling");
-    expect(result).toContain("Article after");
+    await expectVisible(html + "<p>Article after</p>", ["Visible sibling", "Article after"]);
   });
 
-  it.each([
-    "<table><tr hidden><td>Secret<table><tr><td>Secret inner</td></tr></table>Secret tail</td></tr><tr><td>Visible sibling</td></tr></table>",
-  ])("keeps hidden ancestors across optional-element families: %s", async (html) => {
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Secret");
-    expect(result).toContain("Visible sibling");
+  it("keeps hidden ancestors across optional-element families", async () => {
+    const html =
+      "<table><tr hidden><td>Secret<table><tr><td>Secret inner</td></tr></table>Secret tail</td></tr><tr><td>Visible sibling</td></tr></table>";
+    await expectVisible(html);
   });
 
-  it.each(["script"])("keeps %s data inside its hidden paragraph", async (tag) => {
-    const result = await sanitizeHtml(
-      `<p hidden>Secret before<${tag}><p>Secret data</p></${tag}>Secret tail</p><p>Visible sibling</p>`,
+  it("keeps script data inside its hidden paragraph", async () => {
+    await expectVisible(
+      `<p hidden>Secret before<script><p>Secret data</p></script>Secret tail</p><p>Visible sibling</p>`,
     );
-    expect(result).not.toContain("Secret");
-    expect(result).toContain("Visible sibling");
   });
 
-  it.each(["script"])("keeps an unfinished %s region hidden", async (tag) => {
-    const result = await sanitizeHtml(
-      `<p>Visible prefix</p><p hidden>Secret<${tag}><p>Secret data`,
+  it("keeps an unfinished script region hidden", async () => {
+    await expectVisible(`<p>Visible prefix</p><p hidden>Secret<script><p>Secret data`, [
+      "Visible prefix",
+    ]);
+  });
+
+  it("keeps double-escaped script data in its hidden owner", async () => {
+    const html =
+      "<p hidden>Secret before<script><!--<script></script><p>Secret data</p>--></script>Secret tail</p><p>Visible sibling</p>";
+    await expectVisible(html);
+  });
+
+  it("ignores the HTML script opener slash for opaque text", async () => {
+    await expectVisible(
+      `<p hidden>Secret before<script/><p>Secret data</p></script>Secret tail</p><p>Visible sibling</p>`,
     );
-    expect(result).not.toContain("Secret");
-    expect(result).toContain("Visible prefix");
-  });
-
-  it.each([
-    "<p hidden>Secret before<script><!--<script></script><p>Secret data</p>--></script>Secret tail</p><p>Visible sibling</p>",
-  ])("keeps double-escaped script data in its hidden owner: %s", async (html) => {
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Secret");
-    expect(result).toContain("Visible sibling");
-  });
-
-  it.each(["script"])("ignores the HTML %s opener slash for opaque text", async (tag) => {
-    const result = await sanitizeHtml(
-      `<p hidden>Secret before<${tag}/><p>Secret data</p></${tag}>Secret tail</p><p>Visible sibling</p>`,
-    );
-    expect(result).not.toContain("Secret");
-    expect(result).toContain("Visible sibling");
   });
 
   it("preserves self-closing foreign text elements", async () => {
-    const result = await sanitizeHtml(
+    await expectVisible(
       '<math><title hidden data-note="Secret"/><mtext>Visible sibling</mtext></math>',
     );
-    expect(result).not.toContain("Secret");
-    expect(result).toContain("Visible sibling");
   });
 
   it.each(["thead"])(
     "ignores misplaced %s starts when resolving a hidden paragraph",
     async (tag) => {
-      const result = await sanitizeHtml(
+      await expectVisible(
         `<p hidden>Secret before<${tag}>Secret data</${tag}>Secret tail</p><p>Visible sibling</p>`,
       );
-      expect(result).not.toContain("Secret");
-      expect(result).toContain("Visible sibling");
     },
   );
 
-  it.each(["option"])("keeps datalist %s descendants inside the hidden owner", async (tag) => {
-    const result = await sanitizeHtml(
-      `<datalist><${tag} hidden>Secret outer<span><${tag}>Secret inner</${tag}></span>Secret tail</${tag}></datalist><p>Visible sibling</p>`,
+  it("keeps datalist option descendants inside the hidden owner", async () => {
+    await expectVisible(
+      `<datalist><option hidden>Secret outer<span><option>Secret inner</option></span>Secret tail</option></datalist><p>Visible sibling</p>`,
     );
-    expect(result).not.toContain("Secret");
-    expect(result).toContain("Visible sibling");
   });
 
   it("keeps ordinary omitted datalist option siblings", async () => {
-    const result = await sanitizeHtml(
+    await expectVisible(
       "<datalist><option hidden>Secret<option>Visible sibling</option></datalist><p>Article after</p>",
+      ["Visible sibling", "Article after"],
     );
-    expect(result).not.toContain("Secret");
-    expect(result).toContain("Visible sibling");
-    expect(result).toContain("Article after");
   });
 
-  it.each([
-    "<math><mtext><p hidden>Secret before<script><p>Secret data</p></script>Secret tail</p><p>Visible sibling</p></mtext></math>",
-  ])("keeps foreign markup and HTML integration-point text distinct: %s", async (html) => {
-    const result = await sanitizeHtml(html);
-    expect(result).not.toContain("Secret");
-    expect(result).toContain("Visible sibling");
+  it("keeps foreign markup and HTML integration-point text distinct", async () => {
+    const html =
+      "<math><mtext><p hidden>Secret before<script><p>Secret data</p></script>Secret tail</p><p>Visible sibling</p></mtext></math>";
+    await expectVisible(html);
   });
 
   it("handles malformed HTML gracefully", async () => {

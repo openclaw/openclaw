@@ -39,8 +39,7 @@ function setMockFetch(
 
 function expectRawFetchSuccessDetails(details: unknown) {
   const typedDetails = details as { status?: number; extractor?: string };
-  expect(typedDetails.status).toBe(200);
-  expect(typedDetails.extractor).toBe("raw");
+  expect(typedDetails).toMatchObject({ status: 200, extractor: "raw" });
 }
 
 function firstFetchUrl(fetchSpy: ReturnType<typeof setMockFetch>): string {
@@ -62,15 +61,7 @@ function createWebFetchToolForTest(params?: {
     config: {
       plugins: params?.firecrawlApiKey
         ? {
-            entries: {
-              firecrawl: {
-                config: {
-                  webFetch: {
-                    apiKey: params.firecrawlApiKey,
-                  },
-                },
-              },
-            },
+            entries: { firecrawl: { config: { webFetch: { apiKey: params.firecrawlApiKey } } } },
           }
         : undefined,
       tools: {
@@ -273,47 +264,35 @@ describe("web_fetch SSRF protection", () => {
     expect(firstFetchUrl(fetchSpy)).toBe(expectedFetchUrl);
   });
 
-  it("allows RFC2544 benchmark-range URLs only when web_fetch ssrfPolicy opts in", async () => {
-    // Benchmark ranges are fake-IP infrastructure in some deployments, but
-    // remain denied unless the web_fetch config opts in.
-    const url = "http://198.18.0.153/file";
-    lookupMock.mockResolvedValue([{ address: "198.18.0.153", family: 4 }]);
-
-    const deniedTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
-    await expectBlockedUrl(deniedTool, url, /private|internal|blocked/i);
-
-    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("benchmark ok"));
-    const allowedTool = createWebFetchToolForTest({
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-      cacheTtlMinutes: 1,
-    });
-
-    const allowed = await allowedTool?.execute?.("call", { url });
+  async function expectPolicyOptIn(url: string, ssrfPolicy: ssrf.SsrFPolicy, body: string) {
+    const strict = () => createWebFetchToolForTest({ cacheTtlMinutes: 1 });
+    await expectBlockedUrl(strict(), url, /private|internal|blocked/i);
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse(body));
+    const allowed = await createWebFetchToolForTest({ ssrfPolicy, cacheTtlMinutes: 1 })?.execute?.(
+      "call",
+      { url },
+    );
     expectRawFetchSuccessDetails(allowed?.details);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const stricterTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
-    await expectBlockedUrl(stricterTool, url, /private|internal|blocked/i);
+    await expectBlockedUrl(strict(), url, /private|internal|blocked/i);
+  }
+
+  it("allows RFC2544 benchmark-range URLs only when web_fetch ssrfPolicy opts in", async () => {
+    lookupMock.mockResolvedValue([{ address: "198.18.0.153", family: 4 }]);
+    await expectPolicyOptIn(
+      "http://198.18.0.153/file",
+      { allowRfc2544BenchmarkRange: true },
+      "benchmark ok",
+    );
   });
 
   it("allows IPv6 unique-local DNS answers only when web_fetch ssrfPolicy opts in", async () => {
-    const url = "https://fake-ip.test/file";
     lookupMock.mockResolvedValue([{ address: "fc00::153", family: 6 }]);
-
-    const deniedTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
-    await expectBlockedUrl(deniedTool, url, /private|internal|blocked/i);
-
-    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("ipv6 ula ok"));
-    const allowedTool = createWebFetchToolForTest({
-      ssrfPolicy: { allowIpv6UniqueLocalRange: true },
-      cacheTtlMinutes: 1,
-    });
-
-    const allowed = await allowedTool?.execute?.("call", { url });
-    expectRawFetchSuccessDetails(allowed?.details);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-
-    const stricterTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
-    await expectBlockedUrl(stricterTool, url, /private|internal|blocked/i);
+    await expectPolicyOptIn(
+      "https://fake-ip.test/file",
+      { allowIpv6UniqueLocalRange: true },
+      "ipv6 ula ok",
+    );
   });
 
   it("still blocks dangerous hostnames when trusted env proxy is explicitly enabled", async () => {

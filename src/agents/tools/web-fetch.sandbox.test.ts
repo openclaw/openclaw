@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandBuffered } from "../../process/exec.js";
@@ -58,13 +58,20 @@ function mockResponse() {
   };
 }
 
+async function readSpill(read: ReturnType<typeof createSandboxedReadTool>, filePath: string) {
+  return JSON.stringify(await read.execute("read", { path: filePath, offset: 1_000, limit: 30 }));
+}
+
+beforeEach(() => {
+  fetchMock.mockImplementation(async () => mockResponse());
+});
+
 afterEach(() => {
   fetchMock.mockReset();
 });
 
 describe("web_fetch sandbox output recovery", () => {
   it("recovers omitted content through bounded read and keeps cached files with their requester", async () => {
-    fetchMock.mockImplementation(async () => mockResponse());
     const root = tempDirs.make("web-fetch-sandbox-");
     const first = context(root, "first");
     const args = { url: "https://example.com/sandbox-output" };
@@ -73,13 +80,9 @@ describe("web_fetch sandbox output recovery", () => {
     expect(original.text).not.toContain(marker);
     expect(original.text.length).toBeLessThanOrEqual(1_000);
     expect(original.text).toContain(`Full output: ${original.spill.path}`);
-    const recovered = await first.read.execute("read", {
-      path: original.spill.path,
-      offset: 1_000,
-      limit: 30,
-    });
-    expect(JSON.stringify(recovered)).toContain(marker);
-    expect(JSON.stringify(recovered).length).toBeLessThan(4_000);
+    const recovered = await readSpill(first.read, original.spill.path);
+    expect(recovered).toContain(marker);
+    expect(recovered.length).toBeLessThan(4_000);
     const saved = first.bridge.resolvePath({ filePath: original.spill.path });
     assert(saved.hostPath);
     expect(
@@ -97,11 +100,7 @@ describe("web_fetch sandbox output recovery", () => {
     assert(other.spill);
     expect(other.cached).toBeUndefined();
     expect(other.spill.path).not.toBe(original.spill.path);
-    expect(
-      JSON.stringify(
-        await second.read.execute("read", { path: other.spill.path, offset: 1_000, limit: 30 }),
-      ),
-    ).toContain(marker);
+    expect(await readSpill(second.read, other.spill.path)).toContain(marker);
     await expect(second.read.execute("foreign", { path: original.spill.path })).rejects.toThrow();
 
     const sameRoot = details(
@@ -122,7 +121,6 @@ describe("web_fetch sandbox output recovery", () => {
   it.runIf(process.platform !== "win32")(
     "stages readable output without granting guest writes in a read-only workspace",
     async () => {
-      fetchMock.mockImplementation(async () => mockResponse());
       const root = tempDirs.make("web-fetch-native-read-only-");
       const sandbox = createSandboxTestContext({
         overrides: {
@@ -161,11 +159,7 @@ describe("web_fetch sandbox output recovery", () => {
       );
       assert(result.spill);
       const read = createSandboxedReadTool({ root, bridge });
-      expect(
-        JSON.stringify(
-          await read.execute("read", { path: result.spill.path, offset: 1_000, limit: 30 }),
-        ),
-      ).toContain(marker);
+      expect(await readSpill(read, result.spill.path)).toContain(marker);
       expect((await fs.stat(result.spill.path)).mode & 0o077).toBe(0);
       await expect(fs.stat(path.join(root, "guest-write.txt"))).rejects.toThrow();
       await fs.rm(path.dirname(result.spill.path), { recursive: true });
@@ -175,20 +169,11 @@ describe("web_fetch sandbox output recovery", () => {
       expect(renewed.cached).toBeUndefined();
       assert(renewed.spill);
       expect(renewed.spill.path).not.toBe(result.spill.path);
-      expect(
-        JSON.stringify(
-          await read.execute("renewed-read", {
-            path: renewed.spill.path,
-            offset: 1_000,
-            limit: 30,
-          }),
-        ),
-      ).toContain(marker);
+      expect(await readSpill(read, renewed.spill.path)).toContain(marker);
     },
   );
 
   it("returns bounded content without a false host-file promise when a backend cannot stage output", async () => {
-    fetchMock.mockImplementation(async () => mockResponse());
     const sandbox = context(tempDirs.make("web-fetch-unavailable-"), "unavailable");
     const runRemoteShellScript = vi.fn(async () => {
       throw new Error("Unsupported staging must not run a remote command");

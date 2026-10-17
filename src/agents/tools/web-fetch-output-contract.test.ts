@@ -40,18 +40,16 @@ function createContractTool(options?: {
   userAgent?: string;
 }) {
   return createWebFetchTool({
-    config: {
-      tools: {
-        web: {
-          fetch: {
-            cacheTtlMinutes: options?.cacheTtlMinutes ?? 0,
-            maxChars: options?.maxChars,
-            userAgent: options?.userAgent,
-          },
-        },
-      },
-    },
+    config: { tools: { web: { fetch: { cacheTtlMinutes: 0, ...options } } } },
     sandboxed: false,
+  });
+}
+
+function mockProvider(execute: () => unknown) {
+  fetchWithWebToolsNetworkGuardMock.mockRejectedValue(new Error("direct fetch failed"));
+  resolveWebFetchDefinitionMock.mockReturnValue({
+    provider: { id: "mock-provider" },
+    definition: { execute },
   });
 }
 
@@ -105,26 +103,18 @@ describe("web_fetch output contract", () => {
 
     expectContract(details);
     expect(details.length).toBe((details.text as string).length);
-    expect(Object.hasOwn(details, "title")).toBe(false);
-    expect(Object.hasOwn(details, "warning")).toBe(false);
-    expect(Object.hasOwn(details, "spill")).toBe(false);
+    for (const key of ["title", "warning", "spill"]) {
+      expect(Object.hasOwn(details, key)).toBe(false);
+    }
     expect(Object.values(details)).not.toContain(undefined);
   });
 
   it("validates provider-normalized results", async () => {
-    fetchWithWebToolsNetworkGuardMock.mockRejectedValue(new Error("direct fetch failed"));
-    resolveWebFetchDefinitionMock.mockReturnValue({
-      provider: { id: "mock-provider" },
-      definition: {
-        description: "mock provider",
-        parameters: {},
-        execute: async () => ({
-          finalUrl: "https://provider.example/final",
-          status: 206,
-          text: "provider body",
-        }),
-      },
-    });
+    mockProvider(async () => ({
+      finalUrl: "https://provider.example/final",
+      status: 206,
+      text: "provider body",
+    }));
     const result = await createContractTool()?.execute("provider", {
       url: "https://example.com/provider-contract",
       extractMode: "text",
@@ -133,25 +123,21 @@ describe("web_fetch output contract", () => {
 
     expectContract(details);
     expect(details.externalContent).toMatchObject({ provider: "mock-provider" });
-    expect(Object.hasOwn(details, "contentType")).toBe(false);
-    expect(Object.hasOwn(details, "title")).toBe(false);
-    expect(Object.hasOwn(details, "warning")).toBe(false);
+    for (const key of ["contentType", "title", "warning"]) {
+      expect(Object.hasOwn(details, key)).toBe(false);
+    }
     expect(Object.values(details)).not.toContain(undefined);
   });
 
   it.each(["title", "finalUrl"])(
     "bounds provider-controlled %s before serialization and caching",
     async (field) => {
-      fetchWithWebToolsNetworkGuardMock.mockRejectedValue(new Error("direct fetch failed"));
       const providerExecute = vi.fn(async () => ({
         text: "Useful provider body.",
         [field]:
           field === "finalUrl" ? `https://example.com/${"x".repeat(72_000)}` : "x".repeat(72_000),
       }));
-      resolveWebFetchDefinitionMock.mockReturnValue({
-        provider: { id: "mock-provider" },
-        definition: { execute: providerExecute },
-      });
+      mockProvider(providerExecute);
       const tool = createContractTool({ cacheTtlMinutes: 1, maxChars: 1_000 });
       const args = { url: `https://example.com/metadata-${field}` };
       const first = await tool?.execute("metadata-first", args);
@@ -262,15 +248,10 @@ describe("web_fetch output contract", () => {
   it("retains already-wrapped provider warning prose", async () => {
     fetchWithWebToolsNetworkGuardMock.mockRejectedValue(new Error("direct fetch failed"));
     const prose = "Useful metadata ".repeat(8);
-    resolveWebFetchDefinitionMock.mockReturnValue({
-      provider: { id: "mock-provider" },
-      definition: {
-        execute: async () => ({
-          text: "Useful provider body.",
-          warning: wrapExternalContent(prose, { source: "web_fetch", includeWarning: false }),
-        }),
-      },
-    });
+    mockProvider(async () => ({
+      text: "Useful provider body.",
+      warning: wrapExternalContent(prose, { source: "web_fetch", includeWarning: false }),
+    }));
     const details = requireDetails(
       (await createContractTool()?.execute("wrapped-metadata", {
         url: "https://example.com/wrapped-metadata",
@@ -287,17 +268,11 @@ describe("web_fetch output contract", () => {
   it.each([100, 300, 800])(
     "shares a %i-character content budget without breaking metadata wrappers",
     async (maxChars) => {
-      fetchWithWebToolsNetworkGuardMock.mockRejectedValue(new Error("direct fetch failed"));
-      resolveWebFetchDefinitionMock.mockReturnValue({
-        provider: { id: "mock-provider" },
-        definition: {
-          execute: async () => ({
-            text: "Useful provider body.",
-            title: "Title ".repeat(1_000),
-            warning: `Incomplete response. ${"🦞".repeat(1_000)}`,
-          }),
-        },
-      });
+      mockProvider(async () => ({
+        text: "Useful provider body.",
+        title: "Title ".repeat(1_000),
+        warning: `Incomplete response. ${"🦞".repeat(1_000)}`,
+      }));
       const result = await createContractTool({ maxChars })?.execute("shared-budget", {
         url: "https://example.com/shared-budget",
       });

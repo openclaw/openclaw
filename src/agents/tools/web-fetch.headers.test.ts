@@ -10,25 +10,12 @@ import * as webGuardedFetch from "./web-guarded-fetch.js";
 const lookupMock = vi.fn();
 const baseToolConfig = createBaseWebFetchToolConfig({ lookupFn: lookupMock });
 
-function markdownResponse(body: string, extraHeaders: Record<string, string> = {}): Response {
-  return new Response(body, {
-    status: 200,
-    headers: { "content-type": "text/markdown; charset=utf-8", ...extraHeaders },
-  });
-}
-
-function htmlResponse(body: string, contentType = "text/html; charset=utf-8"): Response {
-  return new Response(body, {
-    status: 200,
-    headers: { "content-type": contentType },
-  });
-}
-
-function jsonResponse(body: string, contentType = "application/json; charset=utf-8"): Response {
-  return new Response(body, {
-    status: 200,
-    headers: { "content-type": contentType },
-  });
+function setResponse(body: string, contentType = "text/markdown; charset=utf-8") {
+  const fetchSpy = vi
+    .fn()
+    .mockResolvedValue(new Response(body, { headers: { "content-type": contentType } }));
+  global.fetch = withFetchPreconnect(fetchSpy);
+  return fetchSpy;
 }
 
 function createToolWithHeaders(
@@ -62,10 +49,7 @@ describe("web_fetch headers and response extraction", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
-    lookupMock.mockImplementation(async (hostname: string) => {
-      void hostname;
-      return [{ address: "93.184.216.34", family: 4 }];
-    });
+    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
   });
 
   afterEach(() => {
@@ -75,8 +59,7 @@ describe("web_fetch headers and response extraction", () => {
   });
 
   it("sends configured headers with the direct fetch request", async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Routed"));
-    global.fetch = withFetchPreconnect(fetchSpy);
+    const fetchSpy = setResponse("# Routed");
     const fetchWithRealGuard = webGuardedFetch.fetchWithWebToolsNetworkGuard;
     const guardedFetchSpy = vi
       .spyOn(webGuardedFetch, "fetchWithWebToolsNetworkGuard")
@@ -93,14 +76,14 @@ describe("web_fetch headers and response extraction", () => {
 
     await tool?.execute?.("call", { url: "https://example.com/routed" });
 
-    expect(getRequestHeaders(fetchSpy)["ATL-SG-SERVICE-INJECTION-URL"]).toBe(
-      "http://host.docker.internal:9999",
-    );
-    expect(getRequestHeaders(fetchSpy).Authorization).toBe("Bearer deployment-token");
-    expect(getRequestHeaders(fetchSpy).Cookie).toBe("session=deployment-session");
-    expect(getRequestHeaders(fetchSpy)["X-Api-Key"]).toBe("deployment-api-key");
-    expect(getRequestHeaders(fetchSpy)["X-Tokenizer-Version"]).toBe("v2");
-    expect(getRequestHeaders(fetchSpy)["X-Trace-Token"]).toBe("trace-context");
+    expect(getRequestHeaders(fetchSpy)).toMatchObject({
+      "ATL-SG-SERVICE-INJECTION-URL": "http://host.docker.internal:9999",
+      Authorization: "Bearer deployment-token",
+      Cookie: "session=deployment-session",
+      "X-Api-Key": "deployment-api-key",
+      "X-Tokenizer-Version": "v2",
+      "X-Trace-Token": "trace-context",
+    });
     const captureMeta = guardedFetchSpy.mock.calls[0]?.[0].capture;
     expect(captureMeta === false ? undefined : captureMeta?.sensitiveRequestHeaderNames).toEqual([
       "ATL-SG-SERVICE-INJECTION-URL",
@@ -115,8 +98,7 @@ describe("web_fetch headers and response extraction", () => {
   it("refuses fetch-owned and framing headers", async () => {
     // Upgrade/Expect/Keep-Alive/Transfer-Encoding make fetch throw, so letting one
     // through would break every web_fetch call.
-    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Connection"));
-    global.fetch = withFetchPreconnect(fetchSpy);
+    const fetchSpy = setResponse("# Connection");
 
     const tool = createToolWithHeaders({
       accept: "text/plain",
@@ -145,8 +127,7 @@ describe("web_fetch headers and response extraction", () => {
   });
 
   it("normalizes empty values without retaining a stale case-colliding value", async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Normalized"));
-    global.fetch = withFetchPreconnect(fetchSpy);
+    const fetchSpy = setResponse("# Normalized");
 
     const tool = createToolWithHeaders({
       "X-Presence-Flag": " \t ",
@@ -164,8 +145,7 @@ describe("web_fetch headers and response extraction", () => {
 
   it("still fetches when every configured header is unusable, naming it in a warning", async () => {
     // The whole request must not fail because one config value is unsendable.
-    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Survives"));
-    global.fetch = withFetchPreconnect(fetchSpy);
+    const fetchSpy = setResponse("# Survives");
     const warnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
 
     const invalidName = "X-Bad\n[forged]\u001b[31m";
@@ -193,8 +173,7 @@ describe("web_fetch headers and response extraction", () => {
   });
 
   it("partitions the fetch cache by configured headers", async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Cached"));
-    global.fetch = withFetchPreconnect(fetchSpy);
+    const fetchSpy = setResponse("# Cached");
     const url = "https://example.com/cache-partition";
 
     await createToolWithHeaders(
@@ -218,8 +197,7 @@ describe("web_fetch headers and response extraction", () => {
   });
 
   it("does not partition the cache for headers the request never carries", async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Unpartitioned"));
-    global.fetch = withFetchPreconnect(fetchSpy);
+    const fetchSpy = setResponse("# Unpartitioned");
     const url = "https://example.com/cache-unpartitioned";
 
     const plain = createWebFetchTool({
@@ -242,10 +220,7 @@ describe("web_fetch headers and response extraction", () => {
   });
 
   it("handles structured +json subtypes as JSON", async () => {
-    const fetchSpy = vi
-      .fn()
-      .mockResolvedValue(jsonResponse('{"patch":true}', "Application/JSON-Patch+JSON"));
-    global.fetch = withFetchPreconnect(fetchSpy);
+    setResponse('{"patch":true}', "Application/JSON-Patch+JSON");
 
     const tool = createWebFetchTool(baseToolConfig);
 
@@ -261,14 +236,10 @@ describe("web_fetch headers and response extraction", () => {
   it("bypasses Firecrawl when runtime metadata marks Firecrawl inactive", async () => {
     // Runtime metadata is authoritative for the current credential snapshot; a
     // stale configured provider should not force provider fallback.
-    const fetchSpy = vi
-      .fn()
-      .mockResolvedValue(
-        htmlResponse(
-          "<html><body><article><h1>Runtime Off</h1><p>Use direct fetch.</p></article></body></html>",
-        ),
-      );
-    global.fetch = withFetchPreconnect(fetchSpy);
+    const fetchSpy = setResponse(
+      "<html><body><article><h1>Runtime Off</h1><p>Use direct fetch.</p></article></body></html>",
+      "text/html; charset=utf-8",
+    );
 
     const tool = createWebFetchTool({
       lookupFn: lookupMock as unknown as LookupFn,
@@ -278,23 +249,13 @@ describe("web_fetch headers and response extraction", () => {
             firecrawl: {
               config: {
                 webFetch: {
-                  apiKey: {
-                    source: "env",
-                    provider: "default",
-                    id: "MISSING_FIRECRAWL_KEY_REF",
-                  },
+                  apiKey: { source: "env", provider: "default", id: "MISSING_FIRECRAWL_KEY_REF" },
                 },
               },
             },
           },
         },
-        tools: {
-          web: {
-            fetch: {
-              provider: "firecrawl",
-            },
-          },
-        },
+        tools: { web: { fetch: { provider: "firecrawl" } } },
       },
       sandboxed: false,
       runtimeWebFetch: {
@@ -312,8 +273,7 @@ describe("web_fetch headers and response extraction", () => {
 
   it("converts markdown to text when extractMode is text", async () => {
     const md = "# Heading\n\n**Bold text** and [a link](https://example.com).";
-    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse(md));
-    global.fetch = withFetchPreconnect(fetchSpy);
+    setResponse(md);
 
     const tool = createWebFetchTool(baseToolConfig);
 
