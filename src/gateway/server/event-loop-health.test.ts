@@ -1,4 +1,4 @@
-import type { performance } from "node:perf_hooks";
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getInternalDiagnosticEventSequence,
@@ -92,11 +92,11 @@ function createMonitorHarness(params?: {
       utilization,
     }),
   );
+  vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+  vi.spyOn(process, "cpuUsage").mockImplementation(cpuUsage);
+  vi.spyOn(performance, "eventLoopUtilization").mockImplementation(eventLoopUtilization);
   const monitor = createGatewayEventLoopHealthMonitor({
     scheduler,
-    now: () => nowMs,
-    cpuUsage,
-    eventLoopUtilization,
     isIdle: params?.isIdle,
   });
   monitors.push(monitor);
