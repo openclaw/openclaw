@@ -1,10 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../agents/admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
@@ -75,7 +72,6 @@ type McpResponse = {
   };
 };
 type QuestionGateway = Parameters<Parameters<typeof withQuestionGateway>[0]>[0];
-type PendingQuestion = { id: string; response: Promise<McpResponse> };
 type CliQuestionFixture = ReturnType<typeof createQuestionFixture>["fixture"];
 
 function resolveGrant(token: string, runtimeOwnerToken: string) {
@@ -162,7 +158,7 @@ function createQuestionFixture(
   runtime: { port: number; ownerToken: string },
   signal: AbortSignal,
 ) {
-  const toolCalls = new Set<Promise<unknown>>();
+  const toolCalls: Promise<unknown>[] = [];
   const resolveTools = toolResolution.resolveGatewayScopedTools;
   const resolutions = vi
     .spyOn(toolResolution, "resolveGatewayScopedTools")
@@ -172,12 +168,8 @@ function createQuestionFixture(
         const execute = tool.execute;
         vi.spyOn(tool, "execute").mockImplementation(async (...executeArgs) => {
           const pending = execute(...executeArgs);
-          toolCalls.add(pending);
-          try {
-            return await pending;
-          } finally {
-            toolCalls.delete(pending);
-          }
+          toolCalls.push(pending);
+          return await pending;
         });
       }
       return scoped;
@@ -217,15 +209,12 @@ function createQuestionFixture(
       ) => {
         signal.throwIfAborted();
         const source = new AbortController();
-        const admission = prepareAgentRunAdmission({
-          cfg: config,
-          facts: {
-            runId,
-            agentId: "main",
-            ingress: { kind: "system", boundary: "mcp-question-test", state: "present" },
-          },
-          operationalRunInstance: createOperationalRunInstanceRef(runId),
-        });
+        const admission = prepareSystemAgentRunAdmission(
+          config,
+          runId,
+          "main",
+          "mcp-question-test",
+        );
         admissionCleanups.push(() => admission.close());
         const originalToolsAllow = ["ask_user"];
         const context = await cli.prepare({
@@ -416,21 +405,35 @@ it.for([
   async ({ stage, ending }, { onTestFinished, signal }) => {
     const cancellation = new AbortController();
     const expectedError = new Error(`fixture stopped ${stage} question registration`);
-    let releaseHello = () => {};
-    let asking: Promise<PendingQuestion> | undefined;
     let requestSettled = false;
     let manager: QuestionGateway["manager"] | undefined;
-    const run = withCliQuestionLoopback(
+    const run: Promise<void> = withCliQuestionLoopback(
       async (fixture) => {
         // Timed-out setup must not start a late request.
         signal.throwIfAborted();
         manager = fixture.manager;
         const grant = mintAttachGrant({ sessionKey });
         const hello = stage === "before" ? fixture.holdNextHello() : undefined;
-        releaseHello = hello?.release ?? releaseHello;
+        const asking = fixture.ask(grant.token, true);
+        void asking.catch(() => {});
+        onTestFinished(() =>
+          runQaGatewayFixture(
+            async () => hello?.release(),
+            () => asking.catch(() => {}),
+            () => {
+              for (const question of fixture.manager.list()) {
+                fixture.manager.cancel(question.id, "test-cleanup");
+              }
+            },
+            () =>
+              run.catch((error: unknown) => {
+                if (error !== expectedError && !(signal.aborted && error === signal.reason)) {
+                  throw error;
+                }
+              }),
+          ),
+        );
         try {
-          asking = fixture.ask(grant.token, true);
-          void asking.catch(() => {});
           const request = hello ? asking : (await asking).response;
           const markSettled = () => {
             requestSettled = true;
@@ -452,24 +455,6 @@ it.for([
         }
       },
       AbortSignal.any([signal, cancellation.signal]),
-    );
-    onTestFinished(() =>
-      runQaGatewayFixture(
-        async () => releaseHello(),
-        () => asking?.catch(() => {}),
-        () => {
-          for (const question of manager?.list() ?? []) {
-            manager?.cancel(question.id, "test-cleanup");
-          }
-        },
-        () =>
-          run.catch((error: unknown) => {
-            if (error === expectedError || (signal.aborted && error === signal.reason)) {
-              return;
-            }
-            throw error;
-          }),
-      ),
     );
     // Keep hello held until the fixture has joined the aborted request.
     await expect(run).rejects.toBe(expectedError);

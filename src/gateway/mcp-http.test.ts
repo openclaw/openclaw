@@ -12,8 +12,7 @@ import {
   withTestTimeout,
 } from "../../test/helpers/promise.js";
 import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
+  prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
@@ -42,15 +41,7 @@ import type { resolveGatewayScopedTools } from "./tool-resolution.js";
 const activeAdmissions: PreparedAgentRunAdmission[] = [];
 
 async function activeAdmission(runId: string): Promise<AdmittedRunContext> {
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "mcp-http-test", state: "present" },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-  });
+  const admission = prepareSystemAgentRunAdmission({}, runId, "main", "mcp-http-test");
   activeAdmissions.push(admission);
   return await admission.admit("gateway", `gateway-${runId}`);
 }
@@ -87,13 +78,10 @@ vi.mock("../config/io.js", async (importOriginal) => ({
   getRuntimeConfig: getRuntimeConfigMock,
 }));
 
-vi.mock("../logger.js", async () => {
-  const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
-  return {
-    ...actual,
-    logWarn: (message: string) => logWarnMock(message),
-  };
-});
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
+  logWarn: logWarnMock,
+}));
 
 // Partial: the real gateway resolver reaches other exports of this module when a
 // test drives it instead of the mock below.
@@ -102,19 +90,14 @@ vi.mock("../config/sessions.js", async (importOriginal) => ({
   resolveMainSessionKey: () => "agent:main:main",
 }));
 
-vi.mock("../config/sessions/session-accessor.entry.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../config/sessions/session-accessor.entry.js")>();
-  return {
-    ...actual,
-    readResolvedSessionEntryInWorker: async (params: { sessionKey: string }) =>
-      sessionEntries.get(params.sessionKey),
-  };
-});
+vi.mock("../config/sessions/session-accessor.entry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.entry.js")>()),
+  readResolvedSessionEntryInWorker: async (params: { sessionKey: string }) =>
+    sessionEntries.get(params.sessionKey),
+}));
 
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
-  runBeforeToolCallHook: (...args: Parameters<typeof runBeforeToolCallHookMock>) =>
-    runBeforeToolCallHookMock(...args),
+  runBeforeToolCallHook: runBeforeToolCallHookMock,
 }));
 
 vi.mock("../agents/node-exec-availability.js", () => ({
@@ -122,8 +105,7 @@ vi.mock("../agents/node-exec-availability.js", () => ({
 }));
 
 vi.mock("./tool-resolution.js", () => ({
-  resolveGatewayScopedTools: (...args: Parameters<typeof resolveGatewayScopedToolsMock>) =>
-    resolveGatewayScopedToolsMock(...args),
+  resolveGatewayScopedTools: resolveGatewayScopedToolsMock,
 }));
 
 import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
@@ -319,6 +301,16 @@ async function callMainSessionTool(params: {
   return readOkMcpPayload(await sendMainSessionToolCall(params));
 }
 
+async function callTool(
+  params: Omit<Parameters<typeof sendLoopbackToolCall>[0], "name"> & { name?: string },
+) {
+  return readOkMcpPayload(await sendLoopbackToolCall({ name: "message", ...params }));
+}
+
+async function listTools(params: Parameters<typeof sendLoopbackToolsList>[0]) {
+  return readOkMcpPayload(await sendLoopbackToolsList(params));
+}
+
 async function expectHttpStatus(response: Promise<Response>, status = 200) {
   const result = await response;
   expect(result.status).toBe(status);
@@ -351,6 +343,26 @@ function captureOutcomes(captureKey: string, correlationField: "target" | "statu
       ]),
   });
   return outcomes;
+}
+
+function captureRequest(captureKey: string) {
+  const start = createDeferred();
+  const onRequestStart = vi.fn(() => start.resolve());
+  const onRequestClassified = vi.fn();
+  const onToolCallResult = vi.fn();
+  beginMcpLoopbackToolCallCapture({
+    captureKey,
+    onRequestStart,
+    onRequestClassified,
+    onToolCallResult,
+  });
+  return {
+    started: start.promise,
+    reject: start.reject,
+    onRequestStart,
+    onRequestClassified,
+    onToolCallResult,
+  };
 }
 
 function expectMcpToolNames(payload: McpToolResultPayload, expected: string[]) {
@@ -686,15 +698,13 @@ describe("mcp loopback server", () => {
     const { runtime } = await startLoopbackServerForTest();
 
     for (let index = 0; index < 3; index += 1) {
-      const payload = await readOkMcpPayload(
-        await sendLoopbackToolsList({
-          token: runtime.ownerToken,
-          headers: {
-            ...MAIN_SESSION_HEADER,
-            "x-openclaw-current-message-id": `message-${index}`,
-          },
-        }),
-      );
+      const payload = await listTools({
+        token: runtime.ownerToken,
+        headers: {
+          ...MAIN_SESSION_HEADER,
+          "x-openclaw-current-message-id": `message-${index}`,
+        },
+      });
       expectMcpToolNames(payload, ["lark_doc_read"]);
       expect(payload.result?.tools?.[0]?.inputSchema).toMatchObject(documentSchema());
     }
@@ -991,9 +1001,7 @@ describe("mcp loopback server", () => {
       captureKey: "capture-native-discovery",
     });
 
-    expectMcpToolNames(await readOkMcpPayload(await sendLoopbackToolsList(requestScope)), [
-      "message",
-    ]);
+    expectMcpToolNames(await listTools(requestScope), ["message"]);
     const response = await sendLoopbackToolCall({ ...requestScope, name: "message" });
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
@@ -1001,15 +1009,9 @@ describe("mcp loopback server", () => {
     });
     expect(execute).not.toHaveBeenCalled();
     expect(capture.captureNativeToolAuthority(["read"])).toBe(true);
-    expectMcpResultText(
-      await readOkMcpPayload(await sendLoopbackToolCall({ ...requestScope, name: "message" })),
-      '["read"]',
-    );
+    expectMcpResultText(await callTool({ ...requestScope }), '["read"]');
     expect(capture.captureNativeToolAuthority([])).toBe(true);
-    expectMcpResultText(
-      await readOkMcpPayload(await sendLoopbackToolCall({ ...requestScope, name: "message" })),
-      "[]",
-    );
+    expectMcpResultText(await callTool({ ...requestScope }), "[]");
     expect(capture.captureNativeToolAuthority(null)).toBe(true);
     expect(
       await (await sendLoopbackToolCall({ ...requestScope, name: "message" })).json(),
@@ -1077,13 +1079,7 @@ describe("mcp loopback server", () => {
 
   it("rejects a slow tools request replaced after header admission", async () => {
     const captureKey = "slow-revoked-grant";
-    const { promise: requestStarted, resolve: resolveRequestStarted } = createDeferred();
-    beginMcpLoopbackToolCallCapture({
-      captureKey,
-      onRequestStart: () => resolveRequestStarted?.(),
-      onRequestClassified: vi.fn(),
-      onToolCallResult: vi.fn(),
-    });
+    const { started: requestStarted } = captureRequest(captureKey);
     const { port } = await startLoopbackServerForTest();
     const grant = await createCliGrant("run-slow-revoked", {
       context: { sessionKey: "agent:main:slow-revoked" },
@@ -1545,19 +1541,12 @@ describe("mcp loopback server", () => {
 
   it("binds slow request bodies to their capture generation at header acceptance", async () => {
     const captureKey = "slow-request-generation";
-    const requestClassified = vi.fn();
-    const requestStarted = vi.fn();
-    const captured = vi.fn();
-    const { promise: requestStartedPromise, resolve: resolveRequestStarted } = createDeferred();
-    beginMcpLoopbackToolCallCapture({
-      captureKey,
-      onRequestStart: () => {
-        requestStarted();
-        resolveRequestStarted?.();
-      },
+    const {
+      started: requestStartedPromise,
+      onRequestStart: requestStarted,
       onRequestClassified: requestClassified,
       onToolCallResult: captured,
-    });
+    } = captureRequest(captureKey);
     const { runtime, port } = await startLoopbackServerForTest();
     const { req, response: responsePromise } = openMcpRequest({
       port,
@@ -1994,18 +1983,16 @@ describe("collector result tool across the loopback MCP boundary", () => {
   }
 
   async function listToolNames(scope: { token: string; headers?: Record<string, string> }) {
-    const payload = await readOkMcpPayload(await sendLoopbackToolsList(scope));
+    const payload = await listTools(scope);
     return (payload.result?.tools ?? []).map((tool) => tool.name);
   }
 
   async function callStructuredOutput(scope: { token: string; headers?: Record<string, string> }) {
-    return await readOkMcpPayload(
-      await sendLoopbackToolCall({
-        ...scope,
-        name: "structured_output",
-        args: { result: { answer: "ok" } },
-      }),
-    );
+    return await callTool({
+      ...scope,
+      name: "structured_output",
+      args: { result: { answer: "ok" } },
+    });
   }
 
   function expectNothingRecorded(runId = collectorRunId) {
@@ -2126,16 +2113,7 @@ describe("createMcpLoopbackServerConfig", () => {
     // begun a message, so the drain is pinned by the server-side request start, not
     // by the client-side connect. Capture admission is that server-side signal.
     const captureKey = "capture-stalled-drain";
-    const {
-      promise: requestStarted,
-      resolve: resolveRequestStarted,
-      reject: rejectRequestStarted,
-    } = createDeferred();
-    beginMcpLoopbackToolCallCapture({
-      captureKey,
-      onRequestStart: () => resolveRequestStarted(),
-      onToolCallResult: vi.fn(),
-    });
+    const { started: requestStarted, reject: rejectRequestStarted } = captureRequest(captureKey);
     const { req: stalledRequest, response: responsePromise } = openMcpRequest({
       port: oldRuntime.port,
       token: oldRuntime.ownerToken,

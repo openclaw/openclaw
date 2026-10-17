@@ -1,10 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
+  prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
 import {
@@ -50,13 +50,18 @@ import {
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
 } from "./mcp-grant-store.js";
-import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
+import { closeMcpLoopbackServer } from "./mcp-http.js";
 import {
   beginMcpLoopbackToolCallCapture,
   clearMcpLoopbackToolCallCapture,
-  getActiveMcpLoopbackRuntime,
   type McpLoopbackToolCallOutcome,
 } from "./mcp-http.loopback-runtime.js";
+import {
+  jsonHeaders,
+  mcpToolCallBody,
+  sendRaw,
+  startLoopbackServerForTest,
+} from "./mcp-http.test-support.js";
 
 vi.mock("../agents/tools/gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/tools/gateway.js")>()),
@@ -82,6 +87,7 @@ const childEntry: SessionEntry = {
 
 let state: OpenClawTestState;
 let config: OpenClawConfig;
+let runtime: Awaited<ReturnType<typeof startLoopbackServerForTest>>["runtime"];
 let incognitoIdentity: { agentId: string; path: string };
 const admissions: PreparedAgentRunAdmission[] = [];
 const grants: string[] = [];
@@ -108,7 +114,7 @@ beforeAll(async () => {
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);
   openOpenClawStateDatabase();
-  await ensureMcpLoopbackServer();
+  ({ runtime } = await startLoopbackServerForTest());
 });
 
 afterEach(() => {
@@ -130,29 +136,10 @@ async function seedLineage(child: Partial<SessionEntry> = {}, sourceKey = childK
     { agentId: "main", sessionKey: requesterKey },
     { sessionId: requesterSessionId, updatedAt: 1 },
   );
-  if (isIncognitoSessionKey(sourceKey)) {
-    const owner = memorySessionActorOwners.get(incognitoIdentity);
-    const authority = { assertCurrent() {}, authorize() {} };
-    const actor = await owner.acquire(
-      { database: owner.identity, sessionKey: sourceKey },
-      { assertCurrent() {}, assertReadable() {} },
-    );
-    try {
-      const result = await actor.storage!.mutate(
-        {
-          type: "session.entry.create",
-          input: { entry: { ...childEntry, ...child, incognito: true } },
-        },
-        authority,
-      );
-      expect(result.kind).toBe("committed");
-    } finally {
-      await actor.release();
-    }
-  } else {
-    return updateChild(child, sourceKey);
-  }
-  clearSessionStoreCacheForTest();
+  await updateChild(
+    { ...child, ...(isIncognitoSessionKey(sourceKey) ? { incognito: true } : {}) },
+    sourceKey,
+  );
 }
 
 async function removeChild() {
@@ -163,10 +150,12 @@ async function removeChild() {
 }
 
 async function updateChild(overrides: Partial<SessionEntry>, sourceKey = childKey) {
-  await replaceSessionEntry(
-    { agentId: "main", sessionKey: sourceKey },
-    { ...childEntry, ...overrides },
-  );
+  expect(
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: sourceKey },
+      { ...childEntry, ...overrides },
+    ),
+  ).not.toBeNull();
   clearSessionStoreCacheForTest();
 }
 
@@ -175,19 +164,12 @@ async function mintCompletionGrant(
   sourceKey = childKey,
   sourceSessionId = childEntry.sessionId,
 ) {
-  const runtime = getActiveMcpLoopbackRuntime();
-  if (!runtime) {
-    throw new Error("Expected the isolated MCP runtime");
-  }
-  const admission = prepareAgentRunAdmission({
-    cfg: config,
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "mcp-completion-lineage-test", state: "present" },
-    },
-  });
+  const admission = prepareSystemAgentRunAdmission(
+    config,
+    runId,
+    "main",
+    "mcp-completion-lineage-test",
+  );
   admissions.push(admission);
   const admittedRunContext = await admission.admit("gateway");
   const grant = mintMcpLoopbackClientGrant({
@@ -241,21 +223,14 @@ async function mintCompletionGrant(
   ).not.toBe(false);
   const target = path.join(state.workspaceDir, runId + ".txt");
   const request = (method: "tools/list" | "tools/call") =>
-    fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${grant.token}`,
-        "content-type": "application/json",
-        "x-openclaw-cli-capture-key": captureKey,
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method,
-        ...(method === "tools/call"
-          ? { params: { name: "write", arguments: { path: target, content: runId } } }
-          : {}),
-      }),
+    sendRaw({
+      port: runtime.port,
+      token: grant.token,
+      headers: jsonHeaders({ "x-openclaw-cli-capture-key": captureKey }),
+      body:
+        method === "tools/call"
+          ? mcpToolCallBody("write", { path: target, content: runId })
+          : JSON.stringify({ jsonrpc: "2.0", id: 1, method }),
     });
   return {
     request,
@@ -383,11 +358,7 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
           if (
             request.stage === stage &&
             !witnessed &&
-            (kind === "incognito" ||
-              (facts !== null &&
-                typeof facts === "object" &&
-                "kind" in facts &&
-                facts.kind === "session-entry-current"))
+            (kind === "incognito" || (isRecord(facts) && facts.kind === "session-entry-current"))
           ) {
             witnessed = true;
             if (kind === "incognito") {
