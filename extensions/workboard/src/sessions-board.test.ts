@@ -369,20 +369,13 @@ describe("Sessions board rules and live facts", () => {
         expect(stopped).toBe(false);
         repair.resolve({ placements: 0, boards: 0 });
         if (stopEarly) {
-          expect(await results).toEqual([
-            {
-              status: "rejected",
-              reason: expect.objectContaining({
-                message: "Sessions board service is no longer active.",
-              }),
-            },
-            {
-              status: "rejected",
-              reason: expect.objectContaining({
-                message: "Sessions board service is no longer active.",
-              }),
-            },
-          ]);
+          const rejected = {
+            status: "rejected",
+            reason: expect.objectContaining({
+              message: "Sessions board service is no longer active.",
+            }),
+          };
+          expect(await results).toEqual([rejected, rejected]);
           await stopping;
           expect((await store.getSessionsBoard(BOARD_ID)).sessions.scope?.maxAgeHours).not.toBe(48);
         } else {
@@ -797,20 +790,15 @@ describe("Sessions board rules and live facts", () => {
     await withService(
       { facts: [facts("one", { run: "active" })] },
       async ({ service, store, state, emit }) => {
+        const pinned = { columnId: "other", source: "operator" };
         await service.move(BOARD_ID, facts("one").key, "other");
-        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({
-          columnId: "other",
-          source: "operator",
-        });
+        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject(pinned);
         state.sessions = [
           facts("one", { observerDigest: { health: "stuck", headline: "Stuck", revision: 1 } }),
         ];
         state.revision = "health-changed";
         emit(facts("one").key);
-        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject({
-          columnId: "other",
-          source: "operator",
-        });
+        expect((await service.read(BOARD_ID)).sessions[0]).toMatchObject(pinned);
         await service.update(BOARD_ID, {
           columns: [FOCUS_COLUMN, { ...OTHER_COLUMN, id: "fallback" }],
         });
