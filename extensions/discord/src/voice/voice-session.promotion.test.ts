@@ -4,51 +4,50 @@ import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 defineDiscordVoiceTests((h) => {
   const { expect, it, vi } = h;
-  const useConnection = () => {
-    const connection = h.createConnectionMock();
-    h.joinVoiceChannelMock.mockReturnValueOnce(connection);
-    return connection;
-  };
+  const room = { guildId: "g1", channelId: "1001" };
   const pendingPromotion = async (manager: ReturnType<typeof h.createManager>) => {
     const connect = createDeferred<undefined>();
     h.realtimeSessionMock.connect.mockReturnValueOnce(connect.promise);
-    const joining = manager.join({ guildId: "g1", channelId: "1001" });
+    const joining = manager.join(room);
     await vi.waitFor(() => expect(h.realtimeSessionMock.connect).toHaveBeenCalledOnce());
     return { joining, ...connect };
   };
-  const expectStartupStopped = async (manager: ReturnType<typeof h.createManager>) => {
-    await expect(manager.join({ guildId: "g1", channelId: "1001" })).resolves.toEqual({
-      ok: false,
-      message: "Discord realtime voice session stopped before startup completed.",
-      guildId: "g1",
-      channelId: "1001",
-    });
-    expect(manager.status()).toEqual([]);
-    expect(h.getLastAudioPlayer().stop).toHaveBeenCalledWith(true);
-  };
-  it.each([
-    { mode: "bidi", stop: "after" },
-    { mode: "bidi", stop: "during" },
-  ] as const)(
-    "disconnects capture stopped $stop a failed $mode promotion",
-    async ({ mode, stop }) => {
-      const manager = h.createAgentProxyManager(undefined, { voice: { mode } });
-      const connection = h.createConnectionMock();
-      h.joinVoiceChannelMock.mockReturnValueOnce(connection);
-      expect(await h.startTranscripts(manager)).toMatchObject({ ok: true });
-      const { joining, reject: rejectConnect } = await pendingPromotion(manager);
+  it.each(["after", "during", "replaced"] as const)(
+    "settles failed promotion when capture is stopped %s",
+    async (stop) => {
+      const connection = h.useConnection();
+      const { manager } = await h.createRecordingFixture({
+        voice: { mode: stop === "replaced" ? "agent-proxy" : "bidi" },
+      });
+      const { joining, reject } = await pendingPromotion(manager);
+      const onUtterance = vi.fn();
+      let replacement: ReturnType<typeof h.startTranscripts> | undefined;
       if (stop === "during") {
         expect(await h.stopTranscripts()).toMatchObject({ ok: true });
         expect(connection.destroy).not.toHaveBeenCalled();
+      } else if (stop === "replaced") {
+        replacement = h.startTranscripts(manager, onUtterance, "notes-2");
+        await vi.waitFor(() =>
+          expect(h.getSessionEntry(manager).transcripts?.sessionId).toBe("notes-2"),
+        );
       }
-      rejectConnect(new Error("provider unavailable"));
-      expect(await joining).toMatchObject({
-        ok: false,
-        message: "Failed to start Discord realtime voice: provider unavailable",
-      });
+      reject(new Error("provider unavailable"));
+      const result = await joining;
+      expect(result.ok).toBe(false);
+      if (stop !== "replaced") {
+        expect(result.message).toBe("Failed to start Discord realtime voice: provider unavailable");
+      }
       if (stop === "after") {
         expect(connection.destroy).not.toHaveBeenCalled();
         expect(await h.stopTranscripts()).toMatchObject({ ok: true });
+      } else if (stop === "replaced") {
+        expect(await replacement).toMatchObject({ ok: true });
+        expect(await h.stopTranscripts()).toMatchObject({ ok: false });
+        await h.receiveRecordedSpeech(manager, "replacement recording");
+        expect(onUtterance).toHaveBeenCalledOnce();
+        expect(h.agentCommandMock).not.toHaveBeenCalled();
+        expect(connection.destroy).not.toHaveBeenCalled();
+        expect(await h.stopTranscripts("notes-2")).toMatchObject({ ok: true });
       }
       expect(connection.destroy).toHaveBeenCalledOnce();
       expect(manager.status()).toEqual([]);
@@ -60,10 +59,7 @@ defineDiscordVoiceTests((h) => {
   it.each(["bootstrap", "connect"])(
     "keeps recording while conversation promotion waits for %s",
     async (phase) => {
-      const manager = h.createAgentProxyManager();
-      const onUtterance = vi.fn();
-      await h.startTranscripts(manager, onUtterance);
-      const entry = h.getSessionEntry(manager);
+      const { manager, onUtterance, entry } = await h.createRecordingFixture();
       const { promise: ready, resolve: finish } = createDeferred<void>();
       const pending =
         phase !== "connect"
@@ -77,7 +73,7 @@ defineDiscordVoiceTests((h) => {
       } else {
         h.realtimeSessionMock.connect.mockImplementationOnce(() => ready);
       }
-      const joining = manager.join({ guildId: "g1", channelId: "1001" });
+      const joining = manager.join(room);
       try {
         await vi.waitFor(() => expect(pending).toHaveBeenCalledOnce());
         await h.receiveRecordedSpeech(manager, "recorded during promotion");
@@ -100,47 +96,22 @@ defineDiscordVoiceTests((h) => {
   );
 
   it("resumes silent recording after failed promotion and can retry conversation", async () => {
-    const manager = h.createAgentProxyManager();
-    const onUtterance = vi.fn();
-    await h.startTranscripts(manager, onUtterance);
+    const { manager, onUtterance } = await h.createRecordingFixture();
     h.realtimeSessionMock.connect.mockRejectedValueOnce(new Error("provider unavailable"));
 
-    expect(await manager.join({ guildId: "g1", channelId: "1001" })).toMatchObject({ ok: false });
+    expect(await manager.join(room)).toMatchObject({ ok: false });
     await h.receiveRecordedSpeech(manager, "still recording");
     expect(onUtterance).toHaveBeenCalledWith(expect.objectContaining({ text: "still recording" }));
     expect(h.agentCommandMock).not.toHaveBeenCalled();
     h.expectConnectedStatus(manager, "1001");
 
-    expect(await manager.join({ guildId: "g1", channelId: "1001" })).toMatchObject({ ok: true });
+    expect(await manager.join(room)).toMatchObject({ ok: true });
     expect(await h.stopTranscripts()).toMatchObject({ ok: true });
     h.expectConnectedStatus(manager, "1001");
     expect(h.getSessionEntry(manager).realtimeLifecycle.status).toBe("active");
     h.lastRealtimeBridgeParams().audioSink.sendAudio(Buffer.alloc(24_000));
     expect(h.getLastAudioPlayer().play).toHaveBeenCalledOnce();
     expect(h.joinVoiceChannelMock).toHaveBeenCalledOnce();
-  });
-
-  it("preserves replacement capture when a pending promotion fails", async () => {
-    const manager = h.createAgentProxyManager();
-    const connection = useConnection();
-    await h.startTranscripts(manager);
-    const { joining, reject: rejectConnect } = await pendingPromotion(manager);
-    const onUtterance = vi.fn();
-    const replacement = h.startTranscripts(manager, onUtterance, "notes-2");
-    await vi.waitFor(() =>
-      expect(h.getSessionEntry(manager).transcripts?.sessionId).toBe("notes-2"),
-    );
-    rejectConnect(new Error("provider unavailable"));
-    expect(await joining).toMatchObject({ ok: false });
-    expect(await replacement).toMatchObject({ ok: true });
-    expect(await h.stopTranscripts()).toMatchObject({ ok: false });
-    await h.receiveRecordedSpeech(manager, "replacement recording");
-    expect(onUtterance).toHaveBeenCalledOnce();
-    expect(h.agentCommandMock).not.toHaveBeenCalled();
-    expect(connection.destroy).not.toHaveBeenCalled();
-    expect(await h.stopTranscripts("notes-2")).toMatchObject({ ok: true });
-    expect(connection.destroy).toHaveBeenCalledOnce();
-    expect(manager.status()).toEqual([]);
   });
 
   it.each([false, true])(
@@ -156,31 +127,20 @@ defineDiscordVoiceTests((h) => {
       let states: Array<Record<string, unknown>> = [human];
       h.configureVoiceStateGateway(client, () => states);
       const config = h.makeVoiceConfig(
-        {
-          mode: "stt-tts",
-          autoJoin: [{ guildId: "g1", channelId: "1001", whenOccupied: true }],
-        },
+        { autoJoin: [{ ...room, whenOccupied: true }] },
         { groupPolicy: "open" },
       );
       const manager = h.createManager(config, client);
-      await manager.join(
-        { guildId: "g1", channelId: "1001" },
-        { autoJoinWhenOccupied: whenOccupied },
-      );
+      await manager.join(room, { autoJoinWhenOccupied: whenOccupied });
       const connection = h.joinVoiceChannelMock.mock.results[0]!.value;
       await h.startTranscripts(manager);
       // Exercise realtime attachment on a transport with an established conversation owner.
       config.voice!.mode = "agent-proxy";
       h.realtimeSessionMock.connect.mockRejectedValueOnce(new Error("provider unavailable"));
 
-      expect(
-        await manager.join(
-          { guildId: "g1", channelId: "1001" },
-          {
-            autoJoinWhenOccupied: !whenOccupied,
-          },
-        ),
-      ).toMatchObject({ ok: false });
+      expect(await manager.join(room, { autoJoinWhenOccupied: !whenOccupied })).toMatchObject({
+        ok: false,
+      });
       expect(await h.stopTranscripts()).toMatchObject({ ok: true });
       expect(connection.destroy).not.toHaveBeenCalled();
       h.expectConnectedStatus(manager, "1001");
@@ -199,14 +159,9 @@ defineDiscordVoiceTests((h) => {
   it.each(["resolve", "reject"])(
     "does not revive a cancelled promotion when connect later %ss",
     async (settlement) => {
-      const manager = h.createAgentProxyManager();
-      const oldConnection = h.createConnectionMock();
-      const replacementConnection = h.createConnectionMock();
-      h.joinVoiceChannelMock
-        .mockReturnValueOnce(oldConnection)
-        .mockReturnValueOnce(replacementConnection);
-      await h.startTranscripts(manager);
-      const oldEntry = h.getSessionEntry(manager);
+      const oldConnection = h.useConnection();
+      const replacementConnection = h.useConnection();
+      const { manager, entry: oldEntry } = await h.createRecordingFixture();
       const { joining, ...connect } = await pendingPromotion(manager);
       expect(await manager.leave({ guildId: "g1" })).toMatchObject({ ok: true });
       expect(await h.stopTranscripts()).toMatchObject({ ok: true });
@@ -225,73 +180,60 @@ defineDiscordVoiceTests((h) => {
     },
   );
 
-  it("releases initial startup when the manager is destroyed during provider connect", async () => {
-    const connection = useConnection();
+  it.each([
+    "manager destroyed",
+    "connection destroyed",
+    "output overflow",
+    "synchronous close",
+  ] as const)("retires initial startup after %s", async (terminal) => {
+    const connection = h.useConnection();
     const manager = h.createAgentProxyManager();
-    h.realtimeSessionMock.connect.mockImplementationOnce(async () => {
-      await manager.destroy();
-    });
-
-    try {
-      await expectStartupStopped(manager);
-      expect(h.realtimeSessionMock.close).toHaveBeenCalled();
-      expect(connection.destroy).toHaveBeenCalledTimes(1);
-    } finally {
-      await manager.destroy();
-    }
-  });
-
-  it("does not activate capture if Discord destroys the connection during initial startup", async () => {
-    const connection = useConnection();
-    const manager = h.createAgentProxyManager();
-    h.realtimeSessionMock.connect.mockImplementationOnce(async () => {
-      connection.state.status = "destroyed";
-      connection.handlers.get("destroyed")?.();
-    });
-
-    try {
-      await expectStartupStopped(manager);
-      expect(connection.receiver.subscribe).not.toHaveBeenCalled();
-      expect(h.realtimeSessionMock.close).toHaveBeenCalled();
-    } finally {
-      await manager.destroy();
-    }
-    expect(connection.destroy).not.toHaveBeenCalled();
-  });
-
-  it.each(["output overflow", "synchronous close"] as const)(
-    "handles terminal provider %s before the initial realtime connect finishes",
-    async (terminal) => {
-      const connection = h.createConnectionMock();
-      h.joinVoiceChannelMock.mockReturnValueOnce(connection);
-      const manager = h.createAgentProxyManager();
-      if (terminal === "synchronous close") {
-        h.createRealtimeVoiceBridgeSessionMock.mockImplementationOnce(() => {
-          h.lastRealtimeBridgeParams().onClose?.("error");
-          return h.realtimeSessionMock;
-        });
-      } else {
-        h.realtimeSessionMock.connect.mockImplementationOnce(async () => {
-          const provider = h.lastRealtimeBridgeParams();
-          // Provider output can arrive while connect is pending; exceed the two-minute PCM cap.
-          provider.audioSink.sendAudio(Buffer.alloc(24_000 * 2 * 121));
-        });
-      }
-
-      try {
-        await expectStartupStopped(manager);
-        expect(connection.receiver.subscribe).not.toHaveBeenCalled();
-        expect(h.realtimeSessionMock.close).toHaveBeenCalledOnce();
-        expect(connection.destroy).toHaveBeenCalledTimes(1);
-        if (terminal === "synchronous close") {
-          expect(h.realtimeSessionMock.connect).not.toHaveBeenCalled();
+    if (terminal === "synchronous close") {
+      h.createRealtimeVoiceBridgeSessionMock.mockImplementationOnce(() => {
+        h.lastRealtimeBridgeParams().onClose?.("error");
+        return h.realtimeSessionMock;
+      });
+    } else {
+      h.realtimeSessionMock.connect.mockImplementationOnce(async () => {
+        if (terminal === "manager destroyed") {
+          await manager.destroy();
+        } else if (terminal === "connection destroyed") {
+          connection.state.status = "destroyed";
+          connection.handlers.get("destroyed")?.();
+        } else {
+          // Exceed the two-minute PCM cap while connect is still pending.
+          h.lastRealtimeBridgeParams().audioSink.sendAudio(Buffer.alloc(24_000 * 2 * 121));
         }
-      } finally {
-        await manager.destroy();
+      });
+    }
+    try {
+      await expect(manager.join(room)).resolves.toEqual({
+        ok: false,
+        message: "Discord realtime voice session stopped before startup completed.",
+        guildId: "g1",
+        channelId: "1001",
+      });
+      expect(manager.status()).toEqual([]);
+      expect(h.getLastAudioPlayer().stop).toHaveBeenCalledWith(true);
+      if (terminal !== "manager destroyed") {
+        expect(connection.receiver.subscribe).not.toHaveBeenCalled();
       }
-      expect(connection.destroy).toHaveBeenCalledTimes(1);
-    },
-  );
+      if (terminal.endsWith("destroyed")) {
+        expect(h.realtimeSessionMock.close).toHaveBeenCalled();
+      } else {
+        expect(h.realtimeSessionMock.close).toHaveBeenCalledOnce();
+      }
+      if (terminal === "synchronous close") {
+        expect(h.realtimeSessionMock.connect).not.toHaveBeenCalled();
+      }
+      if (terminal !== "connection destroyed") {
+        expect(connection.destroy).toHaveBeenCalledOnce();
+      }
+    } finally {
+      await manager.destroy();
+    }
+    expect(connection.destroy).toHaveBeenCalledTimes(terminal === "connection destroyed" ? 0 : 1);
+  });
 
   it.each([
     ["agent-proxy", "leave"],
@@ -299,9 +241,8 @@ defineDiscordVoiceTests((h) => {
   ] as const)(
     "retires %s room capture on %s without affecting its replacement",
     async (mode, boundary) => {
-      const oldConnection = h.createConnectionMock();
-      const newConnection = h.createConnectionMock();
-      h.joinVoiceChannelMock.mockReturnValueOnce(oldConnection).mockReturnValueOnce(newConnection);
+      const oldConnection = h.useConnection();
+      const newConnection = h.useConnection();
       const manager = h.createAgentProxyManager(undefined, {
         allowFrom: ["discord:u-owner"],
         voice: { mode },
@@ -309,7 +250,7 @@ defineDiscordVoiceTests((h) => {
       const decoding = createDeferred<void>();
       let receive: Promise<void> | undefined;
       try {
-        await manager.join({ guildId: "g1", channelId: "1001" });
+        await manager.join(room);
         const entry = h.getSessionEntry(manager);
         const onUtterance = vi.fn();
         await h.startTranscripts(manager, onUtterance);
@@ -347,13 +288,9 @@ defineDiscordVoiceTests((h) => {
         expect(player.stop).toHaveBeenCalledWith(true);
         h.expectOffEventWithFunction(oldConnection.receiver.speaking.off, "start");
         h.expectOffEventWithFunction(oldConnection.receiver.speaking.off, "end");
-        const audioPlayer = h.expectDefined(
-          h.createAudioPlayerMock.mock.results[0]?.value,
-          "audio player",
-        );
-        h.expectOffEventWithFunction(audioPlayer.off, "idle");
+        h.expectOffEventWithFunction(player.off, "idle");
 
-        await manager.join({ guildId: "g1", channelId: "1001" });
+        await manager.join(room);
         const replacement = h.getSessionEntry(manager);
         expect(replacement.transcripts).toBe(registration);
         const replacementProvider = h.lastRealtimeBridge();

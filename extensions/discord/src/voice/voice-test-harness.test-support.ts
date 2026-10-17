@@ -13,6 +13,7 @@ import {
   lastMockCall,
   mockCall,
   type MockCallSource,
+  type TestRealtimeBridgeParams,
   requireRecord,
 } from "./manager.e2e.test-support.js";
 import { DECRYPT_FAILURE_WINDOW_MS } from "./receive-recovery.js";
@@ -22,7 +23,6 @@ import {
   installFailingDaveSession,
   makePoisonedDaveConnections,
 } from "./voice-dave.test-support.js";
-import type { DiscordVoiceReceive } from "./voice-receive.js";
 import { voiceTestMocks as mocks } from "./voice-test-mocks.test-support.js";
 
 // Load the in-process media owner only after voice-test-mocks has registered
@@ -42,6 +42,8 @@ type AgentProxyConfigOverrides = Omit<Partial<DiscordConfig>, "voice"> & {
 const { configureVoiceStateGateway, createClient, createClientWithMember } =
   createDiscordVoiceTestHelpers(mocks.updateVoiceStateMock);
 const createRuntime = createVoiceTestRuntime;
+const decryptError = () =>
+  new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)");
 
 function buildVoiceTestHarness() {
   const { startTranscripts, stopTranscripts } = createDiscordVoiceTranscriptFixture();
@@ -193,74 +195,21 @@ function buildVoiceTestHarness() {
     makeAgentProxyConfig({ ...discord, voice: { mode: "bidi", ...voice } });
 
   const createAgentProxyManager = (
-    clientOverride?: ReturnType<typeof createClient>,
+    client?: ReturnType<typeof createClient>,
     overrides?: AgentProxyConfigOverrides,
-    cfgOverride?: ManagerParams["cfg"],
+    cfg?: ManagerParams["cfg"],
     botUserId?: string,
-  ) =>
-    createManager(
-      makeAgentProxyConfig(overrides),
-      clientOverride,
-      cfgOverride,
-      "default",
-      botUserId,
-    );
-
-  const createFollowManager = (
-    voice: Partial<VoiceConfig> = {},
-    clientOverride?: ReturnType<typeof createClient>,
-    overrides: Omit<Partial<DiscordConfig>, "voice"> = {},
-    botUserId?: string,
-  ) =>
-    createManager(
-      makeVoiceConfig({ followUsers: ["u-owner"], ...voice }, overrides),
-      clientOverride,
-      {},
-      "default",
-      botUserId,
-    );
-
-  const expectConnectedStatus = (manager: Manager, channelId: string) => {
-    expect(manager.status()).toEqual([
-      {
-        ok: true,
-        message: `connected: guild g1 channel ${channelId}`,
-        guildId: "g1",
-        channelId,
-      },
-    ]);
-  };
+  ) => createManager(makeAgentProxyConfig(overrides), client, cfg, "default", botUserId);
 
   const getSessionEntry = (manager: Manager, guildId = "g1"): VoiceSessionEntry => {
-    const entry = (manager as unknown as { sessions: Map<string, VoiceSessionEntry> }).sessions.get(
-      guildId,
-    );
+    const entry = manager["sessions"].get(guildId);
     if (!entry) {
       throw new Error(`expected Discord voice session for guild ${guildId}`);
     }
     return entry;
   };
 
-  const getVoiceReceive = (manager: Manager) =>
-    (
-      manager as unknown as {
-        receive: Pick<
-          DiscordVoiceReceive,
-          | "daveRecoveryAttempts"
-          | "handleReceiveError"
-          | "handleSpeakingStart"
-          | "scheduleCaptureFinalize"
-          | "resolveDiscordVoiceIngressContext"
-        >;
-      }
-    ).receive;
-
-  const getVoiceFollowing = (manager: Manager) =>
-    (
-      manager as unknown as {
-        following: { followedUserChannels: Map<string, { channelId: string }> };
-      }
-    ).following;
+  const getVoiceReceive = (manager: Manager) => manager["receive"];
 
   const beginSpeakerTurn = (
     entry: VoiceSessionEntry,
@@ -300,60 +249,25 @@ function buildVoiceTestHarness() {
     return turn;
   };
 
-  const createWakeNameFixture = async (agentName = "Molty") => {
-    const manager = createAgentProxyManager(
-      undefined,
-      { voice: { realtime: { consultPolicy: "auto", requireWakeName: true } } },
-      {
-        agents: { entries: { "agent-1": { identity: { name: agentName } } } },
-        commands: { ownerAllowFrom: ["user:u-owner"] },
-      },
-    );
-    await manager.join({ guildId: "g1", channelId: "1001" });
-    return {
-      bridgeParams: lastRealtimeBridgeParams(),
-      entry: getSessionEntry(manager),
-      manager,
-    };
-  };
-
-  const getLastAudioPlayer = () => {
-    const player = mocks.createAudioPlayerMock.mock.results.at(-1)?.value as
-      | {
-          on: ReturnType<typeof vi.fn>;
-          play: ReturnType<typeof vi.fn>;
-          state: { status: string };
-          stop: ReturnType<typeof vi.fn>;
-        }
-      | undefined;
-    if (!player) {
-      throw new Error("expected Discord voice audio player to be created");
-    }
-    return player;
-  };
-
-  const expectOffEventWithFunction = (source: MockCallSource, event: string) => {
-    const call = Array.from(source.mock.calls).find((candidate) => candidate[0] === event);
-    if (!call) {
-      throw new Error(`Expected ${event} listener removal`);
-    }
-    expect(call[1], `${event} listener`).toBeTypeOf("function");
-  };
-
-  const lastAgentCommandArgs = () =>
-    requireRecord(
-      lastMockCall(mocks.agentCommandMock as unknown as MockCallSource, "agent command")[0],
-      "agent command args",
+  const createWakeNameFixture = async (agentName = "Molty") =>
+    joinManagerFixture(
+      createAgentProxyManager(
+        undefined,
+        { voice: { realtime: { consultPolicy: "auto", requireWakeName: true } } },
+        {
+          agents: { entries: { "agent-1": { identity: { name: agentName } } } },
+          commands: { ownerAllowFrom: ["user:u-owner"] },
+        },
+      ),
     );
 
-  const agentCommandArgsAt = (index: number) =>
+  const getLastAudioPlayer = (): ReturnType<typeof mocks.createAudioPlayerMock> =>
+    expectDefined(mocks.createAudioPlayerMock.mock.results.at(-1)?.value, "voice audio player");
+
+  const callArgs = (source: MockCallSource, label: string, index?: number) =>
     requireRecord(
-      mockCall(
-        mocks.agentCommandMock as unknown as MockCallSource,
-        index,
-        `agent command ${index}`,
-      )[0],
-      `agent command args ${index}`,
+      (index === undefined ? lastMockCall(source, label) : mockCall(source, index, label))[0],
+      `${label} args`,
     );
 
   const { realtimeBridgeAt, lastRealtimeBridge, lastRealtimeBridgeParams, sentUserMessages } =
@@ -369,47 +283,6 @@ function buildVoiceTestHarness() {
     };
   };
 
-  const createJoinedAgentProxyFixture = async (
-    overrides: {
-      client?: ReturnType<typeof createClient>;
-      config?: AgentProxyConfigOverrides;
-      cfg?: ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0]["cfg"];
-    } = {},
-  ) =>
-    joinManagerFixture(createAgentProxyManager(overrides.client, overrides.config, overrides.cfg));
-
-  const createJoinedBidiFixture = async (config: AgentProxyConfigOverrides = {}) =>
-    joinManagerFixture(createManager(makeBidiConfig(config)));
-
-  const lastAudioResourceInput = () =>
-    lastMockCall(mocks.createAudioResourceMock as unknown as MockCallSource, "audio resource")[0];
-
-  const lastTtsArgs = () =>
-    requireRecord(
-      lastMockCall(mocks.textToSpeechMock as unknown as MockCallSource, "tts call")[0],
-      "tts args",
-    );
-
-  const lastTtsStreamArgs = () =>
-    requireRecord(
-      lastMockCall(mocks.textToSpeechStreamMock as unknown as MockCallSource, "tts stream call")[0],
-      "tts stream args",
-    );
-
-  const emitFinalRealtimeUserTranscript = async (
-    bridgeParams:
-      | {
-          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
-        }
-      | null
-      | undefined,
-    text: string,
-  ) => {
-    await flushRealtimeForcedConsultTimers(() => {
-      bridgeParams?.onTranscript?.("user", text, true);
-    });
-  };
-
   const flushRealtimeForcedConsultTimers = async (emitTranscripts: () => void | Promise<void>) => {
     vi.useFakeTimers();
     try {
@@ -418,49 +291,6 @@ function buildVoiceTestHarness() {
     } finally {
       vi.useRealTimers();
     }
-  };
-
-  const expectUserMessageIncludes = (text: string) => {
-    expect(
-      sentUserMessages().some((message) => message.includes(text)),
-      text,
-    ).toBe(true);
-  };
-
-  const expectUserMessageNotIncludes = (text: string) => {
-    expect(
-      sentUserMessages().some((message) => message.includes(text)),
-      text,
-    ).toBe(false);
-  };
-
-  // Projection-only fault for tests of main-owned rejoin/recording policy.
-  // Native DAVE behavior must use emitWorkerReceiveFailure below.
-  const emitDecryptFailure = (manager: Manager) => {
-    const entry = getSessionEntry(manager);
-    getVoiceReceive(manager).handleReceiveError(
-      entry,
-      new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
-    );
-  };
-
-  const receiveVoiceUtterance = async (manager: Manager, userId: string) => {
-    expect(await manager.join({ guildId: "g1", channelId: "1001" })).toMatchObject({ ok: true });
-    await receiveRecordedSpeech(manager, undefined, getSessionEntry(manager), userId);
-  };
-
-  const updateVoiceState = async (
-    manager: Manager,
-    userId: string,
-    channelId: string | null,
-    member?: Record<string, unknown>,
-  ) => {
-    await manager.handleVoiceStateUpdate({
-      guild_id: "g1",
-      user_id: userId,
-      channel_id: channelId,
-      ...(member ? { member } : {}),
-    } as never);
   };
 
   const handleSpeakingStart = async (manager: Manager, entry: VoiceSessionEntry, userId: string) =>
@@ -508,21 +338,6 @@ function buildVoiceTestHarness() {
     return { entry, connection, source, receiving: settled, errors };
   };
 
-  const emitWorkerReceiveFailure = async (
-    manager: Manager,
-    options: { guildId?: string; error?: Error } = {},
-  ) => {
-    const capture = await openWorkerReceiveCapture(manager, options.guildId);
-    // Capture startup separately re-arms passthrough; measure only fault recovery.
-    capture.connection.daveSetPassthroughMode.mockClear();
-    capture.source.destroy(
-      options.error ??
-        new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
-    );
-    await capture.receiving;
-    return capture.errors;
-  };
-
   const receiveRecordedSpeech = async (
     manager: Manager,
     text?: string,
@@ -533,16 +348,11 @@ function buildVoiceTestHarness() {
     const stream = new PassThrough({ objectMode: true });
     getSessionConnection(entry).receiver.subscribe.mockReturnValueOnce(stream);
     // Mock the codec and provider response, retaining receive ownership and WAV/STT dispatch.
-    mocks.decodeOpusStreamChunksMock.mockImplementation(
-      async (
-        input: import("node:stream").Readable,
-        callbacks: { onChunk: (pcm: Buffer, packet: Buffer) => void | Promise<void> },
-      ) => {
-        for await (const pcm of input) {
-          await callbacks.onChunk(pcm, pcm);
-        }
-      },
-    );
+    mocks.decodeOpusStreamChunksMock.mockImplementation(async (input, callbacks) => {
+      for await (const pcm of input) {
+        await callbacks.onChunk(pcm, pcm);
+      }
+    });
     if (text !== undefined) {
       mocks.transcribeAudioFileMock.mockResolvedValue({ text });
     }
@@ -559,6 +369,28 @@ function buildVoiceTestHarness() {
   };
 
   return {
+    createRecordingFixture: async (config?: AgentProxyConfigOverrides) => {
+      const manager = createAgentProxyManager(undefined, config);
+      const onUtterance = vi.fn();
+      expect(await startTranscripts(manager, onUtterance)).toMatchObject({ ok: true });
+      return { manager, onUtterance, entry: getSessionEntry(manager) };
+    },
+    blockOperation: (mock: {
+      mockImplementationOnce: (callback: () => Promise<undefined>) => unknown;
+    }) => {
+      const entered = createDeferred<void>();
+      const ready = createDeferred<undefined>();
+      mock.mockImplementationOnce(() => {
+        entered.resolve();
+        return ready.promise;
+      });
+      return { entered: entered.promise, release: () => ready.resolve(undefined) };
+    },
+    useConnection: () => {
+      const connection = mocks.createConnectionMock();
+      mocks.joinVoiceChannelMock.mockReturnValueOnce(connection);
+      return connection;
+    },
     startTranscripts,
     stopTranscripts,
     expectDefined,
@@ -583,38 +415,114 @@ function buildVoiceTestHarness() {
     makeVoiceConfig,
     makeAgentProxyConfig,
     createAgentProxyManager,
-    createFollowManager,
-    expectConnectedStatus,
+    createFollowManager: (
+      voice: Partial<VoiceConfig> = {},
+      clientOverride?: ReturnType<typeof createClient>,
+      overrides: Omit<Partial<DiscordConfig>, "voice"> = {},
+      botUserId?: string,
+    ) =>
+      createManager(
+        makeVoiceConfig({ followUsers: ["u-owner"], ...voice }, overrides),
+        clientOverride,
+        {},
+        "default",
+        botUserId,
+      ),
+    expectConnectedStatus: (manager: Manager, channelId: string) => {
+      expect(manager.status()).toEqual([
+        {
+          ok: true,
+          message: `connected: guild g1 channel ${channelId}`,
+          guildId: "g1",
+          channelId,
+        },
+      ]);
+    },
     getSessionEntry,
     getSessionConnection,
     getVoiceReceive,
-    getVoiceFollowing,
+    getVoiceFollowing: (manager: Manager) => manager["following"],
     beginSpeakerTurn,
     createWakeNameFixture,
     getLastAudioPlayer,
-    expectOffEventWithFunction,
-    lastAgentCommandArgs,
-    agentCommandArgsAt,
+    expectOffEventWithFunction: (source: MockCallSource, event: string) => {
+      const call = Array.from(source.mock.calls).find((candidate) => candidate[0] === event);
+      if (!call) {
+        throw new Error(`Expected ${event} listener removal`);
+      }
+      expect(call[1], `${event} listener`).toBeTypeOf("function");
+    },
+    lastAgentCommandArgs: () => callArgs(mocks.agentCommandMock, "agent command"),
+    agentCommandArgsAt: (index: number) =>
+      callArgs(mocks.agentCommandMock, `agent command ${index}`, index),
     realtimeBridgeAt,
     lastRealtimeBridge,
     lastRealtimeBridgeParams,
-    createJoinedAgentProxyFixture,
-    createJoinedBidiFixture,
-    lastAudioResourceInput,
-    lastTtsArgs,
-    lastTtsStreamArgs,
+    createJoinedAgentProxyFixture: async (
+      overrides: {
+        client?: ReturnType<typeof createClient>;
+        config?: AgentProxyConfigOverrides;
+        cfg?: ManagerParams["cfg"];
+      } = {},
+    ) =>
+      joinManagerFixture(
+        createAgentProxyManager(overrides.client, overrides.config, overrides.cfg),
+      ),
+    createJoinedBidiFixture: async (config: AgentProxyConfigOverrides = {}) =>
+      joinManagerFixture(createManager(makeBidiConfig(config))),
+    lastAudioResourceInput: () => lastMockCall(mocks.createAudioResourceMock, "audio resource")[0],
+    lastTtsArgs: () => callArgs(mocks.textToSpeechMock, "tts"),
+    lastTtsStreamArgs: () => callArgs(mocks.textToSpeechStreamMock, "tts stream"),
     sentUserMessages,
-    emitFinalRealtimeUserTranscript,
+    emitFinalRealtimeUserTranscript: async (
+      bridgeParams: Pick<TestRealtimeBridgeParams, "onTranscript"> | null | undefined,
+      text: string,
+    ) => {
+      await flushRealtimeForcedConsultTimers(() => {
+        bridgeParams?.onTranscript?.("user", text, true);
+      });
+    },
     flushRealtimeForcedConsultTimers,
-    expectUserMessageIncludes,
-    expectUserMessageNotIncludes,
-    emitDecryptFailure,
-    emitWorkerReceiveFailure,
+    expectUserMessageIncludes: (text: string) =>
+      expect(sentUserMessages(), text).toContainEqual(expect.stringContaining(text)),
+    expectUserMessageNotIncludes: (text: string) =>
+      expect(sentUserMessages(), text).not.toContainEqual(expect.stringContaining(text)),
+    // Projection-only fault for main-owned rejoin policy; native DAVE uses emitWorkerReceiveFailure.
+    emitDecryptFailure: (manager: Manager) => {
+      const entry = getSessionEntry(manager);
+      getVoiceReceive(manager).handleReceiveError(entry, decryptError());
+    },
+    emitWorkerReceiveFailure: async (
+      manager: Manager,
+      options: { guildId?: string; error?: Error } = {},
+    ) => {
+      const capture = await openWorkerReceiveCapture(manager, options.guildId);
+      // Capture startup separately re-arms passthrough; measure only fault recovery.
+      capture.connection.daveSetPassthroughMode.mockClear();
+      capture.source.destroy(options.error ?? decryptError());
+      await capture.receiving;
+      return capture.errors;
+    },
     openWorkerReceiveCapture,
     installFailingDaveSession,
     makePoisonedDaveConnections,
-    receiveVoiceUtterance,
-    updateVoiceState,
+    receiveVoiceUtterance: async (manager: Manager, userId: string) => {
+      expect(await manager.join({ guildId: "g1", channelId: "1001" })).toMatchObject({ ok: true });
+      await receiveRecordedSpeech(manager, undefined, getSessionEntry(manager), userId);
+    },
+    updateVoiceState: async (
+      manager: Manager,
+      userId: string,
+      channelId: string | null,
+      member?: Record<string, unknown>,
+    ) => {
+      await manager.handleVoiceStateUpdate({
+        guild_id: "g1",
+        user_id: userId,
+        channel_id: channelId,
+        ...(member ? { member } : {}),
+      } as never);
+    },
     handleSpeakingStart,
     receiveRecordedSpeech,
   };
