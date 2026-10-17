@@ -10,7 +10,12 @@ import { Agent as HttpsAgent } from "node:https";
 import net, { type Socket } from "node:net";
 import path from "node:path";
 import { Readable, type Duplex, type Writable } from "node:stream";
-import { createSecureContext, createServer as createTlsServer, rootCertificates } from "node:tls";
+import {
+  createSecureContext,
+  createServer as createTlsServer,
+  getCACertificates,
+  rootCertificates,
+} from "node:tls";
 import { URL } from "node:url";
 import { normalizeExactAllowedHost as normalizeHostname } from "../exact-hostname.js";
 import {
@@ -236,11 +241,14 @@ export async function startSecretEgressProxyServer(params: {
   const certificates = await createSecretEgressCertificates(params.caDir);
   const { caPem } = certificates;
   const trustBundlePath = path.join(params.caDir, "trust-bundle.pem");
-  fs.writeFileSync(trustBundlePath, `${rootCertificates.join("\n")}\n${caPem}`, { mode: 0o644 });
+  // Preserve Node's configured startup trust in both egress TLS paths. Keep
+  // bundled roots when OpenSSL CA mode cannot enumerate its lookup store.
+  const trustedCaPems = [...new Set([...rootCertificates, ...getCACertificates("default"), caPem])];
+  fs.writeFileSync(trustBundlePath, trustedCaPems.join("\n"), { mode: 0o644 });
   // The CA set is immutable for this proxy lifetime. A new proxy owns new trust;
   // leaf renewal does not change it. Share only parsed CAs across process grants.
   const upstreamSecureContext = createSecureContext({
-    ca: [...rootCertificates, caPem],
+    ca: trustedCaPems,
   });
   const bypassHosts = new Set((params.bypassHosts ?? []).map(normalizeHostname));
   const allowedHosts =

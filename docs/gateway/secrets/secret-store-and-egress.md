@@ -341,3 +341,19 @@ Use a file SecretRef on a supported credential field instead:
 For `mode: "singleValue"`, the SecretRef `id` is `"value"`. For `mode: "json"`, use an absolute JSON pointer such as `"/providers/xai/apiKey"`.
 
 See [SecretRef Credential Surface](/reference/secretref-credential-surface) for the fields that accept SecretRefs.
+
+## Private CA trust
+
+The Gateway snapshots Node's configured default certificate authorities when the
+secret-egress proxy starts, and preserves bundled public roots. That same trust
+set is used for verified upstream HTTPS and the CA bundle supplied to protected
+subprocesses. Configure private CAs through Node startup settings such as
+`NODE_EXTRA_CA_CERTS=/etc/openclaw/certs/internal-ca.pem`, then restart the Gateway.
+Node reads this file at process startup; changing it in a running command does not
+change the Gateway's trust. Node's normal handling of unreadable or malformed
+extra-CA files applies; the proxy does not add a separate file-admission setting.
+
+Configured CAs may authenticate any permitted upstream, not just one host.
+Certificate-chain and hostname verification, exact-host secret bindings, traffic
+allowlists, and process-grant revocation remain enforced. This does not establish
+support for protected secret substitution on non-443 HTTPS ports.
