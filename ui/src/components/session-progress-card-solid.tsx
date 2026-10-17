@@ -248,12 +248,12 @@ function CardMenu(props: CardProps) {
   );
   return (
     <Show
-      when={Boolean(
+      when={
         props.refreshAction ||
         props.onDismiss ||
         props.onClearSaved ||
-        props.menuOptions?.items.length,
-      )}
+        props.menuOptions?.items.length
+      }
     >
       <div
         onClick={(event) => {

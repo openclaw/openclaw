@@ -1,4 +1,4 @@
-import { Show, createMemo, createUniqueId, mapArray, merge } from "solid-js";
+import { Show, createMemo, createUniqueId, mapArray } from "solid-js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { readPanelHostedTabs, type PanelHostedTab } from "../../../components/panel-hosted-tabs.ts";
 import {
@@ -107,27 +107,24 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
     () =>
       mapArray(
         types,
-        (current): MenuItem => {
-          const type = merge(current);
-          return {
-            get id() {
-              return type.slot;
-            },
-            get label() {
-              return type.label;
-            },
-            class: "side-panel-type-menu__item session-menu__item",
-            icon: <Icon name={type.icon} class="side-panel-type-option__icon" />,
-            labelClass: "side-panel-type-option__label",
-            details: (
-              <Show when={type.shortcut}>
-                {(shortcut) => (
-                  <KeyboardShortcut combo={shortcut()} class="side-panel-type-option__shortcut" />
-                )}
-              </Show>
-            ),
-          };
-        },
+        (current): MenuItem => ({
+          get id() {
+            return current().slot;
+          },
+          get label() {
+            return current().label;
+          },
+          class: "side-panel-type-menu__item session-menu__item",
+          icon: <Icon name={current().icon} class="side-panel-type-option__icon" />,
+          labelClass: "side-panel-type-option__label",
+          details: (
+            <Show when={current().shortcut}>
+              {(shortcut) => (
+                <KeyboardShortcut combo={shortcut()} class="side-panel-type-option__shortcut" />
+              )}
+            </Show>
+          ),
+        }),
         { keyed: (type) => type.slot },
       ),
     { lazy: true },
