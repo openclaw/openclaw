@@ -37,6 +37,13 @@ const REQUESTER_HINT =
 const frame = (json: string) =>
   `Conversation info: ⟦openclaw:ctx⟧\n\`\`\`json\n${json}\n\`\`\`\n\n`;
 const execPrompt = buildExecEventPrompt(["Exec completed (example, code 0) :: done"]);
+const silentExecPrompt = buildExecEventPrompt(["Exec completed (example, code 0) :: done"], {
+  deliverToUser: false,
+});
+const silentHeartbeatToolExecPrompt = buildExecEventPrompt(
+  ["Exec completed (example, code 0) :: done"],
+  { deliverToUser: false, useHeartbeatResponseTool: true },
+);
 
 function merge(localMessages: unknown[], importedMessages: unknown[]) {
   return mergeImportedChatHistoryMessages({ localMessages, importedMessages });
@@ -64,6 +71,12 @@ const internalInputs = [
   ],
   ["compact-output", "<local-command-stdout>Compacted </local-command-stdout>"],
   ["exec", execPrompt],
+  ["exec-silent", silentExecPrompt],
+  ["exec-silent-heartbeat-tool", silentHeartbeatToolExecPrompt],
+  [
+    "exec-silent-with-scratch",
+    `${silentExecPrompt}\n\nHeartbeat monitor scratch:\ncheck disk usage`,
+  ],
   [
     "exec-with-queued-system-event",
     `System: [2026-10-06 14:35:17 GMT+8] Control UI reaction added: 👍 by Alice on msg m1 from assistant\n\n${execPrompt}`,
