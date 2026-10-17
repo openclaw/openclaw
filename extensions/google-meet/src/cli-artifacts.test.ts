@@ -353,6 +353,55 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it.each([
+    { name: "skipped transcript entries", noTranscripts: false, includeDocumentBodies: true },
+    { name: "smart notes without transcripts", noTranscripts: true, includeDocumentBodies: true },
+    { name: "no requested document bodies", noTranscripts: false, includeDocumentBodies: false },
+  ])("exports $name", async ({ noTranscripts, includeDocumentBodies }) => {
+    stubMeetArtifactsApi({ noTranscripts });
+    const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-export-"));
+    try {
+      await runApiCommand("export", [
+        "--conference-record",
+        "rec-1",
+        ...(!noTranscripts ? ["--no-transcript-entries"] : []),
+        ...(includeDocumentBodies ? ["--include-doc-bodies"] : []),
+        "--output",
+        tempDir,
+      ]);
+      const transcript = readFileSync(path.join(tempDir, "transcript.md"), "utf8");
+      expect(transcript).toContain("_No transcript entries._");
+      expect(transcript).not.toContain("Hello from the transcript.");
+      const artifacts = JSON.parse(readFileSync(path.join(tempDir, "artifacts.json"), "utf8"));
+      const artifact = firstRecord(artifacts.artifacts);
+      expect(artifact.transcriptEntries).toEqual([]);
+      if (includeDocumentBodies) {
+        expect(transcript).toContain("Smart note document body.");
+        expectFields(firstRecord(artifact.smartNotes), {
+          documentText: "Smart note document body.",
+        });
+        if (!noTranscripts) {
+          expect(transcript).toContain("Transcript document body.");
+          expectFields(firstRecord(artifact.transcripts), {
+            documentText: "Transcript document body.",
+          });
+        } else {
+          expect(artifact.transcripts).toEqual([]);
+          expect(transcript).not.toContain("Transcript Document Bodies");
+        }
+      } else {
+        expect(transcript).not.toContain("Document Bodies");
+        expect(firstRecord(artifact.transcripts)).not.toHaveProperty("documentText");
+        expect(firstRecord(artifact.smartNotes)).not.toHaveProperty("documentText");
+      }
+      const requests = vi.mocked(fetch).mock.calls.map(([input]) => requestUrl(input).pathname);
+      expect(requests.some((request) => request.endsWith("/entries"))).toBe(false);
+      expect(requests.some((request) => request.endsWith("/export"))).toBe(includeDocumentBodies);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("includes artifact warnings in export summaries and manifests", async () => {
     stubMeetArtifactsApi({ failSmartNoteDocumentBody: true });
 
