@@ -1,7 +1,6 @@
 // Bench Gateway Startup tests cover bench gateway startup script behavior.
 import fs from "node:fs";
 import { createServer, type RequestListener } from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
@@ -23,6 +22,25 @@ import { runNodeScript } from "../helpers/run-node-script.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function writeCase(id: string) {
+  const root = tempDirs.make("openclaw-bench-config-test-");
+  const benchCase = testing.parseOptions(["--case", id]).cases[0];
+  if (!benchCase) {
+    throw new Error(`expected benchmark case ${id}`);
+  }
+  const configPath = testing.writeConfig(root, benchCase);
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
+  return { root, benchCase, config };
+}
+
+function summarizeSample(overrides: Partial<GatewaySample>, id = "demo", name = id) {
+  return testing.summarizeCase({ config: {}, id, name }, [gatewaySample(overrides)]);
+}
+
+function expectOptionsError(args: string[], message: string | RegExp) {
+  expect(() => testing.parseOptions(args)).toThrow(message);
+}
 
 type GatewaySample = Parameters<typeof testing.summarizeCase>[1][number];
 
@@ -218,8 +236,9 @@ server.listen(port, "127.0.0.1", () => {
   );
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
-    expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
-    expect(() => testing.parseOptions(["--installed-cpu-diagnostic"])).toThrow(
+    expectOptionsError(["--wat"], "Unknown argument: --wat");
+    expectOptionsError(
+      ["--installed-cpu-diagnostic"],
       "--installed-cpu-diagnostic requires --installed-cohort",
     );
     for (const flag of [
@@ -228,16 +247,10 @@ server.listen(port, "127.0.0.1", () => {
       "--gateway-runtime",
       "--gateway-cpus",
     ]) {
-      expect(() =>
-        testing.parseOptions([
-          "--installed-cohort",
-          "input.json",
-          "--output",
-          "result.json",
-          flag,
-          "profiles",
-        ]),
-      ).toThrow(`${flag} is not supported with --installed-cohort`);
+      expectOptionsError(
+        ["--installed-cohort", "input.json", "--output", "result.json", flag, "profiles"],
+        `${flag} is not supported with --installed-cohort`,
+      );
     }
     expect(
       testing.parseOptions([
@@ -258,19 +271,14 @@ server.listen(port, "127.0.0.1", () => {
       output: "startup.json",
       runs: 2,
     });
-    expect(() => testing.parseOptions(["--output", "--case", "default"])).toThrow(
-      "--output requires a value",
+    expectOptionsError(["--output", "--case", "default"], "--output requires a value");
+    expectOptionsError(["--case"], "--case requires a value");
+    expectOptionsError(["--runs", "--warmup", "0"], "--runs requires a value");
+    expectOptionsError(["--case", "default", "--case", "default"], 'Duplicate --case "default"');
+    expectOptionsError(
+      ["--output", "first.json", "--output", "second.json"],
+      "--output was provided more than once",
     );
-    expect(() => testing.parseOptions(["--case"])).toThrow("--case requires a value");
-    expect(() => testing.parseOptions(["--runs", "--warmup", "0"])).toThrow(
-      "--runs requires a value",
-    );
-    expect(() => testing.parseOptions(["--case", "default", "--case", "default"])).toThrow(
-      'Duplicate --case "default"',
-    );
-    expect(() =>
-      testing.parseOptions(["--output", "first.json", "--output", "second.json"]),
-    ).toThrow("--output was provided more than once");
   });
 
   it("selects the Gateway runtime and affinity independently of the controller", () => {
@@ -278,11 +286,12 @@ server.listen(port, "127.0.0.1", () => {
     expect(
       testing.parseOptions(["--gateway-runtime", "/tmp/bun", "--gateway-cpus", "0,1"]),
     ).toMatchObject({ gatewayRuntime: "/tmp/bun", gatewayCpus: "0,1" });
-    expect(() => testing.parseOptions(["--gateway-cpus", "0-1"])).toThrow("--gateway-cpus");
-    expect(() => testing.parseOptions(["--gateway-runtime", "bun\0"])).toThrow("--gateway-runtime");
-    expect(() =>
-      testing.parseOptions(["--gateway-runtime", "bun", "--gateway-runtime", "node"]),
-    ).toThrow("--gateway-runtime was provided more than once");
+    expectOptionsError(["--gateway-cpus", "0-1"], "--gateway-cpus");
+    expectOptionsError(["--gateway-runtime", "bun\0"], "--gateway-runtime");
+    expectOptionsError(
+      ["--gateway-runtime", "bun", "--gateway-runtime", "node"],
+      "--gateway-runtime was provided more than once",
+    );
   });
 
   it("forces incident packaged-plugin cases to load built plugin entries", () => {
@@ -347,23 +356,21 @@ server.listen(port, "127.0.0.1", () => {
   });
 
   it("flags samples that never produced readiness or process metrics", () => {
-    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
-      gatewaySample({
-        completionMs: null,
-        cpuCoreRatio: null,
-        cpuMs: null,
-        exitCode: 1,
-        firstOutputMs: 5,
-        gatewayReadyLogLine: null,
-        gatewayReadyLogMs: null,
-        healthz: startupProbe(null, "econnrefused"),
-        httpListenLogLine: null,
-        httpListenLogMs: null,
-        maxRssMb: null,
-        outputTail: "Error: Cannot find module 'dist/entry.js'",
-        readyz: startupProbe(null, "econnrefused"),
-      }),
-    ]);
+    const result = summarizeSample({
+      completionMs: null,
+      cpuCoreRatio: null,
+      cpuMs: null,
+      exitCode: 1,
+      firstOutputMs: 5,
+      gatewayReadyLogLine: null,
+      gatewayReadyLogMs: null,
+      healthz: startupProbe(null, "econnrefused"),
+      httpListenLogLine: null,
+      httpListenLogMs: null,
+      maxRssMb: null,
+      outputTail: "Error: Cannot find module 'dist/entry.js'",
+      readyz: startupProbe(null, "econnrefused"),
+    });
 
     expect(result.summary.startupTrace).toEqual({});
     expect(testing.collectResultFailures([result])).toEqual([
@@ -376,13 +383,11 @@ server.listen(port, "127.0.0.1", () => {
   });
 
   it("flags samples that become ready and then exit nonzero", () => {
-    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
-      gatewaySample({
-        exitedBeforeTeardown: true,
-        exitCode: 1,
-        outputTail: "ready\\nError: startup sidecar crashed",
-      }),
-    ]);
+    const result = summarizeSample({
+      exitedBeforeTeardown: true,
+      exitCode: 1,
+      outputTail: "ready\\nError: startup sidecar crashed",
+    });
 
     expect(result.summary.httpListenLogMs?.p50).toBe(5);
     expect(result.summary.gatewayReadyLogMs?.p50).toBe(20);
@@ -397,15 +402,17 @@ server.listen(port, "127.0.0.1", () => {
   });
 
   it("enforces the combined incident readiness budgets", () => {
-    const result = testing.summarizeCase({ config: {}, id: "incidentCombined", name: "incident" }, [
-      gatewaySample({
+    const result = summarizeSample(
+      {
         completionMs: 60_000,
         exitCode: 0,
         gatewayReadyLogMs: 60_000,
         healthz: startupProbe(30_000),
         readyz: startupProbe(60_000),
-      }),
-    ]);
+      },
+      "incidentCombined",
+      "incident",
+    );
 
     expect(testing.collectResultFailures([result])).toEqual([
       {
@@ -422,13 +429,11 @@ server.listen(port, "127.0.0.1", () => {
   });
 
   it("flags samples that become ready and then die from a signal", () => {
-    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
-      gatewaySample({
-        exitedBeforeTeardown: true,
-        outputTail: "ready\\nsegmentation fault",
-        signal: "SIGSEGV",
-      }),
-    ]);
+    const result = summarizeSample({
+      exitedBeforeTeardown: true,
+      outputTail: "ready\\nsegmentation fault",
+      signal: "SIGSEGV",
+    });
 
     expect(testing.collectResultFailures([result])).toEqual([
       {
@@ -505,31 +510,26 @@ server.listen(port, "127.0.0.1", () => {
   });
 
   it("writes 50-plugin fixtures as a parent load path with explicit startup activation", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-config-test-"));
-    try {
-      const configPath = testing.writeConfig(root, {
-        config: {},
-        id: "fiftyPlugins",
-        name: "gateway, 50 manifest plugins",
-        pluginActivationOnStartup: true,
-        pluginCount: 2,
-      });
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
-        plugins?: { allow?: string[]; load?: { paths?: string[] } };
-      };
-
-      expect(config.plugins?.load?.paths).toEqual([path.join(root, "plugins")]);
-      expect(config.plugins?.allow).toEqual(["bench-plugin-01", "bench-plugin-02"]);
-      const manifest = JSON.parse(
-        fs.readFileSync(
-          path.join(root, "plugins", "bench-plugin-01", "openclaw.plugin.json"),
-          "utf8",
-        ),
-      ) as { activation?: { onStartup?: boolean } };
-      expect(manifest.activation?.onStartup).toBe(true);
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    const root = tempDirs.make("openclaw-bench-config-test-");
+    const configPath = testing.writeConfig(root, {
+      config: {},
+      id: "fiftyPlugins",
+      name: "gateway, 50 manifest plugins",
+      pluginActivationOnStartup: true,
+      pluginCount: 2,
+    });
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+      plugins?: { allow?: string[]; load?: { paths?: string[] } };
+    };
+    expect(config.plugins?.load?.paths).toEqual([path.join(root, "plugins")]);
+    expect(config.plugins?.allow).toEqual(["bench-plugin-01", "bench-plugin-02"]);
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(root, "plugins", "bench-plugin-01", "openclaw.plugin.json"),
+        "utf8",
+      ),
+    ) as { activation?: { onStartup?: boolean } };
+    expect(manifest.activation?.onStartup).toBe(true);
   });
 
   it("builds a bounded incident fixture before the startup timer begins", async () => {
@@ -608,42 +608,25 @@ server.listen(port, "127.0.0.1", () => {
   });
 
   it("builds a deterministic prepared-runtime catalog stall case", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-config-test-"));
-    try {
-      const benchCase = testing.parseOptions(["--case", "preparedRuntimeCatalogStall"]).cases[0];
-      if (!benchCase) {
-        throw new Error("expected prepared runtime catalog stall case");
-      }
-      const configPath = testing.writeConfig(root, benchCase);
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
-      expect(config.agents?.defaults?.modelPolicy?.allow).toEqual([
-        "bench-catalog-stall/bench-model",
-      ]);
-      expect(validateConfigObject(config)).toMatchObject({ ok: true });
-      const pluginId = config.plugins?.allow?.[0];
-      expect(pluginId).toBe("bench-plugin-01");
-      const pluginDir = path.join(root, "plugins", pluginId ?? "missing");
-      const manifest = JSON.parse(
-        fs.readFileSync(path.join(pluginDir, "openclaw.plugin.json"), "utf8"),
-      ) as { providers?: string[] };
-      const source = fs.readFileSync(path.join(pluginDir, "index.cjs"), "utf8");
-
-      expect(manifest.providers).toEqual(["bench-catalog-stall"]);
-      expect(source).toContain("api.registerProvider");
-      expect(source).toContain("Date.now() + 2000");
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    const { root, config } = writeCase("preparedRuntimeCatalogStall");
+    expect(config.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "bench-catalog-stall/bench-model",
+    ]);
+    expect(validateConfigObject(config)).toMatchObject({ ok: true });
+    const pluginId = config.plugins?.allow?.[0];
+    expect(pluginId).toBe("bench-plugin-01");
+    const pluginDir = path.join(root, "plugins", pluginId ?? "missing");
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(pluginDir, "openclaw.plugin.json"), "utf8"),
+    ) as { providers?: string[] };
+    const source = fs.readFileSync(path.join(pluginDir, "index.cjs"), "utf8");
+    expect(manifest.providers).toEqual(["bench-catalog-stall"]);
+    expect(source).toContain("api.registerProvider");
+    expect(source).toContain("Date.now() + 2000");
   });
 
   it("builds a valid large plugin-model startup case", () => {
-    const root = tempDirs.make("openclaw-large-plugin-model-bench-test-");
-    const benchCase = testing.parseOptions(["--case", "largePluginModelConfig"]).cases[0];
-    if (!benchCase) {
-      throw new Error("expected large plugin-model benchmark case");
-    }
-    const configPath = testing.writeConfig(root, benchCase);
-    const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
+    const { benchCase, config } = writeCase("largePluginModelConfig");
     const entries = Object.values(config.agents?.entries ?? {});
     const modelRefs = collectConfiguredModelRefs(config, { includeChannelModelOverrides: false });
 
@@ -663,13 +646,7 @@ server.listen(port, "127.0.0.1", () => {
   ])(
     "builds valid $id config with its shared and distinct workspaces",
     ({ id, agentCount, sharedCount, owner }) => {
-      const root = tempDirs.make("openclaw-bench-config-test-");
-      const benchCase = testing.parseOptions(["--case", id]).cases[0];
-      if (!benchCase) {
-        throw new Error("expected prepared runtime scale case");
-      }
-      const configPath = testing.writeConfig(root, benchCase);
-      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
+      const { root, config } = writeCase(id);
       expect(validateConfigObject(config)).toMatchObject({ ok: true });
       expect(config.agents?.ownership).toBe("explicit");
       expect(config.agents?.defaults?.systemAgent?.agentId).toBe(owner);

@@ -46,6 +46,9 @@ const channelStateFixtures = {
   },
 };
 
+const readText = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
+const readJson = (...parts: string[]) => JSON.parse(readText(...parts));
+
 function writeChannelStateFixtures(pluginRoot: string) {
   for (const { specifier, exportName } of Object.values(channelStateFixtures)) {
     fs.writeFileSync(
@@ -97,7 +100,7 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
       );
     }
     const build = () => buildExternalPluginLocalDist({ repoRoot, env: {}, logLevel: "silent" });
-    const builds = () => fs.readFileSync(path.join(repoRoot, "builds.txt"), "utf8");
+    const builds = () => readText(repoRoot, "builds.txt");
     await build();
     expect(builds()).toBe("first\nsecond\n");
     fs.rmSync(path.join(repoRoot, "dist"), { recursive: true });
@@ -109,26 +112,17 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
     await build();
     expect(builds()).toBe("first\nsecond\n");
     for (const id of ["first", "second"]) {
-      expect(
-        fs.readFileSync(path.join(repoRoot, "dist/extensions", id, "index.js"), "utf8"),
-      ).toContain("value");
-      expect(
-        fs.readFileSync(
-          path.join(repoRoot, "extensions", id, "dist/control-ui/version/index.js"),
-          "utf8",
-        ),
-      ).toBe("browser asset");
-      expect(
-        fs.readFileSync(path.join(repoRoot, "extensions", id, "assets/generated.txt"), "utf8"),
-      ).toBe("generated asset");
+      expect(readText(repoRoot, "dist/extensions", id, "index.js")).toContain("value");
+      expect(readText(repoRoot, "extensions", id, "dist/control-ui/version/index.js")).toBe(
+        "browser asset",
+      );
+      expect(readText(repoRoot, "extensions", id, "assets/generated.txt")).toBe("generated asset");
     }
     fs.rmSync(path.join(repoRoot, "forbid-build"));
     fs.writeFileSync(path.join(repoRoot, "extensions/first/index.ts"), "export const value = 2;\n");
     await build();
     expect(builds()).toBe("first\nsecond\nfirst\n");
-    expect(
-      fs.readFileSync(path.join(repoRoot, "dist/extensions/first/index.js"), "utf8"),
-    ).toContain("value = 2");
+    expect(readText(repoRoot, "dist/extensions/first/index.js")).toContain("value = 2");
   });
 
   it("uses generated browser metadata as input without rewriting source or restoring over its output", async () => {
@@ -188,7 +182,7 @@ fs.writeFileSync(entry, identity);
     });
     await build("first");
     await build("second");
-    expect(fs.readFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "utf8")).toBe(authored);
+    expect(readText(pluginRoot, "openclaw.plugin.json")).toBe(authored);
     const expected = {
       ...JSON.parse(authored),
       controlUi: { entry: "dist/control-ui/second/index.js" },
@@ -196,15 +190,11 @@ fs.writeFileSync(entry, identity);
     expect(
       withPluginCache(createPluginCache(), () => loadPluginManifest(pluginRoot)),
     ).toMatchObject({ ok: true, manifest: expected });
-    expect(
-      JSON.parse(
-        fs.readFileSync(path.join(repoRoot, "dist/extensions/demo/openclaw.plugin.json"), "utf8"),
-      ),
-    ).toMatchObject(expected);
+    expect(readJson(repoRoot, "dist/extensions/demo/openclaw.plugin.json")).toMatchObject(expected);
     const ownedAsset = path.join(pluginRoot, "dist/control-ui/second/owner.js");
     fs.writeFileSync(ownedAsset, "early owner output");
     await build("second");
-    expect(fs.readFileSync(ownedAsset, "utf8")).toBe("early owner output");
+    expect(readText(ownedAsset)).toBe("early owner output");
   });
 
   it.each([
@@ -247,7 +237,7 @@ fs.writeFileSync(entry, identity);
       fs.symlinkSync(type === "file" ? sentinelPath : outside, linkPath, type);
 
       expect(() => copyBundledPluginMetadata({ repoRoot, env: {} })).toThrow("symbolic link");
-      expect(fs.readFileSync(sentinelPath, "utf8")).toBe("outside data\n");
+      expect(readText(sentinelPath)).toBe("outside data\n");
       expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
     },
   );
@@ -378,12 +368,8 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
               rootDir: repoRoot,
             });
             expect(
-              JSON.parse(
-                fs.readFileSync(
-                  path.join(repoRoot, "extensions/external-only/dist/openclaw.plugin.json"),
-                  "utf8",
-                ),
-              ).controlUi.entry,
+              readJson(repoRoot, "extensions/external-only/dist/openclaw.plugin.json").controlUi
+                .entry,
             ).toBe(browserEntry);
           } else {
             expect(invocation.args[2]).toBe("scripts/build-external-plugin-local-dist.mts");
@@ -396,30 +382,23 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
       });
     const built = await build(steps);
     expect(built.exitCode).toBe(0);
-    expect(
-      fs.readFileSync(path.join(repoRoot, "extensions/external-cjs/asset-builds.txt"), "utf8"),
-    ).toBe("built\n");
-    expect(
-      fs.readFileSync(
-        path.join(repoRoot, "dist/extensions/external-cjs/assets/generated.txt"),
-        "utf8",
-      ),
-    ).toBe("generated asset");
+    expect(readText(repoRoot, "extensions/external-cjs/asset-builds.txt")).toBe("built\n");
+    expect(readText(repoRoot, "dist/extensions/external-cjs/assets/generated.txt")).toBe(
+      "generated asset",
+    );
     expect((await build(steps.slice(0, 1))).exitCode).toBe(0);
-    expect(
-      fs.readFileSync(path.join(repoRoot, "extensions/external-cjs/asset-builds.txt"), "utf8"),
-    ).toBe("built\nbuilt\n");
+    expect(readText(repoRoot, "extensions/external-cjs/asset-builds.txt")).toBe("built\nbuilt\n");
     copyBundledPluginMetadata({ repoRoot, env: {} });
     expect(fs.readdirSync(path.join(repoRoot, "dist"))).toEqual(["extensions"]);
     for (const { id, runtimeFormat, bundledDist } of plugins) {
       const pluginRoot = path.join(repoRoot, "dist/extensions", id);
-      const metadata = JSON.parse(fs.readFileSync(path.join(pluginRoot, "package.json"), "utf8"));
+      const metadata = readJson(pluginRoot, "package.json");
       const extension = runtimeFormat === "cjs" ? ".cjs" : ".js";
       expect(metadata.openclaw.extensions).toEqual([`./index${extension}`]);
       expect(metadata.openclaw.setupEntry).toBe(`./setup-entry${extension}`);
       const sourceRoot = path.join(repoRoot, "extensions", id);
       if (id === "external-only") {
-        expect(fs.readFileSync(path.join(sourceRoot, browserEntry), "utf8")).toBe(browserSource);
+        expect(readText(sourceRoot, browserEntry)).toBe(browserSource);
         expect(fs.readdirSync(path.join(sourceRoot, "dist"))).toEqual([
           "control-ui",
           "openclaw.plugin.json",
@@ -483,7 +462,7 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
         },
       });
       const sourcePackagePath = path.join(repoRoot, "extensions", id, "package.json");
-      const sourceText = fs.readFileSync(sourcePackagePath, "utf8");
+      const sourceText = readText(sourcePackagePath);
       const sourcePackage = JSON.parse(sourceText);
       expect(sourcePackage.openclaw.channel).toEqual({ id, label: id, ...channelStateFixtures });
       // Reuse the built graphs: partial pairs must retain env semantics, not require a sidecar.
@@ -505,9 +484,7 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
             };
             fs.writeFileSync(sourcePackagePath, JSON.stringify(sourcePackage));
             copyBundledPluginMetadata({ repoRoot, env: {} });
-            const channel = JSON.parse(
-              fs.readFileSync(path.join(pluginRoot, "package.json"), "utf8"),
-            ).openclaw.channel;
+            const channel = readJson(pluginRoot, "package.json").openclaw.channel;
             expect(channel).toEqual({ ...metadata.openclaw.channel, [metadataKey]: declaration });
             const stateProbe = {
               entry: { channel, pluginId: id, rootDir: pluginRoot, origin: "bundled" as const },
@@ -686,24 +663,20 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
         for (const [pluginId, version] of plugins) {
           const sourceModules = path.join(repoRoot, "extensions", pluginId, "node_modules");
           const outputRoot = path.join(repoRoot, "dist", "extensions", pluginId);
-          expect(
-            fs.readFileSync(path.join(sourceModules, dependency, "SKILL.md"), "utf8"),
-            profile,
-          ).toBe(`# Private dependency ${version}\n`);
+          expect(readText(sourceModules, dependency, "SKILL.md"), profile).toBe(
+            `# Private dependency ${version}\n`,
+          );
           expect(fs.existsSync(path.join(outputRoot, "node_modules", "openclaw")), profile).toBe(
             isolated,
           );
           expect(fs.readlinkSync(path.join(sourceModules, "openclaw")), profile).toBe(
             sourceHostLinks.get(pluginId),
           );
-          const manifest = JSON.parse(
-            fs.readFileSync(path.join(outputRoot, "openclaw.plugin.json"), "utf8"),
-          );
+          const manifest = readJson(outputRoot, "openclaw.plugin.json");
           expect(manifest.skills, profile).toEqual([`./bundled-skills/${dependency}`]);
-          expect(
-            fs.readFileSync(path.join(outputRoot, manifest.skills[0], "SKILL.md"), "utf8"),
-            profile,
-          ).toBe(`# Private dependency ${version}\n`);
+          expect(readText(outputRoot, manifest.skills[0], "SKILL.md"), profile).toBe(
+            `# Private dependency ${version}\n`,
+          );
         }
       }
       let runtimeRoot = repoRoot;
@@ -900,9 +873,7 @@ fs.writeFileSync("assets/generated.txt", "generated asset");
       fs.writeFileSync(output, "export {};\n");
     }
     copyBundledPluginMetadata({ repoRoot, env });
-    const builtPackage = JSON.parse(
-      fs.readFileSync(path.join(distRoot, "extensions/demo/package.json"), "utf8"),
-    );
+    const builtPackage = readJson(distRoot, "extensions/demo/package.json");
     expect(builtPackage.openclaw.extensions).toEqual(["./index.js"]);
     expect(builtPackage.openclaw.setupEntry).toBe("./setup-entry.js");
     expect(builtPackage.openclaw.channel).toEqual({

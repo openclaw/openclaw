@@ -19,30 +19,30 @@ function runStopExistingLocalApp(params: { fakeLsof?: string; fakePgrep: string 
     [
       "lsof",
       params.fakeLsof ??
-        [
-          "#!/usr/bin/env bash",
-          "pid=''",
-          "while [[ $# -gt 0 ]]; do",
-          '  if [[ "$1" == "-p" ]]; then pid="$2"; shift 2; continue; fi',
-          "  shift",
-          "done",
-          'printf "p%s\\n" "$pid"',
-          'printf "n/worktree/apps/macos\\n"',
-          "exit 0",
-        ].join("\n"),
+        `#!/usr/bin/env bash
+pid=''
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == "-p" ]]; then pid="$2"; shift 2; continue; fi
+  shift
+done
+printf "p%s\\n" "$pid"
+printf "n/worktree/apps/macos\\n"
+exit 0`,
     ],
     [
       "sed",
-      [
-        "#!/usr/bin/env bash",
-        'if [[ "$1" == "-n" && "$2" == "s/^n//p" ]]; then',
-        "  /usr/bin/sed -n 's/^n//p'",
-        "else",
-        '  /usr/bin/sed "$@"',
-        "fi",
-      ].join("\n"),
+      `#!/usr/bin/env bash
+if [[ "$1" == "-n" && "$2" == "s/^n//p" ]]; then
+  /usr/bin/sed -n 's/^n//p'
+else
+  /usr/bin/sed "$@"
+fi`,
     ],
-    ["head", ["#!/usr/bin/env bash", 'exec /usr/bin/head "$@"'].join("\n")],
+    [
+      "head",
+      `#!/usr/bin/env bash
+exec /usr/bin/head "$@"`,
+    ],
     ["sleep", "#!/usr/bin/env bash\nexit 0\n"],
   ] as const) {
     const toolPath = join(binDir, name);
@@ -118,16 +118,14 @@ describe("scripts/build-and-run-mac.sh", () => {
   it("stops only the local debug app binary before relaunching", () => {
     const script = readFileSync(scriptPath, "utf8");
     const { killCalls, pgrepCalls, result } = runStopExistingLocalApp({
-      fakePgrep: [
-        "#!/usr/bin/env bash",
-        `printf '%s\\n' "$*" >> "$OPENCLAW_TEST_PGREP_CALLS"`,
-        'count="$(cat "$OPENCLAW_TEST_PGREP_COUNT" 2>/dev/null || echo 0)"',
-        'next="$((count + 1))"',
-        'printf "%s\\n" "$next" > "$OPENCLAW_TEST_PGREP_COUNT"',
-        'if [[ "$2" == "/worktree/apps/macos/.build-local/debug/OpenClaw" ]]; then exit 1; fi',
-        'if [[ "$2" == ".build-local/debug/OpenClaw" && "$count" == "1" ]]; then echo 321; exit 0; fi',
-        "exit 1",
-      ].join("\n"),
+      fakePgrep: `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$OPENCLAW_TEST_PGREP_CALLS"
+count="$(cat "$OPENCLAW_TEST_PGREP_COUNT" 2>/dev/null || echo 0)"
+next="$((count + 1))"
+printf "%s\\n" "$next" > "$OPENCLAW_TEST_PGREP_COUNT"
+if [[ "$2" == "/worktree/apps/macos/.build-local/debug/OpenClaw" ]]; then exit 1; fi
+if [[ "$2" == ".build-local/debug/OpenClaw" && "$count" == "1" ]]; then echo 321; exit 0; fi
+exit 1`,
     });
 
     expect(result.status).toBe(0);
@@ -144,156 +142,74 @@ describe("scripts/build-and-run-mac.sh", () => {
 
   it("fails when the scoped local app process survives cleanup", () => {
     const { result } = runStopExistingLocalApp({
-      fakePgrep: [
-        "#!/usr/bin/env bash",
-        'if [[ "$2" == ".build-local/debug/OpenClaw" ]]; then echo 321; exit 0; fi',
-        "exit 1",
-      ].join("\n"),
+      fakePgrep: `#!/usr/bin/env bash
+if [[ "$2" == ".build-local/debug/OpenClaw" ]]; then echo 321; exit 0; fi
+exit 1`,
     });
 
     expect(result.status).toBe(1);
   });
 });
 
+function scriptPaths(files: string) {
+  return files
+    .trim()
+    .split(/\s+/u)
+    .map((file) => `scripts/${file}`);
+}
+
 // Platform contract: macOS tooling must not select Homebrew Bash through PATH.
-const nativeScripts = [
-  "scripts/lib/plistbuddy.sh",
-  "scripts/e2e/parallels-linux-smoke.sh",
-  "scripts/e2e/parallels-windows-smoke.sh",
-  "scripts/e2e/parallels-npm-update-smoke.sh",
-  "scripts/apple-release-source-check.sh",
-  "scripts/build-and-run-mac.sh",
-  "scripts/check-swift-tools.sh",
-  "scripts/codesign-mac-app.sh",
-  "scripts/create-dmg.sh",
-  "scripts/dev/computer-use-macos-live-rig.sh",
-  "scripts/e2e/parallels-macos-smoke.sh",
-  "scripts/e2e/parallels-windows-prepare.sh",
-  "scripts/format-swift.sh",
-  "scripts/generate-mac-app-icons.sh",
-  "scripts/install-swift-tools.sh",
-  "scripts/ios-app-store-connect-keychain-setup.sh",
-  "scripts/ios-configure-signing.sh",
-  "scripts/ios-release-archive.sh",
-  "scripts/ios-release-cut.sh",
-  "scripts/ios-release-plan.sh",
-  "scripts/ios-release-prepare.sh",
-  "scripts/ios-release-upload.sh",
-  "scripts/ios-run.sh",
-  "scripts/ios-screenshots.sh",
-  "scripts/ios-team-id.sh",
-  "scripts/ios-validate-app-store-ipa.sh",
-  "scripts/ios-write-version-xcconfig.sh",
-  "scripts/lib/ios-fastlane.sh",
-  "scripts/lib/mac-app-bundle.sh",
-  "scripts/lib/mac-disk-image.sh",
-  "scripts/lib/mac-swift-build.sh",
-  "scripts/lib/restart-mac-gateway.sh",
-  "scripts/lib/swift-toolchain.sh",
-  "scripts/lint-swift.sh",
-  "scripts/mac-elevation-host.sh",
-  "scripts/make_appcast.sh",
-  "scripts/notarize-mac-artifact.sh",
-  "scripts/package-mac-app.sh",
-  "scripts/package-mac-dist.sh",
-  "scripts/restart-mac.sh",
-  "scripts/stage-cloudflared-macos.sh",
-  "scripts/stage-cua-driver-macos.sh",
-  "scripts/stage-mac-runtime.sh",
-  "scripts/test-macos-health-render.sh",
-];
+const nativeScripts = scriptPaths(`
+lib/plistbuddy.sh e2e/parallels-linux-smoke.sh e2e/parallels-windows-smoke.sh
+e2e/parallels-npm-update-smoke.sh apple-release-source-check.sh build-and-run-mac.sh
+check-swift-tools.sh codesign-mac-app.sh create-dmg.sh dev/computer-use-macos-live-rig.sh
+e2e/parallels-macos-smoke.sh e2e/parallels-windows-prepare.sh format-swift.sh
+generate-mac-app-icons.sh install-swift-tools.sh ios-app-store-connect-keychain-setup.sh
+ios-configure-signing.sh ios-release-archive.sh ios-release-cut.sh ios-release-plan.sh
+ios-release-prepare.sh ios-release-upload.sh ios-run.sh ios-screenshots.sh ios-team-id.sh
+ios-validate-app-store-ipa.sh ios-write-version-xcconfig.sh lib/ios-fastlane.sh
+lib/mac-app-bundle.sh lib/mac-disk-image.sh lib/mac-swift-build.sh lib/restart-mac-gateway.sh
+lib/swift-toolchain.sh lint-swift.sh mac-elevation-host.sh make_appcast.sh notarize-mac-artifact.sh
+package-mac-app.sh package-mac-dist.sh restart-mac.sh stage-cloudflared-macos.sh
+stage-cua-driver-macos.sh stage-mac-runtime.sh test-macos-health-render.sh
+`);
 
 // Includes host wrappers whose sourced Docker helpers use heredocs.
-const portableScripts = [
-  "scripts/android-release-upload.sh",
-  "scripts/android-screenshots.sh",
-  "scripts/changelog-to-html.sh",
-  "scripts/ci-hydrate-live-auth.sh",
-  "scripts/ci-hydrate-testbox-env.sh",
-  "scripts/dev/computer-use-macos-live-rig.sh",
-  "scripts/docker/setup.sh",
-  "scripts/docker/shared-image-artifact.sh",
-  "scripts/docs-spellcheck.sh",
-  "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
-  "scripts/e2e/agents-delete-shared-workspace-docker.sh",
-  "scripts/e2e/browser-cdp-snapshot-docker.sh",
-  "scripts/e2e/browser-plugin-profiles-docker.sh",
-  "scripts/e2e/build-image.sh",
-  "scripts/e2e/bun-global-install-smoke.sh",
-  "scripts/e2e/bundled-plugin-install-uninstall-docker.sh",
-  "scripts/e2e/cli-installer-distribution-docker.sh",
-  "scripts/e2e/codex-media-path-docker.sh",
-  "scripts/e2e/codex-npm-plugin-live-docker.sh",
-  "scripts/e2e/codex-on-demand-docker.sh",
-  "scripts/e2e/compose-setup.sh",
-  "scripts/e2e/config-reload-source-docker.sh",
-  "scripts/e2e/cron-cli-docker.sh",
-  "scripts/e2e/cron-mcp-cleanup-docker.sh",
-  "scripts/e2e/docker-package-install.sh",
-  "scripts/e2e/docker-selected-plugins.sh",
-  "scripts/e2e/doctor-install-switch-docker.sh",
-  "scripts/e2e/gateway-concurrency-docker.sh",
-  "scripts/e2e/gateway-network-docker.sh",
-  "scripts/e2e/kitchen-sink-plugin-docker.sh",
-  "scripts/e2e/kitchen-sink-rpc-docker.sh",
-  "scripts/e2e/live-plugin-tool-docker.sh",
-  "scripts/e2e/mcp-channels-docker.sh",
-  "scripts/e2e/mcp-code-mode-gateway-docker.sh",
-  "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
-  "scripts/e2e/multi-node-update-docker.sh",
-  "scripts/e2e/npm-onboard-channel-agent-docker.sh",
-  "scripts/e2e/npm-telegram-live-docker.sh",
-  "scripts/e2e/onboard-docker.sh",
-  "scripts/e2e/openai-chat-tools-docker.sh",
-  "scripts/e2e/openai-image-auth-docker.sh",
-  "scripts/e2e/openai-web-search-minimal-docker.sh",
-  "scripts/e2e/openwebui-docker.sh",
-  "scripts/e2e/plugin-binding-command-escape-docker.sh",
-  "scripts/e2e/plugin-lifecycle-matrix-docker.sh",
-  "scripts/e2e/plugin-update-unchanged-docker.sh",
-  "scripts/e2e/plugins-docker.sh",
-  "scripts/e2e/qr-import-docker.sh",
-  "scripts/e2e/release-media-memory-docker.sh",
-  "scripts/e2e/release-plugin-marketplace-docker.sh",
-  "scripts/e2e/release-typed-onboarding-docker.sh",
-  "scripts/e2e/release-upgrade-user-journey-docker.sh",
-  "scripts/e2e/release-user-journey-docker.sh",
-  "scripts/e2e/sandbox-browser-sidecar-docker.sh",
-  "scripts/e2e/session-runtime-context-docker.sh",
-  "scripts/e2e/skill-install-docker.sh",
-  "scripts/e2e/system-agent-first-run-docker.sh",
-  "scripts/e2e/system-agent-rescue-docker.sh",
-  "scripts/e2e/update-channel-switch-docker.sh",
-  "scripts/e2e/update-corrupt-plugin-docker.sh",
-  "scripts/e2e/update-first-hop-compat-docker.sh",
-  "scripts/e2e/upgrade-survivor-docker.sh",
-  "scripts/github/find-reusable-release-validation.sh",
-  "scripts/github/resolve-openclaw-ref.sh",
-  "scripts/github/resolve-release-check-artifacts.sh",
-  "scripts/k8s/create-kind.sh",
-  "scripts/k8s/deploy.sh",
-  "scripts/plugin-clawhub-publish.sh",
-  "scripts/plugin-npm-publish.sh",
-  "scripts/podman/setup.sh",
-  "scripts/pr",
-  "scripts/release-telegram-provenance.sh",
-  "scripts/run-openclaw-podman.sh",
-  "scripts/run-opengrep.sh",
-  "scripts/sandbox-browser-setup.sh",
-  "scripts/sandbox-common-setup.sh",
-  "scripts/sandbox-setup.sh",
-  "scripts/test-cleanup-docker.sh",
-  "scripts/test-install-sh-docker.sh",
-  "scripts/test-install-sh-e2e-docker.sh",
-  "scripts/test-live-acp-bind-docker.sh",
-  "scripts/test-live-build-docker.sh",
-  "scripts/test-live-cli-backend-docker.sh",
-  "scripts/test-live-codex-harness-docker.sh",
-  "scripts/test-live-gateway-models-docker.sh",
-  "scripts/test-live-models-docker.sh",
-  "scripts/test-live-subagent-announce-docker.sh",
-  "scripts/update-gateway.sh",
-];
+const portableScripts = scriptPaths(`
+android-release-upload.sh android-screenshots.sh changelog-to-html.sh ci-hydrate-live-auth.sh
+ci-hydrate-testbox-env.sh dev/computer-use-macos-live-rig.sh docker/setup.sh
+docker/shared-image-artifact.sh docs-spellcheck.sh e2e/agent-bundle-mcp-tools-docker.sh
+e2e/agents-delete-shared-workspace-docker.sh e2e/browser-cdp-snapshot-docker.sh
+e2e/browser-plugin-profiles-docker.sh e2e/build-image.sh e2e/bun-global-install-smoke.sh
+e2e/bundled-plugin-install-uninstall-docker.sh e2e/cli-installer-distribution-docker.sh
+e2e/codex-media-path-docker.sh e2e/codex-npm-plugin-live-docker.sh e2e/codex-on-demand-docker.sh
+e2e/compose-setup.sh e2e/config-reload-source-docker.sh e2e/cron-cli-docker.sh
+e2e/cron-mcp-cleanup-docker.sh e2e/docker-package-install.sh e2e/docker-selected-plugins.sh
+e2e/doctor-install-switch-docker.sh e2e/gateway-concurrency-docker.sh e2e/gateway-network-docker.sh
+e2e/kitchen-sink-plugin-docker.sh e2e/kitchen-sink-rpc-docker.sh e2e/live-plugin-tool-docker.sh
+e2e/mcp-channels-docker.sh e2e/mcp-code-mode-gateway-docker.sh
+e2e/mcp-code-mode-gateway-live-docker.sh e2e/multi-node-update-docker.sh
+e2e/npm-onboard-channel-agent-docker.sh e2e/npm-telegram-live-docker.sh e2e/onboard-docker.sh
+e2e/openai-chat-tools-docker.sh e2e/openai-image-auth-docker.sh
+e2e/openai-web-search-minimal-docker.sh e2e/openwebui-docker.sh
+e2e/plugin-binding-command-escape-docker.sh e2e/plugin-lifecycle-matrix-docker.sh
+e2e/plugin-update-unchanged-docker.sh e2e/plugins-docker.sh e2e/qr-import-docker.sh
+e2e/release-media-memory-docker.sh e2e/release-plugin-marketplace-docker.sh
+e2e/release-typed-onboarding-docker.sh e2e/release-upgrade-user-journey-docker.sh
+e2e/release-user-journey-docker.sh e2e/sandbox-browser-sidecar-docker.sh
+e2e/session-runtime-context-docker.sh e2e/skill-install-docker.sh
+e2e/system-agent-first-run-docker.sh e2e/system-agent-rescue-docker.sh
+e2e/update-channel-switch-docker.sh e2e/update-corrupt-plugin-docker.sh
+e2e/update-first-hop-compat-docker.sh e2e/upgrade-survivor-docker.sh
+github/find-reusable-release-validation.sh github/resolve-openclaw-ref.sh
+github/resolve-release-check-artifacts.sh k8s/create-kind.sh k8s/deploy.sh plugin-clawhub-publish.sh
+plugin-npm-publish.sh podman/setup.sh pr release-telegram-provenance.sh run-openclaw-podman.sh
+run-opengrep.sh sandbox-browser-setup.sh sandbox-common-setup.sh sandbox-setup.sh
+test-cleanup-docker.sh test-install-sh-docker.sh test-install-sh-e2e-docker.sh
+test-live-acp-bind-docker.sh test-live-build-docker.sh test-live-cli-backend-docker.sh
+test-live-codex-harness-docker.sh test-live-gateway-models-docker.sh test-live-models-docker.sh
+test-live-subagent-announce-docker.sh update-gateway.sh
+`);
 
 const guard =
   '# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.\nif [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then\n  exec /bin/bash "$0" "$@"\nfi\n';
