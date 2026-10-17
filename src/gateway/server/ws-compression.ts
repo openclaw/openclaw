@@ -256,10 +256,14 @@ export function installGatewayDeflateCodec(
         }
         let piece = windows.get(windowBits);
         if (!piece) {
-          // Dedicated backing keeps the memo from retaining a larger output chunk or pooled slab.
+          // Avoid retaining pooled slabs for small copies; keep Node's native large-copy path.
           const compressed = compressPiece(bytes);
-          piece = Buffer.allocUnsafeSlow(compressed.length);
-          compressed.copy(piece);
+          if (compressed.length < Buffer.poolSize >>> 1) {
+            piece = Buffer.allocUnsafeSlow(compressed.length);
+            compressed.copy(piece);
+          } else {
+            piece = Buffer.from(compressed);
+          }
           windows.set(windowBits, piece);
         }
         pieces.push(piece);

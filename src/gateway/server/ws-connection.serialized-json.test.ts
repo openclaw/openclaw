@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { constants, deflateRawSync } from "node:zlib";
@@ -68,81 +69,92 @@ it("delivers an owned shared history payload as a JSON text frame", async () => 
   }
 });
 
-it("retains only compressed segment bytes and reuses them within each negotiated window", async () => {
-  const server = new Ws.WebSocketServer({
-    host: "127.0.0.1",
-    port: 0,
-    perMessageDeflate: GATEWAY_PER_MESSAGE_DEFLATE,
-  });
-  const clients: Ws.WebSocket[] = [];
-  const sockets: Ws.WebSocket[] = [];
-  const bytes = Buffer.from(JSON.stringify([{ text: "shared history é🦞 ".repeat(1024) }]));
-  const messages = new SerializedJsonArray(bytes);
-  const retained = new Map<number, Uint8Array>();
-  try {
-    await once(server, "listening");
-    for (const windowBits of [15, 10]) {
-      const accepted = once(server, "connection");
-      const client = new Ws.WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}`, {
-        perMessageDeflate: { serverMaxWindowBits: windowBits },
-      });
-      clients.push(client);
-      const opened = once(client, "open");
-      const [socket] = (await accepted) as [Ws.WebSocket];
-      sockets.push(socket);
-      expect(installGatewayDeflateCodec(socket)).toEqual({
-        acceptsDeflatedSegments: windowBits === 15,
-      });
-      await opened;
-      const compressed = deflateRawSync(bytes, {
-        level: 1,
-        windowBits,
-        finishFlush: constants.Z_SYNC_FLUSH,
-      });
-      for (let sequence = 0; sequence < 2; sequence++) {
-        const frame = serializeGatewayFrame({
-          type: "res",
-          id: `history-${windowBits}-${sequence}`,
-          ok: true,
-          payload: { messages },
+it.each(["small", "large"])(
+  "retains exact backing and reuses %s compressed segments per window",
+  async (size) => {
+    const server = new Ws.WebSocketServer({
+      host: "127.0.0.1",
+      port: 0,
+      perMessageDeflate: GATEWAY_PER_MESSAGE_DEFLATE,
+    });
+    const clients: Ws.WebSocket[] = [];
+    const sockets: Ws.WebSocket[] = [];
+    const text =
+      size === "large"
+        ? randomBytes(64 * 1024).toString("base64")
+        : "shared history é🦞 ".repeat(1024);
+    const bytes = Buffer.from(JSON.stringify([{ text }]));
+    const messages = new SerializedJsonArray(bytes);
+    const retained = new Map<number, Uint8Array>();
+    try {
+      await once(server, "listening");
+      for (const windowBits of [15, 10]) {
+        const accepted = once(server, "connection");
+        const client = new Ws.WebSocket(
+          `ws://127.0.0.1:${(server.address() as AddressInfo).port}`,
+          {
+            perMessageDeflate: { serverMaxWindowBits: windowBits },
+          },
+        );
+        clients.push(client);
+        const opened = once(client, "open");
+        const [socket] = (await accepted) as [Ws.WebSocket];
+        sockets.push(socket);
+        expect(installGatewayDeflateCodec(socket)).toEqual({
+          acceptsDeflatedSegments: windowBits === 15,
         });
-        let segment: Uint8Array | undefined;
-        const concat = Buffer.concat;
-        // Observe the actual memoized piece when the codec assembles its wire output.
-        const assembled = vi.spyOn(Buffer, "concat").mockImplementation((parts, length) => {
-          if (parts.length === 3 && Buffer.isBuffer(parts[1]) && parts[1].equals(compressed)) {
-            segment = parts[1];
-          }
-          return concat(parts, length);
+        await opened;
+        const compressed = deflateRawSync(bytes, {
+          level: 1,
+          windowBits,
+          finishFlush: constants.Z_SYNC_FLUSH,
         });
-        const received = once(client, "message");
-        let sent: Promise<void>;
-        try {
-          sent = new Promise<void>((resolve, reject) => {
-            socket.send(frame, { binary: false }, (error) => (error ? reject(error) : resolve()));
+        expect(compressed.byteLength < Buffer.poolSize >>> 1).toBe(size === "small");
+        for (let sequence = 0; sequence < 2; sequence++) {
+          const frame = serializeGatewayFrame({
+            type: "res",
+            id: `history-${windowBits}-${sequence}`,
+            ok: true,
+            payload: { messages },
           });
-        } finally {
-          assembled.mockRestore();
-        }
-        const [[data, binary]] = await Promise.all([received, sent]);
-        expect(binary).toBe(false);
-        expect(data.toString()).toBe(frame.toString());
-        expect(segment).toBeDefined();
-        expect(segment!.buffer.byteLength).toBe(segment!.byteLength);
-        expect(segment!.byteLength).toBe(compressed.byteLength);
-        if (sequence === 0) {
-          retained.set(windowBits, segment!);
-        } else {
-          expect(segment).toBe(retained.get(windowBits));
+          let segment: Uint8Array | undefined;
+          const concat = Buffer.concat;
+          // Observe the actual memoized piece when the codec assembles its wire output.
+          const assembled = vi.spyOn(Buffer, "concat").mockImplementation((parts, length) => {
+            if (parts.length === 3 && Buffer.isBuffer(parts[1]) && parts[1].equals(compressed)) {
+              segment = parts[1];
+            }
+            return concat(parts, length);
+          });
+          const received = once(client, "message");
+          let sent: Promise<void>;
+          try {
+            sent = new Promise<void>((resolve, reject) => {
+              socket.send(frame, { binary: false }, (error) => (error ? reject(error) : resolve()));
+            });
+          } finally {
+            assembled.mockRestore();
+          }
+          const [[data, binary]] = await Promise.all([received, sent]);
+          expect(binary).toBe(false);
+          expect(data.toString()).toBe(frame.toString());
+          expect(segment).toBeDefined();
+          expect(segment!.buffer.byteLength).toBe(segment!.byteLength);
+          expect(segment!.byteLength).toBe(compressed.byteLength);
+          if (sequence === 0) {
+            retained.set(windowBits, segment!);
+          } else {
+            expect(segment).toBe(retained.get(windowBits));
+          }
         }
       }
+      expect(retained.get(10)).not.toBe(retained.get(15));
+    } finally {
+      for (const client of clients) client.terminate();
+      for (const socket of sockets) socket.terminate();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     }
-    expect(retained.get(10)).not.toBe(retained.get(15));
-  } finally {
-    for (const client of clients) client.terminate();
-    for (const socket of sockets) socket.terminate();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
-});
+  },
+);
