@@ -8,11 +8,27 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+
+function createPresentedReadMarkerPane(params: Parameters<typeof createTestChatPane>[0]) {
+  const fixture = createTestChatPane(params);
+  const { state, sessions } = fixture;
+  setChatHistoryLoad(state, {
+    phase: "committed",
+    sessions,
+    client: params.client,
+    connectionEpoch: state.connectionEpoch,
+    sessionKey: state.sessionKey,
+    requestAgentId: undefined,
+    sessionInfo: undefined,
+  });
+  return fixture;
+}
 
 function createReadMarkerPane(result: Record<string, never> | null = null) {
   const patch = vi.fn().mockResolvedValue(result);
-  const { pane, state } = createTestChatPane({
+  const { pane, state } = createPresentedReadMarkerPane({
     client: {} as GatewayBrowserClient,
     sessions: createSessionCapabilityFixture({ patch }),
   });
@@ -37,7 +53,7 @@ describe("chat pane read markers", () => {
       unread: true,
     };
     const patch = vi.fn().mockReturnValueOnce(rejected.promise).mockReturnValue(trailing.promise);
-    const { pane, sessions } = createTestChatPane({
+    const { pane, sessions } = createPresentedReadMarkerPane({
       client: createTestGatewayClient((method) => {
         if (method === "sessions.list") {
           return sessionsResult([row], 20);
@@ -259,7 +275,7 @@ describe("chat pane read markers", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const { pane } = createTestChatPane({ client: createTestGatewayClient(request) });
+    const { pane } = createPresentedReadMarkerPane({ client: createTestGatewayClient(request) });
     const { context } = pane;
     const errors = vi.fn();
     onTestFinished(

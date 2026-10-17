@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
 
@@ -13,17 +14,15 @@ function createSecondaryHydrationPane() {
   const secondaryResponse = new Promise<never>(() => {});
   const request = vi.fn((_method: string, _params?: unknown) => secondaryResponse);
   const listBranches = vi.fn(() => secondaryResponse);
-  const patch = vi.fn().mockResolvedValue({});
+  const patch = vi.fn(() => secondaryResponse);
   const sessions = {
     capturePullRequestEpoch: vi.fn(() => ({})),
     listBranches,
     patch,
     setPullRequestSummary: vi.fn(),
   } as unknown as SessionCapability;
-  const { pane, state } = createTestChatPane({
-    client: { request } as unknown as GatewayBrowserClient,
-    sessions,
-  });
+  const client = { request } as unknown as GatewayBrowserClient;
+  const { pane, state } = createTestChatPane({ client, sessions });
   state.assistantAgentId = "main";
   state.sessionKey = "agent:work:current";
   pane.context.gateway.snapshot.hello = gatewayHelloForMethods([
@@ -59,6 +58,7 @@ function createSecondaryHydrationPane() {
   };
   return {
     afterCommit,
+    client,
     commitEffects,
     listBranches,
     pane,
@@ -202,7 +202,7 @@ describe("chat pane session hydration", () => {
   ])(
     "acknowledges unread only after deferred transcript hydration $name",
     async ({ committed, expectedPatches }) => {
-      const { commitEffects, pane, patch, runAnimationFrame, state } =
+      const { client, commitEffects, pane, patch, runAnimationFrame, state } =
         createSecondaryHydrationPane();
       const transcript = deferred<boolean>();
       state.sessionsResult = {
@@ -221,6 +221,18 @@ describe("chat pane session hydration", () => {
       pane.presented = true;
       expect(patch).not.toHaveBeenCalled();
 
+      if (committed) {
+        // Startup reports success only after its scoped history owner commits.
+        setChatHistoryLoad(state, {
+          phase: "committed",
+          sessions: state.sessions,
+          client,
+          connectionEpoch: state.connectionEpoch,
+          sessionKey: state.sessionKey,
+          requestAgentId: undefined,
+          sessionInfo: undefined,
+        });
+      }
       transcript.resolve(committed);
       await transcript.promise;
       await Promise.resolve();

@@ -4,8 +4,8 @@ import { resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
 
 /**
  * Acknowledges unread state at most once per unread episode: the pending flag
- * clears when the server-confirmed read (unread=false) is observed, so fresh
- * activity while the session stays open re-acknowledges without patch loops.
+ * clears after settlement. Presented conversations can reconsider newer unread
+ * activity on success; revision-scoped hidden runs stay latched until observed read.
  */
 export class SessionUnreadPatchGuard {
   private activeSessionKey = "";
@@ -74,14 +74,16 @@ export class SessionUnreadPatchGuard {
   }
 
   /** Bind settlement to this activation, including a return to the same session. */
-  settlePatch() {
+  settlePatch({ recheckOnSuccess = false } = {}) {
     const pending = this.pending;
     return (succeeded: boolean, error?: unknown) => {
       if (pending !== this.pending) {
-        return;
+        return false;
       }
       this.pending = null;
-      this.requested = succeeded ? !this.observedRead : isPermanentUnreadAckFailure(error);
+      this.requested = succeeded
+        ? !recheckOnSuccess && !this.observedRead
+        : isPermanentUnreadAckFailure(error);
       if (succeeded) {
         this.retryAt = 0;
         this.failures = 0;
@@ -89,6 +91,7 @@ export class SessionUnreadPatchGuard {
         const delay = resolveGatewayReadRetryDelayMs(error, this.failures++);
         this.retryAt = Date.now() + Math.ceil(delay * (1 + Math.random() * 0.2));
       }
+      return true;
     };
   }
 }
