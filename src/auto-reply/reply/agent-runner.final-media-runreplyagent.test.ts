@@ -29,9 +29,10 @@ vi.mock("../../agents/model-selection.js", async () => {
   };
 });
 
-vi.mock("../../agents/sandbox.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../agents/sandbox.js")>("../../agents/sandbox.js");
+vi.mock("../../agents/sandbox/context.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/sandbox/context.js")>(
+    "../../agents/sandbox/context.js",
+  );
   return {
     ...actual,
     ensureSandboxWorkspaceForSession: async () => null,

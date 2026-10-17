@@ -155,8 +155,8 @@ vi.mock("../../cli/command-secret-targets.js", () => ({
   getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
 }));
 
-vi.mock("../../agents/sandbox.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/sandbox.js")>();
+vi.mock("../../agents/sandbox/context.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/sandbox/context.js")>();
   return {
     ...actual,
     ensureSandboxWorkspaceForSession: async () => null,

@@ -555,8 +555,8 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
   return materialize(params);
 }
 
-export { resolveSandboxContext } from "../agents/sandbox.js";
-export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox.js";
+export { resolveSandboxContext } from "../agents/sandbox/context.js";
+export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox/types.js";
 export { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 export {
   hasSandboxBindContainerPathAliases,

@@ -25,7 +25,7 @@ const mediaRootMocks = vi.hoisted(() => ({
 }));
 
 // mock-isolation: File-policy cases supply fixture workspaces and opt into real preparation explicitly.
-vi.mock("../agents/sandbox.js", () => ({
+vi.mock("../agents/sandbox/context.js", () => ({
   ...sandboxMocks,
   prepareSandboxWorkspaceForSession: async (...args: unknown[]) =>
     createSandboxWorkspacePreparation(await sandboxMocks.ensureSandboxWorkspaceForSession(...args)),
