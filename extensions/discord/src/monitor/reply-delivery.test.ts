@@ -1,4 +1,3 @@
-// Discord tests cover reply delivery plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { createSubscribedSessionHarness } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
@@ -7,17 +6,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "../internal/discord.js";
 
-const sendDurableMessageBatchMock = vi.hoisted(() =>
-  vi.fn(async (): Promise<unknown> => ({
-    status: "sent" as const,
-    results: [{ messageId: "msg-1", channelId: "channel-1" }],
-    receipt: createMessageReceiptFromOutboundResults({
-      results: [{ messageId: "msg-1", channelId: "channel-1" }],
-    }),
-  })),
+const sendDurableMessageBatchMock = vi.hoisted(() => vi.fn<() => Promise<unknown>>());
+const sendMessageDiscordMock = vi.hoisted(() =>
+  vi.fn<typeof import("../send.js").sendMessageDiscord>(),
 );
-const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
-const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
+const sendVoiceMessageDiscordMock = vi.hoisted(() =>
+  vi.fn<typeof import("../send.js").sendVoiceMessageDiscord>(),
+);
 
 vi.mock("openclaw/plugin-sdk/channel-outbound", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-outbound")>(
@@ -33,8 +28,8 @@ vi.mock("../send.js", async () => {
   const actual = await vi.importActual<typeof import("../send.js")>("../send.js");
   return {
     ...actual,
-    sendMessageDiscord: (...args: unknown[]) => sendMessageDiscordMock(...args),
-    sendVoiceMessageDiscord: (...args: unknown[]) => sendVoiceMessageDiscordMock(...args),
+    sendMessageDiscord: sendMessageDiscordMock,
+    sendVoiceMessageDiscord: sendVoiceMessageDiscordMock,
   };
 });
 
@@ -55,36 +50,6 @@ function firstDeliverParams() {
   return params;
 }
 
-function recordField(value: unknown, field: string): Record<string, unknown> {
-  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${field} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
-function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string, index: number) {
-  return firstMockCall(mock, label)[index];
-}
-
-function objectArgAt(
-  mock: { mock: { calls: unknown[][] } },
-  index: number,
-): Record<string, unknown> {
-  const value = firstMockArg(mock, "mock", index);
-  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected call argument ${index} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
 describe("deliverDiscordReply", () => {
   const cfg = {
     channels: { discord: { token: "test-token" } },
@@ -97,6 +62,9 @@ describe("deliverDiscordReply", () => {
     textLimit: 2000,
     kind: "final" as const,
   };
+  type ReplyOptions = Parameters<typeof deliverDiscordReply>[0];
+  const deliver = (replies: ReplyOptions["replies"], options: Partial<ReplyOptions> = {}) =>
+    deliverDiscordReply({ ...deliveryDefaults, replies, ...options });
 
   beforeAll(async () => {
     ({ deliverDiscordReply } = await import("./reply-delivery.js"));
@@ -126,9 +94,7 @@ describe("deliverDiscordReply", () => {
     const replies = [{ text: "shared path" }];
     const onPlatformSendDispatch = vi.fn(async () => undefined);
 
-    await deliverDiscordReply({
-      ...deliveryDefaults,
-      replies,
+    await deliver(replies, {
       accountId: "default",
       rest,
       replyToId: "reply-1",
@@ -138,25 +104,29 @@ describe("deliverDiscordReply", () => {
     });
 
     const params = firstDeliverParams();
-    expect(params.channel).toBe("discord");
-    expect(params.to).toBe("channel:101");
+    expect(params).toMatchObject({
+      channel: "discord",
+      to: "channel:101",
+      accountId: "default",
+      payloads: replies,
+      replyToId: "reply-1",
+      replyToMode: "all",
+    });
     expect(params.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
-    expect(params.accountId).toBe("default");
     expect(params.payloads).toEqual(replies);
-    expect(params.replyToId).toBe("reply-1");
-    expect(params.replyToMode).toBe("all");
 
     const deps = params.deps!;
     await expectDefined(deps.discord, "Discord reply sender")("channel:101", "probe", {
       verbose: false,
     });
-    expect(firstMockArg(sendMessageDiscordMock, "sendMessageDiscord", 0)).toBe("channel:101");
-    expect(firstMockArg(sendMessageDiscordMock, "sendMessageDiscord", 1)).toBe("probe");
-    const sendOptions = objectArgAt(sendMessageDiscordMock, 2);
+    expect(sendMessageDiscordMock).toHaveBeenCalledExactlyOnceWith(
+      "channel:101",
+      "probe",
+      expect.objectContaining({ token: "token", allowedMentions: { parse: [] } }),
+    );
+    const sendOptions = sendMessageDiscordMock.mock.calls[0]![2];
     expect(sendOptions.cfg).toBe(params.cfg);
-    expect(sendOptions.token).toBe("token");
     expect(sendOptions.rest).toBe(rest);
-    expect(sendOptions.allowedMentions).toEqual({ parse: [] });
   });
 
   it("delivers completed provider reasoning before a streamed answer block", async () => {
@@ -165,11 +135,7 @@ describe("deliverDiscordReply", () => {
       reasoningMode: "on",
       blockReplyBreak: "text_end",
       onBlockReply: async (payload) => {
-        await deliverDiscordReply({
-          ...deliveryDefaults,
-          replies: [payload],
-          kind: "block",
-        });
+        await deliver([payload], { kind: "block" });
       },
     });
     try {
@@ -219,10 +185,7 @@ describe("deliverDiscordReply", () => {
 
     let error: unknown;
     try {
-      await deliverDiscordReply({
-        ...deliveryDefaults,
-        replies: [{ text: "first chunk\nsecond chunk" }],
-      });
+      await deliver([{ text: "first chunk\nsecond chunk" }]);
     } catch (caught) {
       error = caught;
     }
@@ -244,24 +207,15 @@ describe("deliverDiscordReply", () => {
     const cause = new Error("Discord send failed before acceptance");
     sendDurableMessageBatchMock.mockResolvedValueOnce({ status: "failed", error: cause });
 
-    await expect(
-      deliverDiscordReply({
-        ...deliveryDefaults,
-        replies: [{ text: "not delivered" }],
-      }),
-    ).rejects.toBe(cause);
+    await expect(deliver([{ text: "not delivered" }])).rejects.toBe(cause);
   });
 
   it("fails when shared outbound accepts a final reply but delivers no Discord message", async () => {
     sendDurableMessageBatchMock.mockResolvedValueOnce({ status: "sent", results: [] });
 
-    await expect(
-      deliverDiscordReply({
-        ...deliveryDefaults,
-        replies: [{ text: "lost reply" }],
-        accountId: "default",
-      }),
-    ).rejects.toThrow("discord final reply produced no delivered message for channel:101");
+    await expect(deliver([{ text: "lost reply" }], { accountId: "default" })).rejects.toThrow(
+      "discord final reply produced no delivered message for channel:101",
+    );
   });
 
   it("returns provider-owned hook suppression without inventing a Discord send", async () => {
@@ -276,13 +230,7 @@ describe("deliverDiscordReply", () => {
       ],
     });
 
-    await expect(
-      deliverDiscordReply({
-        ...deliveryDefaults,
-        replies: [{ text: "cancelled" }],
-        accountId: "default",
-      }),
-    ).resolves.toEqual({
+    await expect(deliver([{ text: "cancelled" }], { accountId: "default" })).resolves.toEqual({
       visibleReplySent: false,
       suppression: {
         reason: "cancelled_by_message_sending_hook",
@@ -293,9 +241,8 @@ describe("deliverDiscordReply", () => {
   });
 
   it("strips assistant scaffolding from explicit tool progress payloads", async () => {
-    await deliverDiscordReply({
-      ...deliveryDefaults,
-      replies: [
+    await deliver(
+      [
         {
           text: [
             "<think>private reasoning</think>",
@@ -304,9 +251,8 @@ describe("deliverDiscordReply", () => {
           ].join("\n"),
         },
       ],
-      accountId: "default",
-      kind: "tool",
-    });
+      { accountId: "default", kind: "tool" },
+    );
 
     expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -316,42 +262,27 @@ describe("deliverDiscordReply", () => {
   });
 
   it("drops pure internal tool failure warnings at the final Discord send boundary", async () => {
-    await deliverDiscordReply({
-      ...deliveryDefaults,
-      replies: [
+    await deliver(
+      [
         {
           text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
           isError: true,
         },
       ],
-      accountId: "default",
-    });
+      { accountId: "default" },
+    );
 
     expect(sendDurableMessageBatchMock).not.toHaveBeenCalled();
   });
 
   it("preserves component-only channelData payloads when text scrubs empty", async () => {
+    const button = { type: 2, style: 1, label: "Open", custom_id: "open" };
     const channelData = {
-      discord: {
-        components: [
-          {
-            type: 1,
-            components: [
-              {
-                type: 2,
-                style: 1,
-                label: "Open",
-                custom_id: "open",
-              },
-            ],
-          },
-        ],
-      },
+      discord: { components: [{ type: 1, components: [button] }] },
     };
 
-    await deliverDiscordReply({
-      ...deliveryDefaults,
-      replies: [
+    await deliver(
+      [
         {
           text: [
             "analysis: internal only",
@@ -370,8 +301,8 @@ describe("deliverDiscordReply", () => {
           channelData,
         },
       ],
-      accountId: "default",
-    });
+      { accountId: "default" },
+    );
 
     expect(firstDeliverParams().payloads).toEqual([{ channelData, text: undefined }]);
   });
@@ -387,16 +318,7 @@ describe("deliverDiscordReply", () => {
       ],
     };
 
-    await deliverDiscordReply({
-      ...deliveryDefaults,
-      replies: [
-        {
-          text: "commentary: hidden",
-          presentation,
-        },
-      ],
-      accountId: "default",
-    });
+    await deliver([{ text: "commentary: hidden", presentation }], { accountId: "default" });
 
     expect(firstDeliverParams().payloads).toEqual([{ presentation, text: undefined }]);
   });
@@ -404,11 +326,7 @@ describe("deliverDiscordReply", () => {
   it("does not strip ordinary code-fenced examples of tool-call labels", async () => {
     const text = ["Example:", "```", "🛠️ Exec: run ls", "```"].join("\n");
 
-    await deliverDiscordReply({
-      ...deliveryDefaults,
-      replies: [{ text }],
-      accountId: "default",
-    });
+    await deliver([{ text }], { accountId: "default" });
 
     expect(firstDeliverParams().payloads).toEqual([{ text }]);
   });
@@ -422,9 +340,7 @@ describe("deliverDiscordReply", () => {
       },
     ];
 
-    await deliverDiscordReply({
-      ...deliveryDefaults,
-      replies,
+    await deliver(replies, {
       target: "channel:202",
       replyToMode: "off",
       mediaLocalRoots: ["/tmp/openclaw-media"],
@@ -438,12 +354,13 @@ describe("deliverDiscordReply", () => {
   });
 
   it("bridges Discord voice sends through the outbound dependency bag", async () => {
-    await deliverDiscordReply({
-      ...deliveryDefaults,
-      replies: [{ text: "voice", mediaUrl: "https://example.com/voice.ogg", audioAsVoice: true }],
-      target: "channel:123",
-      replyToId: "reply-1",
-    });
+    await deliver(
+      [{ text: "voice", mediaUrl: "https://example.com/voice.ogg", audioAsVoice: true }],
+      {
+        target: "channel:123",
+        replyToId: "reply-1",
+      },
+    );
 
     const deps = firstDeliverParams().deps!;
     await expectDefined(deps.discordVoice, "Discord voice reply sender")(
@@ -455,16 +372,13 @@ describe("deliverDiscordReply", () => {
       },
     );
 
-    expect(firstMockArg(sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 0)).toBe(
+    expect(sendVoiceMessageDiscordMock).toHaveBeenCalledExactlyOnceWith(
       "channel:123",
-    );
-    expect(firstMockArg(sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 1)).toBe(
       "https://example.com/voice.ogg",
+      expect.objectContaining({ token: "token", reply: { messageId: "reply-1", scope: "all" } }),
     );
-    const voiceOptions = objectArgAt(sendVoiceMessageDiscordMock, 2);
+    const voiceOptions = sendVoiceMessageDiscordMock.mock.calls[0]![2];
     expect(voiceOptions.cfg).toBe(cfg);
-    expect(voiceOptions.token).toBe("token");
-    expect(voiceOptions.reply).toEqual({ messageId: "reply-1", scope: "all" });
   });
 
   it("rewrites bound thread replies to parent target plus thread id and persona", async () => {
@@ -484,9 +398,7 @@ describe("deliverDiscordReply", () => {
       touchThread: vi.fn(),
     };
 
-    await deliverDiscordReply({
-      ...deliveryDefaults,
-      replies: [{ text: "Hello from subagent" }],
+    await deliver([{ text: "Hello from subagent" }], {
       target: "channel:thread-1",
       accountId: "default",
       replyToId: "reply-1",
@@ -495,12 +407,12 @@ describe("deliverDiscordReply", () => {
     });
 
     const params = firstDeliverParams();
-    expect(params.to).toBe("channel:parent-1");
-    expect(params.threadId).toBe("thread-1");
-    expect(params.replyToId).toBe("reply-1");
-    expect(recordField(params.identity, "identity").name).toBe(`🤖 ${"a".repeat(76)}`);
-    const session = recordField(params.session, "session");
-    expect(session.key).toBe("agent:main:subagent:child");
-    expect(session.agentId).toBe("main");
+    expect(params).toMatchObject({
+      to: "channel:parent-1",
+      threadId: "thread-1",
+      replyToId: "reply-1",
+      identity: { name: `🤖 ${"a".repeat(76)}` },
+      session: { key: "agent:main:subagent:child", agentId: "main" },
+    });
   });
 });

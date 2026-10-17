@@ -122,8 +122,7 @@ describe("Discord provider startup", () => {
     expect(createDiscordGatewaySupervisor).not.toHaveBeenCalled();
     registration.resolve();
     const result = await pending;
-    expect(registerVoiceClientSpy).toHaveBeenCalledOnce();
-    expect(registerVoiceClientSpy).toHaveBeenCalledWith(result.client);
+    expect(registerVoiceClientSpy).toHaveBeenCalledExactlyOnceWith(result.client);
     expect(createDiscordGatewaySupervisor).toHaveBeenCalledOnce();
     expect(result.gatewaySupervisor).toBe(gatewaySupervisor);
   });
@@ -156,10 +155,9 @@ describe("Discord provider startup", () => {
       messageHandler: vi.fn(async () => {}),
     });
     expect(
-      vi.mocked(registerDiscordListener).mock.calls.map((call) => {
-        const listener = call[1] as { type?: string };
-        return listener.type;
-      }),
+      vi
+        .mocked(registerDiscordListener)
+        .mock.calls.map(([, listener]) => (listener as { type?: string }).type),
     ).toEqual([
       "interaction",
       "message",

@@ -1,3 +1,4 @@
+import type { DiscordGuildEntry } from "openclaw/plugin-sdk/config-contracts";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,6 +10,10 @@ import { resolveDiscordGroupToolPolicy } from "../group-policy.js";
 import * as channels from "../resolve-channels.js";
 import * as users from "../resolve-users.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
+
+function resolvedChannel(input: string, channelName = "general", channelId = "246") {
+  return { input, resolved: true, guildId: "145", guildName: "Ops", channelId, channelName };
+}
 
 describe("resolveDiscordAllowlistConfig", () => {
   afterEach(() => {
@@ -65,14 +70,7 @@ describe("resolveDiscordAllowlistConfig", () => {
 
   it("canonicalizes permitted names while preserving unresolved entries and numeric channel policy", async () => {
     vi.mocked(channels.resolveDiscordChannelAllowlist).mockResolvedValueOnce([
-      {
-        input: "ops/246",
-        resolved: true,
-        guildId: "145",
-        guildName: "Ops",
-        channelId: "246",
-        channelName: "dev",
-      },
+      resolvedChannel("ops/246", "dev"),
       {
         input: "145/missing",
         resolved: false,
@@ -92,9 +90,12 @@ describe("resolveDiscordAllowlistConfig", () => {
         ops: { channels: { "246": {} } },
       },
     });
-    expect(result.allowFrom).toEqual(["111", "*", "387"]);
-    expect(result.guildEntries?.["*"]?.users).toEqual(["222", "999"]);
-    expect(result.guildEntries?.["*"]?.channels?.["*"]?.users).toEqual(["Carol", "888"]);
+    expect(result).toMatchObject({
+      allowFrom: ["111", "*", "387"],
+      guildEntries: {
+        "*": { users: ["222", "999"], channels: { "*": { users: ["Carol", "888"] } } },
+      },
+    });
     expect(result.guildEntries?.["145"]?.channels).toEqual({ "246": {}, "999": {}, missing: {} });
     expect(users.resolveDiscordUserAllowlist).toHaveBeenCalledTimes(2);
     const logs = vi.mocked(runtime.log).mock.calls.flat().join("\n");
@@ -111,14 +112,7 @@ describe("resolveDiscordAllowlistConfig", () => {
     "resolves channel name %s without user name matching",
     async (channelKey) => {
       vi.mocked(channels.resolveDiscordChannelAllowlist).mockResolvedValueOnce([
-        {
-          input: `ops/${channelKey}`,
-          resolved: true,
-          guildId: "145",
-          guildName: "Ops",
-          channelId: "246",
-          channelName: channelKey,
-        },
+        resolvedChannel(`ops/${channelKey}`, channelKey),
       ]);
       const result = await resolve({
         allowFrom: ["Alice"],
@@ -173,10 +167,7 @@ describe("resolveDiscordAllowlistConfig", () => {
       };
       vi.mocked(channels.resolveDiscordChannelAllowlist).mockResolvedValueOnce([
         {
-          input: channelKey ? `ops/${channelKey}` : "ops",
-          resolved: true,
-          guildId: "145",
-          guildName: "Ops",
+          ...resolvedChannel(channelKey ? `ops/${channelKey}` : "ops"),
           channelId: channelKey ? "246" : undefined,
           channelName: channelKey ? "general" : undefined,
         },
@@ -193,22 +184,17 @@ describe("resolveDiscordAllowlistConfig", () => {
         groupId: "246",
         groupChannel: "general",
       };
-      expect(
+      const toolPolicy = (entries: Record<string, DiscordGuildEntry>) =>
         resolveDiscordGroupToolPolicy({
           ...context,
-          cfg: {
-            channels: { discord: { guilds: { "*": { tools: { allow: ["exec"] } }, ...guilds } } },
-          },
-        }),
-      ).toEqual({ deny: ["exec"] });
-      expect(
-        resolveDiscordGroupToolPolicy({
-          ...context,
-          cfg: {
-            channels: { discord: { guilds: { ...guilds, "145": { tools: { allow: ["read"] } } } } },
-          },
-        }),
-      ).toEqual({ allow: ["read"] });
+          cfg: { channels: { discord: { guilds: entries } } },
+        });
+      expect(toolPolicy({ "*": { tools: { allow: ["exec"] } }, ...guilds })).toEqual({
+        deny: ["exec"],
+      });
+      expect(toolPolicy({ ...guilds, "145": { tools: { allow: ["read"] } } })).toEqual({
+        allow: ["read"],
+      });
     },
   );
 });

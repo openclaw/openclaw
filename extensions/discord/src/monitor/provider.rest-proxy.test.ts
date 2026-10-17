@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -76,18 +77,10 @@ vi.mock("undici", async (importOriginal) => ({
   Agent: (await import("node:events")).EventEmitter,
 }));
 
-function recordField(value: unknown): Record<string, unknown> {
-  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("expected dispatcher object");
-  }
-  return value as Record<string, unknown>;
-}
 function dispatchRequest(dispatcher: unknown): void {
-  const target = recordField(dispatcher);
-  if (typeof target.dispatch !== "function") {
-    throw new Error("expected dispatcher.dispatch");
-  }
-  target.dispatch({ origin: "https://discord.com", path: "/", method: "GET" }, {});
+  assert(dispatcher && typeof dispatcher === "object" && "dispatch" in dispatcher);
+  assert(typeof dispatcher.dispatch === "function");
+  dispatcher.dispatch({ origin: "https://discord.com", path: "/", method: "GET" }, {});
 }
 
 describe("resolveDiscordRestFetch", () => {
@@ -112,11 +105,11 @@ describe("resolveDiscordRestFetch", () => {
     ]) {
       vi.stubEnv(key, undefined);
     }
-    mocks.capture.mockReset().mockResolvedValue(undefined);
-    mocks.fetch.mockReset().mockResolvedValue(new Response("ok"));
-    mocks.agent.mockReset();
-    mocks.envAgent.mockReset();
-    mocks.proxy.mockReset();
+    for (const mock of [mocks.capture, mocks.fetch, mocks.agent, mocks.envAgent, mocks.proxy]) {
+      mock.mockReset();
+    }
+    mocks.capture.mockResolvedValue(undefined);
+    mocks.fetch.mockResolvedValue(new Response("ok"));
     mocks.dispatch.mockClear();
     runtime = createRuntimeSpies();
     Reflect.set(globalThis, depsKey, runtimeDeps);
@@ -208,8 +201,7 @@ describe("resolveDiscordRestFetch", () => {
     expect(mocks.agent).toHaveBeenCalledTimes(1);
     expect(mocks.envAgent).not.toHaveBeenCalled();
     const options = mocks.agent.mock.calls[0]?.[0];
-    expect(options?.allowH2).toBe(false);
-    expect(typeof options?.connect?.lookup).toBe("function");
+    expect(options).toMatchObject({ allowH2: false, connect: { lookup: expect.any(Function) } });
     dispatchRequest(dispatcher);
     expect(mocks.dispatch).toHaveBeenCalledTimes(1);
     const direct = mocks.dispatch.mock.contexts[0];
