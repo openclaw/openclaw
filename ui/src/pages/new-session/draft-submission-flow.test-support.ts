@@ -3,6 +3,7 @@ import { onTestFinished, vi } from "vitest";
 import type { RouteId } from "../../app-routes.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { registerChatAttachmentPayload } from "../chat/attachment-payload-store.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
@@ -121,6 +122,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     navigateAndWait: vi.fn(async () => undefined),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
+  Object.assign(context, { agentIdentity: createAgentIdentityCapability(context.gateway) });
   // The navigation spy represents an admitted Chat route; route ownership is
   // exercised with the real router in the transition tests.
   void router.navigate("chat", context);
