@@ -2315,7 +2315,7 @@ describe("CI timing sampler provenance", () => {
         git(checkout, "rev-list", "--objects", "--all", "--missing=print")
           .split("\n")
           .filter((line) => line.startsWith("?"))
-          .sort();
+          .toSorted();
       const absent = missing();
       expect(absent).toContain(`?${oldBlob}`);
       expect(git(checkout, "rev-list", "--count", "HEAD")).toBe("3");
