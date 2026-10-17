@@ -1,4 +1,5 @@
-import type { Video } from "@google/genai";
+import type { GenerateVideosParameters, GoogleGenAIOptions, Video } from "@google/genai";
+import { expectDefined } from "@openclaw/normalization-core";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
@@ -6,10 +7,11 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 
 const { createGoogleGenAIMock, downloadMock, generateVideosMock, getVideosOperationMock } =
   vi.hoisted(() => {
-    const generateVideosMockLocal = vi.fn();
+    const generateVideosMockLocal =
+      vi.fn<(request: GenerateVideosParameters) => Promise<unknown>>();
     const getVideosOperationMockLocal = vi.fn();
     const downloadMockLocal = vi.fn();
-    const createGoogleGenAIMockLocal = vi.fn(() => ({
+    const createGoogleGenAIMockLocal = vi.fn((_options: GoogleGenAIOptions) => ({
       models: { generateVideos: generateVideosMockLocal },
       operations: { getVideosOperation: getVideosOperationMockLocal },
       files: { download: downloadMockLocal },
@@ -81,38 +83,17 @@ function videoResponse(bytes: string) {
   });
 }
 
-type MockWithCalls = {
-  mock: { calls: unknown[][] };
-};
-
-function firstObjectArg(mock: MockWithCalls): Record<string, unknown> {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("expected first mock call to receive an object argument");
+function stubFetch(...responses: Response[]) {
+  const fetchMock = vi.fn<typeof fetch>();
+  for (const response of responses) {
+    fetchMock.mockResolvedValueOnce(response);
   }
-  return recordField(call[0], "first mock argument");
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
 }
 
-function recordField(value: unknown, field: string): Record<string, unknown> {
-  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${field} to be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireFetchCall(
-  fetchMock: ReturnType<typeof vi.fn>,
-  index: number,
-): [RequestInfo | URL, RequestInit | undefined] {
-  const call = fetchMock.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected Google video fetch call ${index}`);
-  }
-  return call as [RequestInfo | URL, RequestInit | undefined];
-}
-
-function parseFetchJsonBody(fetchMock: ReturnType<typeof vi.fn>, index: number): unknown {
-  const [, init] = requireFetchCall(fetchMock, index);
+function parseFetchJsonBody(fetchMock: ReturnType<typeof stubFetch>, index: number): unknown {
+  const [, init] = expectDefined(fetchMock.mock.calls[index], "Google video request");
   const body = init?.body;
   if (typeof body !== "string") {
     throw new Error(`expected Google video fetch body ${index}`);
@@ -120,8 +101,8 @@ function parseFetchJsonBody(fetchMock: ReturnType<typeof vi.fn>, index: number):
   return JSON.parse(body) as unknown;
 }
 
-function fetchInputUrl(fetchMock: ReturnType<typeof vi.fn>, index: number): string {
-  const [input] = requireFetchCall(fetchMock, index);
+function fetchInputUrl(fetchMock: ReturnType<typeof stubFetch>, index: number): string {
+  const [input] = expectDefined(fetchMock.mock.calls[index], "Google video request");
   return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 }
 
@@ -180,21 +161,21 @@ describe("google video generation provider", () => {
     });
 
     expect(generateVideosMock).toHaveBeenCalledTimes(1);
-    const request = firstObjectArg(generateVideosMock);
+    const request = expectDefined(generateVideosMock.mock.calls[0], "generation request")[0];
     expect(request).toMatchObject({
       model: "veo-3.1-fast-generate-preview",
       prompt: "A tiny robot watering a windowsill garden",
     });
-    const config = recordField(request.config, "config");
+    const config = expectDefined(request.config, "generation config");
     expect(config).toMatchObject({ durationSeconds: 4, aspectRatio: "16:9", resolution: "720p" });
     expect(config).not.toHaveProperty("generateAudio");
     expect(config).not.toHaveProperty("numberOfVideos");
     expect(result.videos).toHaveLength(1);
     expect(result.videos[0]?.buffer).toEqual(videoBytes);
     expect(result.videos[0]?.mimeType).toBe("video/mp4");
-    const clientOptions = firstObjectArg(createGoogleGenAIMock);
+    const clientOptions = expectDefined(createGoogleGenAIMock.mock.calls[0], "client options")[0];
     expect(clientOptions.apiKey).toBe("google-key");
-    const httpOptions = recordField(clientOptions.httpOptions, "httpOptions");
+    const httpOptions = expectDefined(clientOptions.httpOptions, "HTTP options");
     expect(httpOptions).not.toHaveProperty("baseUrl");
     expect(httpOptions).not.toHaveProperty("apiVersion");
   });
@@ -251,9 +232,7 @@ describe("google video generation provider", () => {
       durationSeconds: 3,
     });
 
-    expect(
-      recordField(firstObjectArg(createGoogleGenAIMock).httpOptions, "httpOptions").baseUrl,
-    ).toBe(expectedBaseUrl);
+    expect(createGoogleGenAIMock.mock.calls[0]?.[0].httpOptions?.baseUrl).toBe(expectedBaseUrl);
   });
 
   it("downloads MLDev direct video uri responses without routing through the Files API", async () => {
@@ -411,8 +390,7 @@ describe("google video generation provider", () => {
 
   it("downloads SDK file handles through the bounded REST media endpoint", async () => {
     mockCompletedVideo({ uri: "files/generated-video", mimeType: "video/mp4" });
-    const fetchMock = vi.fn(async () => videoResponse("sdk-video"));
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubFetch(videoResponse("sdk-video"));
     const result = await generateVideo({ durationSeconds: 3 });
 
     expect(fetchInputUrl(fetchMock, 0)).toBe(
@@ -425,10 +403,7 @@ describe("google video generation provider", () => {
 
   it("rejects SDK file-handle downloads that exceed the configured media cap", async () => {
     mockCompletedVideo({ uri: "files/generated-video", mimeType: "video/mp4" });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => videoResponse("too-large")),
-    );
+    stubFetch(videoResponse("too-large"));
     await expect(
       generateVideo({
         cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
@@ -486,11 +461,7 @@ describe("google video generation provider", () => {
 
   it("falls back to REST predictLongRunning when text-only SDK video generation returns 404", async () => {
     generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(restCompletedVideo())
-      .mockResolvedValueOnce(videoResponse("rest-video"));
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubFetch(restCompletedVideo(), videoResponse("rest-video"));
     const result = await generateVideo({
       model: "google/models/veo-3.1-fast-generate-preview",
       durationSeconds: 3,
@@ -557,13 +528,12 @@ describe("google video generation provider", () => {
   it("retries transient Google REST poll failures with empty bodies", async () => {
     vi.useFakeTimers();
     generateVideosMock.mockRejectedValue(Object.assign(new Error("sdk 404"), { status: 404 }));
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(Response.json({ done: false, name: "operations/rest-123" }))
-      .mockResolvedValueOnce(new Response("", { status: 503, statusText: "Service Unavailable" }))
-      .mockResolvedValueOnce(restCompletedVideo())
-      .mockResolvedValueOnce(videoResponse("rest-video"));
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubFetch(
+      Response.json({ done: false, name: "operations/rest-123" }),
+      new Response("", { status: 503, statusText: "Service Unavailable" }),
+      restCompletedVideo(),
+      videoResponse("rest-video"),
+    );
     const resultPromise = generateVideo({ durationSeconds: 3 });
     await vi.advanceTimersByTimeAsync(10_250);
     const result = await resultPromise;
