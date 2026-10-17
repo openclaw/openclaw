@@ -14,7 +14,6 @@ import {
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
-  tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { buildMatchQueryFromTerms, planKeywordSearch } from "./keyword-query.js";
 import { memoryTextSearchSchema, memoryVectorSearchSchema } from "./manager-search-schema.js";
@@ -80,12 +79,6 @@ export async function searchPostgresMemoryVector(
 ): Promise<SearchRowResult[]> {
   if (query.limit <= 0 || query.candidateIds?.length === 0 || query.queryVec.length === 0) {
     return [];
-  }
-  if (!tableExists(database, "memory_index_chunks_vec")) {
-    throw new DatabaseSearchCapabilityUnavailableError(
-      "vector",
-      'PostgreSQL memory has no admitted vector index. Have a database administrator run CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public; then configure an embedding provider and run openclaw memory index. For keyword-only memory set memory.search.provider to "none".',
-    );
   }
   const search = admitStoreSearch(database, memoryVectorSearchSchema(query.queryVec.length));
   if (!search.vector) {

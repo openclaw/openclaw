@@ -311,25 +311,36 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             indexIdentity.status === "mismatched" &&
             indexIdentity.owner === "openclaw" &&
             indexIdentity.versionOrder === "older"));
-      if (shouldRepairIdentity) {
+      const shouldUpgradeProviderKey =
+        indexIdentity.status === "valid" &&
+        this.provider &&
+        indexState.meta?.model === this.provider.model &&
+        indexState.meta.providerKey &&
+        indexState.meta.providerKey !== this.providerKey &&
+        searchSyncEnabled;
+      if (shouldRepairIdentity || shouldUpgradeProviderKey) {
         await releaseReadGeneration();
-        this.recordAutomaticRebuild();
+        if (shouldRepairIdentity) {
+          this.recordAutomaticRebuild();
+        }
         // The writer rechecks identity under its lease; another manager may have repaired it.
         await this.syncAdmitted(
           { reason: "search" },
           { allowEmbeddingBootstrapFallback: true },
         ).catch((err: unknown) => {
-          if (err instanceof WorkerTaskError && err.code === "overloaded") {
-            throw err;
-          }
-          if (readErrorName(err) === "DatabaseSearchCapabilityUnavailableError") {
+          if (
+            shouldUpgradeProviderKey ||
+            (err instanceof WorkerTaskError && err.code === "overloaded") ||
+            readErrorName(err) === "DatabaseSearchCapabilityUnavailableError"
+          ) {
             throw err;
           }
           log.warn(`memory sync failed (search-identity-repair): ${formatErrorMessage(err)}`);
         });
         indexState = await readIndexState();
       }
-      let repairedIndexIdentity = shouldRepairIdentity ? refreshSearchIdentity() : indexIdentity;
+      let repairedIndexIdentity =
+        shouldRepairIdentity || shouldUpgradeProviderKey ? refreshSearchIdentity() : indexIdentity;
       if (
         repairedIndexIdentity.status === "mismatched" &&
         !embeddingBootstrapKeywordOnly &&

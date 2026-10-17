@@ -30,16 +30,11 @@ import {
   runWithMainSessionRecoveryAdmission,
   type MainSessionRecoveryAdmission,
 } from "./main-session-recovery-admission.js";
-import {
-  repairMainSessionRecoveryMutation,
-  retryMainSessionRecoveryMutation,
-  scheduleMainSessionRecoveryMutation,
-} from "./main-session-recovery-lifecycle.js";
+import { repairMainSessionRecoveryMutation } from "./main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "./main-session-recovery-owner-release.js";
-import {
-  isMainSessionRecoveryPending,
-  type MainSessionRecoveryObservation,
-  type MainSessionRecoveryReservation,
+import type {
+  MainSessionRecoveryObservation,
+  MainSessionRecoveryReservation,
 } from "./main-session-recovery-state.js";
 import {
   commitMainSessionRecovery,
@@ -97,41 +92,10 @@ async function rollbackRestartRecoveryReservation(
     reservation: MainSessionRecoveryReservation;
   },
 ) {
-  return await retryMainSessionRecoveryMutation(async () =>
-    commitMainSessionRecovery({
-      command: { kind: params.kind, reservation: params.reservation },
-      requireWriteSuccess: true,
-      target: params,
-    }),
-  );
-}
-
-function scheduleRestartRecoveryReservationRollback(
-  params: Parameters<typeof rollbackRestartRecoveryReservation>[0],
-): void {
-  // Keep the exact reservation token alive after transient store outages.
-  // A Gateway restart safely retires the timer and its stale-generation slot.
-  scheduleMainSessionRecoveryMutation({
-    mutation: () => rollbackRestartRecoveryReservation(params),
-    onError: (error) => {
-      log.warn(
-        `failed delayed restart recovery reservation rollback ${params.sessionKey}: ${String(error)}`,
-      );
-    },
-    onSuccess: ({ entry, sessionKey }) => {
-      if (
-        entry?.sessionId === params.reservation.sessionId &&
-        sessionKey &&
-        isMainSessionRecoveryPending(entry, sessionKey)
-      ) {
-        scheduleMainSessionRecoveryPendingTarget({
-          agentId: params.agentId,
-          sessionId: entry.sessionId,
-          sessionKey,
-          storePath: params.storePath,
-        });
-      }
-    },
+  return await commitMainSessionRecovery({
+    command: { kind: params.kind, reservation: params.reservation },
+    requireWriteSuccess: true,
+    target: params,
   });
 }
 
@@ -328,7 +292,6 @@ async function resumeMainSessionWithinAdmission(
   const repairAcceptedRecovery = async () => {
     const restored = await repairMainSessionRecoveryMutation({
       mutation: restoreAcceptedRecovery,
-      onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
       onError: (restoreError) => {
         if (params.shouldContinue?.() !== false) {
           log.warn(
@@ -665,11 +628,6 @@ async function resumeMainSessionWithinAdmission(
         log.warn(
           `failed to roll back interrupted main session recovery attempt ${params.sessionKey}: ${String(rollbackError)}`,
         );
-        scheduleRestartRecoveryReservationRollback({
-          ...target,
-          kind: rollbackKind,
-          reservation: reservation!,
-        });
       });
     }
     if (params.shouldContinue?.() === false) {

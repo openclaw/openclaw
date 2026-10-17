@@ -89,6 +89,42 @@ export function loadMemoryEmbeddingCache(params: {
   return out;
 }
 
+/** Preserve canonical entries and move the remaining legacy rows without copying vectors. */
+export function rekeyMemoryEmbeddingCache(
+  database: EngineConnection,
+  identity: MemoryIndexProviderIdentity,
+  providerKey: string,
+): void {
+  const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(database);
+  executeSqliteQuerySync(
+    database,
+    db
+      .deleteFrom("memory_embedding_cache")
+      .where("provider", "=", identity.provider)
+      .where("model", "=", identity.model)
+      .where("provider_key", "=", identity.providerKey)
+      .where(
+        "hash",
+        "in",
+        db
+          .selectFrom("memory_embedding_cache")
+          .select("hash")
+          .where("provider", "=", identity.provider)
+          .where("model", "=", identity.model)
+          .where("provider_key", "=", providerKey),
+      ),
+  );
+  executeSqliteQuerySync(
+    database,
+    db
+      .updateTable("memory_embedding_cache")
+      .set({ provider_key: providerKey })
+      .where("provider", "=", identity.provider)
+      .where("model", "=", identity.model)
+      .where("provider_key", "=", identity.providerKey),
+  );
+}
+
 export function countMemoryEmbeddingCache(database: EngineConnection): number {
   const db = getNodeSqliteKysely<EmbeddingCacheDatabase>(database);
   const result = executeSqliteQuerySync(

@@ -5,17 +5,8 @@ import {
   type SolidRenderLifecycle,
 } from "../pages/chat/solid-render-lifecycle.ts";
 
-/** Structural lifecycle used by the existing imperative panel owners. */
-export interface PanelLifecycleController {
-  hostConnected?(): void;
-  hostDisconnected?(): void;
-  hostUpdate?(): void;
-  hostUpdated?(): void;
-}
-
 /** Keeps synchronous panel state separate from Solid's rendering notification. */
-export class SolidPanelController {
-  private readonly controllers = new Set<PanelLifecycleController>();
+export class SolidPanelOwner {
   private version = 0;
   private rendering: SolidRenderLifecycle<number> | undefined;
   private cancelCommit: (() => void) | undefined;
@@ -52,17 +43,6 @@ export class SolidPanelController {
     return this.element.dispatchEvent(event);
   }
 
-  addController(controller: PanelLifecycleController): void {
-    this.controllers.add(controller);
-    if (this.connected) {
-      controller.hostConnected?.();
-    }
-  }
-
-  removeController(controller: PanelLifecycleController): void {
-    this.controllers.delete(controller);
-  }
-
   read(): this {
     this.rendering?.snapshot();
     return this;
@@ -85,11 +65,6 @@ export class SolidPanelController {
     if (!this.changes.has(name)) {
       this.changes.set(name, oldValue);
     }
-    this.invalidate();
-  }
-
-  /** Legacy controllers consume this structural host method until their callers migrate. */
-  requestUpdate(): void {
     this.invalidate();
   }
 
@@ -118,9 +93,6 @@ export class SolidPanelController {
   connect(): void {
     this.connected = true;
     this.stopLocale = i18n.subscribe(() => this.invalidate());
-    for (const controller of this.controllers) {
-      controller.hostConnected?.();
-    }
     this.connectedCallback();
     this.invalidate();
   }
@@ -130,9 +102,6 @@ export class SolidPanelController {
       return;
     }
     this.willUpdate(this.changes);
-    for (const controller of this.controllers) {
-      controller.hostUpdate?.();
-    }
   }
 
   commit(): void {
@@ -144,9 +113,6 @@ export class SolidPanelController {
     this.changes = new Map();
     const complete = this.complete;
     this.complete = undefined;
-    for (const controller of this.controllers) {
-      controller.hostUpdated?.();
-    }
     this.updated(changed);
     this.hasUpdated = true;
     complete?.(true);
@@ -160,16 +126,13 @@ export class SolidPanelController {
     this.stopLocale?.();
     this.stopLocale = undefined;
     this.disconnectedCallback();
-    for (const controller of this.controllers) {
-      controller.hostDisconnected?.();
-    }
     this.complete?.(false);
     this.complete = undefined;
   }
 }
 
 /** Connect after mount, and publish completion only after Solid commits the DOM. */
-export function usePanelController(controller: SolidPanelController): void {
+export function usePanelOwner(controller: SolidPanelOwner): void {
   controller.bindRendering();
   createRenderEffect(
     () => controller.revision(),

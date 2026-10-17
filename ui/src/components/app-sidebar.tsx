@@ -145,13 +145,8 @@ function AppSidebarContent(props: AppSidebarProps, host: HTMLElement): JSX.Eleme
     return proxy;
   };
   const hostView = observe(owner);
-  [
-    owner.sidebarMenus,
-    owner.sidebarMenus.catalogMenu,
-    owner.sessionData,
-    owner.sessionOrganizer,
-    owner.people,
-  ].forEach(observe);
+  owner.sidebarMenus.catalogMenuView = owner.sidebarMenus.catalogMenu.createView(hostView);
+  [owner.sidebarMenus, owner.sessionData, owner.sessionOrganizer, owner.people].forEach(observe);
   owner.sessionPullRequests = createSessionPullRequestIndicators({
     getConnected: () => prepared().isConnected && props.connected,
     getPresented: () => props.navigationVisible,

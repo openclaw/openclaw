@@ -18,10 +18,18 @@ import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import { hasClawDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
 import { agentDeletionJournalPublication } from "./agent-deletion-journal-publication.js";
 import { resolveAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.js";
-import { publishAgentDeletionJournalStatus } from "./agent-deletion-journal-status.js";
-import { parseAgentDeletionDatabasePaths } from "./agent-deletion-journal.read.js";
+import {
+  getAgentDeletionDiscovery,
+  publishAgentDeletionJournalStatus,
+  updateAgentDeletionDiscovery,
+} from "./agent-deletion-journal-status.js";
+import {
+  parseAgentDeletionDatabasePaths,
+  readRetainedAgentDeletionsFromDatabase,
+} from "./agent-deletion-journal.read.js";
 import type {
   AgentDeletionJournalCleanupPath,
+  AgentDeletionJournalDisposition,
   AgentDeletionJournalEntry,
   AgentDeletionJournalInput,
   AgentDeletionJournalPurpose,
@@ -49,6 +57,26 @@ export type {
   AgentDeletionJournalEntry,
   AgentDeletionJournalInput,
 } from "./agent-deletion-journal.types.js";
+
+function prepareDeletionDiscovery(database: OpenClawStateDatabase) {
+  return (
+    getAgentDeletionDiscovery(database.db) ??
+    readRetainedAgentDeletionsFromDatabase(database.db, database.path, "runtime-discovery")
+  );
+}
+
+function publishDeletingAgent(
+  database: OpenClawStateDatabase,
+  discovery: AgentDeletionJournalDisposition,
+  entry: AgentDeletionJournalEntry,
+) {
+  updateAgentDeletionDiscovery(database.db, discovery, entry.agentId, () => ({
+    agentId: entry.agentId,
+    agentDir: entry.agentDir,
+    databasePaths: [path.join(entry.agentDir, "openclaw-agent.sqlite"), ...entry.databasePaths],
+    cleanupCompleted: false,
+  }));
+}
 
 type AgentDeletionDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -334,6 +362,7 @@ export function beginAgentDeletionJournalInDatabase(
   };
   sessionChanges.emit({ all: true, scope: "stores" }, database.db);
   ensureAgentDeletionJournalPhaseSchema(database.db);
+  const discovery = prepareDeletionDiscovery(database);
   const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
   const existing = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -399,6 +428,7 @@ export function beginAgentDeletionJournalInDatabase(
         deleteFiles: normalized.deleteFiles,
       },
     };
+    publishDeletingAgent(database, discovery, result.entry);
     agentDeletionJournalPublication.stagePostimages(database.db, [
       {
         agentId: result.entry.agentId,
@@ -429,6 +459,7 @@ export function beginAgentDeletionJournalInDatabase(
   const result = {
     entry: { ...normalized, databasePaths, cleanupPaths, createdAt, cleanupCompleted: false },
   };
+  publishDeletingAgent(database, discovery, result.entry);
   agentDeletionJournalPublication.stagePostimages(database.db, [
     {
       agentId: result.entry.agentId,
@@ -443,9 +474,12 @@ export function updateAgentDeletionJournalPathsInDatabase(
   database: OpenClawStateDatabase,
   agentId: string,
   operationId: string,
-  column: "cleanup_paths_json" | "database_paths_json",
-  paths: readonly AgentDeletionJournalCleanupPath[] | readonly string[],
+  ...change:
+    | [column: "cleanup_paths_json", paths: readonly AgentDeletionJournalCleanupPath[]]
+    | [column: "database_paths_json", paths: readonly string[]]
 ): boolean {
+  const [column, paths] = change;
+  const discovery = prepareDeletionDiscovery(database);
   assertAgentDeletionJournalAvailable(database.db);
   const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
   const result = executeSqliteQuerySync(
@@ -459,6 +493,18 @@ export function updateAgentDeletionJournalPathsInDatabase(
   );
   const updated = Number(result.numAffectedRows ?? 0) > 0;
   if (updated) {
+    if (column === "database_paths_json") {
+      updateAgentDeletionDiscovery(
+        database.db,
+        discovery,
+        agentId,
+        (entry) =>
+          entry && {
+            ...entry,
+            databasePaths: [path.join(entry.agentDir, "openclaw-agent.sqlite"), ...paths],
+          },
+      );
+    }
     sessionChanges.emit({ all: true, scope: "stores" }, database.db);
   }
   return updated;
@@ -504,6 +550,7 @@ export function completeAgentDeletionJournalInDatabase(
 ): boolean {
   const id = normalizeAgentId(agentId);
   ensureAgentDeletionJournalPhaseSchema(database.db);
+  const discovery = prepareDeletionDiscovery(database);
   const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
   const completed = executeSqliteQueryTakeFirstSync(
     database.db,
@@ -513,11 +560,14 @@ export function completeAgentDeletionJournalInDatabase(
       .where("agent_id", "=", id)
       .where("operation_id", "=", operationId)
       .where((eb) => eb.or([eb("phase", "is", null), eb("phase", "=", "retiring")]))
-      .returning("database_paths_json"),
+      .returning(["database_paths_json", "delete_files"]),
   );
   // The journal already fences authority. Keep creation history through refusals and
   // partial cleanup, and remove it only when this exact deletion owner completes.
   if (completed) {
+    updateAgentDeletionDiscovery(database.db, discovery, id, (entry) =>
+      completed.delete_files === 1 ? undefined : entry && { ...entry, cleanupCompleted: true },
+    );
     publishAgentDeletionJournalStatus(database.db, id, "complete");
     agentDeletionJournalPublication.stagePostimages(database.db, [
       {
@@ -544,6 +594,7 @@ export function deleteAgentDeletionJournalInDatabase(
   operationId: string,
   completedOnly: boolean,
 ): boolean {
+  const discovery = prepareDeletionDiscovery(database);
   const id = normalizeAgentId(agentId);
   assertAgentDeletionJournalAvailable(database.db);
   const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
@@ -557,6 +608,7 @@ export function deleteAgentDeletionJournalInDatabase(
   );
   const removed = Number(result.numAffectedRows ?? 0) > 0;
   if (removed) {
+    updateAgentDeletionDiscovery(database.db, discovery, id, () => undefined);
     publishAgentDeletionJournalStatus(database.db, id, "absent");
     agentDeletionJournalPublication.stageDeletions(database.db, [id]);
     sessionChanges.emit({ all: true, scope: "stores" }, database.db);

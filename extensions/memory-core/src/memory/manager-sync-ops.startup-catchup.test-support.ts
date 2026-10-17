@@ -154,7 +154,8 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   }
 
   catchUp = () => this.runSessionStartupCatchup();
-  markStartupDirtyFiles = () => this.markSessionStartupCatchupDirtyFiles();
+  markStartupDirtyFiles = (inspectSources = false) =>
+    this.markSessionStartupCatchupDirtyFiles(inspectSources);
   runSyncForTest = (params?: MemorySyncParams) => this.runSync(params);
   runArchiveSyncForTest = () => this.syncArchiveFiles({ needsFullReindex: false });
   getDirtyArchiveFiles = () => Array.from(this.sessionsDirtyFiles);

@@ -10,7 +10,10 @@ import {
   hasSqliteDatabaseSchemaAdmission,
   readSqliteDatabaseFactRevision,
   readSqliteDatabaseGeneration,
+  readSqliteDatabaseAdmissionFact,
+  admitSqliteDatabaseFactValue,
   type Admission,
+  type AdmissionFactValue,
   type SqliteDatabaseAdmissionKey,
   type StagedAdmissionFact,
   type SqliteDatabaseAdmissionRegistry,
@@ -37,7 +40,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
   publishFact: <T>(
     record: Admission,
     key: SqliteDatabaseAdmissionKey<T>,
-    value: T,
+    value: AdmissionFactValue,
     revision: number,
   ) => void;
 }) {
@@ -81,7 +84,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
       local.revision === readSqliteDatabaseFactRevision(record, local.schemaDependent) &&
       (!local.schemaDependent || local.ddlRevision === (state.ddlRevisions.get(anchor) ?? 0))
     ) {
-      return key.read(local.value);
+      return readSqliteDatabaseAdmissionFact(local, key);
     }
     if (key.schemaDependent && state.schemaDirty.has(anchor)) {
       return undefined;
@@ -104,7 +107,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
         }
         exchange(record);
         fact = record.facts.get(key.name);
-        return fact && valid(record, fact) ? key.read(fact.value) : undefined;
+        return fact && valid(record, fact) ? readSqliteDatabaseAdmissionFact(fact, key) : undefined;
       }
       const revision = readSqliteDatabaseGeneration(record, "publicationRevision");
       const misses = state.misses.get(record) ?? new Map<string, number>();
@@ -115,7 +118,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
         misses.set(key.name, readSqliteDatabaseGeneration(record, "publicationRevision"));
       }
     }
-    return fact && valid(record, fact) ? key.read(fact.value) : undefined;
+    return fact && valid(record, fact) ? readSqliteDatabaseAdmissionFact(fact, key) : undefined;
   }
 
   function getOrLoadSqliteDatabaseAdmissionForPath<T>(
@@ -128,14 +131,15 @@ export function createSqliteDatabaseAdmissionReader(owner: {
         return load();
       }
       const fact = record.facts.get(key.name);
-      const cached = fact && valid(record, fact) ? key.read(fact.value) : undefined;
+      const cached =
+        fact && valid(record, fact) ? readSqliteDatabaseAdmissionFact(fact, key) : undefined;
       if (cached !== undefined) {
         return cached;
       }
       const generation = readSqliteDatabaseFactRevision(record, key.schemaDependent);
       const value = load();
       if (value !== undefined) {
-        publishFact(record, key, value, generation);
+        publishFact(record, key, admitSqliteDatabaseFactValue(key, value), generation);
       }
       return value;
     };
