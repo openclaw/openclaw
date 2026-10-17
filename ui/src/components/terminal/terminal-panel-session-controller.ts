@@ -531,7 +531,7 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
   }
 
   const captureDeliveryError = (tab: TerminalPanelSessionTab) =>
-    captureTerminalDeliveryError(host, state, ownedActiveClient, tab, api.setError);
+    captureTerminalDeliveryError(host, state, ownedActiveClient, tab, (text) => api.setError(text));
 
   function retireOperations(): void {
     ownedLifecycleGeneration += 1;
