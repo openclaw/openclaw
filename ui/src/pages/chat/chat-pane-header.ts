@@ -541,7 +541,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         (catalog ? this.catalogSession?.name?.trim() : undefined) ||
         this.resolveHeaderSessionTitle(row),
       agent:
-        !catalog && this.state?.settings.sidebarAgentsMode === "roster"
+        !catalog && this.state?.settings?.sidebarAgentsMode === "roster"
           ? resolveChatAgentIdentity(this.state, this.context)
           : undefined,
       session: row,
