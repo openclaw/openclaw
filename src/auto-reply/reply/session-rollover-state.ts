@@ -1,4 +1,5 @@
 import type { SessionLifecycleTimestamps } from "../../config/sessions/lifecycle.types.js";
+import { preserveResetSessionPresentation } from "../../config/sessions/reset-preserved-presentation.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
@@ -35,11 +36,8 @@ export function resolveReplySessionRolloverState(
     authProfileOverride: preservedSelection.authProfileOverride,
     authProfileOverrideSource: preservedSelection.authProfileOverrideSource,
     authProfileOverrideCompactionCount: preservedSelection.authProfileOverrideCompactionCount,
-    label: entry.label,
-    autoLabel: entry.autoLabel,
-    displayName: entry.displayName,
-    category: entry.category,
-    sidebarRoot: entry.sidebarRoot,
+    // Operator-owned appearance shares the Gateway reset rule.
+    ...preserveResetSessionPresentation(entry),
     deviceFolder: entry.deviceFolder ? { ...entry.deviceFolder } : undefined,
     // Notice debt survives rollover: erasing it here would recreate the
     // silent ambiguous-loss outcome the debt exists to prevent.
