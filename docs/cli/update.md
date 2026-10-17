@@ -310,11 +310,19 @@ not grant update ownership.
 Preparation resolves official `main` once, or accepts an exact
 `--sha <40-hex-commit>`, builds off-path, verifies and seals the candidate, and
 records its preparation. Preparation failure leaves the serving generation in
-place; an already-current target skips the build. Existing adoption records
-remain preparation-only. Native activation requires explicit
+place; an already-current target skips the build. Default update builds include
+the Plugin SDK declarations required by the sealed generation's package exports.
+Existing adoption records remain preparation-only. Native activation requires explicit
 `adopt-immutable --enable-activation` consent recorded in the installation's
 control database. No `openclaw.json` option enables it. `--no-restart` keeps an
 enabled installation preparation-only for that invocation.
+
+Preparation reuses Git objects from the verified current release while fetching
+official `main`, so the network transfer contains only missing objects. A failed
+fetch retries once in the same staging repository, with a separate five-minute
+budget per attempt. Interrupted pack transfers restart the missing pack, not the
+installed history. Before building, preparation copies the reused objects into
+its own store; the prepared release retains independent Git objects.
 
 Immutable preparation requires a separately adopted build account and toolchain.
 The build account must differ from the runtime account, have no supplementary

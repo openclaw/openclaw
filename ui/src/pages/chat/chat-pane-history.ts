@@ -31,6 +31,7 @@ import {
   type StagedOlderHistoryPage,
 } from "./chat-history-request.ts";
 import {
+  applyChatHistoryRefill,
   commitCurrentChatHistorySnapshot,
   historySessionId,
   resolveChatHistoryPagination,
@@ -387,11 +388,11 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     this.syncHistoryObserver();
   }
 
-  protected async loadOlderMessages(prefetch = true): Promise<boolean> {
+  protected async loadOlderMessages(readerIntent = true): Promise<boolean> {
     if (this.activeOlderLoad) {
       return this.activeOlderLoad;
     }
-    const load = this.performOlderMessagesLoad(prefetch);
+    const load = this.performOlderMessagesLoad(readerIntent);
     this.activeOlderLoad = load;
     try {
       return await load;
@@ -402,7 +403,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     }
   }
 
-  private async performOlderMessagesLoad(prefetch: boolean): Promise<boolean> {
+  private async performOlderMessagesLoad(readerIntent: boolean): Promise<boolean> {
     const state = this.state;
     const catalogKey = state ? parseCatalogSessionKey(state.sessionKey) : null;
     if (!state || this.loadingOlder || !this.hasOlderMessages()) {
@@ -424,7 +425,9 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         prepended = await this.loadCatalogSession(catalogKey, true);
       } else {
         const pagination = state.chatHistoryPagination;
-        if (!pagination.hasMore) {
+        // Offset zero refills a bounded cache, not an ordinary older page.
+        // Only reader navigation may replace that restored window.
+        if (!pagination.hasMore || (!readerIntent && pagination.nextOffset === 0)) {
           return false;
         }
         const requestedOffset = pagination.nextOffset;
@@ -502,9 +505,16 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
             new Set(pendingRunIds.filter((runId) => !remaining.has(runId))),
           );
         }
-        const nextMessages = prependUniqueNativeMessages(messages, state.chatMessages);
-        const grew = nextMessages.length > state.chatMessages.length;
-        publishChatSessionProjectionMessages(state, nextMessages);
+        const previousCount = state.chatMessages.length;
+        if (requestedOffset === 0) {
+          applyChatHistoryRefill(state, result);
+        } else {
+          publishChatSessionProjectionMessages(
+            state,
+            prependUniqueNativeMessages(messages, state.chatMessages),
+          );
+        }
+        const grew = state.chatMessages.length > previousCount;
         state.chatHistoryPagination = exhausted
           ? {
               hasMore: false,
@@ -517,7 +527,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         commitCurrentChatHistorySnapshot(state);
         scheduleChatScroll(state, false);
         prepended = grew || !exhausted;
-        if (!exhausted && prefetch) {
+        if (!exhausted && readerIntent) {
           this.stageNextOlderPage(state);
         }
       }

@@ -161,7 +161,8 @@ beforeAll(async () => {
 
 const looseBudgets = {
   startupJsRequests: 10,
-  routeBootJsRequests: 35,
+  chatBootJsRequests: 35,
+  newBootJsRequests: 35,
   chatBootJsGzipBytes: 100_000,
   newBootJsGzipBytes: 100_000,
   startupCssRequests: 10,
@@ -264,7 +265,8 @@ describe("Control UI performance budgets", () => {
     const metrics = collectControlUiPerformanceMetrics(distDir);
     const budgets = {
       startupJsRequests: 0,
-      routeBootJsRequests: 35,
+      chatBootJsRequests: 35,
+      newBootJsRequests: 35,
       chatBootJsGzipBytes: 100_000,
       newBootJsGzipBytes: 100_000,
       startupCssRequests: 1,
@@ -406,9 +408,9 @@ describe("Control UI performance budgets", () => {
     },
   );
 
-  it.each(["chat", "new"])("enforces the %s boot request limit in Actions", (route) => {
+  it.each(["chat", "new"] as const)("enforces the %s boot request limit in Actions", (route) => {
     const { rootDir, scriptPath, distDir } = createCliFixture();
-    const limit = CONTROL_UI_PERFORMANCE_BUDGETS.routeBootJsRequests;
+    const limit = CONTROL_UI_PERFORMANCE_BUDGETS[`${route}BootJsRequests`];
     const links = Array.from({ length: limit }, (_, index) => {
       const file = `route-${index}.js`;
       for (const suffix of ["", ".gz", ".br"]) {

@@ -21,8 +21,10 @@ packages/agent-core/src/operator-messages.ts
 packages/gateway-client/package.json
 packages/gateway-client/src/timeouts.ts
 packages/gateway-protocol/package.json
+packages/gateway-protocol/src/canvas-limits.ts
 packages/gateway-protocol/src/capability-consent-error-details.ts
 packages/gateway-protocol/src/client-info.ts
+packages/gateway-protocol/src/compiled/sender-identity.js
 packages/gateway-protocol/src/failover-reasons.ts
 packages/gateway-protocol/src/plugin-ui-capabilities.ts
 packages/gateway-protocol/src/protocol-validator.ts
@@ -44,6 +46,7 @@ packages/gateway-protocol/src/schema/worktrees.ts
 packages/gateway-protocol/src/secret-ref-contract.ts
 packages/gateway-protocol/src/session-agent-status.ts
 packages/gateway-protocol/src/session-communication.ts
+packages/gateway-protocol/src/session-limits.ts
 packages/gateway-protocol/src/svg-image.ts
 packages/gateway-protocol/src/theme-ids.ts
 packages/gateway-protocol/src/theme.ts
@@ -289,7 +292,6 @@ src/agents/openai-routing.ts
 src/agents/owner-display.ts
 src/agents/plugin-model-catalog-repair.ts
 src/agents/plugin-model-catalog.kernel.ts
-src/agents/plugin-model-catalog.read-operation.ts
 src/agents/provider-auth-aliases.ts
 src/agents/provider-model-auth-source-plan.ts
 src/agents/provider-model-normalization.runtime.ts
@@ -392,6 +394,7 @@ src/infra/database-engine/sqlite-vector.ts
 src/infra/database-engine/text-bytes.ts
 src/infra/database-engine/vector-contract.ts
 src/infra/postgres-sync/connection.ts
+src/infra/postgres-sync/idle-bridges.ts
 src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
 src/infra/sql-connection.ts
@@ -738,6 +741,7 @@ src/config/sessions/targets-discovery.native.ts
 src/config/sessions/targets-path-validation.ts
 src/config/sessions/targets-read-availability.worker.ts
 src/config/sessions/targets.ts
+src/config/sessions/transcript-payload-read.ts
 src/config/sessions/transcript-payload.ts
 src/config/sessions/transcript-predicate-fields.ts
 src/config/sessions/transcript-target-binding.ts
@@ -906,11 +910,13 @@ src/infra/dedupe.ts
 src/infra/deep-merge.ts
 src/infra/deferred-plugin-migrations.contract.ts
 src/infra/deferred-plugin-migrations.ts
+src/infra/deferred-plugin-session-transcript-read.worker.ts
 src/infra/delivery-queue-cache.ts
 src/infra/delivery-queue-retention-columns.ts
 src/infra/delivery-queue-sqlite-bound.ts
 src/infra/delivery-queue-sqlite.types.ts
 src/infra/diagnostic-event-listener-presence.ts
+src/infra/diagnostic-event-queue-policy.ts
 src/infra/diagnostic-event-snapshot.ts
 src/infra/diagnostic-events.ts
 src/infra/diagnostic-flags-env.ts
@@ -934,7 +940,6 @@ src/infra/dotenv-global-core.ts
 src/infra/dotenv-global.ts
 src/infra/dotenv.ts
 src/infra/ed25519-signature.ts
-src/infra/env-log.runtime.ts
 src/infra/env.ts
 src/infra/errno.ts
 src/infra/child-runtime-viability.ts
@@ -1291,6 +1296,7 @@ src/infra/worker-message-metrics.ts
 src/infra/worker-native-error.ts
 src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
+src/infra/worker-native-lifecycle.worker.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-resource.ts
 src/infra/worker-native-task-port.ts
@@ -1538,7 +1544,6 @@ src/plugins/provider-claude-thinking.ts
 src/plugins/provider-thinking-active.ts
 src/plugins/provider-thinking.ts
 src/plugins/registry-runtime-binding.ts
-src/plugins/plugin-instance-disposal.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
@@ -1680,8 +1685,10 @@ src/process/spawn-broker/ipc.ts
 src/process/spawn-broker/pipe.ts
 src/process/spawn-broker/protocol.ts
 src/process/spawn-broker/resource-authority.ts
+src/process/spawn-broker/resource-client.ts
 src/process/spawn-broker/resource-host.ts
 src/process/spawn-broker/resource-protocol.ts
+src/process/spawn-broker/resource-socket.ts
 src/process/spawn-diagnostics.ts
 src/process/spawn-utils.ts
 src/process/supervisor/cancellation-policy.ts
@@ -1744,6 +1751,8 @@ src/sessions/session-row-changes.ts
 src/sessions/session-state-events.ambient-read.ts
 src/sessions/session-state-events.prune.ts
 src/sessions/session-title-source.ts
+src/sessions/session-upstream-links-publication.ts
+src/sessions/session-upstream-links.kernel.ts
 src/sessions/transcript-events.ts
 src/sessions/transcript-terminal-model.ts
 src/sessions/user-turn-transcript-admission.ts
@@ -1851,6 +1860,7 @@ src/state/openclaw-agent-db-registry.read.ts
 src/state/openclaw-agent-db-registry.ts
 src/state/openclaw-agent-db-registry.worker.ts
 src/state/openclaw-agent-db-resources.ts
+src/state/openclaw-agent-db-schema-admission.ts
 src/state/openclaw-agent-db-schema-compatibility.ts
 src/state/openclaw-agent-db-schema-helpers.ts
 src/state/openclaw-agent-db-schema-read.ts
@@ -1872,6 +1882,7 @@ src/state/openclaw-agent-execution-cleanup.ts
 src/state/openclaw-agent-execution-contract.ts
 src/state/openclaw-agent-execution-native.ts
 src/state/openclaw-agent-execution-owner.ts
+src/state/openclaw-agent-execution-preparation.ts
 src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
@@ -1881,7 +1892,6 @@ src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
 src/state/openclaw-agent-pending-inputs-schema.ts
 src/state/openclaw-agent-progress-card-schema.ts
-src/state/openclaw-agent-schema-inspection-operations.worker.ts
 src/state/openclaw-agent-schema-inspection-response.ts
 src/state/openclaw-agent-schema-inspection-worker.ts
 src/state/openclaw-agent-schema.sql
@@ -1899,6 +1909,7 @@ src/state/openclaw-agent-transcript-fts-schema-source.ts
 src/state/openclaw-agent-transcript-fts-schema.ts
 src/state/openclaw-agent-transcript-payload-migration.ts
 src/state/openclaw-agent-write-layout-migration.ts
+src/state/openclaw-agent-index-retirement-migration.ts
 src/state/openclaw-agent-write-admission.ts
 src/state/openclaw-agent-write-admission-state.ts
 src/state/openclaw-database-preflight-agent-scheduler.ts
@@ -1956,6 +1967,7 @@ src/state/openclaw-state-db-schema-v21-columns.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
+src/state/openclaw-state-db-schema-v27-indexes.ts
 src/state/openclaw-state-db-schema-version.ts
 src/state/openclaw-state-db-session-watch-migration.ts
 src/state/openclaw-state-db-snapshot-owner.ts
@@ -2008,11 +2020,13 @@ src/state/schema-migration-backup-tables.ts
 src/state/openclaw-state-ownership-preflight.ts
 src/state/openclaw-state-ownership-worker.ts
 src/state/openclaw-state-read-operation.ts
+src/state/openclaw-state-read-operation-registry.ts
 src/state/openclaw-state-read-pool.ts
 src/state/openclaw-state-read-request.ts
 src/state/openclaw-state-read-scope.ts
 src/state/openclaw-state-read-snapshot.ts
 src/state/openclaw-state-read-worker.ts
+src/state/openclaw-state-read.worker.ts
 src/state/openclaw-state-schema-compatibility.ts
 src/state/openclaw-state-schema-inspection.ts
 src/state/openclaw-state-schema-preflight.ts
@@ -2212,6 +2226,7 @@ src/config/sessions/activity-summary.ts
 src/config/sessions/session-actor.ts
 src/config/sessions/session-entry-cohort-scope.ts
 src/config/sessions/session-transcript-index-maintenance.ts
+src/config/sessions/session-transcript-index-readiness.ts
 src/config/sessions/session-transcript-projection-writer.ts
 src/config/sessions/session-transcript-reconcile-pool.ts
 src/config/sessions/session-transcript-reconcile-readiness.ts
@@ -2282,6 +2297,7 @@ packages/ai/src/utils/usage.ts
 packages/gateway-protocol/src/chat-work-context.ts
 packages/gateway-protocol/src/schema/agent-database-admission.ts
 packages/gateway-protocol/src/schema/agent-summary-enums.ts
+packages/gateway-protocol/src/schema/agents-avatar-generate.ts
 packages/gateway-protocol/src/schema/agents-list-session-placement.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/gateway-protocol/src/schema/background-preferences.ts
@@ -2439,6 +2455,7 @@ src/config/sessions/session-bounded-context-selection.ts
 src/config/sessions/session-cache-ttl-prefix-values.ts
 src/config/sessions/session-entry-lineage.ts
 src/config/sessions/session-entry-patch-operation.ts
+src/config/sessions/session-snapshot-merge.ts
 src/config/sessions/session-entry-projection.ts
 src/config/sessions/session-entry-provenance.ts
 src/config/sessions/session-entry-public-patch.ts
@@ -2474,6 +2491,7 @@ src/config/sessions/work-start-error.ts
 src/gateway/payload-limits.ts
 src/gateway/server-constants.ts
 src/gateway/session-display-projection.ts
+src/gateway/session-row-transcript-preview.ts
 src/gateway/session-transcript-entry-message.ts
 src/gateway/session-transcript-source-pages.ts
 src/gateway/worker-environments/transcript-commit-policy.ts
@@ -2506,6 +2524,7 @@ src/shared/text/final-tags.ts
 src/shared/text/glm-arg-key-payload.ts
 src/shared/text/model-special-tokens.ts
 src/shared/text/reasoning-tags.ts
+src/shared/text/tag-name-probe.ts
 src/shared/text/text-projection.ts
 src/shared/text/tool-call-xml.ts
 src/shared/text/xml-tag-at.ts

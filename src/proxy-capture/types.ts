@@ -5,8 +5,6 @@ import type {
   debugProxyCliCommandSchema,
 } from "./cli-contract.js";
 
-// Shared debug-proxy capture schema. These records back the SQLite store, CLI
-// reports, and runtime capture events for HTTP/SSE/websocket traffic.
 type CaptureWriteCommand = z.input<typeof debugProxyCaptureWriteCommandSchema>;
 type CaptureCliCommand = z.input<typeof debugProxyCliCommandSchema>;
 export type CaptureProtocol = CaptureEventRecord["protocol"];

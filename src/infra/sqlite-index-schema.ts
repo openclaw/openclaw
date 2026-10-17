@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import {
   assertSqliteIntegrity,
+  assertSqliteTableIntegrity,
   isTerminalSqliteIntegrityError,
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityCheckOptions,
@@ -16,6 +17,7 @@ import {
   hasCanonicalSqliteSchemaFingerprint,
   type CanonicalSqliteNamedIndexContract,
   type SqliteSchemaSource,
+  type SqliteTableContractReader,
 } from "./sqlite-schema-contract.js";
 import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -30,6 +32,8 @@ type RepairCanonicalSqliteIndexesOptions = {
   allowMissingColumns?: boolean;
   /** Keep index repair atomic with the caller's whole-schema validation. */
   validateAfterRepair?: () => void;
+  /** Reuse the inspection catalog only while its unchanged snapshot is still pinned. */
+  validateUnchanged?: (readTable?: SqliteTableContractReader) => void;
   verifyPhysicalIntegrity?: boolean;
   integrity?: SqliteIntegrityCheckOptions;
 };
@@ -125,6 +129,9 @@ export function repairCanonicalSqliteIndexes(
     if (options.verifyPhysicalIntegrity !== false) {
       assertSqliteIntegrity(db, databaseLabel, options.integrity);
     }
+    if (repairIndexes.size === 0) {
+      options.validateUnchanged?.(readTable);
+    }
   });
   if (repairIndexes.size === 0) {
     return [];
@@ -156,13 +163,15 @@ export function repairCanonicalSqliteIndexes(
       }
     }
     if (repairIndexes.size === 0) {
+      // Skipped column migrations rolled back DDL after the inspection snapshot ended.
+      options.validateUnchanged?.();
       db.exec(`RELEASE SAVEPOINT ${savepoint};`);
       return [];
     }
-    assertSqliteIntegrity(db, databaseLabel, {
-      check: options.integrity?.check ?? "quick",
-      tables: [...new Set([...repairIndexes].map((index) => index.tableName))],
-    });
+    // The source was already admitted; index-only DDL needs no second whole-file scan.
+    for (const table of new Set([...repairIndexes].map((index) => index.tableName))) {
+      assertSqliteTableIntegrity(db, databaseLabel, table);
+    }
     options.validateAfterRepair?.();
     db.exec(`RELEASE SAVEPOINT ${savepoint};`);
   } catch (error) {

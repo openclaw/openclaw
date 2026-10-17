@@ -28,7 +28,7 @@ import {
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db-contract.js";
 import { resolveQuarantineStorePath } from "./openclaw-state-db.paths.js";
 
-const OPENCLAW_QUARANTINE_SCHEMA_VERSION = 2;
+export const OPENCLAW_QUARANTINE_SCHEMA_VERSION = 2;
 const OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS = 5_000;
 const OPENCLAW_QUARANTINE_DIR_MODE = 0o700;
 const OPENCLAW_QUARANTINE_FILE_MODE = 0o600;

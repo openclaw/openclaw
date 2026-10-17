@@ -3,6 +3,7 @@ import { onTestFinished, vi } from "vitest";
 import type { RouteId } from "../../app-routes.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { registerChatAttachmentPayload } from "../chat/attachment-payload-store.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
@@ -58,14 +59,21 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     ],
   };
   // The roster carries the placement policy; a scripted policy arrives with a roster refresh.
+  const agentListeners = new Set<() => void>();
   const agents = {
-    subscribe: () => () => undefined,
+    subscribe(listener: () => void) {
+      agentListeners.add(listener);
+      return () => agentListeners.delete(listener);
+    },
     state: { agentsList: options.placementPolicy ? roster : { ...roster, sessionPlacement: {} } },
     refreshList: async () => {
       // A failed refresh publishes no policy, like the roster owner.
       const policy = await options.placementPolicy?.().catch(() => undefined);
       if (policy) {
         agents.state.agentsList = Object.assign({}, roster, policy);
+        for (const listener of agentListeners) {
+          listener();
+        }
       }
       return agents.state.agentsList;
     },
@@ -121,6 +129,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     navigateAndWait: vi.fn(async () => undefined),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
+  Object.assign(context, { agentIdentity: createAgentIdentityCapability(context.gateway) });
   // The navigation spy represents an admitted Chat route; route ownership is
   // exercised with the real router in the transition tests.
   void router.navigate("chat", context);

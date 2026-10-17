@@ -1,5 +1,6 @@
 [
   "core",
+  "collection-input-runtime",
   "code-mode-executor-runtime",
   "control-ui-link-reader",
   "provider-setup",
@@ -67,8 +68,10 @@
   "dedupe-runtime",
   "delivery-queue-runtime",
   "file-access-runtime",
+  "node-crypto-runtime",
   "node-selection-runtime",
   "heartbeat-runtime",
+  "http-response-runtime",
   "expect-runtime",
   "number-runtime",
   "secure-random-runtime",

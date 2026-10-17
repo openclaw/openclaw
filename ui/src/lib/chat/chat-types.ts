@@ -229,6 +229,8 @@ export type ChatItem =
       startsTurn?: true;
       boundaryId?: string;
       tone?: "danger";
+      /** Informational source-owned event eligible for timeline folding. */
+      systemEvent?: "info" | "delivery-warning";
       /** Collapse the body behind a disclosure; the label line stays visible. */
       collapsedBody?: true;
       showTimestamp?: true;
@@ -244,6 +246,7 @@ export type ChatItem =
       key: string;
       compaction?: "active" | "complete";
       compactionId?: string;
+      systemEvent?: "info";
       label: string;
       icon?: keyof typeof toolIcons;
       metric?: string;
@@ -278,6 +281,13 @@ export type ChatItem =
       boundaryId?: string;
     }
   | { kind: "question"; key: string; questionId: string; startedAt: number };
+
+export type SystemEventItem = Extract<ChatItem, { kind: "notice" | "divider" }>;
+export type SystemEventGroup = {
+  kind: "system-event-group";
+  key: string;
+  events: SystemEventItem[];
+};
 
 export type ChatStreamSegment = {
   /** Input observed when live commentary first arrived; omitted for history replay. */

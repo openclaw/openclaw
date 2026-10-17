@@ -7,6 +7,7 @@ import "../../components/desktop/desktop-panel.ts";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { formatByteSize, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -150,7 +151,11 @@ export function SystemsPage(props: { controller: Systems; presented: boolean }) 
   const source = createMemo(() => props.controller);
   const isPresented = createMemo(() => props.presented);
   const projection = createMemo(() => projectOwner(source(), (value) => value));
-  const controller = () => projection().read();
+  const config = createMemo(() => projectRuntimeConfig(source().context.runtimeConfig));
+  const controller = () => {
+    config().revision();
+    return projection().read();
+  };
   // The systems owner starts and parks its Gateway polling with page visibility.
   createEffect(
     () => ({ controller: source(), presented: isPresented() }),

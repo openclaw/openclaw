@@ -171,7 +171,7 @@ export const restartSentinelOperations = {
     (db, input: { payload: RestartSentinelPayload; expectedRevision: number | null }) => {
       const current = readRestartSentinelSnapshotSync(db);
       return current.state.kind !== "invalid" && current.revision === input.expectedRevision
-        ? writeRestartSentinelRowSync(db, input.payload)
+        ? writeRestartSentinelRowSync(db, input.payload, current.revision)
         : null;
     },
   ),

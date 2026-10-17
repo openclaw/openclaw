@@ -2,10 +2,10 @@
 # Import specifiers and the helper owner test/helpers/promise.ts are excluded.
 # Ratchet: counts may only shrink. New wall-clock test deadlines are not allowed.
 # Format: repo-relative path, tab, positive count. Zero-count files are omitted.
-packages/agent-core/src/agent-loop.async-tools.test.ts	10
+packages/agent-core/src/agent-loop.async-tools.test.ts	1
 packages/ai/src/transports/openai-responses-client.continuation.test.ts	2
 packages/gateway-client/src/scope-upgrade.test.ts	2
-packages/memory-host-sdk/src/host/batch-upload.test.ts	6
+packages/memory-host-sdk/src/host/batch-upload.test.ts	3
 packages/memory-host-sdk/src/host/post-json.test.ts	3
 packages/memory-host-sdk/src/host/response-snippet.test.ts	6
 src/agents/agent-bundle-mcp-manager.pending-disposal.test.ts	1
@@ -78,7 +78,6 @@ src/gateway/test/server-sessions-resources.test-helpers.ts	1
 src/gateway/worker-environments/node-worker-workspace-publication.test.ts	2
 src/gateway/worker-environments/node-workspace-transfer-revocation.test.ts	3
 src/infra/approval-handler-runtime.test.ts	1
-src/infra/env.test.ts	2
 src/infra/http-body.response.test.ts	2
 src/infra/kysely-sync.test.ts	1
 src/infra/net/fetch-guard.ssrf.test.ts	2

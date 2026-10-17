@@ -37,7 +37,6 @@ function board(face: ResolvedBoardView["face"] = "dashboard") {
 }
 
 const containers: HTMLElement[] = [];
-const requestUpdate = vi.fn();
 
 function callbacks() {
   return {
@@ -106,7 +105,6 @@ function nativeCloseLayoutFixture() {
         narrow={false}
         panelDefinitions={panelDefinitions}
         primary={<main>Conversation</main>}
-        requestUpdate={() => undefined}
         regionError={undefined}
       />
     );
@@ -151,7 +149,6 @@ async function renderLayout(
                 <textarea />
               </main>
             }
-            requestUpdate={requestUpdate}
             regionError={undefined}
           />
         );

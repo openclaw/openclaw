@@ -23,7 +23,7 @@ import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
-import "../../../components/person-reference.ts";
+import "../../../components/solid/person-reference.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
 import { ChatPermissionCard } from "./chat-divider.tsx";
 import { ActivityOperation } from "./chat-message-activity-operation.tsx";

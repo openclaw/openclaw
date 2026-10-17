@@ -56,7 +56,7 @@ async function restoreSubagentCompletionSource(
   // A refused restoration must leave a restricted row, never a synthetic system caller.
   subagentRuns.requireCompletionAuthority(entry);
   if (
-    entry.execution.status === "terminal" &&
+    (entry.execution.status === "terminal" || !entry.operatorRecoverySource) &&
     !entry.requesterSettleWake &&
     (entry.suppressCompletionDelivery ||
       (entry.delivery?.status === "suspended" &&
@@ -111,14 +111,17 @@ async function restoreSubagentCompletionSource(
       }
     };
     assertCurrent();
-    if (!source && !entry.requesterSettleWake) {
-      // Individual completions have no requester cohort to settle this permanent failure.
-      // Keep failed writes and unfinished execution retryable through the existing sweep.
+    if (!source) {
+      // Legacy wakes and yields may have no recoverable requester cohort or final outcome.
+      // Close their unavailable continuation here; execution keeps its own recovery owner.
       deferredCompletionSources.add(runtimeKey);
       // Queue receipts and replaced-store notifications retain their settlement owners.
       if (
         entry.delivery?.queueId ||
-        (entry.expectsCompletionMessage === true &&
+        (entry.execution.status === "terminal" &&
+          entry.execution.outcome &&
+          entry.pauseReason !== "sessions_yield" &&
+          entry.expectsCompletionMessage === true &&
           ["pending", "in_progress"].includes(entry.delivery?.status ?? "") &&
           entry.delivery?.deliveredAt === undefined &&
           entry.delivery?.announcedAt === undefined &&
@@ -126,7 +129,7 @@ async function restoreSubagentCompletionSource(
       ) {
         return;
       }
-      if (entry.execution.status === "terminal" && entry.pauseReason !== "sessions_yield") {
+      if (entry.execution.status === "terminal" || entry.cleanupCompletedAt !== undefined) {
         const { blockSubagentCompletionDelivery } =
           await import("../completion/subagent-completion-admission.store.js");
         if (
@@ -140,6 +143,7 @@ async function restoreSubagentCompletionSource(
           })
         ) {
           deferredCompletionSources.delete(runtimeKey);
+          return;
         }
       }
     }
@@ -184,6 +188,8 @@ async function restoreSubagentCompletionSource(
     continuation = await withPluginRuntimeGatewayRequestScope(
       {
         client: createSyntheticPluginRuntimeClient({
+          // Retried private inputs retain the sender fields included in their accepted hash.
+          authenticatedUserProfile: restored.authenticatedUserProfile,
           operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
           operatorRunAuthority: restored.authority,
           scopes: [...restored.authority.scopes],

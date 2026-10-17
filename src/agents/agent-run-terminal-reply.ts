@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { stripInternalMetadataForDisplay } from "../auto-reply/reply/display-text-sanitize.js";
+import { stripMixedSilentReplyTokens } from "../auto-reply/reply/mixed-silent-reply-tokens.js";
 import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { normalizeAgentRunRouteChange } from "./agent-run-terminal-receipt.js";
 import type { AgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.types.js";
@@ -32,20 +33,22 @@ export type PreparedAgentRunTerminalReply = {
   terminalReply: AgentRunTerminalReplySnapshot;
 };
 
-/** Classifies raw final text, then removes one standalone edge control line before rendering. */
+/** Returns full prepared text, or undefined for an explicitly silent reply. */
+export function prepareAgentRunReplyText(rawText: string): string | undefined {
+  if (isSilentReplyText(rawText)) {
+    return undefined;
+  }
+  return stripMixedSilentReplyTokens(rawText) ?? rawText.replace(/[\r\n]\s*NO_REPLY\s*$/iu, "");
+}
+
 export function prepareAgentRunTerminalReply(params: {
   rawText?: string;
 }): PreparedAgentRunTerminalReply {
-  const rawText = params.rawText ?? "";
-  if (isSilentReplyText(rawText)) {
-    return { text: "", terminalReply: { disposition: "silent" } };
-  }
-  const text = rawText.startsWith("NO_REPLY\n")
-    ? rawText.slice("NO_REPLY\n".length)
-    : rawText.replace(/[\r\n]\s*NO_REPLY\s*$/u, "");
+  const text = prepareAgentRunReplyText(params.rawText ?? "");
   return {
-    text,
-    terminalReply: sanitizeAgentRunTerminalReply(text),
+    text: text ?? "",
+    terminalReply:
+      text === undefined ? { disposition: "silent" } : sanitizeAgentRunTerminalReply(text),
   };
 }
 

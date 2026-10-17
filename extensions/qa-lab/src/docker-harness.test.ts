@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
+import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import YAML from "yaml";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
@@ -178,18 +179,22 @@ describe("qa docker harness", () => {
 
   it("builds the reusable QA image with bundled QA extensions", async () => {
     const calls: string[] = [];
-    const result = await buildQaDockerHarnessImage(
-      {
+    const runExec = vi
+      .spyOn(processRuntime, "runExec")
+      .mockImplementation(async (command, args, options) => {
+        const cwd = typeof options === "number" ? undefined : options?.cwd;
+        calls.push([command, ...args, `@${cwd}`].join(" "));
+        return { stdout: "", stderr: "" };
+      });
+    let result: Awaited<ReturnType<typeof buildQaDockerHarnessImage>>;
+    try {
+      result = await buildQaDockerHarnessImage({
         repoRoot: "/repo/openclaw",
         imageName: "openclaw:qa-local-prebaked",
-      },
-      {
-        async runCommand(command, args, cwd) {
-          calls.push([command, ...args, `@${cwd}`].join(" "));
-          return { stdout: "", stderr: "" };
-        },
-      },
-    );
+      });
+    } finally {
+      runExec.mockRestore();
+    }
 
     expect(result.imageName).toBe("openclaw:qa-local-prebaked");
     expect(calls).toEqual([

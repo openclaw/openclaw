@@ -27,6 +27,15 @@ const mocks = vi.hoisted(() => ({
   resolveStatusUsageSummary: vi.fn(),
 }));
 
+// mock-isolation: Keep store discovery out of these runtime composition tests.
+vi.mock("./status-database-engines.js", () => ({
+  resolveStatusDatabaseEngines: async () => ({
+    source: "unavailable",
+    stores: [],
+    reason: "Physical store inspection unavailable in fixture.",
+  }),
+}));
+
 // mock-isolation: Keep config I/O out of this fixture while exercising the real snapshot owner.
 vi.mock("../config/config.js", async () => ({
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,

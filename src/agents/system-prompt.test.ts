@@ -141,6 +141,25 @@ describe("buildAgentSystemPrompt", () => {
       ["## Documentation", "Docs: /tmp/openclaw/docs", "Source: /tmp/openclaw"],
     ],
     [
+      "acknowledges unavailable docs retrieval in a sandbox without web tools",
+      { toolNames: ["read"], sandboxInfo: { enabled: true } },
+      [
+        "Docs: https://docs.openclaw.ai",
+        "docs could not be checked; mark recalled behavior as unverified",
+      ],
+      ["docs mirror first when web exists", "inspect GitHub source"],
+    ],
+    [
+      "keeps mirror guidance when a sandbox can discover a web tool",
+      {
+        toolNames: ["read"],
+        capabilityToolNames: ["web_fetch"],
+        sandboxInfo: { enabled: true },
+      },
+      ["Docs: https://docs.openclaw.ai", "docs mirror first when web exists"],
+      ["mark recalled behavior as unverified"],
+    ],
+    [
       "uses limited bootstrap wording for constrained user-facing runs",
       { bootstrapMode: "limited" },
       ["## Bootstrap Pending", "cannot safely finish full BOOTSTRAP.md"],

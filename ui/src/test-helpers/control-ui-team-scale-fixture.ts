@@ -20,6 +20,7 @@ import {
   prepareTeamScaleSidebarListChurn,
   type TeamScaleLiveEvent,
 } from "./control-ui-sidebar-list-fixture.ts";
+import { createTeamScaleHistoryFixture } from "./control-ui-team-scale-history-fixture.ts";
 import {
   createTeamScalePeople,
   TEAM_SCALE_SELF_INSTANCE_ID,
@@ -67,6 +68,7 @@ type FixtureOptions = {
   sessionEventChurn?: boolean;
   duplicateBootReads?: boolean;
   closedMenuMembers?: boolean;
+  largeSnapshot?: boolean;
 };
 
 function widgetHtml(index: number) {
@@ -78,7 +80,10 @@ function widgetHtml(index: number) {
 
 /** One deterministic inventory shared by browser benchmarks and focused UI proofs. */
 export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
-  const counts = TEAM_SCALE_COUNTS;
+  const counts = {
+    ...TEAM_SCALE_COUNTS,
+    transcriptMessages: options.largeSnapshot ? 1_100 : TEAM_SCALE_COUNTS.transcriptMessages,
+  };
   const now = options.now ?? Date.now();
   const baseUrl = options.baseUrl ?? "http://127.0.0.1:19626/";
   const agentNames = ["Harbor", "Forge", "Scout", "Atlas", "Cedar", "Beacon"];
@@ -215,35 +220,23 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       label: person.name,
     })),
   });
-  const messageIds = Array.from(
-    { length: counts.transcriptMessages },
-    (_, index) => `team-message-${index + 1}`,
-  );
-  const historyMessages = messageIds.map((id, index) => ({
-    role: index % 2 ? "assistant" : "user",
-    __openclaw: { id, seq: index + 1 },
-    timestamp: now - (counts.transcriptMessages - index) * 60_000,
-    content: [
-      ...(duplicateReads && index === counts.transcriptMessages - 1
-        ? duplicateReads.attachments
-        : []),
-      {
-        type: "text",
-        text: [
-          `### Project checkpoint ${index + 1}`,
-          "Review the synthetic work queue, confirm the dependency order, and record the owner of the next action. The fixture contains no real conversations or account data.",
-          index % 2
-            ? "The current implementation is ready for verification. Coverage includes the normal path, a recoverable failure, and the final user-visible result."
-            : "Please check the current progress and keep the existing layout stable while the remaining results arrive.",
-          ...(index % 20 === 19
-            ? [
-                `[embed ref="team-scale-chart-${Math.floor(index / 20) + 1}" title="Team metric ${Math.floor(index / 20) + 1}" height="220" /]`,
-              ]
-            : []),
-        ].join("\n\n"),
-      },
-    ],
-  }));
+  const { messageIds, historyMessages } = createTeamScaleHistoryFixture({
+    messageCount: counts.transcriptMessages,
+    inlineWidgets: counts.inlineWidgets,
+    now,
+    largeSnapshot: options.largeSnapshot,
+    attachments: duplicateReads?.attachments,
+  });
+  const largeHistory = options.largeSnapshot
+    ? {
+        messages: historyMessages,
+        sessionId: pinnedRows[0]!.sessionId,
+        sessionInfo: pinnedRows[0]!,
+        hasMore: false,
+        totalMessages: counts.transcriptMessages,
+        metadata: { models: [] },
+      }
+    : undefined;
   const catalogs: SessionCatalog[] = ["codex", "claude"].map((id, catalogIndex) => ({
     id,
     label: id === "codex" ? "Codex" : "Claude Code",
@@ -413,6 +406,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         ? { "session.members.listEvidence": { sessionKey: selectedSessionKey, ...sharingMembers } }
         : {}),
       "question.list": { questions: [] },
+      ...(largeHistory ? { "chat.startup": largeHistory, "chat.history": largeHistory } : {}),
       ...duplicateReads?.methodResponses,
       "agents.list": agents,
       "agent.identity.get": {

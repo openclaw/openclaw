@@ -50,7 +50,7 @@ describe("transcript run identity", () => {
     const transcript = createTestTranscript();
     onTestFinished(() => {
       view.unmount();
-      transcript.hostDisconnected();
+      transcript.dispose();
       container.remove();
     });
     const view = mountSolid(
@@ -79,8 +79,8 @@ describe("transcript run identity", () => {
       { container },
     );
     flush();
-    transcript.hostConnected();
-    transcript.hostUpdated();
+    transcript.start();
+    transcript.update();
     flush();
 
     expect(build).toHaveBeenCalledWith(expect.objectContaining({ runId: null }));

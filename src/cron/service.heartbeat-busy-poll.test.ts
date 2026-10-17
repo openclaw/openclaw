@@ -6,6 +6,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
+import { createReplyOperation, replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
 import {
@@ -541,7 +542,7 @@ describe("native heartbeat busy poll settlement", () => {
       async ({
         cron,
         monitor,
-        deps,
+        sessionKey,
         reply,
         runOnce,
         request,
@@ -549,21 +550,32 @@ describe("native heartbeat busy poll settlement", () => {
         finished,
         holdLane,
       }) => {
-        // The wake-stage check is clear; the second check is in preparation after
-        // delivery resolution. This is the actual late admission boundary.
-        deps.isReplyRunActive = vi
-          .fn()
-          .mockReturnValueOnce(false)
-          .mockReturnValueOnce(true)
-          .mockReturnValue(false);
+        // Register real isolated work after the base-session fence; preparation
+        // must observe it after delivery resolution and retain this occurrence.
+        const isActive = replyRunRegistry.isActive.bind(replyRunRegistry);
+        let lateRun: ReturnType<typeof createReplyOperation> | undefined;
+        const activeReply = vi.spyOn(replyRunRegistry, "isActive").mockImplementationOnce((key) => {
+          const active = isActive(key);
+          lateRun = createReplyOperation({
+            sessionKey: `${sessionKey}:heartbeat`,
+            sessionId: "late-isolated-reply",
+            resetTriggered: false,
+          });
+          lateRun.setPhase("running");
+          return active;
+        });
         const parent = cron.run(monitor.id, "force");
-        await waitForRequest(1);
-        expect(request).toHaveBeenCalledOnce();
-        await vi.advanceTimersByTimeAsync(250);
-        await runOnce.mock.results[0]?.value;
-        expect(deps.isReplyRunActive).toHaveBeenCalledTimes(2);
-        expect(finished()).toHaveLength(0);
-        expect(reply).not.toHaveBeenCalled();
+        try {
+          await waitForRequest(1);
+          expect(request).toHaveBeenCalledOnce();
+          await vi.advanceTimersByTimeAsync(250);
+          await runOnce.mock.results[0]?.value;
+          expect(activeReply).toHaveBeenCalledTimes(2);
+          expect(finished()).toHaveLength(0);
+          expect(reply).not.toHaveBeenCalled();
+        } finally {
+          lateRun?.complete();
+        }
         const releaseMain = await holdLane(CommandLane.Main);
         await vi.advanceTimersByTimeAsync(60_000);
         expect(runOnce).toHaveBeenCalledTimes(2);

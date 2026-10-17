@@ -190,6 +190,23 @@ describe("Browser panel stream ownership", () => {
     expect(calls("/screenshot")).toHaveLength(2);
   });
 
+  it("sizes the first stream from the viewport before any resize notification", async () => {
+    const { controller, host, calls } = setup();
+    const viewport = document.createElement("div");
+    Object.defineProperties(viewport, {
+      clientWidth: { value: 620 },
+      clientHeight: { value: 940 },
+    });
+    host.renderRoot.append(viewport);
+    controller.input.elements.viewport = viewport;
+
+    await start(controller);
+
+    expect(calls("/screencast")[0]?.[1]).toMatchObject({
+      body: { maxWidth: 620, maxHeight: 940 },
+    });
+  });
+
   it("defers a resize restart until inspect ends", async () => {
     const { controller, host, calls } = setup();
     let width = 500;

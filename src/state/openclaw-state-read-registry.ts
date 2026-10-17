@@ -27,7 +27,6 @@ export function readStateRegistryCommand(
         | "workerEnvironments.pruneCandidates"
         | "agentDeletionJournal.status"
         | "worktrees.cleanupState"
-        | "worktrees.list"
         | "sandboxRegistry.list"
         | "sandboxRegistry.get"
         | "sandboxRegistry.runtimeIds"
@@ -76,12 +75,9 @@ export function readStateRegistryCommand(
   if (command.type === "sandboxRegistry.browsers") {
     return { type: command.type, entries: readSandboxBrowserRegistryInDatabase(db) };
   }
-  if (command.type === "worktrees.cleanupState") {
-    return {
-      type: command.type,
-      records: listRegistryWorktreesInDatabase(db),
-      leases: readWorktreeRunLeaseStateInDatabase(db),
-    };
-  }
-  return { type: command.type, records: listRegistryWorktreesInDatabase(db) };
+  return {
+    type: command.type,
+    records: listRegistryWorktreesInDatabase(db),
+    leases: readWorktreeRunLeaseStateInDatabase(db),
+  };
 }

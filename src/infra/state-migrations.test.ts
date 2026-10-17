@@ -796,7 +796,7 @@ describe("state migrations", () => {
             .get("historical-transcript-directives-v1"),
         ).toEqual(
           doctorOnlyStateMigrations
-            ? { agent_id: "main", app_version: JSON.stringify({ phase: "complete" }) }
+            ? { agent_id: "main", app_version: JSON.stringify({ phase: "complete", version: 2 }) }
             : undefined,
         );
         expect(
@@ -2411,6 +2411,7 @@ describe("state migrations", () => {
     const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
     expect(detected.preview.filter((line) => line.startsWith("- Shared SQLite schema:"))).toEqual([
       "- Shared SQLite schema: subagent recovery → original operator authority required",
+      "- Shared SQLite schema: replay, skill usage, and lease writes → smaller index maintenance",
       "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
       "- Shared SQLite schema: tables → SQLite STRICT typing",
     ]);

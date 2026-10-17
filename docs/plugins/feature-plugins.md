@@ -360,7 +360,7 @@ authority and mutation guards with their existing owners.
 ### Packaged Settings presentations
 
 A bundled presentation can render a host-owned Settings placement without
-activating the plugin's runtime UI. Memory Core uses this for the Memory overview,
+activating the plugin's runtime UI. Memory Core uses this for the Memory overview and indexed-search panel,
 including when memory is off, another engine is selected, or the Gateway is offline.
 Declare the placement alongside the built entry:
 
@@ -369,7 +369,10 @@ Declare the placement alongside the built entry:
   "controlUi": {
     "entry": "dist/control-ui/<content-hash>/index.js",
     "activation": "settings-only",
-    "settingsViews": [{ "section": "memory", "panel": "overview" }]
+    "settingsViews": [
+      { "section": "memory", "panel": "overview" },
+      { "section": "memory", "panel": "memories" }
+    ]
   }
 }
 ```
@@ -377,16 +380,18 @@ Declare the placement alongside the built entry:
 The browser module exports `pluginId` and a `settingsViews` array of
 `ControlUiSettingsView` from `openclaw/plugin-sdk/control-ui`. Each view declares
 its `placement` and a `mount(container, context)` that returns `update(snapshot)`
-and `dispose()`. The current supported placement is the Memory overview; this
+and `dispose()`. The supported placements are the Memory overview and Memories panel; this
 contract does not register arbitrary Settings routes.
 
 The host supplies the selected Settings agent, engine availability, connection
-state, locale, shared Settings components, and bounded navigation. Authenticated
+state, advertised Gateway methods, locale, shared Settings components, and bounded navigation. Authenticated
 operator RPC remains trusted native UI authority, bound to the mounted view's
-lifetime. Retained callbacks reject after that lifetime ends. The host keeps
+lifetime. Retained callbacks reject after that lifetime ends, including when the advertised
+method catalog changes. An absent method catalog means the method is unavailable. The host keeps
 routing, agent selection, engine decisions, and config writes; the plugin owns
-its presentation and status requests. Only an explicit user action probes
-embedding readiness.
+its presentation, status requests, and indexed-memory search. Search and full-file
+reads remain agent-scoped through the existing Gateway methods. Only an explicit
+user action searches memory or probes embedding readiness.
 
 The normal plugin builder preserves this declaration. The Control UI build
 loads it from the completed bundled distribution with the same package identity,

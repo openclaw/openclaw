@@ -91,18 +91,6 @@ export function hasVisibleAgentPayload(
   );
 }
 
-/** Honors recorded visibility before deriving it from the payload's visible content. */
-export function hasExplicitlyVisibleAgentPayload(payload: unknown): boolean {
-  const visible = asOptionalRecord(payload)?.visible;
-  if (typeof visible === "boolean") {
-    return visible;
-  }
-  return hasVisibleAgentPayload(
-    { payloads: [payload] },
-    { includeErrorPayloads: false, includeReasoningPayloads: false },
-  );
-}
-
 export function getTranscriptMessageRole(message: unknown): string | undefined {
   const role = asOptionalObjectRecord(message)?.role;
   return typeof role === "string" ? role : undefined;

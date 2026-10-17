@@ -30,6 +30,9 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resetPluginBlobStoreForTests } from "./plugin-blob-store.js";
 import {
   createPluginStateKeyedStore,
+  createPluginStateKeyedStoreV2,
+  createPluginStateRuntimeStores,
+  createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
 } from "./plugin-state-store.js";
 
@@ -450,6 +453,38 @@ describe("plugin-state-store.runtime", () => {
   });
 
   describe("plugin runtime state proxy", () => {
+    it("warns once per legacy factory and leaves V2 factories silent", async () => {
+      await withOpenClawTestState({ label: "plugin-state-factory-warning" }, async () => {
+        const pluginId = "sdk-state-factory-warning";
+        const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+        try {
+          const runtime = createPluginStateRuntimeStores(pluginId, () => {});
+          createPluginStateKeyedStoreV2(pluginId, keyedOptions, { assertCurrent() {} });
+          runtime.openKeyedStoreV2(keyedOptions);
+          expect(warning).not.toHaveBeenCalled();
+          createPluginStateSyncKeyedStore(pluginId, keyedOptions);
+          createPluginStateSyncKeyedStore(pluginId, keyedOptions);
+          runtime.openSyncKeyedStore(keyedOptions);
+          runtime.openSyncKeyedStore(keyedOptions);
+          expect(warning).toHaveBeenCalledTimes(2);
+          for (const [method, replacement] of [
+            ["createPluginStateSyncKeyedStore", "createPluginStateKeyedStoreV2"],
+            ["api.runtime.state.openSyncKeyedStore", "api.runtime.state.openKeyedStoreV2"],
+          ]) {
+            expect(warning).toHaveBeenCalledWith(
+              expect.stringContaining(`${method} is deprecated; use ${replacement}`),
+              { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+            );
+          }
+          for (const [message] of warning.mock.calls) {
+            expect(message).toContain("first January 2027 stable release");
+          }
+        } finally {
+          warning.mockRestore();
+        }
+      });
+    });
+
     it("binds keyed stores to local plugin ids and keeps resolveStateDir", async () => {
       await withOpenClawTestState({ label: "plugin-state-runtime" }, async (state) => {
         const record = createPluginRecord("discord", "config");

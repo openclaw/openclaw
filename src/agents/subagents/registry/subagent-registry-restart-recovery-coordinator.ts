@@ -4,6 +4,7 @@ import {
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { SubagentRegistryMutationRejectedError } from "./subagent-registry-persistence.js";
@@ -37,6 +38,30 @@ export function createInterruptedRecoveryCoordinator(params: {
   };
   const attempts = new Map<string, Attempt>();
   let warnedRetainedOwners = new WeakSet<object>();
+  let stopObservingRunOwners: (() => void) | undefined;
+  const retryRetainedOwner = (runId: string, attempt: Attempt) => {
+    if (attempts.get(runId) === attempt) {
+      attempts.delete(runId);
+      params.schedule(1_000);
+    }
+  };
+  const observeRetainedRunOwners = () => {
+    stopObservingRunOwners ??= sessionChanges.subscribe((change) => {
+      if ("all" in change ? change.scope !== "agent-runs" : change.scope !== "runtime") {
+        return;
+      }
+      const entries =
+        "sessionKey" in change
+          ? params.getRunsForChildSession(change.sessionKey, change.agentId)
+          : params.runs.values();
+      for (const entry of entries) {
+        const attempt = attempts.get(entry.runId);
+        if (attempt?.retained && !attempt.retained.isCurrent()) {
+          retryRetainedOwner(entry.runId, attempt);
+        }
+      }
+    });
+  };
   const recoveryFacts = (entry: SubagentRunRecord) => [
     getSubagentRunRuntimeKey(entry),
     entry.execution.status,
@@ -76,6 +101,8 @@ export function createInterruptedRecoveryCoordinator(params: {
       }
     },
     reset() {
+      stopObservingRunOwners?.();
+      stopObservingRunOwners = undefined;
       attempts.clear();
       warnedRetainedOwners = new WeakSet();
     },
@@ -152,11 +179,13 @@ export function createInterruptedRecoveryCoordinator(params: {
         if (result.status === "handled" && result.retained) {
           const attempt = { delayMs: 0, retained: result.retained };
           attempts.set(entry.runId, attempt);
+          // Admission can release before the run context finishes its cleanup.
+          observeRetainedRunOwners();
+          if (!result.retained.isCurrent()) {
+            retryRetainedOwner(entry.runId, attempt);
+          }
           void result.retained.released?.then(() => {
-            if (attempts.get(entry.runId) === attempt) {
-              attempts.delete(entry.runId);
-              params.schedule(1_000);
-            }
+            retryRetainedOwner(entry.runId, attempt);
           });
         }
         return result.status === "handled";

@@ -76,7 +76,7 @@ import { hasMissingInstalledPluginOwnerMetadata } from "./installed-plugin-packa
 import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "./plugin-lifecycle-lease-identity.js";
 import {
   withPluginLifecycleLease,
-  type PluginLifecycleLeaseContext,
+  type PluginMetadataLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
@@ -292,11 +292,9 @@ export function writePersistedInstalledPluginIndexToSqlite(
         }
       }
       lease.assertOwnedInTransaction(db);
+      const previous = previousRow ? parseInstalledPluginIndex(previousRow.index) : null;
       if (preserveAdmissions) {
-        preservePluginSourceAdmissions(
-          previousRow ? parseInstalledPluginIndex(previousRow.index) : null,
-          persisted,
-        );
+        preservePluginSourceAdmissions(previous, persisted);
       }
       const revision = resolveNextInstalledPluginIndexRevision(
         previousRow ? previousRow.revision : null,
@@ -304,7 +302,7 @@ export function writePersistedInstalledPluginIndexToSqlite(
       const after = writePersistedInstalledPluginIndexRow(db, persisted, revision);
       lease.assertOwnedInTransaction(db, "commit");
       return {
-        previous: previousRow ? parseInstalledPluginIndex(previousRow.index) : null,
+        previous,
         revision,
         mutation: { databasePath, before: before ?? null, after },
       };
@@ -363,7 +361,6 @@ export async function writePersistedInstalledPluginIndex(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<string> {
   assertWritableInstalledPluginIndexStoreOptions(options);
-  const prepared = structuredClone(index);
   const captured = {
     ...options,
     env: cloneEnvWithPlatformSemantics(options.env ?? process.env),
@@ -375,7 +372,7 @@ export async function writePersistedInstalledPluginIndex(
       await runInstalledPluginIndexWrite(captured, lease, (scope, identity) =>
         scope.execute({
           type: "plugins.metadata.index.write",
-          input: { identity, index: prepared },
+          input: { identity, index },
         }),
       );
       return captured.filePath;
@@ -388,7 +385,7 @@ export async function restorePersistedInstalledPluginIndexIfCurrent(
   index: InstalledPluginIndex | null,
   expectedRevision: number,
   options: InstalledPluginIndexStoreOptions & {
-    lease: PluginLifecycleLeaseContext;
+    lease: PluginMetadataLeaseContext;
   },
 ): Promise<boolean> {
   const { lease, ...storeOptions } = options;
@@ -396,11 +393,10 @@ export async function restorePersistedInstalledPluginIndexIfCurrent(
   if (!existsSync(resolveInstalledPluginIndexStorePath(storeOptions))) {
     return false;
   }
-  const prepared = index && structuredClone(index);
   return runInstalledPluginIndexWrite(storeOptions, lease, (scope, identity) =>
     scope.execute({
       type: "plugins.metadata.index.restore",
-      input: { identity, index: prepared, expectedRevision },
+      input: { identity, index, expectedRevision },
     }),
   );
 }
@@ -445,7 +441,7 @@ export function restorePersistedInstalledPluginIndexInDatabase(
 
 async function runInstalledPluginIndexWrite<T>(
   options: InstalledPluginIndexStoreOptions,
-  lease: PluginLifecycleLeaseContext,
+  lease: PluginMetadataLeaseContext,
   operation: (
     scope: Pick<SqliteWorkerStore<InstalledPluginIndexWriteOperations>, "execute">,
     identity: OpenClawStateLeaseIdentity,
@@ -602,7 +598,7 @@ function resolveRefreshedPersistedInstalledPluginIndex(
 export async function refreshPersistedInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams &
     InstalledPluginIndexStoreOptions & {
-      lease?: PluginLifecycleLeaseContext;
+      lease?: PluginMetadataLeaseContext;
     },
 ): Promise<InstalledPluginIndex> {
   return (await refreshPersistedInstalledPluginIndexWithReceipt(params)).index;
@@ -611,7 +607,7 @@ export async function refreshPersistedInstalledPluginIndex(
 export async function refreshPersistedInstalledPluginIndexWithReceipt(
   params: RefreshInstalledPluginIndexParams &
     InstalledPluginIndexStoreOptions & {
-      lease?: PluginLifecycleLeaseContext;
+      lease?: PluginMetadataLeaseContext;
       assertCurrent?: () => void;
       onAcknowledged?: (receipt: InstalledPluginIndexWriteReceipt) => void;
     },
@@ -629,7 +625,7 @@ export async function refreshPersistedInstalledPluginIndexWithReceipt(
       installOwner: resolvePluginCandidateInstallOwner(candidate),
       ambiguous: isPluginCandidateInstallOwnerAmbiguous(candidate),
     }));
-  const prepared: PreparedInstalledPluginIndexRefresh = structuredClone({
+  const prepared: PreparedInstalledPluginIndexRefresh = {
     config: params.config,
     workspaceDir: params.workspaceDir,
     stateDir: params.stateDir,
@@ -649,8 +645,8 @@ export async function refreshPersistedInstalledPluginIndexWithReceipt(
     env: { ...env },
     installRoots: resolveActivePluginInstallRoots(env),
     ...(now ? { nowMs: now().getTime() } : {}),
-  });
-  const refresh = async (lease: PluginLifecycleLeaseContext) => {
+  };
+  const refresh = async (lease: PluginMetadataLeaseContext) => {
     const receipt = await runInstalledPluginIndexWrite(
       storeOptions,
       lease,

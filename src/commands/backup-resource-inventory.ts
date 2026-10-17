@@ -230,11 +230,7 @@ function createBackupPathPolicy({
   BackupResourcePlan,
   "stateDir" | "agentRoots" | "regenerableRoots" | "protectedPaths" | "excludedPaths"
 >): BackupResourcePolicy {
-  const isIncluded = (sourcePath: string): boolean => {
-    const candidate = path.resolve(sourcePath);
-    if (isUpdateCapturePath(candidate, stateDir)) {
-      return false;
-    }
+  const isIncludedByOwner = (candidate: string): boolean => {
     const exclusion = excludedPaths.find((excludedPath) => isPathInside(excludedPath, candidate));
     if (!exclusion) {
       return true;
@@ -246,13 +242,18 @@ function createBackupPathPolicy({
         isPathInside(protectedPath, candidate) && isPathInside(exclusion, protectedPath),
     );
   };
+  const isIncluded = (sourcePath: string): boolean => {
+    const candidate = path.resolve(sourcePath);
+    return !isUpdateCapturePath(candidate, stateDir) && isIncludedByOwner(candidate);
+  };
   const isTraversable = (sourcePath: string): boolean => {
     const candidate = path.resolve(sourcePath);
     if (isUpdateCapturePath(candidate, stateDir)) {
       return false;
     }
     return (
-      isIncluded(candidate) ||
+      // Privacy was checked for this entry; protected descendants cannot override it.
+      isIncludedByOwner(candidate) ||
       protectedPaths.some((protectedPath) => isPathInside(candidate, protectedPath))
     );
   };

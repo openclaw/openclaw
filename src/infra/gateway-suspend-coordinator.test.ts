@@ -13,7 +13,6 @@ import {
   getGatewaySuspendAdmissionPhase,
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
-  onGatewaySuspendAdmissionChange,
   resetGatewayWorkAdmission,
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
@@ -300,103 +299,10 @@ describe("gateway suspend coordinator", () => {
     ).toMatchObject({ status: "ready", activeCount: 0, blockers: [] });
   });
 
-  it("keeps admission closed until a failed busy rollback resumes scheduling", () => {
-    vi.useFakeTimers();
-    try {
-      const resumeScheduling = vi
-        .fn()
-        .mockImplementationOnce(() => {
-          throw new Error("timer unavailable");
-        })
-        .mockImplementationOnce(() => {});
-      const first = prepareGatewaySuspend({
-        requestId: "request-busy-resume-retry",
-        pauseScheduling: vi.fn(),
-        resumeScheduling,
-        inspect: inspectors({ getQueueSize: () => 1 }),
-      });
-
-      expect(first).toEqual({
-        status: "recovering",
-        reason: "scheduler-resume-failed",
-        retryAfterMs: 1_000,
-      });
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-      expect(getGatewaySuspendStatus("stale-id")).toEqual(first);
-      expect(resumeGatewaySuspend("stale-id")).toEqual({
-        ok: false,
-        reason: "scheduler-resume-failed",
-        retryAfterMs: 1_000,
-      });
-      expect(
-        prepareGatewaySuspend({
-          requestId: "request-before-scheduler-resume",
-          pauseScheduling: vi.fn(),
-          resumeScheduling,
-          inspect: inspectors(),
-        }),
-      ).toEqual(first);
-
-      vi.advanceTimersByTime(1_000);
-      expect(resumeScheduling).toHaveBeenCalledTimes(2);
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-      expect(getGatewaySuspendStatus("stale-id")).toEqual({ status: "running" });
-
-      expect(
-        prepareGatewaySuspend({
-          requestId: "request-after-scheduler-resume",
-          pauseScheduling: vi.fn(),
-          resumeScheduling,
-          inspect: inspectors(),
-          createSuspensionId: () => "suspension-after-scheduler-resume",
-        }),
-      ).toMatchObject({
-        status: "ready",
-        suspensionId: "suspension-after-scheduler-resume",
-      });
-      vi.advanceTimersByTime(1_000);
-      expect(resumeScheduling).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("cancels scheduler recovery when restart supersedes suspension", () => {
-    vi.useFakeTimers();
-    try {
-      const resumeScheduling = vi.fn(() => {
-        throw new Error("timer unavailable");
-      });
-      expect(
-        prepareGatewaySuspend({
-          requestId: "request-recovery-restart",
-          pauseScheduling: vi.fn(),
-          resumeScheduling,
-          inspect: inspectors({ getQueueSize: () => 1 }),
-        }),
-      ).toMatchObject({ status: "recovering" });
-
-      markGatewayRestartDraining();
-      vi.advanceTimersByTime(1_000);
-
-      expect(resumeScheduling).toHaveBeenCalledOnce();
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-      expect(getGatewaySuspendStatus("stale-id")).toEqual({ status: "running" });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("owns recovery when inspection fails before admission commits", () => {
-    vi.useFakeTimers();
-    try {
-      const resumeScheduling = vi
-        .fn()
-        .mockImplementationOnce(() => {
-          throw new Error("timer unavailable");
-        })
-        .mockImplementationOnce(() => {});
-      const result = prepareGatewaySuspend({
+  it("reopens admission when inspection fails before admission commits", () => {
+    const resumeScheduling = vi.fn();
+    expect(() =>
+      prepareGatewaySuspend({
         requestId: "request-inspection-failure",
         pauseScheduling: vi.fn(),
         resumeScheduling,
@@ -405,16 +311,10 @@ describe("gateway suspend coordinator", () => {
             throw new Error("inspection failed");
           },
         }),
-      });
-
-      expect(result).toMatchObject({ status: "recovering" });
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-      vi.advanceTimersByTime(1_000);
-      expect(resumeScheduling).toHaveBeenCalledTimes(2);
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
+      }),
+    ).toThrow("inspection failed");
+    expect(resumeScheduling).toHaveBeenCalledOnce();
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
   });
 
   it("renews one ready lease and resumes only with the matching id", () => {
@@ -468,57 +368,6 @@ describe("gateway suspend coordinator", () => {
     expect(resumeScheduling).toHaveBeenCalledOnce();
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
   });
-
-  it.each([false, true])(
-    "exposes scheduler recovery after a held lease cannot resume (drain: %s)",
-    (drain) => {
-      vi.useFakeTimers();
-      try {
-        const resumeScheduling = vi
-          .fn()
-          .mockImplementationOnce(() => {
-            throw new Error("timer unavailable");
-          })
-          .mockImplementationOnce(() => {});
-        prepareGatewaySuspend({
-          requestId: "request-resume-retry",
-          drain,
-          pauseScheduling: vi.fn(),
-          resumeScheduling,
-          inspect: inspectors({ getQueueSize: () => Number(drain) }),
-          createSuspensionId: () => "suspension-resume-retry",
-        });
-
-        expect(resumeGatewaySuspend("suspension-resume-retry")).toMatchObject({
-          ok: false,
-          reason: "scheduler-resume-failed",
-        });
-        expect(isGatewayWorkAdmissionClosed()).toBe(true);
-        expect(getGatewaySuspendStatus("suspension-resume-retry")).toMatchObject({
-          status: "recovering",
-        });
-        expect(
-          prepareGatewaySuspend({
-            requestId: "request-resume-retry",
-            pauseScheduling: vi.fn(),
-            resumeScheduling,
-            inspect: inspectors(),
-          }),
-        ).toMatchObject({ status: "recovering" });
-        expect(resumeGatewaySuspend("suspension-resume-retry")).toMatchObject({
-          ok: false,
-          reason: "scheduler-resume-failed",
-        });
-
-        vi.advanceTimersByTime(1_000);
-        expect(resumeScheduling).toHaveBeenCalledTimes(2);
-        expect(getGatewaySuspendStatus("suspension-resume-retry")).toEqual({ status: "running" });
-        expect(isGatewayWorkAdmissionClosed()).toBe(false);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
 
   it.each(
     [false, true].flatMap((drain) =>
@@ -650,43 +499,4 @@ describe("gateway suspend coordinator", () => {
       }
     },
   );
-
-  it("enters recovery when lease expiry cannot resume the scheduler", () => {
-    vi.useFakeTimers();
-    const phases: string[] = [];
-    const unsubscribe = onGatewaySuspendAdmissionChange((phase) => phases.push(phase));
-    try {
-      const resumeScheduling = vi
-        .fn()
-        .mockImplementationOnce(() => {
-          throw new Error("timer unavailable");
-        })
-        .mockImplementationOnce(() => {});
-      prepareGatewaySuspend({
-        requestId: "request-expiry-recovery",
-        pauseScheduling: vi.fn(),
-        resumeScheduling,
-        inspect: inspectors(),
-        createSuspensionId: () => "suspension-expiry-recovery",
-      });
-
-      vi.advanceTimersByTime(SUSPEND_TTL_MS);
-      expect(getGatewaySuspendStatus("suspension-expiry-recovery")).toMatchObject({
-        status: "recovering",
-      });
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-      expect(phases).toEqual(["preparing", "prepared"]);
-
-      vi.advanceTimersByTime(1_000);
-      expect(resumeScheduling).toHaveBeenCalledTimes(2);
-      expect(getGatewaySuspendStatus("suspension-expiry-recovery")).toEqual({
-        status: "running",
-      });
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-      expect(phases).toEqual(["preparing", "prepared", "accepting"]);
-    } finally {
-      unsubscribe();
-      vi.useRealTimers();
-    }
-  });
 });

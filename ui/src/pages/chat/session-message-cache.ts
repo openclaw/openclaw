@@ -7,6 +7,7 @@ import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
@@ -22,25 +23,6 @@ export const MAX_CACHED_CHAT_WEIGHT = 24 * 1024 * 1024;
 // objects, so serialization weight can follow the same immutable identity.
 const cachedMessageWeights = new WeakMap<object, number>();
 const appendedEventClaims = new WeakMap<ChatMessageCache, WeakSet<object>>();
-
-export const CHAT_TRANSCRIPT_METADATA_KEYS = [
-  "key",
-  "kind",
-  "label",
-  "displayName",
-  "derivedTitle",
-  "classification",
-  "participants",
-  "expandedParticipants",
-  "owner",
-  "lastRunId",
-  "status",
-  "runtimeMs",
-] as const;
-export type ChatTranscriptMetadata = Pick<
-  GatewaySessionRow,
-  (typeof CHAT_TRANSCRIPT_METADATA_KEYS)[number]
->;
 
 const transcriptMetadata = new WeakMap<GatewaySessionRow, ChatTranscriptMetadata>();
 

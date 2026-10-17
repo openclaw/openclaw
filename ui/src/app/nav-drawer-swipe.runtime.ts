@@ -13,8 +13,9 @@ type Swipe = {
   lockedHorizontal: boolean;
 };
 
-export type NavDrawerHost = Pick<HTMLElement, "querySelector" | "isConnected"> & {
+export type NavDrawerHost = Pick<HTMLElement, "isConnected"> & {
   readonly element: HTMLElement;
+  readonly navDrawerElement?: HTMLElement;
   readonly onboardingMode: boolean;
   readonly navDrawerOpen: boolean;
 };
@@ -56,8 +57,7 @@ export class NavDrawerSwipeOwner {
   }
 
   private openAfterSwipe(deltaX: number): void {
-    const width =
-      this.host.querySelector<HTMLElement>(".shell-nav")?.getBoundingClientRect().width ?? 0;
+    const width = this.host.navDrawerElement?.getBoundingClientRect().width ?? 0;
     if (deltaX >= Math.max(MIN_OPEN_DISTANCE_PX, width * OPEN_RATIO)) {
       // Commit once intent is clear; a held gesture must not leave clipped
       // navigation text and a non-interactive scrim sitting over the chat.

@@ -1,5 +1,6 @@
 import { UI_APPEARANCE_TYPEFACE_VALUES } from "../../../packages/gateway-protocol/src/schema/ui-appearance-typefaces.ts";
 import { isBuiltinThemeId } from "../../../packages/gateway-protocol/src/theme-ids.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { inferControlUiPublicAssetPath } from "./public-assets.ts";
 import type { ThemeName } from "./theme.ts";
 
@@ -89,7 +90,7 @@ export function loadTypefaceStylesheet(face: TypefaceId): HTMLLinkElement | unde
   link.id = id;
   link.rel = "stylesheet";
   link.href = inferControlUiPublicAssetPath(asset);
-  link.addEventListener("error", () => link.remove(), { once: true });
+  listen(link, "error", () => link.remove(), { once: true });
   document.head.append(link);
   return link;
 }

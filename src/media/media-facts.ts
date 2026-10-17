@@ -359,7 +359,7 @@ function normalizeMediaFact<TInput extends MediaFactInput>(
     url: normalizeOptionalString(input.url),
     contentType,
     kind:
-      input.kind ??
+      (typeof input.kind === "string" ? input.kind : undefined) ??
       defaults.kind ??
       (isGenericBinaryMediaContentType(contentType) ? undefined : kindFromMime(contentType)),
     fileName: normalizeOptionalString(input.fileName),

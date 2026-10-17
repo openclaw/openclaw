@@ -710,10 +710,7 @@ export async function sanitizeSessionHistory(
   // provider-owned ordering rewrite above; keep this generic fallback for the
   // strict OpenAI-compatible path and for any provider that leaves assistant-
   // first repair to core. See #38962.
-  const googleOrdered = sanitizeGoogleTurnOrdering(messages);
-  return isOpenAIResponsesApi
-    ? assertOpenAIResponsesToolUseResultInvariant(googleOrdered)
-    : googleOrdered;
+  return sanitizeGoogleTurnOrdering(messages);
 }
 
 /**

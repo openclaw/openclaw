@@ -62,7 +62,6 @@ import {
   runExclusiveSqliteSessionReclamation,
   resolveSessionReclamationDatabaseOptions,
 } from "./session-accessor.sqlite-reclamation.js";
-import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   captureLifecycleDatabaseScope,
   withPreparedSqliteScope,
@@ -324,13 +323,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
       : undefined;
   try {
     return await withSqliteTranscriptArchiveSession(databaseOptions, async () => {
-      if (reclamationOptions && !metadataTarget) {
-        await prepareSessionEntryReplacementDatabase(
-          reclamationOptions,
-          assertSourceCurrent,
-          execution,
-        );
-      }
       const {
         commitGuard: _commitGuard,
         env: _env,
@@ -527,8 +519,15 @@ async function deleteSqliteSessionEntryLifecycleLocked(
             const onWorkerResult = (_result: unknown, databaseIdentity: string | symbol) => {
               committedDatabaseIdentity = databaseIdentity;
             };
+            // Empty state needs no reclamation connection; the writer still validates its snapshots.
             const reclaimed =
-              metadataTarget && execution
+              execution &&
+              materializedPlans.every(
+                ({ snapshot }) =>
+                  snapshot.lastSeq === null &&
+                  snapshot.trajectoryLastSeq === null &&
+                  snapshot.acpParentStreamEventCount === 0,
+              )
                 ? await deleteSessionEntryInWorker(
                     reclamationPlan,
                     execution,

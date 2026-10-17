@@ -140,7 +140,7 @@ describe("channel ingress monitor", () => {
   it("prunes zero-interval retention once before a multi-event batch", async () => {
     await withQueue(async (queue) => {
       const prune = vi.spyOn(queue, "prune");
-      const enqueue = vi.spyOn(queue, "enqueue");
+      const enqueue = vi.spyOn(queue, "enqueueBatch");
       const monitor = createMonitor(queue, vi.fn(), {
         inspect: (raw) =>
           raw.id === "ignored" ? null : { eventId: raw.id, laneKey: `lane:${raw.lane}` },
@@ -155,11 +155,43 @@ describe("channel ingress monitor", () => {
       ]);
 
       expect(prune).toHaveBeenCalledOnce();
-      expect(enqueue).toHaveBeenCalledTimes(3);
+      expect(enqueue).toHaveBeenCalledOnce();
+      expect((await queue.listPending()).map((row) => row.id)).toEqual([
+        "event-batch-1",
+        "event-batch-2",
+        "event-batch-3",
+      ]);
       expect(Math.max(...prune.mock.invocationCallOrder)).toBeLessThan(
         Math.min(...enqueue.mock.invocationCallOrder),
       );
       await monitor.stop();
+    });
+  });
+
+  it("recovers the entire committed batch after an acknowledgment fails", async () => {
+    await withQueue(async (queue) => {
+      const monitor = createMonitor(queue, vi.fn(), {
+        onDurableAdmission: () => {
+          throw new Error("lost acknowledgment");
+        },
+      });
+      await expect(
+        monitor.admitBatch([
+          { id: "first", lane: "a", text: "one" },
+          { id: "second", lane: "a", text: "two" },
+        ]),
+      ).rejects.toThrow("lost acknowledgment");
+      await monitor.stop();
+
+      const delivered: string[] = [];
+      const restarted = createMonitor(queue, (raw) => {
+        delivered.push(raw.id);
+      });
+      restarted.start();
+      await restarted.waitForIdle();
+      await restarted.stop();
+      expect(delivered).toEqual(["first", "second"]);
+      expect(await queue.listPending()).toEqual([]);
     });
   });
 

@@ -104,7 +104,6 @@ async function showHeaderMenu(page: Page, input: "pointer" | "keyboard" = "point
   }
   await surface.waitFor({ state: "visible" });
   await expect.poll(() => surface.getAttribute("data-phase")).toBe("open");
-  await menu.locator(".board-widget__page-menu-heading").waitFor();
   return menu;
 }
 
@@ -190,7 +189,9 @@ suite.define(() => {
         await updateBoard(gateway, multiple);
         await expect.poll(() => page.locator(".board-widget").count()).toBe(2);
         await widget.locator(".board-widget__menu-trigger").waitFor({ state: "attached" });
+        await showHeaderMenu(page);
         expect(await page.locator(menuSelector + ' [value^="board-widget:"]').count()).toBe(0);
+        await page.keyboard.press("Escape");
         expect(await frame.evaluate((element, previous) => element === previous, original)).toBe(
           true,
         );
@@ -223,7 +224,9 @@ suite.define(() => {
           ops: [{ kind: "widget_remove", name: "research-widget" }],
         });
         await page.locator('[data-test-id="board-empty"]').waitFor();
+        await showHeaderMenu(page);
         expect(await page.locator(menuSelector + ' [value^="board-widget:"]').count()).toBe(0);
+        await page.keyboard.press("Escape");
         await page.getByRole("tab", { name: "Overview", exact: true }).click();
         await frame.waitFor();
         expect(await frame.evaluate((element, previous) => element === previous, original)).toBe(

@@ -218,7 +218,7 @@ export async function handleEmbeddedPromptFailure(input: {
       result: promptFailoverReason === "timeout" ? "timeout" : decision,
       ...(reason ? { reason } : {}),
       stage: "prompt",
-      ...(typeof status === "number" ? { status } : {}),
+      ...(status !== undefined ? { status } : {}),
     });
     logFailoverDecision(decision, {
       ...(decision === "fallback_model" ? { status } : {}),
@@ -356,7 +356,7 @@ function resolveBlockedPromptResult(
       return undefined;
     }
     const maxMb = imageSizeError.maxMb;
-    const maxMbLabel = typeof maxMb === "number" && Number.isFinite(maxMb) ? `${maxMb}` : null;
+    const maxMbLabel = Number.isFinite(maxMb) ? `${maxMb}` : null;
     const maxBytesHint = maxMbLabel ? ` (max ${maxMbLabel}MB)` : "";
     text =
       `Image too large for the model${maxBytesHint}. ` +

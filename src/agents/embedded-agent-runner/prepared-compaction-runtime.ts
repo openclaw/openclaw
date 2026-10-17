@@ -473,6 +473,7 @@ export async function buildPreparedCompactionRuntime(
       surface: promptSurface,
     });
     const openClawReferences = await resolveOpenClawReferencePaths({
+      sandbox,
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
       cwd: effectiveCwd,

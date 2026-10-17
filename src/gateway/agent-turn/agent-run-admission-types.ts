@@ -1,3 +1,4 @@
+import type { ActiveMediaModel } from "../../../packages/media-understanding-common/src/active-model.js";
 import type {
   AdmittedRunOperatorAuthority,
   OperationalRunInstanceRef,
@@ -33,6 +34,7 @@ export type PreparedAgentRunModelRuntime =
     };
 
 export type PreparedAgentRunDispatch = PreparedAgentRunModelRuntime & {
+  imageUnderstandingModel?: ActiveMediaModel;
   activeGatewayWorkAdmission: SessionWorkAdmissionLease;
   activeRunAbort: ReturnType<typeof registerChatAbortController>;
   cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
@@ -70,6 +72,7 @@ export type PrepareAgentRunDispatchParams = Omit<
   | "resolvedThreadId"
   | "freshChildStorePath"
 > & {
+  needsImageUnderstanding?: boolean;
   /** Consumed host-bound child creation facts, never a wire-request option. */
   freshChild?: boolean;
   assertAdmissionCurrent?: () => void;

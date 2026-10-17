@@ -208,6 +208,10 @@ function readRootFileUtf8(
         warn?.(
           `Ignoring oversized hook metadata ${params.absolutePath}: file exceeds the ${params.maxBytes}-byte limit`,
         );
+      } else {
+        warn?.(
+          `Failed to read hook metadata ${params.absolutePath}; check file permissions and disk health.`,
+        );
       }
       return null;
     }

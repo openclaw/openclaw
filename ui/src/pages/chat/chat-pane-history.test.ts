@@ -617,6 +617,58 @@ it("prepends a strictly older page and exhausts", async () => {
   expect(request).toHaveBeenCalledExactlyOnceWith("chat.history", olderRequest(state.sessionKey));
 });
 
+it("replaces cached source groups during a zero-offset refill without losing live rows", async () => {
+  const cached = nativeHistoryMessage(3);
+  const changed = {
+    ...cached,
+    __openclaw: {
+      ...cached["__openclaw"],
+      senderProfileAvatarUrl: "/api/users/synthetic/avatar?v=2",
+    },
+  };
+  const sibling = {
+    ...changed,
+    content: [{ type: "text", text: "Second projection from the same source" }],
+  };
+  const unchanged = nativeHistoryMessage(4);
+  const live = nativeHistoryMessage(5);
+  const request = vi.fn(async () => ({
+    ...historyPage(undefined, { sessionId: "session-current" }),
+    messages: [nativeHistoryMessage(2), changed, sibling, { ...unchanged }],
+  }));
+  const { pane, state } = historyPane(request);
+  state.currentSessionId = "session-current";
+  state.chatMessages = [cached, unchanged];
+  reduceChatSessionProjection(state, { type: "messagePersisted", message: live });
+  state.chatHistoryPagination = pagination(4, 0);
+
+  await pane.loadOlderMessages();
+
+  expect(state.chatMessages).toEqual([nativeHistoryMessage(2), changed, sibling, unchanged, live]);
+  expect(state.chatMessages[3]).toBe(unchanged);
+  expect(state.chatMessages[4]).toBe(live);
+  expect(request).toHaveBeenCalledExactlyOnceWith(
+    "chat.history",
+    olderRequest(state.sessionKey, 0),
+  );
+});
+
+it("replaces a byte-limited cached tail before loading the next older page", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce({ ...historyPage([4, 5]), ...pagination(5, 2) })
+    .mockResolvedValueOnce(historyPage([1, 2, 3], { totalMessages: 5 }));
+  const { pane, state } = historyPane(request);
+  state.chatMessages = historyPage([2, 3, 4, 5]).messages;
+  state.chatHistoryPagination = pagination(5, 0);
+
+  await pane.loadOlderMessages();
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([4, 5]);
+  await pane.loadOlderMessages();
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4, 5]);
+  expect(state.chatHistoryPagination).toEqual(pagination(5));
+});
+
 it("refreshes the tail instead of mixing an older page from a replacement session", async () => {
   const extra = { totalMessages: 2, sessionInfo: { sessionId: "session-new" } };
   const request = vi

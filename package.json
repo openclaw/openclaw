@@ -9,8 +9,8 @@
     ],
     "postgresFamilies": ["state", "agent", "workboard", "logbook", "team-reports"],
     "schemaVersions": {
-      "state": 26,
-      "agent": 28
+      "state": 27,
+      "agent": 29
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -470,7 +470,10 @@
     "!dist/plugin-sdk/memory-host-search.d.ts",
     "!dist/plugin-sdk/codex-client-version-runtime.d.ts",
     "!dist/plugin-sdk/realtime-transcription-provider.d.ts",
-    "!dist/plugin-sdk/meeting-config.d.ts"
+    "!dist/plugin-sdk/meeting-config.d.ts",
+    "!dist/plugin-sdk/collection-input-runtime.d.ts",
+    "!dist/plugin-sdk/http-response-runtime.d.ts",
+    "!dist/plugin-sdk/node-crypto-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -479,6 +482,9 @@
     "./plugin-sdk/core": {
       "types": "./dist/plugin-sdk/core.d.ts",
       "default": "./dist/plugin-sdk/core.js"
+    },
+    "./plugin-sdk/collection-input-runtime": {
+      "default": "./dist/plugin-sdk/collection-input-runtime.js"
     },
     "./plugin-sdk/code-mode-executor-runtime": {
       "types": "./dist/plugin-sdk/code-mode-executor-runtime.d.ts",
@@ -717,11 +723,17 @@
     "./plugin-sdk/file-access-runtime": {
       "default": "./dist/plugin-sdk/file-access-runtime.js"
     },
+    "./plugin-sdk/node-crypto-runtime": {
+      "default": "./dist/plugin-sdk/node-crypto-runtime.js"
+    },
     "./plugin-sdk/node-selection-runtime": {
       "default": "./dist/plugin-sdk/node-selection-runtime.js"
     },
     "./plugin-sdk/heartbeat-runtime": {
       "default": "./dist/plugin-sdk/heartbeat-runtime.js"
+    },
+    "./plugin-sdk/http-response-runtime": {
+      "default": "./dist/plugin-sdk/http-response-runtime.js"
     },
     "./plugin-sdk/expect-runtime": {
       "default": "./dist/plugin-sdk/expect-runtime.js"
@@ -2258,6 +2270,8 @@
     "ui:solid:inventory": "node --import ./scripts/tsx.mjs scripts/control-ui-solid-inventory.mts",
     "ui:build": "node scripts/ui.js build",
     "ui:parity": "node --import ./scripts/tsx.mjs scripts/control-ui-parity/index.mts",
+    "ui:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-control-ui-validators.mts",
+    "ui:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-control-ui-validators.mts --check",
     "ui:check-performance": "node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts",
     "ui:check-performance:base": "node --import ./scripts/tsx.mjs scripts/check-control-ui-performance-base.mts",
     "ui:dev": "node scripts/ui.js dev",
@@ -2304,13 +2318,17 @@
     "@grammyjs/transformer-throttler": "1.2.1",
     "@homebridge/ciao": "1.3.12",
     "@lydell/node-pty": "1.2.0-beta.15",
-    "@mistralai/mistralai": "2.7.0",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/core": "2.3.1",
+    "@modelcontextprotocol/node": "2.1.1",
     "@modelcontextprotocol/sdk": "1.32.1",
+    "@modelcontextprotocol/server": "2.3.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.26.6",
+    "@openclaw/fs-safe": "0.26.7",
     "@openclaw/proc-safe": "0.3.0",
     "@openclaw/proxyline": "0.4.0",
+    "@opentelemetry/semantic-conventions": "1.43.0",
     "@resvg/resvg-js": "2.6.2",
     "@silvia-odwyer/photon-node": "0.3.4",
     "@trycua/cua-driver": "0.34.0",
@@ -2345,6 +2363,7 @@
     "openai": "7.31.0",
     "p-limit": "7.3.3",
     "p-map": "7.0.8",
+    "parse5": "8.0.1",
     "partial-json": "0.1.7",
     "pg": "8.23.1",
     "playwright-core": "1.64.0",
@@ -2359,7 +2378,8 @@
     "web-tree-sitter": "0.27.1",
     "ws": "8.22.0",
     "yaml": "2.9.1",
-    "zod": "4.6.5"
+    "zod": "4.6.5",
+    "zod-to-json-schema": "3.25.2"
   },
   "devDependencies": {
     "@a2ui/lit": "0.12.0",
@@ -2367,6 +2387,7 @@
     "@babel/types": "8.0.6",
     "@copilotkit/aimock": "1.44.0",
     "@mdx-js/mdx": "3.1.1",
+    "@mistralai/mistralai": "2.7.0",
     "@openclaw/crabline": "0.1.29",
     "@openclaw/session-url-contract": "workspace:*",
     "@opentelemetry/sdk-node": "0.223.0",

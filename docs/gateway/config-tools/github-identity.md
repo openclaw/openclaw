@@ -102,11 +102,27 @@ The default sandbox tool policy also allows `github_publish` for publication-eli
 
 Publication may wait until the requesting turn finishes and its workspace is accepted. Its result is appended to the session transcript; this does not start another agent turn. When the authorized task also includes review, CI repair, or landing, the agent must arrange a separate continuation before ending the requesting turn. A draft PR or publication receipt does not complete a landing request.
 
+Use `github_publish` with `action: "edit"` to change the current session's shared
+PR title or description without publishing source. Call it without `title`/`body`
+to read the current metadata, then send `requestId`, `expectedHeadCommit`, and only
+the fields to change, each paired with its observed `expectedTitle`/`expectedBody`.
+Keep the attribution, publication marker and footer unchanged in the full body.
+Omitted fields stay unchanged. Guests can edit their own session's PR; no child or
+arbitrary PR selector is accepted. Edit never synchronizes, stages, commits or
+pushes workspace files, and never changes PR lifecycle state. Closed PRs are read-only.
+An unsuccessful later source publication does not hide the existing PR from edit.
+
+Stale observed values are rejected. This is not atomic GitHub compare-and-swap:
+external edits can race the PATCH. After a lost response, the Gateway rereads the
+same PR; already-applied values need no second write. Read with `edit` before
+retrying uncertainty. Omitted action or `publish` still publishes workspace source;
+its title/body are creation-only and do not edit an existing PR.
+
 A person with full operator write access can request landing in the same conversation, including a guest-created sandboxed session. The agent uses `github_publish` with `action: "inspect"` to read the session's completed shared publication and its current GitHub state. After review and required checks, `action: "ready"` marks its draft ready and `action: "merge"` merges it. To close the PR without merging, use `action: "close"` after inspection. All three writes require the inspected `requestId` and `expectedHeadCommit`; merge also requires an explicit `mergeMethod` (`merge`, `squash`, or `rebase`). GitHub still enforces repository permissions and merge requirements. These operations do not enable auto-merge or delete the branch, workspace, or conversation.
 
 For delegated work, the agent must explicitly select the child's `publishingSessionKey`. An authorized person's managed parent conversation receives these PR actions even when its own workspace is ineligible for publication; publishing from that parent remains unavailable. The Gateway verifies that the publishing session belongs to this conversation and binds the operation to its recorded PR. A changed publication or GitHub head requires another inspection and review. If an action's response is interrupted, inspect the same publication before retrying; already-ready, already-merged, or already-closed requests return their observed state without another write. Closing preserves the branch, workspace, and conversation history; it does not reopen a closed PR. Failed checks or unavailable credentials leave the saved work intact.
 
-Only a current full-write person's tool schema and instructions expose these PR actions. Guest turns retain the draft-publication schema, including after admin participation in the conversation. Each action also rechecks the initiating person's current authority at the Gateway. Admin participation does not elevate the session or later guest requests, and guest publication remains draft-only. The Gateway keeps the publisher credentials and executes only the requested operation; the agent remains responsible for review, testing, and sequencing the landing request.
+Only a current full-write person's tool schema and instructions expose the privileged inspection and lifecycle actions. Guest turns retain draft publication and current-PR metadata editing, including after admin participation in the conversation. Each action also rechecks the initiating person's current authority at the Gateway. Admin participation does not elevate the session or later guest requests, and guest publication remains draft-only. The Gateway keeps the publisher credentials and executes only the requested operation; the agent remains responsible for review, testing, and sequencing the landing request.
 
 The Gateway prepares publication availability and the shared identity in the background at startup and when GitHub configuration, credentials, or a session workspace binding changes. Automatic prewarming from resident session rows skips sessions without a repository workspace or managed worktree; adding a binding enables preparation, and removing it retires the previous discovery fact. Ordinary messages and internal continuations read the last published result synchronously; they never wait for GitHub discovery. Until the first result is ready, or if publication is unavailable, `github_identity_status` remains available to explain identity setup or reconnection needs, subject to the session's tool policy. Standalone local runs and runs with tools disabled do not expose these managed publication tools.
 

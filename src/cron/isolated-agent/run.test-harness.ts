@@ -11,6 +11,7 @@ import { runInitialModelFallbackAttempt } from "../../agents/test-helpers/model-
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type * as CronHelpers from "./helpers.js";
@@ -40,7 +41,6 @@ type CronSession = {
 type SessionAccessorModule = typeof import("../../config/sessions/session-accessor.js");
 
 let actualReplaceSessionEntry: SessionAccessorModule["replaceSessionEntry"];
-let actualLoadSessionEntry: SessionAccessorModule["loadSessionEntry"];
 
 function normalizeModelSelectionForTest(value: unknown): string | undefined {
   const direct = normalizeOptionalString(value);
@@ -360,8 +360,6 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<SessionAccessorModule>(
     "../../config/sessions/session-accessor.js",
   );
-  actualReplaceSessionEntry = actual.replaceSessionEntry;
-  actualLoadSessionEntry = actual.loadSessionEntry;
   return {
     ...actual,
     replaceSessionEntry: replaceSessionEntryMock,
@@ -372,6 +370,7 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
 vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../config/sessions/session-accessor.sqlite-entry.js")>();
+  actualReplaceSessionEntry = actual.replaceSessionEntry;
   const { projectSessionEntryPatch } =
     await import("../../config/sessions/session-entry-patch-operation.js");
   return {
@@ -814,7 +813,7 @@ function installPatchSessionEntryStore(): void {
       const existingEntry =
         rows.get(key) ??
         (usesRealAccessorStore(scope.storePath)
-          ? actualLoadSessionEntry(scope as never)
+          ? await readSessionEntryReadOnlyInWorker(scope)
           : loadSessionEntryMock(scope.storePath, scope.sessionKey));
       const writeBase = existingEntry ?? options.fallbackEntry;
       if (!writeBase) {

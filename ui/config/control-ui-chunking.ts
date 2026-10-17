@@ -56,6 +56,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/pages/chat/route-entry.ts":
+      // Pending New Session previews must render while the Chat route entry waits.
+      return "chat-route-entry";
     case "ui/src/pages/devices/devices-page.tsx":
       return "devices-page";
     case "ui/src/pages/plugins/plugins-page.tsx":
@@ -64,7 +67,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "cron-page";
     case "packages/gateway-protocol/src/capability-consent-error-details.ts":
     case "packages/gateway-protocol/src/install-policy-warning-error-details.ts":
-    case "packages/gateway-protocol/src/schema/plugin-install-progress.ts":
     case "packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts":
       // Shared protocol readers must not pull the lazy Plugins page into chat.
       return "plugin-contracts-runtime";
@@ -104,16 +106,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "chat-transcript-styles";
   }
 
-  if (
-    moduleIdIncludesPackage(id, "highlight.js") ||
-    moduleIdIncludesPackage(id, "markdown-it") ||
-    moduleIdIncludesPackage(id, "dompurify") ||
-    moduleIdIncludesPackage(id, "entities") ||
-    moduleIdIncludesPackage(id, "linkify-it") ||
-    moduleIdIncludesPackage(id, "mdurl") ||
-    moduleIdIncludesPackage(id, "punycode.js") ||
-    moduleIdIncludesPackage(id, "uc.micro")
-  ) {
+  // Code highlighting is requested by the first completed code block; it must
+  // not share the parser/sanitizer chunk used by ordinary transcript prose.
+  if (moduleIdIncludesPackage(id, "highlight.js")) {
+    return "markdown-highlight-runtime";
+  }
+  if (moduleIdIncludesPackage(id, "dompurify")) {
     return "markdown-runtime";
   }
 
@@ -121,7 +119,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "config-runtime";
   }
   if (moduleIdIncludesPackage(id, "json5")) {
-    // Zod validates boot snapshots; JSON5 loads only when a config consumer warms it.
+    // Config parsing loads only when a config consumer warms it.
     return "json5-runtime";
   }
 

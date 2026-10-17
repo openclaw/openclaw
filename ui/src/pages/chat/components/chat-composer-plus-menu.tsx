@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createUniqueId, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createUniqueId, onSettled, Show, untrack } from "solid-js";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import {
@@ -331,16 +331,16 @@ function toolItems(menu: ChatComposerPlusMenuContentProps, serverName: string): 
 }
 
 function handleMenuSelection(
-  item: MenuItem,
+  { id: value }: MenuItem,
   event: CustomEvent<MenuItem>,
-  surface: HTMLElement,
-  pickerAnchor: HTMLElement | undefined,
-  props: ChatComposerPlusMenuContentProps,
+  overlay: MenuHandle["overlay"],
+  ownerProps: { menu: ChatComposerPlusMenuContentProps },
 ) {
-  const value = item.id;
+  const props = ownerProps.menu;
+  const { surface, trigger } = overlay;
   if (
     uploadsEnabled(props.attachments.uploadConfig) &&
-    handleChatAttachmentMenuSelection(surface, value, pickerAnchor)
+    handleChatAttachmentMenuSelection(surface, value, trigger)
   ) {
     return;
   }
@@ -353,10 +353,19 @@ function handleMenuSelection(
     return;
   }
   const changeView = (view: ChatComposerPlusMenuView) => {
+    const focused = surface.ownerDocument.activeElement;
     props.onViewChange(view);
-    requestAnimationFrame(() =>
-      surface.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')?.focus(),
-    );
+    onSettled(() => {
+      const active = surface.ownerDocument.activeElement;
+      // A controlled close can settle before Menu applies it; newer focus also wins.
+      if (
+        overlay.open &&
+        ownerProps.menu.open &&
+        (active === focused || (active === surface.ownerDocument.body && !focused?.isConnected))
+      ) {
+        surface.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])')?.focus();
+      }
+    });
   };
   const toggleCapability = (
     group: "skills" | "mcpServers",
@@ -473,7 +482,7 @@ function handleMenuSelection(
 }
 
 function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
-  let handle: MenuHandle | undefined;
+  let handle!: MenuHandle;
   let host!: HTMLDivElement;
   const id = createUniqueId();
   const view = createMemo(() => (props.menu.showCapabilities ? props.menu.view : "root"));
@@ -526,17 +535,7 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
           ref={(next) => {
             handle = next;
           }}
-          onSelect={(item, event) => {
-            if (handle) {
-              handleMenuSelection(
-                item,
-                event,
-                handle.overlay.surface,
-                handle.overlay.trigger,
-                props.menu,
-              );
-            }
-          }}
+          onSelect={(item, event) => handleMenuSelection(item, event, handle.overlay, props)}
           onNavigate={({ value }) =>
             props.menu.onNavigate(value === "manage-skills" ? "skills" : "plugins")
           }

@@ -2,7 +2,7 @@ import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 import { vi } from "vitest";
 import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
-import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
+import { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import { prepareToolResult } from "./embedded-agent-tool-results.js";
 
 export type ToolExecutionEndEvent = Omit<
@@ -45,7 +45,7 @@ export function createTestContext() {
       info: vi.fn(),
       warn,
     },
-    state: createEmbeddedAgentSubscribeState({}),
+    state: new EmbeddedAgentSubscribeState({}),
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
     emitToolSummary: vi.fn(),

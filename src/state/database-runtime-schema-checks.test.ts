@@ -15,7 +15,6 @@ import {
   openClawStateDatabaseCache,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
@@ -139,29 +138,15 @@ it("keeps admitted reads free of schema checks and freshness probes", () => {
   );
 });
 
-it.each(["revocation", "schema-change"] as const)(
-  "invalidates cached admission after %s",
-  (cause) => {
-    const scope = { env: { OPENCLAW_STATE_DIR: sessionDirs.make() } };
-    const database = openOpenClawStateDatabase(scope);
-    const cached = () => openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path);
-    expect(cached()).toBe(database);
-    if (cause === "schema-change") {
-      database.db.exec(`BEGIN; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
-      expect(cached()).toBe(database);
-      database.db.exec("ROLLBACK");
-      expect(cached()).toBe(database);
-      database.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
-      expect(cached).toThrow(/uses newer schema version/);
-      return;
-    }
-    const failure = new Error("synthetic revoked state admission");
-    recordOpenClawStateDatabaseOpenFailure(database.path, failure);
-    trace.execute.mockClear();
-    expect(cached).toThrow(failure);
-    expect(() => withExistingOpenClawStateDatabaseReadOnly(() => undefined, scope)).toThrow(
-      failure,
-    );
-    expect(trace.execute).not.toHaveBeenCalled();
-  },
-);
+it("invalidates cached admission after terminal revocation", () => {
+  const scope = { env: { OPENCLAW_STATE_DIR: sessionDirs.make() } };
+  const database = openOpenClawStateDatabase(scope);
+  const cached = () => openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path);
+  expect(cached()).toBe(database);
+  const failure = new Error("synthetic revoked state admission");
+  recordOpenClawStateDatabaseOpenFailure(database.path, failure);
+  trace.execute.mockClear();
+  expect(cached).toThrow(failure);
+  expect(() => withExistingOpenClawStateDatabaseReadOnly(() => undefined, scope)).toThrow(failure);
+  expect(trace.execute).not.toHaveBeenCalled();
+});

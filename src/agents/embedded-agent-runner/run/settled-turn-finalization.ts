@@ -87,7 +87,6 @@ async function prepareSettledTurnFinalization(
     };
   };
   const delivery = await observeSourceDelivery();
-  const { replyDeliveryState } = delivery;
   const prepared = prepareEmbeddedRunTerminal({
     ...input,
     ...delivery,
@@ -103,7 +102,9 @@ async function prepareSettledTurnFinalization(
       prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout,
     hasTerminalToolPresentation: options.hasTerminalToolPresentation,
     terminalState: input.terminalState,
-    replyDeliveryState,
+    // Terminal preparation reconciles committed tool delivery with the observer.
+    // An absent observer must not generate another answer after a confirmed send.
+    replyDeliveryState: prepared.replyDeliveryState,
     settledTurnFinalizationAvailable:
       !input.runParams.providerReviewAcknowledgment &&
       typeof options.harness.finalizeSettledTurn === "function",

@@ -14,7 +14,24 @@ import {
 } from "./keyboard-shortcut-contract.ts";
 
 describe("keyboard shortcut catalog matching", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  it.each([false, true])("shows the New Session chord for native=%s", (native) => {
+    vi.stubGlobal("__OPENCLAW_NATIVE_WEB_CHROME__", native);
+    for (const preference of ["enter", "modifier-enter"] as const) {
+      const entry = resolveKeyboardShortcutSections(preference)
+        .flatMap((section) => section.entries)
+        .find((candidate) => candidate.id === "newSession")!;
+      expect(entry.combos.map((combo) => formatKeyboardShortcutCombo(combo, true))).toEqual([
+        native ? "⌘N" : "⌘⇧O",
+      ]);
+      expect(entry.combos.map((combo) => formatKeyboardShortcutCombo(combo, false))).toEqual([
+        native ? "Ctrl+N" : "Ctrl+Shift+O",
+      ]);
+    }
+  });
   it.each(["MacIntel", "Win32", "Linux x86_64"])(
     "matches direct session shortcuts exactly on %s without taking New Window",
     (platform) => {

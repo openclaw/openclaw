@@ -37,6 +37,7 @@ import {
   readResidentUserProfileIdentity,
   prepareUserProfileCatalog,
 } from "./user-profile-list.js";
+import { prepareCurrentUserProfileAliases } from "./user-profile-reads.js";
 import {
   linkCanonicalUserProfileEmail,
   mergeCanonicalUserProfiles,
@@ -101,8 +102,10 @@ it.each(["email binding", "stale role reply"] as const)(
               await setCanonicalUserProfileRole(source.id, "member", options);
               const reply = await execute(...args);
               expect(reply).toMatchObject({
-                type: "userProfiles.authority.resolve",
-                profile: { profileId: source.id, role: "member" },
+                type: "userProfiles.catalog",
+                profiles: expect.arrayContaining([
+                  [source.id, expect.objectContaining({ role: "member" })],
+                ]),
               });
               await setCanonicalUserProfileRole(source.id, "admin", options);
               return reply;
@@ -167,8 +170,14 @@ it("serves profile authority from committed catalog facts without another worker
   const catalog = await prepareUserProfileCatalog(options);
   const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   try {
-    const original = await prepareUserProfileRoleAuthority(source.id, options);
+    const original = await prepareUserProfileRoleAuthority(source.id, {
+      ...options,
+      includeProfile: true,
+    });
     expect(original).toMatchObject({ profileId: source.id, role: "admin" });
+    expect(original?.listItem?.emails).toEqual(["source@example.test"]);
+    const aliases = await prepareCurrentUserProfileAliases(source.id, options);
+    expect(aliases.aliases).toEqual(new Set([source.id]));
     expect(original?.isCurrent()).toBe(true);
     expect(reads).not.toHaveBeenCalled();
 
@@ -187,14 +196,22 @@ it("serves profile authority from committed catalog facts without another worker
 
     await mergeCanonicalUserProfiles(source.id, target.id, options);
     expect(current?.isCurrent()).toBe(false);
+    expect(() => aliases.assertCurrent()).toThrow();
     reads.mockClear();
-    const merged = await prepareUserProfileRoleAuthority(source.id, options);
+    const merged = await prepareUserProfileRoleAuthority(source.id, {
+      ...options,
+      includeProfile: true,
+    });
     expect(merged).toMatchObject({
       profileId: target.id,
       aliases: [target.id, source.id],
       display: { id: target.id },
     });
     expect(merged?.isCurrent()).toBe(true);
+    expect(merged?.listItem?.emails).toEqual(["source@example.test", "target@example.test"]);
+    expect((await prepareCurrentUserProfileAliases(source.id, options)).aliases).toEqual(
+      new Set([target.id, source.id]),
+    );
     expect(reads).not.toHaveBeenCalled();
   } finally {
     reads.mockRestore();

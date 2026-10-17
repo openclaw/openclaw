@@ -465,9 +465,9 @@ describe("chat pane embedded panels", () => {
       function renderAttachment() {
         setCurrent({ ...chat });
         flush();
-        controller.hostUpdated();
+        controller.update();
       }
-      controller.hostConnected();
+      controller.start();
       try {
         renderAttachment();
         const open = await vi.waitFor(() => {
@@ -489,7 +489,6 @@ describe("chat pane embedded panels", () => {
               chat,
               content,
               host: state,
-              requestUpdate: vi.fn(),
             }),
           { container: mount, wrapper: application.wrapper },
         );
@@ -526,7 +525,7 @@ describe("chat pane embedded panels", () => {
         }
       } finally {
         view.unmount();
-        controller.hostDisconnected();
+        controller.dispose();
         mount.remove();
         releaseChatMediaResourceSubscriber(renderAttachment);
         resetTranscriptTestDom();

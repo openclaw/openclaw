@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { OpenClawPluginApi, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   PluginStateCompareIntent,
@@ -250,6 +251,52 @@ export const isCrabboxWarmImageHeld = (
       (choice.kind === "checkpoint" && choice.checkpointId === checkpointId) ||
       imageGeneration?.checkpointId === checkpointId,
   );
+
+export function assertCrabboxWarmImagePreparation(
+  preparation:
+    | { key: string; cacheKey: string; purpose: "session" | "reserve"; demandAtMs: number }
+    | undefined,
+  allocation: { projectKey?: string; target: CrabboxOperatingSystem },
+): void {
+  if (
+    preparation &&
+    (!allocation.projectKey ||
+      allocation.target !== "linux" ||
+      !/^[a-f0-9]{64}$/u.test(preparation.key) ||
+      !/^[a-f0-9]{64}$/u.test(preparation.cacheKey) ||
+      (preparation.purpose !== "session" && preparation.purpose !== "reserve") ||
+      !Number.isSafeInteger(preparation.demandAtMs) ||
+      preparation.demandAtMs < 0)
+  ) {
+    throw new Error("Crabbox project preparation identity is invalid.");
+  }
+}
+
+/** A provision retry keeps the profile, project, and runtime identity its lease first recorded. */
+export function assertCrabboxWarmImageReplay(
+  replay: WarmAllocationRecord & { key: string },
+  request: Pick<
+    WarmAllocationRecord,
+    "machineClass" | "preparationKey" | "cacheKey" | "purpose" | "runtimeIdentity"
+  > & { key: string; os: CrabboxOperatingSystem; demandAtMs?: number },
+): void {
+  if (
+    replay.key !== request.key ||
+    replay.machineClass !== request.machineClass ||
+    (replay.os ?? "linux") !== request.os ||
+    replay.preparationKey !== request.preparationKey ||
+    replay.cacheKey !== request.cacheKey ||
+    replay.purpose !== request.purpose ||
+    (request.demandAtMs !== undefined && replay.demandAtMs !== request.demandAtMs)
+  ) {
+    throw new Error("Crabbox provision retry changed its recorded profile or project identity.");
+  }
+  if (!isDeepStrictEqual(replay.runtimeIdentity, request.runtimeIdentity)) {
+    throw new Error(
+      "Crabbox provision retry changed or lacks its recorded node runtime identity; stop the worker before reprovisioning",
+    );
+  }
+}
 
 type WarmProfileDisplayFacts = Pick<
   WarmProfileRecord,

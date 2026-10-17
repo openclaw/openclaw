@@ -217,6 +217,8 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
     return roots;
   }
 
+  // Full retained-root Doctor scans add ~85s on Node before backup, restore, and reverse port.
+  // Keep this complete user flow together with enough time for the expanded diagnostics.
   it("ports every retained token/account root with the state family and restores fresh namespaces", async () => {
     await withRoots(async (state, files, config) => {
       const expected = files.map(sqliteEntries);
@@ -273,9 +275,23 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         const findings = await withDatabaseEngineSelection(selection, () =>
           noteDatabaseEngines(doctorConfig, { env: state.env }),
         );
-        expect(findings.filter((finding) => files.includes(finding.path ?? ""))).toEqual([]);
+        const storeFindings = findings.filter((finding) => files.includes(finding.path ?? ""));
+        expect(storeFindings).toHaveLength(files.length);
         const output = String(note.mock.lastCall?.[0]);
         for (const [index, file] of files.entries()) {
+          expect(storeFindings.find((finding) => finding.path === file)).toMatchObject({
+            severity: "info",
+            details: {
+              family: "state",
+              observed: "postgres",
+              mismatch: false,
+              connectivity: "reachable",
+              namespace: physical[index]!.anchor.namespace,
+              storeId: physical[index]!.anchor.storeId,
+              schema: { pending: 0 },
+              issues: [],
+            },
+          });
           expect(output).toContain(
             `Shared state root: ${file} (physical=postgres, namespace=${physical[index]!.anchor.namespace})`,
           );
@@ -361,7 +377,7 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       expect(files.map(sqliteEntries)).toEqual(expected);
       expect(readBackupEngine(agentPath)).toEqual({ engine: "sqlite" });
     });
-  }, 300_000);
+  }, 450_000);
 
   it.each(["resume", "rollback"] as const)(
     "%s recovers a partially published multi-root port and blocks ordinary startup meanwhile",

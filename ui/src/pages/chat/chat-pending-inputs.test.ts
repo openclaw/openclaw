@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEffect, createRoot, flush } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
@@ -32,6 +33,7 @@ import {
   getChatPendingInputs,
 } from "./chat-pending-inputs.ts";
 import { readChatQueueForScope } from "./chat-queue.ts";
+import { projectChatRun } from "./chat-run-projection.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
@@ -81,6 +83,33 @@ afterEach(() => {
 });
 
 describe("server-owned pending input display", () => {
+  it("publishes custody changes through the run projection while retaining the pending view", () => {
+    const host = makeChatHost({ sessionKey, currentSessionId: sessionId });
+    const rendered: (readonly string[])[] = [];
+    const dispose = createRoot((stop) => {
+      projectChatRun(host);
+      createEffect(
+        () => getChatPendingInputs(host)?.page.items.map((item) => item.id) ?? [],
+        (items) => {
+          rendered.push(items);
+        },
+      );
+      return stop;
+    });
+    onTestFinished(dispose);
+    flush();
+    applyChatPendingInputs(host, page);
+    const retained = getChatPendingInputs(host);
+    expect(retained?.page.items).toHaveLength(1);
+    flush();
+    expect(rendered).toEqual([[], [input.id]]);
+    applyChatPendingInputs(host, { items: [], total: 0 });
+    expect(getChatPendingInputs(host)).toBe(retained);
+    expect(retained?.page.items).toEqual([]);
+    flush();
+    expect(rendered).toEqual([[], [input.id], []]);
+  });
+
   it.each([
     ["queued", undefined],
     ["interrupted", "Delivery interrupted. This saved agent update is not scheduled to retry."],

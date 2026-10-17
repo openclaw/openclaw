@@ -3,8 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestConfigFileStore } from "../commands/test-runtime-config-helpers.js";
+import {
+  createTestConfigFileStore,
+  createTestConfigSnapshot,
+} from "../commands/test-runtime-config-helpers.js";
 import type { ConfigWriteOptions } from "../config/io.js";
+import type { ConfigMutationCommit } from "../config/mutate.js";
 import {
   createPluginInstallRecordMap,
   getPluginInstallRecordMapEntry,
@@ -90,12 +94,10 @@ vi.mock("./plugin-lifecycle-lease.js", () => ({
 
 import {
   commitConfigWithPendingPluginInstalls,
-  commitConfigWriteWithPendingPluginInstalls,
   commitPluginInstallRecordsOnly,
   commitPluginInstallRecordsWithConfig,
   stripPendingPluginInstallRecords,
   transformConfigWithPendingPluginInstalls,
-  unchangedPendingPluginInstallRecordIds,
 } from "./install-record-commit.js";
 
 function createManagedInstallPath(stateDir: string, generation: string, pluginId = "codex") {
@@ -249,12 +251,16 @@ describe("commitConfigWithPendingPluginInstalls", () => {
           stale: { source: "npm", spec: "stale@1.0.0" },
           missing: { source: "npm", spec: "missing@1.0.0" },
           codex: { source: "npm", spec: "codex@1.0.0" },
+          constructor: { source: "npm", spec: "constructor@1.0.0" } satisfies PluginInstallRecord,
+          ["__proto__"]: { source: "npm", spec: "proto@1.0.0" },
         },
       },
     };
     const existingRecords: Record<string, PluginInstallRecord> = {
       stale: { source: "npm", spec: "stale@2.0.0" },
       codex: { source: "npm", spec: "codex@2.0.0" },
+      constructor: { source: "npm", spec: "constructor@2.0.0" } satisfies PluginInstallRecord,
+      ["__proto__"]: { source: "npm", spec: "proto@2.0.0" },
     };
     const nextConfig: OpenClawConfig = {
       plugins: {
@@ -265,13 +271,15 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         },
       },
     };
-    const commit = vi.fn(async (candidate: OpenClawConfig) => configFiles.write(candidate));
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(existingRecords);
+    const snapshot = createTestConfigSnapshot(sourceConfig);
+    mocks.transformConfigFileWithRetry.mockImplementationOnce(
+      async (params: { commit: ConfigMutationCommit }) =>
+        await params.commit({ nextConfig, snapshot, afterWrite: { mode: "auto" } }),
+    );
 
-    const result = await commitConfigWriteWithPendingPluginInstalls({
-      nextConfig,
-      sourceConfig,
-      commit,
+    await transformConfigWithPendingPluginInstalls({
+      transform: () => ({ nextConfig }),
     });
 
     expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).toHaveBeenCalledWith(
@@ -280,6 +288,8 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         missing: sourceConfig.plugins?.installs?.missing,
         codex: nextConfig.plugins?.installs?.codex,
         concurrent: nextConfig.plugins?.installs?.concurrent,
+        constructor: existingRecords.constructor,
+        ["__proto__"]: { source: "npm", spec: "proto@2.0.0" },
       },
       {
         config: {},
@@ -289,13 +299,13 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         onAcknowledged: expect.any(Function),
       },
     );
-    expect(commit).toHaveBeenCalledWith(
-      {},
-      {
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: {},
+      snapshot,
+      writeOptions: {
         unsetPaths: [["plugins", "installs"]],
       },
-    );
-    expect(result.movedInstallRecords).toBe(true);
+    });
     expect(
       Object.getPrototypeOf(
         mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mock.calls[0]?.[0],
@@ -381,14 +391,8 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     for (const [pluginId, record] of Object.entries(baseInstalls)) {
       setPluginInstallRecordMapEntry(nextInstalls, pluginId, record);
     }
-    const baseConfig = { plugins: { installs: baseInstalls } } satisfies OpenClawConfig;
     const nextConfig = { plugins: { installs: nextInstalls } } satisfies OpenClawConfig;
 
-    expect(unchangedPendingPluginInstallRecordIds(nextConfig, baseConfig)).toEqual([
-      "constructor",
-      "toString",
-      "__proto__",
-    ]);
     const stripped = stripPendingPluginInstallRecords(nextConfig, ["__proto__"]);
     const installs = stripped.plugins?.installs;
     expect(Object.getPrototypeOf(installs)).toBeNull();

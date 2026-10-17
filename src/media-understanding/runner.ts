@@ -684,9 +684,6 @@ export async function runCapability(params: {
     };
   };
   const handOffToNativeModel = async (provider: string): Promise<RunCapabilityResult> => {
-    if (shouldLogVerbose()) {
-      logVerbose(`Skipping ${capability} understanding: primary model supports it natively`);
-    }
     const attempt = {
       type: "provider" as const,
       provider,
@@ -845,8 +842,6 @@ export async function runCapability(params: {
   const { decision } = result;
   if (decision.outcome === "failed") {
     logWarn(`media-understanding: ${formatDecisionSummary(decision)}`);
-  } else if (shouldLogVerbose()) {
-    logVerbose(`Media understanding ${formatDecisionSummary(decision)}`);
   }
   return result;
 }

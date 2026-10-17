@@ -386,6 +386,63 @@ describe("cron batch outcome finalization", () => {
     });
   });
 
+  it("sends the recurring auto-disable notice through the job's failure route instead of a model turn", async () => {
+    const job = dueJob("recurring-auto-disable-route", {
+      name: "Recurring report",
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: DUE_AT - 60_000 },
+      state: {
+        nextRunAtMs: DUE_AT,
+        consecutiveErrors: 9,
+        runningAtMs: DUE_AT,
+        // The streak's threshold alert already fired for this cause; the disable is still news.
+        lastFailureAlertAtMs: DUE_AT - 30_000,
+      },
+      failureAlert: { mode: "webhook", to: "https://alerts.example.com/hook" },
+    });
+    const enqueueSystemEvent = vi.fn<CronServiceDeps["enqueueSystemEvent"]>();
+    const requestHeartbeat = vi.fn();
+    const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
+      async () => {},
+    );
+    const { state, storePath } = await fixture([job], {
+      nowMs: () => DUE_AT + 10,
+      defaultAgentId: "main",
+      enqueueSystemEvent,
+      requestHeartbeat,
+      sendCronFailureAlert,
+    });
+    await finalizeError(
+      state,
+      job,
+      "cron: provider returned HTTP 500 at /private/agent/work",
+      undefined,
+      { kind: "reason", reason: "server_error" },
+    );
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    const alert = sendCronFailureAlert.mock.calls[0]?.[0];
+    expect(alert).toMatchObject({ mode: "webhook", to: "https://alerts.example.com/hook" });
+    expect(alert?.payload.text).toContain('Automation "Recurring report" was auto-disabled');
+    expect(alert?.payload.text).toContain("10 consecutive run failures");
+    expect(alert?.payload.text).toContain("Cause: server_error");
+    expect(alert?.payload.text).toContain(`openclaw automations enable ${job.id}`);
+    // Webhook alerts carry the raw last error like the threshold alert does.
+    expect(alert?.payload.text).toContain(
+      "Last error: cron: provider returned HTTP 500 at /private/agent/work",
+    );
+    // The route owns the notice, like a terminal one-shot: no in-app duplicate, no model turn.
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeat).not.toHaveBeenCalled();
+    expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
+      enabled: false,
+      state: {
+        consecutiveErrors: 10,
+        autoDisabled: { reason: "consecutive-failures", atMs: DUE_AT + 10, consecutiveErrors: 10 },
+        lastFailureAlertAtMs: DUE_AT + 10,
+        lastFailureNotificationDeliveryStatus: "unknown",
+      },
+    });
+  });
+
   it("records a completed setup timeout and clears its active marker while the service is stopped", async () => {
     const job = dueJob("stopped-setup-timeout-marker", {
       state: { nextRunAtMs: DUE_AT, runningAtMs: DUE_AT },

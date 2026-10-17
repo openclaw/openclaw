@@ -203,6 +203,65 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.prepared.payloadsWithToolMedia).toEqual([]);
   });
 
+  it.each([
+    { delivery: "delivered", observation: "absent", expected: "delivered" },
+    { delivery: "delivered", observation: "missing", expected: "delivered" },
+    { delivery: "delivered", observation: "pending", expected: "delivered" },
+    { delivery: "pending", observation: "absent", expected: "pending" },
+    { delivery: "pending", observation: "missing", expected: "pending" },
+    { delivery: "pending", observation: "delivered", expected: "delivered" },
+    { delivery: "missing", observation: "absent", expected: "missing" },
+    { delivery: "missing", observation: "delivered", expected: "delivered" },
+    { delivery: "progress", observation: "absent", expected: "missing" },
+    { delivery: "progress", observation: "missing", expected: "missing" },
+    { delivery: "progress", observation: "delivered", expected: "delivered" },
+  ] as const)(
+    "uses reconciled $delivery custody with an $observation observer for finalization",
+    async ({ delivery, observation, expected }) => {
+      const attempt = settledSuccessfulAttempt();
+      attempt.sourceReplyDeliveryState = delivery === "progress" ? undefined : delivery;
+      // The current input's state outranks older final markers. Progress markers
+      // alone likewise cannot claim a final reply, even when a tool sent content.
+      attempt.messagingToolSentTargets = [
+        {
+          tool: "message",
+          provider: "fixture",
+          to: "source",
+          sourceReplyFinal: delivery !== "progress",
+        },
+      ];
+      attempt.didSendViaMessagingTool = true;
+      const input = finalizationInput(attempt);
+      if (observation !== "absent") {
+        input.terminalBase.runParams.resolveReplyDelivery = vi.fn(async () => observation);
+      }
+      const finalAssistant = buildEmbeddedRunnerAssistant({
+        content: [{ type: "text", text: "The final answer." }],
+      });
+      backendMocks.runSettledFinalization.mockResolvedValueOnce({
+        outcome: "answered",
+        result: {
+          assistant: finalAssistant,
+          preparedTerminalReply: prepareAgentRunTerminalReply({ rawText: "The final answer." }),
+          usage: finalAssistant.usage,
+        },
+      });
+
+      const result = await prepareTerminalWithSettledTurnFinalization(input);
+
+      expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(
+        expected === "missing" ? 1 : 0,
+      );
+      expect(result.finalizationOutcome).toBe(
+        expected === "missing" ? "answered" : "not-attempted",
+      );
+      expect(result.prepared.replyDeliveryState).toBe(expected);
+      if (expected !== "missing") {
+        expect(result.attempt).toBe(attempt);
+      }
+    },
+  );
+
   it("preserves classified stream failure after commentary when finalization stays empty", async () => {
     const commentary = "I am saving the note.";
     const base = createSettledProviderFailureAttempt({ assistantTexts: [commentary] });

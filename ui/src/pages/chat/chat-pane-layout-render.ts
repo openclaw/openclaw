@@ -163,6 +163,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       onOpenWorkspace: () => openPanelSlot("workspace"),
       onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
       onOpenSubagents: ownsSubagentsPanel ? (focus) => this.showSubagents(null, focus) : undefined,
+      onOpenProcesses: ownsSubagentsPanel
+        ? () => this.requestBackgroundPanel("processes", "open")
+        : undefined,
       composerRecovery: recovery,
       pluginToolIcons: this.toolIcons,
       presented: {
@@ -203,7 +206,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         }
       : null;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
-    const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
+    const discussionState = this.sessionDiscussion.snapshot.states.get(state.sessionKey.trim());
     const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionSessionKey = state.sessionKey;
@@ -289,7 +292,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       },
       dashboard: !this.compact ? this.renderBoardPanel(board, sidebarLayout) : null,
       workspace: sessionWorkspace,
-      detail: { chat: chatProps, host: state, requestUpdate: state.requestUpdate! },
+      detail: { chat: chatProps, host: state },
       digest: observerDigest,
       activeRunId: observerRunId,
       pullRequests: this.sessionPullRequests,
@@ -319,7 +322,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       layout: savedLayout,
       closePanelSlot,
       openPanelSlot,
-      forgetDiscussionUrl: () => this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim()),
+      forgetDiscussionUrl: () => this.sessionDiscussion.forgetOpenUrl(state.sessionKey.trim()),
       resizePanel: (columnId, size) => this.commitSidebarPanelResize(savedLayout, columnId, size),
       setPanelOpen: (open) => this.setChatSidePanelOpen(open, savedLayout),
     });
@@ -369,7 +372,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       sideFocusOrigin: this.sideFocusOrigin,
       panelDefinitions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
-      requestUpdate: state.requestUpdate!,
     });
     return {
       region,

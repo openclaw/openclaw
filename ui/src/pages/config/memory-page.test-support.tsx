@@ -107,6 +107,7 @@ export function createMemoryPage(params: {
   settingsRequest?: (method: string, payload?: unknown) => Promise<unknown>;
   processInfo?: (call: number) => Promise<{ processInstanceId?: string }>;
   scopes?: string[];
+  methods?: string[];
   lookupSchemaPath?: (call: number) => Promise<unknown>;
 }) {
   const settingsViews: Array<{
@@ -155,7 +156,10 @@ export function createMemoryPage(params: {
     lastError: null,
     lastErrorCode: null,
     hello: {
-      ...gatewayHelloForMethods(params.processInfo ? ["system.info"] : [], params.scopes),
+      ...gatewayHelloForMethods(
+        [...(params.processInfo ? ["system.info"] : []), ...(params.methods ?? [])],
+        params.scopes,
+      ),
       server: { version: "test", bootId: "memory-boot-a", connId: "memory-connection" },
     },
   });
@@ -386,6 +390,16 @@ export function createMemoryPage(params: {
     publishPluginGeneration,
     setBootId,
     setScopes,
+    setMethods(methods: string[]) {
+      const hello = gateway.snapshot.hello;
+      if (!hello) {
+        throw new Error("Missing Memory fixture hello");
+      }
+      publishGateway({
+        ...gateway.snapshot,
+        hello: { ...hello, features: { ...hello.features, methods } },
+      });
+    },
     refresh: runtimeConfig.refresh,
     runExternalMutation: runtimeConfig.runExternalMutation,
     lookupSchemaPath: runtimeConfig.lookupSchemaPath,

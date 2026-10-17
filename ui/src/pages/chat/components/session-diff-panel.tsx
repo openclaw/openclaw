@@ -126,6 +126,7 @@ function SessionDiffContent(props: SessionDiffProps) {
   const unavailableFileText = new WeakSet<FileSource>();
   let generation = 0;
   const nativeGateways = nativeGatewaysCapability();
+  // Dismiss the menu at native-owner replacement before another menu action can run.
   const unsubscribe = nativeGateways?.subscribe(() => setMenu(null));
   onCleanup(() => {
     generation += 1;
@@ -430,7 +431,7 @@ function SessionDiffContent(props: SessionDiffProps) {
           >
             {([direction, label]) => (
               <button
-                class={direction === "all" ? "session-diff__gap-count" : undefined}
+                class={{ "session-diff__gap-count": direction === "all" }}
                 type="button"
                 aria-label={t(`chat.sessionDiff.${label}`, {
                   count: String(direction === "all" ? gap()!.count : chunkCount()),

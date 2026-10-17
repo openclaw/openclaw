@@ -1,4 +1,5 @@
 import type { IconName } from "../components/solid/icon.tsx";
+import type { AgentIdentity } from "./identity-avatar-view.ts";
 import { listen } from "./reactive/listener.ts";
 
 export type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
@@ -12,6 +13,8 @@ export type ToastOptions = {
   /** Bottom placement suits settings feedback without covering the page heading. */
   placement?: "top" | "bottom";
   icon?: IconName;
+  /** Agent identity shown for session notifications, using the shared avatar loader. */
+  avatar?: AgentIdentity;
   actionLabel?: string;
   onAction?: () => void;
   onDismiss?: (reason: ToastDismissReason) => void;

@@ -159,6 +159,7 @@ export async function executeWorkerTurn(
     modelRef,
     startedAt,
     assertCurrent: assertContextCurrent,
+    assertSourceCurrent,
     onBlocked: () => {
       blocked = true;
     },

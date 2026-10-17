@@ -9,6 +9,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
+import { sessionIdentity } from "./worker-environments/placement-suite.test-support.js";
 
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
@@ -18,27 +19,14 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
-async function fixture(
-  name: string,
-  state: "active" | "failed" | "local" | "reclaimed" = "active",
-) {
-  const request = {
-    sessionId: `session-${name}`,
-    sessionKey: `agent:main:${name}`,
-    agentId: "main",
-  };
+async function fixture(name: string) {
+  const request = sessionIdentity(name);
+  const storePath = path.join(tempDirs.make(`reclaim-preparation-${name}-`), "sessions.sqlite");
   const entry = { sessionId: request.sessionId, lifecycleRevision: "original", updatedAt: 1 };
-  const target = {
-    storePath: path.join(tempDirs.make(`reclaim-preparation-${name}-`), "sessions.sqlite"),
-    canonicalKey: request.sessionKey,
-    storeKeys: [request.sessionKey],
-    agentId: request.agentId,
-    store: { [request.sessionKey]: entry },
-  };
-  await replaceSessionEntry({ ...request, storePath: target.storePath }, entry);
+  await replaceSessionEntry({ ...request, storePath }, entry);
   const placement = {
     ...request,
-    state,
+    state: "active" as const,
     generation: 4,
     environmentId: "worker",
     activeOwnerEpoch: 7,
@@ -55,7 +43,7 @@ async function fixture(
       resolveGatewaySessionStoreTargetInWorker: (params) =>
         resolveGatewaySessionStoreTargetInWorker({
           ...params,
-          cfg: { ...params.cfg, session: { ...params.cfg.session, store: target.storePath } },
+          cfg: { ...params.cfg, session: { ...params.cfg.session, store: storePath } },
         }),
       resolveCanonicalSessionEntryFromStoreKeys,
     }),
@@ -63,23 +51,20 @@ async function fixture(
     revokeSessionAuthority: vi.fn(),
   });
   const run = vi.fn(async () => ({ ...placement, state: "reclaimed" as const }) as never);
-  const admit = (onInterrupt?: () => void) =>
-    beginSessionWorkAdmission({
-      scope: target.storePath,
-      identities: [request.sessionKey, request.sessionId],
-      assertAllowed: () => {},
-      onInterrupt,
-    });
   return {
-    ...request,
-    entry,
     placement,
     cancel,
     run,
-    admit,
-    replaceEntry: async (lifecycleRevision: string) => {
+    admit: (onInterrupt?: () => void) =>
+      beginSessionWorkAdmission({
+        scope: storePath,
+        identities: [request.sessionKey, request.sessionId],
+        assertAllowed: () => {},
+        onInterrupt,
+      }),
+    replaceEntry: (lifecycleRevision: string) => {
       entry.lifecycleRevision = lifecycleRevision;
-      await replaceSessionEntry({ ...request, storePath: target.storePath }, entry);
+      return replaceSessionEntry({ ...request, storePath }, entry);
     },
     prepare: (options: Partial<Parameters<typeof barriers.runReclaimPreparation>[0]> = {}) =>
       barriers.runReclaimPreparation({ ...request, run, ...options }),
@@ -113,7 +98,7 @@ it("one failed Stop cannot reopen ingress while another Stop still owns its clos
   (await f.admit()).release();
 });
 
-it.each(["authorization", "incarnation"] as const)(
+it.each(["authorization", "incarnation", "worker"] as const)(
   "rejects changed %s after cancellation and reopens admission on failure",
   async (change) => {
     const f = await fixture(`changed-${change}`);
@@ -121,14 +106,21 @@ it.each(["authorization", "incarnation"] as const)(
     const release = createDeferredCore();
     let authorized = true;
     const interrupted = vi.fn();
+    const signalled = vi.fn();
     const acquired = await f.admit(() => {
       interrupted();
       acquired.release();
     });
     f.cancel.mockImplementation(async ({ assertCurrent }) => {
-      assertCurrent();
+      if (change !== "worker") {
+        assertCurrent();
+      }
       entered.resolve();
       await release.promise;
+      if (change === "worker") {
+        assertCurrent();
+        signalled();
+      }
     });
     try {
       const stop = f.prepare({
@@ -139,11 +131,18 @@ it.each(["authorization", "incarnation"] as const)(
         },
       });
       const rejected = expect(stop).rejects.toThrow(
-        change === "authorization" ? "access revoked" : "Session",
+        change === "authorization"
+          ? "access revoked"
+          : change === "worker"
+            ? "worker changed before cancellation"
+            : "Session",
       );
       await entered.promise;
       if (change === "authorization") {
         authorized = false;
+      } else if (change === "worker") {
+        // Replacement must not mutate the captured owner snapshot.
+        f.placement.generation++;
       } else {
         await f.replaceEntry("replacement-with-same-session-id");
       }
@@ -151,6 +150,7 @@ it.each(["authorization", "incarnation"] as const)(
       await rejected;
       expect(interrupted).not.toHaveBeenCalled();
       expect(f.run).not.toHaveBeenCalled();
+      expect(signalled).not.toHaveBeenCalled();
       (await f.admit()).release();
     } finally {
       release.resolve();
@@ -158,29 +158,6 @@ it.each(["authorization", "incarnation"] as const)(
     }
   },
 );
-
-it("rechecks the exact worker owner after asynchronous cancellation setup", async () => {
-  const f = await fixture("changed-worker");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const signalled = vi.fn();
-  f.cancel.mockImplementation(async ({ assertCurrent }) => {
-    entered.resolve();
-    await release.promise;
-    assertCurrent();
-    signalled();
-  });
-  const stop = f.prepare();
-  const rejected = expect(stop).rejects.toThrow("worker changed before cancellation");
-  await entered.promise;
-  // The store returns immutable snapshots; replacement must not mutate the captured owner.
-  const priorGeneration = f.placement.generation;
-  f.placement.generation = priorGeneration + 1;
-  release.resolve();
-  await rejected;
-  expect(signalled).not.toHaveBeenCalled();
-  expect(f.run).not.toHaveBeenCalled();
-});
 
 it("auto-suspend eligibility rejects before closing admission or signalling cancellation", async () => {
   const f = await fixture("auto-suspend");

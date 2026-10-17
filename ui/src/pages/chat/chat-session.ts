@@ -1,7 +1,4 @@
-import {
-  readAgentRuntimeRestrictionErrorDetails,
-  type AgentRuntimeRestrictionErrorDetails,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import type { AgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
 import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { FastMode, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -11,6 +8,7 @@ import { resolvePreferredServerChatModelValue } from "../../lib/chat/model-ref.t
 import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRuntimePinned } from "../../lib/model-runtime-choice.ts";
+import { isAgentRuntimeRestrictionErrorDetails } from "../../lib/protocol-validators.generated/session-input.js";
 import { readSessionMethodScopeAccess } from "../../lib/session-method-access.ts";
 import {
   DEFAULT_SESSION_LIST_QUERY,
@@ -550,8 +548,8 @@ export async function switchChatModel(
         return false;
       }
       const restriction =
-        err instanceof GatewayRequestError
-          ? readAgentRuntimeRestrictionErrorDetails(err.details)
+        err instanceof GatewayRequestError && isAgentRuntimeRestrictionErrorDetails(err.details)
+          ? err.details
           : undefined;
       if (!restriction) {
         setChatError(host, `Failed to set model: ${formatUiError(err)}`, true);

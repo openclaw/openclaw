@@ -2,12 +2,15 @@ import { describe, expect, test } from "vitest";
 import {
   asFiniteNumberInRange,
   asNonNegativeFiniteNumber,
+  asNonNegativeInteger,
   asPositiveFiniteNumber,
+  asPositiveInteger,
   asSafeIntegerInRange,
   addTimerTimeoutGraceMs,
   clampPositiveTimerTimeoutMs,
   clampTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
+  floorPositiveFiniteNumber,
   isFutureDateTimestampMs,
   MAX_DATE_TIMESTAMP_MS,
   MAX_TIMER_TIMEOUT_MS,
@@ -31,6 +34,27 @@ import {
 } from "./number-coercion.js";
 
 describe("number-coercion", () => {
+  test.each([
+    ["positive integer", 1, 1, 1, 1],
+    ["unsafe integer", 2 ** 53, 2 ** 53, 2 ** 53, 2 ** 53],
+    ["zero", 0, undefined, 0, undefined],
+    ["negative zero", -0, undefined, -0, undefined],
+    ["negative integer", -1, undefined, undefined, undefined],
+    ["positive fraction", 1.5, undefined, undefined, 1],
+    ["fraction below one", 0.5, undefined, undefined, 0],
+    ["NaN", Number.NaN, undefined, undefined, undefined],
+    ["infinity", Number.POSITIVE_INFINITY, undefined, undefined, undefined],
+    ["numeric string", "1", undefined, undefined, undefined],
+    ["missing input", undefined, undefined, undefined, undefined],
+  ])(
+    "preserves integer and positive-floor policies for %s",
+    (_name, input, positive, nonNegative, floored) => {
+      expect(asPositiveInteger(input)).toBe(positive);
+      expect(asNonNegativeInteger(input)).toBe(nonNegative);
+      expect(floorPositiveFiniteNumber(input)).toBe(floored);
+    },
+  );
+
   test("signed finite helpers preserve finite fractional values", () => {
     expect(asPositiveFiniteNumber(0.5)).toBe(0.5);
     expect(asPositiveFiniteNumber(0)).toBeUndefined();

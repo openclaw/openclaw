@@ -12,7 +12,6 @@ type Selection<TRouteId extends string, TModule, TData> = {
 };
 type Snapshot<TRouteId extends string, TModule, TData> = Selection<TRouteId, TModule, TData> & {
   settled: RouteMatch<TRouteId, TModule, TData> | undefined;
-  showPending: boolean;
   startupPending?: boolean;
 };
 type Inputs<TRouteId extends string, TLoadContext, TModule, TData> = {
@@ -46,7 +45,6 @@ export function createRouterOutletPresentation<
     active: undefined,
     pending: undefined,
     settled: undefined,
-    showPending: false,
   });
   let inputs: Inputs<TRouteId, TLoadContext, TModule, TData> = {};
   let router: OutletRouter;
@@ -56,9 +54,6 @@ export function createRouterOutletPresentation<
   // Retention-scope navigation can notify synchronously inside the caller's render memo.
   const [snapshot, setSnapshot] = createSignal<OutletSnapshot>(published, { ownedWrite: true });
   let settled: OutletSnapshot["settled"];
-  let pendingMatchId: string | undefined;
-  let pendingTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  let showPending = false;
   let notFoundActive = false;
   let notFoundDeclined = false;
   let notFoundGeneration = 0;
@@ -72,7 +67,6 @@ export function createRouterOutletPresentation<
       source: router,
       ...selection,
       settled,
-      showPending,
       startupPending: startupMatchId !== undefined,
     };
     if (
@@ -81,7 +75,6 @@ export function createRouterOutletPresentation<
       published.active === next.active &&
       published.pending === next.pending &&
       published.settled === next.settled &&
-      published.showPending === next.showPending &&
       published.startupPending === next.startupPending
     ) {
       return;
@@ -89,10 +82,6 @@ export function createRouterOutletPresentation<
     // Readiness compares this receipt synchronously, before Solid commits the same object.
     published = next;
     setSnapshot(next);
-  }
-  function clearPendingTimer() {
-    globalThis.clearTimeout(pendingTimer);
-    pendingTimer = undefined;
   }
   function clearStartupRetry() {
     globalThis.clearTimeout(startupTimer);
@@ -188,23 +177,6 @@ export function createRouterOutletPresentation<
         settled = undefined;
       }
     }
-    const pending = next.pending;
-    const coldPending =
-      pending?.status === "pending" && pending.module === undefined && pending.error === undefined;
-    if (!coldPending || next.active) {
-      clearPendingTimer();
-      pendingMatchId = undefined;
-      showPending = false;
-    } else if (pendingMatchId !== pending.id) {
-      clearPendingTimer();
-      pendingMatchId = pending.id;
-      showPending = false;
-      pendingTimer = globalThis.setTimeout(() => {
-        pendingTimer = undefined;
-        showPending = true;
-        publish();
-      }, 1_000);
-    }
     updateStartupRetry();
     publish();
     updateNotFound();
@@ -212,9 +184,6 @@ export function createRouterOutletPresentation<
   function detach() {
     stopRouter?.();
     stopRouter = undefined;
-    clearPendingTimer();
-    pendingMatchId = undefined;
-    showPending = false;
     cancelNotFound();
     clearStartupRetry();
   }

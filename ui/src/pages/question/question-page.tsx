@@ -62,6 +62,7 @@ function createQuestionPage(context: ApplicationContext, props: QuestionPageProp
   const prompt = () => questions.read().find((candidate) => candidate.id === props.questionId);
   const previousDocumentTitle = document.title;
   let activeDocumentTitle: string | undefined;
+  // Gateway receipts retire question operations and rebind the prompt client synchronously before reconnect.
   const stopGateway = context.gateway.subscribe(applyGatewaySnapshot);
   const stopGatewayEvents = context.gateway.subscribeEvents((event) => {
     if (isRecord(event.payload) && event.payload.id === questionId()) {

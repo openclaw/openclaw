@@ -33,19 +33,14 @@ const suite = createChatFlowE2eSuite();
 type ChatFlowSuite = ReturnType<typeof createChatFlowE2eSuite>;
 type ChatFlowPage = Parameters<Parameters<ChatFlowSuite["withPage"]>[1]>[0]["page"];
 
-// Each delta lands in its own message task. The animation-frame queue must
-// coalesce those invalidations and keep them off message tasks.
+// Each delta lands in its own message task. The owner publication queue must
+// coalesce them before the transcript changes.
 const BURST_DELTA_COUNT = 240;
-// Sanity floor: the burst must invalidate the chat page host at least twice,
-// proving the probe observed the streaming path at all.
-const MIN_BURST_INVALIDATIONS = 2;
-// A direct update per delta produces at least 240 host invalidations. Keep the
-// burst below that count so frame scheduling alone cannot hide lost coalescing.
-const MAX_BURST_INVALIDATIONS = 180;
-// Minimum share of host invalidations that must execute inside an animation
-// frame callback. The queue guarantees this for every stream-driven update;
-// only rare timer-driven strays (poll controllers) fall outside frames.
-const FRAME_SCHEDULED_MIN_RATIO = 0.9;
+// The emitter crosses a frame halfway through, so both batches must reach DOM.
+const MIN_BURST_MUTATION_BATCHES = 2;
+// A direct DOM update per delta produces at least 240 batches. Measure the
+// visible transcript instead of the retired generic page invalidation path.
+const MAX_BURST_MUTATION_BATCHES = 180;
 // Unrelated page timers can contribute one host update after the probe resets;
 // ordinary characters must not invalidate the pane themselves.
 const MAX_STEADY_COMPOSER_INVALIDATIONS = 1;
@@ -140,6 +135,10 @@ async function installRenderProbe(page: ChatFlowPage) {
     if (!chatPage) {
       throw new Error("openclaw-chat-page is not mounted");
     }
+    const thread = chatPage.querySelector(".chat-thread");
+    if (!thread) {
+      throw new Error("chat transcript is not mounted");
+    }
     scope.ocStreamPerf = {
       mutationBatches: 0,
       rafCount: 0,
@@ -153,7 +152,7 @@ async function installRenderProbe(page: ChatFlowPage) {
       if (records.length > 0) {
         scope.ocStreamPerf!.mutationBatches += 1;
       }
-    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+    }).observe(thread, { childList: true, subtree: true, characterData: true });
     let insideFrame = false;
     const originalRequestAnimationFrame = window.requestAnimationFrame.bind(window);
     window.requestAnimationFrame = (callback: FrameRequestCallback): number =>
@@ -185,7 +184,6 @@ async function installRenderProbe(page: ChatFlowPage) {
       "create-chat-pane",
       "chat-page",
       "chat-page-retained-sessions",
-      "subscriptions-controller",
     ]);
     const classifyCaller = (frame: string): string => {
       const location = frame.match(/\/([^/\s?#]+)\.(js|ts)(?:\?[^\s]*)?:(\d{1,7}):(\d{1,7})\)?$/);
@@ -668,12 +666,8 @@ suite.define(() => {
       });
 
       expect(probe.commits).toBeGreaterThan(0);
-      expect(probe.invalidations).toBeGreaterThanOrEqual(MIN_BURST_INVALIDATIONS);
-      expect(probe.invalidations).toBeLessThanOrEqual(MAX_BURST_INVALIDATIONS);
-      expect(
-        probe.invalidationsInsideFrame / probe.invalidations,
-        `frame-scheduled update budget: ${JSON.stringify(probe)}`,
-      ).toBeGreaterThanOrEqual(FRAME_SCHEDULED_MIN_RATIO);
+      expect(probe.mutationBatches).toBeGreaterThanOrEqual(MIN_BURST_MUTATION_BATCHES);
+      expect(probe.mutationBatches).toBeLessThanOrEqual(MAX_BURST_MUTATION_BATCHES);
     });
   });
 

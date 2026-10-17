@@ -4,6 +4,7 @@ import { afterEach, expect, it as baseIt, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as fsSafe from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import * as logger from "../logger.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { MediaAttachmentCache } from "./attachments.js";
@@ -352,12 +353,20 @@ test("keeps concurrent staging success after a write failure", async ({ base, ca
 });
 
 test("retries failed cleanup across later staging success", async ({ base, cache }) => {
+  const warn = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
   const { error, spy } = failPartialWrite();
   const cleanupError = Object.assign(new Error("permission denied"), { code: "EACCES" });
   const unlink = vi.spyOn(fs, "unlink").mockRejectedValueOnce(cleanupError);
 
   await expect(cache.getPath(request)).rejects.toBe(error);
   expect(await fs.readdir(base)).toHaveLength(1);
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(warn).toHaveBeenCalledWith(
+    expect.stringContaining(`could not remove staged attachment ${base}${path.sep}`),
+  );
+  expect(warn).toHaveBeenCalledWith(
+    expect.stringContaining("remove it manually if it remains: Error: permission denied"),
+  );
 
   const staged = await cache.getPath(request);
   await expectStaged(cache, staged);
@@ -367,9 +376,11 @@ test("retries failed cleanup across later staging success", async ({ base, cache
   unlink.mockRejectedValueOnce(cleanupError);
   await cache.cleanup();
   expect(await fs.readdir(base)).toHaveLength(1);
+  expect(warn).toHaveBeenCalledTimes(2);
 
   await cache.cleanup();
   expect(await fs.readdir(base)).toEqual([]);
+  expect(warn).toHaveBeenCalledTimes(2);
 });
 
 test("retains files staged after cleanup takes its snapshot", async ({ cache }) => {

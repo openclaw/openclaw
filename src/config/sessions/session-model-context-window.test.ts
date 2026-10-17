@@ -96,7 +96,7 @@ it.each([
         requests,
         sizing([0, 300, 300, 300, 300]),
         { maxEvents: 4, maxBytes: 1000 },
-        { count: 1, bytes: prefixBytes, hasUser: true, pairing: { owners: new Map(), spans: [] } },
+        { count: 1, bytes: prefixBytes, hasUser: true, pairing: new Map() },
       ).map(({ entry }) => entry.seq),
     ).toEqual(selected);
   },
@@ -111,7 +111,7 @@ it("uses atomic headroom when the newest user turn starts in the discarded prefi
       requests,
       sizing([0, 300, 300, 300, 300]),
       { maxEvents: 4, maxBytes: 1000 },
-      { count: 1, bytes: 100, hasUser: true, pairing: { owners: new Map(), spans: [] } },
+      { count: 1, bytes: 100, hasUser: true, pairing: new Map() },
     ).map(({ entry }) => entry.seq),
   ).toEqual([2, 3, 4]);
 });

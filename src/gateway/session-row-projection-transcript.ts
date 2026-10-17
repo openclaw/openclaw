@@ -124,6 +124,7 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
                   maxSeq: fact.value.rawSeq,
                 },
                 transcriptPreview: fact.value.lastMessagePreview,
+                transcriptAssistantMessage: fact.value.lastAssistantMessage,
                 transcriptTerminalModel: fact.value.terminalModel,
               }
             : undefined;

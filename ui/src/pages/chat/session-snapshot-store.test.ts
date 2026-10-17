@@ -2,6 +2,8 @@
 
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseSidebarSnapshot } from "../../components/sidebar-snapshot-data.ts";
+import { sidebarSnapshot } from "../../components/sidebar-snapshot.test-support.ts";
 import {
   requestResult,
   transactionComplete as transactionDone,
@@ -109,6 +111,95 @@ describe("persistent chat session snapshots", () => {
     vi.unstubAllGlobals();
   });
 
+  it("restores bounded sidebar facts with legacy defaults and strips live-only fields", async () => {
+    const store = new SessionSnapshotStore();
+    store.connect();
+    const sidebarKey = `${key("").split("\u0000")[0]}\u0000sidebar:operator`;
+    const row = { key: "agent:main:cedar", kind: "direct", label: "Cedar" };
+    const roster = {
+      agentId: "main",
+      result: {
+        ts: 1,
+        path: "sessions",
+        count: 1,
+        defaults: { model: null, modelProvider: null, contextTokens: null },
+        sessions: [{ ...row, hasActiveRun: true }],
+      },
+      groups: [],
+      groupSettings: [],
+      sectionOrder: [],
+    };
+    async function putSidebarModel(model: unknown): Promise<void> {
+      const database = await requestResult(indexedDB.open(CHAT_SNAPSHOT_DB_NAME));
+      const transaction = database.transaction(SIDEBAR_SNAPSHOT_STORE_NAME, "readwrite");
+      const completed = transactionDone(transaction);
+      transaction.objectStore(SIDEBAR_SNAPSHOT_STORE_NAME).put({
+        sessionKey: sidebarKey,
+        projectionVersion: 1,
+        savedAt: Date.now(),
+        model,
+      });
+      await completed;
+      database.close();
+    }
+    try {
+      expect(await store.writeSidebar(sidebarKey, sidebarSnapshot, parseSidebarSnapshot)).toBe(
+        true,
+      );
+      // Older or foreign writers can leave data that is not an admitted live model.
+      await putSidebarModel({
+        ...sidebarSnapshot,
+        peoplePresenceFilter: undefined,
+        offlineUsers: undefined,
+        roster,
+        footer: { id: "operator", scopes: ["operator.admin"] },
+        token: "synthetic-disallowed-field",
+      });
+      const restored = await store.readSidebar(sidebarKey, parseSidebarSnapshot);
+      expect(restored?.peoplePresenceFilter).toBe("online");
+      expect(restored?.offlineUsers).toEqual([]);
+      expect(restored?.roster?.result.sessions).toEqual([row]);
+      expect(restored?.footer).toEqual({ id: "operator" });
+      expect(restored).not.toHaveProperty("token");
+      await putSidebarModel({
+        ...sidebarSnapshot,
+        roster: {
+          ...roster,
+          result: { ...roster.result, sessions: [{ ...row, incognito: true }] },
+        },
+      });
+      expect(await store.readSidebar(sidebarKey, parseSidebarSnapshot)).toBeNull();
+    } finally {
+      store.disconnect();
+      await store.whenIdle();
+    }
+  });
+
+  it.each([
+    { snapshot: { ...snapshot("message"), unexpected: true } },
+    { snapshot: { ...snapshot("message"), pagination: { hasMore: false, nextOffset: 1 } } },
+    { snapshot: { ...snapshot("message"), pagination: { hasMore: true, nextOffset: -1 } } },
+    { sessionId: "different-session" },
+  ])(
+    "rejects malformed durable snapshot envelopes without exposing cached history ($snapshot)",
+    async (corrupt) => {
+      const sessionKey = key("agent:main:corrupt-envelope");
+      const writer = new SessionSnapshotStore();
+      writer.write(sessionKey, snapshot("message"));
+      await writer.flush();
+      const persisted = await readStoredChatSnapshotRecord(sessionKey);
+      if (!persisted || typeof persisted !== "object") {
+        throw new Error("expected the writer to persist a snapshot envelope");
+      }
+      await putRawRecord({
+        ...persisted,
+        ...corrupt,
+      });
+      expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+      expect(await readStoredChatSnapshotRecord(sessionKey)).toBeUndefined();
+    },
+  );
+
   it("retires one Gateway cache without touching another Gateway or account", async () => {
     const memory: ChatMessageCache = new Map();
     const store = new SessionSnapshotStore(memory);
@@ -180,7 +271,7 @@ describe("persistent chat session snapshots", () => {
     await writer.flush();
     // A foreign/older writer must not make private records readable by this UI.
     await putRawRecord({
-      projectionVersion: 2,
+      projectionVersion: 3,
       sessionKey: privateKey,
       savedAt: 1,
       sessionId: "session-1",
@@ -193,53 +284,23 @@ describe("persistent chat session snapshots", () => {
   });
 
   it.each(["direct", "prewarmed"])(
-    "restores and rewrites pre-sanitizer snapshots without pairing credentials (%s)",
+    "discards a superseded unbounded projection (%s)",
     async (mode) => {
-      const ordinaryKey = key("agent:main:ordinary");
-      const sessionKey = key("agent:main:pairing-upgrade");
+      const sessionKey = key("agent:main:old-projection");
       const writer = new SessionSnapshotStore();
-      writer.write(ordinaryKey, snapshot("ordinary"));
+      writer.write(sessionKey, snapshot("current"));
       await writer.flush();
-      const safeContent = [
-        { type: "text", text: "Scan this QR code with the OpenClaw iOS app:" },
-        { type: "image", url: "https://example.com/photo.png" },
-      ];
-      const content = [
-        ...safeContent,
-        {
-          type: "openclaw_pairing_qr",
-          image_url: "data:image/png;base64,cGFpcmluZy1maXh0dXJl",
-          expiresAtMs: Date.now() + 60_000,
-          sensitive: true,
-        },
-      ];
-      const message = {
-        role: "assistant",
-        content,
-        openclawDisplayContent: content,
-        __openclaw: { id: "pairing-reply", seq: 1 },
-      };
       await putRawRecord({
         projectionVersion: 2,
         sessionKey,
         savedAt: 1,
         sessionId: "session-1",
-        snapshot: snapshot(message),
+        snapshot: snapshot("old"),
       });
       if (mode === "prewarmed") {
         prewarmChatSnapshot(sessionKey);
       }
-      const reader = new SessionSnapshotStore();
-      const expected = snapshot({
-        ...message,
-        content: safeContent,
-        openclawDisplayContent: safeContent,
-      });
-
-      expect(await reader.read(sessionKey)).toEqual(expected);
-      await reader.flush();
-      expect(await readStoredChatSnapshotRecord(sessionKey)).toMatchObject({ snapshot: expected });
-      expect(await reader.read(ordinaryKey)).toEqual(snapshot("ordinary"));
+      expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
     },
   );
 
@@ -438,7 +499,7 @@ describe("persistent chat session snapshots", () => {
       await writer.flush();
       await putRawRecord(
         {
-          projectionVersion: 2,
+          projectionVersion: 3,
           sessionKey: corrupt,
           sessionId: "session-1",
           savedAt: Date.now(),
@@ -503,7 +564,7 @@ describe("persistent chat session snapshots", () => {
 
     const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME);
     const database = await requestResult(request);
-    expect(database.version).toBe(7);
+    expect(database.version).toBe(8);
     expect(Array.from(database.objectStoreNames)).toEqual([
       SIDEBAR_SNAPSHOT_STORE_NAME,
       CHAT_SNAPSHOT_METADATA_STORE_NAME,
@@ -522,6 +583,34 @@ describe("persistent chat session snapshots", () => {
     expect(snapshotRequest.result).toBeUndefined();
     expect(metadataRequest.result).toBeUndefined();
     database.close();
+  });
+
+  it("upgrades unbounded transcripts without discarding the current sidebar", async () => {
+    const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME, 7);
+    request.addEventListener("upgradeneeded", () => {
+      for (const name of [
+        CHAT_SNAPSHOT_STORE_NAME,
+        CHAT_SNAPSHOT_METADATA_STORE_NAME,
+        SIDEBAR_SNAPSHOT_STORE_NAME,
+      ]) {
+        request.result.createObjectStore(name, { keyPath: "sessionKey" });
+      }
+    });
+    const oldDatabase = await requestResult(request);
+    const transaction = oldDatabase.transaction([...oldDatabase.objectStoreNames], "readwrite");
+    for (const name of oldDatabase.objectStoreNames) {
+      transaction.objectStore(name).put({ sessionKey: "old", payload: "retained" });
+    }
+    await transactionDone(transaction);
+    oldDatabase.close();
+    const reader = new SessionSnapshotStore();
+    await reader.loadSavedAtIndex();
+    expect(await readRawRecord("old")).toBeUndefined();
+    expect(await readRawRecord("old", CHAT_SNAPSHOT_METADATA_STORE_NAME)).toBeUndefined();
+    expect(await readRawRecord("old", SIDEBAR_SNAPSHOT_STORE_NAME)).toEqual({
+      sessionKey: "old",
+      payload: "retained",
+    });
   });
 
   it.each(["all", "session"] as const)(

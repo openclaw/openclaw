@@ -17,8 +17,8 @@ import type { ApplicationUpdateOverlaySnapshot } from "./overlays-types.ts";
 import { createUpdateCampaignStatusPoller } from "./update-campaign-status-poller.ts";
 import {
   canReportUpdateFailure,
-  createUpdateFailureReportController,
-} from "./update-failure-report-controller.ts";
+  createUpdateFailureReportOwner,
+} from "./update-failure-report-owner.ts";
 import {
   createUpdateStatusRefresher,
   projectUpdateSentinel,
@@ -95,7 +95,7 @@ export function createApplicationUpdateOverlays(
   let currentFailure: UpdateFailureTriage | null = null;
   let diagnosticGeneration = 0;
 
-  const updateFailureReporter = createUpdateFailureReportController({
+  const updateFailureReporter = createUpdateFailureReportOwner({
     getClient: () => gateway.snapshot.client,
     isCurrent: (attemptId, client) =>
       isCurrentClient(client) &&

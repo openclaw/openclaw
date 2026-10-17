@@ -14,7 +14,7 @@ import { loadDesktopEnvironments } from "./desktop-source.ts";
 type DesktopSessionContext = {
   isConnected: boolean;
   client: GatewayBrowserClient | null;
-  sessions: Pick<SessionCapability, "describe">;
+  sessions: Pick<SessionCapability, "describe"> | undefined;
   available: boolean;
   documentMode: boolean;
   embedded: boolean;
@@ -117,21 +117,6 @@ export class DesktopSessionOwner {
   invalidate(): void {
     this.refreshId += 1;
     this.stopStartup()?.resolve(undefined);
-  }
-
-  targetChanged(changed: ReadonlyMap<PropertyKey, unknown>, automaticSource: boolean): boolean {
-    const { embedded, suppliedEnvironments } = this.context;
-    return (
-      changed.has("client") ||
-      changed.has("available") ||
-      changed.has("sessions") ||
-      changed.has("embedded") ||
-      changed.has("documentMode") ||
-      (changed.has("requestedSource") &&
-        (!embedded || suppliedEnvironments !== null || automaticSource)) ||
-      changed.has("sessionKey") ||
-      changed.has("documentControl")
-    );
   }
 
   private stopStartup(): DesktopStartup | undefined {
@@ -321,9 +306,12 @@ export class DesktopSessionOwner {
       requestedSource === this.context.requestedSource;
     // Embedded presenters and placement events already carry the authoritative target.
     const target = requestedSource ?? resolvedSessionTarget;
+    if (target === undefined && documentMode && sessionKey !== null && !sessions) {
+      throw new Error("Desktop session capability is unavailable");
+    }
     return {
       target:
-        target === undefined && documentMode && sessionKey !== null
+        target === undefined && documentMode && sessionKey !== null && sessions
           ? sessions
               .describe({ key: sessionKey }, { client, refresh })
               .then(({ session }) => resolveChatPaneDesktopTarget(session ?? undefined))

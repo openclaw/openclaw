@@ -8,7 +8,7 @@ import {
   requireDirectorySync,
   syncDirectory,
 } from "./directory-durability.js";
-import { hashFileDescriptorSync } from "./file-descriptor.js";
+import { hashFileDescriptorSync, sameFileMutationFingerprint } from "./file-descriptor.js";
 
 const IdentitySchema = z.object({
   dev: z.string(),
@@ -36,6 +36,11 @@ export const MigrationArtifactSchema = z.object({
 });
 export type MigrationArtifact = z.infer<typeof MigrationArtifactSchema>;
 export type MigrationArtifactIdentity = MigrationArtifact["identity"];
+/** One maintenance operation owns these facts; never persist or share them across runs. */
+export type MigrationArtifactVerification = Map<
+  string,
+  { stat: fs.BigIntStats; identity: MigrationArtifactIdentity }
+>;
 
 export function statMigrationPath(filePath: string): fs.Stats | undefined {
   try {
@@ -86,6 +91,7 @@ export function readMigrationArtifactIdentity(
   filePath: string,
   expectedLinks = 1n,
   importedFingerprint?: Pick<fs.BigIntStats, "ctimeNs" | "dev" | "ino" | "mtimeNs" | "size">,
+  verification?: MigrationArtifactVerification,
 ): MigrationArtifactIdentity {
   const before = fs.lstatSync(filePath, { bigint: true });
   if (!before.isFile() || before.nlink !== expectedLinks) {
@@ -105,28 +111,50 @@ export function readMigrationArtifactIdentity(
   );
   try {
     const opened = fs.fstatSync(fd, { bigint: true });
-    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) {
+    if (
+      !opened.isFile() ||
+      opened.nlink !== expectedLinks ||
+      !sameFileMutationFingerprint(opened, before)
+    ) {
       throw new Error("artifact identity changed");
     }
-    const { sha256, sizeBytes: bytes } = hashFileDescriptorSync(fd);
+    const key =
+      before.dev !== 0n && before.ino !== 0n && before.ctimeNs !== 0n
+        ? `${before.dev}:${before.ino}`
+        : undefined;
+    const previous = key === undefined ? undefined : verification?.get(key);
+    // Both names of a claimed original share one content generation. Link/unlink
+    // changes ctime and nlink, so each transition still requires a fresh full hash.
+    const content =
+      previous &&
+      previous.stat.nlink === before.nlink &&
+      sameFileMutationFingerprint(previous.stat, before)
+        ? { sha256: previous.identity.sha256, sizeBytes: previous.identity.size }
+        : hashFileDescriptorSync(fd);
+    const { sha256, sizeBytes: bytes } = content;
     const after = fs.lstatSync(filePath, { bigint: true });
+    const descriptorAfter = fs.fstatSync(fd, { bigint: true });
     if (
-      after.dev !== before.dev ||
-      after.ino !== before.ino ||
-      after.mtimeNs !== before.mtimeNs ||
-      after.ctimeNs !== before.ctimeNs ||
-      after.size !== before.size ||
+      !after.isFile() ||
+      after.nlink !== expectedLinks ||
+      descriptorAfter.nlink !== expectedLinks ||
+      !sameFileMutationFingerprint(after, before) ||
+      !sameFileMutationFingerprint(descriptorAfter, before) ||
       BigInt(bytes) !== before.size
     ) {
       throw new Error("artifact changed while hashing");
     }
-    return {
+    const identity = {
       dev: String(before.dev),
       ino: String(before.ino),
       mtimeNs: String(before.mtimeNs),
       size: bytes,
       sha256,
     };
+    if (key !== undefined) {
+      verification?.set(key, { stat: after, identity });
+    }
+    return identity;
   } finally {
     fs.closeSync(fd);
   }
@@ -153,10 +181,16 @@ export async function moveMigrationArtifact(
   expected: MigrationArtifactIdentity,
   onPublished?: () => undefined,
   publishSourceRemoval?: (remove: () => void, retainSource: () => void) => void,
+  verification?: MigrationArtifactVerification,
 ): Promise<void> {
   let createdPublication = false;
   if (!fs.lstatSync(targetPath, { bigint: true, throwIfNoEntry: false })) {
-    if (!sameMigrationArtifact(readMigrationArtifactIdentity(sourcePath), expected)) {
+    if (
+      !sameMigrationArtifact(
+        readMigrationArtifactIdentity(sourcePath, 1n, undefined, verification),
+        expected,
+      )
+    ) {
       throw new Error("artifact changed before publication");
     }
     const published = await publishFileExclusive({
@@ -177,10 +211,10 @@ export async function moveMigrationArtifact(
     );
   }
   const removeSource = () => {
-    assertMigrationArtifactPublication(sourcePath, targetPath, expected);
+    assertMigrationArtifactPublication(sourcePath, targetPath, expected, verification);
     if (onPublished) {
       onPublished();
-      assertMigrationArtifactPublication(sourcePath, targetPath, expected);
+      assertMigrationArtifactPublication(sourcePath, targetPath, expected, verification);
     }
     fs.unlinkSync(sourcePath);
   };
@@ -189,7 +223,7 @@ export async function moveMigrationArtifact(
     if (!createdPublication) {
       throw new Error("Cannot discard a recovery publication created by an earlier run.");
     }
-    assertMigrationArtifactPublication(sourcePath, targetPath, expected);
+    assertMigrationArtifactPublication(sourcePath, targetPath, expected, verification);
     fs.unlinkSync(targetPath);
     retainedSource = true;
   };
@@ -208,7 +242,12 @@ export async function moveMigrationArtifact(
     }
   }
   requireDirectorySync(await syncDirectory(path.dirname(sourcePath)), "Recovery artifact source");
-  if (!sameMigrationArtifact(readMigrationArtifactIdentity(targetPath), expected)) {
+  if (
+    !sameMigrationArtifact(
+      readMigrationArtifactIdentity(targetPath, 1n, undefined, verification),
+      expected,
+    )
+  ) {
     throw new Error("artifact changed during publication");
   }
 }
@@ -218,6 +257,7 @@ function assertMigrationArtifactPublication(
   sourcePath: string,
   targetPath: string,
   expected: MigrationArtifactIdentity,
+  verification?: MigrationArtifactVerification,
 ): void {
   // A crash can leave both names. Only this exact two-link original can complete the move.
   const target = fs.lstatSync(targetPath, { bigint: true });
@@ -228,8 +268,14 @@ function assertMigrationArtifactPublication(
     target.dev !== source.dev ||
     target.ino !== source.ino ||
     source.nlink !== 2n ||
-    !sameMigrationArtifact(readMigrationArtifactIdentity(sourcePath, 2n), expected) ||
-    !sameMigrationArtifact(readMigrationArtifactIdentity(targetPath, 2n), expected)
+    !sameMigrationArtifact(
+      readMigrationArtifactIdentity(sourcePath, 2n, undefined, verification),
+      expected,
+    ) ||
+    !sameMigrationArtifact(
+      readMigrationArtifactIdentity(targetPath, 2n, undefined, verification),
+      expected,
+    )
   ) {
     throw new Error("publication paths changed or have unexpected aliases");
   }

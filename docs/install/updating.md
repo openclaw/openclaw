@@ -41,6 +41,11 @@ using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
 
+After a Doctor child settles, the updater drains its retained handles for the
+affected shared-state database and revokes their schema admission, even when
+Doctor exits unsuccessfully. The next parent access admits the resulting schema
+again and refuses a version newer than the running updater supports.
+
 ### Migration integrity checks
 
 SQLite upgrades default to a whole-database `quick_check`, a full
@@ -81,6 +86,10 @@ Doctor's held-store warning remains visible. Configured agents required by the
 Gateway must still pass runtime admission: Doctor fails if a recovery hold
 leaves a required store unusable. Active databases and pending deletions require
 the candidate schema, and held stores remain part of rollback verification.
+Retained plugin databases, including plugin shared-state stores, are not checked
+against the agent schema. Their plugin owns migration; they remain in the
+snapshot and rollback inventory even when the plugin is disabled. The primary
+shared-state database is checked against the shared-state schema.
 
 OpenClaw.app runs plugin convergence through the selected runtime's Doctor while
 the app owns Gateway activation. This aligns managed official npm plugins with the new
@@ -661,6 +670,18 @@ directory. `status` reads the operation, `repair` resumes only its recorded
 package publication, and `retire` removes only its recorded obsolete objects.
 These commands do not replace post-update plugin, migration or service recovery.
 Keep other package managers stopped while recovering the operation.
+
+If an updater-owned recovery directory, helper, or journal gains group or other
+permissions, the updater restores owner-only access and warns with the path,
+observed mode, and link count. On Linux, this also clears the effective POSIX ACL
+mask; named ACL entries can remain but no longer grant access. When `getfacl` is
+available, the warning identifies detected ACL entries. Foreign ownership,
+symlinks, unexpected object types, multiply linked files, and permissions that
+cannot be repaired still require intervention. Repairing these private objects
+does not change package-content fingerprints or authorize recovery of modified
+package files.
+If recovery still refuses, automatic update and managed-service handoff reports
+retain its reason code and diagnostic message in the failed phase.
 
 On FreeBSD, `repair` and `retire` read process identity through the recorded
 installation's own `@openclaw/proc-safe` dependency and its FreeBSD platform

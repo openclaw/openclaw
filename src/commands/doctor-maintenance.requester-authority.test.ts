@@ -11,7 +11,7 @@ import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { withLegacyMigrationStateLock } from "../infra/state-migrations.lock.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
-import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
+import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-database-generations.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
 import {
   createManagedUpdateRequesterAuthority,
@@ -76,7 +76,7 @@ it.each(["configured-owner", "profile"] as const)(
         await closeOpenClawStateDatabaseAsync();
         const databasePath = resolveOpenClawStateSqlitePath(state.env);
         const files = [databasePath];
-        const generation = readUpdateDatabaseGenerations(files);
+        const generation = await readUpdatePhysicalDatabaseGenerations(files);
         const foreignEnv = { ...state.env, OPENCLAW_STATE_DIR: state.path("foreign-state") };
         const foreignDatabase = resolveOpenClawStateSqlitePath(foreignEnv);
         await fs.mkdir(state.path("foreign-state", "state"), { recursive: true });
@@ -99,7 +99,7 @@ it.each(["configured-owner", "profile"] as const)(
           requester.requester,
           foreignEnv,
         );
-        expect(readUpdateDatabaseGenerations(files)).toEqual(generation);
+        expect(await readUpdatePhysicalDatabaseGenerations(files)).toEqual(generation);
         const authorityWorkerLaunches = new Set<object>();
         const assertCurrent = () => {
           const start = vi.mocked(spawnSync).mock.calls.length;

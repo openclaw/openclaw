@@ -213,6 +213,13 @@ Repeated preparation errors stop renewing the waiting heartbeat, allowing the
 existing ingress watchdog to apply its retry and dead-letter policy. Normal
 capacity waits keep their heartbeat.
 
+Transient session admission conflicts follow the same ingress retry policy as
+other retryable failures: by default, a message becomes eligible for dead-lettering
+only after both eight failed attempts and 24 hours, with capped retry backoff. The
+oldest pending message keeps its place ahead of later messages in the same lane.
+A terminal restart-recovery tombstone still fails immediately so an authorized
+reset can proceed.
+
 ## Lanes and scope
 
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).

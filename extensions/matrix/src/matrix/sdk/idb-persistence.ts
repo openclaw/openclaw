@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { IDBFactory, indexedDB as fakeIndexedDB } from "fake-indexeddb";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -48,9 +49,7 @@ function isValidIdbIndexSnapshot(value: unknown): value is IdbStoreSnapshot["ind
   const candidate = asOptionalObjectRecord(value);
   return (
     typeof candidate?.name === "string" &&
-    (typeof candidate.keyPath === "string" ||
-      (Array.isArray(candidate.keyPath) &&
-        candidate.keyPath.every((entry) => typeof entry === "string"))) &&
+    (typeof candidate.keyPath === "string" || isStringArray(candidate.keyPath)) &&
     typeof candidate.multiEntry === "boolean" &&
     typeof candidate.unique === "boolean"
   );
@@ -64,10 +63,7 @@ function isValidIdbRecordSnapshot(value: unknown): value is IdbStoreSnapshot["re
 function isValidIdbStoreSnapshot(value: unknown): value is IdbStoreSnapshot {
   const candidate = asOptionalObjectRecord(value);
   const keyPath = candidate?.keyPath;
-  const validKeyPath =
-    keyPath === null ||
-    typeof keyPath === "string" ||
-    (Array.isArray(keyPath) && keyPath.every((entry) => typeof entry === "string"));
+  const validKeyPath = keyPath === null || typeof keyPath === "string" || isStringArray(keyPath);
   return (
     typeof candidate?.name === "string" &&
     validKeyPath &&

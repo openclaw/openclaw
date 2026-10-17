@@ -13,12 +13,24 @@ import {
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 
-function controllerHostUsers(root: string, sources: ReadonlyMap<string, string>) {
+function retiredControllerHostUsers(root: string, sources: ReadonlyMap<string, string>) {
   using parser = createNativeTypeScriptParser({ cwd: root });
   const files = [...sources]
-    .filter(([file, text]) => !isTest(file) && text.includes("solid-controller-host"))
+    .filter(
+      ([, text]) =>
+        text.includes("solid-controller-host") ||
+        text.includes("subscriptions-controller") ||
+        text.includes("SolidController") ||
+        text.includes("addController") ||
+        text.includes("removeController"),
+    )
     .map(([fileName, text]) => ({ fileName, text }));
-  const users = new Set<string>();
+  const users = new Set(
+    [
+      "ui/src/lib/reactive/solid-controller-host.ts",
+      "ui/src/lib/subscriptions-controller.ts",
+    ].filter((file) => sources.has(file)),
+  );
   for (const tree of parser.parseSourceFiles(files)) {
     const visit = (node: ts.Node): void => {
       const specifier =
@@ -30,9 +42,16 @@ function controllerHostUsers(root: string, sources: ReadonlyMap<string, string>)
               ? node.argument.literal
               : undefined;
       if (
-        specifier &&
-        (ts.isStringLiteral(specifier) || ts.isNoSubstitutionTemplateLiteral(specifier)) &&
-        /(?:^|\/)solid-controller-host(?:\.ts)?$/u.test(specifier.text)
+        (ts.isIdentifier(node) &&
+          (node.text === "SolidController" ||
+            node.text === "SolidControllerHost" ||
+            node.text === "addController" ||
+            node.text === "removeController")) ||
+        (specifier &&
+          (ts.isStringLiteral(specifier) || ts.isNoSubstitutionTemplateLiteral(specifier)) &&
+          /(?:^|\/)(?:solid-controller-host|subscriptions-controller)(?:\.ts)?$/u.test(
+            specifier.text,
+          ))
       ) {
         users.add(path.relative(root, tree.fileName).split(path.sep).join("/"));
       }
@@ -55,10 +74,6 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     }
     const previous = readInventorySources(root, { ref: base, roots: ["ui/src"] });
     const current = readInventorySources(root, { staged: args.staged, roots: ["ui/src"] });
-    const previousHostUsers = controllerHostUsers(root, previous);
-    const newHostUsers = [...controllerHostUsers(root, current)].filter(
-      (file) => !previousHostUsers.has(file),
-    );
     // Parse candidates so comments and strings cannot keep the retirement gate open.
     const candidates = (sources: ReadonlyMap<string, string>) =>
       new Map(
@@ -80,8 +95,9 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       reportRatchetFailures(
         [
           {
-            title: "New Control UI modules must not depend on the retiring controller host:",
-            entries: newHostUsers,
+            title:
+              "Retired Control UI controller host modules and contracts must not be reintroduced:",
+            entries: [...retiredControllerHostUsers(root, current)],
           },
           {
             title: "Retired Control UI controller patterns must not be reintroduced:",

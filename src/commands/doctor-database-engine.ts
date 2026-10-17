@@ -3,6 +3,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { ensureSqliteLibrarySelected } from "../infra/bun-sqlite-library.js";
+import { formatDatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics-format.js";
 import { describeDatabaseEngineSelection } from "../infra/database-engine/report.js";
 import type {
   DoctorDatabaseEngineInspection,
@@ -92,6 +93,16 @@ function collectInspectionFindings(
   return [
     ...collectDatabaseEngineHealthFindings(cfg, observed),
     ...stateRootFindings(cfg, inspection),
+    ...(inspection.stores ?? []).map((store): HealthFinding => ({
+      checkId: "core/doctor/database-engine",
+      severity: store.issues.length || store.legacyMigrations.state !== "none" ? "warning" : "info",
+      source: "doctor",
+      target: store.path ?? store.family,
+      path: store.path ?? `database.families.${store.family}`,
+      message: formatDatabaseStoreDiagnostic(store),
+      fixHint: store.nextSteps.join(" ") || undefined,
+      details: { ...store },
+    })),
   ];
 }
 
@@ -119,6 +130,9 @@ export async function noteDatabaseEngines(
     const namespace = physical.engine === "postgres" ? `, namespace=${physical.namespace}` : "";
     lines.push(`Shared state root: ${path} (physical=${physical.engine}${namespace})`);
   }
+  for (const store of inspection.stores ?? []) {
+    lines.push(formatDatabaseStoreDiagnostic(store));
+  }
   const sqliteLibrary = ensureSqliteLibrarySelected();
   if (sqliteLibrary.source !== "runtime") {
     lines.push(
@@ -128,6 +142,9 @@ export async function noteDatabaseEngines(
     lines.push(`SQLite (doctor process): ${sqliteLibrary.ignoredOverride}; override ignored`);
   }
   for (const finding of findings) {
+    if (finding.details) {
+      continue;
+    }
     lines.push("", finding.message, finding.fixHint ?? "");
   }
   note(lines.join("\n"), "Database engines");

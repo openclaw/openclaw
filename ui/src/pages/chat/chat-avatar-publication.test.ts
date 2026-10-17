@@ -73,8 +73,8 @@ describe("forwarded avatar publication", () => {
         props.messages = host.chatMessages;
         props.senderAgentAvatars = host.senderAgentAvatars;
         view.update(props);
-        transcript.hostConnected();
-        transcript.hostUpdated();
+        transcript.start();
+        transcript.update();
         flush();
       };
       try {
@@ -124,7 +124,7 @@ describe("forwarded avatar publication", () => {
         expect(host.requestUpdate).toHaveBeenCalledOnce();
       } finally {
         view.unmount();
-        transcript.hostDisconnected();
+        transcript.dispose();
         invalidateChatAvatarCache(host);
       }
     },

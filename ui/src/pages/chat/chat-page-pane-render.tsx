@@ -162,15 +162,14 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
     props.options.context &&
     (routeData()?.creation?.admitted === false ||
       readDeletedSessionStartup(props.options.context, props.sessionKey));
-  const className = () =>
-    [
-      "chat-pane-cache__pane",
-      visible() ? "chat-pane-cache__pane--visible" : "",
-      active() ? "chat-pane-cache__pane--active" : "",
-      props.options.splitMode ? "chat-split-view__pane" : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
+  const className = () => [
+    "chat-pane-cache__pane",
+    {
+      "chat-pane-cache__pane--visible": visible(),
+      "chat-pane-cache__pane--active": active(),
+      "chat-split-view__pane": props.options.splitMode,
+    },
+  ];
   return (
     <Show
       when={!pending()}

@@ -68,8 +68,12 @@ export function nativeHistoryMessageIdentity(message: unknown): string | null {
   const record = asNullableRecord(message);
   const metadata = asNullableRecord(record?.["__openclaw"]);
   const { recordTimestampMs: _recordTimestampMs, ...projectionMetadata } = metadata ?? {};
-  const projection = metadata ? { ...record, __openclaw: projectionMetadata } : record;
-  // History alone adds recordTimestampMs; delivery metadata is not projection identity.
+  const projection = { ...record };
+  delete projection.openclawResponsesInputReplay;
+  if (metadata) {
+    projection["__openclaw"] = projectionMetadata;
+  }
+  // History timestamps and provider replay data are not display identity.
   // Keep every other projection byte so siblings from one transcript row stay distinct.
   return `${sourceIdentity}:${JSON.stringify(projection)}`;
 }

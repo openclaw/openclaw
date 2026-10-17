@@ -1,8 +1,8 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { CHAT_MESSAGE_MAX_CHARS } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { currentThemeBranding } from "../../../app/theme-branding.ts";
 import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
-import { currentThemeBranding } from "../../../components/neutral-mark.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-avatar.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
@@ -12,10 +12,10 @@ import { messageRecoveryKey, resolveSourceMessageId } from "../chat-message-reco
 import { resolveTurnRecap } from "../chat-progress.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
 import { projectSubagentStatus } from "../chat-subagent-wait.ts";
+import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
-  type coalesceAgentRunFrames,
   getExpansionStateVersion,
   getExpandedToolCards,
   getExpandedUserMessages,
@@ -29,11 +29,7 @@ import { assistantMediaPolicyKey, getChatMediaRenderVersion } from "./chat-messa
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
 import { projectRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
-import {
-  closeTranscriptSearch,
-  getTranscriptState,
-  type ChatThreadProps,
-} from "./chat-thread-interactions.ts";
+import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
@@ -60,9 +56,13 @@ import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.t
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
-type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+type ChatRenderItem = SystemEventRenderItem;
 
-export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTranscriptSession) {
+export function projectChatTranscript(
+  props: ChatThreadProps,
+  transcript: ChatTranscriptSession,
+  search = getTranscriptState(props.paneId).search.snapshot,
+) {
   const state = getTranscriptState(props.paneId);
   const { asyncQuestions, selectedSession: activeSession } = props;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
@@ -84,7 +84,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     textAvatar: assistantAvatar.textAvatar,
   };
   const locale = i18n.getLocale();
-  const searchFiltering = state.searchOpen && Boolean(state.searchQuery.trim());
+  const searchFiltering = search.open && Boolean(search.query.trim());
   const expandedAssistantMessages = transcript.expandedAssistantMessages;
   const recoveryKey = (id: string) => messageRecoveryKey(props.fullMessageAgentId, id);
   pruneTranscriptExpansions(expandedAssistantMessages, props);
@@ -126,8 +126,8 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     loading: props.loading,
     replyPeople: [...sessionPeople].toSorted(),
     replyLocalPerson: localParticipantIdentityKey(props.userId),
-    searchOpen: state.searchOpen,
-    searchQuery: state.searchQuery,
+    searchOpen: search.open,
+    searchQuery: search.query,
     messageRecovery:
       searchFiltering && props.loadFullAssistantMessage
         ? {
@@ -233,7 +233,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     transcriptItems.length === 0 &&
     !props.loading &&
     !hasLiveContent &&
-    (!props.historyPagination?.hasMore || state.searchOpen);
+    (!props.historyPagination?.hasMore || search.open);
   transcript.setContentReady(!props.loading);
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(
     props,
@@ -446,6 +446,9 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     state,
     (item) => [liveStatusSignature(item), ...transcriptReplyDependencies(item, loadedReplySources)],
     (item) => {
+      if (item.kind === "system-event-group") {
+        return { kind: "system-events", item };
+      }
       if (item.kind === "group") {
         return { kind: "group", group: item, options: renderGroupOptions(item) };
       }
@@ -685,7 +688,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       expandReplyTargetWork(targetChain.transcriptItems, expandedToolCards, replyToId);
     }
     if (searchFiltering) {
-      closeTranscriptSearch(state, requestUpdate);
+      state.search.close();
     }
     if (loaded) {
       // Closing search must commit the original's row before reveal can find it.
@@ -706,13 +709,13 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       : positionIndex,
     isEmpty,
     showLoadingSkeleton,
-    searchOpen: state.searchOpen,
+    searchOpen: search.open,
     renderRows: (overlay: JSX.Element = null, header: TranscriptHeader | null = null) =>
       transcript.render(
         transcriptRows,
         (row) => (row.kind === "item" ? renderItem(row.item) : row.content),
         latestTranscriptAnnouncement(collapsedItems),
-        props.announceTranscript !== false && !state.searchOpen && !props.loading,
+        props.announceTranscript !== false && !search.open && !props.loading,
         overlay,
         header,
         props.transcriptVisible ?? true,

@@ -106,11 +106,9 @@ describe("standing intents", () => {
     const match = prepareStandingIntentMatch({ prompt: "release", nowMs: 2_000 });
     expect(match).toBeDefined();
     expect(worker.execute({ type: "match", input: match! })).toMatchObject({
-      kind: "result",
       value: [{ id: intent.id, status: "fired", fireCount: 1 }],
     });
     expect(worker.execute({ type: "list", input: { nowMs: 2_999 } })).toMatchObject({
-      kind: "result",
       value: [{ id: intent.id, status: "fired" }],
     });
     refuseCommit = true;
@@ -119,11 +117,9 @@ describe("standing intents", () => {
     );
     refuseCommit = false;
     expect(worker.execute({ type: "list", input: { nowMs: 3_000 } })).toMatchObject({
-      kind: "result",
       value: [{ id: intent.id, status: "armed" }],
     });
     expect(worker.execute({ type: "list", input: { nowMs: 10_000 } })).toMatchObject({
-      kind: "result",
       value: [{ id: intent.id, status: "expired" }],
     });
     const row = {
@@ -145,7 +141,6 @@ describe("standing intents", () => {
     };
     worker.execute({ type: "create", input: row });
     expect(worker.execute({ type: "list", input: { nowMs: 12_000 } })).toMatchObject({
-      kind: "result",
       value: [
         { id: intent.id, status: "expired" },
         { id: row.id, status: "expired" },
@@ -156,7 +151,6 @@ describe("standing intents", () => {
     expect(
       worker.execute({ type: "list", input: { status: "cancelled", nowMs: 14_000 } }),
     ).toMatchObject({
-      kind: "result",
       value: [{ id: "cancelled", status: "cancelled" }],
     });
     const preciseExpiry = 1_790_000_000_001;
@@ -196,7 +190,7 @@ describe("standing intents", () => {
     let worker = bindSqliteWorkerBackend(undefined, context);
     const match = (prompt = "release", nowMs = 1_000) =>
       worker.execute({ type: "match", input: prepareStandingIntentMatch({ prompt, nowMs })! });
-    const empty = { kind: "result", value: [], nextDueAt: Infinity };
+    const empty = { value: [], nextDueAt: Infinity };
     const row = {
       id: "release",
       description: "Review the release.",
@@ -224,7 +218,6 @@ describe("standing intents", () => {
       worker.execute({ type: "create", input: row });
       expect(match("unrelated")).toEqual({ ...empty, nextDueAt: row.expires_at });
       expect(match()).toMatchObject({
-        kind: "result",
         value: [{ id: row.id, status: "done", fireCount: 1 }],
       });
       worker.execute({ type: "create", input: { ...row, id: "cancelled" } });
@@ -239,7 +232,6 @@ describe("standing intents", () => {
       expect(() => match("release", 10_000)).toThrow("test commit refused");
       refuseCommit = false;
       expect(match()).toMatchObject({
-        kind: "result",
         value: [{ id: "rollback", status: "done", fireCount: 1 }],
       });
     } finally {

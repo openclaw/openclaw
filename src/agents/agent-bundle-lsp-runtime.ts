@@ -98,11 +98,8 @@ function attachLspProcessHandlers(session: LspSession): void {
     () => {},
     (chunk) => handleIncomingData(session, chunk),
   );
-  session.process.onStderr((chunk) => {
-    for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
-      logDebug(`bundle-lsp:${session.serverName}: ${line.trim()}`);
-    }
-  });
+  // Drain the pipe without recording server output, which can contain file/tool content.
+  session.process.onStderr(() => {});
 }
 
 function encodeLspMessage(body: unknown): string {
@@ -579,10 +576,6 @@ export async function createBundleLspToolRuntime(params: {
           });
           tools.push(tool);
         }
-
-        logDebug(
-          `bundle-lsp: started "${serverName}" (${describeStdioMcpServerLaunchConfig(launchConfig)}) with ${serverTools.length} tools`,
-        );
       } catch (error) {
         if (session) {
           await disposeSessions([session]);

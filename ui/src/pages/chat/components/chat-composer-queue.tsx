@@ -397,17 +397,9 @@ function ChatQueueItem(rowProps: {
         ? t("chat.queue.imageCount", { count: String(item().attachments?.length ?? 0) })
         : ""),
   );
-  const itemClass = createMemo(
-    () =>
-      `chat-queue__item${hasAuthorAvatar() ? "" : " chat-queue__item--no-avatar"}${previewUrl() ? " chat-queue__item--with-images" : ""}${steered() ? " chat-queue__item--steered" : ""}${
-        failed() ? " chat-queue__item--failed" : ""
-      }${reconnecting() ? " chat-queue__item--reconnect" : ""}${
-        editing() ? " chat-queue__item--editing" : ""
-      }`,
-  );
   const renderDeliveryAction = (action: "retry" | "steer", disabled = false) => (
     <button
-      class={`chat-queue__action chat-queue__${action}`}
+      class={["chat-queue__action", `chat-queue__${action}`]}
       type="button"
       disabled={disabled}
       aria-label={t(`chat.queue.${action}QueuedMessage`)}
@@ -425,7 +417,17 @@ function ChatQueueItem(rowProps: {
   // diagnostic grows the attached tray without disturbing its action rail.
   return (
     <div
-      class={itemClass()}
+      class={[
+        "chat-queue__item",
+        {
+          "chat-queue__item--no-avatar": !hasAuthorAvatar(),
+          "chat-queue__item--with-images": Boolean(previewUrl()),
+          "chat-queue__item--steered": steered(),
+          "chat-queue__item--failed": failed(),
+          "chat-queue__item--reconnect": reconnecting(),
+          "chat-queue__item--editing": editing(),
+        },
+      ]}
       data-chat-queue-item={item().id}
       onClick={(event) => {
         const row = event.currentTarget;
@@ -609,13 +611,11 @@ function ChatQueueItem(rowProps: {
           ) : null}
           {stateLabel() && (!failed() || !item().sendError) ? (
             <span
-              class={
-                failed()
-                  ? "chat-queue__badge"
-                  : reconnecting()
-                    ? "chat-queue__badge chat-queue__badge--reconnect"
-                    : "chat-queue__state"
-              }
+              class={{
+                "chat-queue__badge": failed() || reconnecting(),
+                "chat-queue__badge--reconnect": !failed() && reconnecting(),
+                "chat-queue__state": !failed() && !reconnecting(),
+              }}
               title={reconnecting() ? item().sendError : undefined}
             >
               {stateLabel()}

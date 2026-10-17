@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { runOutsideOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -8,6 +9,7 @@ import {
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { withoutGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 
 type MaintenanceOwner = {
   controller: AbortController;
@@ -143,8 +145,13 @@ export function createSessionMaintenanceOwner(params: {
         assertCurrent();
         owner.running = true;
       }
-      // A maintenance model call and a coalesced child must not wait on their own parent.
-      return state.current.run(new Set([...ancestors, owner]), run);
+      // Maintenance owns this session's work, never its launching turn's tool grants.
+      return withoutGatewayToolCallerIdentity(() =>
+        runOutsideOperatorToolGatewayAuthority(() =>
+          // Nested model reads must not wait on their own maintenance parent.
+          state.current.run(new Set([...ancestors, owner]), run),
+        ),
+      );
     },
     track: <T>(work: Promise<T>): Promise<T> =>
       work.finally(() => {

@@ -26,10 +26,13 @@ export function buildStatusJsonPayload(params: {
   pluginCompatibility?: Array<Record<string, unknown>> | null | undefined;
 }) {
   const channelInfo = resolveStatusUpdateChannelInfo({
-    updateConfigChannel: params.surface.cfg.update?.channel ?? undefined,
+    updateConfigChannel: params.surface.cfg.update?.channel,
     update: params.surface.update,
   });
-  const databaseFamilies = describeDatabaseEngineSelection(params.surface.cfg);
+  const databaseFamilies = describeDatabaseEngineSelection(
+    params.surface.cfg,
+    params.surface.databaseEngines?.stores,
+  );
   return {
     ...params.summary,
     os: params.osSummary,
@@ -42,6 +45,7 @@ export function buildStatusJsonPayload(params: {
       source: "configured",
       experimental: databaseFamilies.some((family) => family.effective === "postgres"),
       families: databaseFamilies,
+      ...params.surface.databaseEngines,
     },
     gateway: buildGatewayStatusJsonPayload(params.surface),
     gatewayService: params.surface.gatewayService,

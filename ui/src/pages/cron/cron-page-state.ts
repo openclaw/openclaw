@@ -184,6 +184,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       gatewayAvailable = nextAvailable;
       publish();
     };
+    // Gateway receipts retire requests and privileged editor state before reconnecting or losing access.
     cleanups.push(currentContext.gateway.subscribe(applySnapshot));
     applySnapshot();
     cleanups.push(

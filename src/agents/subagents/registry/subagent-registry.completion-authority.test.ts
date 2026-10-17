@@ -19,9 +19,7 @@ import {
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { onAgentEvent, rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import { loadPendingSessionDeliveries } from "../../../infra/session-delivery-queue-storage.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
-import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../../plugins/runtime.js";
 import {
   getGatewayContextLifetime,
@@ -30,7 +28,6 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import {
   createChannelTestPluginBase,
@@ -40,22 +37,16 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "../announce/subagent-announce-overrides.test-support.js";
 import * as announce from "../announce/subagent-announce.js";
-import {
-  bindSubagentRunGatewayOwners,
-  retryDeferredSubagentCompletionSource,
-} from "./subagent-registry-gateway-owner.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
-  createSubagentStoreRunFixture,
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   adoptSubagentRunForRequesterTurn,
-  initSubagentRegistry,
   registerSubagentRun,
   replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
@@ -72,18 +63,6 @@ vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../gateway/call.js", { spy: true });
 vi.mock("../../../gateway/server-recovery-runtime-context.js", { spy: true });
 vi.mock("../../../infra/agent-events.js", { spy: true });
-
-const recoveryWarn = vi.hoisted(() => vi.fn());
-vi.mock("../../../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) => {
-      const logger = actual.createSubsystemLogger(subsystem);
-      return subsystem === "agents/subagents" ? { ...logger, warn: recoveryWarn } : logger;
-    },
-  };
-});
 
 function useConfig<T extends OpenClawConfig>(cfg: T) {
   config.setRuntimeConfigSnapshot(cfg);
@@ -195,108 +174,6 @@ afterEach(async () => {
 
 describe("registered completion source custody", () => {
   registerSubagentRegistrationOwnershipTests({ registration, updateRun });
-
-  it.each([false, true])(
-    "durably settles missing individual completion sources across two restarts (failed write: %s)",
-    async (failWrite) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        useConfig({ session: { store: state.path("sessions.json") } });
-        const entries = ["successful", "interrupted", "quiet", "delivered"].map((kind) =>
-          createSubagentStoreRunFixture({
-            runId: `legacy-${kind}`,
-            childSessionKey: `agent:main:subagent:legacy-${kind}`,
-            expectsCompletionMessage: kind !== "quiet",
-            requesterStorePath: ["quiet", "delivered"].includes(kind) ? "old" : "current",
-            ...(kind === "delivered"
-              ? {
-                  delivery: {
-                    status: "delivered",
-                    disposition: "delivered",
-                    deliveredAt: 260,
-                    announcedAt: 260,
-                  },
-                }
-              : {}),
-            ...(kind === "interrupted"
-              ? {
-                  execution: {
-                    status: "terminal",
-                    endedAt: 250,
-                    outcome: { status: "error", error: "Gateway restarted" },
-                  },
-                }
-              : {}),
-          }),
-        );
-        saveSubagentRegistryChangesToSqlite(
-          new Map(entries.map((entry) => [entry.runId, entry])),
-          entries.map((entry) => entry.runId),
-        );
-        const restart = async () => {
-          await resetSubagentRegistryForTests({ persist: false });
-          rotateAgentEventLifecycleGeneration();
-          await initSubagentRegistry();
-          publishSystemEventStoreResolver(() => "current");
-          const context = createContext();
-          context.resolveGatewayContext = () => context;
-          await bindSubagentRunGatewayOwners({
-            runs: subagentRuns,
-            resumedRuns: new Set(),
-            getGatewayContextResolver: () => context.resolveGatewayContext,
-            onRecovered: () => {},
-          });
-        };
-        onTestFinished(() => publishSystemEventStoreResolver(undefined));
-        let rejected = false;
-        if (failWrite) {
-          const writeProbe = probe.command(stateWorker, async (command, options, scope) => {
-            if (!rejected && command.type === "sessionDelivery.mutateSubagentCompletion") {
-              rejected = true;
-              throw new Error("temporary completion settlement failure");
-            }
-            return scope.execute(command, options);
-          });
-          onTestFinished(() => writeProbe.mockRestore());
-        }
-        recoveryWarn.mockClear();
-        await restart();
-        expect(recoveryWarn).toHaveBeenCalledTimes(4);
-        if (failWrite) {
-          expect(rejected).toBe(true);
-          const unsettled = [...loadSubagentRegistryFromSqlite().values()].filter(
-            (entry) => !entry.suppressCompletionDelivery,
-          );
-          expect(unsettled).toHaveLength(1);
-          await retryDeferredSubagentCompletionSource(
-            expectDefined(subagentRuns.get(unsettled[0]!.runId), "retryable completion"),
-          );
-        }
-        expect(await loadPendingSessionDeliveries(captureOpenClawStateWorkerContext())).toEqual([]);
-        recoveryWarn.mockClear();
-        await restart();
-        expect(recoveryWarn).not.toHaveBeenCalledWith(
-          "subagent completion authority was not restored",
-          expect.anything(),
-        );
-        const settled = loadSubagentRegistryFromSqlite();
-        for (const entry of entries) {
-          expect(settled.get(entry.runId)).toMatchObject({
-            execution: entry.execution,
-            completion: entry.completion,
-            suppressCompletionDelivery: true,
-            delivery:
-              entry.delivery?.status === "delivered"
-                ? entry.delivery
-                : {
-                    status: entry.expectsCompletionMessage ? "failed" : "not_required",
-                    disposition: "permanent_failure",
-                    lastError: expect.stringContaining("original operator source"),
-                  },
-          });
-        }
-      });
-    },
-  );
 
   it("keeps same-key child registrations owned by different agents separate", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

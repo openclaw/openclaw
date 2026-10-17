@@ -21,6 +21,17 @@ vi.mock("./status.scan.fast-json.js", () => ({
   scanStatusJsonFast: mocks.scanStatusJsonFast,
 }));
 
+// mock-isolation: Command policy tests consume a fixed unavailable snapshot without reading stores.
+vi.mock("./status-database-engines.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./status-database-engines.js")>()),
+  resolveStatusDatabaseEngines: async () => ({
+    source: "unavailable",
+    stores: [],
+    reason:
+      "Physical stores unknown: admitted facts unavailable. Run openclaw doctor for recovery steps.",
+  }),
+}));
+
 vi.mock("../security/audit.runtime.js", () => ({
   runSecurityAudit: mocks.runSecurityAudit,
 }));
@@ -86,74 +97,28 @@ function createExpectedStatusPayload() {
     memory: null,
     memoryPlugin: null,
     databaseEngines: {
-      source: "configured",
+      source: "unavailable",
       experimental: false,
       families: [
-        {
-          id: "state",
-          label: "Shared state",
-          default: "sqlite",
-          override: null,
-          fixedLocal: false,
-          effective: "sqlite",
-        },
-        {
-          id: "agent",
-          label: "Agent data",
-          default: "sqlite",
-          override: null,
-          fixedLocal: false,
-          effective: "sqlite",
-        },
-        {
-          id: "workboard",
-          label: "Workboard",
-          default: "sqlite",
-          override: null,
-          fixedLocal: false,
-          effective: "sqlite",
-        },
-        {
-          id: "logbook",
-          label: "Logbook",
-          default: "sqlite",
-          override: null,
-          fixedLocal: false,
-          effective: "sqlite",
-        },
-        {
-          id: "team-reports",
-          label: "Team Reports",
-          default: "sqlite",
-          override: null,
-          fixedLocal: false,
-          effective: "sqlite",
-        },
-        {
-          id: "quarantine",
-          label: "Database quarantine",
-          default: "sqlite",
-          override: null,
-          fixedLocal: true,
-          effective: "sqlite",
-        },
-        {
-          id: "managed-update",
-          label: "Managed update handoffs",
-          default: "sqlite",
-          override: null,
-          fixedLocal: true,
-          effective: "sqlite",
-        },
-        {
-          id: "package-activation",
-          label: "Package activation journal",
-          default: "sqlite",
-          override: null,
-          fixedLocal: true,
-          effective: "sqlite",
-        },
-      ],
+        ["state", "Shared state", false],
+        ["agent", "Agent data", false],
+        ["workboard", "Workboard", false],
+        ["logbook", "Logbook", false],
+        ["team-reports", "Team Reports", false],
+        ["quarantine", "Database quarantine", true],
+        ["managed-update", "Managed update handoffs", true],
+        ["package-activation", "Package activation journal", true],
+      ].map(([id, label, fixedLocal]) => ({
+        id,
+        label,
+        default: "sqlite",
+        override: null,
+        fixedLocal,
+        effective: "sqlite",
+      })),
+      stores: [],
+      reason:
+        "Physical stores unknown: admitted facts unavailable. Run openclaw doctor for recovery steps.",
     },
     gateway: {
       mode: "local",

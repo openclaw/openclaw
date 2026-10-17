@@ -47,12 +47,12 @@ export type InternalRealtimeVoiceBrowserSessionCreateRequest =
   };
 
 export type InternalRealtimeVoiceProviderApi = {
-  /** @deprecated Use isBrowserSessionConfiguredAsync. Compatibility ends 2026-12-31. */
+  /** @deprecated Use isBrowserSessionConfiguredAsync. Compatibility ends 2026-12-31. Removal in the first January 2027 stable release. */
   isBrowserSessionConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
   isBrowserSessionConfiguredAsync?: (
     ctx: RealtimeVoiceProviderConfiguredContext,
   ) => Promise<boolean>;
-  /** @deprecated Use resolveBrowserSessionCapabilitiesAsync. Compatibility ends 2026-12-31. */
+  /** @deprecated Use resolveBrowserSessionCapabilitiesAsync. Compatibility ends 2026-12-31. Removal in the first January 2027 stable release. */
   resolveBrowserSessionCapabilities?: (
     ctx: RealtimeVoiceProviderConfiguredContext & {
       /** Effective per-session model after request overrides. */
@@ -66,7 +66,7 @@ export type InternalRealtimeVoiceProviderApi = {
       clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
     },
   ) => Promise<InternalRealtimeVoiceProviderCapabilities>;
-  /** @deprecated Use isGatewayRelayConfiguredAsync. Compatibility ends 2026-12-31. */
+  /** @deprecated Use isGatewayRelayConfiguredAsync. Compatibility ends 2026-12-31. Removal in the first January 2027 stable release. */
   isGatewayRelayConfigured?: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean | undefined;
   isGatewayRelayConfiguredAsync?: (
     ctx: RealtimeVoiceProviderConfiguredContext,

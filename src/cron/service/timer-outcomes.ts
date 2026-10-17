@@ -8,7 +8,11 @@ import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.js";
 import type { CronJob, CronRunStatus, CronTriggerEvalOutcome } from "../types.js";
-import { autoDisableCronJob, maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
+import {
+  autoDisableCronJob,
+  maybeAutoDisableCronJobAfterRunFailure,
+  queueCronAutoDisableNotification,
+} from "./auto-disable.js";
 import {
   finalizeCronFailureNotifications,
   resolveFailureIncident,
@@ -214,7 +218,7 @@ export function applyJobResult(
     !preserveOneShotSchedule &&
     job.deleteAfterRun === true &&
     completionStatus === "succeeded";
-  let autoDisableNotificationOwnsFailure = false;
+  let terminalRecurring = false;
   let terminalOneShot = false;
   // Set when a quick transient re-run is scheduled for a provider outage; finalize holds
   // the failure alert/repair until that retry ladder resolves.
@@ -235,12 +239,22 @@ export function applyJobResult(
       alertConfig,
       result,
       completionStatus,
-      autoDisableNotificationOwnsFailure,
+      terminalRecurring,
       terminalOneShot,
       pendingTransientRetry,
       replay: opts.replay,
       deferredNotifications: opts.deferredNotifications,
     });
+    if (terminalRecurring && failureNotification !== "queued") {
+      // Same contract as a terminal one-shot: the route-backed alert carries the
+      // safety notice; every other outcome keeps the in-app notice as before.
+      queueCronAutoDisableNotification({
+        job,
+        reason: "consecutive-failures",
+        consecutiveErrors: job.state.consecutiveErrors ?? 0,
+        deferredNotifications: opts.deferredNotifications,
+      });
+    }
     if (terminalOneShot) {
       autoDisableCronJob({
         job,
@@ -381,9 +395,12 @@ export function applyJobResult(
         job,
         atMs: result.endedAt,
         deferredNotifications: opts.deferredNotifications,
+        // The failure route owns the terminal notice when one resolves; the
+        // in-app notice is queued at finish only when no route can carry it.
+        notify: false,
       })
     ) {
-      autoDisableNotificationOwnsFailure = true;
+      terminalRecurring = true;
       // Keep this after the ownership and immediate-preserve gates: those paths
       // restore schedule state and would otherwise silently undo the disable.
       state.deps.log.error(

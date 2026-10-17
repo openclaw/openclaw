@@ -68,6 +68,14 @@ export async function updateCleanupCommand(options: {
           env: process.env,
           preview: report,
           readConfig: readSourceConfigBestEffort,
+          onProgress: ({ phase, path, index, total, bytes }) => {
+            const label = {
+              verifying: "Verifying original",
+              claiming: "Retiring original",
+              "removing-capture": "Removing capture",
+            }[phase];
+            process.stderr.write(`${label} ${index}/${total}: ${path} (${bytes} bytes)\n`);
+          },
           confirm: async (verified) => {
             if (options.yes || verified.artifacts.length === 0) {
               return true;

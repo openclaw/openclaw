@@ -1,4 +1,6 @@
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionRow } from "../../packages/gateway-protocol/src/index.js";
 import {
   isSessionTranscriptTerminalModel,
   readSessionTranscriptTerminalModel,
@@ -9,8 +11,37 @@ import { projectSessionDisplayMessage } from "./session-display-projection.js";
 export const SESSION_ROW_TRANSCRIPT_PREVIEW_MAX_BYTES = 64 * 1024;
 export const SESSION_ROW_TRANSCRIPT_TERMINAL_MAX_BYTES = 256 * 1024;
 
+export type SessionRowAssistantMessage = NonNullable<SessionRow["lastAssistantMessage"]>;
+
+export function isSessionRowAssistantMessage(value: unknown): value is SessionRowAssistantMessage {
+  return (
+    isRecord(value) &&
+    typeof value.text === "string" &&
+    typeof value.timestamp === "number" &&
+    Number.isFinite(value.timestamp)
+  );
+}
+
+/** Message time orders agents' replies independently of later user or metadata activity. */
+export function projectSessionRowAssistantMessage(
+  event: unknown,
+  text: string,
+): SessionRowAssistantMessage | null {
+  if (!isRecord(event) || !isRecord(event.message)) {
+    return null;
+  }
+  const timestamp =
+    parseDateFirstTimestampMs(event.message.timestamp) ??
+    parseDateFirstTimestampMs(event.timestamp);
+  return timestamp === undefined
+    ? null
+    : { text: Buffer.from(text, "utf16le").toString("utf16le"), timestamp };
+}
+
 export type SessionRowTranscriptProjection = {
   lastMessagePreview: string | null;
+  /** Undefined needs backfill after a user append or a cache written by an older build. */
+  lastAssistantMessage?: SessionRowAssistantMessage | null;
   terminalModel: SessionTranscriptTerminalModel | null;
   indexedSeq: number | null;
 };
@@ -35,6 +66,11 @@ export function projectSessionRowTranscriptFields(
     lastMessagePreview: projected
       ? Buffer.from(projected.text, "utf16le").toString("utf16le")
       : null,
+    lastAssistantMessage: !projected
+      ? null
+      : projected.role === "assistant"
+        ? projectSessionRowAssistantMessage(event, projected.text)
+        : undefined,
     terminalModel:
       serializedBytes <= SESSION_ROW_TRANSCRIPT_TERMINAL_MAX_BYTES
         ? readSessionTranscriptTerminalModel(event)
@@ -57,10 +93,14 @@ export function readStoredSessionRowTranscriptProjection(params: {
     const value: unknown = JSON.parse(params.json);
     return isRecord(value) &&
       (value.lastMessagePreview === null || typeof value.lastMessagePreview === "string") &&
+      (value.lastAssistantMessage === undefined ||
+        value.lastAssistantMessage === null ||
+        isSessionRowAssistantMessage(value.lastAssistantMessage)) &&
       (value.terminalModel === null || isSessionTranscriptTerminalModel(value.terminalModel)) &&
       value.indexedSeq === (params.indexedSeq ?? null)
       ? {
           lastMessagePreview: value.lastMessagePreview,
+          lastAssistantMessage: value.lastAssistantMessage,
           terminalModel: value.terminalModel,
           indexedSeq: params.indexedSeq ?? null,
         }

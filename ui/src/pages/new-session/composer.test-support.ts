@@ -17,7 +17,7 @@ import type { NewSessionVisibility } from "./create-params.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
 const attachmentDrafts: NewSessionAttachmentDraft[] = [];
-const textareaControllers: NewSessionComposerTextarea[] = [];
+const composerTextareas: NewSessionComposerTextarea[] = [];
 
 export function composerContext(
   snapshot: Partial<ApplicationGatewaySnapshot> & { client: GatewayBrowserClient | null },
@@ -64,7 +64,7 @@ export function renderComposer(
     onInput?: (message: string) => void;
     onSubmit?: () => void;
     onBackgroundSubmit?: () => void;
-    textareaController?: NewSessionComposerTextarea;
+    composerTextarea?: NewSessionComposerTextarea;
   } = {},
 ) {
   onTestFinished(installChatComposerPickerDismissal(document));
@@ -74,9 +74,9 @@ export function renderComposer(
     () => undefined,
   );
   attachmentDrafts.push(attachmentDraft);
-  const textareaController = overrides.textareaController ?? createNewSessionComposerTextarea();
-  if (!textareaControllers.includes(textareaController)) {
-    textareaControllers.push(textareaController);
+  const composerTextarea = overrides.composerTextarea ?? createNewSessionComposerTextarea();
+  if (!composerTextareas.includes(composerTextarea)) {
+    composerTextareas.push(composerTextarea);
   }
   let message = overrides.message ?? "";
   let agentId = overrides.agentId ?? "main";
@@ -103,7 +103,7 @@ export function renderComposer(
     nativeTerminal: overrides.nativeTerminal,
     onUnsupportedAttachment: overrides.onUnsupportedAttachment,
     submitting: overrides.submitting ?? false,
-    textareaController,
+    composerTextarea,
     messageLocked: overrides.messageLocked,
     onInput: (next) => {
       message = next;
@@ -124,7 +124,7 @@ export function renderComposer(
     attachmentDraft,
     composer,
     container,
-    textareaController,
+    composerTextarea,
     rerender: renderCurrent,
     unmount: mounted.unmount,
     rerenderWithMessage: (nextMessage: string) => {
@@ -148,10 +148,10 @@ export function resetComposerTestFixtures() {
     attachmentDraft.reset();
   }
   attachmentDrafts.length = 0;
-  for (const textareaController of textareaControllers) {
-    textareaController.disconnect();
+  for (const composerTextarea of composerTextareas) {
+    composerTextarea.disconnect();
   }
-  textareaControllers.length = 0;
+  composerTextareas.length = 0;
 }
 
 export function mountNewSessionComposer(

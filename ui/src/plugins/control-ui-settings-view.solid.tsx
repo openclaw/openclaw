@@ -16,6 +16,7 @@ function authority(snapshot: ControlUiSettingsSnapshot): string {
     snapshot.agentId,
     snapshot.engine,
     snapshot.connected,
+    snapshot.advertisedMethods,
     snapshot.connectionEpoch,
     snapshot.routeIntent,
   ]);

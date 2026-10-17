@@ -2621,6 +2621,7 @@ openclaw-session-menu[popover] {
    letters and digits share one rail. Identity-menu chords use the system UI face
    below because theme body fonts are not guaranteed to cover modifier glyphs. */
 .session-menu__shortcut,
+.side-panel-type-option__shortcut,
 .chat-controls__model-option-action kbd {
   flex: 0 0 auto;
   min-width: 12px;
@@ -2631,7 +2632,13 @@ openclaw-session-menu[popover] {
   text-align: center;
 }
 
-.sidebar-identity-menu .session-menu__shortcut {
+.session-menu__shortcut,
+.side-panel-type-option__shortcut {
+  text-align: end;
+}
+
+.sidebar-identity-menu .session-menu__shortcut,
+.side-panel-type-option__shortcut {
   font-family: var(--font-shortcut);
 }
 
@@ -3863,8 +3870,7 @@ button.gateway-status:focus-visible {
 
 .sidebar-agent-menu > .sidebar-customize-menu__item,
 .sidebar-agent-menu > .sidebar-customize-menu__title,
-.sidebar-agent-menu > .sidebar-customize-menu__separator,
-.sidebar-agent-menu__filter {
+.sidebar-agent-menu > .sidebar-customize-menu__separator {
   flex: none;
 }
 
@@ -3878,25 +3884,6 @@ button.gateway-status:focus-visible {
   overscroll-behavior: contain;
   scrollbar-color: color-mix(in srgb, var(--border) 72%, transparent) transparent;
   scrollbar-width: thin;
-}
-
-.sidebar-agent-menu__filter {
-  width: calc(100% - 8px);
-  min-width: 0;
-  margin: 0 4px 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
-}
-
-.sidebar-agent-menu__empty {
-  padding: 16px 8px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 .sidebar-agent-menu > .sidebar-customize-menu__separator {

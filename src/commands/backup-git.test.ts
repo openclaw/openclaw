@@ -48,6 +48,27 @@ import {
   backupGitVerifyCommand,
 } from "./backup-git.js";
 
+function create(
+  options: Parameters<typeof backupGitCreateCommand>[1],
+  runtime = createTestRuntime(),
+) {
+  return backupGitCreateCommand(runtime, { repository: "/tmp/repository", ...options });
+}
+
+function restore(
+  options: Parameters<typeof backupGitRestoreCommand>[1],
+  runtime = createTestRuntime(),
+) {
+  return backupGitRestoreCommand(runtime, { repository: "/tmp/repository", ...options });
+}
+
+function verify(
+  options: Parameters<typeof backupGitVerifyCommand>[1],
+  runtime = createTestRuntime(),
+) {
+  return backupGitVerifyCommand(runtime, { repository: "/tmp/repository", ...options });
+}
+
 describe("Git backup command agent selection", () => {
   beforeEach(() => {
     mocks.createGitBackup.mockReset().mockResolvedValue({
@@ -99,6 +120,38 @@ describe("Git backup command agent selection", () => {
     ).resolves.toMatchObject({ commit: "backup-commit" });
   });
 
+  it.each(["workboard", "logbook", "team-reports", "matrix__account_state"])(
+    "selects the recorded plugin store %s for Git verification and restore",
+    async (store) => {
+      await backupGitVerifyCommand(createTestRuntime(), { repository: "/tmp/repository", store });
+      await backupGitRestoreCommand(createTestRuntime(), {
+        repository: "/tmp/repository",
+        store,
+        target: "/tmp/restored.sqlite",
+      });
+      expect(mocks.verifyGitBackupRef).toHaveBeenCalledWith(
+        expect.objectContaining({ identity: { role: "generic", id: store } }),
+      );
+      expect(mocks.restoreGitBackupRef).toHaveBeenCalledWith(
+        expect.objectContaining({ identity: { role: "generic", id: store } }),
+      );
+    },
+  );
+
+  it.each([{ global: true }, { agent: "main" }])(
+    "rejects an ambiguous plugin store selector alongside %j",
+    async (scope) => {
+      await expect(
+        backupGitVerifyCommand(createTestRuntime(), {
+          repository: "/tmp/repository",
+          store: "workboard",
+          ...scope,
+        }),
+      ).rejects.toThrow("Choose exactly one Git backup scope");
+      expect(mocks.verifyGitBackupRef).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["success", "failure", "uncertain"] as const)(
     "retains backup custody through artifact and outcome settlement: %s",
     async (outcome) => {
@@ -127,10 +180,7 @@ describe("Git backup command agent selection", () => {
       mocks.recordBackupRunOutcome.mockImplementation(async () => {
         expect(readLifecycleWriteCustody()).toEqual([{ phase: "backup", count: 1 }]);
       });
-      const running = backupGitCreateCommand(createTestRuntime(), {
-        repository: "/tmp/repository",
-        global: true,
-      }).catch((error: unknown) => error);
+      const running = create({ global: true }).catch((error: unknown) => error);
       await entered.promise;
       try {
         expect(readLifecycleWriteCustody()).toEqual([{ phase: "backup", count: 1 }]);
@@ -160,12 +210,7 @@ describe("Git backup command agent selection", () => {
     ],
     ["whitespace-only", "   ", "--agent must not be blank"],
   ])("rejects an %s Git create agent", async (_label, agent, message) => {
-    await expect(
-      backupGitCreateCommand(createTestRuntime(), {
-        repository: "/tmp/repository",
-        agents: [agent],
-      }),
-    ).rejects.toThrow(message);
+    await expect(create({ agents: [agent] })).rejects.toThrow(message);
 
     expect(mocks.createGitBackup).not.toHaveBeenCalled();
   });
@@ -182,10 +227,7 @@ describe("Git backup command agent selection", () => {
       },
     });
 
-    await backupGitCreateCommand(createTestRuntime(), {
-      repository: "/tmp/repository",
-      all: true,
-    });
+    await create({ all: true });
 
     expect(mocks.getRuntimeConfig).toHaveBeenCalledOnce();
     expect(mocks.createGitBackup).toHaveBeenCalledWith(
@@ -206,28 +248,17 @@ describe("Git backup command agent selection", () => {
   });
 
   it("keeps the --all plus explicit-scope conflict ahead of agent validation", async () => {
-    await expect(
-      backupGitCreateCommand(createTestRuntime(), {
-        repository: "/tmp/repository",
-        all: true,
-        agents: ["nope-agent"],
-      }),
-    ).rejects.toThrow("Use --all by itself, or select --global and --agent scopes explicitly.");
+    await expect(create({ all: true, agents: ["nope-agent"] })).rejects.toThrow(
+      "Use --all by itself, or select --global and --agent scopes explicitly.",
+    );
 
     expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.createGitBackup).not.toHaveBeenCalled();
   });
 
   it("keeps artifact verify and restore available for an unconfigured agent", async () => {
-    await backupGitVerifyCommand(createTestRuntime(), {
-      repository: "/tmp/repository",
-      agent: "retired-agent",
-    });
-    await backupGitRestoreCommand(createTestRuntime(), {
-      repository: "/tmp/repository",
-      agent: "retired-agent",
-      target: "/tmp/restored.sqlite",
-    });
+    await verify({ agent: "retired-agent" });
+    await restore({ agent: "retired-agent", target: "/tmp/restored.sqlite" });
 
     expect(mocks.verifyGitBackupRef).toHaveBeenCalledWith(
       expect.objectContaining({ identity: { role: "agent", agentId: "retired-agent" } }),

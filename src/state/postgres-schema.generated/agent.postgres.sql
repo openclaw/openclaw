@@ -1,6 +1,6 @@
 -- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-CREATE FUNCTION "openclaw_transcript_navigation_check"(navigation_json text) RETURNS boolean LANGUAGE sql IMMUTABLE AS $navigation$
+CREATE FUNCTION "openclaw_transcript_navigation_check"(navigation_json text) RETURNS boolean LANGUAGE sql IMMUTABLE STRICT SET search_path = pg_catalog AS $navigation$
 WITH input AS (SELECT CASE WHEN navigation_json IS JSON THEN navigation_json::json END AS document),
 members AS (SELECT (SELECT member.value FROM json_each(CASE WHEN json_typeof(document) = 'object' THEN document ELSE '{}'::json END) WITH ORDINALITY AS member(key, value, position) WHERE member.key = 'version' ORDER BY member.position LIMIT 1) AS "j_version",
 (SELECT member.value FROM json_each(CASE WHEN json_typeof(document) = 'object' THEN document ELSE '{}'::json END) WITH ORDINALITY AS member(key, value, position) WHERE member.key = 'modelBytes' ORDER BY member.position LIMIT 1) AS "j_modelBytes",
@@ -703,8 +703,6 @@ CREATE INDEX "idx_agent_session_nodes_entry_valid_pending" ON "session_nodes" ((
 
 CREATE INDEX "idx_agent_session_nodes_label" ON "session_nodes" (("label") ASC NULLS FIRST, ("session_key") ASC NULLS FIRST) WHERE "label" IS NOT NULL;
 
-CREATE INDEX "idx_agent_session_nodes_last_interaction_at" ON "session_nodes" (("last_interaction_at") DESC NULLS LAST, ("session_key") ASC NULLS FIRST);
-
 CREATE INDEX "idx_agent_session_nodes_parent_session_key" ON "session_nodes" (("parent_session_key") ASC NULLS FIRST, ("session_key") ASC NULLS FIRST);
 
 CREATE INDEX "idx_agent_session_nodes_spawned_by" ON "session_nodes" (("spawned_by") ASC NULLS FIRST, ("session_key") ASC NULLS FIRST);
@@ -714,8 +712,6 @@ CREATE INDEX "idx_agent_session_nodes_status" ON "session_nodes" (("status") ASC
 CREATE INDEX "idx_agent_session_nodes_updated_at" ON "session_nodes" (("updated_at") DESC NULLS LAST, ("session_key") ASC NULLS FIRST);
 
 CREATE INDEX "idx_agent_session_pending_inputs_session" ON "session_pending_inputs" (("session_key") ASC NULLS FIRST, ("session_id") ASC NULLS FIRST, ("seq") DESC NULLS LAST);
-
-CREATE INDEX "idx_agent_session_reactions_message" ON "session_reactions" (("session_key") ASC NULLS FIRST, ("session_id") ASC NULLS FIRST, ("message_id") ASC NULLS FIRST);
 
 CREATE INDEX "idx_agent_session_suggestions_author_created" ON "session_suggestions" (("author_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("id") ASC NULLS FIRST);
 

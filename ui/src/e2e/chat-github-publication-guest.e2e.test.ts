@@ -7,7 +7,7 @@ import type {
   SessionGitHubStatusResult,
 } from "../../../packages/gateway-protocol/src/schema/session-github-publication.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
-import type { GitHubPublicationOptions } from "../lib/sessions/github-publication-controller.ts";
+import type { GitHubPublicationOptions } from "../lib/sessions/github-publication-owner.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
