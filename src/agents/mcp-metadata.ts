@@ -1,8 +1,10 @@
 import type { ClientCapabilities, ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeModelSpecialTokens } from "../security/external-content.js";
 
 const MCP_METADATA_TEXT_LIMIT = 1_200;
+const OPENCLAW_PROMPT_MARKER_OPENER = /<!--(?=\s*\/?\s*openclaw[\s:_-])/gi;
 const MCP_APPS_CLIENT_EXTENSION = "io.modelcontextprotocol/ui";
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
@@ -52,10 +54,13 @@ function scrubMcpMetadataText(value: unknown, limit?: number): string | undefine
       /(?:ignore|disregard)\s+(?:all\s+)?(?:previous|prior|above)\s+instructions/gi,
       "[redacted MCP metadata instruction]",
     )
-    .replace(/system\s+prompt/gi, "system prompt");
-  return limit !== undefined && scrubbed.length > limit
-    ? `${truncateUtf16Safe(scrubbed, limit)}...`
-    : scrubbed;
+    .replace(/system\s+prompt/gi, "system prompt")
+    // Server text must not open or close OpenClaw prompt sections (attempt regions, cache boundary).
+    .replace(OPENCLAW_PROMPT_MARKER_OPENER, "<! --");
+  const sanitized = sanitizeModelSpecialTokens(scrubbed);
+  return limit !== undefined && sanitized.length > limit
+    ? `${truncateUtf16Safe(sanitized, limit)}...`
+    : sanitized;
 }
 
 /** Scrubs untrusted MCP metadata before exposing it to a model. */
