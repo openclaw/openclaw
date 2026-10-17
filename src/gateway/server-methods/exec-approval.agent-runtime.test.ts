@@ -112,7 +112,7 @@ type ApprovalFixture = Awaited<
 >;
 
 function createApproval(test: TestContext, validate = () => true) {
-  return createPreparedTestApprovalManager<ExecApprovalRequestPayload>(test, {
+  return createPreparedTestApprovalManager(test, {
     validateAgentRuntimeDelegatedAuthority: validate,
   });
 }

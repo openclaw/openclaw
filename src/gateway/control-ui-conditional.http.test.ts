@@ -146,7 +146,8 @@ describe.each([
   afterAll(async () => {
     try {
       if (server?.listening) {
-        await promisify(server.close).call(server);
+        const activeServer = server;
+        await promisify(activeServer.close.bind(activeServer))();
       }
     } finally {
       tempDirs.cleanup();

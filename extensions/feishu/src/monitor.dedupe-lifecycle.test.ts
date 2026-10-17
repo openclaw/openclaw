@@ -25,13 +25,13 @@ const meetingEvent = (event_id: string) => ({
   invite_time: "1712345678",
 });
 
-function gated<T>(result: () => T) {
+function gated<T>(result: () => T | Promise<T>) {
   const started = createDeferred<void>();
   const gate = createDeferred<void>();
   return {
     started: started.promise,
     release: gate.resolve,
-    run: async () => {
+    run: async (): Promise<T> => {
       started.resolve();
       await gate.promise;
       return await result();
