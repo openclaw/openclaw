@@ -276,16 +276,17 @@ describe("session upstream monitor", () => {
       [expect.objectContaining({ sessionKey: watched, marker: { offset: 8 } })],
       { allowProcessHomeFallback: false },
     );
-    const events = (await listSessionStateEventsSince(watched, "main", 0, 20, database)).events;
-    expect(events).toHaveLength(1);
-    expect(events[0]).toEqual(
+    const recordedEvents = (await listSessionStateEventsSince(watched, "main", 0, 20, database))
+      .events;
+    expect(recordedEvents).toHaveLength(1);
+    expect(recordedEvents[0]).toEqual(
       expect.objectContaining({
         kind: "human_direct_message",
         summary: "human message via claude",
         occurredAt: 2_000,
       }),
     );
-    expect(events[0]?.payload).toBeUndefined();
+    expect(recordedEvents[0]?.payload).toBeUndefined();
     const dedupeRow = openOpenClawStateDatabase(database)
       .db.prepare("SELECT dedupe_key FROM session_state_events WHERE session_key = ?")
       .get(watched) as { dedupe_key: string };
@@ -666,11 +667,12 @@ describe("session upstream monitor", () => {
       loadOwnRecentUserTexts: async () => [],
     });
 
-    const events = (await listSessionStateEventsSince(watched, "main", 0, 20, database)).events;
-    expect(events).toHaveLength(1);
+    const recordedEvents = (await listSessionStateEventsSince(watched, "main", 0, 20, database))
+      .events;
+    expect(recordedEvents).toHaveLength(1);
     // Event time is clamped into [now - 24h, now]; cursor rows keep the local clock
     // so a skewed upstream timestamp cannot age watch state into retention pruning.
-    expect(events[0]?.occurredAt).toBe(now - 24 * 60 * 60_000);
+    expect(recordedEvents[0]?.occurredAt).toBe(now - 24 * 60 * 60_000);
     const cursor = openOpenClawStateDatabase(database)
       .db.prepare("SELECT updated_at FROM session_watch_cursors WHERE target_session_key = ?")
       .get(watched) as { updated_at: number };
