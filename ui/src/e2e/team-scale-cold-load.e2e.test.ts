@@ -298,12 +298,54 @@ suite.define(() => {
         expect(JSON.stringify(mutated.transcript)).toContain(mutation);
         expect(mutated.transcript).not.toEqual(baseline.transcript);
         expect(mutated.sidebar).not.toEqual(baseline.sidebar);
+        const draftWrite = await page.evaluateHandle(() => {
+          // oxlint-disable-next-line typescript/unbound-method -- call(this, value, key) preserves each store receiver.
+          const put = IDBObjectStore.prototype.put;
+          return {
+            done: new Promise<void>((resolve) => {
+              IDBObjectStore.prototype.put = function (
+                this: IDBObjectStore,
+                value: { text?: string },
+                key?: IDBValidKey,
+              ) {
+                const request = put.call(this, value, key);
+                if (this.name === "composerDrafts" && value.text === "Synthetic streaming input") {
+                  IDBObjectStore.prototype.put = put;
+                  this.transaction.addEventListener("complete", () => resolve(), { once: true });
+                }
+                return request;
+              };
+            }),
+          };
+        });
+        const composer = page.locator(".agent-chat__composer-combobox textarea").last();
+        await composer.fill("Synthetic streaming input");
+        await draftWrite.evaluate(({ done }) => done);
+        await draftWrite.dispose();
         await restoreColdLoadWarmState(page, warm.storage);
         expect(await page.evaluate(readStoredWarmState, warmInput)).toEqual(baseline);
+        expect(
+          await page.evaluate(
+            () =>
+              new Promise<number>((resolve, reject) => {
+                const request = indexedDB.open("openclaw-control-ui");
+                request.onsuccess = () => {
+                  const database = request.result;
+                  const transaction = database.transaction("composerDrafts");
+                  const count = transaction.objectStore("composerDrafts").count();
+                  count.onsuccess = () => resolve(count.result);
+                  count.onerror = () => reject(count.error);
+                  transaction.oncomplete = () => database.close();
+                };
+                request.onerror = () => reject(request.error);
+              }),
+          ),
+        ).toBe(0);
         await page.reload();
         await sidebar.locator('[data-navigation-view="online"][aria-pressed="true"]').waitFor();
         await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
         expect(await sidebar.locator("[data-online-user-id]").count()).toBe(120);
+        expect(await composer.inputValue()).toBe("");
         await page
           .locator(".chat-pane__session-title-text", { hasText: "Project dashboard 1" })
           .waitFor();

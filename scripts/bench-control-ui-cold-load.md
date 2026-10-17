@@ -49,7 +49,9 @@ persistence trims the transcript to its last 80 messages (whole sequence groups 
 extend that bound), strips replay metadata and retains authoritative pagination.
 Before each measured reload, the bench unloads the app into an empty same-origin
 document, replays the original snapshot records and browser preferences, and restores
-the deep-link URL. This keeps pagehide writes and live events from changing the next
+the deep-link URL. It also clears the separate composer draft store: the synthetic
+warm visit starts empty, and streaming input must not become the next reload’s draft.
+This keeps pagehide writes and live events from changing the next
 run's transcript or sidebar, while preserving the browser's HTTP cache. Only the
 subsequent app reload is measured.
 `snapshotSave` records database/projection versions, message count, sidebar shape
@@ -214,11 +216,15 @@ node scripts/control-ui-bench-fidelity.ts \
 
 This reuses the campaign analyzer's source mapping and inclusive CPU accounting;
 it does not add a profiler. Keep raw profiles and adjacent build maps together, or
-pass `--board-assets`/`--chat-assets`. Live RPC JSON contains the complete sanitized
-method-to-count inventory. Private capture text and profile preambles are never
+pass `--board-assets`/`--chat-assets`. Live RPC JSON has the explicit shape
+`{"complete": true, "counts": {"connect": 1, "sessions.list": 5}}` with sanitized
+method counts. Set `complete` to `false` for partial evidence: it remains reportable
+but cannot pass the RPC gate. Every observed bench method needs an explicit live
+count, including zero; omitted counts stay unknown even when `complete` is `true`. Private capture text and profile preambles are never
 included in the report. The report preserves each run's shares/counts, prints
 median and IQR, and exits nonzero unless at least 15 of the top 20 unique live app
-locations fall within 0.5–2× live share and every method is within ±1 in every run.
+locations fall within 0.5–2× live share and a complete live RPC census supplies an
+explicit count for every observed bench method, within ±1 in every run.
 It requires a successful capture and every requested reload's metrics/profile pair;
 an aborted capture cannot pass using only its completed iterations. Each benchmark
 frame can match at most one live function, with a unique name taking priority over

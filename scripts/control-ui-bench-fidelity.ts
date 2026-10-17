@@ -20,6 +20,7 @@ type AppFunction = {
 type CpuReport = { busyMs: number; functions: AppFunction[] };
 type Distribution = { median: number; q1: number; q3: number; samples: number[] };
 type RpcCounts = Record<string, number>;
+type RpcCensus = { complete: boolean; counts: RpcCounts };
 type BenchRun = { run: number; cpu: CpuReport; rpcs: RpcCounts };
 type Scenario = {
   name: string;
@@ -138,12 +139,12 @@ function matchingFunction(live: AppFunction, bench: CpuReport, liveReport: CpuRe
   return exact ? { fn: exact, match: "location" } : undefined;
 }
 
-export function parseFidelityRpcCounts(value: unknown): RpcCounts {
-  if (!record(value) || !Object.keys(value).length) {
-    throw new Error("Live RPC input must be a nonempty JSON object of method counts");
+export function parseFidelityRpcCensus(value: unknown): RpcCensus {
+  if (!record(value) || typeof value.complete !== "boolean" || !record(value.counts)) {
+    throw new Error("Live RPC input must contain complete:boolean and counts:object");
   }
   const counts: RpcCounts = {};
-  for (const [method, count] of Object.entries(value)) {
+  for (const [method, count] of Object.entries(value.counts)) {
     if (
       !/^[a-zA-Z][\w]*(?:\.[\w]+)*$/u.test(method) ||
       !Number.isSafeInteger(count) ||
@@ -153,13 +154,13 @@ export function parseFidelityRpcCounts(value: unknown): RpcCounts {
     }
     counts[method] = Number(count);
   }
-  return counts;
+  return { complete: value.complete, counts };
 }
 
 export function compareFidelity(
   name: string,
   live: CpuReport,
-  liveRpcs: RpcCounts,
+  liveRpcs: RpcCensus,
   runs: BenchRun[],
 ) {
   if (!runs.length) {
@@ -204,23 +205,23 @@ export function compareFidelity(
     };
   });
   const methods = new Set([
-    ...Object.keys(liveRpcs),
+    ...Object.keys(liveRpcs.counts),
     ...runs.flatMap((run) => Object.keys(run.rpcs)),
   ]);
   const rpcs = [...methods].toSorted().map((method) => {
-    const count = liveRpcs[method] ?? 0;
+    const count = liveRpcs.counts[method] ?? null;
     const bench = fidelityDistribution(runs.map((run) => run.rpcs[method] ?? 0));
     return {
       method,
       live: count,
       bench,
-      delta: bench.median - count,
-      pass: bench.samples.every((sample) => Math.abs(sample - count) <= 1),
+      delta: count === null ? null : bench.median - count,
+      pass: count !== null && bench.samples.every((sample) => Math.abs(sample - count) <= 1),
     };
   });
   const matchedFunctions = functions.filter((fn) => fn.pass).length;
   const cpuPass = functions.length === TOP_FUNCTIONS && matchedFunctions >= REQUIRED_MATCHES;
-  const rpcPass = rpcs.every((rpc) => rpc.pass);
+  const rpcPass = liveRpcs.complete && rpcs.every((rpc) => rpc.pass);
   return {
     name,
     runs: runs.map((run) => run.run),
@@ -230,6 +231,7 @@ export function compareFidelity(
     matchedFunctions,
     cpuPass,
     rpcs,
+    liveRpcComplete: liveRpcs.complete,
     rpcPass,
     pass: cpuPass && rpcPass,
   };
@@ -244,7 +246,7 @@ export function formatFidelityMarkdown(report: FidelityReport): string {
     "",
     "CPU = inclusive share of sampled non-idle busy time. Same-source-line aliases use the maximum, never their sum. Frames absent from the analyzer's top 70 or unmatched by identity are not observed, not measured zero; incomplete observations fail the gate. IQR uses linear-interpolated quartiles.",
     "",
-    "CPU gate: 15 of 20 unique live app locations at 0.5–2× live share, present in every run. RPC gate: every run within ±1 for every method (unlisted live methods count as zero).",
+    "CPU gate: 15 of 20 unique live app locations at 0.5–2× live share, present in every run. RPC gate: complete live census, explicit counts for every observed bench method, and every run within ±1 for every method. Omitted live counts are unknown, never zero.",
   ];
   const number = (value: number) => value.toFixed(2);
   const spread = (value: Distribution) =>
@@ -269,12 +271,14 @@ export function formatFidelityMarkdown(report: FidelityReport): string {
     }
     lines.push(
       "",
+      `Live RPC census: ${scenario.liveRpcComplete ? "complete" : "incomplete; RPC gate cannot pass"}.`,
+      "",
       "| Boot RPC | Live | Bench median [IQR] | Delta | Gate |",
       "| --- | ---: | ---: | ---: | --- |",
     );
     for (const rpc of scenario.rpcs) {
       lines.push(
-        `| ${rpc.method} | ${rpc.live} | ${spread(rpc.bench)} | ${number(rpc.delta)} | ${rpc.pass ? "PASS" : "FAIL"} |`,
+        `| ${rpc.method} | ${rpc.live ?? "unknown"} | ${spread(rpc.bench)} | ${rpc.delta === null ? "unknown" : number(rpc.delta)} | ${rpc.pass ? "PASS" : "FAIL"} |`,
       );
     }
   }
@@ -322,7 +326,7 @@ async function readScenario(
     throw new Error(`${scenario.name}: no JavaScript source maps in the bundle assets`);
   }
   const live = parseFidelityCpuReport(await readFile(scenario.liveCpu, "utf8"));
-  const liveRpcs = parseFidelityRpcCounts(await readJson(scenario.liveRpcs));
+  const liveRpcs = parseFidelityRpcCensus(await readJson(scenario.liveRpcs));
   const scratch = await mkdtemp(path.join(tmpdir(), "control-ui-fidelity-"));
   try {
     const runs: BenchRun[] = [];
@@ -419,7 +423,9 @@ async function main() {
   [--board-assets <assets-directory>] [--chat-assets <assets-directory>]
 
 Consumes summary.json, run-N.metrics.json and run-N.cpuprofile from each bench directory.
-Live RPC JSON is a complete, sanitized method-to-count object, e.g. {"connect":1,"sessions.list":5}.
+Live RPC JSON is {"complete":true,"counts":{"connect":1,"sessions.list":5}}. Use complete:false
+for partial evidence; it remains reportable but cannot pass the RPC gate. Every observed bench method
+requires an explicit live count, including zero. Omitted counts remain unknown even with complete:true.
 Assets must contain source maps from the exact measured bundle. Each summary.route must match its
 board/chat scenario. Explicit workspace source paths stay distinct; already stripped analyzer labels
 remain unqualified. Both scenarios are required.
