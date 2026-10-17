@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   captureUpdateProcesses as capture,
@@ -94,12 +94,7 @@ describe("published update interruption diagnostics", () => {
       [
         "--import",
         `data:text/javascript,${encodeURIComponent(preload)}`,
-        fileURLToPath(
-          new URL(
-            "../../scripts/e2e/lib/upgrade-survivor/update-timeout-diagnostics.mjs",
-            import.meta.url,
-          ),
-        ),
+        resolve("scripts/e2e/lib/upgrade-survivor/update-timeout-diagnostics.mjs"),
         "--",
         process.execPath,
         "-e",

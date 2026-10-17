@@ -60,6 +60,22 @@ async function expectRuntime(env: NodeJS.ProcessEnv, expected: object, loaded = 
 const writeEnvironment = (file: string, value: string) =>
   writeFileSync(file, serializeSystemdEnvironmentFile({ FIXTURE_VALUE: value }));
 
+function propertyQuery(service: boolean, ...properties: string[]) {
+  const root = "/org/freedesktop/systemd1";
+  return [
+    "--user",
+    service ? "--json=short" : "--auto-start=no",
+    "get-property",
+    "org.freedesktop.systemd1",
+    service ? `${root}/unit/openclaw_2dgateway_2eservice` : root,
+    `org.freedesktop.systemd1.${service ? "Service" : "Manager"}`,
+    ...properties,
+  ];
+}
+
+const busctl = (home: string, env: NodeJS.ProcessEnv, ...args: string[]) =>
+  spawnSync(join(home, "bin/busctl"), args, { env, encoding: "utf8" });
+
 function fixture(registry?: string) {
   const home = realpathSync(tempDirs.make("survivor-manager-"));
   const artifacts = join(home, "artifacts ' \" $ `");
@@ -204,19 +220,7 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
 
   it("distinguishes confirmed absence from unsupported inspection and reads the generated service", async () => {
     const { home, env, systemctl, unit, paths, inspect, writeUnit } = fixture();
-    const managerVersion = spawnSync(
-      join(home, "bin/busctl"),
-      [
-        "--user",
-        "--auto-start=no",
-        "get-property",
-        "org.freedesktop.systemd1",
-        "/org/freedesktop/systemd1",
-        "org.freedesktop.systemd1.Manager",
-        "Version",
-      ],
-      { env, encoding: "utf8" },
-    );
+    const managerVersion = busctl(home, env, ...propertyQuery(false, "Version"));
     expect(output(managerVersion)).toBe('s "252.39-1~deb12u2"');
     // First install must reach the same effective reader used by the guarded writer.
     await expectRuntime(env, { status: "unknown" }, true);
@@ -290,11 +294,7 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
       sourcePath: peer.unit,
     });
     expect(await inspect()).toEqual(command);
-    const invalid = spawnSync(
-      join(home, "bin/busctl"),
-      ["--user", "--json=short", "call", "unsupported"],
-      { env, encoding: "utf8" },
-    );
+    const invalid = busctl(home, env, "--user", "--json=short", "call", "unsupported");
     expect(invalid.status).not.toBe(0);
     expect(invalid.stderr).not.toContain("not found");
     expect(systemctl("show", "openclaw-gateway.service", "--property=Unsupported").status).not.toBe(
@@ -344,17 +344,14 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
     });
     const properties = manager(
       "busctl",
-      "--user",
-      "--json=short",
-      "get-property",
-      "org.freedesktop.systemd1",
-      "/org/freedesktop/systemd1/unit/openclaw_2dgateway_2eservice",
-      "org.freedesktop.systemd1.Service",
-      "ExecStart",
-      "WorkingDirectory",
-      "Environment",
-      "EnvironmentFiles",
-      "UnsetEnvironment",
+      ...propertyQuery(
+        true,
+        "ExecStart",
+        "WorkingDirectory",
+        "Environment",
+        "EnvironmentFiles",
+        "UnsetEnvironment",
+      ),
     );
     expectStatus(properties);
     expect(

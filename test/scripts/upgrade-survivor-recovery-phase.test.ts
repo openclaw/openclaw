@@ -20,15 +20,25 @@ function runFixture(
   bash = "bash",
 ) {
   const root = dirs.make("survivor-recovery-phase-");
-  const result = spawnSync(
-    bash,
-    ["-c", `set -euo pipefail\nexec 3>&1\n${script}`, "fixture", root, fault, ...args],
-    {
-      env: { PATH: process.env.PATH, HOME: root },
-      encoding: "utf8",
-      timeout,
-    },
-  );
+  const prelude = `set -euo pipefail
+exec 3>&1
+ARTIFACT_ROOT="$1"
+SUMMARY_JSON="$1/summary.json"
+FAULT="$2"
+SCENARIO=base
+CURRENT_PHASE=""
+FAILURE_PHASE=""
+FAILURE_MESSAGE=""
+FAILURE_SIGNAL=""
+last_update_observation_root=""
+run_completed=0
+update_repair_required=0
+`;
+  const result = spawnSync(bash, ["-c", prelude + script, "fixture", root, fault, ...args], {
+    env: { PATH: process.env.PATH, HOME: root },
+    encoding: "utf8",
+    timeout,
+  });
   return { root, result };
 }
 
@@ -41,23 +51,13 @@ it.skipIf(process.platform === "win32").each([
   const { root, result } = runFixture(
     fault,
     `source scripts/lib/openclaw-e2e-instance.sh
-ARTIFACT_ROOT="$1"
 RUNTIME_ROOT="$1"
-FAULT="$2"
 FAULT_STATUS="$3"
-SCENARIO=base
 COMMAND_TIMEOUT=1500s
 candidate_tarball=candidate.tgz
 candidate_version=2026.10.2
 OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=registry
 NPM_CONFIG_REGISTRY=registry
-CURRENT_PHASE=""
-FAILURE_PHASE=""
-FAILURE_MESSAGE=""
-FAILURE_SIGNAL=""
-last_update_observation_root=""
-SUMMARY_JSON="$1/summary.json"
-run_completed=0
 json_event() { :; }
 cleanup() { :; }
 write_summary() { :; }
@@ -118,16 +118,12 @@ it.skipIf(process.platform === "win32").each([
   const { result } = runFixture(
     fault,
     `source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
-ARTIFACT_ROOT="$1"
 OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG="$1/gateway.log"
-FAULT="$2"
-SCENARIO=base
 UPDATE_RESTART_MODE=auto-auth
 OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE=absent
 COMMAND_TIMEOUT=30
 restart_fixture_package=synthetic.tgz
 restart_fixture_version=2026.9.7
-update_repair_required=0
 active=1
 phase() { shift; "$@"; }
 systemctl() {
@@ -189,11 +185,7 @@ it.skipIf(process.platform === "win32").each([
     const expectedPhase = stage ? `recovery-update-${stage}` : phase;
     const { root, result } = runFixture(
       fault,
-      `ARTIFACT_ROOT="$1"
-SUMMARY_JSON="$1/summary.json"
-FAULT="$2"
-SCENARIO=base
-UPDATE_RESTART_MODE=auto-auth
+      `UPDATE_RESTART_MODE=auto-auth
 ROOT_MANAGED_VPS=0
 COMMAND_TIMEOUT=unchanged
 candidate_version=2026.9.7
@@ -209,13 +201,6 @@ SYSTEMCTL_SHIM_LOG="$1/systemctl.log"
 printf '42\n' > "$SYSTEMCTL_SHIM_PID_FILE"
 : > "$SYSTEMCTL_SHIM_LOG"
 initial_update_observation_root=initial-observation
-last_update_observation_root=""
-FAILURE_PHASE=""
-FAILURE_MESSAGE=""
-FAILURE_SIGNAL=""
-CURRENT_PHASE=""
-run_completed=0
-update_repair_required=0
 json_event() { printf 'event\t%s\t%s\n' "$1" "$2" >&3; }
 cleanup() { printf 'cleanup\n' >&3; }
 write_summary() { printf 'summary\t%s\t%s\t%s\n' "$1" "$FAILURE_PHASE" "$FAILURE_SIGNAL" >&3; }

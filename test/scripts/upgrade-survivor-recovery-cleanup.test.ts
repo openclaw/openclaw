@@ -276,6 +276,15 @@ describe("recovery survivor evidence", () => {
     for (const original of fixture.originals) {
       expect(recoveryFileIdentity(original.source)).toEqual(original.identity);
     }
+    for (const [agent, disposition, reported] of [
+      ["recovery-protected", "unmanifested", false],
+      ["recovery-clean", "protected", true],
+    ] as const) {
+      const source = path.join(root, `agents/${agent}/sessions/recovery-unreferenced.jsonl`);
+      expect(fixture.originals.filter((original) => original.source === source)).toMatchObject([
+        { disposition, reported },
+      ]);
+    }
     const scale = path.join(root, "agents/recovery-clean/sessions/recovery-scale-0.jsonl");
     const events = readLines(scale);
     expect(events).toHaveLength(5);
@@ -289,35 +298,33 @@ describe("recovery survivor evidence", () => {
     );
   });
 
-  it("retains unindexed sources without weakening archived-original evidence", () => {
+  it.each(["candidate", "unmanifested"] as const)("preserves %s originals", (disposition) => {
     const root = temporary();
-    const fixture = seedRecoveryFixture(root, { sessions: 1, eventsPerSession: 3 });
-    const retainedSource = path.join(
-      root,
-      "agents/recovery-protected/sessions/recovery-unreferenced.jsonl",
+    const source = path.join(root, "original.jsonl");
+    writeRecoveryTranscript(source, "old", 3);
+    const identity = recoveryFileIdentity(source);
+    const original = {
+      source,
+      disposition,
+      identity,
+      ...(disposition === "unmanifested" ? { reported: false } : {}),
+    };
+    const fixture = { originals: [original] };
+    const archived = disposition === "candidate";
+    const archive = archived ? path.join(root, "archive.jsonl") : source;
+    expect(() =>
+      assertRecoveryOriginals(fixture, archived ? [] : [{ sourcePath: source }]),
+    ).toThrow(archived ? /did not record/ : /recorded/);
+    const moves = archived ? [archiveOriginal(source, archive).move] : [];
+    expect(assertRecoveryOriginals(fixture, moves)).toMatchObject([{ ...original, archive }]);
+    fs.appendFileSync(archive, "unexpected rewrite");
+    expect(() => assertRecoveryOriginals(fixture, moves)).toThrow(
+      archived ? /copied or rewritten/ : /changed/,
     );
-    const originals = fixture.originals.filter((original) => original.source === retainedSource);
-    expect(originals).toHaveLength(1);
-    expect(assertRecoveryOriginals({ originals }, [])).toMatchObject([
-      {
-        source: retainedSource,
-        archive: retainedSource,
-        disposition: "unmanifested",
-        reported: false,
-      },
-    ]);
-    expect(() => assertRecoveryOriginals({ originals }, [{ sourcePath: retainedSource }])).toThrow(
-      /recorded/,
-    );
-    const archivedSource = path.join(
-      root,
-      "agents/recovery-clean/sessions/recovery-unreferenced.jsonl",
-    );
-    const archived = fixture.originals.filter((original) => original.source === archivedSource);
-    expect(archived).toHaveLength(1);
-    expect(() => assertRecoveryOriginals({ originals: archived }, [])).toThrow(/did not record/);
-    fs.appendFileSync(retainedSource, "unexpected change");
-    expect(() => assertRecoveryOriginals({ originals }, [])).toThrow(/changed/);
+    if (archived) {
+      fs.rmSync(archive);
+      expect(() => assertRecoveryOriginals(fixture, moves)).toThrow();
+    }
   });
 
   it("allows only selected transient WAL indexes during offline maintenance", () => {
@@ -346,21 +353,6 @@ describe("recovery survivor evidence", () => {
         assertRecoverySnapshot(baseline, recoveryTreeSnapshot([root]), allowed, true),
       ).toThrow();
     }
-  });
-
-  it("requires the preserved original inode and content, not just a matching manifest", () => {
-    const root = temporary();
-    const source = path.join(root, "original.jsonl");
-    const archive = path.join(root, "archive.jsonl");
-    writeRecoveryTranscript(source, "old", 3);
-    const { original, move } = archiveOriginal(source, archive);
-    const fixture = { originals: [original] };
-    const moves = [move];
-    expect(assertRecoveryOriginals(fixture, moves)[0]?.archive).toBe(archive);
-    fs.appendFileSync(archive, "unexpected rewrite");
-    expect(() => assertRecoveryOriginals(fixture, moves)).toThrow(/copied or rewritten/);
-    fs.rmSync(archive);
-    expect(() => assertRecoveryOriginals(fixture, moves)).toThrow();
   });
 
   it("rejects missing or misclassified originals even when aggregate candidates are nonzero", () => {
