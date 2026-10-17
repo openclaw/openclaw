@@ -23,17 +23,28 @@ const readers = [
 ] as const;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
+
+function authorize(
+  database: DatabaseSync,
+  action: number,
+  name: string,
+  decision = constants.SQLITE_DENY,
+) {
+  database.setAuthorizer((code, target) =>
+    code === action && target === name ? decision : constants.SQLITE_OK,
+  );
+}
 
 function createMetadata(role: string, location = ":memory:"): DatabaseSync {
   const database = new DatabaseSync(location);
   database.exec(`
     CREATE TABLE schema_meta (
-      meta_key TEXT PRIMARY KEY, role TEXT NOT NULL, schema_version INTEGER NOT NULL,
-      agent_id TEXT, app_version TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER, agent_id TEXT, app_version TEXT
     );
   `);
   database
-    .prepare("INSERT INTO schema_meta VALUES ('primary', ?, 1, ?, NULL, 1, 1)")
+    .prepare("INSERT INTO schema_meta VALUES ('primary', ?, 1, ?, NULL)")
     .run(role, role === "agent" ? "main" : null);
   return database;
 }
@@ -42,11 +53,7 @@ describe.each(readers)("$role schema metadata", ({ role, read }) => {
   it("reads historical metadata without probing columns on success", () => {
     using database = createMetadata(role);
     database.exec("ALTER TABLE schema_meta DROP COLUMN app_version");
-    database.setAuthorizer((action, name) =>
-      action === constants.SQLITE_PRAGMA && name === "table_info"
-        ? constants.SQLITE_DENY
-        : constants.SQLITE_OK,
-    );
+    authorize(database, constants.SQLITE_PRAGMA, "table_info");
     expect(() => read(database)).not.toThrow();
   });
 
@@ -65,61 +72,47 @@ describe.each(readers)("$role schema metadata", ({ role, read }) => {
     });
     const prepare = database.prepare.bind(database);
     const nativeFailure = failure === "missing column" || failure === "authorization";
-    const stub = nativeFailure
-      ? undefined
-      : vi.spyOn(database, "prepare").mockImplementation((sql, ...args) => {
-          if (sql.includes("FROM schema_meta")) {
-            throw error;
-          }
-          if (failure === "failed inspection" && sql.includes("table_info")) {
-            throw new Error("synthetic inspection failure");
-          }
-          return prepare(sql, ...args);
-        });
-    try {
-      if (failure === "missing column") {
-        const column = role === "agent" ? "agent_id" : "schema_version";
-        database.exec(`ALTER TABLE schema_meta RENAME COLUMN ${column} TO retired_${column}`);
-        expect(database.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      } else if (failure === "authorization") {
-        database.setAuthorizer((action, table) =>
-          action === constants.SQLITE_READ && table === "schema_meta"
-            ? constants.SQLITE_DENY
-            : constants.SQLITE_OK,
-        );
-      } else if (failure === "ignored inspection") {
-        database.setAuthorizer((action, name) =>
-          action === constants.SQLITE_PRAGMA && name === "table_info"
-            ? constants.SQLITE_IGNORE
-            : constants.SQLITE_OK,
-        );
-      }
-      if (failure === "missing column") {
-        expect(() => read(database)).toThrowError(
-          expect.objectContaining({
-            name: "SqliteSchemaMismatchError",
-            cause: expect.objectContaining({ code: "ERR_SQLITE_ERROR", errcode: 1 }),
-          }),
-        );
-      } else if (failure === "authorization") {
-        expect(() => read(database)).toThrowError(
-          expect.objectContaining({
-            name: "Error",
-            code: "ERR_SQLITE_ERROR",
-            errcode: 23,
-          }),
-        );
-      } else {
-        let observed: unknown;
-        try {
-          read(database);
-        } catch (caught) {
-          observed = caught;
+    if (!nativeFailure) {
+      vi.spyOn(database, "prepare").mockImplementation((sql, ...args) => {
+        if (sql.includes("FROM schema_meta")) {
+          throw error;
         }
-        expect(observed).toBe(error);
+        if (failure === "failed inspection" && sql.includes("table_info")) {
+          throw new Error("synthetic inspection failure");
+        }
+        return prepare(sql, ...args);
+      });
+    }
+    if (failure === "missing column") {
+      const column = role === "agent" ? "agent_id" : "schema_version";
+      database.exec(`ALTER TABLE schema_meta RENAME COLUMN ${column} TO retired_${column}`);
+      expect(database.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    } else if (failure === "authorization") {
+      authorize(database, constants.SQLITE_READ, "schema_meta");
+    } else if (failure === "ignored inspection") {
+      authorize(database, constants.SQLITE_PRAGMA, "table_info", constants.SQLITE_IGNORE);
+    }
+    if (nativeFailure) {
+      const expected =
+        failure === "missing column"
+          ? {
+              name: "SqliteSchemaMismatchError",
+              cause: expect.objectContaining({ code: "ERR_SQLITE_ERROR", errcode: 1 }),
+            }
+          : {
+              name: "Error",
+              code: "ERR_SQLITE_ERROR",
+              errcode: 23,
+            };
+      expect(() => read(database)).toThrowError(expect.objectContaining(expected));
+    } else {
+      let observed: unknown;
+      try {
+        read(database);
+      } catch (caught) {
+        observed = caught;
       }
-    } finally {
-      stub?.mockRestore();
+      expect(observed).toBe(error);
     }
   });
 });
@@ -147,8 +140,7 @@ it.each(["transaction", "pinned snapshot"] as const)(
       observation.queries.filter((sql) => /^SELECT role, schema_version, agent_id/iu.test(sql));
     try {
       const readSnapshot = () => {
-        expect(read()?.agentId).toBe("main");
-        expect(read()?.agentId).toBe("main");
+        expect([read()?.agentId, read()?.agentId]).toEqual(["main", "main"]);
         writer.exec("UPDATE schema_meta SET agent_id = 'foreign'");
         expect(read()?.agentId).toBe("main");
         expect(metadataReads()).toHaveLength(3);
@@ -163,8 +155,7 @@ it.each(["transaction", "pinned snapshot"] as const)(
       } else {
         runSqliteSchemaReadSnapshotSync(reader, readSnapshot);
       }
-      expect(read()?.agentId).toBe("foreign");
-      expect(read()?.agentId).toBe("foreign");
+      expect([read()?.agentId, read()?.agentId]).toEqual(["foreign", "foreign"]);
       expect(metadataReads()).toHaveLength(5);
     } finally {
       observation.restore();
