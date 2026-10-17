@@ -54,7 +54,6 @@ function buildFinalPayloads(
 ) {
   return buildReplyPayloads({
     isHeartbeat: false,
-    didLogHeartbeatStrip: false,
     blockStreamingEnabled: true,
     blockReplyPipeline: null,
     replyToMode: "off",

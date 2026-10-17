@@ -283,6 +283,9 @@ the original caller's permission to run worktree setup scripts.
 
 When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
+Explicit nonfinal message-tool progress (`final: false`) recorded by the same run
+does not close that turn; recovery preserves the visible update without sending it
+back to the model as an answer.
 A restart-aborted embedded response retains its already-streamed text as an
 interrupted assistant message when the transcript writer is still available.
 Unfinished tool calls in that response are discarded before persistence.

@@ -108,7 +108,10 @@ With `models.mode: "replace"`, discovery is disabled, so onboarding keeps the do
 in the provider model list while preserving existing model definitions.
 
 Re-running authentication also combines case-variant provider keys, such as `LiteLLM` and `litellm`,
-into one canonical row while preserving authored provider options and model settings.
+into one canonical row while preserving authored provider options and model settings, including when
+activating a saved sign-in. Non-interactive
+reauthentication without `--custom-base-url` keeps the configured proxy URL, including when the
+existing provider key uses different casing.
 
 ## Image generation
 

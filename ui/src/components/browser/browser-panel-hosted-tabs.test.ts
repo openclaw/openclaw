@@ -208,7 +208,7 @@ describe("Browser panel hosted tabs", () => {
 
       controller.setState("urlDraft", "https://draft.test/");
       await panel.updateComplete;
-      panel.requestUpdate();
+      panel.invalidate();
       await panel.updateComplete;
       expect(changed).toHaveBeenCalledTimes(2);
     } finally {

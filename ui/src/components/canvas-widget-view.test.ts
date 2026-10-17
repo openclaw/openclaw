@@ -779,7 +779,9 @@ describe("Canvas widget view", () => {
       view.allowScripts = false;
     }
     expect(close).toHaveBeenCalledOnce();
-    expect(removeEventListener).toHaveBeenCalledWith("message", onMessage);
+    expect(removeEventListener.mock.calls).toContainEqual(
+      expect.arrayContaining(["message", onMessage]),
+    );
     prompt("Stale port");
     expect(received).toHaveBeenCalledOnce();
     if (change === "strict then scripts") {

@@ -43,10 +43,16 @@ function wrap(
     ...context,
   });
 }
-function completedStream() {
+function completedStream(
+  content: NonNullable<Parameters<typeof makeAssistantMessageFixture>[0]>["content"] = [],
+) {
   const stream = createAssistantMessageEventStream();
   stream.end(
-    makeAssistantMessageFixture({ stopReason: "stop", errorMessage: undefined, content: [] }),
+    makeAssistantMessageFixture({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content,
+    }),
   );
   return stream;
 }
@@ -314,11 +320,7 @@ describe("model diagnostic lifecycle", () => {
         input: [{ role: "user", content: "private preparation fixture" }],
       });
       expect(await request.body.text()).toContain("private preparation fixture");
-      const source = createAssistantMessageEventStream();
-      source.end(
-        makeAssistantMessageFixture({ stopReason: "stop", content: [], errorMessage: undefined }),
-      );
-      return source;
+      return completedStream();
     });
     const events = await timeline(async () => {
       const response = await wrapped(
@@ -400,16 +402,10 @@ describe("model diagnostic lifecycle", () => {
   it("records legacy HTTP metadata without inferring provider acceptance", async () => {
     const onResponse = vi.fn(async () => undefined);
     const response = { status: 200, headers: { "x-request-id": "req-1" } };
-    const wrapped = wrap(
-      async (
-        model: Parameters<StreamFn>[0],
-        _context: Parameters<StreamFn>[1],
-        options: Parameters<StreamFn>[2],
-      ) => {
-        await options?.onResponse?.(response, model);
-        return completedStream();
-      },
-    );
+    const wrapped = wrap(async (model, _context, options) => {
+      await options?.onResponse?.(response, model);
+      return completedStream();
+    });
     const events = await timeline(async () => {
       const stream = await wrapped({} as never, {} as never, { onResponse });
       await stream.result();
@@ -421,16 +417,10 @@ describe("model diagnostic lifecycle", () => {
   });
 
   it("records SDK acceptance without HTTP metadata", async () => {
-    const wrapped = wrap(
-      (
-        _model: Parameters<StreamFn>[0],
-        _context: Parameters<StreamFn>[1],
-        options: Parameters<StreamFn>[2],
-      ) => {
-        void notifyProviderStreamOpened({ options, cancelStream: vi.fn() });
-        return completedStream();
-      },
-    );
+    const wrapped = wrap((_model, _context, options) => {
+      void notifyProviderStreamOpened({ options, cancelStream: vi.fn() });
+      return completedStream();
+    });
     const events = await timeline(async () => {
       const stream = await wrapped({} as never, {} as never, {});
       await stream.result();
@@ -467,7 +457,7 @@ describe("model diagnostic lifecycle", () => {
       registerDiagnosticTracePropagationBridge({
         resolveTraceContext: () => (resolved ? trace : undefined),
       });
-      const source = vi.fn<StreamFn>().mockImplementation(completedStream);
+      const source = vi.fn<StreamFn>().mockImplementation(() => completedStream());
       const caller = {
         headers: { "X-Custom": "kept", TraceParent: "untrusted" },
         sessionId: "provider-session",

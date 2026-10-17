@@ -63,7 +63,6 @@ export function successfulChatTurn(
       resolved: { provider: "openai", model: "gpt-test" },
       fallback: { exhausted: false, attempts: [] },
       autoCompactionCount: 0,
-      didLogHeartbeatStrip: false,
     },
   };
 }

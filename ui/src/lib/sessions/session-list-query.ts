@@ -26,7 +26,7 @@ import {
   hasSessionChangedAncestorCoverage,
   matchesExistingSession,
   parseSessionChangedEvent,
-  reconcileSessionChangedRow,
+  reconcileParsedSessionChangedRow,
   sessionChangedSnapshots,
 } from "./session-row-reconcile.ts";
 
@@ -155,7 +155,7 @@ export function canApplySessionListSnapshot(
     const excluded =
       !existing &&
       complete &&
-      reconcileSessionChangedRow(observedRow?.(info.key, info.agentId), snapshot, {
+      reconcileParsedSessionChangedRow(observedRow?.(info.key, info.agentId), parsedSnapshot, {
         resultAgentId: options.agentId,
         archivedFilter: "all",
         admitSnapshot: true,
@@ -163,10 +163,10 @@ export function canApplySessionListSnapshot(
     if (
       excluded &&
       ((parent &&
-        Array.isArray(excluded.childOwnerSessionKeys) &&
+        excluded.childOwnerSessionKeys !== undefined &&
         !excluded.childOwnerSessionKeys.includes(parent)) ||
         (options.hasBoard !== undefined &&
-          typeof excluded.hasBoard === "boolean" &&
+          excluded.hasBoard !== undefined &&
           excluded.hasBoard !== options.hasBoard) ||
         (options.boardFace !== undefined && excluded.boardFace !== options.boardFace) ||
         (options.includeGlobal === false && excluded.kind === "global") ||
@@ -199,7 +199,7 @@ export function canApplySessionListSnapshot(
       covered = true;
       continue;
     }
-    const next = reconcileSessionChangedRow(existing, snapshot, {
+    const next = reconcileParsedSessionChangedRow(existing, parsedSnapshot, {
       resultAgentId: options.agentId,
       archivedFilter: "all",
     }).admittedRow;
@@ -302,7 +302,7 @@ export function isForegroundReplacement(options: SessionRefreshOptions): boolean
 
 export function sessionListAgentMatcher(agentId?: string | null) {
   const normalized = agentId ? normalizeAgentId(agentId) : null;
-  return (queryAgentId?: string) =>
+  return (queryAgentId?: string | null) =>
     !normalized || !queryAgentId?.trim() || normalizeAgentId(queryAgentId) === normalized;
 }
 
@@ -635,7 +635,7 @@ export function retainSessionPaginationWindow(
   const ownerFirstPage =
     Boolean(snapshot.selfUser?.id.trim()) && isPrimarySessionListQuery(options);
   const retainedListLimit =
-    ownerFirstPage && result && typeof offset === "number"
+    ownerFirstPage && result && offset !== undefined
       ? offset + result.sessions.length
       : nextResult.sessions.length;
   // Retain the shared pagination window, excluding owner rows merged ahead of it.

@@ -12,8 +12,8 @@ function createHello(mainSessionKey = "agent:main:main"): GatewayHelloOk {
     protocol: 1,
     auth: { role: "operator", scopes: [] },
     features: { methods: [SESSION_VIEWERS_SET_METHOD] },
-    snapshot: { sessionDefaults: { mainSessionKey } },
-  } as GatewayHelloOk;
+    snapshot: { sessionDefaults: { defaultAgentId: "main", mainKey: "main", mainSessionKey } },
+  };
 }
 
 function createGatewayHarness() {

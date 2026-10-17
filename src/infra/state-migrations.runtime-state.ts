@@ -4,7 +4,7 @@ import { asNullableRecord, asRecord } from "@openclaw/normalization-core/record-
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { migrationFileExists } from "./state-migrations.fs.js";
+import { safeStatSync } from "./path-guards.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
 import type { LegacyStateDetection } from "./state-migrations.types.js";
 
@@ -81,7 +81,7 @@ function retireLegacyConfigHealthSource(params: {
   warnings: string[];
 }): void {
   const archivedPath = `${params.sourcePath}.migrated`;
-  if (!migrationFileExists(archivedPath)) {
+  if (!safeStatSync(archivedPath)?.isFile()) {
     archiveLegacyImportSource({
       sourcePath: params.sourcePath,
       label: "config health state",
@@ -107,7 +107,7 @@ export function migrateLegacyConfigHealth(params: {
 }): { changes: string[]; warnings: string[] } {
   const { sourcePath } = params.detected;
   const warnings: string[] = [];
-  if (!migrationFileExists(sourcePath)) {
+  if (!safeStatSync(sourcePath)?.isFile()) {
     return { changes: [], warnings };
   }
   let entries: LegacyConfigHealthEntry[];

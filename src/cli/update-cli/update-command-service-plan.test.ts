@@ -171,7 +171,7 @@ describe("package runtime compatibility guidance", () => {
             }
           : { ok: false, error: "Bun 1.4.3+ with WAL-reset-safe node:sqlite is required." },
       );
-      expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(executable, undefined, runtimeEnv);
+      expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(executable, runtimeEnv);
       expect(resolveNodeRuntimeInfo).not.toHaveBeenCalled();
       expect(resolveTargetNodeRuntime).not.toHaveBeenCalled();
       if (homebrew) {
