@@ -1,5 +1,5 @@
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { getFlagValue, hasFlag } from "./argv.js";
+import { getCommandPositionalsWithRootOptions, getFlagValue, hasFlag } from "./argv.js";
 import { resolveCliDatabaseProcessRole } from "./database-process-role.js";
 
 const OWNED_DATABASE_SELECTION = new Set([
@@ -102,9 +102,20 @@ const OWNED_DATABASE_SELECTION = new Set([
 /** Select storage before stateful startup; true means Doctor completed a no-database report. */
 export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean> {
   const invocation = resolveCliArgvInvocation(argv);
+  // Recommendations accepts only --json before its subcommand. Other setup
+  // options can carry values that the early generic command path cannot classify.
+  const onboardSubcommand =
+    invocation.primary === "onboard"
+      ? getCommandPositionalsWithRootOptions(argv, {
+          commandPath: ["onboard"],
+          booleanFlags: ["--json"],
+          maxPositionals: 1,
+          mode: "command-path",
+        })?.[0]
+      : undefined;
   const isSetupInvocation =
-    invocation.commandPath.length === 1 &&
-    ["onboard", "setup", "crestodian"].includes(invocation.primary ?? "");
+    ["setup", "crestodian"].includes(invocation.primary ?? "") ||
+    (invocation.primary === "onboard" && onboardSubcommand !== "recommendations");
   let command = invocation.hasHelpOrVersion
     ? "help"
     : resolveCliDatabaseProcessRole(argv) === "gateway"

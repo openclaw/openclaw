@@ -28,8 +28,10 @@ const database = {
 const recoveryOwnerCommands = [
   [],
   ["onboard", "--reset"],
+  ["onboard", "--reset", "--reset-scope", "config", "--agent-name", "main"],
   ["onboard", "--reset", "--non-interactive", "--accept-risk"],
   ["setup", "--wizard", "--reset"],
+  ["setup", "--wizard", "--reset", "--reset-scope", "config"],
   ["agent", "--agent", "main", "--message", "hello"],
   ["gateway", "restart"],
   ["daemon", "restart"],
@@ -111,6 +113,12 @@ describe("one-shot CLI engine selection", () => {
       code: "INVALID_CONFIG",
       heading: "Invalid config at",
       args: ["onboard", "--json", "recommendations"],
+    },
+    {
+      source: "recommendation mutation",
+      code: "INVALID_CONFIG",
+      heading: "Invalid config at",
+      args: ["onboard", "recommendations", "refresh"],
     },
     { source: "include", code: "INVALID_CONFIG", heading: "Invalid config at" },
     {
