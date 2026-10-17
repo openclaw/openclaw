@@ -1,4 +1,3 @@
-// Gateway Smoke tests cover QA Lab gateway smoke evidence.
 import { spawnSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,30 +8,34 @@ let server: Server | undefined;
 let wss: WebSocketServer | undefined;
 
 afterEach(async () => {
-  await new Promise<void>((resolve) => {
-    wss?.close(() => resolve());
-    if (!wss) {
-      resolve();
-    }
-  });
+  if (wss) {
+    await new Promise<void>((resolve) => {
+      wss?.close(() => resolve());
+    });
+  }
   wss = undefined;
 
-  await new Promise<void>((resolve, reject) => {
-    server?.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
+  if (server) {
+    await new Promise<void>((resolve, reject) => {
+      server?.close((error) => (error ? reject(error) : resolve()));
     });
-    if (!server) {
-      resolve();
-    }
-  });
+  }
   server = undefined;
 });
 
 describe("gateway-smoke", () => {
+  const smokeOptions = { token: "secret-token", urlRaw: "ws://127.0.0.1:12345" };
+  function expectCliError(args: string[], message: string) {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/dev/gateway-smoke.ts", ...args],
+      { cwd: process.cwd(), encoding: "utf8" },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe(message);
+  }
+
   function healthResponse() {
     return {
       ok: true,
@@ -76,9 +79,7 @@ describe("gateway-smoke", () => {
       ws.on("message", (data: RawData) => {
         const text = Array.isArray(data)
           ? Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf8")
-          : Buffer.isBuffer(data)
-            ? data.toString("utf8")
-            : Buffer.from(data).toString("utf8");
+          : Buffer.from(data).toString("utf8");
         const frame = JSON.parse(text) as {
           id: string;
           method: string;
@@ -86,33 +87,21 @@ describe("gateway-smoke", () => {
           type: string;
         };
         requests.push({ method: frame.method, params: frame.params });
+        const reply = (result: Record<string, unknown>) =>
+          ws.send(JSON.stringify({ id: frame.id, type: "res", ...result }));
         if (frame.method === "connect") {
-          ws.send(JSON.stringify({ id: frame.id, type: "res", ...connectHelloResponse() }));
+          reply(connectHelloResponse());
           return;
         }
         if (frame.method === "health") {
-          ws.send(JSON.stringify({ id: frame.id, type: "res", ...healthResponse() }));
+          reply(healthResponse());
           return;
         }
         if (frame.method === "chat.history") {
-          ws.send(
-            JSON.stringify({
-              error: "missing scope: operator.read",
-              id: frame.id,
-              ok: false,
-              type: "res",
-            }),
-          );
+          reply({ error: "missing scope: operator.read", ok: false });
           return;
         }
-        ws.send(
-          JSON.stringify({
-            error: `unexpected method ${frame.method}`,
-            id: frame.id,
-            ok: false,
-            type: "res",
-          }),
-        );
+        reply({ error: `unexpected method ${frame.method}`, ok: false });
       });
     });
     await new Promise<void>((resolve) => {
@@ -170,27 +159,10 @@ describe("gateway-smoke", () => {
   }
 
   it("rejects unknown CLI args before connecting", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/dev/gateway-smoke.ts",
-        "--url",
-        "ws://127.0.0.1:9",
-        "--token",
-        "token",
-        "--wat",
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
+    expectCliError(
+      ["--url", "ws://127.0.0.1:9", "--token", "token", "--wat"],
+      "Unknown argument: --wat",
     );
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
   });
 
   it("rejects option-looking CLI values before connecting", () => {
@@ -198,18 +170,7 @@ describe("gateway-smoke", () => {
       ["--url", ["--url", "-h", "--token", "token"]],
       ["--token", ["--url", "ws://127.0.0.1:9", "--token", "-h"]],
     ] as const) {
-      const result = spawnSync(
-        process.execPath,
-        ["--import", "tsx", "scripts/dev/gateway-smoke.ts", ...args],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-        },
-      );
-
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr.trim()).toBe(`${flag} requires a value`);
+      expectCliError([...args], `${flag} requires a value`);
     }
   });
 
@@ -219,18 +180,7 @@ describe("gateway-smoke", () => {
       ["--token", ["--url", "ws://127.0.0.1:9", "--token", "one", "--token", "two"]],
       ["--help", ["--help", "--help"]],
     ] as const) {
-      const result = spawnSync(
-        process.execPath,
-        ["--import", "tsx", "scripts/dev/gateway-smoke.ts", ...args],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-        },
-      );
-
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr.trim()).toBe(`${flag} was provided more than once`);
+      expectCliError([...args], `${flag} was provided more than once`);
     }
   });
 
@@ -264,35 +214,13 @@ describe("gateway-smoke", () => {
   });
 
   it("closes the websocket client when connect fails", async () => {
-    const stderr: string[] = [];
-    const methods: string[] = [];
-    let closed = 0;
-
-    const code = await runGatewaySmoke(
-      { token: "secret-token", urlRaw: "ws://127.0.0.1:12345" },
-      {
-        createClient: () =>
-          ({
-            close: () => {
-              closed += 1;
-            },
-            request: async (method: string) => {
-              methods.push(method);
-              return { error: "bad token", id: "connect", ok: false, type: "res" };
-            },
-            waitOpen: async () => {},
-          }) as never,
-        stderr: (message) => {
-          stderr.push(message);
-        },
-        stdout: () => {},
-      },
-    );
+    const fake = createSmokeDeps({ connect: { ok: false, error: "bad token" } });
+    const code = await runGatewaySmoke(smokeOptions, fake.deps);
 
     expect(code).toBe(2);
-    expect(closed).toBe(1);
-    expect(methods).toEqual(["connect"]);
-    expect(stderr).toEqual(["connect failed: bad token"]);
+    expect(fake.closed).toBe(1);
+    expect(fake.calls.map((call) => call.method)).toEqual(["connect"]);
+    expect(fake.stderr).toEqual(["connect failed: bad token"]);
   });
 
   it("requires connect and health in order", async () => {
@@ -301,10 +229,7 @@ describe("gateway-smoke", () => {
       health: healthResponse(),
     });
 
-    const code = await runGatewaySmoke(
-      { token: "secret-token", urlRaw: "ws://127.0.0.1:12345" },
-      fake.deps,
-    );
+    const code = await runGatewaySmoke(smokeOptions, fake.deps);
 
     expect(code).toBe(0);
     expect(fake.closed).toBe(1);
@@ -321,10 +246,7 @@ describe("gateway-smoke", () => {
       connect: { ok: true },
     });
 
-    const code = await runGatewaySmoke(
-      { token: "secret-token", urlRaw: "ws://127.0.0.1:12345" },
-      fake.deps,
-    );
+    const code = await runGatewaySmoke(smokeOptions, fake.deps);
 
     expect(code).toBe(2);
     expect(fake.closed).toBe(1);
@@ -338,10 +260,7 @@ describe("gateway-smoke", () => {
       connect: connectHelloResponse(["operator.read"]),
     });
 
-    const code = await runGatewaySmoke(
-      { token: "secret-token", urlRaw: "ws://127.0.0.1:12345" },
-      fake.deps,
-    );
+    const code = await runGatewaySmoke(smokeOptions, fake.deps);
 
     expect(code).toBe(2);
     expect(fake.closed).toBe(1);
@@ -356,10 +275,7 @@ describe("gateway-smoke", () => {
       health: { ok: true },
     });
 
-    const code = await runGatewaySmoke(
-      { token: "secret-token", urlRaw: "ws://127.0.0.1:12345" },
-      fake.deps,
-    );
+    const code = await runGatewaySmoke(smokeOptions, fake.deps);
 
     expect(code).toBe(3);
     expect(fake.closed).toBe(1);

@@ -13,6 +13,7 @@ import {
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { resolveRetryableHistoryDelayMs } from "./gateway-recovery.test-support.js";
 
 type GatewayChatMessage = {
   role?: unknown;
@@ -48,8 +49,6 @@ type GatewayHandle = Awaited<
 
 const HISTORY_RETRY_TIMEOUT_MS = 10_000;
 const HISTORY_RETRY_DEFAULT_MS = 250;
-const HISTORY_RETRY_MIN_MS = 100;
-const HISTORY_RETRY_MAX_MS = 5_000;
 const requestSnapshotsSchema = z.array(
   z.object({ cursor: z.number().int(), model: z.string(), raw: z.string() }),
 );
@@ -135,44 +134,6 @@ function historyContainsExpectedTurns(
         (message) => message.role === "assistant" && messageContains(message, expectedAssistant),
       ))
   );
-}
-
-// Transcript projection rebuilds can briefly reject chat.history. Retry only
-// that structured protocol response; every other failure remains immediate.
-function resolveRetryableHistoryDelayMs(error: unknown): number | null {
-  let current = error;
-  for (let depth = 0; depth < 4; depth += 1) {
-    if (typeof current !== "object" || current === null || Array.isArray(current)) {
-      break;
-    }
-    const shaped = current as {
-      cause?: unknown;
-      code?: unknown;
-      details?: unknown;
-      gatewayCode?: unknown;
-      retryable?: unknown;
-      retryAfterMs?: unknown;
-    };
-    const code = shaped.gatewayCode ?? shaped.code;
-    if (code === "UNAVAILABLE" && shaped.retryable === true) {
-      const detailMethod =
-        typeof shaped.details === "object" && shaped.details !== null
-          ? (shaped.details as { method?: unknown }).method
-          : undefined;
-      if (typeof detailMethod !== "string" || detailMethod === "chat.history") {
-        const rawDelayMs =
-          typeof shaped.retryAfterMs === "number" && Number.isFinite(shaped.retryAfterMs)
-            ? shaped.retryAfterMs
-            : HISTORY_RETRY_DEFAULT_MS;
-        return Math.min(
-          Math.max(Math.floor(rawDelayMs), HISTORY_RETRY_MIN_MS),
-          HISTORY_RETRY_MAX_MS,
-        );
-      }
-    }
-    current = shaped.cause;
-  }
-  return null;
 }
 
 function resolveGatewayErrorReason(error: unknown): string | undefined {
@@ -408,34 +369,6 @@ describe("Gateway chat RPCs", () => {
             typeof content === "string" ? content : expectDefined(content[0], "history text").text;
           expectWhitespaceInterior([recorded], recorded, expected.marker, expected.interior);
         }
-        console.log(
-          "[gateway-rpc-chat-runtime-proof]",
-          JSON.stringify({
-            turn: index + 1,
-            gatewayRunStatus: terminal.status,
-            serializedRuntimeCarriersSkipped: input
-              .filter((item) => item.role === "user")
-              .map((item) =>
-                (item.content ?? [])
-                  .filter((part) => part.type === "input_text")
-                  .map((part) => part.text ?? "")
-                  .join(""),
-              )
-              .filter(isInternalRuntimeContextCarrierText).length,
-            selectedUserTurns: userTexts.length,
-            latestPromptSelected: userTexts.at(-1)?.includes(`BEGIN_${turn.marker}`) ?? false,
-            persistedHistoryContainsPrompt: userMessages.some((message) => {
-              const content = historyTextSchema.safeParse(message.content);
-              return (
-                content.success &&
-                (typeof content.data === "string"
-                  ? content.data
-                  : (content.data[0]?.text ?? "")
-                ).includes(`BEGIN_${turn.marker}`)
-              );
-            }),
-          }),
-        );
         // The first-sent model prompt replays as projected, so its directive stays stripped.
         expect(userTexts[0]).not.toContain("/think high");
       }
@@ -540,18 +473,6 @@ describe("Gateway chat RPCs", () => {
           "trace session",
         );
         expect(row.traceLevel).toBe(turn.stored);
-        console.log(
-          `[inline-trace-proof] ${JSON.stringify({
-            turn: index,
-            runId,
-            settled: settledRunIds.has(runId),
-            modelReplyDelivered: text.includes(reply),
-            rawExpected: turn.raw,
-            rawInput: text.includes("Model Input (User Role)"),
-            rawOutput: text.includes("Model Output (Assistant Role)"),
-            storedTrace: row.traceLevel ?? null,
-          })}`,
-        );
       }
     } finally {
       await disconnectGatewayClient(client);
@@ -842,17 +763,6 @@ describe("Gateway chat RPCs", () => {
         { timeoutMs: 10_000 },
       )) as GatewayChatHistory;
       expect(JSON.stringify(history.messages ?? [])).not.toContain(rejectedPrompt);
-
-      console.log(
-        `[session-settings-authority-proof] ${JSON.stringify({
-          restrictedRun: "completed",
-          deniedFinalEffect: true,
-          sentinelCreated: false,
-          changedSettingsRejected: true,
-          rejectedRequestReachedProvider: false,
-          rejectedRequestReachedTranscript: false,
-        })}`,
-      );
     },
   );
 });

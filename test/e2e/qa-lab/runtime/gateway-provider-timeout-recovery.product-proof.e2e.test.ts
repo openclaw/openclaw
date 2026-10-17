@@ -14,27 +14,17 @@ const CHECKPOINT_AFTER_FLOOR_MS = GLOBAL_RECOVERY_FLOOR_MS + 45_000;
 const PROVIDER_ALLOWANCE_MS = 450_000;
 const TEST_TIMEOUT_MS = PROVIDER_ALLOWANCE_MS + 60_000;
 
-type StabilityEvent = {
-  type?: unknown;
-  action?: unknown;
-  ageMs?: unknown;
-  reason?: unknown;
-};
+import { messageText } from "./gateway-recovery.test-support.js";
+
+type StabilityEvent = Partial<Record<"type" | "action" | "ageMs" | "reason", unknown>>;
 
 type StabilitySnapshot = {
   lastSeq?: unknown;
   events?: StabilityEvent[];
 };
 
-type GatewayChatRun = {
-  runId?: unknown;
-  status?: unknown;
-};
-
-type GatewayChatMessage = {
-  role?: unknown;
-  content?: unknown;
-};
+type GatewayChatRun = Partial<Record<"runId" | "status", unknown>>;
+type GatewayChatMessage = Partial<Record<"role" | "content", unknown>>;
 
 type GatewayChatHistory = {
   messages?: GatewayChatMessage[];
@@ -137,23 +127,6 @@ async function startControlledProvider() {
   };
 }
 
-function messageText(message: GatewayChatMessage): string {
-  if (typeof message.content === "string") {
-    return message.content.trim();
-  }
-  if (!Array.isArray(message.content)) {
-    return "";
-  }
-  return message.content
-    .flatMap((part) =>
-      part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string"
-        ? [(part as { text: string }).text]
-        : [],
-    )
-    .join("\n")
-    .trim();
-}
-
 describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
   "Gateway provider-timeout recovery product proof",
   () => {
@@ -216,28 +189,17 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
           if (!providerConfig) {
             throw new Error("mock-openai provider is missing from QA gateway config");
           }
-          return {
-            ...config,
-            plugins: { enabled: false },
-            diagnostics: { enabled: true },
-            agents: {
-              ...config.agents,
-              defaults: {
-                ...config.agents?.defaults,
-                timeoutSeconds: TEST_TIMEOUT_MS / 1_000,
-              },
-            },
-            models: {
-              ...config.models,
-              providers: {
-                ...config.models?.providers,
-                "mock-openai": {
-                  ...providerConfig,
-                  timeoutSeconds: PROVIDER_ALLOWANCE_MS / 1_000,
-                },
-              },
+          providerConfig.timeoutSeconds = PROVIDER_ALLOWANCE_MS / 1_000;
+          config.plugins = { enabled: false };
+          config.diagnostics = { enabled: true };
+          config.agents = {
+            ...config.agents,
+            defaults: {
+              ...config.agents?.defaults,
+              timeoutSeconds: TEST_TIMEOUT_MS / 1_000,
             },
           };
+          return config;
         },
       });
 

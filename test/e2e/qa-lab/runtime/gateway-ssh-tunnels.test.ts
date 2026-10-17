@@ -100,17 +100,12 @@ function startProducer(
   child.stderr.setEncoding("utf8");
   let stdout = "";
   let stderr = "";
-  let resolveReady: () => void;
-  let rejectReady: (error: Error) => void;
-  const ready = new Promise<void>((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
-  });
+  const ready = createDeferred();
   const trustPrepared = createDeferred();
   child.stdout.on("data", (chunk) => {
     stdout += String(chunk);
     if (stdout.includes(producerReadyMarker)) {
-      resolveReady();
+      ready.resolve();
     }
     if (stdout.includes(sshTrustPreparedMarker)) {
       trustPrepared.resolve();
@@ -121,7 +116,7 @@ function startProducer(
   });
   const completion = new Promise<void>((resolve, reject) => {
     child.once("error", (error) => {
-      rejectReady(error);
+      ready.reject(error);
       reject(error);
     });
     child.once("close", (code, signal) => {
@@ -133,7 +128,7 @@ function startProducer(
       const error = new Error(
         `Gateway SSH tunnel producer exited ${code ?? "null"}/${signal ?? "none"}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
       );
-      rejectReady(error);
+      ready.reject(error);
       reject(error);
     });
   });
@@ -141,7 +136,7 @@ function startProducer(
   return {
     completion,
     kill: () => terminateChild(child),
-    ready,
+    ready: ready.promise,
     start: () => child.stdin.end("start\n"),
     waitForTrustPrepared: () =>
       awaitGateBeforeSettlement(
@@ -181,6 +176,8 @@ async function readSummary(artifactBase: string) {
   ) as {
     cleanupReleased?: boolean;
     knownHostsIsolated?: boolean;
+    hostKeyDiagnostic?: string;
+    unreachableDiagnostic?: string;
   };
 }
 
@@ -207,16 +204,8 @@ describeOnTestbox("Gateway SSH tunnel QA producer", () => {
     expect(snapshotGatewayStartupEnv()).toEqual(gatewayStartupEnv);
     expect(evidence.entries).toHaveLength(1);
     expect(evidence.entries[0]?.result.status).toBe("pass");
-    const summary = JSON.parse(
-      await fs.readFile(path.join(artifactBase, "gateway-ssh-tunnels-summary.json"), "utf8"),
-    ) as {
-      cleanupReleased?: boolean;
-      hostKeyDiagnostic?: string;
-      knownHostsIsolated?: boolean;
-      unreachableDiagnostic?: string;
-    };
-    expect(summary.cleanupReleased).toBe(true);
-    expect(summary.knownHostsIsolated).toBe(true);
+    const summary = await readSummary(artifactBase);
+    expect(summary).toMatchObject({ cleanupReleased: true, knownHostsIsolated: true });
     expect(summary.hostKeyDiagnostic).toMatch(
       /REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i,
     );

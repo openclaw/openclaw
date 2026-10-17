@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   captureRuntimeConfigAsyncReader,
   clearConfigCache,
@@ -59,25 +59,6 @@ const FIXTURE_USAGE = {
     total: 0.0031,
   },
 } as const;
-
-type SessionLogsResult = {
-  logs: Array<{
-    timestamp: number;
-    role: "user" | "assistant" | "tool" | "toolResult";
-    content: string;
-    tokens?: number;
-    cost?: number;
-  }>;
-};
-
-type DoctorMemoryStatus = {
-  agentId: string;
-  embedding: {
-    ok: boolean;
-    checked?: boolean;
-    error?: string;
-  };
-};
 
 async function seedCompletedUsageSession(state: OpenClawTestState): Promise<{
   databasePath: string;
@@ -151,204 +132,194 @@ async function seedCompletedUsageSession(state: OpenClawTestState): Promise<{
   return { databasePath };
 }
 
-describe("gateway usage and memory APIs", () => {
-  it(
-    "projects deterministic usage and explicit memory readiness over authenticated WebSocket RPCs",
-    { timeout: TEST_TIMEOUT_MS },
-    async () => {
-      const portClaim = await acquireGatewayE2ePortBlock();
-      const { port } = portClaim;
-      // Released here until the started Gateway owns the claim.
-      let unstartedPortClaim: typeof portClaim | undefined = portClaim;
-      const token = `gateway-usage-memory-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}`;
-      const state = await createOpenClawTestState({
-        label: "gateway-usage-memory-apis",
-        env: {
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        },
+it(
+  "projects deterministic usage and explicit memory readiness over authenticated WebSocket RPCs",
+  { timeout: TEST_TIMEOUT_MS },
+  async () => {
+    const portClaim = await acquireGatewayE2ePortBlock();
+    const { port } = portClaim;
+    // Released here until the started Gateway owns the claim.
+    let unstartedPortClaim: typeof portClaim | undefined = portClaim;
+    const token = `gateway-usage-memory-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}`;
+    const state = await createOpenClawTestState({
+      label: "gateway-usage-memory-apis",
+      env: {
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+      },
+    });
+    const config = {
+      agents: {
+        defaults: { workspace: state.workspaceDir },
+        entries: { main: { workspace: state.workspaceDir } },
+      },
+      gateway: {
+        mode: "local",
+        port,
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUi: { enabled: false },
+      },
+      plugins: { enabled: false },
+      session: {
+        store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+    } satisfies OpenClawConfig;
+    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+
+    try {
+      await state.writeConfig(config);
+      clearRuntimeConfigSnapshot();
+      clearConfigCache();
+      clearModelAuthStatusUsageCache();
+
+      await captureRuntimeConfigAsyncReader()();
+      const { databasePath } = await seedCompletedUsageSession(state);
+      const databaseStats = await fs.stat(databasePath);
+      expect(databaseStats.isFile()).toBe(true);
+      const rollupRows = readSessionCostUsageRollupRows("main", databasePath);
+      expect(rollupRows).toHaveLength(1);
+      expect(parseSqliteSessionFileMarker(rollupRows[0]?.key)).toEqual({
+        agentId: "main",
+        sessionId: FIXTURE_SESSION_ID,
+        storePath: databasePath,
       });
-      const config = {
-        agents: {
-          defaults: { workspace: state.workspaceDir },
-          entries: { main: { workspace: state.workspaceDir } },
+      const storedSession = await loadGatewaySessionEntryReadOnlyAsync(FIXTURE_SESSION_KEY);
+      expect(storedSession).toMatchObject({
+        entry: {
+          sessionId: FIXTURE_SESSION_ID,
         },
-        gateway: {
-          mode: "local",
-          port,
+        storePath: path.join(state.sessionsDir("main"), "sessions.json"),
+      });
+      expect(storedSession.entry).not.toHaveProperty("sessionFile");
+
+      unstartedPortClaim = undefined;
+      server = await startClaimedGateway(portClaim, () =>
+        startGatewayServer(port, {
           bind: "loopback",
           auth: { mode: "token", token },
-          controlUi: { enabled: false },
-        },
-        plugins: { enabled: false },
-        session: {
-          store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-        },
-      } satisfies OpenClawConfig;
-      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-      let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }),
+      );
+      client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token,
+        scopes: [READ_SCOPE],
+        clientDisplayName: "gateway-usage-memory-qa",
+        requestTimeoutMs: 30_000,
+        timeoutMs: 30_000,
+      });
 
-      try {
-        await state.writeConfig(config);
-        clearRuntimeConfigSnapshot();
-        clearConfigCache();
-        clearModelAuthStatusUsageCache();
+      const usageStatus = await client.request<UsageSummary>("usage.status", {});
+      expect(usageStatus).toMatchObject({ updatedAt: expect.any(Number), providers: [] });
 
-        await captureRuntimeConfigAsyncReader()();
-        const { databasePath } = await seedCompletedUsageSession(state);
-        const databaseStats = await fs.stat(databasePath);
-        expect(databaseStats.isFile()).toBe(true);
-        const rollupRows = readSessionCostUsageRollupRows("main", databasePath);
-        expect(rollupRows).toHaveLength(1);
-        expect(parseSqliteSessionFileMarker(rollupRows[0]?.key)).toEqual({
-          agentId: "main",
-          sessionId: FIXTURE_SESSION_ID,
-          storePath: databasePath,
-        });
-        const storedSession = await loadGatewaySessionEntryReadOnlyAsync(FIXTURE_SESSION_KEY);
-        expect(storedSession).toMatchObject({
-          entry: {
-            sessionId: FIXTURE_SESSION_ID,
-          },
-          storePath: path.join(state.sessionsDir("main"), "sessions.json"),
-        });
-        expect(storedSession.entry).not.toHaveProperty("sessionFile");
+      const range = {
+        agentId: "main",
+        startDate: FIXTURE_DATE,
+        endDate: FIXTURE_DATE,
+        mode: "utc",
+      };
+      const totals = {
+        totalTokens: FIXTURE_USAGE.totalTokens,
+        totalCost: expect.closeTo(FIXTURE_USAGE.cost.total, 8),
+      };
+      const cost = await client.request<CostUsageSummary>("usage.cost", range);
+      expect(cost.daily).toEqual([
+        expect.objectContaining({
+          date: FIXTURE_DATE,
+          ...totals,
+        }),
+      ]);
+      expect(cost.totals).toMatchObject({
+        input: FIXTURE_USAGE.input,
+        output: FIXTURE_USAGE.output,
+        cacheRead: FIXTURE_USAGE.cacheRead,
+        ...totals,
+      });
 
-        unstartedPortClaim = undefined;
-        server = await startClaimedGateway(portClaim, () =>
-          startGatewayServer(port, {
-            bind: "loopback",
-            auth: { mode: "token", token },
-            controlUiEnabled: false,
-            sidecarStartup: "defer",
-          }),
-        );
-        client = await connectGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
-          token,
-          scopes: [READ_SCOPE],
-          clientDisplayName: "gateway-usage-memory-qa",
-          requestTimeoutMs: 30_000,
-          timeoutMs: 30_000,
-        });
-
-        const usageStatus = await client.request<UsageSummary>("usage.status", {});
-        expect(usageStatus.updatedAt).toEqual(expect.any(Number));
-        expect(usageStatus.providers).toEqual([]);
-
-        const cost = await client.request<CostUsageSummary>("usage.cost", {
-          agentId: "main",
-          startDate: FIXTURE_DATE,
-          endDate: FIXTURE_DATE,
-          mode: "utc",
-        });
-        expect(cost.daily).toEqual([
-          expect.objectContaining({
-            date: FIXTURE_DATE,
-            totalTokens: FIXTURE_USAGE.totalTokens,
-            totalCost: expect.closeTo(FIXTURE_USAGE.cost.total, 8),
-          }),
-        ]);
-        expect(cost.totals).toMatchObject({
-          input: FIXTURE_USAGE.input,
-          output: FIXTURE_USAGE.output,
-          cacheRead: FIXTURE_USAGE.cacheRead,
-          totalTokens: FIXTURE_USAGE.totalTokens,
-          totalCost: expect.closeTo(FIXTURE_USAGE.cost.total, 8),
-        });
-
-        const sessions = await client.request<SessionsUsageResult>("sessions.usage", {
-          agentId: "main",
-          startDate: FIXTURE_DATE,
-          endDate: FIXTURE_DATE,
-          mode: "utc",
-          limit: 10,
-        });
-        expect(sessions.aggregates.sessionCount).toBe(1);
-        expect(sessions.totals.totalTokens).toBe(FIXTURE_USAGE.totalTokens);
-        expect(sessions.totals.totalCost).toBeCloseTo(FIXTURE_USAGE.cost.total, 8);
-        expect(sessions.sessions).toEqual([
-          expect.objectContaining({
-            key: FIXTURE_SESSION_KEY,
-            sessionId: FIXTURE_SESSION_ID,
-            usage: expect.objectContaining({
-              totalTokens: FIXTURE_USAGE.totalTokens,
-              totalCost: expect.closeTo(FIXTURE_USAGE.cost.total, 8),
-            }),
-          }),
-        ]);
-
-        const timeseries = await client.request<SessionUsageTimeSeries>(
-          "sessions.usage.timeseries",
-          { key: FIXTURE_SESSION_KEY },
-        );
-        expect(timeseries).toEqual({
-          sessionId: FIXTURE_SESSION_ID,
-          points: [
-            expect.objectContaining({
-              timestamp: FIXTURE_STARTED_AT + 1_000,
-              input: FIXTURE_USAGE.input,
-              output: FIXTURE_USAGE.output,
-              cacheRead: FIXTURE_USAGE.cacheRead,
-              totalTokens: FIXTURE_USAGE.totalTokens,
-              cumulativeTokens: FIXTURE_USAGE.totalTokens,
-              cost: expect.closeTo(FIXTURE_USAGE.cost.total, 8),
-              cumulativeCost: expect.closeTo(FIXTURE_USAGE.cost.total, 8),
-            }),
-          ],
-        });
-
-        const logs = await client.request<SessionLogsResult>("sessions.usage.logs", {
+      const sessions = await client.request<SessionsUsageResult>("sessions.usage", {
+        ...range,
+        limit: 10,
+      });
+      expect(sessions).toMatchObject({ aggregates: { sessionCount: 1 }, totals });
+      expect(sessions.sessions).toEqual([
+        expect.objectContaining({
           key: FIXTURE_SESSION_KEY,
-          limit: 10,
-        });
-        expect(logs.logs).toEqual([
-          expect.objectContaining({
-            timestamp: FIXTURE_STARTED_AT,
-            role: "user",
-            content: "Summarize the deterministic gateway usage fixture.",
-          }),
+          sessionId: FIXTURE_SESSION_ID,
+          usage: expect.objectContaining(totals),
+        }),
+      ]);
+
+      const timeseries = await client.request<SessionUsageTimeSeries>("sessions.usage.timeseries", {
+        key: FIXTURE_SESSION_KEY,
+      });
+      expect(timeseries).toEqual({
+        sessionId: FIXTURE_SESSION_ID,
+        points: [
           expect.objectContaining({
             timestamp: FIXTURE_STARTED_AT + 1_000,
-            role: "assistant",
-            content: "Deterministic usage fixture complete.",
-            tokens: FIXTURE_USAGE.totalTokens,
+            input: FIXTURE_USAGE.input,
+            output: FIXTURE_USAGE.output,
+            cacheRead: FIXTURE_USAGE.cacheRead,
+            totalTokens: FIXTURE_USAGE.totalTokens,
+            cumulativeTokens: FIXTURE_USAGE.totalTokens,
             cost: expect.closeTo(FIXTURE_USAGE.cost.total, 8),
+            cumulativeCost: expect.closeTo(FIXTURE_USAGE.cost.total, 8),
           }),
-        ]);
+        ],
+      });
 
-        await expect(
-          client.request("sessions.usage.timeseries", {
-            key: "agent:main:qa:missing-usage-session",
-          }),
-        ).rejects.toMatchObject({
-          gatewayCode: "INVALID_REQUEST",
-          message: expect.stringContaining("Invalid session key"),
-        });
+      const logs = await client.request<{ logs: unknown }>("sessions.usage.logs", {
+        key: FIXTURE_SESSION_KEY,
+        limit: 10,
+      });
+      expect(logs.logs).toEqual([
+        expect.objectContaining({
+          timestamp: FIXTURE_STARTED_AT,
+          role: "user",
+          content: "Summarize the deterministic gateway usage fixture.",
+        }),
+        expect.objectContaining({
+          timestamp: FIXTURE_STARTED_AT + 1_000,
+          role: "assistant",
+          content: "Deterministic usage fixture complete.",
+          tokens: FIXTURE_USAGE.totalTokens,
+          cost: expect.closeTo(FIXTURE_USAGE.cost.total, 8),
+        }),
+      ]);
 
-        const memoryStatus = await client.request<DoctorMemoryStatus>("doctor.memory.status", {});
-        expect(memoryStatus).toEqual({
-          agentId: "main",
-          embedding: {
-            ok: false,
-            error: "memory plugin unavailable",
-          },
-        });
-      } finally {
-        if (client) {
-          await disconnectGatewayClient(client);
-        }
-        await server?.close({ reason: "gateway usage and memory QA complete" });
-        await unstartedPortClaim?.release();
-        clearModelAuthStatusUsageCache();
-        await state.cleanup();
+      await expect(
+        client.request("sessions.usage.timeseries", {
+          key: "agent:main:qa:missing-usage-session",
+        }),
+      ).rejects.toMatchObject({
+        gatewayCode: "INVALID_REQUEST",
+        message: expect.stringContaining("Invalid session key"),
+      });
+
+      expect(await client.request("doctor.memory.status", {})).toEqual({
+        agentId: "main",
+        embedding: {
+          ok: false,
+          error: "memory plugin unavailable",
+        },
+      });
+    } finally {
+      if (client) {
+        await disconnectGatewayClient(client);
       }
-    },
-  );
-});
+      await server?.close({ reason: "gateway usage and memory QA complete" });
+      await unstartedPortClaim?.release();
+      clearModelAuthStatusUsageCache();
+      await state.cleanup();
+    }
+  },
+);

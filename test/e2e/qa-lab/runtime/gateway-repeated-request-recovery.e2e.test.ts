@@ -1,52 +1,42 @@
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { messageText, resolveRetryableHistoryDelayMs } from "./gateway-recovery.test-support.js";
 
-type StabilityEvent = {
-  seq?: unknown;
-  type?: unknown;
-  action?: unknown;
-  reason?: unknown;
-  outcome?: unknown;
-  ageMs?: unknown;
-  durationMs?: unknown;
-  failureKind?: unknown;
-  queueDepth?: unknown;
-  source?: unknown;
-};
+type StabilityEvent = Partial<
+  Record<
+    | "seq"
+    | "type"
+    | "action"
+    | "reason"
+    | "outcome"
+    | "ageMs"
+    | "durationMs"
+    | "failureKind"
+    | "queueDepth"
+    | "source",
+    unknown
+  >
+>;
 
 type StabilitySnapshot = {
   lastSeq?: unknown;
   events?: StabilityEvent[];
 };
 
-type GatewayChatRun = {
-  runId?: unknown;
-  status?: unknown;
-  stopReason?: unknown;
-  endedAt?: unknown;
-};
-
-type GatewayChatMessage = {
-  role?: unknown;
-  content?: unknown;
-};
+type GatewayChatRun = Partial<Record<"runId" | "status" | "stopReason" | "endedAt", unknown>>;
+type GatewayChatMessage = Partial<Record<"role" | "content", unknown>>;
 
 type GatewayChatHistory = {
   messages?: GatewayChatMessage[];
 };
 
-type MockRequestSnapshot = {
-  cursor?: unknown;
-  prompt?: unknown;
-  allInputText?: unknown;
-  model?: unknown;
-  outcome?: unknown;
-  errorCode?: unknown;
-};
+type MockRequestSnapshot = Partial<
+  Record<"cursor" | "prompt" | "allInputText" | "model" | "outcome" | "errorCode", unknown>
+>;
 
 type ClassifiedMockRequest = {
   cursor: unknown;
@@ -79,8 +69,10 @@ const RECOVERY_PROGRESS_INTERVAL_MS = 30_000;
 const HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const HISTORY_RETRY_INTERVAL_MS = 250;
 
+type GatewayHarness = Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>;
+type Gateway = GatewayHarness["gateway"];
 let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
-let harness: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>> | undefined;
+let harness: GatewayHarness | undefined;
 
 afterEach(async () => {
   if (gatewayOwner) {
@@ -90,10 +82,7 @@ afterEach(async () => {
   gatewayOwner = undefined;
 });
 
-async function readStability(
-  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"],
-  sinceSeq?: number,
-): Promise<StabilitySnapshot> {
+async function readStability(gateway: Gateway, sinceSeq?: number): Promise<StabilitySnapshot> {
   return (await gateway.call(
     "diagnostics.stability",
     { limit: 1000, ...(sinceSeq === undefined ? {} : { sinceSeq }) },
@@ -102,7 +91,7 @@ async function readStability(
 }
 
 async function waitForStability(
-  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"],
+  gateway: Gateway,
   sinceSeq: number,
   predicate: (events: StabilityEvent[]) => boolean,
   timeoutMs: number,
@@ -132,23 +121,6 @@ async function waitForStability(
   );
 }
 
-function messageText(message: GatewayChatMessage): string {
-  if (typeof message.content === "string") {
-    return message.content.trim();
-  }
-  if (!Array.isArray(message.content)) {
-    return "";
-  }
-  return message.content
-    .flatMap((part) =>
-      part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string"
-        ? [(part as { text: string }).text]
-        : [],
-    )
-    .join("\n")
-    .trim();
-}
-
 function historyContainsQueuedReply(history: GatewayChatHistory): boolean {
   const messages = history.messages ?? [];
   const queuedIndex = messages.findLastIndex(
@@ -164,39 +136,8 @@ function historyContainsQueuedReply(history: GatewayChatHistory): boolean {
   );
 }
 
-function resolveRetryableHistoryDelayMs(error: unknown): number | null {
-  let current = error;
-  for (let depth = 0; depth < 4; depth += 1) {
-    if (typeof current !== "object" || current === null || Array.isArray(current)) {
-      break;
-    }
-    const shaped = current as {
-      cause?: unknown;
-      code?: unknown;
-      details?: unknown;
-      gatewayCode?: unknown;
-      retryable?: unknown;
-      retryAfterMs?: unknown;
-    };
-    const code = shaped.gatewayCode ?? shaped.code;
-    if (code === "UNAVAILABLE" && shaped.retryable === true) {
-      const detailMethod =
-        typeof shaped.details === "object" && shaped.details !== null
-          ? (shaped.details as { method?: unknown }).method
-          : undefined;
-      if (typeof detailMethod !== "string" || detailMethod === "chat.history") {
-        return typeof shaped.retryAfterMs === "number" && Number.isFinite(shaped.retryAfterMs)
-          ? Math.max(100, Math.min(Math.floor(shaped.retryAfterMs), 5_000))
-          : HISTORY_RETRY_INTERVAL_MS;
-      }
-    }
-    current = shaped.cause;
-  }
-  return null;
-}
-
 async function waitForQueuedReply(
-  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"],
+  gateway: Gateway,
   sessionKey: string,
 ): Promise<GatewayChatHistory> {
   const startedAt = Date.now();
@@ -269,7 +210,7 @@ async function readClassifiedMockRequests(mockBaseUrl: string): Promise<Classifi
 }
 
 async function readFailureEvidence(params: {
-  gateway: Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>["gateway"];
+  gateway: Gateway;
   mockBaseUrl: string | undefined;
   sinceSeq: number;
 }): Promise<string> {
@@ -308,214 +249,199 @@ async function readFailureEvidence(params: {
   return JSON.stringify({ stability, requests, gatewayLogs });
 }
 
-describe("Gateway repeated-request recovery", () => {
-  it(
-    "recovers semantic stagnation and settles the active run before draining one queued followup",
-    { timeout: 330_000 },
-    async () => {
-      gatewayOwner = createQaLiveLaneGateway();
-      harness = await gatewayOwner.start({
-        repoRoot: process.cwd(),
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        alternateModel: "mock-openai/gpt-5.6-luna-alt",
-        transport: {
-          requiredPluginIds: [],
-          createGatewayConfig: () => ({
-            messages: { queue: { mode: "followup" } },
-          }),
-        },
-        transportBaseUrl: "http://127.0.0.1",
-        controlUiEnabled: false,
-        mockProviderOptions: {
-          repeatedRequestResponsePauseMs: ORDINARY_RESPONSE_PAUSE_MS,
-          repeatedRequestStalledResponsePauseMs: STALLED_RESPONSE_PAUSE_MS,
-        },
-        runtimeEnvPatch: {
-          QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS: String(QA_RECOVERY_BOUND_MS),
-        },
-        mutateConfig: (config) => {
-          const models = config.models;
-          const provider = models?.providers?.["mock-openai"];
-          if (!models || !provider) {
-            throw new Error("mock-openai provider config unavailable");
-          }
-          return {
-            ...config,
-            diagnostics: { enabled: true },
-            models: {
-              ...models,
-              providers: {
-                ...models.providers,
-                "mock-openai": {
-                  ...provider,
-                  timeoutSeconds: MODEL_REQUEST_ALLOWANCE_SECONDS,
-                },
-              },
-            },
-          };
-        },
-      });
-      const { gateway } = harness;
-      expect(gateway.runtimeEnv.QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS).toBe(
-        String(QA_RECOVERY_BOUND_MS),
-      );
-      expect(gateway.runtimeEnv.OPENCLAW_GATEWAY_HOST_LIFELINE).toBe("stdin");
-
-      const baseline = await readStability(gateway);
-      const baselineSeq = typeof baseline.lastSeq === "number" ? baseline.lastSeq : 0;
-      const sessionKey = `agent:qa:repeated-request-recovery-${randomUUID()}`;
-      const active = (await gateway.call(
-        "chat.send",
-        {
-          sessionKey,
-          message: RECOVERY_PROMPT,
-          deliver: false,
-          idempotencyKey: randomUUID(),
-        },
-        { timeoutMs: 30_000 },
-      )) as GatewayChatRun;
-      expect(active).toMatchObject({ status: "started" });
-      expect(typeof active.runId).toBe("string");
-
-      await waitForStability(
-        gateway,
-        baselineSeq,
-        (events) => events.filter((event) => event.type === "model.call.started").length >= 2,
-        100_000,
-      );
-
-      const queued = (await gateway.call(
-        "chat.send",
-        {
-          sessionKey,
-          message: QUEUED_PROMPT,
-          queueMode: "followup",
-          deliver: false,
-          idempotencyKey: randomUUID(),
-        },
-        { timeoutMs: 30_000 },
-      )) as GatewayChatRun;
-      expect(queued).toMatchObject({ status: "started" });
-      expect(typeof queued.runId).toBe("string");
-
-      // Repeated-request recovery interrupts the live-but-silent fallback after its
-      // own request allowance expires. Observe that recovery before queue drain.
-      const events = await waitForStability(
-        gateway,
-        baselineSeq,
-        (records) => records.some((event) => event.type === "session.recovery.completed"),
-        250_000,
-      );
-      const stalled = events.filter(
-        (event) => event.type === "session.stalled" && event.reason === RECOVERY_REASON,
-      );
-      const requested = events.filter(
-        (event) => event.type === "session.recovery.requested" && event.reason === RECOVERY_REASON,
-      );
-      const completed = events.filter((event) => event.type === "session.recovery.completed");
-
-      // Heartbeats may observe a stall more than once; recovery still owns one abort.
-      expect(stalled.length).toBeGreaterThan(0);
-      for (const event of stalled) {
-        expect(event.ageMs).toEqual(expect.any(Number));
-        expect(event.ageMs as number).toBeGreaterThanOrEqual(QA_RECOVERY_BOUND_MS);
-      }
-      expect(requested).toEqual([
-        expect.objectContaining({ action: "abort", reason: RECOVERY_REASON }),
-      ]);
-      expect(completed).toEqual([
-        // An active model call is interrupted like an idle timeout, so the run
-        // keeps its lane and settles through its remaining fallback retries.
-        expect.objectContaining({
-          action: "keep_lane",
-          outcome: "skipped",
-          reason: "model_attempt_recovery",
+it(
+  "recovers semantic stagnation and settles the active run before draining one queued followup",
+  { timeout: 330_000 },
+  async () => {
+    gatewayOwner = createQaLiveLaneGateway();
+    harness = await gatewayOwner.start({
+      repoRoot: process.cwd(),
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      transport: {
+        requiredPluginIds: [],
+        createGatewayConfig: () => ({
+          messages: { queue: { mode: "followup" } },
         }),
-      ]);
-      expect(
-        events.filter((event) => event.type === "model.call.started").length,
-      ).toBeGreaterThanOrEqual(5);
-
-      const activeTerminal = (await gateway.call(
-        "agent.wait",
-        { runId: active.runId, timeoutMs: 30_000 },
-        { timeoutMs: 35_000 },
-      )) as GatewayChatRun;
-      expect(activeTerminal).toMatchObject({
-        status: "error",
-        endedAt: expect.any(Number),
-      });
-
-      const history = await waitForQueuedReply(gateway, sessionKey).catch(
-        async (error: unknown) => {
-          const evidence = await readFailureEvidence({
-            gateway,
-            mockBaseUrl: harness?.mock?.baseUrl,
-            sinceSeq: baselineSeq,
-          });
-          throw new Error(`${String(error)}; evidence=${evidence}`, { cause: error });
-        },
-      );
-      expect(historyContainsQueuedReply(history)).toBe(true);
-      // agent.wait returns pending immediately while the queue owns this run,
-      // even after its reply is visible. Observe settlement within the same budget.
-      const queuedDeadline = Date.now() + 30_000;
-      let queuedTerminal: GatewayChatRun;
-      do {
-        const remainingMs = Math.max(1, queuedDeadline - Date.now());
-        queuedTerminal = (await gateway.call(
-          "agent.wait",
-          { runId: queued.runId, timeoutMs: remainingMs },
-          { timeoutMs: remainingMs },
-        )) as GatewayChatRun;
-        if (queuedTerminal.status !== "pending") {
-          break;
+      },
+      transportBaseUrl: "http://127.0.0.1",
+      controlUiEnabled: false,
+      mockProviderOptions: {
+        repeatedRequestResponsePauseMs: ORDINARY_RESPONSE_PAUSE_MS,
+        repeatedRequestStalledResponsePauseMs: STALLED_RESPONSE_PAUSE_MS,
+      },
+      runtimeEnvPatch: {
+        QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS: String(QA_RECOVERY_BOUND_MS),
+      },
+      mutateConfig: (config) => {
+        const models = config.models;
+        const provider = models?.providers?.["mock-openai"];
+        if (!models || !provider) {
+          throw new Error("mock-openai provider config unavailable");
         }
-        await sleep(Math.max(0, Math.min(100, queuedDeadline - Date.now())));
-      } while (Date.now() < queuedDeadline);
-      expect(queuedTerminal.status).toBe("ok");
-      const mockBaseUrl = harness?.mock?.baseUrl;
-      if (!mockBaseUrl) {
-        throw new Error("mock provider request evidence unavailable");
-      }
-      const requests = await readClassifiedMockRequests(mockBaseUrl);
-      const recoveryRequests = requests.filter((request) => request.prompt === "recovery");
-      // Invisible replay-safe errors exhaust the primary model's retry budget;
-      // the diagnostic owner then interrupts the stalled fallback request, and the
-      // fallback's own retries fail fast until the run settles.
-      // The mock records its planned response before the delay; lifecycle checks
-      // above prove the actual interruption and completion.
-      expect(recoveryRequests).toEqual([
-        ...Array.from({ length: 4 }, () =>
-          expect.objectContaining({
-            model: "gpt-5.6-luna",
-            continuation: false,
-            outcome: "error",
-            errorCode: "response_failed_no_details",
-          }),
-        ),
-        ...Array.from({ length: 5 }, () =>
-          expect.objectContaining({
-            model: "gpt-5.6-luna-alt",
-            outcome: "error",
-            errorCode: "response_failed_no_details",
-          }),
-        ),
-      ]);
-      // The interrupted attempt settles as a fallback failure rather than a
-      // stuck-run abort, so the queued request answers without stalled-turn guidance.
-      expect(requests.filter((request) => request.prompt === "queued")).toEqual([
-        expect.objectContaining({ outcome: "success", stallGuidance: false }),
-      ]);
+        provider.timeoutSeconds = MODEL_REQUEST_ALLOWANCE_SECONDS;
+        config.diagnostics = { enabled: true };
+        return config;
+      },
+    });
+    const { gateway } = harness;
+    expect(gateway.runtimeEnv.QA_DIAGNOSTIC_STUCK_SESSION_ABORT_MS).toBe(
+      String(QA_RECOVERY_BOUND_MS),
+    );
+    expect(gateway.runtimeEnv.OPENCLAW_GATEWAY_HOST_LIFELINE).toBe("stdin");
 
-      const finalEvents = (await readStability(gateway, baselineSeq)).events ?? [];
-      expect(
-        finalEvents.filter((event) => event.type === "session.recovery.requested"),
-      ).toHaveLength(1);
-      expect(
-        finalEvents.filter((event) => event.type === "session.recovery.completed"),
-      ).toHaveLength(1);
-    },
-  );
-});
+    const baseline = await readStability(gateway);
+    const baselineSeq = typeof baseline.lastSeq === "number" ? baseline.lastSeq : 0;
+    const sessionKey = `agent:qa:repeated-request-recovery-${randomUUID()}`;
+    const active = (await gateway.call(
+      "chat.send",
+      {
+        sessionKey,
+        message: RECOVERY_PROMPT,
+        deliver: false,
+        idempotencyKey: randomUUID(),
+      },
+      { timeoutMs: 30_000 },
+    )) as GatewayChatRun;
+    expect(active).toMatchObject({ status: "started" });
+    expect(typeof active.runId).toBe("string");
+
+    await waitForStability(
+      gateway,
+      baselineSeq,
+      (events) => events.filter((event) => event.type === "model.call.started").length >= 2,
+      100_000,
+    );
+
+    const queued = (await gateway.call(
+      "chat.send",
+      {
+        sessionKey,
+        message: QUEUED_PROMPT,
+        queueMode: "followup",
+        deliver: false,
+        idempotencyKey: randomUUID(),
+      },
+      { timeoutMs: 30_000 },
+    )) as GatewayChatRun;
+    expect(queued).toMatchObject({ status: "started" });
+    expect(typeof queued.runId).toBe("string");
+
+    // Repeated-request recovery interrupts the live-but-silent fallback after its
+    // own request allowance expires. Observe that recovery before queue drain.
+    const events = await waitForStability(
+      gateway,
+      baselineSeq,
+      (records) => records.some((event) => event.type === "session.recovery.completed"),
+      250_000,
+    );
+    const stalled = events.filter(
+      (event) => event.type === "session.stalled" && event.reason === RECOVERY_REASON,
+    );
+    const requested = events.filter(
+      (event) => event.type === "session.recovery.requested" && event.reason === RECOVERY_REASON,
+    );
+    const completed = events.filter((event) => event.type === "session.recovery.completed");
+
+    // Heartbeats may observe a stall more than once; recovery still owns one abort.
+    expect(stalled.length).toBeGreaterThan(0);
+    for (const event of stalled) {
+      expect(event.ageMs).toEqual(expect.any(Number));
+      expect(event.ageMs as number).toBeGreaterThanOrEqual(QA_RECOVERY_BOUND_MS);
+    }
+    expect(requested).toEqual([
+      expect.objectContaining({ action: "abort", reason: RECOVERY_REASON }),
+    ]);
+    expect(completed).toEqual([
+      // An active model call is interrupted like an idle timeout, so the run
+      // keeps its lane and settles through its remaining fallback retries.
+      expect.objectContaining({
+        action: "keep_lane",
+        outcome: "skipped",
+        reason: "model_attempt_recovery",
+      }),
+    ]);
+    expect(
+      events.filter((event) => event.type === "model.call.started").length,
+    ).toBeGreaterThanOrEqual(5);
+
+    const activeTerminal = (await gateway.call(
+      "agent.wait",
+      { runId: active.runId, timeoutMs: 30_000 },
+      { timeoutMs: 35_000 },
+    )) as GatewayChatRun;
+    expect(activeTerminal).toMatchObject({
+      status: "error",
+      endedAt: expect.any(Number),
+    });
+
+    const history = await waitForQueuedReply(gateway, sessionKey).catch(async (error: unknown) => {
+      const evidence = await readFailureEvidence({
+        gateway,
+        mockBaseUrl: harness?.mock?.baseUrl,
+        sinceSeq: baselineSeq,
+      });
+      throw new Error(`${String(error)}; evidence=${evidence}`, { cause: error });
+    });
+    expect(historyContainsQueuedReply(history)).toBe(true);
+    // agent.wait returns pending immediately while the queue owns this run,
+    // even after its reply is visible. Observe settlement within the same budget.
+    const queuedDeadline = Date.now() + 30_000;
+    let queuedTerminal: GatewayChatRun;
+    do {
+      const remainingMs = Math.max(1, queuedDeadline - Date.now());
+      queuedTerminal = (await gateway.call(
+        "agent.wait",
+        { runId: queued.runId, timeoutMs: remainingMs },
+        { timeoutMs: remainingMs },
+      )) as GatewayChatRun;
+      if (queuedTerminal.status !== "pending") {
+        break;
+      }
+      await sleep(Math.max(0, Math.min(100, queuedDeadline - Date.now())));
+    } while (Date.now() < queuedDeadline);
+    expect(queuedTerminal.status).toBe("ok");
+    const mockBaseUrl = harness?.mock?.baseUrl;
+    if (!mockBaseUrl) {
+      throw new Error("mock provider request evidence unavailable");
+    }
+    const requests = await readClassifiedMockRequests(mockBaseUrl);
+    const recoveryRequests = requests.filter((request) => request.prompt === "recovery");
+    // Invisible replay-safe errors exhaust the primary model's retry budget;
+    // the diagnostic owner then interrupts the stalled fallback request, and the
+    // fallback's own retries fail fast until the run settles.
+    // The mock records its planned response before the delay; lifecycle checks
+    // above prove the actual interruption and completion.
+    expect(recoveryRequests).toEqual([
+      ...Array.from({ length: 4 }, () =>
+        expect.objectContaining({
+          model: "gpt-5.6-luna",
+          continuation: false,
+          outcome: "error",
+          errorCode: "response_failed_no_details",
+        }),
+      ),
+      ...Array.from({ length: 5 }, () =>
+        expect.objectContaining({
+          model: "gpt-5.6-luna-alt",
+          outcome: "error",
+          errorCode: "response_failed_no_details",
+        }),
+      ),
+    ]);
+    // The interrupted attempt settles as a fallback failure rather than a
+    // stuck-run abort, so the queued request answers without stalled-turn guidance.
+    expect(requests.filter((request) => request.prompt === "queued")).toEqual([
+      expect.objectContaining({ outcome: "success", stallGuidance: false }),
+    ]);
+
+    const finalEvents = (await readStability(gateway, baselineSeq)).events ?? [];
+    expect(finalEvents.filter((event) => event.type === "session.recovery.requested")).toHaveLength(
+      1,
+    );
+    expect(finalEvents.filter((event) => event.type === "session.recovery.completed")).toHaveLength(
+      1,
+    );
+  },
+);
