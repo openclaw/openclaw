@@ -105,6 +105,39 @@ async function main() {
     run("tar", ["--no-same-owner", "-xzf", archive, "-C", destination]);
   }
   await ensureKyselyTypes(root);
+  const fixtures = process.argv.includes("--canaries")
+    ? JSON.parse(fs.readFileSync(path.join(root, "test/fixtures/compiler-comparison.json"), "utf8"))
+    : [];
+  const canaries = fixtures.map(({ name, files, compilerOptions, kind, expectedCodes, source }) => {
+    const fixtureDirectory = path.join(directory, "canaries", name);
+    fs.mkdirSync(fixtureDirectory, { recursive: true });
+    for (const [file, contents] of Object.entries(files)) {
+      fs.writeFileSync(path.join(fixtureDirectory, file), contents);
+    }
+    const config = path.join(fixtureDirectory, "tsconfig.json");
+    fs.writeFileSync(
+      config,
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          target: "ES2022",
+          module: "NodeNext",
+          types: [],
+          lib: ["es2022"],
+          ...compilerOptions,
+        },
+        files: Object.keys(files).toSorted(),
+      }),
+    );
+    return {
+      name: "canary-" + name,
+      config: path.relative(root, config),
+      kind,
+      expectedCodes,
+      source,
+    };
+  });
+  const selectedGraphs = [...canaries, ...graphs];
   const nativeDirectory = path.join(directory, "native/package/lib");
   const referenceDirectory = path.join(directory, "reference/package/lib");
   const binaries = { pinned: "/pin/tsc", candidate: "/native/tsc-ts", reference: "/reference/tsc" };
@@ -118,13 +151,18 @@ async function main() {
   const memoryBytes = Math.floor((memoryCapacity * 0.8) / 1024 ** 3) * 1024 ** 3;
   assert(memoryBytes > 0, "Missing memory capacity");
   const resources = { logicalCpuCount: os.availableParallelism(), totalMemoryBytes: memoryBytes };
-  const modesFor = (graph) => [
-    "incremental-cold",
-    ...(["core", "ui", "extensions", "scripts"].includes(graph.name) ? ["nonincremental"] : []),
-    ...(graph.name === "core" ? ["single-threaded", "incremental-unthrottled"] : []),
-  ];
+  const modesFor = (graph) =>
+    graph.kind
+      ? ["nonincremental", "single-threaded"]
+      : [
+          "incremental-cold",
+          ...(["core", "ui", "extensions", "scripts"].includes(graph.name)
+            ? ["nonincremental"]
+            : []),
+          ...(graph.name === "core" ? ["single-threaded", "incremental-unthrottled"] : []),
+        ];
   const compilers = Object.keys(binaries);
-  const expectedSamples = graphs.flatMap((graph) =>
+  const expectedSamples = selectedGraphs.flatMap((graph) =>
     modesFor(graph).flatMap((mode) =>
       compilers.flatMap((compiler) =>
         Array.from({ length: repeats }, (_, index) =>
@@ -267,6 +305,9 @@ async function main() {
       ) {
         throw new Error("Failed to join task-owned container " + name);
       }
+      if (result) {
+        result.cleanupVerified = true;
+      }
     }
     if (!result) {
       throw failure;
@@ -295,6 +336,13 @@ async function main() {
     [String(memoryBytes), "0", cpuSet],
     "Container limits were not enforced",
   );
+  const deadlineSmoke = await executeIsolated(
+    ["sh", "-c", "printf ready > /metrics/deadline-ready; sleep 30"],
+    { timeout: 3000 },
+  );
+  assert.equal(fs.readFileSync(path.join(metricsDirectory, "deadline-ready"), "utf8"), "ready");
+  assert.equal(deadlineSmoke.signal, "SIGKILL", "Deadline did not terminate the Docker client");
+  assert.equal(deadlineSmoke.cleanupVerified, true, "Deadline cleanup was not verified");
   const probe = ".compiler-isolation-" + randomUUID();
   const probePaths = {
     checkout: path.join(root, probe),
@@ -392,9 +440,11 @@ if ( : > /dev/tcp/192.0.2.1/9 ) 2>/tmp/network-error; then fail "Unexpected exte
     isolationSmoke,
     containerImage,
     limits: { cpuSet, memoryBytes, swapBytes: 0 },
+    deadlineSmoke: { signal: deadlineSmoke.signal, cleanupVerified: deadlineSmoke.cleanupVerified },
     expectedSamples,
+    canaries,
     method:
-      "Fresh process and empty incremental cache per sample. Warm filesystem after input preflight. GNU time inside secretless sandbox. incremental-cold applies the canonical CI resource policy to both compilers; other modes use explicit direct flags without Go tuning.",
+      "Fresh process and empty incremental cache per sample. Warm filesystem after input preflight. GNU time inside secretless sandbox. incremental-cold applies the canonical CI resource policy to all three compilers; other modes use explicit direct flags without Go tuning.",
   });
   const normalize = (text) =>
     text.replaceAll("/pin/", "/libs/").replaceAll("/reference/", "/libs/");
@@ -492,7 +542,7 @@ if ( : > /dev/tcp/192.0.2.1/9 ) 2>/tmp/network-error; then fail "Unexpected exte
     dump("measurements.json", records);
     console.log(JSON.stringify(row));
   }
-  for (const graph of graphs) {
+  for (const graph of selectedGraphs) {
     const proofs = {};
     for (const compiler of compilers) {
       proofs[compiler] = {};
@@ -501,8 +551,8 @@ if ( : > /dev/tcp/192.0.2.1/9 ) 2>/tmp/network-error; then fail "Unexpected exte
         ["files", "--listFilesOnly"],
       ]) {
         const output = normalize(
-          await isolatedOutput([binaries[compiler], ...flags(graph, "incremental-cold"), option], {
-            mode: "incremental-cold",
+          await isolatedOutput([binaries[compiler], ...flags(graph, modesFor(graph)[0]), option], {
+            mode: modesFor(graph)[0],
           }),
         );
         fs.writeFileSync(
@@ -539,7 +589,9 @@ if ( : > /dev/tcp/192.0.2.1/9 ) 2>/tmp/network-error; then fail "Unexpected exte
       records.length +
       " samples for " +
       graphs.length +
-      " canonical graphs. Run audit-compiler-comparison.mts before interpreting timings.",
+      " canonical graphs and " +
+      canaries.length +
+      " canaries. Run audit-compiler-comparison.mts before interpreting timings.",
   );
 }
 try {

@@ -5,6 +5,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 type Graph = { name: string; config: string };
+type Canary = Graph & {
+  kind: "control" | "port-probe" | "version-probe";
+  expectedCodes?: number[];
+  source?: string;
+};
 type Compiler = "pinned" | "candidate" | "reference";
 type Measurement = {
   graph: string;
@@ -42,6 +47,7 @@ export function auditCompilerComparison(directory: string) {
     binarySha256: Record<Compiler, string>;
     libraryManifest: { name: string; sha256: string }[];
     expectedSamples?: string[];
+    canaries?: Canary[];
   };
   const inventory = JSON.parse(read("inventory.json")) as {
     inventory: Graph[];
@@ -73,6 +79,16 @@ export function auditCompilerComparison(directory: string) {
     "Selected graphs differ from the declared partition",
   );
   assert(inventory.graphs.length > 0, "Empty group");
+  const canaries = metadata.canaries ?? [];
+  const graphs = [...inventory.graphs, ...canaries];
+  assert.equal(new Set(graphs.map((graph) => graph.name)).size, graphs.length);
+  for (const canary of canaries) {
+    assert(canary.name.startsWith("canary-"));
+    assert(["control", "port-probe", "version-probe"].includes(canary.kind));
+    assert(metadata.expectedSamples, "Canaries require a complete sample plan");
+    assert(canary.kind === "version-probe" || canary.expectedCodes, "Missing canary expectation");
+    assert(canary.expectedCodes?.every((code) => Number.isInteger(code) && code > 0) ?? true);
+  }
   for (const compiler of ["pinned", "candidate", "reference"] as const) {
     assert.match(
       metadata.binarySha256[compiler],
@@ -103,7 +119,7 @@ export function auditCompilerComparison(directory: string) {
     parity.length,
     "Duplicate input proof",
   );
-  for (const graph of inventory.graphs) {
+  for (const graph of graphs) {
     assert.match(graph.name, /^[\w-]+$/u, "Invalid graph name");
     const proof = parity.find((entry) => entry.graph === graph.name);
     if (!proof) {
@@ -133,13 +149,13 @@ export function auditCompilerComparison(directory: string) {
     }
     inputs.set(graph.name, equal);
   }
-  assert(parity.every((entry) => inventory.graphs.some((graph) => graph.name === entry.graph)));
+  assert(parity.every((entry) => graphs.some((graph) => graph.name === entry.graph)));
 
   const samples = new Map<string, Outcome[]>();
   const iterations = new Set<string>();
   const flags = new Map<string, string>();
   for (const row of measurements) {
-    const graph = inventory.graphs.find((entry) => entry.name === row.graph);
+    const graph = graphs.find((entry) => entry.name === row.graph);
     assert(graph && graph.config === row.config, "Measurement outside declared graphs");
     assert(
       ["incremental-cold", "nonincremental", "single-threaded", "incremental-unthrottled"].includes(
@@ -204,15 +220,23 @@ export function auditCompilerComparison(directory: string) {
   // Primary coverage is mandatory. Additional modes are scoped to those actually
   // collected; an absent reference is reported, never invented from the core run.
   const keys = new Set(inventory.graphs.map((graph) => `${graph.name}/incremental-cold`));
+  for (const canary of canaries) {
+    for (const mode of ["nonincremental", "single-threaded"]) {
+      keys.add(`${canary.name}/${mode}`);
+    }
+  }
   for (const key of flags.keys()) {
     keys.add(key);
   }
   const comparisons = [...keys].map((key) => {
+    const [graphName] = key.split("/");
+    assert(graphName);
+    const canary = canaries.find((entry) => entry.name === graphName);
     const outcomes = new Map<Compiler, Outcome>();
     const stability = new Map<Compiler, boolean>();
     for (const compiler of ["pinned", "candidate", "reference"] as const) {
       const values = samples.get(`${key}/${compiler}`);
-      if (!values && compiler === "reference") {
+      if (!values && compiler === "reference" && !canary) {
         continue;
       }
       if (values?.length !== metadata.repeats) {
@@ -233,8 +257,6 @@ export function auditCompilerComparison(directory: string) {
     const pinned = outcomes.get("pinned");
     const candidate = outcomes.get("candidate");
     const reference = outcomes.get("reference");
-    const [graphName] = key.split("/");
-    assert(graphName);
     const inputEqual = inputs.get(graphName) === true;
     const stable = stability.get("pinned") === true && stability.get("candidate") === true;
     const equivalent = Boolean(
@@ -244,8 +266,31 @@ export function auditCompilerComparison(directory: string) {
       inputEqual &&
       JSON.stringify(pinned) === JSON.stringify(candidate),
     );
+    // Negative controls must still fail in both upstream baselines. Equal empty
+    // output from a skipped check cannot qualify a compiler as correct or fast.
+    const expectedDiagnosticsMatch = canary?.expectedCodes
+      ? [pinned, reference].every((outcome) => {
+          if (!outcome || outcome.stderr !== "") {
+            return false;
+          }
+          const codes = [
+            ...new Set(
+              [...outcome.stdout.matchAll(/\berror TS(\d+):/gu)].map((match) => Number(match[1])),
+            ),
+          ].toSorted((a, b) => a - b);
+          return (
+            JSON.stringify(codes) ===
+              JSON.stringify(canary.expectedCodes?.toSorted((a, b) => a - b)) &&
+            (codes.length
+              ? outcome.exitCode !== 0
+              : outcome.exitCode === 0 && outcome.stdout === "")
+          );
+        })
+      : null;
     return {
       key,
+      canary: canary?.kind ?? null,
+      expectedDiagnosticsMatch,
       inputEqual,
       stable,
       equivalent,
@@ -260,6 +305,16 @@ export function auditCompilerComparison(directory: string) {
           : null,
     };
   });
+  const canariesPassed = canaries.length
+    ? comparisons
+        .filter((row) => row.canary)
+        .every(
+          (row) => row.equivalent && row.referenceStable && row.expectedDiagnosticsMatch !== false,
+        )
+    : null;
+  const typecheckPassed =
+    missing.length === 0 &&
+    comparisons.filter((row) => !row.canary).every((row) => row.typecheckPassed);
   return {
     sourceHead: metadata.sourceHead,
     binarySha256: metadata.binarySha256,
@@ -270,15 +325,18 @@ export function auditCompilerComparison(directory: string) {
       group: metadata.group,
       groups: metadata.groups,
       graphs: inventory.graphs,
+      canaries,
       plannedSamples: expected?.length ?? null,
-      referenceInputsVerified: Boolean(expected),
+      referenceInputsVerified: Boolean(expected) && inputs.size === graphs.length,
     },
     status: missing.length
       ? "incomplete"
-      : comparisons.every((row) => row.equivalent)
+      : comparisons.every((row) => row.equivalent) && canariesPassed !== false
         ? "equivalent"
         : "divergent",
-    typecheckPassed: missing.length === 0 && comparisons.every((row) => row.typecheckPassed),
+    typecheckPassed,
+    canariesPassed,
+    qualificationPassed: typecheckPassed && canariesPassed !== false,
     missing,
     comparisons,
   };
@@ -295,7 +353,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     assert(directory);
     const verdict = auditCompilerComparison(directory);
     console.log(JSON.stringify(verdict, null, 2));
-    process.exitCode = verdict.typecheckPassed ? 0 : 1;
+    process.exitCode = verdict.qualificationPassed ? 0 : 1;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     const missingFile = error instanceof Error && "code" in error && error.code === "ENOENT";

@@ -1,0 +1,124 @@
+name: Compiler qualification
+
+on:
+  pull_request:
+    paths:
+      - scripts/audit-compiler-comparison.mts
+      - scripts/collect-compiler-comparison.mjs
+      - scripts/lib/compiler-comparison-io.mts
+      - test/scripts/compiler-comparison.test.ts
+      - test/scripts/compiler-comparison-canaries.test.ts
+      - test/fixtures/compiler-comparison.json
+      - .github/workflows/compiler-qualification.yml
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Canonical graph coverage
+        type: choice
+        options: [representative, all]
+        default: representative
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compiler-qualification-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    name: Qualification tooling tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.x
+          install-bun: "false"
+          cache-mode: off
+          semantic-checks: "true"
+      - name: Select canonical execution graphs
+        id: plan
+        env:
+          QUALIFICATION_SCOPE: ${{ inputs.scope || 'representative' }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from "node:fs";
+          import { TSGO_CI_GRAPHS, expandTsgoExecutionGraphs } from "./scripts/lib/tsgo-core-test-shards.mts";
+          const inventory = expandTsgoExecutionGraphs(TSGO_CI_GRAPHS);
+          const selected = new Set(["core", "ui", "extensions", "scripts", "test-root-e2e"]);
+          const include = inventory.flatMap((graph, group) =>
+            process.env.QUALIFICATION_SCOPE === "all" || selected.has(graph.name)
+              ? [{ graph: graph.name, group, groups: inventory.length }] : []);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, "matrix=" + JSON.stringify({ include }) + "\n");
+          JS
+      - name: Test artifact and metric boundaries
+        run: node scripts/run-vitest.mjs test/scripts/compiler-comparison.test.ts test/scripts/compiler-comparison-canaries.test.ts --maxWorkers=1
+      - name: Check tooling types
+        run: |
+          node scripts/generate-kysely-types.mts
+          node scripts/run-tsgo.mjs -p tsconfig.scripts.json --noEmit
+          node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.root.scripts.json --noEmit
+      - name: Lint and format qualification tooling
+        run: |
+          node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts/audit-compiler-comparison.mts scripts/collect-compiler-comparison.mjs scripts/lib/compiler-comparison-io.mts
+          pnpm format:check scripts/audit-compiler-comparison.mts scripts/collect-compiler-comparison.mjs scripts/lib/compiler-comparison-io.mts test/scripts/compiler-comparison.test.ts test/scripts/compiler-comparison-canaries.test.ts test/fixtures/compiler-comparison.json .github/workflows/compiler-qualification.yml
+          pnpm check:workflows
+
+  compare:
+    name: Compiler comparison (${{ matrix.graph }})
+    needs: proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.proof.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.x
+          install-bun: "false"
+          cache-mode: off
+      - name: Prepare pinned isolation image
+        run: docker pull ubuntu@sha256:a2d43bffc46670d7108bb3c0468c67c5557c4c92e83e1e34cbff1322ad1b94dc
+      - name: Collect diagnostics and resource measurements
+        env:
+          COMPILER_GROUP: ${{ matrix.group }}
+          COMPILER_GROUP_COUNT: ${{ matrix.groups }}
+          COMPILER_CANARIES: ${{ matrix.graph == 'core' }}
+        run: |
+          args=(--group "$COMPILER_GROUP" --repeats 3)
+          if [[ -n "$COMPILER_GROUP_COUNT" ]]; then args+=(--groups "$COMPILER_GROUP_COUNT"); fi
+          if [[ "$COMPILER_CANARIES" == true ]]; then args+=(--canaries); fi
+          node scripts/collect-compiler-comparison.mjs "${args[@]}"
+      - name: Audit qualification independently
+        if: ${{ !cancelled() }}
+        env:
+          COMPILER_GROUP: ${{ matrix.group }}
+        run: |
+          set -euo pipefail
+          node scripts/audit-compiler-comparison.mts ".artifacts/compiler-comparison/group-$COMPILER_GROUP" |
+            tee ".artifacts/compiler-comparison/group-$COMPILER_GROUP/verdict.json"
+      - name: Upload diagnostics and verdict evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: compiler-qualification-${{ matrix.group }}
+          path: |
+            .artifacts/compiler-comparison/group-${{ matrix.group }}/
+            !.artifacts/compiler-comparison/**/native/**
+            !.artifacts/compiler-comparison/**/reference/**
+            !.artifacts/compiler-comparison/**/*.tgz
+          retention-days: 7
+          if-no-files-found: warn

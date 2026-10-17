@@ -1,0 +1,111 @@
+[
+  {
+    "name": "assignment-pass",
+    "kind": "control",
+    "files": {
+      "input.ts": "export const count: number = 1;\n"
+    },
+    "expectedCodes": []
+  },
+  {
+    "name": "assignment-error",
+    "kind": "control",
+    "files": {
+      "input.ts": "export const count: number = \"invalid\";\n"
+    },
+    "expectedCodes": [
+      2322
+    ]
+  },
+  {
+    "name": "indexed-write",
+    "kind": "port-probe",
+    "source": "https://github.com/vercel-labs/tsc-ts/pull/155",
+    "files": {
+      "input.ts": "declare const values: number[];\nvalues[0] = 1;\n"
+    },
+    "compilerOptions": {
+      "noUncheckedIndexedAccess": true
+    },
+    "expectedCodes": []
+  },
+  {
+    "name": "indexed-compound",
+    "kind": "port-probe",
+    "source": "https://github.com/vercel-labs/tsc-ts/pull/155",
+    "files": {
+      "input.ts": "declare const values: number[];\nvalues[0] += 1;\n"
+    },
+    "compilerOptions": {
+      "noUncheckedIndexedAccess": true
+    },
+    "expectedCodes": [
+      2532
+    ]
+  },
+  {
+    "name": "variadic-valid",
+    "kind": "port-probe",
+    "source": "https://github.com/vercel-labs/tsc-ts/pull/167",
+    "files": {
+      "input.ts": "declare function read(path: string, done: (error: Error | null) => void): void;\ntype ParametersBeforeCallback<T> =\n  T extends (...args: [...args: infer A, callback: (error: any) => void]) => void ? A : never;\nconst argumentsBeforeCallback: ParametersBeforeCallback<typeof read> = [\"synthetic\"];\n"
+    },
+    "expectedCodes": []
+  },
+  {
+    "name": "variadic-invalid",
+    "kind": "port-probe",
+    "source": "https://github.com/vercel-labs/tsc-ts/pull/167",
+    "files": {
+      "input.ts": "declare function read(path: string, done: (error: Error | null) => void): void;\ntype ParametersBeforeCallback<T> =\n  T extends (...args: [...args: infer A, callback: (error: any) => void]) => void ? A : never;\nconst argumentsBeforeCallback: ParametersBeforeCallback<typeof read> = [1];\n"
+    },
+    "expectedCodes": [
+      2322
+    ]
+  },
+  {
+    "name": "commonjs-types",
+    "kind": "port-probe",
+    "source": "https://github.com/vercel-labs/tsc-ts/pull/156",
+    "files": {
+      "dep.cts": "export type Value = number;\n",
+      "input.cts": "import type { Value } from \"./dep.cjs\";\nexport type { Value };\n"
+    },
+    "compilerOptions": {
+      "verbatimModuleSyntax": true
+    },
+    "expectedCodes": []
+  },
+  {
+    "name": "commonjs-runtime",
+    "kind": "port-probe",
+    "source": "https://github.com/vercel-labs/tsc-ts/pull/156",
+    "files": {
+      "dep.cts": "export const value = 1;\n",
+      "input.cts": "import { value } from \"./dep.cjs\";\nexport { value };\n"
+    },
+    "compilerOptions": {
+      "verbatimModuleSyntax": true
+    },
+    "expectedCodes": [
+      1286,
+      1287
+    ]
+  },
+  {
+    "name": "narrowed-status",
+    "kind": "version-probe",
+    "source": "https://github.com/openclaw/openclaw/blob/445e34d75c3b7d54670542faa10f9b60cb1e0354/src/commands/backup-record.ts#L17-L39",
+    "files": {
+      "input.ts": "declare function record(value: { kind: \"external\"; status: \"ok\" | \"failed\"; target: string; bytes?: number; error?: string }): void;\nexport function report(options: { status?: string; bytes?: number; error?: string }) {\n  if (options.status !== \"ok\" && options.status !== \"failed\") throw new Error(\"invalid status\");\n  const outcome = {\n    kind: \"external\" as const,\n    target: \"synthetic\",\n    status: options.status,\n    ...(options.bytes !== undefined ? { bytes: options.bytes } : {}),\n    ...(options.error ? { error: options.error } : {}),\n  };\n  record(outcome);\n}\n"
+    }
+  },
+  {
+    "name": "generic-union",
+    "kind": "version-probe",
+    "source": "https://github.com/openclaw/openclaw/blob/445e34d75c3b7d54670542faa10f9b60cb1e0354/src/config/sessions/session-transcript-worker-readers.ts#L30-L54",
+    "files": {
+      "input.ts": "type Input = { kind: \"preview\"; database: object; limit: number } | { kind: \"title\"; database: object; text: string };\ntype Prepared<T> = T extends unknown ? Omit<T, \"database\"> : never;\ntype Request = Prepared<Input>;\nexport function prepare<K extends Request[\"kind\"], Value extends object>(kind: K, input: Value) {\n  return { kind, ...input } as Extract<Request, { kind: K }>;\n}\n"
+    }
+  }
+]
