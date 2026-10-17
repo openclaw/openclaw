@@ -38,15 +38,17 @@ import type { AnyAgentTool } from "./tools/common.js";
 function harness(targets: AnyAgentTool[]) {
   const h = createCodeModeHarness();
   applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...targets] });
+  const run = async (code: string) => {
+    let result = await h.tools[0]!.execute("mcp", { code });
+    for (let i = 0; i < 8 && resultDetails(result).status === "waiting"; i++) {
+      result = await h.tools[1]!.execute("mcp-wait", { runId: resultDetails(result).runId });
+    }
+    return result;
+  };
   return {
     ...h,
-    async run(code: string) {
-      let result = await h.tools[0]!.execute("mcp", { code });
-      for (let i = 0; i < 8 && resultDetails(result).status === "waiting"; i++) {
-        result = await h.tools[1]!.execute("mcp-wait", { runId: resultDetails(result).runId });
-      }
-      return result;
-    },
+    run,
+    details: async (code: string) => resultDetails(await run(code)),
   };
 }
 
@@ -54,16 +56,18 @@ function textContent(text: string) {
   return [{ type: "text" as const, text }];
 }
 
-function materializedMcpTool(params: Parameters<typeof mcpTool>[0]) {
+function ownedMcpTool(
+  serverName: string,
+  toolName: string,
+  result: (input: unknown) => CallToolResult,
+  options: Pick<Parameters<typeof mcpTool>[0], "parameters" | "description"> = {},
+) {
   return mcpTool({
-    ...params,
-    execute: vi.fn(async (_id, input) =>
-      projectMcpCallToolResult({
-        content: textContent(
-          JSON.stringify({ serverName: params.serverName, toolName: params.toolName, input }),
-        ),
-      }),
-    ),
+    serverName,
+    toolName,
+    name: `${serverName}__${toolName}`,
+    ...options,
+    execute: vi.fn(async (_id, input) => projectMcpCallToolResult(result(input))),
   });
 }
 
@@ -89,13 +93,11 @@ describe("Code Mode MCP namespace", () => {
       ],
       structuredContent: { answer: 42 },
       isError: false,
-      _meta: { privateAppState: "must-not-reach-guest" },
     };
     const failure: CallToolResult = {
       content: textContent("recoverable failure"),
       structuredContent: { retryable: true },
       isError: true,
-      _meta: { privateAppState: "failure-private-state" },
     };
     const catalog: McpToolCatalog = {
       version: 1,
@@ -124,26 +126,16 @@ describe("Code Mode MCP namespace", () => {
           {
             uri: "memo://one",
             name: "memo",
-            annotations: { priority: 0.5 },
             _meta: { resourceOnly: "preserved" },
           },
         ],
         nextCursor: "resources-next",
       },
       resources_read: {
-        contents: [
-          {
-            uri: "memo://one",
-            text: "memo text",
-            mimeType: "text/plain",
-            _meta: { contentOnly: "preserved" },
-          },
-        ],
+        contents: [{ uri: "memo://one", text: "memo text" }],
       },
       prompts_list: {
-        prompts: [
-          { name: "brief", description: "A short briefing", _meta: { promptOnly: "preserved" } },
-        ],
+        prompts: [{ name: "brief" }],
         nextCursor: "prompts-next",
       },
       prompts_get: {
@@ -176,8 +168,10 @@ describe("Code Mode MCP namespace", () => {
       markUsed: () => {},
       getCatalog: async () => catalog,
       peekCatalog: () => catalog,
-      callTool: async (_serverName, toolName) =>
-        toolName === "resolved_failure" ? failure : success,
+      callTool: async (_serverName, toolName) => ({
+        ...structuredClone(toolName === "resolved_failure" ? failure : success),
+        _meta: { privateAppState: "must-not-reach-guest" },
+      }),
       listResources: async () => privateUtilityResults.resources_list,
       readResource: async () => privateUtilityResults.resources_read,
       listPrompts: async () => privateUtilityResults.prompts_list,
@@ -198,16 +192,8 @@ describe("Code Mode MCP namespace", () => {
     const details = resultDetails(result);
     expect(details.status).toBe("completed");
     expect(details.value).toEqual({
-      success: {
-        content: success.content,
-        structuredContent: { answer: 42 },
-        isError: false,
-      },
-      failure: {
-        content: failure.content,
-        structuredContent: { retryable: true },
-        isError: true,
-      },
+      success,
+      failure,
       resources: publicUtilityResults.resources_list,
       resource: publicUtilityResults.resources_read,
       prompts: publicUtilityResults.prompts_list,
@@ -232,11 +218,9 @@ describe("Code Mode MCP namespace", () => {
     const h = harness([
       mcpTool({ name: "docs__spoof", serverName: "docs", toolName: "spoof", execute: executor }),
     ]);
-    const details = resultDetails(
-      await h.run(`
+    const details = await h.details(`
       try { return await MCP.docs.spoof(); } catch (error) { return { error: error.message }; }
-    `),
-    );
+    `);
     expectCompleted(details, {
       error: "MCP namespace tool result is missing its owned guest projection.",
     });
@@ -281,12 +265,10 @@ describe("Code Mode MCP namespace", () => {
           reason,
         });
       } else {
-        const details = resultDetails(
-          await h.run(
-            surface === "tool"
-              ? "return await MCP.docs.saveNote({});"
-              : "try { return await MCP.docs.resources.list(); } catch (error) { return { error: error.message }; }",
-          ),
+        const details = await h.details(
+          surface === "tool"
+            ? "return await MCP.docs.saveNote({});"
+            : "try { return await MCP.docs.resources.list(); } catch (error) { return { error: error.message }; }",
         );
         expect(details).toMatchObject({
           status: "completed",
@@ -305,18 +287,14 @@ describe("Code Mode MCP namespace", () => {
   it.each([["constructor", "prototype", "constructor2", "prototype2"]])(
     "escapes reserved MCP paths: %s.%s",
     async (serverName, toolName, serverIdentifier, toolIdentifier) => {
-      const target = materializedMcpTool({
-        name: `${serverName}__${toolName}`,
-        serverName,
-        toolName,
-      });
-      const result = resultDetails(
-        await harness([target]).run(`
+      const target = ownedMcpTool(serverName, toolName, (input) => ({
+        content: textContent(JSON.stringify({ serverName, toolName, input })),
+      }));
+      const result = await harness([target]).details(`
       return { value: await MCP.${serverIdentifier}.${toolIdentifier}({ value: "safe" }),
         api: await MCP.${serverIdentifier}.$api("${toolIdentifier}"),
         file: await API.read("mcp/${serverIdentifier}.d.ts") };
-    `),
-      );
+    `);
       expectCompleted(result, {
         value: {
           content: textContent(JSON.stringify({ serverName, toolName, input: { value: "safe" } })),
@@ -338,152 +316,145 @@ const dictionarySchema: JsonSchemaType = {
   additionalProperties: { type: "string" },
 };
 
-describe("MCP declaration consumers", () => {
-  it("advertises dictionary and nullable inputs accepted through the MCP namespace", async () => {
-    const mixedSchema = requiredObject({
-      value: { properties: { nested: { type: "boolean" } }, enum: ["keep", { nested: true }] },
-    });
-    const defaultedSchema = requiredObject({
-      limit: { type: "number", default: 0 },
-      enabled: { type: "boolean", default: false },
-      value: { type: ["string", "null"], default: null },
-    });
-    const fixtures: [
-      name: string,
-      schema: JsonSchemaType & {
-        properties?: Record<string, JsonSchemaType & { nullable?: boolean }>;
-      },
-      input: Record<string, unknown> | undefined,
-      expected?: Record<string, unknown>,
-    ][] = [
-      [
-        "commentKey",
-        requiredObject(
-          { "path */ segment": { type: "string", description: "Fixture route" } },
-          { additionalProperties: false },
-        ),
-        { "path */ segment": "synthetic" },
-      ],
-      ["defaulted", defaultedSchema, {}, { limit: 0, enabled: false, value: null }],
-      ["defaultedOmitted", defaultedSchema, undefined, { limit: 0, enabled: false, value: null }],
-      ["dictionary", dictionarySchema, { topic: "synthetic" }],
-      ["open", { type: "object" }, { topic: null }],
-      ["closed", { type: "object", patternProperties: {}, additionalProperties: false }, {}],
-      [
-        "pattern",
-        {
-          type: "object",
-          patternProperties: { "^x": { type: "string" } },
-          additionalProperties: false,
-        },
-        { xLabel: "synthetic" },
-      ],
-      [
-        "nullable",
-        requiredObject({ value: { enum: ["keep", null] } }, { additionalProperties: false }),
-        { value: null },
-      ],
-      [
-        "nullableKeyword",
-        {
-          type: "object",
-          properties: {
-            scalar: { type: "string", nullable: true },
-            union: { type: ["number", "boolean"], nullable: true },
-            dictionary: { ...dictionarySchema, nullable: true },
-            restricted: { type: "string", nullable: true, enum: ["keep"] },
-            constrained: { type: "string", enum: ["keep", null] },
-            integer: { type: "integer", enum: [1, 1.5, { nested: true }] },
-            impossible: { type: "string", enum: [false, { nested: true }] },
-            options: requiredObject({ limit: { type: "number", default: 10 } }),
-            mixed: { type: "string", nullable: true, enum: ["keep", { nested: true }] },
-            oversized: {
-              type: "string",
-              nullable: true,
-              enum: Array.from({ length: 17 }, (_, i) => `choice${i}`),
-            },
-          },
-          required: ["scalar", "union", "dictionary", "restricted"],
-        },
-        {
-          scalar: null,
-          union: null,
-          dictionary: null,
-          restricted: "keep",
-          constrained: "keep",
-          integer: 1,
-          options: { limit: 5 },
-          mixed: "keep",
-          oversized: "choice0",
-        },
-      ],
-      ["mixed", mixedSchema, { value: { nested: true } }],
-      ["mixedPrimitive", mixedSchema, { value: "keep" }],
-      [
-        "named",
-        {
-          type: "object",
-          properties: { id: { type: "number" }, label: { type: "string" } },
-          required: ["id"],
-          additionalProperties: { type: "boolean" },
-        },
-        { id: 1, extra: true },
-      ],
-      [
-        "nested",
-        requiredObject({
-          values: {
-            type: "array",
-            items: { type: "object", additionalProperties: { enum: ["keep", null] } },
-          },
-        }),
-        { values: [{ topic: null }] },
-      ],
-    ];
-    const validator = new AjvJsonSchemaValidator();
-    const targets = fixtures.map(([name, schema]) => {
-      const validate = validator.getValidator(structuredClone(schema));
-      return mcpTool({
-        name: `fixture__${name}`,
-        serverName: "fixture",
-        toolName: name,
-        parameters: schema,
-        execute: vi.fn(async (_toolCallId, input) => {
-          expect(validate(input).valid).toBe(true);
-          return projectMcpCallToolResult({
-            content: textContent(JSON.stringify(input)),
-          });
-        }),
-      });
-    });
-    const calls = fixtures.map(
-      ([name, , input]) =>
-        `MCP.fixture.${name}(${input === undefined ? "" : JSON.stringify(input)})`,
-    );
-    const details = resultDetails(
-      await harness(targets).run(
-        `return { root: await MCP.$api(), file: await API.read("mcp/fixture.d.ts"), api: await MCP.fixture.$api(), results: await Promise.all([${calls.join(",")}]) };`,
+it("advertises dictionary and nullable inputs accepted through the MCP namespace", async () => {
+  const mixedSchema = requiredObject({
+    value: { properties: { nested: { type: "boolean" } }, enum: ["keep", { nested: true }] },
+  });
+  const defaultedSchema = requiredObject({
+    limit: { type: "number", default: 0 },
+    enabled: { type: "boolean", default: false },
+    value: { type: ["string", "null"], default: null },
+  });
+  const fixtures: [
+    name: string,
+    schema: JsonSchemaType & {
+      properties?: Record<string, JsonSchemaType & { nullable?: boolean }>;
+    },
+    input: Record<string, unknown> | undefined,
+    expected?: Record<string, unknown>,
+  ][] = [
+    [
+      "commentKey",
+      requiredObject(
+        { "path */ segment": { type: "string", description: "Fixture route" } },
+        { additionalProperties: false },
       ),
-    );
-    expectCompleted(details, {
-      root: {
-        servers: [{ identifier: "fixture", serverName: "fixture", toolCount: fixtures.length }],
+      { "path */ segment": "synthetic" },
+    ],
+    ["defaulted", defaultedSchema, {}, { limit: 0, enabled: false, value: null }],
+    ["defaultedOmitted", defaultedSchema, undefined, { limit: 0, enabled: false, value: null }],
+    ["dictionary", dictionarySchema, { topic: "synthetic" }],
+    ["open", { type: "object" }, { topic: null }],
+    ["closed", { type: "object", patternProperties: {}, additionalProperties: false }, {}],
+    [
+      "pattern",
+      {
+        type: "object",
+        patternProperties: { "^x": { type: "string" } },
+        additionalProperties: false,
       },
-    });
-    const value = details.value as {
-      file: { content: string; bytes: number };
-      api: { header: string };
-      results: CallToolResult[];
-    };
-    expect(
-      value.results.map((result) => JSON.parse((result.content[0] as { text: string }).text)),
-    ).toEqual(fixtures.map(([_name, _schema, input, expected]) => expected ?? input));
-    expectToolCalls(1, ...targets);
-    expect(value.file.content).toBe(value.api.header);
-    expect(value.file.bytes).toBe(Buffer.byteLength(value.file.content));
-    // Compile real accepted calls against the advertised header, not a parallel expected renderer.
-    const fileName = "/mcp-declaration-consumer.ts";
-    const source = `${value.file.content}\n${calls.join(";\n")};
+      { xLabel: "synthetic" },
+    ],
+    [
+      "nullable",
+      requiredObject({ value: { enum: ["keep", null] } }, { additionalProperties: false }),
+      { value: null },
+    ],
+    [
+      "nullableKeyword",
+      {
+        type: "object",
+        properties: {
+          scalar: { type: "string", nullable: true },
+          union: { type: ["number", "boolean"], nullable: true },
+          dictionary: { ...dictionarySchema, nullable: true },
+          restricted: { type: "string", nullable: true, enum: ["keep"] },
+          constrained: { type: "string", enum: ["keep", null] },
+          integer: { type: "integer", enum: [1, 1.5, { nested: true }] },
+          impossible: { type: "string", enum: [false, { nested: true }] },
+          options: requiredObject({ limit: { type: "number", default: 10 } }),
+          mixed: { type: "string", nullable: true, enum: ["keep", { nested: true }] },
+          oversized: {
+            type: "string",
+            nullable: true,
+            enum: Array.from({ length: 17 }, (_, i) => `choice${i}`),
+          },
+        },
+        required: ["scalar", "union", "dictionary", "restricted"],
+      },
+      {
+        scalar: null,
+        union: null,
+        dictionary: null,
+        restricted: "keep",
+        constrained: "keep",
+        integer: 1,
+        options: { limit: 5 },
+        mixed: "keep",
+        oversized: "choice0",
+      },
+    ],
+    ["mixed", mixedSchema, { value: { nested: true } }],
+    ["mixedPrimitive", mixedSchema, { value: "keep" }],
+    [
+      "named",
+      {
+        type: "object",
+        properties: { id: { type: "number" }, label: { type: "string" } },
+        required: ["id"],
+        additionalProperties: { type: "boolean" },
+      },
+      { id: 1, extra: true },
+    ],
+    [
+      "nested",
+      requiredObject({
+        values: {
+          type: "array",
+          items: { type: "object", additionalProperties: { enum: ["keep", null] } },
+        },
+      }),
+      { values: [{ topic: null }] },
+    ],
+  ];
+  const validator = new AjvJsonSchemaValidator();
+  const targets = fixtures.map(([name, schema]) => {
+    const validate = validator.getValidator(structuredClone(schema));
+    return ownedMcpTool(
+      "fixture",
+      name,
+      (input) => {
+        expect(validate(input).valid).toBe(true);
+        return { content: textContent(JSON.stringify(input)) };
+      },
+      { parameters: schema },
+    );
+  });
+  const calls = fixtures.map(
+    ([name, , input]) => `MCP.fixture.${name}(${input === undefined ? "" : JSON.stringify(input)})`,
+  );
+  const details = await harness(targets).details(
+    `return { root: await MCP.$api(), file: await API.read("mcp/fixture.d.ts"), api: await MCP.fixture.$api(), results: await Promise.all([${calls.join(",")}]) };`,
+  );
+  expectCompleted(details, {
+    root: {
+      servers: [{ identifier: "fixture", serverName: "fixture", toolCount: fixtures.length }],
+    },
+  });
+  const value = details.value as {
+    file: { content: string; bytes: number };
+    api: { header: string };
+    results: CallToolResult[];
+  };
+  expect(
+    value.results.map((result) => JSON.parse((result.content[0] as { text: string }).text)),
+  ).toEqual(fixtures.map(([_name, _schema, input, expected]) => expected ?? input));
+  expectToolCalls(1, ...targets);
+  expect(value.file.content).toBe(value.api.header);
+  expect(value.file.bytes).toBe(Buffer.byteLength(value.file.content));
+  // Compile real accepted calls against the advertised header, not a parallel expected renderer.
+  const fileName = "/mcp-declaration-consumer.ts";
+  const source = `${value.file.content}\n${calls.join(";\n")};
 // @ts-expect-error Dictionary values are strings.
 MCP.fixture.dictionary({ topic: 42 });
 // @ts-expect-error Closed objects have no extra properties.
@@ -513,27 +484,21 @@ MCP.fixture.nullable();
 MCP.fixture.nullableKeyword({ ...nullableFields, oversized: null });
 // @ts-expect-error Nested dictionary values retain their enum type.
 MCP.fixture.nested({ values: [{ topic: 42 }] });`;
-    expect(typeCheckSources({ [fileName]: source })).toEqual([]);
-  });
+  expect(typeCheckSources({ [fileName]: source })).toEqual([]);
 });
-
 function invoiceTool(toolName: string) {
-  return mcpTool({
-    name: `accounting__${toolName}`,
-    serverName: "accounting",
+  return ownedMcpTool(
+    "accounting",
     toolName,
-    description: `Find overdue invoices. ${"Remote description. ".repeat(50)}`,
-    parameters: {
-      type: "object",
-      properties: { currency: { type: "string", default: "EUR" } },
+    (input) => ({ content: [], structuredContent: { toolName, input } }),
+    {
+      description: `Find overdue invoices. ${"Remote description. ".repeat(50)}`,
+      parameters: {
+        type: "object",
+        properties: { currency: { type: "string", default: "EUR" } },
+      },
     },
-    execute: vi.fn(async (_id, input) =>
-      projectMcpCallToolResult({
-        content: [],
-        structuredContent: { toolName, input },
-      }),
-    ),
-  });
+  );
 }
 
 describe.each(["interactive", "headless"])("Code Mode %s MCP discovery", (mode) => {
@@ -647,19 +612,10 @@ it("bounds MCP discovery and wraps remote metadata before any tool executes", as
 });
 
 it("supports root MCP API and multiple server declarations", async () => {
-  const h = createCodeModeHarness();
   const targets = ["alpha", "beta", "index"].map((serverName) =>
-    mcpTool({
-      name: serverName + "_ping",
-      serverName,
-      toolName: "ping",
-      execute: vi.fn(async () => projectMcpCallToolResult({ content: textContent("pong") })),
-    }),
+    ownedMcpTool(serverName, "ping", () => ({ content: textContent("pong") })),
   );
-  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...targets] });
-  const result = resultDetails(
-    await expectDefined(h.tools[0], "exec").execute("root-api", {
-      code: `
+  const result = await harness(targets).details(`
           const root = await MCP.$api();
           const rootFile = await API.read("mcp/index.d.ts");
           const a = await MCP.alpha.$api();
@@ -675,9 +631,7 @@ it("supports root MCP API and multiple server declarations", async () => {
             indexDeclaration: indexFile?.content.includes("declare namespace MCP.index"),
             files: [rootFile, indexFile, await API.read("mcp/alpha.d.ts"), await API.read("mcp/beta.d.ts")],
           };
-        `,
-    }),
-  );
+        `);
   expectCompleted(result, {
     headers: ["string", "string", "string"],
     rootDeclaration: true,

@@ -13,7 +13,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import * as diagnostics from "../logging/code-mode-diagnostic.js";
-import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveSkillsPrompt } from "../skills/loading/workspace-skill-prompt.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
@@ -23,6 +23,7 @@ import { createOpenClawReadTool } from "./agent-tools.read.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 import { bindCodeModeSessionStore } from "./code-mode-session-store.js";
 import { resolveCodeModeSkills } from "./code-mode-skills.js";
+import { controlledTool } from "./code-mode.controlled-tool.test-support.js";
 import {
   applyCodeModeCatalog,
   buildCodeModeCatalogPrompt,
@@ -43,11 +44,12 @@ import {
   codeModeRunner,
   expectCompleted,
   expectToolCalls,
+  expectFailure,
   createCatalogCodeModeHarness,
 } from "./code-mode.test-support.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface-bridge.js";
 import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
-import { createReadTool, type ToolDefinition } from "./sessions/index.js";
+import { createReadTool } from "./sessions/index.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
@@ -81,6 +83,25 @@ function catalog(targets: AnyAgentTool[], directToolNames?: string[]) {
     catalogPrompt: () =>
       buildCodeModeCatalogPrompt(harness.ctx, harness.catalogRef.current?.entries ?? []),
   };
+}
+
+function complete(tools: AnyAgentTool[], code: string) {
+  return runUntilCompleted({
+    execTool: tools.find((tool) => tool.name === "exec")!,
+    waitTool: tools.find((tool) => tool.name === "wait")!,
+    code,
+  });
+}
+
+function markReplaySafe(tool: AnyAgentTool) {
+  setPluginToolMeta(tool, { ...getPluginToolMeta(tool)!, replaySafe: true });
+  return tool;
+}
+
+function contractedTool(name: string, pluginId?: string) {
+  return Object.assign(pluginTool(name, "Deferred", pluginId), {
+    outputSchema: Type.Object({ ok: Type.Boolean() }, { additionalProperties: false }),
+  });
 }
 
 describe("Code Mode catalog and model-visible surface", () => {
@@ -121,37 +142,29 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(exec.description).toContain("10000 ms wall-clock budget");
   });
 
-  it("keeps direct-only tools model-visible and out of the guest catalog", () => {
-    const { tools, catalogRef } = catalog([
-      { ...fakeTool("computer", "Control a desktop"), catalogMode: "direct-only" },
-      pluginTool("fake_create_ticket", "Create a ticket"),
-    ]);
-    expect(tools.map((tool) => tool.name)).toEqual(["exec", "wait", "computer"]);
-    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_create_ticket"]);
-  });
-
-  it("keeps explicitly required native message delivery visible and searchable", () => {
+  it.each([
+    { kind: "direct-only", visible: ["computer"], indexed: ["fake_create_ticket"] },
+    { kind: "required native", visible: ["message"], indexed: ["message", "fake_create_ticket"] },
+    { kind: "MCP lookalike", visible: [], indexed: ["message"] },
+  ])("keeps $kind visibility separate from guest discovery", ({ kind, visible, indexed }) => {
+    const targets =
+      kind === "MCP lookalike"
+        ? [mcpTool({ name: "message", serverName: "spoofed", toolName: "message" })]
+        : [
+            kind === "direct-only"
+              ? {
+                  ...fakeTool("computer", "Control a desktop"),
+                  catalogMode: "direct-only" as const,
+                }
+              : fakeTool("message", "Deliver the visible response"),
+            pluginTool("fake_create_ticket", "Create a ticket"),
+          ];
     const { tools, catalogRef } = catalog(
-      [
-        fakeTool("message", "Deliver the visible response"),
-        pluginTool("fake_create_ticket", "Create a ticket"),
-      ],
-      ["message"],
+      targets,
+      kind === "direct-only" ? undefined : ["message"],
     );
-    expect(tools.map((tool) => tool.name)).toEqual(["exec", "wait", "message"]);
-    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
-      "message",
-      "fake_create_ticket",
-    ]);
-  });
-
-  it("never exposes an MCP lookalike as the required native message tool", () => {
-    const { tools, catalogRef } = catalog(
-      [mcpTool({ name: "message", serverName: "spoofed", toolName: "message" })],
-      ["message"],
-    );
-    expect(tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
-    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["message"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["exec", "wait", ...visible]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(indexed);
   });
 
   it("includes resolvable callable contracts in the catalog prompt", () => {
@@ -182,8 +195,7 @@ describe("Code Mode catalog and model-visible surface", () => {
 
   it("keeps declared-output tools indexed when truncation drops unknown-output lines", () => {
     const pluginId = `fake-${"x".repeat(120)}`;
-    const contracted = pluginTool("zzz_contracted_tool", "Deferred", pluginId);
-    contracted.outputSchema = Type.Object({ ok: Type.Boolean() }, { additionalProperties: false });
+    const contracted = contractedTool("zzz_contracted_tool", pluginId);
     const { catalogPrompt } = catalog([
       ...Array.from({ length: 500 }, (_, index) =>
         pluginTool(`fake_${index.toString().padStart(3, "0")}`, "Deferred", pluginId),
@@ -203,13 +215,7 @@ describe("Code Mode catalog and model-visible surface", () => {
       `a_${"z".repeat(9_000)}`,
       ...Array.from({ length: 4 }, (_, index) => `b_short_${index}`),
     ];
-    const { catalogPrompt } = catalog(
-      names.map((name) => {
-        const tool = pluginTool(name, "Deferred");
-        tool.outputSchema = Type.Object({ ok: Type.Boolean() }, { additionalProperties: false });
-        return tool;
-      }),
-    );
+    const { catalogPrompt } = catalog(names.map((name) => contractedTool(name)));
     const prompt = catalogPrompt();
     const index = prompt.slice(prompt.indexOf("Enabled async tool globals"));
     expect(index.length).toBeLessThanOrEqual(8_000);
@@ -222,17 +228,13 @@ describe("Code Mode catalog and model-visible surface", () => {
 
 describe("Code Mode search", () => {
   it("round-trips exact plugin and client callable names that differ only in case", async () => {
-    const { config, catalogRef, ctx, tools } = createCodeModeHarness();
     const plugin = pluginTool("listURL", "List plugin URLs");
-    const clientExecute = vi.fn(async () => jsonResult({ name: "listUrl" }));
-    const client: ToolDefinition = {
-      name: "listUrl",
-      label: "Client URLs",
-      description: "List client URLs",
+    const client = {
+      ...fakeTool("listUrl", "List client URLs"),
       parameters: Type.Object({}),
-      execute: clientExecute,
+      execute: vi.fn(async () => jsonResult({ name: "listUrl" })),
     };
-    applyCodeModeCatalog({ tools: [...tools, plugin], config, catalogRef });
+    const { ctx, catalogRef } = createCatalogCodeModeHarness([plugin]);
     addClientToolsToToolCatalog({ tools: [client], enabled: true, catalogRef });
     const code = `
       const found = [];
@@ -251,8 +253,7 @@ describe("Code Mode search", () => {
         { name: "listUrl", sameHandle: true, called: { name: "listUrl" } },
       ]),
     );
-    expect(plugin.execute).toHaveBeenCalledOnce();
-    expect(clientExecute).toHaveBeenCalledOnce();
+    expectToolCalls(1, plugin, client);
   });
 
   function setup(maxSearchLimit = 50) {
@@ -315,7 +316,6 @@ it("records Code Mode skills.read of a workshop skill as run usage and skill.use
     { include: ["skill.used"] },
   );
   try {
-    const h = createCodeModeHarness({ agentId: "main", codeModeSkills });
     // Production catalogs hold hook-wrapped tools; the wrapper owns skill usage recording.
     const hookCtx = {
       agentId: "main",
@@ -327,20 +327,13 @@ it("records Code Mode skills.read of a workshop skill as run usage and skill.use
         resolvedSkills: [learned.skill],
       },
     };
-    applyCodeModeCatalog({
-      ...h.ctx,
-      tools: [
-        ...h.tools,
-        ...createInstalledSkillTools(codeModeSkills).map((tool) =>
-          wrapToolWithBeforeToolCallHook(tool, hookCtx),
-        ),
-      ],
-    });
-    const result = await runUntilCompleted({
-      execTool: h.tools[0]!,
-      waitTool: h.tools[1]!,
-      code: 'return await skills.read("learned");',
-    });
+    const h = createCatalogCodeModeHarness(
+      createInstalledSkillTools(codeModeSkills).map((tool) =>
+        wrapToolWithBeforeToolCallHook(tool, hookCtx),
+      ),
+      { agentId: "main", codeModeSkills },
+    );
+    const result = await h.complete('return await skills.read("learned");');
     expectCompleted(
       result,
       "Skill location: /skills/learned/SKILL.md\n" +
@@ -443,14 +436,14 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
         },
       });
       try {
-        const surface = runtime.compactTools(effectiveTools, {
-          prepared: {
-            codeModeSkills: scenario === "transported" ? undefined : skills,
-            preserveToolNames: [],
-          },
-        });
-        const exec = surface.tools.find((tool) => tool.name === "exec")!;
-        const wait = surface.tools.find((tool) => tool.name === "wait")!;
+        const compact = (transported = false) =>
+          runtime.compactTools(effectiveTools, {
+            prepared: {
+              codeModeSkills: transported ? undefined : skills,
+              preserveToolNames: [],
+            },
+          });
+        const surface = compact(scenario === "transported");
         const catalogPrompt = buildCodeModeCatalogPrompt(
           { config: runtime.config },
           runtime.toolSearchCatalogRef?.current?.entries ?? [],
@@ -458,10 +451,9 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
         expect(catalogPrompt.includes("skills.search(")).toBe(denied !== "skills_search");
         expect(catalogPrompt.includes("skills.list(")).toBe(denied !== "skills_search");
         expect(catalogPrompt.includes("skills.read(")).toBe(denied !== "skills_read");
-        const pending = runUntilCompleted({
-          execTool: exec,
-          waitTool: wait,
-          code: `
+        const pending = complete(
+          surface.tools,
+          `
         async function outcome(call) {
           try { return await call(); } catch (error) { return error.message; }
         }
@@ -472,7 +464,7 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
           body: await outcome(() => skills.read("guide")),
         };
       `,
-        });
+        );
         if (denied === "revoked") {
           await withinTest(
             awaitGateBeforeSettlement(
@@ -483,9 +475,7 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
             testSignal,
           );
           effectiveTools = skillTools.filter((tool) => tool.name !== "skills_read");
-          runtime.compactTools(effectiveTools, {
-            prepared: { codeModeSkills: skills, preserveToolNames: [] },
-          });
+          compact();
           releaseRead.resolve();
         }
         const result = await pending;
@@ -516,16 +506,10 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
         expect(reads).toBe(denied === undefined || denied === "revoked" ? 1 : 0);
         if (denied === undefined) {
           effectiveTools = skillTools.filter((tool) => tool.name !== "skills_read");
-          const revoked = runtime.compactTools(effectiveTools, {
-            prepared: { codeModeSkills: skills, preserveToolNames: [] },
-          });
-          expect(
-            await runUntilCompleted({
-              execTool: revoked.tools.find((tool) => tool.name === "exec")!,
-              waitTool: revoked.tools.find((tool) => tool.name === "wait")!,
-              code: 'return await skills.search("private");',
-            }),
-          ).toMatchObject({ status: "completed", value: { skills: [] } });
+          expectCompleted(
+            await complete(compact().tools, 'return await skills.search("private");'),
+            { skills: [] },
+          );
           expect(reads).toBe(1);
         }
       } finally {
@@ -554,21 +538,14 @@ it.each([undefined, "read", "skills_read"])(
         discoverySkills: [guide.skill, hidden.skill],
       },
     });
-    const h = createCodeModeHarness({ codeModeSkills: skills });
-    applyCodeModeCatalog({
-      ...h.ctx,
-      tools: [
-        ...h.tools,
-        ...filterToolsByPolicy(createInstalledSkillTools(skills), {
-          allow: ["read", "exec"],
-          deny: denied ? [denied] : [],
-        }),
-      ],
-    });
-    const result = await runUntilCompleted({
-      execTool: h.tools[0]!,
-      waitTool: h.tools[1]!,
-      code: `
+    const h = createCatalogCodeModeHarness(
+      filterToolsByPolicy(createInstalledSkillTools(skills), {
+        allow: ["read", "exec"],
+        deny: denied ? [denied] : [],
+      }),
+      { codeModeSkills: skills },
+    );
+    const result = await h.complete(`
         let body;
         let hidden;
         try {
@@ -577,8 +554,7 @@ it.each([undefined, "read", "skills_read"])(
         } catch (error) { body = error.message; }
         try { await skills.read("hidden"); } catch (error) { hidden = error.message; }
         return { body, hidden };
-      `,
-    });
+      `);
     expectCompleted(result, {
       body: denied
         ? "skills_read is not available in this run."
@@ -591,7 +567,6 @@ it.each([undefined, "read", "skills_read"])(
 );
 
 it("returns missing implicitly optional daily memory through Code Mode", async () => {
-  const h = createCodeModeHarness();
   const read = createOpenClawReadTool(
     createReadTool("/workspace", {
       operations: {
@@ -602,12 +577,9 @@ it("returns missing implicitly optional daily memory through Code Mode", async (
       },
     }),
   );
-  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, read] });
-  const result = await runUntilCompleted({
-    execTool: h.tools[0]!,
-    waitTool: h.tools[1]!,
-    code: 'return await read({ path: "memory/2026-05-15.md" });',
-  });
+  const result = await createCatalogCodeModeHarness([read]).complete(
+    'return await read({ path: "memory/2026-05-15.md" });',
+  );
   expectCompleted(result, {
     kind: "not_found",
     status: "not_found",
@@ -629,15 +601,7 @@ function replay(targets: AnyAgentTool[], options?: Parameters<typeof createCodeM
 }
 
 it("keeps restart safety when an audited read outlives the inline deadline", async () => {
-  const started = createDeferred();
-  const release = createDeferred();
-  const target = fakeTool("read", "Read");
-  const execute = target.execute;
-  target.execute = vi.fn(async (...args: Parameters<AnyAgentTool["execute"]>) => {
-    started.resolve();
-    await release.promise;
-    return await execute(...args);
-  });
+  const { tool: target, started, release } = controlledTool(fakeTool("read", "Read"));
   const { execTool, waitTool } = replay([target]);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   const running = execTool.execute("slow-replay", {
@@ -663,36 +627,33 @@ it("keeps restart safety when an audited read outlives the inline deadline", asy
   }
 });
 
-it("rejects MCP tools even when their metadata claims replay safety", async () => {
-  const target = mcpTool({
-    name: "mcp_github_read_file",
-    serverName: "github",
-    toolName: "read_file",
-  });
-  setPluginToolMeta(target, {
-    pluginId: "bundle-mcp",
-    optional: false,
-    replaySafe: true,
-    mcp: {
-      serverName: "github",
-      safeServerName: "github",
-      toolName: "read_file",
-      operation: "tool",
-    },
-  });
-  expect(
-    await replay([target]).run('return await MCP.github.readFile({ path: "README.md" });'),
-  ).toMatchObject({
+it.each([
+  { kind: "MCP replay-safe metadata", forced: false, error: "cannot call namespace tools" },
+  { kind: "model-cleared exec flag", forced: true, error: "not proven replay-safe" },
+])("enforces restart safety despite $kind", async ({ forced, error }) => {
+  const target = forced
+    ? pluginTool("fake_forced_write", "Write")
+    : markReplaySafe(
+        mcpTool({
+          name: "mcp_github_read_file",
+          serverName: "github",
+          toolName: "read_file",
+        }),
+      );
+  const { run } = replay([target], { forceRestartSafeTools: forced });
+  const code = forced
+    ? 'const [write] = await catalog.search("fake_forced_write"); return await write({});'
+    : 'return await MCP.github.readFile({ path: "README.md" });';
+  expect(await run(code, !forced)).toMatchObject({
     status: "failed",
     replaySafe: true,
-    error: expect.stringContaining("cannot call namespace tools"),
+    error: expect.stringContaining(error),
   });
   expect(target.execute).not.toHaveBeenCalled();
 });
 
 it("preserves bridge evidence when a later restart-safe call is rejected", async () => {
-  const read = pluginTool("catalog", "Read");
-  setPluginToolMeta(read, { pluginId: "fake-code-mode", optional: true, replaySafe: true });
+  const read = markReplaySafe(pluginTool("catalog", "Read"));
   const write = pluginTool("fake_unsafe_write", "Write");
   const result = await replay([read, write]).run(`
     const [read] = await catalog.search("catalog");
@@ -709,22 +670,6 @@ it("preserves bridge evidence when a later restart-safe call is rejected", async
   });
   expect(read.execute).toHaveBeenCalledOnce();
   expect(write.execute).not.toHaveBeenCalled();
-});
-
-it("keeps host-forced restart safety when the model clears the exec flag", async () => {
-  const target = pluginTool("fake_forced_write", "Write");
-  const { run } = replay([target], { forceRestartSafeTools: true });
-  expect(
-    await run(
-      'const [write] = await catalog.search("fake_forced_write"); return await write({});',
-      false,
-    ),
-  ).toMatchObject({
-    status: "failed",
-    replaySafe: true,
-    error: expect.stringContaining("not proven replay-safe"),
-  });
-  expect(target.execute).not.toHaveBeenCalled();
 });
 
 const catalogs: Array<ReturnType<typeof createCodeModeHarness>["ctx"]> = [];
@@ -823,43 +768,34 @@ describe("session store bridge", () => {
       ),
       cause: RangeError,
     },
-  ])("keeps $name replay failures distinct from guest input", async ({ set, cause }) => {
+    { name: "uncaught guest RangeError", set: undefined, cause: RangeError },
+  ])("keeps bridge provenance for $name", async ({ set, cause }) => {
     const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
     const h = sessionStoreHarness(executor);
-    await h.manager.appendCustomEntryAsync("openclaw.code-mode-store", {
-      set,
-      delete: [],
-      networkContent: Object.fromEntries(Object.keys(set).map((key) => [key, false])),
-    });
-    const result = await h.exec('return await load("key");');
-    expect(result).toMatchObject({
-      status: "failed",
-      code: "internal_error",
-      failurePhase: "bridge",
-      error: expect.stringContaining("repair the session"),
-    });
-    expect(log).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledWith(
-      expect.objectContaining({ cause: expect.any(cause) }),
-      expect.objectContaining({ failurePhase: "bridge", failureCode: "tool_error" }),
+    if (set) {
+      await h.manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+        set,
+        delete: [],
+        networkContent: Object.fromEntries(Object.keys(set).map((key) => [key, false])),
+      });
+    }
+    const result = await h.exec(
+      set ? 'return await load("key");' : 'await store("a", "x".repeat(256 * 1024));',
     );
-  });
-
-  it("keeps bridge provenance for uncaught typed store errors", async () => {
-    const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
-    const h = sessionStoreHarness(executor);
-    const result = await h.exec('await store("a", "x".repeat(256 * 1024));');
-    expect(result).toMatchObject({
-      status: "failed",
-      code: "internal_error",
-      failurePhase: "bridge",
-      bridgeDispatchStarted: true,
-    });
-    expect(String(result.error)).toMatch(/^RangeError/);
-    expect(log).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledWith(
-      expect.any(RangeError),
-      expect.objectContaining({ failurePhase: "bridge", failureCode: "store_range" }),
+    expectFailure(
+      result,
+      "bridge",
+      "internal_error",
+      set
+        ? { error: expect.stringContaining("repair the session") }
+        : { bridgeDispatchStarted: true, error: expect.stringMatching(/^RangeError/) },
+    );
+    expect(log).toHaveBeenCalledExactlyOnceWith(
+      set ? expect.objectContaining({ cause: expect.any(cause) }) : expect.any(cause),
+      expect.objectContaining({
+        failurePhase: "bridge",
+        failureCode: set ? "tool_error" : "store_range",
+      }),
     );
   });
 

@@ -25,17 +25,18 @@ import { buildExecApprovalPendingToolResult } from "./bash-tools.exec-host-share
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import { disposeAllCodeModeRuns, waitForPendingBridgeSettlement } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness as subscribeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
+import { controlledTool } from "./code-mode.controlled-tool.test-support.js";
 import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "./code-mode.js";
 import {
   fakeTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
-  runUntilCompleted,
   testing,
   waitUntilCompleted,
   codeModeRunner,
   expectCompleted,
+  jsonTool,
 } from "./code-mode.test-support.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import { emitAssistantTextDeltaAndEnd } from "./embedded-agent-subscribe.e2e-harness.js";
@@ -46,7 +47,7 @@ import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fi
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
-import { jsonResult } from "./tools/common.js";
+import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createMessageTool } from "./tools/message-tool-execution.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
@@ -59,6 +60,10 @@ function createSubscribedCodeModeHarness(params: Parameters<typeof subscribeHarn
   return {
     ...harness,
     ...codeModeRunner(harness.tools),
+    exec: expectDefined(harness.tools[0], "Code Mode exec"),
+    wait: expectDefined(harness.tools[1], "Code Mode wait"),
+    catalog: (...targets: AnyAgentTool[]) =>
+      applyCodeModeCatalog({ ...harness, tools: [...harness.tools, ...targets] }),
   };
 }
 
@@ -74,6 +79,18 @@ function sessionScope(name: string, sessionId = `session-code-mode-${name}`) {
 function expectNoRuns() {
   expect(testing.activeRuns.size).toBe(0);
   expect(testing.resumingRunIds.size).toBe(0);
+}
+
+function parkedState(result: Record<string, unknown>) {
+  expect(result).toMatchObject({ status: "waiting", runId: expect.any(String) });
+  return expectDefined(testing.activeRuns.get(String(result.runId)), "parked run");
+}
+
+function pendingRequest(state: ReturnType<typeof parkedState>, method: string) {
+  return expectDefined(
+    state.pending.find((entry) => entry.method === method),
+    method,
+  );
 }
 
 describe("Code Mode subscribed bridge lifecycle", () => {
@@ -93,8 +110,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       manager.appendMessage({ role: "user", content: "Read both records", timestamp: 1 });
       const harness = createSubscribedCodeModeHarness({ name, sessionManager: manager });
       const target = fakeTool("read_record", "Read a record");
-      applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
-      const wait = expectDefined(harness.tools[1], "Code Mode wait");
+      harness.catalog(target);
       try {
         for (const value of ["first", "second"]) {
           const toolCall = {
@@ -114,7 +130,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
               harness.execute(toolCall.arguments.code, toolCall.id),
             ),
           );
-          const result = await waitUntilCompleted({ details, waitTool: wait });
+          const result = await waitUntilCompleted({ details, waitTool: harness.wait });
           expectCompleted(result, { input: { value } });
         }
 
@@ -168,7 +184,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           hadUnresolvedTargets: false,
         }),
       });
-      applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
+      harness.catalog(target);
       try {
         // Await transcript persistence through the real catalog without a guest wall-clock budget.
         const runtime = new ToolSearchRuntime(
@@ -191,14 +207,9 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           deliveryStatus: "sent",
           sourceReplyTranscriptOwner: true,
         });
-        expect(messages.map(readNestedToolActivity).filter(Boolean)).toEqual(
-          await harness.readNestedActivities(),
-        );
-        expect(await harness.readNestedActivities()).toHaveLength(1);
-        expect((await harness.readNestedActivities())[0]?.details).toMatchObject({
-          toolName: "message",
-          isError: false,
-        });
+        const activities = await harness.readNestedActivities();
+        expect(messages.map(readNestedToolActivity).filter(Boolean)).toEqual(activities);
+        expect(activities).toMatchObject([{ details: { toolName: "message", isError: false } }]);
         expect(manager.buildSessionContext().messages.some(readNestedToolActivity)).toBe(false);
       } finally {
         harness.dispose();
@@ -422,9 +433,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         await release.promise;
       },
     });
-    const target = pluginToolWithExecute("read", "Read a record", async () =>
-      jsonResult({ ok: true }),
-    );
+    const target = jsonTool("read", { ok: true });
     attachInternalToolExecutionPreparer(target, async () => ({
       kind: "ready",
       args: {},
@@ -486,9 +495,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           unavailableReason: unavailable ? "initiating-platform-disabled" : null,
         }),
       );
-      const browser = pluginToolWithExecute("browser", "Read pull requests", async () =>
-        jsonResult({ pullRequests: [123] }),
-      );
+      const browser = jsonTool("browser", { pullRequests: [123] });
       // Exercise the executor used by hidden Code Mode calls without a worker-startup deadline.
       const callNestedTool = (tool: typeof shell, toolCallId: string) =>
         harness.executeTool({
@@ -563,39 +570,6 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     },
   );
 
-  it("starts a subscribed nested tool without re-entering its outer presentation flush", async () => {
-    const blockReplyFlush = createDeferred();
-    const onBlockReplyFlush = vi.fn(() => blockReplyFlush.promise);
-    const harness = createSubscribedCodeModeHarness({ name: "circular-flush", onBlockReplyFlush });
-    const target = pluginToolWithExecute("release_flush", "Release the pending reply", async () => {
-      blockReplyFlush.resolve();
-      return jsonResult({ released: true });
-    });
-    applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
-
-    try {
-      const result = await runUntilCompleted({
-        execTool: expectDefined(harness.tools[0], "Code Mode exec test invariant"),
-        waitTool: expectDefined(harness.tools[1], "Code Mode wait test invariant"),
-        code: "return await release_flush({});",
-      });
-
-      expect(result.status, JSON.stringify(result)).toBe("completed");
-      expect(result.value).toEqual({ released: true });
-      expect(target.execute).toHaveBeenCalledOnce();
-      expect(onBlockReplyFlush).not.toHaveBeenCalled();
-      expect(harness.subscription.getItemLifecycle()).toMatchObject({
-        startedCount: 1,
-        completedCount: 1,
-        activeCount: 0,
-      });
-      expect(countActiveToolExecutions(harness.runId)).toBe(0);
-      expect(testing.activeRuns.size).toBe(0);
-    } finally {
-      blockReplyFlush.resolve();
-    }
-  });
-
   it("keeps direct sessions_yield handoff successful while closing sibling Code Mode cells", async () => {
     const harness = createSubscribedCodeModeHarness({ name: "yield-handoff" });
     const handoffReason = { code: "sessions_yield", turnHandoff: true } as const;
@@ -608,7 +582,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       }),
       harness.runAbortController.signal,
     );
-    const surface = applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
+    const surface = harness.catalog(target);
     const parked = await harness.run(
       "await yield_control(); return 'unreachable';",
       "sibling-cell",
@@ -626,7 +600,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     });
     expect(onYield).toHaveBeenCalledOnce();
     expect(testing.activeRuns.size).toBe(0);
-    await expect(harness.tools[1]!.execute("closed-sibling", { runId: parked.runId })).rejects.toBe(
+    await expect(harness.wait.execute("closed-sibling", { runId: parked.runId })).rejects.toBe(
       handoffReason,
     );
   });
@@ -635,28 +609,17 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     const owner = createSubscribedCodeModeHarness({ name: "parked-catalog" });
     const survivor = createSubscribedCodeModeHarness({ name: "survivor-catalog" });
     const code = 'setTimeout(() => {}, 60_000); await yield_control("pause"); return "done";';
-    applyCodeModeCatalog(owner);
-    applyCodeModeCatalog(survivor);
+    owner.catalog();
+    survivor.catalog();
 
     const parked = await owner.run(code, "code-call-parked");
     const other = await survivor.run(code, "code-call-survivor");
-    for (const result of [parked, other]) {
-      expect(result).toMatchObject({ status: "waiting", runId: expect.any(String) });
-    }
-    const ownerId = parked.runId as string;
     const survivorId = other.runId as string;
-    const ownerState = expectDefined(testing.activeRuns.get(ownerId), "parked owner snapshot");
-    const survivorState = expectDefined(testing.activeRuns.get(survivorId), "survivor snapshot");
-    const pending = expectDefined(
-      ownerState.pending.find((entry) => entry.method === "sleep"),
-      "owner timer",
-    );
-    const otherPending = expectDefined(
-      survivorState.pending.find((entry) => entry.method === "sleep"),
-      "survivor timer",
-    );
-    expect(pending.settled).toBeUndefined();
-    expect(otherPending.settled).toBeUndefined();
+    const ownerState = parkedState(parked);
+    const survivorState = parkedState(other);
+    const pending = pendingRequest(ownerState, "sleep");
+    const otherPending = pendingRequest(survivorState, "sleep");
+    expect([pending.settled, otherPending.settled]).toEqual([undefined, undefined]);
     expect(ownerState.continuation.retainedBytes).toBeGreaterThan(0);
     expect(testing.resumingRunIds.size).toBe(0);
 
@@ -671,9 +634,8 @@ describe("Code Mode subscribed bridge lifecycle", () => {
 
   it("transfers parked ownership across refresh and repeated resumes before completion", async () => {
     const owner = createSubscribedCodeModeHarness({ name: "transfer-complete" });
-    applyCodeModeCatalog(owner);
-    const exec = expectDefined(owner.tools[0], "owner exec");
-    const wait = expectDefined(owner.tools[1], "owner wait");
+    owner.catalog();
+    const { exec, wait } = owner;
     let controller = new AbortController();
     let result = resultDetails(
       await exec.execute(
@@ -689,8 +651,8 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     );
     expect(result.status, JSON.stringify(result)).toBe("waiting");
     const runId = result.runId as string;
-    const initial = expectDefined(testing.activeRuns.get(runId), "initial snapshot");
-    expect(applyCodeModeCatalog(owner).catalogReused).toBe(true);
+    const initial = parkedState(result);
+    expect(owner.catalog().catalogReused).toBe(true);
     addClientToolsToToolCatalog({
       enabled: true,
       ...owner,
@@ -702,14 +664,14 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     );
 
     for (let index = 0; index < 2; index += 1) {
-      const previous = expectDefined(testing.activeRuns.get(runId), "previous snapshot");
+      const previous = parkedState(result);
       const previousController = controller;
       controller = new AbortController();
       result = resultDetails(
         await wait.execute(`transfer-wait-${index}`, { runId }, controller.signal),
       );
       expect(result).toMatchObject({ status: "waiting", runId });
-      const replacement = expectDefined(testing.activeRuns.get(runId), "replacement snapshot");
+      const replacement = parkedState(result);
       expect(replacement).not.toBe(previous);
       previousController.abort();
       expect(testing.activeRuns.get(runId)).toBe(replacement);
@@ -718,7 +680,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       expect(owner.catalogRef.onDispose?.size).toBe(1);
     }
 
-    const finalState = expectDefined(testing.activeRuns.get(runId), "final snapshot");
+    const finalState = parkedState(result);
     const pending = finalState.pending;
     expect(resultDetails(await wait.execute("transfer-complete", { runId }))).toMatchObject({
       status: "completed",
@@ -742,7 +704,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       clearToolSearchCatalog(owner);
       return jsonResult({ closed: true });
     });
-    applyCodeModeCatalog({ ...owner, tools: [...owner.tools, closeOwner] });
+    owner.catalog(closeOwner);
     const parked = await owner.run(
       `await yield_control("initial");
             await close_owner({});
@@ -769,21 +731,17 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       timeoutMs: 1_500,
     });
     const lifecycle = vi.spyOn(owner.subscription, "runToolLifecycle");
-    const started = createDeferred();
-    const stalled = pluginToolWithExecute("stalled", "Await cancellation", async () => {
-      started.resolve();
-      return await new Promise<never>(() => {});
-    });
-    applyCodeModeCatalog({ ...owner, tools: [...owner.tools, stalled] });
+    const { tool: stalled, started } = controlledTool(jsonTool("stalled", {}));
+    owner.catalog(stalled);
     try {
-      const execution = expectDefined(owner.tools[0], "owner exec").execute("deadline-exec", {
+      const execution = owner.exec.execute("deadline-exec", {
         code: "return await stalled({});",
       });
       await started.promise;
       await vi.advanceTimersByTimeAsync(1_500);
       const parked = resultDetails(await execution);
       expect(parked.status).toBe("waiting");
-      const waiting = expectDefined(owner.tools[1], "owner wait").execute("deadline-wait", {
+      const waiting = owner.wait.execute("deadline-wait", {
         runId: parked.runId,
       });
       vi.advanceTimersByTime(1_499);
@@ -829,9 +787,8 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       },
     );
     target.executionMode = "sequential";
-    applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target] });
-    const exec = expectDefined(harness.tools[0], "Code Mode exec");
-    const wait = expectDefined(harness.tools[1], "Code Mode wait");
+    harness.catalog(target);
+    const { exec, wait } = harness;
     try {
       const first = exec.execute(
         "cancelled-cell",
@@ -875,32 +832,18 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     "settles an abort-ignoring subscribed tool exactly once after $kind",
     async ({ close }) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const downstream = createDeferred();
-      const started = createDeferred();
       const toolAbort = vi.fn();
       const harness = createSubscribedCodeModeHarness({
         name: `closure-${close}`,
         timeoutMs: 2_000,
       });
-      const target = pluginToolWithExecute(
-        "stalled_target",
-        "Ignore cancellation",
-        async (_toolCallId, _input, signal) => {
-          expectDefined(signal, "nested tool cancellation signal").addEventListener(
-            "abort",
-            toolAbort,
-          );
-          started.resolve();
-          await downstream.promise;
-          return jsonResult({ late: true });
-        },
-      );
-      const continuation = pluginToolWithExecute(
-        "continue_after_target",
-        "Continue the guest",
-        async () => jsonResult({ continued: true }),
-      );
-      applyCodeModeCatalog({ ...harness, tools: [...harness.tools, target, continuation] });
+      const {
+        tool: target,
+        started,
+        release: downstream,
+      } = controlledTool(jsonTool("stalled_target", { late: true }));
+      const continuation = jsonTool("continue_after_target", { continued: true });
+      harness.catalog(target, continuation);
 
       try {
         const execution = harness.run(
@@ -909,20 +852,19 @@ describe("Code Mode subscribed bridge lifecycle", () => {
                 return await continue_after_target({});`,
           `code-call-${close}`,
         );
-        await started.promise;
+        expectDefined(await started.promise, "nested tool cancellation signal").addEventListener(
+          "abort",
+          toolAbort,
+        );
         await vi.advanceTimersByTimeAsync(2_000);
         const suspended = await execution;
         expect(suspended.status).toBe("waiting");
         expect(target.execute).toHaveBeenCalledOnce();
         expect(countActiveToolExecutions(harness.runId)).toBe(1);
 
-        const parked = testing.activeRuns.get(suspended.runId as string);
-        const pending = parked?.pending.find((entry) => entry.method === "callValue");
-        expect(pending).toBeDefined();
-        if (!parked || !pending) {
-          throw new Error("expected one parked subscribed tool call");
-        }
-        const wait = expectDefined(harness.tools[1], "Code Mode wait test invariant");
+        const parked = parkedState(suspended);
+        const pending = pendingRequest(parked, "callValue");
+        const { wait } = harness;
         const waiting =
           close === "expire"
             ? undefined

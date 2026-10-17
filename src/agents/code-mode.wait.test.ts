@@ -15,6 +15,7 @@ import * as worker from "./code-mode-executor.js";
 import * as codeModeState from "./code-mode-state.js";
 import { waitForPendingBridgeSettlement } from "./code-mode-state.js";
 import type { SettledBridgeRequest } from "./code-mode-worker-types.js";
+import { controlledTool } from "./code-mode.controlled-tool.test-support.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -24,10 +25,10 @@ import {
   resetCodeModeTestState,
   resultDetails,
   testing,
-  runUntilCompleted,
   waitUntilCompleted,
-  codeModeRunner,
   expectCompleted,
+  createCatalogCodeModeHarness,
+  jsonTool,
 } from "./code-mode.test-support.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
@@ -41,14 +42,24 @@ function harness(
   targets: AnyAgentTool[],
   options: Parameters<typeof createCodeModeHarness>[0] = {},
 ) {
-  const fixture = createCodeModeHarness(options);
-  applyCodeModeCatalog({ ...fixture.ctx, tools: [...fixture.tools, ...targets] });
+  const fixture = createCatalogCodeModeHarness(targets, options);
   return {
     ...fixture,
-    ...codeModeRunner(fixture.tools),
     exec: fixture.tools[0]!,
     wait: fixture.tools[1]!,
   };
+}
+
+function parkedState(details: Record<string, unknown>) {
+  expect(details.status).toBe("waiting");
+  return expectDefined(testing.activeRuns.get(String(details.runId)), "parked run");
+}
+
+function drainPending(state: ReturnType<typeof parkedState>) {
+  return waitForPendingBridgeSettlement(state.pending, {
+    kind: "draining",
+    requiredRequestIds: state.pending.map((entry) => entry.id),
+  });
 }
 
 function observeSettlement(onWait: () => void) {
@@ -183,15 +194,10 @@ describe("Code Mode wait, scope, and suspended runs", () => {
   it.each(["failure", "cancel", "replace"] as const)(
     "settles required work on %s without late guest effects",
     async (outcome) => {
-      const released = createDeferred();
       const parked = createDeferred();
-      const target = pluginToolWithExecute("required_pending", "Required result", async () => {
-        await released.promise;
-        if (outcome === "failure") {
-          throw new Error("required result failed");
-        }
-        return jsonResult({ complete: true });
-      });
+      const { tool: target, release: released } = controlledTool(
+        jsonTool("required_pending", { complete: true }),
+      );
       const effect = pluginTool("after_required", "Effect after collection");
       const fixture = harness([target, effect]);
       const abort = new AbortController();
@@ -211,7 +217,7 @@ describe("Code Mode wait, scope, and suspended runs", () => {
         } else if (outcome === "replace") {
           clearToolSearchCatalog(fixture.ctx);
         } else {
-          released.resolve();
+          released.reject(new Error("required result failed"));
         }
         expect(resultDetails(await result)).toMatchObject({
           status: "failed",
@@ -447,23 +453,19 @@ describe("Code Mode wait, scope, and suspended runs", () => {
   );
 
   it("allocates distinct replay identities when a later turn reuses a tool-call id", async () => {
-    const { exec } = harness([pluginTool("fake_noop", "Noop")]);
+    const { run } = harness([pluginTool("fake_noop", "Noop")]);
     const input = { code: 'await yield_control("pause"); return "done";' };
     const executionContext = (turnId: string) =>
       ({
         assistantMessage: { responseId: " ", turnId },
         toolCall: { type: "toolCall", id: "reused-call-id", name: "exec", arguments: input },
       }) as never;
-    const first = resultDetails(
-      await runWithAgentToolExecutionContext(executionContext("turn-1"), () =>
-        exec.execute("reused-call-id", input),
-      ),
-    );
-    const second = resultDetails(
-      await runWithAgentToolExecutionContext(executionContext("turn-2"), () =>
-        exec.execute("reused-call-id", input),
-      ),
-    );
+    const runTurn = (turn: string) =>
+      runWithAgentToolExecutionContext(executionContext(turn), () =>
+        run(input.code, "reused-call-id"),
+      );
+    const first = await runTurn("turn-1");
+    const second = await runTurn("turn-2");
     expect([first.status, second.status]).toEqual(["waiting", "waiting"]);
     expect(second.runId).not.toBe(first.runId);
     expect(testing.activeRuns.size).toBe(2);
@@ -473,17 +475,11 @@ describe("Code Mode wait, scope, and suspended runs", () => {
   it("keeps an admitted wait alive past idle expiry and expires it only after reparking", async () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const timeoutMs = 10_000;
-    const started = createDeferred<AbortSignal | undefined>();
-    const completion = createDeferred();
-    const target = pluginToolWithExecute(
-      "slow_action",
-      "Complete one action",
-      async (_id, _input, signal) => {
-        started.resolve(signal);
-        await completion.promise;
-        return jsonResult({ delivered: true });
-      },
-    );
+    const {
+      tool: target,
+      started,
+      release: completion,
+    } = controlledTool(jsonTool("slow_action", { delivered: true }));
     const { exec, wait } = harness([target], { codeMode: { timeoutMs, snapshotTtlSeconds: 1 } });
     try {
       const execution = exec.execute("expiry", { code: "return await slow_action({});" });
@@ -554,12 +550,10 @@ describe("Code Mode wait, scope, and suspended runs", () => {
       expect(first.status).toBe("waiting");
       for (const missing of identities) {
         const foreign = createCodeModeTools({ ...ctx, [missing]: undefined })[1]!;
-        try {
-          await foreign.execute("missing-owner", { runId: first.runId });
-          throw new Error("expected missing owner identity to reject");
-        } catch (error) {
-          rejections.set(missing, String(error));
-        }
+        rejections.set(
+          missing,
+          String(await foreign.execute("missing-owner", { runId: first.runId }).catch(String)),
+        );
         expect(testing.activeRuns.has(first.runId as string)).toBe(true);
       }
       rightfulResult = await resume(first, "rightful-owner");
@@ -690,33 +684,23 @@ describe("Code Mode preflight repair", () => {
   });
 });
 
-describe("Code Mode program data", () => {
-  async function run(tools: AnyAgentTool[], code: string) {
-    const h = harness(tools, { codeMode: { maxOutputBytes: 1024 } });
-    return runUntilCompleted({ execTool: h.tools[0]!, waitTool: h.tools[1]!, code });
-  }
-
-  it("refuses aggregate overflow across a parked boundary", async () => {
-    const bytes = 6 * 1024 * 1024;
-    const tool = pluginToolWithExecute("large_page", "Read a large page", async () =>
-      jsonResult("x".repeat(bytes)),
-    );
-    const code =
-      "const pages = Promise.allSettled([large_page({}), large_page({})]); " +
-      "await yield_control(); " +
-      'return (await pages).map(item => item.status === "fulfilled" ? { length: item.value.length } : { error: item.reason.message });';
-    const result = await run([tool], code);
-    expect(result, JSON.stringify(result)).toMatchObject({
-      status: "completed",
-      value: [
-        { length: bytes },
-        { error: expect.stringMatching(/program-data budget exceeded.*Paginate/) },
-      ],
-    });
-    expect(tool.execute).toHaveBeenCalledTimes(2);
+it("refuses aggregate overflow across a parked boundary", async () => {
+  const bytes = 6 * 1024 * 1024;
+  const tool = jsonTool("large_page", "x".repeat(bytes));
+  const code =
+    "const pages = Promise.allSettled([large_page({}), large_page({})]); " +
+    "await yield_control(); " +
+    'return (await pages).map(item => item.status === "fulfilled" ? { length: item.value.length } : { error: item.reason.message });';
+  const result = await harness([tool], { codeMode: { maxOutputBytes: 1024 } }).complete(code);
+  expect(result, JSON.stringify(result)).toMatchObject({
+    status: "completed",
+    value: [
+      { length: bytes },
+      { error: expect.stringMatching(/program-data budget exceeded.*Paginate/) },
+    ],
   });
+  expect(tool.execute).toHaveBeenCalledTimes(2);
 });
-
 it("clears host and worker-input aliases after bridge settlement", async () => {
   const original = worker.runCodeModeExecutor;
   const arrays: SettledBridgeRequest[][] = [];
@@ -730,9 +714,7 @@ it("clears host and worker-input aliases after bridge settlement", async () => {
     }
     return await original(input, ...args);
   });
-  const success = pluginToolWithExecute("reply_success", "Read data", async () =>
-    jsonResult("x".repeat(200000)),
-  );
+  const success = jsonTool("reply_success", "x".repeat(200000));
   const failure = pluginToolWithExecute("reply_failure", "Fail", async () => {
     throw new Error("failure:" + "x".repeat(200000));
   });
@@ -742,12 +724,8 @@ it("clears host and worker-input aliases after bridge settlement", async () => {
       "const replies = Promise.allSettled([reply_success({}), reply_failure({})]); await yield_control(); return (await replies).map(reply => reply.status);",
       "aliases",
     );
-    expect(first.status).toBe("waiting");
-    const retainedState = testing.activeRuns.get(String(first.runId))!;
-    await waitForPendingBridgeSettlement(retainedState.pending, {
-      kind: "draining",
-      requiredRequestIds: retainedState.pending.map((entry) => entry.id),
-    });
+    const retainedState = parkedState(first);
+    await drainPending(retainedState);
     const final = await waitUntilCompleted({ details: first, waitTool: h.tools[1]! });
     expectCompleted(final, ["fulfilled", "rejected"]);
     expect(aliases.some((reply) => reply.ok)).toBe(true);
@@ -767,15 +745,9 @@ it("clears host and worker-input aliases after bridge settlement", async () => {
 it.each(["cancel", "expiry"])(
   "does not retain a late tool completion after parked %s",
   async (close) => {
-    const started = createDeferred();
-    const release = createDeferred();
-    const finished = createDeferred();
-    const tool = pluginToolWithExecute("late_page", "Signal-ignoring data source", async () => {
-      started.resolve();
-      await release.promise;
-      finished.resolve();
-      return jsonResult("late".repeat(300000));
-    });
+    const { tool, started, release, finished } = controlledTool(
+      jsonTool("late_page", "late".repeat(300000)),
+    );
     const h = harness([tool]);
     try {
       const first = await h.run(
@@ -784,16 +756,13 @@ it.each(["cancel", "expiry"])(
       );
       expect(first.status).toBe("waiting");
       await started.promise;
-      const retained = testing.activeRuns.get(String(first.runId))!;
+      const retained = parkedState(first);
       if (close === "expiry") {
         testing.removeExpiredRuns(retained.expiresAt + 1);
       } else {
         clearToolSearchCatalog(h.ctx);
       }
-      await waitForPendingBridgeSettlement(retained.pending, {
-        kind: "draining",
-        requiredRequestIds: retained.pending.map((entry) => entry.id),
-      });
+      await drainPending(retained);
       release.resolve();
       await finished.promise;
       await Promise.resolve();
@@ -824,8 +793,7 @@ it("releases each guest-discarded timer lease before the cell closes", async () 
       "discarded-timers",
     );
     for (let round = 0; round < 6; round++) {
-      expect(result.status).toBe("waiting");
-      const parked = testing.activeRuns.get(String(result.runId))!;
+      const parked = parkedState(result);
       const timer = parked.pending.find((entry) => entry.method === "sleep")!;
       expect(timer).toBeDefined();
       expect(timer.settled).toBeUndefined();
