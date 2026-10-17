@@ -49,7 +49,7 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
   defaultRuntime: lifecycleTestRuntime,
 }));
 
-// Config admission has its own guard tests; these service scenarios use valid config.
+// mock-isolation: These service tests use valid config; preflight has its own guard tests.
 vi.mock("./lifecycle-action-preflight.js", () => ({
   getServiceActionPreflightFailure: async () => null,
 }));
