@@ -41,14 +41,43 @@ const readSessionTranscriptMessageEventCount = (
 ): number =>
   readSessionTranscriptMessageEventPage(scope, { maxMessages: 0, offset: 0 }).totalMessages;
 
-async function withBoundedContextScope(
-  run: (scope: {
-    agentId: string;
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  }) => Promise<void>,
-): Promise<void> {
+type Scope = { agentId: string; sessionId: string; sessionKey: string; storePath: string };
+function persist(
+  scope: Scope,
+  messages: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"],
+) {
+  return persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
+}
+
+function user(id: string, parent: string | null, content = id) {
+  return transcriptMessage(id, parent, { role: "user", content });
+}
+
+function assistant(id: string, parent: string | null, content = id) {
+  return transcriptMessage(id, parent, { role: "assistant", content });
+}
+
+function eventIds(events: unknown[]) {
+  return events.map((event) => (event as { id: string }).id);
+}
+
+function serializedBytes(events: unknown[]) {
+  return events.reduce<number>(
+    (total, event) => total + Buffer.byteLength(JSON.stringify(event)) + 1,
+    0,
+  );
+}
+
+function readContext(
+  scope: Scope,
+  maxBytes = 1024,
+  maxEvents = 10,
+  onRead?: Parameters<typeof readSessionTranscriptBoundedActiveContextCore>[1]["onRead"],
+) {
+  return readSessionTranscriptBoundedActiveContextCore(scope, { maxBytes, maxEvents, onRead });
+}
+
+async function withBoundedContextScope(run: (scope: Scope) => Promise<void>): Promise<void> {
   await withOpenClawTestState({ label: "bounded-transcript-context" }, async (state) => {
     await captureRuntimeConfigAsyncReader()();
     const scope = {
@@ -143,11 +172,7 @@ it("skips sizing an empty transcript and reads its first committed turn", async 
     );
     const onRead = vi.fn();
     try {
-      const empty = readSessionTranscriptBoundedActiveContextCore(scope, {
-        maxBytes: 1024,
-        maxEvents: 10,
-        onRead,
-      });
+      const empty = readContext(scope, 1024, 10, onRead);
       expect(empty).toMatchObject({
         version: { rawSeq: null },
         activeLeafEntryId: null,
@@ -161,14 +186,8 @@ it("skips sizing an empty transcript and reads its first committed turn", async 
       expect(onRead).toHaveBeenCalledExactlyOnceWith(expect.anything(), [], undefined);
       expect(counter.counts.sizing).toBe(0);
 
-      await persistSessionTranscriptTurn(scope, {
-        messages: [transcriptMessage("first", null, { role: "user", content: "first turn" })],
-        touchSessionEntry: false,
-      });
-      const populated = readSessionTranscriptBoundedActiveContextCore(scope, {
-        maxBytes: 1024,
-        maxEvents: 10,
-      });
+      await persist(scope, [user("first", null, "first turn")]);
+      const populated = readContext(scope, 1024, 10);
       expect(populated).toMatchObject({
         activeLeafEntryId: "first",
         events: [
@@ -189,26 +208,16 @@ it("skips sizing an empty transcript and reads its first committed turn", async 
 it("enforces context count and byte budgets and releases rejected reads for later appends", async () => {
   await withBoundedContextScope(async (scope) => {
     const append = (id: string, parent: string | null, content = id) =>
-      persistSessionTranscriptTurn(scope, {
-        messages: [transcriptMessage(id, parent, { role: "user", content })],
-        touchSessionEntry: false,
-      });
+      persist(scope, [transcriptMessage(id, parent, { role: "user", content })]);
     await append("old", null);
     await append("large", "old", "🦞".repeat(1024));
     await append("new", "large");
-    const read = (maxBytes: number, maxEvents = 100) =>
-      readSessionTranscriptBoundedActiveContextCore(scope, { maxBytes, maxEvents });
-    const ids = (context: ReturnType<typeof read>) =>
-      context.events.map((event) => (event as { id: string }).id);
+    const read = (maxBytes: number, maxEvents = 100) => readContext(scope, maxBytes, maxEvents);
+    const ids = (context: ReturnType<typeof read>) => eventIds(context.events);
     const counted = read(16_384, 2);
     expect(ids(counted)).toEqual([scope.sessionId, "large", "new"]);
     expect(counted).toMatchObject({ activeLeafEntryId: "new", totalEvents: 3, truncated: true });
-    expect(counted.serializedBytes).toBe(
-      counted.events.reduce<number>(
-        (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
-        0,
-      ),
-    );
+    expect(counted.serializedBytes).toBe(serializedBytes(counted.events));
     expect(counted.serializedBytes).toBeLessThanOrEqual(16_384);
     expect(read(16_384, 3).truncated).toBe(false);
     const headerBytes = Buffer.byteLength(JSON.stringify(counted.events[0])) + 1;
@@ -253,9 +262,9 @@ it("rejects an oversized header before acquiring its payload", async () => {
     });
     const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
     const acquiredBytes = countAcquiredTranscriptPayloadBytes(db, marker, () => {
-      expect(() =>
-        readSessionTranscriptBoundedActiveContextCore(scope, { maxBytes: 1024, maxEvents: 10 }),
-      ).toThrow("Session transcript header exceeds the active-context byte limit");
+      expect(() => readContext(scope, 1024, 10)).toThrow(
+        "Session transcript header exceeds the active-context byte limit",
+      );
     });
     expect(acquiredBytes).toBe(0);
   });
@@ -283,22 +292,11 @@ it("omits an oversized latest compaction boundary before acquiring its payload",
     await waitForSessionTranscriptProjection(scope);
     const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
     const acquiredBytes = countAcquiredTranscriptPayloadBytes(db, marker, () => {
-      const context = readSessionTranscriptBoundedActiveContextCore(scope, {
-        maxBytes: 1024,
-        maxEvents: 1,
-      });
-      expect(context.events.map((event) => (event as { id: string }).id)).toEqual([
-        scope.sessionId,
-        "tail",
-      ]);
+      const context = readContext(scope, 1024, 1);
+      expect(eventIds(context.events)).toEqual([scope.sessionId, "tail"]);
       expect(context.truncated).toBe(true);
       expect(context.boundaryCount).toBe(1);
-      expect(context.serializedBytes).toBe(
-        context.events.reduce<number>(
-          (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
-          0,
-        ),
-      );
+      expect(context.serializedBytes).toBe(serializedBytes(context.events));
     });
     expect(acquiredBytes).toBe(0);
   });
@@ -346,10 +344,7 @@ it("selects imported headers and retention anchors before later indexed duplicat
       parentId: "reply",
       message: { role: "assistant", content: "Later indexed duplicate.".repeat(100) },
     });
-    const context = readSessionTranscriptBoundedActiveContextCore(scope, {
-      maxBytes: 32_768,
-      maxEvents: 10,
-    });
+    const context = readContext(scope, 32_768, 10);
     expect(context.events[0]).toMatchObject({ type: "session", version: 3, id: scope.sessionId });
     const range = context.firstKeptRanges.get("cut");
     expect(range).toBeDefined();
@@ -367,10 +362,7 @@ it("selects imported headers and retention anchors before later indexed duplicat
 
 it("retains the latest boundary and counts earlier resets before a truncated tail", async () => {
   await withBoundedContextScope(async (scope) => {
-    await persistSessionTranscriptTurn(scope, {
-      messages: [transcriptMessage("old", null, { role: "user", content: "old" })],
-      touchSessionEntry: false,
-    });
+    await persist(scope, [user("old", null)]);
     await appendTranscriptEvent(scope, {
       type: "reset",
       id: "prior-reset",
@@ -387,24 +379,11 @@ it("retains the latest boundary and counts earlier resets before a truncated tai
       firstKeptEntryId: "old",
       tokensBefore: 100,
     });
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        transcriptMessage("middle", "summary", { role: "user", content: "middle" }),
-        transcriptMessage("new", "middle", { role: "assistant", content: "new" }),
-      ],
-      touchSessionEntry: false,
-    });
+    await persist(scope, [user("middle", "summary"), assistant("new", "middle")]);
 
-    const context = readSessionTranscriptBoundedActiveContextCore(scope, {
-      maxBytes: 2048,
-      maxEvents: 1,
-    });
+    const context = readContext(scope, 2048, 1);
 
-    expect(context.events.map((event) => (event as { id?: string }).id)).toEqual([
-      scope.sessionId,
-      "summary",
-      "new",
-    ]);
+    expect(eventIds(context.events)).toEqual([scope.sessionId, "summary", "new"]);
     expect(context.events.at(-1)).toMatchObject({ parentId: "middle" });
     expect(context.parents).toEqual(
       new Map([
@@ -486,33 +465,27 @@ it("counts paired reset tool results without counting discarded orphan results",
       content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
       stopReason: "toolUse",
     });
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        transcriptMessage("discarded-old", null, {
-          role: "user",
-          content: `discarded ${"x".repeat(12_000)}`,
-        }),
-        transcriptMessage("kept-user", "discarded-old", { role: "user", content: "kept question" }),
-        transcriptMessage("kept-assistant", "kept-user", assistantMessage),
-        transcriptMessage("kept-result", "kept-assistant", {
-          role: "toolResult",
-          toolCallId: "call-1",
-          toolName: "read",
-          content: [{ type: "text", text: `paired ${"p".repeat(3_000)}` }],
-          isError: false,
-          timestamp: Date.parse("2026-08-15T00:00:01.000Z"),
-        }),
-        transcriptMessage("discarded-orphan", "kept-result", {
-          role: "toolResult",
-          toolCallId: "orphan-call",
-          toolName: "read",
-          content: [{ type: "text", text: `orphan ${"o".repeat(20_000)}` }],
-          isError: false,
-          timestamp: Date.parse("2026-08-15T00:00:02.000Z"),
-        }),
-      ],
-      touchSessionEntry: false,
-    });
+    await persist(scope, [
+      user("discarded-old", null, `discarded ${"x".repeat(12_000)}`),
+      user("kept-user", "discarded-old", "kept question"),
+      transcriptMessage("kept-assistant", "kept-user", assistantMessage),
+      transcriptMessage("kept-result", "kept-assistant", {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "read",
+        content: [{ type: "text", text: `paired ${"p".repeat(3_000)}` }],
+        isError: false,
+        timestamp: Date.parse("2026-08-15T00:00:01.000Z"),
+      }),
+      transcriptMessage("discarded-orphan", "kept-result", {
+        role: "toolResult",
+        toolCallId: "orphan-call",
+        toolName: "read",
+        content: [{ type: "text", text: `orphan ${"o".repeat(20_000)}` }],
+        isError: false,
+        timestamp: Date.parse("2026-08-15T00:00:02.000Z"),
+      }),
+    ]);
     await appendTranscriptEvent(scope, {
       type: "reset",
       id: "reset-boundary",
@@ -521,12 +494,7 @@ it("counts paired reset tool results without counting discarded orphan results",
       reason: "new",
       firstKeptEntryId: "kept-user",
     });
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        transcriptMessage("post-reset", "reset-boundary", { role: "user", content: "fresh turn" }),
-      ],
-      touchSessionEntry: false,
-    });
+    await persist(scope, [user("post-reset", "reset-boundary", "fresh turn")]);
 
     const stats = readActiveTranscriptStats(scope);
     expect(stats.eventCount).toBe(4);
@@ -534,15 +502,7 @@ it("counts paired reset tool results without counting discarded orphan results",
     expect(stats.sizeBytes).toBeLessThan(8_000);
     expect(readHistory(scope).totalMessages).toBe(3);
 
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        transcriptMessage("second-post-reset", "post-reset", {
-          role: "assistant",
-          content: "fresh answer",
-        }),
-      ],
-      touchSessionEntry: false,
-    });
+    await persist(scope, [assistant("second-post-reset", "post-reset", "fresh answer")]);
     const parseSpy = vi.spyOn(JSON, "parse");
     try {
       expect(readActiveTranscriptStats(scope).eventCount).toBe(5);
@@ -652,14 +612,8 @@ it("keeps later unindexed feedback payloads outside an admitted context read", a
       runWithSessionTranscriptReadFence(
         { ...anchor, logicalTurnId: "current", role: "user" },
         () => {
-          const context = readSessionTranscriptBoundedActiveContextCore(scope, {
-            maxBytes: 1024,
-            maxEvents: 10,
-          });
-          expect(context.events.map((event) => (event as { id: string }).id)).toEqual([
-            scope.sessionId,
-            "imported-user",
-          ]);
+          const context = readContext(scope, 1024, 10);
+          expect(eventIds(context.events)).toEqual([scope.sessionId, "imported-user"]);
           expect(context.activeLeafEntryId).toBe("imported-user");
         },
       );
@@ -677,27 +631,24 @@ it("keeps usage and bootstrap facts in the rebuilt bounded tail despite display 
       customType: "bootstrap-completed",
       data: {},
     });
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        transcriptMessage("usage", "bootstrap", {
-          role: "assistant",
-          content: "answer",
-          usage: { input: 86_000, output: 2_000 },
-        }),
-        ...Array.from({ length: 513 }, (_, index) => ({
-          eventId: `display-${index}`,
-          parentId: index === 0 ? "usage" : `display-${index - 1}`,
-          message: {
-            role: "custom",
-            customType: "tool-activity",
-            display: true,
-            excludeFromContext: true,
-            content: "completed",
-          },
-        })),
-      ],
-      touchSessionEntry: false,
-    });
+    await persist(scope, [
+      transcriptMessage("usage", "bootstrap", {
+        role: "assistant",
+        content: "answer",
+        usage: { input: 86_000, output: 2_000 },
+      }),
+      ...Array.from({ length: 513 }, (_, index) => ({
+        eventId: `display-${index}`,
+        parentId: index === 0 ? "usage" : `display-${index - 1}`,
+        message: {
+          role: "custom",
+          customType: "tool-activity",
+          display: true,
+          excludeFromContext: true,
+          content: "completed",
+        },
+      })),
+    ]);
 
     openOpenClawAgentDatabase(scope)
       .db.prepare(
@@ -706,7 +657,7 @@ it("keeps usage and bootstrap facts in the rebuilt bounded tail despite display 
       .run(scope.sessionId);
     expect(await reconcileSessionTranscriptIndexes(scope)).toEqual({ reconciledSessions: 1 });
     const tail = readRecentSessionTranscriptActiveEvents(scope, 2);
-    expect(tail.map((event) => (event as { id: string }).id)).toEqual(["bootstrap", "usage"]);
+    expect(eventIds(tail)).toEqual(["bootstrap", "usage"]);
     expect(tail[1]).toMatchObject({ message: { usage: { input: 86_000, output: 2_000 } } });
     const visited: unknown[] = [];
     withRecentActiveTranscriptEvents(scope, 2, (visit) => {
@@ -719,10 +670,7 @@ it("keeps usage and bootstrap facts in the rebuilt bounded tail despite display 
 
 it("keeps repeated visits on one snapshot and expires their reader on return", async () => {
   await withBoundedContextScope(async (scope) => {
-    await persistSessionTranscriptTurn(scope, {
-      messages: [transcriptMessage("seed", null, { role: "user", content: "before" })],
-      touchSessionEntry: false,
-    });
+    await persist(scope, [user("seed", null, "before")]);
     const database = openOpenClawAgentDatabase(scope);
     const { DatabaseSync } = requireNodeSqlite();
     const writer = new DatabaseSync(database.path);
@@ -760,14 +708,11 @@ it.each(["json", "sql", "consumer"] as const)(
   "preserves %s failure precedence and releases the read cursor",
   async (failureKind) => {
     await withBoundedContextScope(async (scope) => {
-      await persistSessionTranscriptTurn(scope, {
-        messages: [
-          transcriptMessage("oldest", null, { role: "user", content: "oldest" }),
-          transcriptMessage("middle", "oldest", { role: "assistant", content: "middle" }),
-          transcriptMessage("newest", "middle", { role: "user", content: "newest" }),
-        ],
-        touchSessionEntry: false,
-      });
+      await persist(scope, [
+        user("oldest", null),
+        assistant("middle", "oldest"),
+        user("newest", "middle"),
+      ]);
       const database = openOpenClawAgentDatabase(scope);
       const failure = new Error("consumer stopped");
       const malformed = '{"old":}';
@@ -837,17 +782,11 @@ it.each(["unbounded", "reset"] as const)(
         details: { output: "x".repeat(32_000) },
         timestamp: 1,
       };
-      await persistSessionTranscriptTurn(scope, {
-        messages: [
-          transcriptMessage("kept-user", null, { role: "user", content: "question" }),
-          transcriptMessage("display-prefix", "kept-user", activity),
-          transcriptMessage("kept-assistant", "display-prefix", {
-            role: "assistant",
-            content: "answer",
-          }),
-        ],
-        touchSessionEntry: false,
-      });
+      await persist(scope, [
+        user("kept-user", null, "question"),
+        transcriptMessage("display-prefix", "kept-user", activity),
+        assistant("kept-assistant", "display-prefix", "answer"),
+      ]);
       if (boundary !== "unbounded") {
         await appendTranscriptEvent(scope, {
           type: boundary,
@@ -864,18 +803,12 @@ it.each(["unbounded", "reset"] as const)(
       );
       const expected = {
         eventCount: contextEvents.length,
-        sizeBytes: contextEvents.reduce<number>(
-          (total, event) => total + Buffer.byteLength(JSON.stringify(event), "utf8") + 1,
-          0,
-        ),
+        sizeBytes: serializedBytes(contextEvents),
       };
       expect(readActiveTranscriptStats(scope)).toEqual(expected);
       const physicalBefore = readTranscriptStatsSync(scope);
       const historyBefore = readSessionTranscriptMessageEventCount(scope);
-      await persistSessionTranscriptTurn(scope, {
-        messages: [{ eventId: "display-tail", message: activity }],
-        touchSessionEntry: false,
-      });
+      await persist(scope, [{ eventId: "display-tail", message: activity }]);
 
       expect(readActiveTranscriptStats(scope)).toEqual(expected);
       expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(

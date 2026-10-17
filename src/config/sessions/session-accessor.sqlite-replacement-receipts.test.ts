@@ -48,6 +48,39 @@ const { getReplacementPublicationDelivery } =
   await import("./session-accessor.sqlite-replacement-publication.test-support.js");
 const delivery = getReplacementPublicationDelivery();
 
+function seed(
+  database: ReturnType<typeof openOpenClawAgentDatabase>,
+  id: string,
+  fields: Partial<SessionEntry> = {},
+) {
+  const scope = { agentId: "main", storePath: database.path, sessionKey: `agent:main:${id}` };
+  const entry = { sessionId: id, updatedAt: 1, ...fields };
+  replaceSessionEntrySync(scope, entry);
+  return { scope, entry };
+}
+
+function durableIdentity(database: ReturnType<typeof openOpenClawAgentDatabase>) {
+  const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+  if (typeof identity !== "string") {
+    throw new Error("Expected durable receipt fixture");
+  }
+  return identity;
+}
+
+function replaceFields(
+  scope: { storePath: string; sessionKey: string },
+  fields: Partial<SessionEntry>,
+) {
+  return applySessionEntryExactReplacements({
+    storePath: scope.storePath,
+    sessionKeys: [scope.sessionKey],
+    update: ([row]) => ({
+      result: undefined,
+      replacements: [{ sessionKey: scope.sessionKey, entry: { ...row!.entry, ...fields } }],
+    }),
+  });
+}
+
 it("sheds aggregate optional snapshots while committing every required receipt row", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -197,11 +230,6 @@ it.each([false, true])(
   async (rawWrite) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const scope = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey: "agent:main:full-receipt",
-      };
       const snapshots = {
         sessionDiffBaseline: {
           version: 1,
@@ -219,7 +247,7 @@ it.each([false, true])(
           tools: { listChars: 0, schemaChars: 0, entries: [] },
         },
       } satisfies Partial<SessionEntry>;
-      replaceSessionEntrySync(scope, { sessionId: "full-receipt", updatedAt: 1, ...snapshots });
+      const { scope } = seed(database, "full-receipt", snapshots);
       let published: ReturnType<typeof readPreparedSessionEntryChange>;
       const stop = sessionChanges.subscribeFacts((change) => {
         if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
@@ -236,16 +264,7 @@ it.each([false, true])(
         }
       };
       try {
-        await applySessionEntryExactReplacements({
-          storePath: database.path,
-          sessionKeys: [scope.sessionKey],
-          update: ([row]) => ({
-            result: undefined,
-            replacements: [
-              { sessionKey: scope.sessionKey, entry: { ...row!.entry, label: "committed" } },
-            ],
-          }),
-        });
+        await replaceFields(scope, { label: "committed" });
         expect(published?.entry?.label).toBe("committed");
         expect(published?.entry?.skillsSnapshot).toBeUndefined();
         expect(published?.entry?.systemPromptReport).toBeUndefined();
@@ -270,19 +289,9 @@ it.each(["native", "worker"] as const)(
   async (writer) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const scope = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey: "agent:main:category-authority",
-      };
-      const entry = { sessionId: "category-authority", updatedAt: 1, category: "before" };
-      replaceSessionEntrySync(scope, entry);
-      const source = readOpenClawAgentDatabaseIdentity(database);
-      if (typeof source.identity !== "string") {
-        throw new Error("Expected durable category fixture");
-      }
+      const { scope, entry } = seed(database, "category-authority", { category: "before" });
       const sharing = retainPreparedSessionSharingFacts({
-        databaseIdentity: `file:${source.identity}`,
+        databaseIdentity: `file:${durableIdentity(database)}`,
         sessionKey: scope.sessionKey,
         entry,
         membership: new Set(),
@@ -321,17 +330,8 @@ it.each(["native", "worker"] as const)(
 it("keeps unrelated predicates current through participant publication", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const scope = {
-      agentId: "main",
-      storePath: database.path,
-      sessionKey: "agent:main:participant-authority",
-    };
-    const entry = { sessionId: "participant-authority", updatedAt: 1, sandboxMode: "off" } as const;
-    replaceSessionEntrySync(scope, entry);
-    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
-    if (typeof identity !== "string") {
-      throw new Error("Expected durable participant fixture");
-    }
+    const { scope, entry } = seed(database, "participant-authority", { sandboxMode: "off" });
+    const identity = durableIdentity(database);
     const retained = { databaseIdentity: `file:${identity}`, sessionKey: scope.sessionKey, entry };
     const policy = retainPreparedSessionEntryPredicate({
       ...retained,
@@ -398,22 +398,12 @@ it.each([
   async ({ successor, authorityChanged, acquiring }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const scope = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey: "agent:main:late-replacement",
-      };
-      replaceSessionEntrySync(scope, {
-        sessionId: "late-replacement",
-        updatedAt: 1,
+      const { scope } = seed(database, "late-replacement", {
         category: "shared",
         sandboxMode: "off",
       });
       addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 1 });
-      const identity = readOpenClawAgentDatabaseIdentity(database).identity;
-      if (typeof identity !== "string") {
-        throw new Error("Expected durable publication fixture");
-      }
+      const identity = durableIdentity(database);
       const entry = readExactSessionEntryRow(database, scope.sessionKey)!.entry;
       const retained = {
         databaseIdentity: `file:${identity}`,
@@ -444,22 +434,9 @@ it.each([
         }
       };
       try {
-        await applySessionEntryExactReplacements({
-          storePath: database.path,
-          sessionKeys: [scope.sessionKey],
-          update: ([row]) => ({
-            result: undefined,
-            replacements: [
-              {
-                sessionKey: scope.sessionKey,
-                entry: {
-                  ...row!.entry,
-                  label: "older commit",
-                  sandboxMode: successor === "member" ? undefined : "off",
-                },
-              },
-            ],
-          }),
+        await replaceFields(scope, {
+          label: "older commit",
+          sandboxMode: successor === "member" ? undefined : "off",
         });
         expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.label).toBe(
           successor === "member" ? "older commit" : "newer commit",
@@ -489,19 +466,11 @@ it.each([
 it("fences every retained reader after a native installer fails, including older pending receipts", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const scope = {
-      agentId: "main",
-      storePath: database.path,
-      sessionKey: "agent:main:failed-native",
-    };
-    replaceSessionEntrySync(scope, { sessionId: "before", updatedAt: 1 });
-    const source = readOpenClawAgentDatabaseIdentity(database);
-    if (typeof source.identity !== "string") {
-      throw new Error("Expected durable native publication fixture");
-    }
+    const { scope } = seed(database, "failed-native", { sessionId: "before" });
+    const identity = durableIdentity(database);
     const entry = readExactSessionEntryRow(database, scope.sessionKey)!.entry;
     const params = {
-      databaseIdentity: `file:${source.identity}`,
+      databaseIdentity: `file:${identity}`,
       sessionKey: scope.sessionKey,
       entry,
     };
@@ -523,7 +492,7 @@ it("fences every retained reader after a native installer fails, including older
     });
     const older = retainSessionEntryWorkerPublication({
       ...scope,
-      databaseIdentity: source.identity,
+      databaseIdentity: identity,
     });
     older.begin([scope.sessionKey], []);
     try {
@@ -549,20 +518,12 @@ it("fences every retained reader after a native installer fails, including older
 it("preserves a replacement receipt across another session's transcript notification", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const scope = {
-      agentId: "main",
-      storePath: database.path,
-      sessionKey: "agent:main:late-watermark",
-      sessionId: "late-watermark",
-    };
-    replaceSessionEntrySync(scope, {
-      sessionId: scope.sessionId,
-      updatedAt: 1,
+    const { scope: access } = seed(database, "late-watermark", {
       activitySummary: {
         version: 1,
         text: "Empty transcript",
         updatedAt: 1,
-        sessionId: scope.sessionId,
+        sessionId: "late-watermark",
         generation: null,
         maxSeq: null,
         leafEntryId: null,
@@ -571,6 +532,7 @@ it("preserves a replacement receipt across another session's transcript notifica
         omittedContent: false,
       },
     });
+    const scope = { ...access, sessionId: "late-watermark" };
     let published: ReturnType<typeof readPreparedSessionEntryChange>;
     const stop = sessionChanges.subscribeFacts((change) => {
       if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
@@ -587,16 +549,7 @@ it("preserves a replacement receipt across another session's transcript notifica
       });
     };
     try {
-      await applySessionEntryExactReplacements({
-        storePath: database.path,
-        sessionKeys: [scope.sessionKey],
-        update: ([row]) => ({
-          result: undefined,
-          replacements: [
-            { sessionKey: scope.sessionKey, entry: { ...row!.entry, label: "committed" } },
-          ],
-        }),
-      });
+      await replaceFields(scope, { label: "committed" });
       expect(published?.entry?.label).toBe("committed");
       expect(published?.projection).toMatchObject({
         hasBoard: false,
@@ -614,16 +567,7 @@ it.each(["before preparation", "before settlement", "during facts delivery"] as 
   async (boundary) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const scope = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey: "agent:main:compact-receipt",
-      };
-      replaceSessionEntrySync(scope, {
-        sessionId: "compact-receipt",
-        updatedAt: 1,
-        category: "before",
-      });
+      const { scope } = seed(database, "compact-receipt", { category: "before" });
       recordSessionParticipant(scope, {
         identity: {
           type: "remote",
@@ -691,16 +635,7 @@ it.each(["before preparation", "before settlement", "during facts delivery"] as 
             removeSessionMember(scope, "revoked");
           };
         }
-        await applySessionEntryExactReplacements({
-          storePath: database.path,
-          sessionKeys: [scope.sessionKey],
-          update: ([row]) => ({
-            result: undefined,
-            replacements: [
-              { sessionKey: scope.sessionKey, entry: { ...row!.entry, category: "after" } },
-            ],
-          }),
-        });
+        await replaceFields(scope, { category: "after" });
         expect(revokedDuringFacts).toBe(boundary === "during facts delivery");
         expect(observed.length).toBeGreaterThan(0);
         expect(predicate.isCurrent()).toBe(false);
@@ -827,16 +762,7 @@ it.each(["facts", "projection"] as const)(
   async (phase) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
-      const scope = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey: "agent:main:failed-install",
-      };
-      replaceSessionEntrySync(scope, {
-        sessionId: "failed-install",
-        updatedAt: 1,
-        category: "before",
-      });
+      const { scope } = seed(database, "failed-install", { category: "before" });
       const source = readOpenClawAgentDatabaseIdentity(database);
       const projection = createSessionMembershipProjection();
       projection.updateTargets([{ ...scope, ...source }]);
