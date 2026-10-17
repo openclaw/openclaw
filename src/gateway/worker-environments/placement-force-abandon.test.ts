@@ -19,6 +19,7 @@ import {
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
+import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
 
@@ -95,12 +96,12 @@ describe("forced worker environment abandonment", () => {
   it("drains nested operations before recording result loss and releasing the claim", async ({
     signal,
   }) => {
-    const { store, environmentId } = await createActiveAbandonmentFixture(database);
+    const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
     const claim = await store.claimTurn({
       ...REQUEST,
       claimId: "forced-claim",
       runId: "forced-run",
-      owner: { kind: "worker", environmentId, ownerEpoch: 2 },
+      owner: placementTurnOwner(active),
     });
     await store.markWorkspaceResultPending(claim);
     const binding = claim;
@@ -168,7 +169,7 @@ describe("forced worker environment abandonment", () => {
       ...REQUEST,
       claimId: "reclaim-forced-missing-workspace",
       runId: "reclaim-forced-missing-workspace",
-      owner: { kind: "worker", environmentId, ownerEpoch: 2 },
+      owner: placementTurnOwner(active),
     });
     await store.recordStagedWorkspaceResult(
       claim,
@@ -192,7 +193,7 @@ describe("forced worker environment abandonment", () => {
         ...REQUEST,
         claimId: "captured-claim",
         runId: "captured-run",
-        owner: { kind: "worker", environmentId, ownerEpoch: active.activeOwnerEpoch },
+        owner: placementTurnOwner(active),
       });
       await store.authorizeWorkerTurnTools(original, ["sessions_send"]);
       const entered = createDeferred();
@@ -296,7 +297,7 @@ describe("forced worker environment abandonment", () => {
             ...REQUEST,
             claimId: "captured-claim",
             runId: "captured-run",
-            owner: { kind: "worker", environmentId, ownerEpoch: active.activeOwnerEpoch },
+            owner: placementTurnOwner(active),
           })
         : undefined;
       const entered = createDeferred();
@@ -373,13 +374,10 @@ describe("forced worker environment abandonment", () => {
       const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
       await seedJournal({ store, environmentId, active }, "b", "c");
       const draining = await startFixtureDrain({ store, environmentId, active });
-      if (draining.state !== "draining") {
-        throw new Error("draining placement fixture was not draining");
-      }
       const reconciling = await store.startReconcile({
-        sessionId: draining.sessionId,
-        environmentId: draining.environmentId,
-        ownerEpoch: draining.activeOwnerEpoch,
+        sessionId: active.sessionId,
+        environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: draining.generation,
       });
       if (state !== "reconciling") {

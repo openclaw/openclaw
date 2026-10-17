@@ -255,8 +255,7 @@ describe("worker placement shutdown replay", () => {
 
       expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
       expect(placements.get(REQUEST.sessionId)?.terminalAtMs).not.toBeNull();
-      expect(destroy).toHaveBeenCalledOnce();
-      expect(destroy).toHaveBeenCalledWith(
+      expect(destroy).toHaveBeenCalledExactlyOnceWith(
         deriveEnvironmentIntent(`session-dispatch:${REQUEST.sessionId}:1`).environmentId,
       );
     },
