@@ -2355,7 +2355,6 @@ src/process/command-queue.ts	2
 src/process/exec-spawn.ts	3
 src/process/exec.ts	3
 src/process/spawn-secret-input.ts	1
-src/process/spawn-utils.ts	1
 src/process/supervisor/adapters/child.ts	2
 src/process/supervisor/adapters/pty.ts	1
 src/process/terminal-pty.ts	1
