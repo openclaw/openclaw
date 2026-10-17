@@ -126,7 +126,7 @@ export function createDashboardHarness(
   pane.boardProvider = createMockBoardProvider(current.key);
   // The detached pane exposes real controller methods without running unrelated
   // connectedCallback polling. Header templates are mounted separately below.
-  vi.spyOn(pane, "requestUpdate").mockImplementation(() => {});
+  vi.spyOn(pane, "invalidate").mockImplementation(() => {});
   pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
     ["sessions.patch"],
     options.scopes ?? ["operator.write", "operator.read"],
