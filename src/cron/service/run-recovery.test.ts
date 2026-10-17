@@ -104,12 +104,7 @@ async function activateManual(
       storeKey: store.storeKey,
       nowMs: now,
       maxConcurrentRuns: 10,
-      requests: [
-        {
-          receiptId: request.runReceipt.receiptId,
-          mode: "force",
-        },
-      ],
+      requests: [{ receiptId: request.runReceipt.receiptId, mode: "force" }],
     },
   });
   expect(launch.skipped).toEqual([]);
@@ -120,13 +115,7 @@ async function activateManual(
 async function record(
   store: Awaited<ReturnType<typeof recoveryStore>>,
   receipt: CronRunReceiptHandle,
-  entry: {
-    status: "ok";
-    delivered?: boolean;
-    deliveryStatus?: "delivered";
-    nextRunAtMs?: number;
-  },
-  triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown },
+  delivery: { delivered: true; deliveryStatus: "delivered" } | undefined = undefined,
 ) {
   await executeOpenClawStateWorker(store.context, {
     type: "cron.recordRun",
@@ -146,9 +135,10 @@ async function record(
           runAtMs: now,
           durationMs: 500,
           completionStatus: "succeeded",
-          ...entry,
+          status: "ok",
+          ...delivery,
         },
-        { storeKey: store.storeKey, triggerEval },
+        { storeKey: store.storeKey },
       ),
     },
   });
@@ -211,7 +201,8 @@ describe("worker-owned startup recovery", () => {
       });
       try {
         await start(state);
-        expect((await loadCronStore(store.storePath)).jobs[0]).toMatchObject({
+        const recovered = (await loadCronStore(store.storePath)).jobs[0]!;
+        expect(recovered).toMatchObject({
           enabled: kind !== "at",
           state: {
             lastRunStatus: "error",
@@ -227,7 +218,6 @@ describe("worker-owned startup recovery", () => {
             deliveryStatus: "unknown",
           },
         ]);
-        const recovered = (await loadCronStore(store.storePath)).jobs[0]!;
         expect(recovered.state.nextRunAtMs).toBe(kind === "at" ? undefined : now + 3_601_000);
         expect(recovered.state.autoDisabled).toBeUndefined();
         expect(recovered.state.failureAlertIncident).toBeUndefined();
@@ -251,7 +241,7 @@ describe("worker-owned startup recovery", () => {
     const entry = job("legacy-active");
     const store = await recoveryStore([entry]);
     const receipt = await activateManual(store, entry, "legacy-public-run");
-    await record(store, receipt, { status: "ok" });
+    await record(store, receipt);
     const internalRunId = `cron:${entry.id}:${now}:${receipt.receiptId}`;
     openOpenClawStateDatabase()
       .db.prepare(
@@ -279,11 +269,7 @@ describe("worker-owned startup recovery", () => {
       const store = await recoveryStore([entry]);
       const receipt = await activateManual(store, entry, "removed-manual-run");
       if (recorded) {
-        await record(store, receipt, {
-          status: "ok",
-          delivered: true,
-          deliveryStatus: "delivered",
-        });
+        await record(store, receipt, { delivered: true, deliveryStatus: "delivered" });
       }
       await writeCronStoreSnapshot({ storePath: store.storePath, jobs: [] });
       const before = await store.history();
@@ -322,7 +308,7 @@ describe("worker-owned startup recovery", () => {
     });
     const store = await recoveryStore([entry]);
     const receipt = await activateManual(store, entry);
-    await record(store, receipt, { status: "ok", delivered: true, deliveryStatus: "delivered" });
+    await record(store, receipt, { delivered: true, deliveryStatus: "delivered" });
     const outcome = await store.recover();
     expect(outcome.removedJobIds).toEqual([entry.id]);
     expect(outcome.interruptedRuns).toEqual([]);

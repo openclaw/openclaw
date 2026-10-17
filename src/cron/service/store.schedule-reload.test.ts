@@ -14,8 +14,11 @@ const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-store-sc
 
 const STORE_TEST_NOW = Date.parse("2026-03-23T12:00:00.000Z");
 
-async function writeSingleJobStore(storePath: string, job: CronJob) {
+async function seedJob(initial?: Partial<CronJob>) {
+  const { storePath } = await makeStorePath();
+  const job = createReloadCronJob({ state: { nextRunAtMs: staleNextRunAtMs }, ...initial });
   await saveCronStore(storePath, { version: 1, jobs: [job] });
+  return { storePath, job };
 }
 
 function createStoreTestService(storePath: string) {
@@ -55,14 +58,7 @@ function createReloadCronJob(params?: Partial<CronJob>): CronJob {
 const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;
 const dueNextRunAtMs = STORE_TEST_NOW - 1_000;
 
-type ReloadCase = {
-  name: string;
-  initial?: Partial<CronJob>;
-  patch: CronJobPatch;
-  nextRunAtMs: number;
-};
-
-it.each<ReloadCase>([
+it.each<{ name: string; initial?: Partial<CronJob>; patch: CronJobPatch; nextRunAtMs: number }>([
   {
     name: "cron expression",
     patch: { schedule: { kind: "cron", expr: "30 6 * * 0,6", tz: "UTC" } },
@@ -95,9 +91,7 @@ it.each<ReloadCase>([
 ])(
   "commits $name with its matching next-run identity before another view reloads",
   async ({ initial, patch, nextRunAtMs }) => {
-    const { storePath } = await makeStorePath();
-    const job = createReloadCronJob({ state: { nextRunAtMs: staleNextRunAtMs }, ...initial });
-    await writeSingleJobStore(storePath, job);
+    const { storePath, job } = await seedJob(initial);
     const writer = createStoreTestService(storePath);
     const observer = createStoreTestService(storePath);
     for (const { state } of [writer, observer]) {
@@ -146,17 +140,12 @@ it.each<{
     nextRunAtMs: staleNextRunAtMs + 60_000,
   },
 ])("reloads a $name snapshot without changing its deadline", async (testCase) => {
-  const { storePath } = await makeStorePath();
-  const job = createReloadCronJob({
-    state: { nextRunAtMs: staleNextRunAtMs },
-    ...testCase.initial,
-  });
-  await writeSingleJobStore(storePath, job);
+  const { storePath, job } = await seedJob(testCase.initial);
   const { state, onEvent } = createStoreTestService(storePath);
   await ensureLoaded(state);
 
   const updated = { ...job, updatedAtMs: STORE_TEST_NOW, ...testCase.replacement };
-  await writeSingleJobStore(storePath, updated);
+  await saveCronStore(storePath, { version: 1, jobs: [updated] });
   await ensureLoaded(state, { forceReload: true });
 
   const reloaded = findJobOrThrow(state, job.id);
@@ -176,9 +165,8 @@ it.each([
 ])(
   "commits enablement and retains the authored one-shot across views ($oneShot, $enabled)",
   async ({ oneShot, enabled }) => {
-    const { storePath } = await makeStorePath();
     const occurrenceAtMs = STORE_TEST_NOW - 1_000;
-    const job = createReloadCronJob({
+    const { storePath, job } = await seedJob({
       enabled,
       ...(oneShot ? { schedule: { kind: "at", at: new Date(occurrenceAtMs).toISOString() } } : {}),
       state: {
@@ -188,7 +176,6 @@ it.each([
         lastRunStatus: "ok",
       },
     });
-    await writeSingleJobStore(storePath, job);
     const writer = createStoreTestService(storePath);
     const observer = createStoreTestService(storePath);
     await ensureLoaded(writer.state);
