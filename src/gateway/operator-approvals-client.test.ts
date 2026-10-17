@@ -25,14 +25,13 @@ class MockGatewayClient {
   start(): void {
     void Promise.resolve()
       .then(async () => {
+        const { onClose, onHelloOk } = this.opts;
         if (clientState.startMode === "close") {
-          const onClose = this.opts.onClose;
           if (typeof onClose === "function") {
             onClose(clientState.close.code, clientState.close.reason);
           }
           return;
         }
-        const onHelloOk = this.opts.onHelloOk;
         if (typeof onHelloOk === "function") {
           await onHelloOk();
         }
@@ -40,35 +39,24 @@ class MockGatewayClient {
       .catch(() => {});
   }
 
-  async request(method: string, params: unknown): Promise<unknown> {
-    return await clientState.requestSpy(method, params);
-  }
-
-  stop(): void {
-    clientState.stopSpy();
-  }
-
-  async stopAndWait(): Promise<void> {
-    await clientState.stopAndWaitSpy();
-  }
+  request = clientState.requestSpy;
+  stop = clientState.stopSpy;
+  stopAndWait = clientState.stopAndWaitSpy;
 }
 
-const resolveGatewayClientBootstrapMock = vi.hoisted(() =>
-  vi.fn<typeof resolveGatewayClientBootstrap>(async () => ({
-    url: bootstrapState.url,
-    urlSource: bootstrapState.urlSource,
-    connectionDetails: {
+vi.mock("./client-bootstrap.js", () => ({
+  resolveGatewayClientBootstrap: async () =>
+    ({
       url: bootstrapState.url,
       urlSource: bootstrapState.urlSource,
-      message: `Gateway target: ${bootstrapState.url}`,
-    },
-    auth: bootstrapState.auth,
-    tlsFingerprint: bootstrapState.tlsFingerprint,
-  })),
-);
-
-vi.mock("./client-bootstrap.js", () => ({
-  resolveGatewayClientBootstrap: resolveGatewayClientBootstrapMock,
+      connectionDetails: {
+        url: bootstrapState.url,
+        urlSource: bootstrapState.urlSource,
+        message: `Gateway target: ${bootstrapState.url}`,
+      },
+      auth: bootstrapState.auth,
+      tlsFingerprint: bootstrapState.tlsFingerprint,
+    }) satisfies Awaited<ReturnType<typeof resolveGatewayClientBootstrap>>,
 }));
 
 vi.mock("./client.js", () => ({
@@ -77,16 +65,14 @@ vi.mock("./client.js", () => ({
 
 const { withOperatorApprovalsGatewayClient } = await import("./operator-approvals-client.js");
 
-const DEFAULT_APPROVAL_CLIENT_DISPLAY_NAME = "Matrix approval (@owner:example.org)";
-
 async function runOperatorApprovalsGatewayClient(
   params: { gatewayUrl?: string } = {},
   callback: Parameters<typeof withOperatorApprovalsGatewayClient>[1] = async () => undefined,
 ) {
   await withOperatorApprovalsGatewayClient(
     {
-      config: {} as never,
-      clientDisplayName: DEFAULT_APPROVAL_CLIENT_DISPLAY_NAME,
+      config: {},
+      clientDisplayName: "Matrix approval (@owner:example.org)",
       ...params,
     },
     callback,
@@ -108,21 +94,16 @@ describe("withOperatorApprovalsGatewayClient", () => {
   });
 
   it("waits for hello before running the callback and stops cleanly", async () => {
+    const request = { id: "req-123", decision: "allow-once" };
     await runOperatorApprovalsGatewayClient({}, async (client) => {
-      await client.request("exec.approval.resolve", {
-        id: "req-123",
-        decision: "allow-once",
-      });
+      await client.request("exec.approval.resolve", request);
     });
 
     expect(clientState.options?.scopes).toEqual(["operator.approvals"]);
     expect(clientState.options?.caps).toEqual(["approvals"]);
     expect(typeof clientState.options?.approvalRuntimeToken).toBe("string");
     expect(clientState.options?.deviceIdentity).toBeNull();
-    expect(clientState.requestSpy).toHaveBeenCalledWith("exec.approval.resolve", {
-      id: "req-123",
-      decision: "allow-once",
-    });
+    expect(clientState.requestSpy).toHaveBeenCalledWith("exec.approval.resolve", request);
     expect(clientState.stopAndWaitSpy).toHaveBeenCalledTimes(1);
   });
 

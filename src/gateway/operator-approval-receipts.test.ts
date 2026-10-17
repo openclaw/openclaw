@@ -26,28 +26,13 @@ afterEach(async () => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function databaseOptions() {
-  return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-approval-receipts-") } };
-}
-
-function approval(
-  id: string,
-  overrides: {
-    runId?: string;
-    createdAtMs?: number;
-    expiresAtMs?: number;
-    contextId?: string;
-    executionId?: string;
-  } = {},
-): Parameters<typeof insertOperatorApproval>[0]["approval"] {
-  const createdAtMs = overrides.createdAtMs ?? 1_000;
+function approval(id: string): Parameters<typeof insertOperatorApproval>[0]["approval"] {
   return {
     id,
     kind: "exec" as const,
     presentation: {
       kind: "exec" as const,
       commandText: "secret command --token private-value",
-      agentId: "main",
       allowedDecisions: ["allow-once", "allow-always", "deny"],
     },
     requester: {
@@ -60,19 +45,17 @@ function approval(
       agentId: "main",
       sessionKey: "session-secret",
       sessionId: "session-id-secret",
-      runId: overrides.runId ?? "run-receipts",
+      runId: context.runId,
       toolCallId: "tool-call-secret",
       toolName: "exec",
     },
     runtimeEpoch: "runtime-secret",
-    createdAtMs,
-    expiresAtMs: overrides.expiresAtMs ?? createdAtMs + 10_000,
+    createdAtMs: 1_000,
+    expiresAtMs: 11_000,
     executionIdentityToken: {
+      ...context,
       tokenVersion: 1,
-      createdAt: createdAtMs,
-      runId: overrides.runId ?? "run-receipts",
-      contextId: overrides.contextId ?? "context-receipts",
-      executionId: overrides.executionId ?? "execution-receipts",
+      createdAt: 1_000,
     },
   };
 }
@@ -100,7 +83,7 @@ const identityContext: ExecutionIdentityContextV1 = {
 };
 
 function receiptFixture() {
-  const database = databaseOptions();
+  const database = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-approval-receipts-") } };
   const db = openOpenClawStateDatabase(database).db;
   const insert = (id: string) =>
     insertOperatorApproval({ approval: approval(id), databaseOptions: database });
@@ -154,26 +137,21 @@ function receiptFixture() {
       decisionLimit,
       now: 3_000,
     }).decisionDisplays;
-  return { database, db, insert, resolve, deny, page, summary, displays };
+  return { db, insert, resolve, deny, page, summary, displays };
 }
 
 describe("operator approval decision receipts", () => {
-  it.each(["approval-scope-closed"])(
-    "only recommends a new run when the outer approval owner stopped (%s)",
-    async (resolverId) => {
-      const { insert, deny, page } = receiptFixture();
-      await insert("cancelled-scope");
-      await deny("cancelled-scope", "cancelled", "run-aborted", {
-        resolver: { kind: "system", id: resolverId },
-      });
-      const receipt = page({ limit: 1 }).entries[0]?.receipt;
-      expect(receipt?.remediation).toEqual([
-        expect.objectContaining({
-          code: "request_approval_again",
-        }),
-      ]);
-    },
-  );
+  it("requests approval again when the outer approval scope closed", async () => {
+    const { insert, deny, page } = receiptFixture();
+    await insert("cancelled-scope");
+    await deny("cancelled-scope", "cancelled", "run-aborted", {
+      resolver: { kind: "system", id: "approval-scope-closed" },
+    });
+    const receipt = page({ limit: 1 }).entries[0]?.receipt;
+    expect(receipt?.remediation).toEqual([
+      expect.objectContaining({ code: "request_approval_again" }),
+    ]);
+  });
 
   it("projects every terminal state from the authoritative first answer", async () => {
     const { db, insert, resolve, deny, page, summary, displays } = receiptFixture();
@@ -211,16 +189,9 @@ describe("operator approval decision receipts", () => {
 
     const entries = page().entries;
     const receipts = entries.map((entry) => entry.receipt);
-    expect(entries.map((entry) => entry.selectorId)).toEqual([
-      "approval-decision:1",
-      "approval-decision:2",
-      "approval-decision:3",
-      "approval-decision:4",
-      "approval-decision:5",
-      "approval-decision:6",
-      "approval-decision:7",
-    ]);
-    expect(entries).toHaveLength(receipts.length);
+    expect(entries.map((entry) => entry.selectorId)).toEqual(
+      Array.from({ length: 7 }, (_, index) => `approval-decision:${index + 1}`),
+    );
     expect(summary()).toEqual({
       count: 7,
       coverageState: "unknown",
@@ -281,12 +252,10 @@ describe("operator approval decision receipts", () => {
     const { insert, resolve, page } = receiptFixture();
     await insert("first-answer");
     expect(
-      (
-        await resolve("first-answer", "deny", {
-          resolver: { kind: "device", id: "first" },
-        })
-      ).outcome,
-    ).toBe("resolved");
+      await resolve("first-answer", "deny", {
+        resolver: { kind: "device", id: "first" },
+      }),
+    ).toMatchObject({ outcome: "resolved" });
     expect(
       await resolve("first-answer", "allow-once", {
         resolver: { kind: "device", id: "second" },
@@ -357,12 +326,8 @@ describe("operator approval decision receipts", () => {
     expect(receiptSearch).not.toContain(
       encodeURIComponent(first.entries[0]?.receipt.receiptId ?? ""),
     );
-    expect(
-      page({
-        after: first.nextCursor,
-        limit: 2,
-      }).entries.map((entry) => entry.receipt),
-    ).toEqual([
+    const next = page({ after: first.nextCursor, limit: 2 });
+    expect(next.entries.map((entry) => entry.receipt)).toEqual([
       expect.objectContaining({
         decision: { outcome: "unknown", reasonCode: "operator_approval_payload_bounded" },
         missingEvidence: ["operator_approval.payload_bounded"],
@@ -398,12 +363,8 @@ describe("operator approval decision receipts", () => {
         nowMs: 3_000,
       });
 
-      expect(
-        page({
-          limit: 10,
-          nowMs: 4_000,
-        }).entries.map((entry) => entry.receipt),
-      ).toEqual([
+      const receipts = page({ limit: 10, nowMs: 4_000 }).entries.map((entry) => entry.receipt);
+      expect(receipts).toEqual([
         expect.objectContaining({
           decision: { outcome: "unknown", reasonCode },
           enforcement: expect.objectContaining({ coverageState: "unknown", grantRefs: [] }),
