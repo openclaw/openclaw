@@ -72,6 +72,42 @@ Use Scribe v2 for inbound audio attachments and short recorded voice segments:
 OpenClaw sends multipart audio to ElevenLabs `/v1/speech-to-text` with
 `model_id: "scribe_v2"`. Language hints map to `language_code` when present.
 
+### Transcription options
+
+You can forward supported synchronous transcription options to ElevenLabs via
+`providerOptions.elevenlabs` on the audio defaults (`tools.media.audio`) or on
+the individual model entry (`tools.media.models[]`, which overrides the audio
+defaults). Only an allowlist of options that do not change the response contract
+is forwarded; the provider always expects a `text` field in the response.
+
+```json5
+{
+  tools: {
+    media: {
+      models: [
+        {
+          provider: "elevenlabs",
+          model: "scribe_v2",
+          capabilities: ["audio"],
+          providerOptions: {
+            elevenlabs: { no_verbatim: true, tag_audio_events: false },
+          },
+        },
+      ],
+      audio: { enabled: true },
+    },
+  },
+}
+```
+
+Supported keys:
+
+| Option             | Type    | Default | Description                                                               |
+| ------------------ | ------- | ------- | ------------------------------------------------------------------------- |
+| `no_verbatim`      | boolean | `false` | Remove filler words, false starts and non-speech sounds (Scribe v2 only). |
+| `tag_audio_events` | boolean | `true`  | Tag audio events like `(laughter)` in the transcript.                     |
+| `diarize`          | boolean | `false` | Annotate which speaker is talking.                                        |
+
 ## Streaming STT
 
 The bundled `elevenlabs` plugin registers Scribe v2 Realtime for Voice Call and
