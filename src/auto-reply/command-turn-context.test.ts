@@ -7,19 +7,23 @@ import {
   isNativeCommandTurn,
   resolveCommandTurnContext,
   resolveCommandTurnTargetSessionKey,
+  type CommandTurnContext,
   type CommandTurnContextInput,
 } from "./command-turn-context.js";
 import { isExplicitCommandTurnContext } from "./command-turn-detection.js";
 
 const isExplicit = (input: CommandTurnContextInput) => isExplicitCommandTurnContext(input, {});
-function normalTurn(body: string, visible = body, commandBody = body): CommandTurnContextInput {
+function normalTurn(body: string, visible = body): CommandTurnContextInput {
   return {
     CommandTurn: { kind: "normal", source: "message", authorized: false, body },
     CommandAuthorized: true,
     Body: visible,
     RawBody: visible,
-    CommandBody: commandBody,
+    CommandBody: body,
   };
+}
+function targetSession(turn: CommandTurnContext, key: string) {
+  return resolveCommandTurnTargetSessionKey({ CommandTurn: turn, CommandTargetSessionKey: key });
 }
 
 describe("resolveCommandTurnContext", () => {
@@ -123,12 +127,7 @@ describe("resolveCommandTurnContext", () => {
 
     expect(isNativeCommandTurn(nativeTurn)).toBe(true);
     expect(isAuthorizedTextSlashCommandTurn(textTurn)).toBe(true);
-    expect(
-      resolveCommandTurnTargetSessionKey({
-        CommandTurn: nativeTurn,
-        CommandTargetSessionKey: " target-session ",
-      }),
-    ).toBe("target-session");
+    expect(targetSession(nativeTurn, " target-session ")).toBe("target-session");
     expect(
       resolveCommandTurnTargetSessionKey({
         CommandSource: "native",
@@ -137,30 +136,25 @@ describe("resolveCommandTurnContext", () => {
       }),
     ).toBe("legacy-target");
     expect(
-      resolveCommandTurnTargetSessionKey({
-        CommandTurn: createCommandTurnContext("text", {
+      targetSession(
+        createCommandTurnContext("text", {
           authorized: true,
           body: "/steer finish with a table",
           commandName: "steer",
         }),
-        CommandTargetSessionKey: " active-direct-session ",
-      }),
+        " active-direct-session ",
+      ),
     ).toBe("active-direct-session");
+    expect(targetSession(textTurn, "must-not-retarget-status")).toBeUndefined();
     expect(
-      resolveCommandTurnTargetSessionKey({
-        CommandTurn: textTurn,
-        CommandTargetSessionKey: "must-not-retarget-status",
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveCommandTurnTargetSessionKey({
-        CommandTurn: createCommandTurnContext("text", {
+      targetSession(
+        createCommandTurnContext("text", {
           authorized: false,
           body: "/steer denied",
           commandName: "steer",
         }),
-        CommandTargetSessionKey: "must-not-retarget-unauthorized",
-      }),
+        "must-not-retarget-unauthorized",
+      ),
     ).toBeUndefined();
     expect(isExplicitCommandTurn(undefined)).toBe(false);
   });

@@ -26,6 +26,52 @@ const finalText = "```ts\n" + "const answer = 42;\n".repeat(20) + "```";
 const finalMediaUrl = "https://example.test/final.png";
 const mediaCaption = "Here is the generated image.";
 const fallbackText = "The backup produced a second answer.";
+const mediaBlock = { kind: "block", text: mediaCaption, mediaUrls: [finalMediaUrl] };
+const mediaFinal = { kind: "final", text: undefined, mediaUrls: [finalMediaUrl] };
+
+function responseFrames(model?: string) {
+  const backup = model === "backup";
+  const text = backup ? fallbackText : `${finalText}\nMEDIA:${finalMediaUrl}`;
+  const item = {
+    id: "message-fixture",
+    type: "message",
+    role: "assistant",
+    phase: "final_answer",
+    status: "completed",
+    content: [{ type: "output_text", text, annotations: [] }],
+  };
+  const indices = { item_id: item.id, output_index: 0, content_index: 0 };
+  const frame = (type: string, fields: Record<string, unknown>) => {
+    const event = { type: `response.${type}`, ...fields };
+    return `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+  };
+  return [
+    frame("created", { response: { id: "response-fixture", status: "in_progress" } }),
+    frame("output_item.added", {
+      output_index: 0,
+      item: { ...item, status: "in_progress", content: [] },
+    }),
+    frame("output_text.delta", { ...indices, delta: text }),
+    frame("output_text.done", { ...indices, text }),
+    frame("output_item.done", { output_index: 0, item }),
+    frame(backup ? "completed" : "failed", {
+      response: {
+        id: "response-fixture",
+        model,
+        status: backup ? "completed" : "failed",
+        output: [item],
+        ...(backup
+          ? {}
+          : {
+              error: {
+                code: "insufficient_balance",
+                message: "Insufficient balance. Top up to continue.",
+              },
+            }),
+      },
+    }),
+  ];
+}
 
 function completion(delta: Record<string, unknown>, finish_reason?: string) {
   return `data: ${JSON.stringify({ id: "completion-fixture", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] })}\n\n`;
@@ -33,13 +79,12 @@ function completion(delta: Record<string, unknown>, finish_reason?: string) {
 
 function fixtureProvider(
   baseUrl: string,
-  id: string,
+  id: "answer" | "backup",
   api: "openai-responses" | "openai-completions",
-  apiKey: string,
 ) {
   return {
     baseUrl,
-    apiKey,
+    apiKey: id === "answer" ? "synthetic-test-key" : "synthetic-backup-key",
     api,
     request: { allowPrivateNetwork: true },
     models: [
@@ -98,7 +143,7 @@ it.for([
     const toolRequestBodies: string[] = [];
     const attempted: Array<{ kind: string; text: string | undefined; mediaUrls?: string[] }> = [];
     const delivered: Array<{ kind: string; text: string | undefined; mediaUrls?: string[] }> = [];
-    const fallbackEvents: string[] = [];
+    let primaryBlockAttempted = false;
     const server = createServer((request, response) => {
       const requestRecord: { method?: string; url?: string; model?: string } = {
         method: request.method,
@@ -108,63 +153,11 @@ it.for([
       const sendResponse = () => {
         response.writeHead(200, { "content-type": "text/event-stream" });
         if (fallback) {
-          const backup = requestRecord.model === "backup";
-          fallbackEvents.push(`request:${requestRecord.model}`);
-          const text = backup ? fallbackText : `${finalText}\nMEDIA:${finalMediaUrl}`;
-          const item = {
-            id: "message-fixture",
-            type: "message",
-            role: "assistant",
-            phase: "final_answer",
-            status: "completed",
-            content: [{ type: "output_text", text, annotations: [] }],
-          };
-          for (const event of [
-            {
-              type: "response.created",
-              response: { id: "response-fixture", status: "in_progress" },
-            },
-            {
-              type: "response.output_item.added",
-              output_index: 0,
-              item: { ...item, status: "in_progress", content: [] },
-            },
-            {
-              type: "response.output_text.delta",
-              item_id: item.id,
-              output_index: 0,
-              content_index: 0,
-              delta: text,
-            },
-            {
-              type: "response.output_text.done",
-              item_id: item.id,
-              output_index: 0,
-              content_index: 0,
-              text,
-            },
-            { type: "response.output_item.done", output_index: 0, item },
-          ]) {
-            response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+          const frames = responseFrames(requestRecord.model);
+          for (const frame of frames.slice(0, -1)) {
+            response.write(frame);
           }
-          const terminal = {
-            type: backup ? "response.completed" : "response.failed",
-            response: {
-              id: "response-fixture",
-              model: requestRecord.model,
-              status: backup ? "completed" : "failed",
-              output: [item],
-              ...(backup
-                ? {}
-                : {
-                    error: {
-                      code: "insufficient_balance",
-                      message: "Insufficient balance. Top up to continue.",
-                    },
-                  }),
-            },
-          };
-          response.end(`event: ${terminal.type}\ndata: ${JSON.stringify(terminal)}\n\n`);
+          response.end(frames.at(-1));
           return;
         }
         if (directMedia && requests.length === 1) {
@@ -248,6 +241,10 @@ it.for([
         throw new Error("fixture server did not bind");
       }
       const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+      const configuredModels: Array<[string, "answer" | "backup"]> = [["fixture", "answer"]];
+      if (fallback) {
+        configuredModels.push(["fixture-backup", "backup"]);
+      }
       const cfg = {
         agents: {
           ownership: "explicit",
@@ -260,12 +257,12 @@ it.for([
               primary: "fixture/answer",
               ...(fallback ? { fallbacks: ["fixture-backup/backup"] } : {}),
             },
-            models: {
-              "fixture/answer": { agentRuntime: { id: "openclaw" } },
-              ...(fallback
-                ? { "fixture-backup/backup": { agentRuntime: { id: "openclaw" } } }
-                : {}),
-            },
+            models: Object.fromEntries(
+              configuredModels.map(([provider, id]) => [
+                `${provider}/${id}`,
+                { agentRuntime: { id: "openclaw" as const } },
+              ]),
+            ),
             blockStreamingDefault: directMedia || fallbackDirect ? "off" : "on",
             blockStreamingChunk: { minChars: 80, maxChars: 160 },
             blockStreamingCoalesce: { minChars: 1, maxChars: 160, idleMs: 0 },
@@ -273,24 +270,12 @@ it.for([
         },
         models: {
           mode: "replace",
-          providers: {
-            fixture: fixtureProvider(
-              baseUrl,
-              "answer",
-              fallback ? "openai-responses" : "openai-completions",
-              "synthetic-test-key",
-            ),
-            ...(fallback
-              ? {
-                  "fixture-backup": fixtureProvider(
-                    baseUrl,
-                    "backup",
-                    "openai-responses",
-                    "synthetic-backup-key",
-                  ),
-                }
-              : {}),
-          },
+          providers: Object.fromEntries(
+            configuredModels.map(([provider, id]) => [
+              provider,
+              fixtureProvider(baseUrl, id, fallback ? "openai-responses" : "openai-completions"),
+            ]),
+          ),
         },
         channels: {
           discord: {
@@ -351,7 +336,7 @@ it.for([
             };
             attempted.push(call);
             if (fallback && info.kind === "block" && payload.text !== fallbackText) {
-              fallbackEvents.push("primary-block");
+              primaryBlockAttempted = true;
               if (fallbackRejected) {
                 throw noSend;
               }
@@ -439,10 +424,7 @@ it.for([
       if (scenario === "direct-no-delivery") {
         await expect(dispatch).rejects.toBe(noSend);
         expect(toolRequestBodies[1]).toContain("Fixture generated image.");
-        expect(attempted).toEqual([
-          { kind: "block", text: mediaCaption, mediaUrls: [finalMediaUrl] },
-          { kind: "final", text: mediaCaption },
-        ]);
+        expect(attempted).toEqual([mediaBlock, { kind: "final", text: mediaCaption }]);
         expect(delivered).toEqual([]);
         return;
       }
@@ -452,7 +434,7 @@ it.for([
           providerFailure = error;
           return undefined;
         });
-        expect(fallbackEvents).toContain("primary-block");
+        expect(primaryBlockAttempted).toBe(true);
         if (fallbackRejected) {
           expect(requests.map((entry) => entry.model)).toEqual(["answer", "backup"]);
           expect(delivered.some((call) => call.text === fallbackText)).toBe(true);
@@ -481,12 +463,8 @@ it.for([
       if (directMedia) {
         expect(toolRequestBodies[0]).toContain('"fixture_media"');
         expect(toolRequestBodies[1]).toContain("Fixture generated image.");
-        expect(attempted).toEqual([
-          { kind: "block", text: mediaCaption, mediaUrls: [finalMediaUrl] },
-        ]);
-        expect(delivered).toEqual([
-          { kind: "block", text: mediaCaption, mediaUrls: [finalMediaUrl] },
-        ]);
+        expect(attempted).toEqual([mediaBlock]);
+        expect(delivered).toEqual([mediaBlock]);
         expect(result.settledReceipt?.counts.final.delivered).toBe(0);
       } else if (uncertainMedia) {
         const mediaAttempts = attempted.filter((call) => call.mediaUrls?.includes(finalMediaUrl));
@@ -506,12 +484,8 @@ it.for([
         }
       } else if (scenario === "timeout-media") {
         expect(blocks).toBe(2);
-        expect(attempted.filter((call) => call.kind === "final")).toEqual([
-          { kind: "final", text: undefined, mediaUrls: [finalMediaUrl] },
-        ]);
-        expect(delivered.filter((call) => call.mediaUrls?.length)).toEqual([
-          { kind: "final", text: undefined, mediaUrls: [finalMediaUrl] },
-        ]);
+        expect(attempted.filter((call) => call.kind === "final")).toEqual([mediaFinal]);
+        expect(delivered.filter((call) => call.mediaUrls?.length)).toEqual([mediaFinal]);
         expect(result.settledReceipt?.counts.final.delivered).toBe(1);
         expect(result.settledReceipt?.counts.block.delivered).toBe(2);
       } else if (

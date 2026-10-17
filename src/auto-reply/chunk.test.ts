@@ -1,5 +1,6 @@
 /** Tests text chunking helpers used by auto-reply delivery. */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 import {
@@ -20,11 +21,7 @@ function expectFencesBalanced(chunks: string[]) {
 }
 
 function requireChunk(chunks: string[], index: number): string {
-  const chunk = chunks[index];
-  if (chunk === undefined) {
-    throw new Error(`expected chunk ${index}`);
-  }
-  return chunk;
+  return expectDefined(chunks[index], `chunk ${index}`);
 }
 
 function expectNormalizedChunkJoin(chunks: string[], text: string) {
@@ -59,8 +56,7 @@ function expectMarkdownFenceSplitCases(
   });
 }
 
-function expectNoEmptyFencedChunks(text: string, limit: number) {
-  const chunks = chunkMarkdownText(text, limit);
+function expectNoEmptyFencedChunks(chunks: string[]) {
   for (const chunk of chunks) {
     const nonFenceLines = chunk
       .split("\n")
@@ -124,11 +120,9 @@ describe("chunkText", () => {
   ]);
 });
 
-describe("chunkByParagraph code boundaries", () => {
-  it("leaves oversized indented code intact for a render-aware chunker", () => {
-    const text = `    ${"A".repeat(128)}\n\n    ${"B".repeat(128)}`;
-    expect(chunkByParagraph(text, 256, { splitLongParagraphs: false })).toEqual([text]);
-  });
+it("chunkByParagraph leaves oversized indented code intact for a render-aware chunker", () => {
+  const text = `    ${"A".repeat(128)}\n\n    ${"B".repeat(128)}`;
+  expect(chunkByParagraph(text, 256, { splitLongParagraphs: false })).toEqual([text]);
 });
 
 describe("chunkByParagraph Unicode line/paragraph separators", () => {
@@ -321,7 +315,7 @@ describe("chunkMarkdownText", () => {
   ])("never emits empty fenced chunks at limit $limit", ({ text, limit }) => {
     const chunks = chunkMarkdownText(text, limit);
     expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
-    expectNoEmptyFencedChunks(text, limit);
+    expectNoEmptyFencedChunks(chunks);
   });
 });
 
