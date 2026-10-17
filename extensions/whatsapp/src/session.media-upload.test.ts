@@ -48,14 +48,10 @@ const receipt = {
   direct_path: "/uploaded/fixture",
 };
 const proxyEnvKeys = [
-  "http_proxy",
-  "HTTP_PROXY",
-  "https_proxy",
-  "HTTPS_PROXY",
-  "all_proxy",
-  "ALL_PROXY",
-  "no_proxy",
-  "NO_PROXY",
+  ...["http_proxy", "https_proxy", "all_proxy", "no_proxy"].flatMap((key) => [
+    key,
+    key.toUpperCase(),
+  ]),
   "OPENCLAW_PROXY_ACTIVE",
   "OPENCLAW_PROXY_CA_FILE",
 ];
@@ -78,6 +74,18 @@ describe("WhatsApp session media upload", () => {
   let proxyCaFile: string;
   let wrongProxyCaFile: string;
 
+  const host = (hostname = "127.0.0.1", plain = false) =>
+    `${hostname}:${plain ? plainOriginPort : originPort}`;
+  function useManagedProxy(ca = proxyCaFile) {
+    vi.stubEnv("HTTPS_PROXY", httpsProxyUrl);
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    vi.stubEnv("OPENCLAW_PROXY_CA_FILE", ca);
+  }
+  function expectTraffic(hosts: string[], tunnels: string[] = []) {
+    expect(received).toEqual(hosts.map((hostname) => ({ host: hostname, body: mediaBytes })));
+    expect(proxyRequests).toEqual(tunnels);
+  }
+
   function trackSocket(socket: Duplex) {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
@@ -97,7 +105,7 @@ describe("WhatsApp session media upload", () => {
 
   function connectProxy(request: http.IncomingMessage, client: Duplex, head: Buffer) {
     const authority = request.url ?? "";
-    if (authority !== `127.0.0.1:${originPort}` && authority !== `files.proxy.test:${originPort}`) {
+    if (authority !== host() && authority !== host("files.proxy.test")) {
       client.end("HTTP/1.1 403 Forbidden\r\n\r\n");
       return;
     }
@@ -107,13 +115,15 @@ describe("WhatsApp session media upload", () => {
     upstream.once("connect", () => {
       client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       upstream.write(head);
-      client.pipe(upstream);
-      upstream.pipe(client);
+      client.pipe(upstream).pipe(client);
     });
-    upstream.on("error", () => client.destroy());
-    client.on("error", () => upstream.destroy());
-    client.once("close", () => upstream.destroy());
-    upstream.once("close", () => client.destroy());
+    for (const [source, target] of [
+      [upstream, client],
+      [client, upstream],
+    ]) {
+      source!.on("error", () => target!.destroy());
+      source!.once("close", () => target!.destroy());
+    }
   }
 
   function receiveUpload(
@@ -126,8 +136,7 @@ describe("WhatsApp session media upload", () => {
     request.on("end", () => {
       received.push({ host: request.headers.host, body: Buffer.concat(chunks) });
       if (location) {
-        response.writeHead(307, { location, connection: "close" });
-        response.end();
+        response.writeHead(307, { location, connection: "close" }).end();
       } else {
         response.writeHead(200, { "content-type": "application/json", connection: "close" });
         response.end(JSON.stringify(receipt));
@@ -227,18 +236,20 @@ describe("WhatsApp session media upload", () => {
     if (!options) {
       throw new Error("WhatsApp session did not create its Baileys socket");
     }
-    if (options.agent) {
-      agents.add(options.agent);
-    }
-    if (options.fetchAgent) {
-      agents.add(options.fetchAgent);
+    for (const agent of [options.agent, options.fetchAgent]) {
+      if (agent) {
+        agents.add(agent);
+      }
     }
     const filePath = path.join(authDir, "media.enc");
     await fs.writeFile(filePath, mediaBytes);
     return { options, filePath };
   }
 
-  async function upload(session: Awaited<ReturnType<typeof createUploadSession>>, host: string) {
+  async function upload(
+    session: Awaited<ReturnType<typeof createUploadSession>>,
+    hostname: string,
+  ) {
     const warnings: unknown[][] = [];
     const uploadMedia = getWAUploadToServer(
       {
@@ -253,7 +264,7 @@ describe("WhatsApp session media upload", () => {
         auth: "fixture-auth",
         ttl: 60,
         fetchDate: new Date(0),
-        hosts: [{ hostname: `${host}:${originPort}`, maxContentLengthBytes: 1024 }],
+        hosts: [{ hostname: `${hostname}:${originPort}`, maxContentLengthBytes: 1024 }],
       }),
     );
     try {
@@ -267,67 +278,49 @@ describe("WhatsApp session media upload", () => {
     }
   }
 
-  it.each([
-    { name: "without a proxy", proxy: "none" },
-    { name: "through the lowercase proxy in preference to uppercase", proxy: "http" },
-    { name: "through a managed HTTPS proxy", proxy: "https" },
-    { name: "through HTTPS despite an unused unsupported HTTP proxy", proxy: "https-unused-http" },
-  ])("uploads the complete media and receives its receipt $name", async ({ proxy }) => {
-    if (proxy === "http") {
-      vi.stubEnv("https_proxy", httpProxyUrl);
-      vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:1");
-    }
-    if (proxy === "https") {
-      vi.stubEnv("HTTPS_PROXY", httpsProxyUrl);
-      vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
-      vi.stubEnv("OPENCLAW_PROXY_CA_FILE", wrongProxyCaFile);
-      const untrustedProxySession = await createUploadSession();
-      await expect(upload(untrustedProxySession, "127.0.0.1")).rejects.toThrow(/certificate/i);
-      expect(proxyRequests).toEqual([]);
-      expect(received).toEqual([]);
-      vi.stubEnv("OPENCLAW_PROXY_CA_FILE", proxyCaFile);
-    }
-    if (proxy === "https-unused-http") {
-      vi.stubEnv("HTTPS_PROXY", httpsProxyUrl);
-      vi.stubEnv("HTTP_PROXY", "socks5://127.0.0.1:1");
-      vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
-      vi.stubEnv("OPENCLAW_PROXY_CA_FILE", proxyCaFile);
-    }
-    const session = await createUploadSession();
-    await upload(session, "127.0.0.1");
-    expect(received).toEqual([{ host: `127.0.0.1:${originPort}`, body: mediaBytes }]);
-    expect(proxyRequests).toEqual(proxy === "none" ? [] : [`127.0.0.1:${originPort}`]);
-    if (proxy === "https-unused-http") {
-      redirectUrl = `http://127.0.0.1:${plainOriginPort}/invalid-proxy`;
-      await expect(upload(session, "127.0.0.1")).rejects.toThrow("Unsupported proxy protocol");
-      expect(received).toEqual([
-        { host: `127.0.0.1:${originPort}`, body: mediaBytes },
-        { host: `127.0.0.1:${originPort}`, body: mediaBytes },
-      ]);
-      expect(proxyRequests).toEqual([`127.0.0.1:${originPort}`, `127.0.0.1:${originPort}`]);
-    }
-  });
+  it.each(["none", "http", "https", "https-unused-http"])(
+    "uploads media with %s proxy routing",
+    async (proxy) => {
+      if (proxy === "http") {
+        vi.stubEnv("https_proxy", httpProxyUrl);
+        vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:1");
+      }
+      if (proxy === "https") {
+        useManagedProxy(wrongProxyCaFile);
+        const untrustedProxySession = await createUploadSession();
+        await expect(upload(untrustedProxySession, "127.0.0.1")).rejects.toThrow(/certificate/i);
+        expectTraffic([]);
+        vi.stubEnv("OPENCLAW_PROXY_CA_FILE", proxyCaFile);
+      }
+      if (proxy === "https-unused-http") {
+        useManagedProxy();
+        vi.stubEnv("HTTP_PROXY", "socks5://127.0.0.1:1");
+      }
+      const session = await createUploadSession();
+      await upload(session, "127.0.0.1");
+      expectTraffic([host()], proxy === "none" ? [] : [host()]);
+      if (proxy === "https-unused-http") {
+        redirectUrl = `http://127.0.0.1:${plainOriginPort}/invalid-proxy`;
+        await expect(upload(session, "127.0.0.1")).rejects.toThrow("Unsupported proxy protocol");
+        expectTraffic([host(), host()], [host(), host()]);
+      }
+    },
+  );
 
   it.each([true, false])(
     "replays the media after an HTTPS-to-HTTP redirect (redirect host bypass: %s)",
     async (bypassRedirect) => {
-      vi.stubEnv("HTTPS_PROXY", httpsProxyUrl);
+      useManagedProxy();
       vi.stubEnv("HTTP_PROXY", httpProxyUrl);
-      vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
-      vi.stubEnv("OPENCLAW_PROXY_CA_FILE", proxyCaFile);
       vi.stubEnv("NO_PROXY", bypassRedirect ? "127.0.0.0/8" : "");
       const redirectHost = bypassRedirect ? "127.0.0.1" : "files.proxy.test";
       redirectUrl = `http://${redirectHost}:${plainOriginPort}/redirected`;
       const session = await createUploadSession();
       await upload(session, "files.proxy.test");
-      expect(received).toEqual([
-        { host: `files.proxy.test:${originPort}`, body: mediaBytes },
-        { host: `${redirectHost}:${plainOriginPort}`, body: mediaBytes },
-      ]);
-      expect(proxyRequests).toEqual([
-        `files.proxy.test:${originPort}`,
-        ...(bypassRedirect ? [] : [redirectUrl]),
-      ]);
+      expectTraffic(
+        [host("files.proxy.test"), host(redirectHost, true)],
+        [host("files.proxy.test"), ...(bypassRedirect ? [] : [redirectUrl])],
+      );
     },
   );
 
@@ -341,21 +334,15 @@ describe("WhatsApp session media upload", () => {
         redirectUrl = `http://127.0.0.1:${plainOriginPort}/bypassed`;
       }
       const session = await createUploadSession();
-      const expectedUploads = bypass
-        ? [
-            { host: `127.0.0.1:${originPort}`, body: mediaBytes },
-            { host: `127.0.0.1:${plainOriginPort}`, body: mediaBytes },
-          ]
-        : [];
+      const expectedHosts = bypass ? [host(), host("127.0.0.1", true)] : [];
       if (bypass) {
         await upload(session, "127.0.0.1");
-        expect(received).toEqual(expectedUploads);
+        expectTraffic(expectedHosts);
       }
       await expect(upload(session, bypass ? "files.proxy.test" : "127.0.0.1")).rejects.toThrow(
         "Unsupported proxy protocol",
       );
-      expect(received).toEqual(expectedUploads);
-      expect(proxyRequests).toEqual([]);
+      expectTraffic(expectedHosts);
     },
   );
 
@@ -368,11 +355,7 @@ describe("WhatsApp session media upload", () => {
       expect(Boolean(session.options.agent)).toBe(!bypassWebSocket);
       await upload(session, "127.0.0.1");
       await upload(session, "files.proxy.test");
-      expect(received).toEqual([
-        { host: `127.0.0.1:${originPort}`, body: mediaBytes },
-        { host: `files.proxy.test:${originPort}`, body: mediaBytes },
-      ]);
-      expect(proxyRequests).toEqual([`files.proxy.test:${originPort}`]);
+      expectTraffic([host(), host("files.proxy.test")], [host("files.proxy.test")]);
     },
   );
 });

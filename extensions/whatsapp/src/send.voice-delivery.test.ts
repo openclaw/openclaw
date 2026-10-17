@@ -6,10 +6,11 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWebSendApi } from "./inbound/send-api.js";
 import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
 import type { ActiveWebListener } from "./inbound/types.js";
+import { sendMessageWhatsApp } from "./send.js";
 
 const hoisted = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
@@ -17,51 +18,35 @@ const hoisted = vi.hoisted(() => ({
   transcodeAudioBufferToOpus: vi.fn(),
 }));
 const recordChannelActivity = vi.hoisted(() => vi.fn());
-const loadWebMediaMock = vi.fn();
-let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
+const loadWebMediaMock = hoisted.loadOutboundMediaFromUrl;
 const WHATSAPP_TEST_CFG: OpenClawConfig = { channels: { whatsapp: {} } };
 
 vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   const actual = await vi.importActual<
     typeof import("openclaw/plugin-sdk/channel-activity-runtime")
   >("openclaw/plugin-sdk/channel-activity-runtime");
-  return {
-    ...actual,
-    recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
-  };
+  return { ...actual, recordChannelActivity };
 });
 
-vi.mock("./connection-controller-runtime-context.js", async () => {
-  const actual = await vi.importActual<typeof import("./connection-controller-runtime-context.js")>(
-    "./connection-controller-runtime-context.js",
-  );
-  return {
-    ...actual,
-    getWhatsAppConnectionController: vi.fn((accountId: string) => {
-      const listener = hoisted.controllerListeners.get(accountId) ?? null;
-      return listener ? { getActiveListener: () => listener } : null;
-    }),
-  };
-});
+vi.mock("./connection-controller-runtime-context.js", () => ({
+  getWhatsAppConnectionController: vi.fn((accountId: string) => {
+    const listener = hoisted.controllerListeners.get(accountId) ?? null;
+    return listener ? { getActiveListener: () => listener } : null;
+  }),
+}));
 
 vi.mock("openclaw/plugin-sdk/outbound-media", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
     "openclaw/plugin-sdk/outbound-media",
   );
-  return {
-    ...actual,
-    loadOutboundMediaFromUrl: hoisted.loadOutboundMediaFromUrl,
-  };
+  return { ...actual, loadOutboundMediaFromUrl: hoisted.loadOutboundMediaFromUrl };
 });
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
     "openclaw/plugin-sdk/media-runtime",
   );
-  return {
-    ...actual,
-    transcodeAudioBufferToOpus: hoisted.transcodeAudioBufferToOpus,
-  };
+  return { ...actual, transcodeAudioBufferToOpus: hoisted.transcodeAudioBufferToOpus };
 });
 
 describe("WhatsApp gateway voice delivery", () => {
@@ -71,40 +56,14 @@ describe("WhatsApp gateway voice delivery", () => {
   const sendReaction = vi.fn(async () =>
     createAcceptedWhatsAppSendResult("reaction", "reaction123"),
   );
-  const sendVoice = (
-    options: Omit<Parameters<typeof sendMessageWhatsApp>[2], "verbose" | "cfg"> = {},
-  ) =>
-    sendMessageWhatsApp("+1555", "voice note", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "/tmp/voice.ogg",
-      ...options,
-    });
-  function loadNativeAudio() {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("audio"),
-      contentType: "audio/ogg",
-      kind: "audio",
-    });
-  }
-
-  beforeAll(async () => {
-    ({ sendMessageWhatsApp } = await import("./send.js"));
-  });
+  const listener = { sendComposingTo, sendMessage, sendPoll, sendReaction };
 
   beforeEach(() => {
     vi.clearAllMocks();
     hoisted.transcodeAudioBufferToOpus.mockReset().mockResolvedValue(Buffer.from("opus-output"));
-    hoisted.loadOutboundMediaFromUrl
-      .mockReset()
-      .mockImplementation(async (mediaUrl: string) => await loadWebMediaMock(mediaUrl));
+    loadWebMediaMock.mockReset();
     hoisted.controllerListeners.clear();
-    hoisted.controllerListeners.set("default", {
-      sendComposingTo,
-      sendMessage,
-      sendPoll,
-      sendReaction,
-    });
+    hoisted.controllerListeners.set("default", listener);
   });
 
   afterEach(() => {
@@ -112,18 +71,21 @@ describe("WhatsApp gateway voice delivery", () => {
     hoisted.controllerListeners.clear();
   });
 
-  it("shares one gateway activity scope across separately accepted producer voice and caption", async () => {
-    recordChannelActivity.mockReset();
+  it.each(["ogg", "m4a"])("delivers %s voice and caption in one activity scope", async (format) => {
     recordChannelActivity.mockImplementation(() => {
       if (recordChannelActivity.mock.calls.length > 1) {
         throw new Error("gateway caption producer repeated logical delivery bookkeeping");
       }
     });
     const voice = Buffer.from("gateway-voice");
+    const native = format === "ogg";
+    const caption = native ? "voice caption" : "voice note";
+    const fileName = native ? "gateway-voice.ogg" : "voice.m4a";
     loadWebMediaMock.mockResolvedValueOnce({
       buffer: voice,
-      contentType: "audio/ogg",
+      contentType: native ? "audio/ogg" : "audio/mp4; codecs=mp4a.40.2",
       kind: "audio",
+      ...(native ? {} : { fileName }),
     });
     const providerSendMessage = vi.fn();
     for (const id of ["gateway-scoped-voice", "gateway-scoped-caption"]) {
@@ -143,17 +105,15 @@ describe("WhatsApp gateway voice delivery", () => {
         await sendApi.sendMessage(to, text, mediaBuffer, mediaType, options),
     );
     hoisted.controllerListeners.set("default", {
-      sendComposingTo,
+      ...listener,
       sendMessage: listenerSendMessage,
-      sendPoll,
-      sendReaction,
     });
     const onDeliveryResult = vi.fn();
 
-    const result = await sendMessageWhatsApp("+1555", "voice caption", {
+    const result = await sendMessageWhatsApp("+1555", caption, {
       verbose: false,
       cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "/tmp/gateway-voice.ogg",
+      mediaUrl: `/tmp/${fileName}`,
       onDeliveryResult,
     });
 
@@ -161,15 +121,17 @@ describe("WhatsApp gateway voice delivery", () => {
       messageId: "gateway-scoped-voice",
       toJid: "1555@s.whatsapp.net",
     });
-    expect(providerSendMessage).toHaveBeenCalledTimes(2);
-    expect(providerSendMessage).toHaveBeenNthCalledWith(1, "1555@s.whatsapp.net", {
-      audio: voice,
-      ptt: true,
-      mimetype: "audio/ogg; codecs=opus",
-    });
-    expect(providerSendMessage).toHaveBeenNthCalledWith(2, "1555@s.whatsapp.net", {
-      text: "voice caption",
-    });
+    expect(providerSendMessage.mock.calls).toEqual([
+      [
+        "1555@s.whatsapp.net",
+        {
+          audio: native ? voice : Buffer.from("opus-output"),
+          ptt: true,
+          mimetype: "audio/ogg; codecs=opus",
+        },
+      ],
+      ["1555@s.whatsapp.net", { text: caption }],
+    ]);
     expect(listenerSendMessage).toHaveBeenCalledTimes(2);
     expect(onDeliveryResult).toHaveBeenCalledTimes(2);
     for (const [index, kind] of ["media", "text"].entries()) {
@@ -188,99 +150,88 @@ describe("WhatsApp gateway voice delivery", () => {
       accountId: "default",
       direction: "outbound",
     });
-    recordChannelActivity.mockReset();
-  });
-
-  it("retains the accepted voice receipt when its gateway caption has no provider key", async () => {
-    loadNativeAudio();
-    sendMessage
-      .mockResolvedValueOnce(createAcceptedWhatsAppSendResult("media", "gateway-voice-accepted"))
-      .mockResolvedValueOnce({
-        kind: "text",
-        messageId: "unknown",
-        keys: [],
-        providerAccepted: false,
+    if (!native) {
+      expect(hoisted.transcodeAudioBufferToOpus).toHaveBeenCalledWith({
+        audioBuffer: voice,
+        inputFileName: fileName,
+        tempPrefix: "whatsapp-voice-",
+        outputFileName: "voice.ogg",
+        maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+        sampleRateHz: 48000,
+        channels: 1,
+        bitrate: "64k",
       });
-    const onDeliveryResult = vi.fn();
-
-    const failure = await sendVoice({ onDeliveryResult }).catch((caught: unknown) => caught);
-
-    expect(isChannelPartialDeliveryError(failure)).toBe(true);
-    if (!isChannelPartialDeliveryError(failure)) {
-      throw new Error("accepted gateway voice delivery did not preserve its partial receipt");
-    }
-    expect(failure.deliveryResult.messageIds).toEqual(["gateway-voice-accepted"]);
-    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual(["gateway-voice-accepted"]);
-    expect(failure).toHaveProperty("cause", expect.any(PlatformMessageNotDispatchedError));
-    expect(onDeliveryResult).toHaveBeenCalledOnce();
-    expect(onDeliveryResult).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: "gateway-voice-accepted" }),
-    );
-  });
-
-  it("merges accepted gateway voice and nested accepted caption receipts", async () => {
-    loadNativeAudio();
-    const bookkeepingError = new Error("accepted gateway caption bookkeeping failed");
-    const acceptedCaption = createAcceptedWhatsAppSendResult("text", "gateway-caption-accepted");
-    sendMessage
-      .mockResolvedValueOnce(createAcceptedWhatsAppSendResult("media", "gateway-voice-first"))
-      .mockRejectedValueOnce(
-        createChannelPartialDeliveryError(bookkeepingError, {
-          messageIds: [acceptedCaption.messageId],
-          receipt: acceptedCaption.receipt,
-          visibleReplySent: true,
-        }),
+      expect(listenerSendMessage).toHaveBeenNthCalledWith(
+        1,
+        "+1555",
+        "",
+        Buffer.from("opus-output"),
+        "audio/ogg; codecs=opus",
       );
-
-    const failure = await sendVoice().catch((caught: unknown) => caught);
-
-    expect(isChannelPartialDeliveryError(failure)).toBe(true);
-    if (!isChannelPartialDeliveryError(failure)) {
-      throw new Error(
-        "gateway discarded its first accepted voice receipt on nested caption failure",
+      expect(listenerSendMessage).toHaveBeenNthCalledWith(
+        2,
+        "+1555",
+        caption,
+        undefined,
+        undefined,
       );
     }
-    expect(failure.deliveryResult.messageIds).toEqual([
-      "gateway-voice-first",
-      "gateway-caption-accepted",
-    ]);
-    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual([
-      "gateway-voice-first",
-      "gateway-caption-accepted",
-    ]);
-    expect(failure).toHaveProperty("cause", bookkeepingError);
-    expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 
-  it("transcodes non-native audio to Ogg Opus before sending a PTT voice note", async () => {
-    const media = { contentType: "audio/mp4; codecs=mp4a.40.2", fileName: "voice.m4a" };
-    const buf = Buffer.from("m4a");
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: buf,
-      contentType: media.contentType,
-      kind: "audio",
-      fileName: media.fileName,
-    });
-
-    await sendVoice({ mediaUrl: `/tmp/${media.fileName}` });
-
-    expect(hoisted.transcodeAudioBufferToOpus).toHaveBeenCalledWith({
-      audioBuffer: buf,
-      inputFileName: media.fileName,
-      tempPrefix: "whatsapp-voice-",
-      outputFileName: "voice.ogg",
-      maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
-      sampleRateHz: 48000,
-      channels: 1,
-      bitrate: "64k",
-    });
-    expect(sendMessage).toHaveBeenNthCalledWith(
-      1,
-      "+1555",
-      "",
-      Buffer.from("opus-output"),
-      "audio/ogg; codecs=opus",
-    );
-    expect(sendMessage).toHaveBeenNthCalledWith(2, "+1555", "voice note", undefined, undefined);
-  });
+  it.each([false, true])(
+    "preserves receipts after caption failure (accepted: %s)",
+    async (accepted) => {
+      loadWebMediaMock.mockResolvedValueOnce({
+        buffer: Buffer.from("audio"),
+        contentType: "audio/ogg",
+        kind: "audio",
+      });
+      const bookkeepingError = new Error("accepted gateway caption bookkeeping failed");
+      const acceptedCaption = createAcceptedWhatsAppSendResult("text", "gateway-caption-accepted");
+      const voiceId = accepted ? "gateway-voice-first" : "gateway-voice-accepted";
+      sendMessage.mockResolvedValueOnce(createAcceptedWhatsAppSendResult("media", voiceId));
+      if (accepted) {
+        sendMessage.mockRejectedValueOnce(
+          createChannelPartialDeliveryError(bookkeepingError, {
+            messageIds: [acceptedCaption.messageId],
+            receipt: acceptedCaption.receipt,
+            visibleReplySent: true,
+          }),
+        );
+      } else {
+        sendMessage.mockResolvedValueOnce({
+          kind: "text",
+          messageId: "unknown",
+          keys: [],
+          providerAccepted: false,
+        });
+      }
+      const onDeliveryResult = vi.fn();
+      const failure = await sendMessageWhatsApp("+1555", "voice note", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        mediaUrl: "/tmp/voice.ogg",
+        ...(accepted ? {} : { onDeliveryResult }),
+      }).catch((caught: unknown) => caught);
+      if (!isChannelPartialDeliveryError(failure)) {
+        throw new Error("gateway discarded its accepted voice receipt on caption failure");
+      }
+      const messageIds = accepted ? [voiceId, "gateway-caption-accepted"] : [voiceId];
+      expect(failure.deliveryResult).toMatchObject({
+        messageIds,
+        receipt: { platformMessageIds: messageIds },
+      });
+      expect(failure).toHaveProperty(
+        "cause",
+        accepted ? bookkeepingError : expect.any(PlatformMessageNotDispatchedError),
+      );
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+      if (!accepted) {
+        expect(onDeliveryResult).toHaveBeenCalledOnce();
+        expect(onDeliveryResult).toHaveBeenCalledWith(
+          expect.objectContaining({ messageId: voiceId }),
+        );
+      }
+    },
+  );
 });

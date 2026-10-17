@@ -1,21 +1,9 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expect } from "vitest";
 
-type WhatsAppSetupConfig = {
-  channels?: {
-    whatsapp?: {
-      selfChatMode?: boolean;
-      dmPolicy?: string;
-      allowFrom?: string[];
-      accounts?: Record<string, { dmPolicy?: string; allowFrom?: string[]; authDir?: string }>;
-    };
-  };
-};
+type WhatsAppSetupConfig = Pick<OpenClawConfig, "channels">;
 
-type WizardPromptHarness = {
-  text: (...args: unknown[]) => unknown;
-  select: (...args: unknown[]) => unknown;
-  note: (...args: unknown[]) => unknown;
-};
+type WizardPromptHarness = Record<"text" | "select" | "note", (...args: unknown[]) => unknown>;
 
 type QueuedWizardPrompterFactory<T extends WizardPromptHarness> = (params: {
   confirmValues?: boolean[];
@@ -26,10 +14,6 @@ type QueuedWizardPrompterFactory<T extends WizardPromptHarness> = (params: {
 const WHATSAPP_OWNER_NUMBER_INPUT = "+1 (555) 555-0123";
 const WHATSAPP_OWNER_NUMBER_E164 = "+15555550123";
 const WHATSAPP_OWNER_NUMBER = "15555550123";
-const WHATSAPP_PERSONAL_NUMBER_INPUT = "+1 (555) 111-2222";
-const WHATSAPP_PERSONAL_NUMBER = "15551112222";
-const WHATSAPP_ACCESS_NOTE_TITLE = "WhatsApp DM access";
-const WHATSAPP_LOGIN_NOTE_TITLE = "WhatsApp";
 
 export function createWhatsAppRootAllowFromConfig(): WhatsAppSetupConfig {
   return { channels: { whatsapp: { allowFrom: [WHATSAPP_OWNER_NUMBER_E164] } } };
@@ -50,7 +34,7 @@ export function createWhatsAppPersonalPhoneHarness<T extends WizardPromptHarness
   return createPrompter({
     confirmValues: [false],
     selectValues: ["personal"],
-    textValues: [WHATSAPP_PERSONAL_NUMBER_INPUT],
+    textValues: ["+1 (555) 111-2222"],
   });
 }
 
@@ -103,18 +87,11 @@ function expectWhatsAppDmAccess(
 }
 
 export function expectWhatsAppWorkAccountOpenAccess(cfg: WhatsAppSetupConfig): void {
-  expect(cfg.channels?.whatsapp?.dmPolicy).toBe("disabled");
-  expect(cfg.channels?.whatsapp?.allowFrom).toEqual([WHATSAPP_OWNER_NUMBER_E164]);
-  expect(cfg.channels?.whatsapp?.accounts?.work?.dmPolicy).toBe("open");
-  expect(cfg.channels?.whatsapp?.accounts?.work?.allowFrom).toEqual(["*", WHATSAPP_OWNER_NUMBER]);
-}
-
-function expectWhatsAppOwnerNumberPrompt(harness: WizardPromptHarness): void {
-  expect(harness.text).toHaveBeenCalledWith(
-    expect.objectContaining({
-      message: "Your personal WhatsApp number (the phone you will message from)",
-    }),
-  );
+  expect(cfg.channels?.whatsapp).toMatchObject({
+    dmPolicy: "disabled",
+    allowFrom: [WHATSAPP_OWNER_NUMBER_E164],
+    accounts: { work: { dmPolicy: "open", allowFrom: ["*", WHATSAPP_OWNER_NUMBER] } },
+  });
 }
 
 export function expectWhatsAppOwnerAllowlistSetup(
@@ -122,7 +99,11 @@ export function expectWhatsAppOwnerAllowlistSetup(
   harness: WizardPromptHarness,
 ): void {
   expectWhatsAppDmAccess(cfg, true, "allowlist", [WHATSAPP_OWNER_NUMBER]);
-  expectWhatsAppOwnerNumberPrompt(harness);
+  expect(harness.text).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: "Your personal WhatsApp number (the phone you will message from)",
+    }),
+  );
 }
 
 export function expectWhatsAppSeparatePhoneDisabledSetup(
@@ -138,7 +119,7 @@ export function expectWhatsAppAllowlistModeSetup(cfg: WhatsAppSetupConfig): void
 }
 
 export function expectWhatsAppPersonalPhoneSetup(cfg: WhatsAppSetupConfig): void {
-  expectWhatsAppDmAccess(cfg, true, "allowlist", [WHATSAPP_PERSONAL_NUMBER]);
+  expectWhatsAppDmAccess(cfg, true, "allowlist", ["15551112222"]);
 }
 
 export function expectWhatsAppOpenPolicySetup(
@@ -153,31 +134,29 @@ export function expectWhatsAppOpenPolicySetup(
 export function expectNoWhatsAppLoginFollowup(harness: WizardPromptHarness): void {
   expect(harness.note).not.toHaveBeenCalledWith(
     expect.stringContaining("openclaw channels login"),
-    WHATSAPP_LOGIN_NOTE_TITLE,
+    "WhatsApp",
   );
 }
 
 export function expectWhatsAppLoginFollowup(harness: WizardPromptHarness): void {
   expect(harness.note).toHaveBeenCalledWith(
     expect.stringContaining("openclaw channels login"),
-    WHATSAPP_LOGIN_NOTE_TITLE,
+    "WhatsApp",
+  );
+}
+
+function expectAccountAccessNote(harness: WizardPromptHarness, account: string): void {
+  const prefix = `channels.whatsapp.accounts.${account}`;
+  expect(harness.note).toHaveBeenCalledWith(
+    expect.stringContaining(`\`${prefix}.dmPolicy\` + \`${prefix}.allowFrom\``),
+    "WhatsApp DM access",
   );
 }
 
 export function expectWhatsAppWorkAccountAccessNote(harness: WizardPromptHarness): void {
-  expect(harness.note).toHaveBeenCalledWith(
-    expect.stringContaining(
-      "`channels.whatsapp.accounts.work.dmPolicy` + `channels.whatsapp.accounts.work.allowFrom`",
-    ),
-    WHATSAPP_ACCESS_NOTE_TITLE,
-  );
+  expectAccountAccessNote(harness, "work");
 }
 
 export function expectWhatsAppDefaultAccountAccessNote(harness: WizardPromptHarness): void {
-  expect(harness.note).toHaveBeenCalledWith(
-    expect.stringContaining(
-      "`channels.whatsapp.accounts.default.dmPolicy` + `channels.whatsapp.accounts.default.allowFrom`",
-    ),
-    WHATSAPP_ACCESS_NOTE_TITLE,
-  );
+  expectAccountAccessNote(harness, "default");
 }
