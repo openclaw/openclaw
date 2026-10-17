@@ -52,8 +52,8 @@ vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
 
 function plugin(
   id: string,
-  accounts: ChannelAccountSnapshot[],
   config: Partial<Plugin["config"]> = {},
+  accounts: ChannelAccountSnapshot[] = [{ accountId: "default" }],
 ): Plugin {
   const resolveAccount = (_cfg: OpenClawConfig, accountId?: string | null) => {
     const account = accounts.find((entry) => entry.accountId === (accountId ?? "default"));
@@ -74,6 +74,12 @@ function plugin(
     },
   };
 }
+const makeAccount = (accountId: string, fields: Partial<ChannelAccountSnapshot> = {}) => ({
+  accountId,
+  enabled: true,
+  configured: true,
+  ...fields,
+});
 const repairHint = "Install the official Feishu plugin.";
 const missingMetadata = {
   label: "Feishu",
@@ -113,6 +119,14 @@ const displayMetadata = new Map<MetadataEntry[0], MetadataEntry[1]>([
   ["imessage", { label: "iMessage", defaultAccountId: "default", visibleInConfiguredLists: true }],
   ["feishu", missingMetadata],
 ]);
+const listDisplayProviders = (bindings: AgentRouteBinding[], summaryIsDefault = false) =>
+  listProvidersForAgent({
+    summaryIsDefault,
+    cfg: {},
+    bindings,
+    providerStatus: displayStatuses,
+    providerMetadata: displayMetadata,
+  });
 
 describe("agent provider inventories", () => {
   beforeEach(() => {
@@ -131,67 +145,24 @@ describe("agent provider inventories", () => {
         imessage: { accounts: { Alpha: { name: "Alias" }, alpha: { name: "Exact" }, Secret: {} } },
       },
     };
-    const inspectAccount = vi.fn(() => ({
-      accountId: "default",
-      enabled: true,
-      configured: true,
-      linked: true,
-      name: "Work",
-    }));
+    const inspectAccount = vi.fn(() => makeAccount("default", { linked: true, name: "Work" }));
     const resolveAccount = vi.fn(() => {
       throw new Error("must inspect read-only accounts");
     });
-    const inspected = plugin("workchat", [{ accountId: "default" }], {
-      inspectAccount,
-      resolveAccount,
-    });
-    const prepared = plugin("prepared", [{ accountId: "work" }], {
-      resolveAccount,
-      resolveAccountAsync: async () => ({
-        accountId: "work",
-        name: "Prepared",
-        enabled: true,
-        configured: true,
-      }),
-    });
-    const unavailable = plugin(
-      "telegram",
-      [
-        {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          tokenStatus: "configured_unavailable",
-        },
-      ],
+    const inspected = plugin("workchat", { inspectAccount, resolveAccount });
+    const prepared = plugin(
+      "prepared",
       {
-        isConfigured: () => false,
+        resolveAccount,
+        resolveAccountAsync: async () => makeAccount("work", { name: "Prepared" }),
       },
+      [{ accountId: "work" }],
     );
+    const unavailable = plugin("telegram", { isConfigured: () => false }, [
+      makeAccount("default", { tokenStatus: "configured_unavailable" }),
+    ]);
     const slack = plugin(
       "slack",
-      [
-        {
-          accountId: "optional",
-          enabled: true,
-          configured: true,
-          userTokenStatus: "configured_unavailable",
-        },
-        {
-          accountId: "missing",
-          enabled: true,
-          configured: false,
-          botTokenStatus: "configured_unavailable",
-          appTokenStatus: "missing",
-        },
-        {
-          accountId: "unavailable",
-          enabled: true,
-          configured: true,
-          botTokenStatus: "configured_unavailable",
-          appTokenStatus: "available",
-        },
-      ],
       {
         isConfigured: (account) => account.accountId === "optional",
         describeAccount: (account) => ({
@@ -200,27 +171,38 @@ describe("agent provider inventories", () => {
           configured: account.accountId !== "unavailable",
         }),
       },
+      [
+        makeAccount("optional", { userTokenStatus: "configured_unavailable" }),
+        makeAccount("missing", {
+          configured: false,
+          botTokenStatus: "configured_unavailable",
+          appTokenStatus: "missing",
+        }),
+        makeAccount("unavailable", {
+          botTokenStatus: "configured_unavailable",
+          appTokenStatus: "available",
+        }),
+      ],
     );
     const isLinked = vi.fn(() => {
       throw new Error("linkage unavailable");
     });
-    const unconfigured = plugin("quietchat", [{ accountId: "default", enabled: true }], {
-      describeAccount: undefined,
-      isConfigured: () => false,
-      isLinked,
-    });
-    const custom = plugin(
-      "legacychat",
-      [{ accountId: "default", enabled: true, configured: true }],
+    const unconfigured = plugin(
+      "quietchat",
       {
         describeAccount: undefined,
-        isConfigured: () => true,
+        isConfigured: () => false,
+        isLinked,
       },
+      [{ accountId: "default", enabled: true }],
     );
+    const custom = plugin("legacychat", { describeAccount: undefined, isConfigured: () => true }, [
+      makeAccount("default"),
+    ]);
     const resolveAccountState = vi.fn(() => "enabled" as const);
     custom.status = { resolveAccountState };
-    const disabled = plugin("disabledchat", [
-      { accountId: "default", enabled: false, configured: false },
+    const disabled = plugin("disabledchat", {}, [
+      makeAccount("default", { enabled: false, configured: false }),
     ]);
     const calls: Array<string | null | undefined> = [];
     const resolveRawAccount = (config: OpenClawConfig, requestedId?: string | null) => {
@@ -239,7 +221,7 @@ describe("agent provider inventories", () => {
     };
     const accountHelpers = createAccountListHelpers("imessage");
     const raw: ChannelPlugin<ReturnType<typeof resolveRawAccount>> = {
-      ...plugin("imessage", []),
+      ...plugin("imessage", {}, []),
       config: {
         ...createScopedChannelConfigAdapter({
           sectionKey: "imessage",
@@ -318,7 +300,7 @@ describe("agent provider inventories", () => {
 
   it("rethrows unexpected account resolution errors", async () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
-      plugin("quietchat", [{ accountId: "default" }], {
+      plugin("quietchat", {
         resolveAccount: () => {
           throw new Error("plugin crash");
         },
@@ -332,19 +314,12 @@ describe("agent provider inventories", () => {
       typeof value === "string" && value !== "feishu" ? value : null,
     );
     const bindings = [
-      route("telegram"),
-      route("telegram", " \t "),
-      route("telegram", "default"),
-      route("telegram", " ALPHA "),
-      route("telegram", " * "),
-      route("telegram", "absent"),
-      route("imessage", "*"),
-      route("imessage", "alpha"),
-      route("imessage", "Alpha"),
-      route("signal", "*"),
-      route("signal", "default"),
-      route("feishu", "*"),
-      route("feishu"),
+      ...[undefined, " \t ", "default", " ALPHA ", " * ", "absent"].map((id) =>
+        route("telegram", id),
+      ),
+      ...["*", "alpha", "Alpha"].map((id) => route("imessage", id)),
+      ...["*", "default"].map((id) => route("signal", id)),
+      ...["*", undefined].map((id) => route("feishu", id)),
     ];
     expect(summarizeBindings({}, bindings, displayMetadata)).toEqual([
       "Telegram default",
@@ -358,15 +333,7 @@ describe("agent provider inventories", () => {
       "Feishu *",
       "Feishu default",
     ]);
-    expect(
-      listProvidersForAgent({
-        summaryIsDefault: false,
-        cfg: {},
-        bindings,
-        providerStatus: displayStatuses,
-        providerMetadata: displayMetadata,
-      }),
-    ).toEqual([
+    expect(listDisplayProviders(bindings)).toEqual([
       "telegram default (Default): not configured",
       "telegram alpha (Alpha): configured",
       "telegram beta (Beta): disabled",
@@ -380,15 +347,7 @@ describe("agent provider inventories", () => {
   });
 
   it.each([false, true])("filters unbound inventory for default=%s", (summaryIsDefault) => {
-    expect(
-      listProvidersForAgent({
-        summaryIsDefault,
-        cfg: {},
-        bindings: [],
-        providerStatus: displayStatuses,
-        providerMetadata: displayMetadata,
-      }),
-    ).toEqual(
+    expect(listDisplayProviders([], summaryIsDefault)).toEqual(
       summaryIsDefault
         ? [
             "telegram alpha (Alpha): configured",

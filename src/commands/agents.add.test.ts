@@ -136,6 +136,11 @@ const { persistAuthProfileBatch } = await vi.importActual<
 const runtime = createTestRuntime();
 const apiKey = (key: string) => createApiKeyCredential("openai", key);
 const keyProfile = (profileId: string, key: string) => ({ profileId, credential: apiKey(key) });
+function expectUnused(...mocks: Array<{ mock: { calls: unknown[] } }>) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
 
 describe("agents add command", () => {
   const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-agents-add-" });
@@ -236,9 +241,7 @@ describe("agents add command", () => {
       humanOutput: message,
       machineOutput: message,
     });
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(writeConfig).not.toHaveBeenCalled();
+    expectUnused(runtime.error, runtime.exit, writeConfig);
   }
 
   it.each([
@@ -278,7 +281,6 @@ describe("agents add command", () => {
   });
 
   it("rejects an unrepresentable positional name before targeting an existing agent", async () => {
-    setConfigSnapshot({ agents: { entries: { main: {} } } });
     const prompter = useWizard();
 
     await agentsAddCommand({ name: "агент✨" }, runtime);
@@ -286,11 +288,7 @@ describe("agents add command", () => {
     expect(prompter.outro).toHaveBeenCalledWith(
       'Agent name "агент✨" has no valid id characters. Use at least one letter a-z or digit.',
     );
-    expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(prompter.note).not.toHaveBeenCalled();
-    expect(creationGate).not.toHaveBeenCalled();
-    expect(createAgent).not.toHaveBeenCalled();
-    expect(writeConfig).not.toHaveBeenCalled();
+    expectUnused(prompter.confirm, prompter.note, creationGate, createAgent, writeConfig);
   });
 
   it("rejects a reserved system-agent id from an interactive positional argument", async () => {
@@ -298,8 +296,7 @@ describe("agents add command", () => {
     const prompter = useWizard();
     await agentsAddCommand({ name: "openclaw" }, runtime);
     expect(prompter.outro).toHaveBeenCalledWith('"openclaw" is reserved. Choose another name.');
-    expect(prompter.text).not.toHaveBeenCalled();
-    expect(writeConfig).not.toHaveBeenCalled();
+    expectUnused(prompter.text, writeConfig);
   });
 
   it("refuses the interactive JSON wizard without a usable terminal", async () => {
@@ -309,11 +306,8 @@ describe("agents add command", () => {
     const message =
       "Agent creation needs an interactive TTY. Use `openclaw agents add <id> --non-interactive --workspace <dir>` for automation.";
     await expectRootFailure(agentsAddCommand({ json: true }, runtime), message);
-    expect(runtime.log).not.toHaveBeenCalled();
     expect(hasTerminal).toHaveBeenCalledWith(process.stderr);
-    expect(readConfig).not.toHaveBeenCalled();
-    expect(createPrompter).not.toHaveBeenCalled();
-    expect(createAgent).not.toHaveBeenCalled();
+    expectUnused(runtime.log, readConfig, createPrompter, createAgent);
   });
 
   it("keeps guided JSON stdout isolated while wizard logs and UI use stderr", async () => {
@@ -372,9 +366,7 @@ describe("agents add command", () => {
 
     expect(creationGate).toHaveBeenCalledWith("main");
     expect(prompter.outro).toHaveBeenCalledWith("Run openclaw doctor --fix, then retry.");
-    expect(prompter.text).not.toHaveBeenCalled();
-    expect(prepareAuth).not.toHaveBeenCalled();
-    expect(createAgent).not.toHaveBeenCalled();
+    expectUnused(prompter.text, prepareAuth, createAgent);
   });
 
   it("reports only portable profiles persisted from shared state-db auth", async () => {
@@ -468,8 +460,7 @@ describe("agents add command", () => {
       await agentsAddCommand({}, runtime);
 
       expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
-      expect(persistAuth).not.toHaveBeenCalled();
-      expect(createAgent).not.toHaveBeenCalled();
+      expectUnused(persistAuth, createAgent);
       expect(runtime.exit).toHaveBeenCalledWith(1);
     });
   });
@@ -538,8 +529,7 @@ describe("agents add command", () => {
 
       expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
       expect(createAgent).toHaveBeenCalledOnce();
-      expect(commitConfig).not.toHaveBeenCalled();
-      expect(writeConfig).not.toHaveBeenCalled();
+      expectUnused(commitConfig, writeConfig);
     });
   });
 
@@ -624,8 +614,7 @@ describe("agents add command", () => {
       /workspace provisioning.*agent "work".*controlled mkdir failure/i,
     );
 
-    expect(commitConfig).not.toHaveBeenCalled();
-    expect(writeConfig).not.toHaveBeenCalled();
+    expectUnused(commitConfig, writeConfig);
   });
 
   describe("non-interactive config mutation", () => {
@@ -645,10 +634,7 @@ describe("agents add command", () => {
           transformConfig,
         }),
       );
-      expect(transformConfig).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(hasTerminal).not.toHaveBeenCalled();
+      expectUnused(transformConfig, runtime.exit, runtime.error, hasTerminal);
     });
 
     it("reports a duplicate agent through the root failure owner", async () => {

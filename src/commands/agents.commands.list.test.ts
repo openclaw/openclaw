@@ -8,49 +8,36 @@ import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.j
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const {
-  buildProviderStatusIndexMock,
-  buildProviderSummaryMetadataIndexMock,
-  listProvidersForAgentMock,
-  listAgentProvenanceMock,
-  readAgentProvenanceForDisplayMock,
-  providerSummaryMetadataMock,
-  requireValidConfigMock,
-  summarizeBindingsMock,
-} = vi.hoisted(() => ({
-  buildProviderStatusIndexMock: vi.fn(),
-  buildProviderSummaryMetadataIndexMock: vi.fn(),
-  listProvidersForAgentMock: vi.fn(),
-  listAgentProvenanceMock: vi.fn(),
-  readAgentProvenanceForDisplayMock: vi.fn(),
-  providerSummaryMetadataMock: new Map([
+const mocks = vi.hoisted(() => ({
+  status: vi.fn(),
+  metadata: vi.fn(),
+  providers: vi.fn(),
+  provenance: vi.fn(),
+  displayProvenance: vi.fn(),
+  summaryMetadata: new Map([
     [
       "telegram",
-      {
-        label: "Telegram",
-        defaultAccountId: "default",
-        visibleInConfiguredLists: true,
-      },
+      { label: "Telegram", defaultAccountId: "default", visibleInConfiguredLists: true },
     ],
   ]),
-  requireValidConfigMock: vi.fn(),
-  summarizeBindingsMock: vi.fn(),
+  config: vi.fn(),
+  bindings: vi.fn(),
 }));
 
 vi.mock("./config-validation.js", () => ({
-  requireValidConfig: requireValidConfigMock,
+  requireValidConfig: mocks.config,
 }));
 
 vi.mock("./agents.providers.js", () => ({
-  buildProviderStatusIndex: buildProviderStatusIndexMock,
-  buildProviderSummaryMetadataIndex: buildProviderSummaryMetadataIndexMock,
-  listProvidersForAgent: listProvidersForAgentMock,
-  summarizeBindings: summarizeBindingsMock,
+  buildProviderStatusIndex: mocks.status,
+  buildProviderSummaryMetadataIndex: mocks.metadata,
+  listProvidersForAgent: mocks.providers,
+  summarizeBindings: mocks.bindings,
 }));
 
 vi.mock("../state/agent-provenance.js", () => ({
-  listAgentProvenance: listAgentProvenanceMock,
-  readAgentProvenanceForDisplay: readAgentProvenanceForDisplayMock,
+  listAgentProvenance: mocks.provenance,
+  readAgentProvenanceForDisplay: mocks.displayProvenance,
 }));
 
 const { agentsListCommand } = await import("./agents.commands.list.js");
@@ -72,25 +59,27 @@ async function list(options: Parameters<typeof agentsListCommand>[0]) {
   };
 }
 
-function createConfig(): OpenClawConfig {
-  return {
-    agents: {
-      entries: { main: {} },
-    },
-    bindings: [{ agentId: "main", match: { channel: "telegram" } }],
-  };
+const telegramBinding = [{ agentId: "main", match: { channel: "telegram" } }];
+function setEntries(
+  entries: NonNullable<OpenClawConfig["agents"]>["entries"],
+  bindings?: OpenClawConfig["bindings"],
+) {
+  mocks.config.mockResolvedValue({
+    agents: { entries },
+    bindings,
+  } satisfies OpenClawConfig);
 }
 
 describe("agentsListCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    requireValidConfigMock.mockResolvedValue(createConfig());
-    buildProviderStatusIndexMock.mockResolvedValue(new Map());
-    buildProviderSummaryMetadataIndexMock.mockReturnValue(providerSummaryMetadataMock);
-    listProvidersForAgentMock.mockReturnValue(["Telegram default: configured"]);
-    listAgentProvenanceMock.mockResolvedValue([]);
-    readAgentProvenanceForDisplayMock.mockResolvedValue([]);
-    summarizeBindingsMock.mockReturnValue(["Telegram default"]);
+    setEntries({ main: {} }, telegramBinding);
+    mocks.status.mockResolvedValue(new Map());
+    mocks.metadata.mockReturnValue(mocks.summaryMetadata);
+    mocks.providers.mockReturnValue(["Telegram default: configured"]);
+    mocks.provenance.mockResolvedValue([]);
+    mocks.displayProvenance.mockResolvedValue([]);
+    mocks.bindings.mockReturnValue(["Telegram default"]);
   });
 
   it("keeps the migrated default in JSON after reloading explicit ownership", async () => {
@@ -106,7 +95,7 @@ describe("agentsListCommand", () => {
       agents: { ...migrated.agents, ownership: "explicit" },
     });
     for (const config of [migrated, persisted]) {
-      requireValidConfigMock.mockResolvedValueOnce(config);
+      mocks.config.mockResolvedValueOnce(config);
       expect((await list({ json: true })).json).toMatchObject([
         { id: "main", isDefault: false },
         { id: "research", isDefault: true },
@@ -115,8 +104,8 @@ describe("agentsListCommand", () => {
   });
 
   it("adds durable provenance to JSON without loading provider details", async () => {
-    listAgentProvenanceMock.mockRejectedValue(new Error("unrelated stored provenance is invalid"));
-    readAgentProvenanceForDisplayMock.mockResolvedValue([
+    mocks.provenance.mockRejectedValue(new Error("unrelated stored provenance is invalid"));
+    mocks.displayProvenance.mockResolvedValue([
       {
         agentId: "main",
         createdVia: "operator",
@@ -126,7 +115,7 @@ describe("agentsListCommand", () => {
     ]);
 
     const { json } = await list({ json: true });
-    expect(buildProviderStatusIndexMock).not.toHaveBeenCalled();
+    expect(mocks.status).not.toHaveBeenCalled();
     expect(json).toMatchObject([
       { id: "main", createdVia: "operator", creatorAgentId: null, createdAt: 42 },
     ]);
@@ -140,31 +129,21 @@ describe("agentsListCommand", () => {
   });
 
   it("renders roots, children, missing rows, and dangling creators as a tree", async () => {
-    requireValidConfigMock.mockResolvedValueOnce({
-      agents: {
-        entries: {
-          main: { name: "Main" },
-          child: { name: "Child" },
-          legacy: { name: "Legacy" },
-          orphan: { name: "Orphan" },
-        },
-      },
-    } satisfies OpenClawConfig);
-    listAgentProvenanceMock.mockResolvedValue([
+    setEntries({
+      main: { name: "Main" },
+      child: { name: "Child" },
+      legacy: { name: "Legacy" },
+      orphan: { name: "Orphan" },
+    });
+    mocks.provenance.mockResolvedValue([
       { agentId: "main", createdVia: "operator", creatorAgentId: null, createdAtMs: 1 },
       { agentId: "child", createdVia: "agent", creatorAgentId: "main", createdAtMs: 2 },
       { agentId: "orphan", createdVia: "agent", creatorAgentId: "deleted", createdAtMs: 3 },
     ]);
     expect((await list({ tree: true })).text).toBe(
-      [
-        "Agents:",
-        "- main (Main)",
-        "  - child (Child)",
-        "- legacy (Legacy)",
-        "- orphan (Orphan)",
-      ].join("\n"),
+      "Agents:\n- main (Main)\n  - child (Child)\n- legacy (Legacy)\n- orphan (Orphan)",
     );
-    expect(buildProviderStatusIndexMock).not.toHaveBeenCalled();
+    expect(mocks.status).not.toHaveBeenCalled();
   });
 
   it("lists configured, inherited, and local avatar identities without changing the workspace", async () => {
@@ -174,27 +153,23 @@ describe("agentsListCommand", () => {
         "- Name: Workspace Identity\n- Emoji: 🦞\n- Avatar: https://example.invalid/workspace.png\n";
       fs.writeFileSync(identityPath, identityFile);
       fs.writeFileSync(path.join(workspace, "avatar.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-      requireValidConfigMock.mockResolvedValue({
-        agents: {
-          entries: {
-            configured: {
-              workspace,
-              identity: {
-                name: " Chosen Identity ",
-                emoji: "🦉",
-                avatar: "https://example.invalid/new.png",
-              },
-            },
-            partial: { workspace, identity: { name: "Chosen Identity" } },
-            fallback: {
-              workspace,
-              identity: { name: " ", emoji: "\t", avatar: "slack://avatar.png" },
-            },
-            local: { workspace, identity: { avatar: "avatar.png" } },
-            bare: { workspace: path.join(workspace, "empty") },
+      setEntries({
+        configured: {
+          workspace,
+          identity: {
+            name: " Chosen Identity ",
+            emoji: "🦉",
+            avatar: "https://example.invalid/new.png",
           },
         },
-      } satisfies OpenClawConfig);
+        partial: { workspace, identity: { name: "Chosen Identity" } },
+        fallback: {
+          workspace,
+          identity: { name: " ", emoji: "\t", avatar: "slack://avatar.png" },
+        },
+        local: { workspace, identity: { avatar: "avatar.png" } },
+        bare: { workspace: path.join(workspace, "empty") },
+      });
       const { json } = await list({ json: true });
       expect(json).toMatchObject([
         {
@@ -239,23 +214,20 @@ describe("agentsListCommand", () => {
     const identityName = `${control}Operator 🦞\r\nforged-row`;
     const workspace = `/tmp/workspace-${control}\tpath`;
     const model = `${control}provider/model\nvariant`;
-    const cfg = {
-      agents: {
-        entries: {
-          main: {
-            name: `${control}Main\nAlias`,
-            workspace,
-            agentDir: `/tmp/agent-${control}\npath`,
-            model,
-            identity: { name: identityName },
-          },
+    setEntries(
+      {
+        main: {
+          name: `${control}Main\nAlias`,
+          workspace,
+          agentDir: `/tmp/agent-${control}\npath`,
+          model,
+          identity: { name: identityName },
         },
       },
-      bindings: [{ agentId: "main", match: { channel: "telegram" } }],
-    } satisfies OpenClawConfig;
-    requireValidConfigMock.mockResolvedValue(cfg);
-    summarizeBindingsMock.mockReturnValue([`${control}Telegram\nroute`]);
-    listProvidersForAgentMock.mockReturnValue([`${control}Telegram\tconfigured`]);
+      telegramBinding,
+    );
+    mocks.bindings.mockReturnValue([`${control}Telegram\nroute`]);
+    mocks.providers.mockReturnValue([`${control}Telegram\tconfigured`]);
 
     const { text: textOutput } = await list({ bindings: true });
     expect(textOutput).not.toContain("\u001B");
@@ -280,16 +252,12 @@ describe("agentsListCommand", () => {
         const homeAlias = home.toUpperCase();
         expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
 
-        requireValidConfigMock.mockResolvedValueOnce({
-          agents: {
-            entries: {
-              main: {
-                workspace: path.join(homeAlias, "workspace"),
-                agentDir: path.join(homeAlias, "agents", "main", "agent"),
-              },
-            },
+        setEntries({
+          main: {
+            workspace: path.join(homeAlias, "workspace"),
+            agentDir: path.join(homeAlias, "agents", "main", "agent"),
           },
-        } satisfies OpenClawConfig);
+        });
         const { text: output } = await withEnvAsync({ OPENCLAW_HOME: home }, () => list({}));
         expect(output).toContain(`Workspace: $OPENCLAW_HOME${path.sep}workspace`);
         expect(output).toContain(
