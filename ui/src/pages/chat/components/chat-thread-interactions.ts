@@ -58,6 +58,7 @@ import {
   removeChatSelectionPopup,
 } from "./chat-selection-popup.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
+import { TranscriptSearchState } from "./chat-transcript-search-state.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -72,11 +73,7 @@ export type ChatThreadState = {
   asyncQuestionGeneration?: number;
   asyncQuestionPresentation?: AsyncQuestionPresentation;
   turnRecapWatch: TurnRecapWatch | null;
-  searchOpen: boolean;
-  searchQuery: string;
-  searchFocusPending: boolean;
-  searchReturnFocusTarget: HTMLElement | null;
-  searchReturnFocusOwner: HTMLElement | null;
+  search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
     onRequestUpdate?: () => void;
@@ -236,13 +233,6 @@ type TranscriptInteractionProps = Pick<
 >;
 
 const transcriptStates = new Map<string, ChatThreadState>();
-const transcriptSearchDefaults = {
-  searchOpen: false,
-  searchQuery: "",
-  searchFocusPending: false,
-  searchReturnFocusTarget: null,
-  searchReturnFocusOwner: null,
-};
 
 export function getTranscriptState(paneId: string): ChatThreadState {
   const existing = transcriptStates.get(paneId);
@@ -253,7 +243,7 @@ export function getTranscriptState(paneId: string): ChatThreadState {
     asyncQuestionDrafts: new Map(),
     asyncQuestionRevision: 0,
     turnRecapWatch: null,
-    ...transcriptSearchDefaults,
+    search: new TranscriptSearchState(),
     transcriptRenderDependencies: [],
     transcriptRenderContext: {},
   };
@@ -293,7 +283,7 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
     // Parked rows must commit fresh bindings on return even when visible props match.
     state.transcriptRenderDependencies = [];
     // Search input belongs to the outgoing transcript; pane preferences survive.
-    Object.assign(state, transcriptSearchDefaults);
+    state.search.reset();
   }
 }
 
@@ -316,42 +306,9 @@ export function resetThreadPresentation(paneId?: string, owner?: ParentNode) {
   resetChatThreadState(paneId);
 }
 
-export function closeTranscriptSearch(state: ChatThreadState, requestUpdate: () => void): void {
-  const returnFocusTarget = state.searchReturnFocusTarget;
-  const returnFocusOwner = state.searchReturnFocusOwner;
-  Object.assign(state, transcriptSearchDefaults);
-  requestUpdate();
-  queueMicrotask(() => {
-    const target = returnFocusTarget?.isConnected
-      ? returnFocusTarget
-      : returnFocusOwner?.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox > textarea",
-        );
-    target?.focus({ preventScroll: true });
-  });
-}
-
 /** Toggles transcript search and retains the shortcut origin for focus restoration. */
-export function toggleTranscriptSearch(
-  paneId: string,
-  requestUpdate: () => void,
-  triggerEvent?: Event,
-): void {
-  const state = getTranscriptState(paneId);
-  if (state.searchOpen) {
-    closeTranscriptSearch(state, requestUpdate);
-    return;
-  }
-
-  state.searchOpen = true;
-  state.searchFocusPending = true;
-  const returnFocusTarget = triggerEvent?.target;
-  const returnFocusOwner = triggerEvent?.currentTarget;
-  const connectedElement = (target: EventTarget | null | undefined) =>
-    target instanceof HTMLElement && target.isConnected ? target : null;
-  state.searchReturnFocusTarget = connectedElement(returnFocusTarget);
-  state.searchReturnFocusOwner = connectedElement(returnFocusOwner);
-  requestUpdate();
+export function toggleTranscriptSearch(paneId: string, triggerEvent?: Event): void {
+  getTranscriptState(paneId).search.toggle(triggerEvent);
 }
 
 let activeReplyContextMenu: {

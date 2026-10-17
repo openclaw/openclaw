@@ -353,13 +353,13 @@ describe("chat transcript entry lifecycle", () => {
     ];
     view.update();
     expect(entering(view.container)).toHaveLength(0);
-    toggleTranscriptSearch(view.props.paneId, () => {});
+    toggleTranscriptSearch(view.props.paneId);
     view.props.messages = [
       ...view.props.messages,
       { role: "user", content: "while searching", timestamp: 3_000 },
     ];
     view.update();
-    toggleTranscriptSearch(view.props.paneId, () => {});
+    toggleTranscriptSearch(view.props.paneId);
     view.update();
     expect(entering(view.container)).toHaveLength(0);
     view.props.sessionKey = "agent:main:other";

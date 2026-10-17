@@ -334,7 +334,8 @@ it("keeps search and gallery caches warm while refreshing streamed and replaced 
     streamStartedAt: 3,
   };
   const state = getTranscriptState(props.paneId);
-  Object.assign(state, { searchOpen: true, searchQuery: "needle" });
+  state.search.toggle();
+  state.search.setQuery("needle");
   const transcript = createTestTranscript(props.paneId);
   const build = vi.spyOn(chatThreadBuild, "buildChatItems");
   const project = () => {
@@ -390,13 +391,15 @@ it("opens the visible forwarded disclosure when replying across search after a p
     view.draw();
     props.messages = [forwarded("earlier", "Hidden original", 1), later, answer];
     view.draw();
-    Object.assign(state, { searchOpen: true, searchQuery: "needle" });
+    state.search.toggle();
+    state.search.setQuery("needle");
     view.draw();
     expect(view.container.textContent).not.toContain("Hidden original");
 
     state.transcriptRenderContext.onOpenReply?.("earlier");
+    flush();
 
-    expect(state.searchOpen).toBe(false);
+    expect(state.search.snapshot.open).toBe(false);
     expect(view.container.querySelector<HTMLDetailsElement>(".chat-session-activity")?.open).toBe(
       true,
     );

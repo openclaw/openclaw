@@ -40,7 +40,6 @@ import { ChatSwarmProgress } from "./components/chat-swarm-progress.solid.tsx";
 import { ChatTaskSuggestionTray } from "./components/chat-task-suggestions.tsx";
 import {
   getTranscriptState,
-  closeTranscriptSearch,
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
 import { ChatThread } from "./components/chat-thread-view.tsx";
@@ -372,7 +371,7 @@ function ChatContent(input: { props: ChatProps }) {
         }
         if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.transcriptSearch, event)) {
           event.preventDefault();
-          toggleTranscriptSearch(input.props.paneId, frame().requestUpdate, event);
+          toggleTranscriptSearch(input.props.paneId, event);
         }
       }}
     >
@@ -401,17 +400,7 @@ function ChatContent(input: { props: ChatProps }) {
                     prop:presented={presented()}
                   />
                 </Show>
-                <TranscriptSearch
-                  revision={frame()}
-                  state={getTranscriptState(input.props.paneId)}
-                  requestUpdate={frame().requestUpdate}
-                  onClose={() =>
-                    closeTranscriptSearch(
-                      getTranscriptState(input.props.paneId),
-                      frame().requestUpdate,
-                    )
-                  }
-                />
+                <TranscriptSearch search={getTranscriptState(input.props.paneId).search} />
                 <div class="chat-main__conversation-frame">
                   <div
                     class="chat-main__conversation"

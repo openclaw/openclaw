@@ -741,11 +741,11 @@ describe("conversation position rail", () => {
       rerender();
       expect(preview()).toBeUndefined();
       const state = getTranscriptState(props.paneId);
-      state.searchOpen = true;
-      state.searchQuery = "Checkpoint 5";
+      state.search.toggle();
+      state.search.setQuery("Checkpoint 5");
       rerender();
       expect(markers()).toHaveLength(1);
-      state.searchQuery = "not present";
+      state.search.setQuery("not present");
       rerender();
       expect(markers()).toHaveLength(0);
     } finally {

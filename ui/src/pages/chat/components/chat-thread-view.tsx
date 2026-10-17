@@ -21,11 +21,13 @@ import {
 } from "../../../lib/navigation-click.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
 import { ChatCommentPins } from "./chat-comment-pins.tsx";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import {
+  getTranscriptState,
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
   type ChatThreadProps,
@@ -53,9 +55,16 @@ export function ChatThread(input: { props: ChatThreadProps; transcript: ChatTran
   let stopHistory: (() => void)[] = [];
   // Retained transcript roots can settle before refs; bind native input at the ref.
   onCleanup(() => stopHistory.forEach((stop) => stop()));
+  const search = createMemo(() =>
+    projectOwner(
+      getTranscriptState(input.props.paneId).search,
+      (owner) => owner.snapshot,
+      Object.is,
+    ),
+  );
   const current = createMemo(() =>
     input.transcript.renderSession(input.props.sessionKey, (session) => {
-      const projection = projectChatTranscript(input.props, session);
+      const projection = projectChatTranscript(input.props, session, search().read());
       // Empty shells establish the baseline for first-submission animation.
       if (projection.isEmpty || projection.showLoadingSkeleton) {
         session.entryAnimations.sync(

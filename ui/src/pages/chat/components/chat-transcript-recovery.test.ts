@@ -39,7 +39,7 @@ class RecoveryTranscriptElement extends TranscriptTestHost {
   override renderTranscript = () => {
     const requestUpdate = () => this.requestRender();
     return renderChatThread({ ...this.props, onRequestUpdate: requestUpdate }, this.transcript, {
-      search: requestUpdate,
+      search: true,
     });
   };
 
@@ -71,7 +71,7 @@ function mountTranscript(
 
 async function searchTranscript(pane: RecoveryTranscriptElement, query: string) {
   if (!pane.querySelector(".agent-chat__search-bar input")) {
-    toggleTranscriptSearch(pane.props.paneId, () => pane.requestRender());
+    toggleTranscriptSearch(pane.props.paneId);
     await pane.updateComplete;
   }
   const input = expectDefined(
@@ -273,7 +273,7 @@ describe("chat transcript full-message recovery", () => {
     pane.requestRender();
     await pane.updateComplete;
     expect(pane.querySelector(".chat-bubble")).toBeNull();
-    toggleTranscriptSearch(pane.props.paneId, () => pane.requestRender());
+    toggleTranscriptSearch(pane.props.paneId);
     await vi.waitFor(() => expect(pane.textContent).toContain("Second scope."));
     expect(load).toHaveBeenLastCalledWith({
       sessionKey: pane.props.sessionKey,
@@ -321,7 +321,7 @@ describe("chat transcript full-message recovery", () => {
     pane.requestRender();
     await pane.updateComplete;
     expect(pane.querySelector(".chat-bubble")).toBeNull();
-    toggleTranscriptSearch(pane.props.paneId, () => pane.requestRender());
+    toggleTranscriptSearch(pane.props.paneId);
     await vi.waitFor(() => expect(pane.textContent).toContain("Revisited input."));
     expect(load).toHaveBeenCalledTimes(2);
   });
