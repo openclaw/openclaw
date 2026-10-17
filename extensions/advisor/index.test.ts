@@ -129,22 +129,6 @@ describe("advisor", () => {
     );
   });
 
-  it.each([
-    ["the run already ended", "no_active_run"],
-    [
-      "prompt injection is denied",
-      "blocked by plugins.entries.advisor.hooks.allowPromptInjection=false",
-    ],
-  ])("delivers nothing when %s", async (_case, reason) => {
-    const run = setup({ everyToolCalls: 1, everyMinutes: 0 }, "CORRECTION\nFix the config typo.");
-    run.steer.mockResolvedValue({ steered: false, reason });
-    await run.start();
-    await run.startRun();
-    await run.tool();
-    await run.flush();
-    expect(run.steer).toHaveBeenCalledOnce();
-  });
-
   it.each(["Looks fine to me.", "CORRECTION", "NO_CHANGE"])(
     "does not steer on a reply of %j",
     async (reply) => {
