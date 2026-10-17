@@ -2,15 +2,19 @@ import { randomUUID } from "node:crypto";
 import { getEnvironmentData } from "node:worker_threads";
 import pg from "pg";
 import { describe, expect, it } from "vitest";
-import { loadLegacyCronRepairState } from "../../commands/doctor/cron/legacy-repair.js";
 import { assertCronStateSchemaSupported } from "../../commands/doctor/cron/schema-safety.js";
+import { inspectCronOwnerRowsForDoctor } from "../../commands/doctor/cron/store-inventory.js";
 import { saveCronJobsStore } from "../../cron/store.js";
+import { cronStoreKey } from "../../cron/store/key.js";
 import {
   inspectCronJobsReadOnly,
   loadCronJobsStoreWithConfigJobsReadOnly,
 } from "../../cron/store/read-only.js";
 import type { CronStoreFile } from "../../cron/types.js";
-import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
+import {
+  withArtifactPreservingStateReads,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+} from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -57,14 +61,14 @@ describe.skipIf(!connection)("PostgreSQL cron read-only owner", () => {
         };
         await saveCronJobsStore(storePath, store);
         await closeStateDatabaseForTest();
-        withEngineStoreAdmission(() => assertCronStateSchemaSupported(state.env));
-        const repairState = await loadLegacyCronRepairState({
-          cfg: {},
-          storePath,
-          env: state.env,
-          readOnly: true,
+        const ownerRows = withEngineStoreAdmission(() => {
+          assertCronStateSchemaSupported(state.env);
+          return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+            ({ db }) => inspectCronOwnerRowsForDoctor(db, cronStoreKey(storePath)),
+            { env: state.env },
+          );
         });
-        expect(repairState?.ownerRows).toEqual([
+        expect(ownerRows).toEqual([
           expect.objectContaining({ job_id: "postgres-read-only", agent_id: "main" }),
         ]);
         for (const preserveArtifacts of [false, true]) {

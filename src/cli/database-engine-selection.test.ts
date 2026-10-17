@@ -1,11 +1,16 @@
 import fs from "node:fs/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { databaseEngineAdapters } from "../infra/database-engine/adapters.js";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
+import * as nodeSqlite from "../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareCliDatabaseEngine } from "./database-engine-selection.js";
 
-afterEach(resetDatabaseEngineSelectionForTest);
+afterEach(() => {
+  resetDatabaseEngineSelectionForTest();
+  vi.restoreAllMocks();
+});
 
 const database = {
   engine: "postgres",
@@ -57,6 +62,8 @@ describe("one-shot CLI engine selection", () => {
       ["config", "unset", "database"],
       ["gateway", "run"],
       ["gateway", "--dev", "--reset"],
+      ["doctor", "--session-sqlite", "inspect", "--session-sqlite-store", "/selected/store"],
+      ["doctor", "--post-upgrade"],
       ["update", "admit", "--context", "/selected/context"],
       ["update", "migrate"],
       ["update", "restore"],
@@ -74,6 +81,71 @@ describe("one-shot CLI engine selection", () => {
       await expect(fs.access(state.statePath("state", "openclaw.sqlite"))).rejects.toMatchObject({
         code: "ENOENT",
       });
+    });
+  });
+
+  it.each(["sqlite", "postgres"])(
+    "does not open existing storage while Doctor cannot parse %s config",
+    async (engine) => {
+      await withOpenClawTestState({ label: "doctor-unresolved-engine" }, async (state) => {
+        await fs.writeFile(state.configPath, `{"database":{"engine":"${engine}"}, broken`);
+        const databasePath = state.statePath("state", "openclaw.sqlite");
+        await fs.mkdir(state.statePath("state"), { recursive: true });
+        await fs.writeFile(databasePath, "unopened synthetic store");
+        const sqliteOpen = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+        const postgresOpen = vi.spyOn(databaseEngineAdapters.postgres, "openConnection");
+        expect(
+          await prepareCliDatabaseEngine([
+            "node",
+            "openclaw",
+            "doctor",
+            "--non-interactive",
+            "--json",
+          ]),
+        ).toBe(true);
+        expect(getDatabaseEngineSelection()).toBeUndefined();
+        expect(sqliteOpen).not.toHaveBeenCalled();
+        expect(postgresOpen).not.toHaveBeenCalled();
+        expect(await fs.readFile(databasePath, "utf8")).toBe("unopened synthetic store");
+      });
+    },
+  );
+
+  it("keeps updater-owned Doctor selection with its result receipt", async () => {
+    await withOpenClawTestState(
+      {
+        label: "doctor-update-selection",
+        env: { OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: "-" },
+      },
+      async (state) => {
+        await state.writeConfig({ database, plugins: { enabled: false } });
+        delete process.env.OPENCLAW_TEST_CLI_DSN;
+        expect(await prepareCliDatabaseEngine(["node", "openclaw", "doctor"])).toBe(false);
+        expect(getDatabaseEngineSelection()).toBeUndefined();
+      },
+    );
+  });
+
+  it("keeps storage unopened when prefix repair leaves a PostgreSQL credential unresolved", async () => {
+    await withOpenClawTestState({ label: "doctor-repaired-unresolved-engine" }, async (state) => {
+      const config = { database, plugins: { enabled: false } };
+      await fs.writeFile(state.configPath, `synthetic warning\n${JSON.stringify(config)}\n`);
+      delete process.env.OPENCLAW_TEST_CLI_DSN;
+      const sqliteOpen = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+      const postgresOpen = vi.spyOn(databaseEngineAdapters.postgres, "openConnection");
+      expect(
+        await prepareCliDatabaseEngine([
+          "node",
+          "openclaw",
+          "doctor",
+          "--fix",
+          "--non-interactive",
+        ]),
+      ).toBe(true);
+      expect(getDatabaseEngineSelection()).toBeUndefined();
+      expect(sqliteOpen).not.toHaveBeenCalled();
+      expect(postgresOpen).not.toHaveBeenCalled();
+      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual(config);
     });
   });
 });

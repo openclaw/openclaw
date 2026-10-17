@@ -627,6 +627,14 @@ owner, including interactive onboarding that can start an embedded Gateway.
 Updater admission and recovery commands retain their context, receipt, or explicit
 path selection. QA fixtures, database tooling, and agent execution likewise keep
 their existing target owners.
+
+When Doctor cannot parse config, it attempts the requested file-only config repair
+before selecting an engine. If the target remains unresolved, Doctor completes a
+best-effort report with database checks marked **unknown**, a config repair next
+step, and no database access. It never creates fallback SQLite state. Recovery
+that requires database metadata, including verification of a last-known-good
+promotion, remains deferred until the target is resolved.
+
 Close remains available to settle resources. The store owner supplies
 `openEngineStore` with `inspectSqlite(): { hasExistingData, hasEngineAnchor }`,
 so partially initialized stores are also protected from an accidental engine

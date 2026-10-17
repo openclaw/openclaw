@@ -289,31 +289,104 @@ describe("doctor invalid config process exit", () => {
     getCliProcessTestTimeout(LEGACY_APPROVAL_CHILD_TIMEOUT_MS),
   );
 
-  it("exits after a complete best-effort report for an unparseable config", async () => {
-    const { configPath, env, run } = createDoctorFixture("doctor-invalid-config-exit", true);
-    Object.assign(env, { OPENCLAW_NO_RESPAWN: "1", OPENCLAW_SKIP_CHANNELS: "1" });
-    for (const key of [
-      "NODE_OPTIONS",
-      "OPENCLAW_GATEWAY_PASSWORD",
-      "OPENCLAW_GATEWAY_TOKEN",
-      "OPENCLAW_GATEWAY_URL",
-      "VITEST_POOL_ID",
-      "VITEST_WORKER_ID",
-    ]) {
-      delete env[key];
-    }
+  it.each([
+    { engine: "sqlite", fix: false },
+    { engine: "sqlite", fix: true },
+    { engine: "postgres", fix: false },
+    { engine: "postgres", fix: true },
+  ])(
+    "reports unknown storage without creating databases for unparseable $engine config (fix: $fix)",
+    async ({ engine, fix }) => {
+      const { stateDir, configPath, env, run } = createDoctorFixture(
+        `doctor-invalid-${engine}-${fix ? "fix" : "report"}`,
+        true,
+      );
+      Object.assign(env, { OPENCLAW_NO_RESPAWN: "1", OPENCLAW_SKIP_CHANNELS: "1" });
+      for (const key of [
+        "NODE_OPTIONS",
+        "OPENCLAW_GATEWAY_PASSWORD",
+        "OPENCLAW_GATEWAY_TOKEN",
+        "OPENCLAW_GATEWAY_URL",
+        "OPENCLAW_TEST_MISSING_DOCTOR_DSN",
+        "VITEST_POOL_ID",
+        "VITEST_WORKER_ID",
+      ]) {
+        delete env[key];
+      }
 
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(configPath, '{"agents": {broken json');
+      const database = {
+        engine,
+        ...(engine === "postgres"
+          ? {
+              postgres: {
+                connection: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENCLAW_TEST_MISSING_DOCTOR_DSN",
+                },
+              },
+            }
+          : {}),
+      };
+      const raw = `{"database":${JSON.stringify(database)},"agents":{broken json`;
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(configPath, raw);
 
-    const result = await run(doctorArgs(), 60_000);
-    const output = `${result.stderr}\n${result.stdout}`;
+      const result = await run(doctorArgs(fix ? "fix" : undefined), DOCTOR_CHILD_TIMEOUT_MS);
+      const output = `${result.stderr}\n${result.stdout}`;
 
-    expect(result, output).toMatchObject({ code: 0, signal: null });
-    expect(output).toContain("Config invalid; doctor will run with best-effort config.");
-    expect(output).toContain("Doctor complete.");
-    expect(output).not.toContain("Building Control UI assets");
-  }, 75_000);
+      expect(result, output).toMatchObject({ code: 0, signal: null });
+      for (const message of [
+        "Config invalid; doctor will run with best-effort config.",
+        "unknown: config could not be parsed; fix config (or run `openclaw doctor --fix`), then rerun",
+        "Run `openclaw config validate` to inspect the parse error.",
+        "Doctor complete.",
+      ]) {
+        expect(output).toContain(message);
+      }
+      expect(output).not.toContain("Building Control UI assets");
+      expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+      const createdFiles = fs.readdirSync(stateDir, { recursive: true, encoding: "utf8" });
+      expect(
+        createdFiles.filter((file) => /\.(?:sqlite|db)(?:$|-(?:wal|shm|journal)$)/u.test(file)),
+      ).toEqual([]);
+      expect(createdFiles.filter((file) => file.includes(".clobbered."))).toEqual([]);
+    },
+    getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS),
+  );
+
+  it(
+    "recovers a non-JSON prefix through doctor --fix before normal database checks",
+    async () => {
+      const { configPath, env, run } = createDoctorFixture("doctor-prefixed-config-fix", true);
+      Object.assign(env, { OPENCLAW_NO_RESPAWN: "1", OPENCLAW_SKIP_CHANNELS: "1" });
+      const config = {
+        database: { engine: "sqlite" },
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+      };
+      const raw = `synthetic warning\n${JSON.stringify(config)}\n`;
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(configPath, raw);
+
+      const result = await run(doctorArgs("fix"), DOCTOR_CHILD_TIMEOUT_MS);
+      const output = `${result.stderr}\n${result.stdout}`;
+
+      expect(result, output).toMatchObject({ code: 0, signal: null });
+      expect(output).toContain("Removed non-JSON prefix from openclaw.json.");
+      expect(output).toContain("Doctor complete.");
+      expect(output).not.toContain("unknown: config could not be parsed");
+      expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject(config);
+      const clobbered = fs
+        .readdirSync(path.dirname(configPath))
+        .filter((file) => file.startsWith(`${path.basename(configPath)}.clobbered.`));
+      expect(clobbered).toHaveLength(1);
+      for (const file of clobbered) {
+        expect(fs.readFileSync(path.join(path.dirname(configPath), file), "utf8")).toBe(raw);
+      }
+    },
+    getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS),
+  );
 });
 
 describe("Doctor repair followed by gateway readiness", () => {

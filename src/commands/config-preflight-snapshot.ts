@@ -160,8 +160,8 @@ async function readConfigPreflightSnapshot(
   });
 }
 
-/** Select storage from a core-only read before observation or plugin discovery can open it. */
-export async function readConfigSnapshotForEngineSelection(
+/** Resolve the final config target without observing or opening its storage. */
+export async function readConfigSnapshotBeforeEngineSelection(
   env: NodeJS.ProcessEnv = process.env,
   options: { isolateEnv?: boolean } = {},
 ): Promise<ConfigFileSnapshot> {
@@ -176,6 +176,15 @@ export async function readConfigSnapshotForEngineSelection(
   while (options.isolateEnv === false && snapshot.path !== resolveConfigPath(env)) {
     snapshot = await read();
   }
+  return snapshot;
+}
+
+/** Select storage from a core-only read before observation or plugin discovery can open it. */
+export async function readConfigSnapshotForEngineSelection(
+  env: NodeJS.ProcessEnv = process.env,
+  options: { isolateEnv?: boolean } = {},
+): Promise<ConfigFileSnapshot> {
+  const snapshot = await readConfigSnapshotBeforeEngineSelection(env, options);
   if (
     !isConfigReadFailure(snapshot) &&
     !snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")

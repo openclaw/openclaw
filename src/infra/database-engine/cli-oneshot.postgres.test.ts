@@ -5,28 +5,29 @@ import { getEnvironmentData } from "node:worker_threads";
 import pg from "pg";
 import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { cliRecoveryEntrypoints } from "../../cli/cli-entrypoint.test-support.js";
 import {
   formatCliProcessFailure,
   getCliProcessTestTimeout,
-  runCliProcessChild,
 } from "../../cli/cli-process-child.test-helpers.js";
+import {
+  createBuiltRuntime,
+  runBuiltRuntime,
+} from "../../commands/doctor-config-preflight.process.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const roots = useAutoCleanupTempDirTracker(afterAll);
 const childTimeoutMs = 60_000;
-const entrypoint = resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli));
 
 describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
   it(
     "runs onboarding, agent, model, config and Doctor commands without local application tables",
     async () => {
       const root = roots.make("postgres-cli-oneshot-");
+      const runtimeRoot = createBuiltRuntime(root);
       const stateDir = path.join(root, ".openclaw");
       const configPath = path.join(stateDir, "openclaw.json");
       const prefix = `cli_parity_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
@@ -108,11 +109,7 @@ describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
       try {
         const schemas = new Set<string>();
         for (const args of commands) {
-          const result = await runCliProcessChild({
-            nodeArgs: [...entrypoint, ...args],
-            env,
-            timeoutMs: childTimeoutMs,
-          });
+          const result = await runBuiltRuntime(runtimeRoot, env, args, childTimeoutMs);
           expect(
             result.code,
             formatCliProcessFailure({
@@ -187,6 +184,7 @@ describe("CLI with unresolved PostgreSQL credentials", () => {
     "keeps help, logs and DSN repair available while refusing stateful commands without SQLite fallback",
     async () => {
       const root = roots.make("postgres-cli-unresolved-");
+      const runtimeRoot = createBuiltRuntime(root);
       const stateDir = path.join(root, ".openclaw");
       const configPath = path.join(stateDir, "openclaw.json");
       const logPath = path.join(root, "openclaw.log");
@@ -243,11 +241,7 @@ describe("CLI with unresolved PostgreSQL credentials", () => {
           ["channels", "logs", "--lines", "1", "--json"],
           ["config", "set", "database.postgres.connection.id", "OPENCLAW_REPAIRED_CLI_DSN"],
         ]) {
-          const result = await runCliProcessChild({
-            nodeArgs: [...entrypoint, ...args],
-            env,
-            timeoutMs: childTimeoutMs,
-          });
+          const result = await runBuiltRuntime(runtimeRoot, env, args, childTimeoutMs);
           expect(
             result.code,
             formatCliProcessFailure({ reason: `CLI ${args.join(" ")} failed`, ...result }),
@@ -263,13 +257,14 @@ describe("CLI with unresolved PostgreSQL credentials", () => {
         }
         const repaired = JSON.parse(await fs.readFile(configPath, "utf8"));
         expect(repaired.database.postgres.connection.id).toBe("OPENCLAW_REPAIRED_CLI_DSN");
-        const result = await runCliProcessChild({
-          nodeArgs: [...entrypoint, "models", "list", "--json"],
+        const result = await runBuiltRuntime(
+          runtimeRoot,
           env,
-          timeoutMs: childTimeoutMs,
-        });
+          ["models", "list", "--json"],
+          childTimeoutMs,
+        );
         expect(result.code).toBe(1);
-        expect(result.stderr).toContain("SecretRef is unresolved");
+        expect(`${result.stdout}\n${result.stderr}`).toContain("SecretRef is unresolved");
         expect(
           (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
             file.endsWith(".sqlite"),
