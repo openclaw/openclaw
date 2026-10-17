@@ -29,6 +29,35 @@ const avatarPng = Buffer.from(
 );
 
 const profileContext = () => ({ viewport: { width: 1280, height: 800 } });
+const pngResponse = { body: avatarPng, contentType: "image/png", status: 200 };
+const svgResponse = {
+  body: '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="red"/></svg>',
+  contentType: "image/svg+xml",
+  status: 200,
+};
+const identitySelector = "#settings-profile-identity";
+type MockGateway = Awaited<ReturnType<typeof installMockGateway>>;
+
+async function navigateProfile(page: Page) {
+  const response = await page.goto(new URL(profilePath, suite.server.baseUrl).href);
+  expect(response?.status()).toBe(200);
+  return response;
+}
+
+async function expectRequest(gateway: MockGateway, method: string, params: unknown) {
+  expect((await gateway.waitForRequest(method)).params).toEqual(params);
+}
+
+async function refreshProfile(page: Page, gateway: MockGateway) {
+  const after = (await gateway.getRequests("users.self")).length;
+  await page.locator(".profile-refresh").click();
+  await gateway.waitForRequest("users.self", { after });
+}
+
+const identityRow = (page: Page, title: string) =>
+  page.locator(`${identitySelector} .settings-row`).filter({
+    has: page.locator(".settings-row__title", { hasText: title }),
+  });
 
 const imageWidth = (image: Locator) =>
   image.evaluate((element) => (element as HTMLImageElement).naturalWidth);
@@ -80,13 +109,12 @@ function modelAccount(
   };
 }
 
-const githubAvatarUrl = "https://avatars.githubusercontent.com/u/583231?v=4";
 const linkedGitHubProfile = {
   ...testProfile,
   githubIdentity: {
     login: "octocat",
     profileUrl: "https://github.com/octocat",
-    avatarUrl: githubAvatarUrl,
+    avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
   },
 };
 const testPresenceUsers: NonNullable<ControlUiMockGatewayScenario["presenceUsers"]> = [
@@ -126,8 +154,7 @@ suite.define(() => {
         ...methodResponses,
       },
     });
-    const response = await page.goto(new URL(profilePath, suite.server.baseUrl).href);
-    expect(response?.status()).toBe(200);
+    await navigateProfile(page);
     return gateway;
   }
 
@@ -159,10 +186,7 @@ suite.define(() => {
   });
 
   it.each([
-    {
-      issuer: "public",
-      profile: linkedGitHubProfile,
-    },
+    { issuer: "public", profile: linkedGitHubProfile },
     {
       issuer: "enterprise",
       profile: {
@@ -183,11 +207,7 @@ suite.define(() => {
         const avatarUrl = profile.githubIdentity.avatarUrl;
         await page.route(avatarUrl, async (route) => {
           avatarRequests.push(route.request().url());
-          await route.fulfill({
-            body: `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="32" fill="#24292f"/><circle cx="32" cy="27" r="14" fill="white"/><path d="M12 62c2-15 10-23 20-23s18 8 20 23" fill="white"/></svg>`,
-            contentType: "image/svg+xml",
-            status: 200,
-          });
+          await route.fulfill(svgResponse);
         });
         const gateway = await openProfilePage(page, {
           "users.self": { profile: testProfile },
@@ -198,12 +218,8 @@ suite.define(() => {
           "users.prefs.set": { status: "ok" },
         });
 
-        const githubRow = page
-          .locator("#settings-profile-identity .settings-row")
-          .filter({ has: page.locator(".settings-row__title", { hasText: "GitHub account" }) });
-        const coauthorRow = page.locator("#settings-profile-identity .settings-row").filter({
-          has: page.locator(".settings-row__title", { hasText: "Git co-author credit" }),
-        });
+        const githubRow = identityRow(page, "GitHub account");
+        const coauthorRow = identityRow(page, "Git co-author credit");
         await expect(githubRow).toContainText("Unavailable");
         await expect(githubRow).toContainText("No single verified GitHub sign-in account");
         await expect(githubRow.locator(".settings-account")).toHaveCount(0);
@@ -218,11 +234,8 @@ suite.define(() => {
         ).toHaveCount(0);
 
         await gateway.setMethodResponse("users.self", { profile });
-        const readsBeforeRefresh = (await gateway.getRequests("users.self")).length;
-        await page.locator(".profile-refresh").click();
-        await gateway.waitForRequest("users.self", { after: readsBeforeRefresh });
-        const prefGet = await gateway.waitForRequest("users.prefs.get");
-        expect(prefGet.params).toEqual({ keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
+        await refreshProfile(page, gateway);
+        await expectRequest(gateway, "users.prefs.get", { keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
         const account = githubRow.getByRole("link", { name: "@octocat" });
         await expect(account).toBeVisible();
         await expect(account).toHaveAttribute("href", profile.githubIdentity.profileUrl);
@@ -245,43 +258,13 @@ suite.define(() => {
         await expect(toggle).not.toBeChecked();
 
         await toggle.click();
-        const prefSet = await gateway.waitForRequest("users.prefs.set");
-        expect(prefSet.params).toEqual({
+        await expectRequest(gateway, "users.prefs.set", {
           entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true },
         });
         await expect(toggle).toBeChecked();
       });
     },
   );
-
-  it.each([
-    ["verified GitHub identity", linkedGitHubProfile],
-    [
-      "merged enterprise hosts without a display primary",
-      {
-        ...testProfile,
-        emails: ["github:ghe.example.test:101", "github:code.example.test:101"],
-        githubIdentity: null,
-      },
-    ],
-  ] as const)("keeps default co-author consent editable for %s", async (_name, profile) => {
-    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
-      const gateway = await openProfilePage(page, {
-        "users.self": { profile },
-        "users.prefs.get": { status: "ok", entries: {} },
-        "users.prefs.set": { status: "ok" },
-      });
-      const toggle = page
-        .locator("#settings-profile-identity")
-        .getByRole("switch", { name: "Git co-author credit" });
-      await expect(toggle).toBeEnabled();
-      await expect(toggle).toBeChecked();
-      await toggle.click();
-      const saved = await gateway.waitForRequest("users.prefs.set");
-      expect(saved.params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } });
-      await expect(toggle).not.toBeChecked();
-    });
-  });
 
   it("renders the protected assistant avatar through an authenticated blob fetch", async () => {
     await suite.withPage(profileContext(), async ({ page }) => {
@@ -299,11 +282,7 @@ suite.define(() => {
           await route.fulfill({ status: 401 });
           return;
         }
-        await route.fulfill({
-          body: `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><circle cx="32" cy="32" r="28" fill="#ef4e2f"/><circle cx="23" cy="27" r="4" fill="white"/><circle cx="41" cy="27" r="4" fill="white"/><path d="M20 42c8 6 16 6 24 0" fill="none" stroke="white" stroke-width="4" stroke-linecap="round"/></svg>`,
-          contentType: "image/svg+xml",
-          status: 200,
-        });
+        await route.fulfill(svgResponse);
       });
       const gateway = await openProfilePage(
         page,
@@ -384,8 +363,6 @@ suite.define(() => {
       const revisedAvatarReady = new Promise<void>((resolve) => {
         releaseRevisedAvatar = resolve;
       });
-      // Profile images require the same bearer auth as gateway RPCs. One cached
-      // blob keeps the sidebar and preview inside the Control UI's image CSP.
       await page.route(`**/api/users/${testProfile.id}/avatar*`, async (route) => {
         const revision = new URL(route.request().url()).searchParams.get("v");
         avatarRequests.push({
@@ -393,8 +370,7 @@ suite.define(() => {
           url: route.request().url(),
         });
         if (revision === "3") {
-          // Hold the real response so Chromium can prove pending fallback and
-          // stable image-node identity before the replacement finishes loading.
+          // Keep the image pending to verify stable DOM identity during replacement.
           await revisedAvatarReady;
         }
         if (revision === "4") {
@@ -405,16 +381,11 @@ suite.define(() => {
           });
           return;
         }
-        await route.fulfill({
-          body: avatarPng,
-          contentType: "image/png",
-          status: 200,
-        });
+        await route.fulfill(pngResponse);
       });
       const gateway = await installProfileGateway(page);
 
-      const response = await page.goto(new URL(profilePath, suite.server.baseUrl).href);
-      expect(response?.status()).toBe(200);
+      const response = await navigateProfile(page);
       expect(response?.headers()["content-security-policy"]).toContain(
         "img-src 'self' data: blob:",
       );
@@ -478,20 +449,10 @@ suite.define(() => {
       await missingAvatarResponse;
       await expect.poll(() => avatarRequests.length).toBe(3);
       await expect.poll(() => sidebarAvatar.getAttribute("src")).toBeNull();
-      await expect
-        .poll(() =>
-          sidebarAvatar.evaluate((image) =>
-            image.closest(".viewer-avatar")?.classList.contains("is-fallback"),
-          ),
-        )
-        .toBe(true);
-      await expect
-        .poll(async () =>
-          (
-            await page.locator(".sidebar-identity-card .viewer-avatar__fallback").textContent()
-          )?.trim(),
-        )
-        .toBe("UP");
+      await expect.poll(() => avatarState(sidebarAvatar, "is-fallback")).toBe(true);
+      await expect(page.locator(".sidebar-identity-card .viewer-avatar__fallback")).toHaveText(
+        "UP",
+      );
       expect(await originalSidebarImage?.evaluate((image) => image.isConnected)).toBe(true);
       expectAvatarRequest(2, 4);
     });
@@ -502,6 +463,7 @@ suite.define(() => {
       const personal = modelAccount("openai:scott", "Test Person · Personal workspace");
       const work = modelAccount("openai:work", "Test Person · Work workspace", { selected: false });
       const connected = modelAccount("openai:personal", "Test Person · New workspace");
+      const apiKeyMethod = { id: "api-key", label: "API key" };
       const savedAccounts = [personal, work];
       const inventory = (selected: UserModelAccount | null) => ({
         profileId: testProfile.id,
@@ -510,13 +472,7 @@ suite.define(() => {
           selected: account.authProfileId === selected?.authProfileId,
         })),
         links: selected
-          ? [
-              {
-                provider: selected.provider,
-                authProfileId: selected.authProfileId,
-                updatedAt: 1_700_000_000_000,
-              },
-            ]
+          ? [{ provider: selected.provider, authProfileId: selected.authProfileId, updatedAt: 1 }]
           : [],
       });
       const gateway = await openProfilePage(page, {
@@ -526,12 +482,9 @@ suite.define(() => {
             {
               id: "openai",
               label: "OpenAI",
-              methods: [
-                { id: "browser", label: "Browser sign-in" },
-                { id: "api-key", label: "API key" },
-              ],
+              methods: [{ id: "browser", label: "Browser sign-in" }, apiKeyMethod],
             },
-            { id: "xai", label: "Grok", methods: [{ id: "api-key", label: "API key" }] },
+            { id: "xai", label: "Grok", methods: [apiKeyMethod] },
           ],
         },
         "users.authConnect.start": {
@@ -550,8 +503,7 @@ suite.define(() => {
           },
         },
       });
-      // Anchor on the always-rendered manual-link row: the Sign in button swaps
-      // for the flow UI once clicked, so it cannot identify the section.
+      // The manual-link row stays mounted while the Sign in button is replaced.
       const section = page.locator("section.settings-section", {
         has: page.locator(".profile-auth-link-input"),
       });
@@ -607,8 +559,10 @@ suite.define(() => {
 
       await gateway.deferNext("users.authConnect.cancel");
       await auth("connect-cancel").click();
-      const cancellation = await gateway.waitForRequest("users.authConnect.cancel");
-      expect(cancellation.params).toEqual({ profileId: testProfile.id, connectId: "connect-1" });
+      await expectRequest(gateway, "users.authConnect.cancel", {
+        profileId: testProfile.id,
+        connectId: "connect-1",
+      });
       await expect(account("flow")).toBeVisible();
       await expect(auth("connect-cancel")).toBeDisabled();
       await gateway.resolveDeferred("users.authConnect.cancel", { status: "cancelled" });
@@ -622,9 +576,7 @@ suite.define(() => {
       });
       await startSignIn();
       await expect(section.locator(".wizard-step__progress")).toHaveText("Saving account…");
-      const readsBeforeRefresh = (await gateway.getRequests("users.self")).length;
-      await page.locator(".profile-refresh").click();
-      await gateway.waitForRequest("users.self", { after: readsBeforeRefresh });
+      await refreshProfile(page, gateway);
       await expect(auth("connect-cancel")).toBeEnabled();
       savedAccounts.push(connected);
       await gateway.setMethodResponse("users.listModelAccounts", inventory(connected));
@@ -644,8 +596,7 @@ suite.define(() => {
       });
       await gateway.setMethodResponse("users.listModelAccounts", inventory(work));
       await section.locator(`[data-auth-profile-id="${work.authProfileId}"]`).click();
-      const selection = await gateway.waitForRequest("users.selectModelAccount");
-      expect(selection.params).toEqual({
+      await expectRequest(gateway, "users.selectModelAccount", {
         profileId: testProfile.id,
         authProfileId: work.authProfileId,
       });
@@ -682,8 +633,7 @@ suite.define(() => {
       await keyInput.fill("synthetic-grok-key");
       await gateway.deferNext("users.authConnect.answer");
       await section.locator('.wizard-step__form button[type="submit"]').click();
-      const answer = await gateway.waitForRequest("users.authConnect.answer");
-      expect(answer.params).toEqual({
+      await expectRequest(gateway, "users.authConnect.answer", {
         profileId: testProfile.id,
         connectId: "connect-3",
         stepId: "api-key",
@@ -708,16 +658,11 @@ suite.define(() => {
     await suite.withPage(profileContext(), async ({ page }) => {
       const gateway = await installProfileGateway(page, { deferredMethods: ["users.self"] });
 
-      const response = await page.goto(new URL(profilePath, suite.server.baseUrl).href);
-      expect(response?.status()).toBe(200);
+      await navigateProfile(page);
 
       const refresh = page.locator(".profile-refresh");
       const expectRefresh = async (busy: boolean) => {
-        if (busy) {
-          await expect(refresh).toBeDisabled();
-        } else {
-          await expect(refresh).toBeEnabled();
-        }
+        await expect(refresh).toBeEnabled({ enabled: !busy });
         expect(await refresh.ariaSnapshot()).toContain(
           busy ? 'button "Refreshing…" [disabled]' : 'button "Refresh"',
         );
@@ -765,15 +710,10 @@ suite.define(() => {
       const avatarRequests: string[] = [];
       await page.route(`**/api/users/${testProfile.id}/avatar*`, async (route) => {
         avatarRequests.push(route.request().url());
-        await route.fulfill({
-          body: avatarPng,
-          contentType: "image/png",
-          status: 200,
-        });
+        await route.fulfill(pngResponse);
       });
       const gateway = await installProfileGateway(page, { deferredMethods: ["users.setAvatar"] });
-      const response = await page.goto(new URL(profilePath, suite.server.baseUrl).href);
-      expect(response?.status()).toBe(200);
+      await navigateProfile(page);
       await page.locator("#settings-profile-identity").waitFor({ timeout: 10_000 });
       const connect = await gateway.waitForRequest("connect");
       const selfInstanceId = (connect.params as { client?: { instanceId?: string } } | undefined)

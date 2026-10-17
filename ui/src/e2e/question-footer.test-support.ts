@@ -22,10 +22,10 @@ export function defineQuestionFooterTests({
   questionSessionKey,
 }: QuestionFooterFixtures) {
   it.each([
-    { height: 844, screenshotName: "portrait", width: 390 },
-    { height: 390, screenshotName: "landscape", width: 844 },
+    { height: 844, orientation: "portrait", width: 390 },
+    { height: 390, orientation: "landscape", width: 844 },
   ])(
-    "keeps a collapsed question separate from PRs, notices, and the input on $screenshotName",
+    "keeps a collapsed question separate from PRs, notices, and the input on $orientation",
     async ({ height, width }) => {
       const { gateway, page } = await openQuestionPage({ height, width }, true);
       const composer = page.locator(".agent-chat__input");
@@ -104,7 +104,6 @@ export function defineQuestionFooterTests({
             shellBorder: getComputedStyle(element).borderTopWidth,
             shellShadow: getComputedStyle(element).boxShadow,
             hasPullRequests,
-            noticeTop: notice.getBoundingClientRect().top,
             noticeBottom: notice.getBoundingClientRect().bottom,
             questionTop: question.getBoundingClientRect().top,
             contextBottom: stack.getBoundingClientRect().bottom,

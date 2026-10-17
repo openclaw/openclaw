@@ -1,5 +1,4 @@
-// Control UI tests prove route-scoped CSS on fresh direct navigation.
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -26,13 +25,9 @@ async function probeStyles(
       probe.className = className;
       probe.innerHTML = html;
       document.body.append(probe);
-      const styles = properties.map(([selector, property]) => {
-        const element = probe.querySelector(selector);
-        if (!element) {
-          throw new Error(`Style probe missing ${selector}`);
-        }
-        return getComputedStyle(element).getPropertyValue(property);
-      });
+      const styles = properties.map(([selector, property]) =>
+        getComputedStyle(probe.querySelector(selector)!).getPropertyValue(property),
+      );
       probe.remove();
       return styles;
     },
@@ -43,6 +38,10 @@ async function probeStyles(
 suite.define(() => {
   it("loads shared Markdown and session-link styles on direct Cron, Skills, and Chat routes", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const openRoute = async (path: string, ready: Locator) => {
+        expect((await page.goto(`${suite.server.baseUrl}${path}`))?.status()).toBe(200);
+        await ready.waitFor();
+      };
       const emptyPage = { total: 0, offset: 0, limit: 50, hasMore: false, nextOffset: null };
       await installMockGateway(page, {
         methodResponses: {
@@ -57,9 +56,7 @@ suite.define(() => {
         },
       });
 
-      const cronResponse = await page.goto(`${suite.server.baseUrl}cron`);
-      expect(cronResponse?.status()).toBe(200);
-      await page.locator(".cron-page").waitFor();
+      await openRoute("cron", page.locator(".cron-page"));
 
       const [padding, listGap, listFontSize, ...cronStyles] = await probeStyles(
         page,
@@ -81,9 +78,10 @@ suite.define(() => {
       expect(Number.parseFloat(listGap!) / Number.parseFloat(listFontSize!)).toBeCloseTo(0.4, 2);
       expect(cronStyles).toEqual(["solid", "auto", "500", "none"]);
 
-      const skillsResponse = await page.goto(`${suite.server.baseUrl}skills`);
-      expect(skillsResponse?.status()).toBe(200);
-      await page.getByRole("searchbox", { name: "Search skills", exact: true }).waitFor();
+      await openRoute(
+        "skills",
+        page.getByRole("searchbox", { name: "Search skills", exact: true }),
+      );
 
       expect(
         await probeStyles(
@@ -105,9 +103,7 @@ suite.define(() => {
         ),
       ).toEqual(["solid", "auto", "block", "none"]);
 
-      const chatResponse = await page.goto(`${suite.server.baseUrl}chat?session=main`);
-      expect(chatResponse?.status()).toBe(200);
-      await page.locator("openclaw-chat-page").waitFor();
+      await openRoute("chat?session=main", page.locator("openclaw-chat-page"));
 
       const chatMarkdownStyles = await page.evaluate(() => {
         const probe = document.createElement("div");
@@ -127,13 +123,7 @@ suite.define(() => {
           <ol class="probe-ordered"><li>Ordered</li></ol>
         `;
         document.body.append(probe);
-        const element = (selector: string) => {
-          const found = probe.querySelector(selector);
-          if (!found) {
-            throw new Error(`Chat Markdown style probe missing ${selector}`);
-          }
-          return found;
-        };
+        const element = (selector: string) => probe.querySelector(selector)!;
         const dimension = element("th:first-child");
         const gap = (before: string, after: string) =>
           element(after).getBoundingClientRect().top -

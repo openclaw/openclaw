@@ -93,6 +93,9 @@ suite.define(() => {
   it("rejects cancelled and stale callbacks, then saves a fresh sign-in and serves an existing session", async () => {
     const call = <T = unknown>(method: string, params: Record<string, unknown>) =>
       readback.client.request<T>(method, params);
+    const sessionKey = loginSessionKey;
+    const history = async () => JSON.stringify(await call("chat.history", { sessionKey }));
+    const loginLabel = "Fixture browser sign-in";
     const authStatus = () => call<ModelAuthStatusResult>("models.authStatus", { agentId: "main" });
     const profile = async () => {
       const status = await authStatus();
@@ -103,12 +106,12 @@ suite.define(() => {
     const initialAuthStatus = await authStatus();
     expect(
       initialAuthStatus.providerCapabilities?.flatMap((provider) => provider.loginOptions ?? []),
-    ).toEqual([
-      expect.objectContaining({
+    ).toMatchObject([
+      {
         id: `${loginProvider}/browser`,
-        label: "Fixture browser sign-in",
+        label: loginLabel,
         kind: "oauth",
-      }),
+      },
     ]);
     const savedProfile = { type: "api_key", profileId: `${loginProvider}:default` };
     const approve = async (page: Page) => {
@@ -123,11 +126,7 @@ suite.define(() => {
       expect(await profile()).toBeUndefined();
       expect(fixture.requests).not.toContain("/token");
     };
-    const sessionKey = loginSessionKey;
-    expect(JSON.stringify(await call("chat.history", { sessionKey }))).toContain(
-      loginHistoryMarker,
-    );
-    const url = new URL("settings/model-providers", `${loginOrigin}/`);
+    expect(await history()).toContain(loginHistoryMarker);
     await suite.withPage(
       {
         ignoreHTTPSErrors: true,
@@ -145,13 +144,12 @@ suite.define(() => {
             }
           }),
         );
-        await page.goto(url.href);
+        await page.goto(`${loginOrigin}/settings/model-providers`);
         // Read the login document only after its UI is ready, not during document replacement.
-        await page.getByLabel("Gateway secret", { exact: true }).waitFor();
+        const secret = page.getByLabel("Gateway secret", { exact: true });
+        await secret.waitFor();
         expect(await page.evaluate(() => window.isSecureContext)).toBe(true);
-        await page
-          .getByLabel("Gateway secret", { exact: true })
-          .fill(fixture.instance.gatewayToken);
+        await secret.fill(fixture.instance.gatewayToken);
         await page.locator(".login-gate__connect").click();
         await page.locator('[data-kind="pairing-required"]').waitFor();
         const devices = await fixture.instance.cli(["devices", "list", "--json"]);
@@ -162,10 +160,15 @@ suite.define(() => {
         expect(approved.code, approved.stderr).toBe(0);
         await waitForControlUiGatewayReady(page);
         const modal = page.locator("openclaw-modal-dialog");
+        const modalButton = (name: string) => modal.getByRole("button", { name, exact: true });
+        const closeModal = async (name: string) => {
+          await modalButton(name).click();
+          await expect.poll(() => modal.count()).toBe(0);
+        };
         const begin = async () => {
           await page.locator("[data-models-connect]").click();
           await page.locator(`[data-models-login-provider="${loginProvider}"]`).click();
-          await modal.getByRole("button", { name: "Fixture browser sign-in", exact: true }).click();
+          await modalButton(loginLabel).click();
           const link = page.locator(".wizard-step__external-link");
           await link.waitFor();
           const popup = context.waitForEvent("page");
@@ -177,8 +180,7 @@ suite.define(() => {
         const cancelledPage = await begin();
         expect(pagePreviewRequests).toBe(0);
         expect(await page.locator(".link-hovercard").count()).toBe(0);
-        await modal.getByRole("button", { name: "Cancel", exact: true }).click();
-        await expect.poll(() => modal.count()).toBe(0);
+        await closeModal("Cancel");
         const cancelledResponse = await approve(cancelledPage);
         await expectRejected(cancelledResponse);
         await cancelledPage.waitForURL(cancelledResponse.url());
@@ -193,13 +195,12 @@ suite.define(() => {
         expect(new URL(freshResponse.url()).origin).toBe(loginOrigin);
         await expect.poll(profile).toMatchObject(savedProfile);
         await modal
-          .getByRole("heading", { name: "Fixture browser sign-in is connected", exact: true })
+          .getByRole("heading", { name: `${loginLabel} is connected`, exact: true })
           .waitFor();
         await page
-          .getByText("Fixture browser sign-in: Provider credentials saved.", { exact: true })
+          .getByText(`${loginLabel}: Provider credentials saved.`, { exact: true })
           .waitFor();
-        await modal.getByRole("button", { name: "Close", exact: true }).click();
-        await expect.poll(() => modal.count()).toBe(0);
+        await closeModal("Close");
         await readback.client.stopAndWait();
         await fixture.instance.stopGateway();
         await fixture.instance.startGateway();
@@ -207,9 +208,7 @@ suite.define(() => {
         // The browser may still be in its 15-second reconnect backoff.
         await waitForControlUiGatewayReady(page, 30_000);
         expect(await profile()).toMatchObject(savedProfile);
-        expect(JSON.stringify(await call("chat.history", { sessionKey }))).toContain(
-          loginHistoryMarker,
-        );
+        expect(await history()).toContain(loginHistoryMarker);
         const catalog = await (async () => {
           const signal = AbortSignal.timeout(10_000);
           for (;;) {
@@ -240,9 +239,7 @@ suite.define(() => {
           message: "Confirm this signed-in fixture works.",
           idempotencyKey: "browser-login-existing-session",
         });
-        await expect
-          .poll(async () => JSON.stringify(await call("chat.history", { sessionKey })))
-          .toContain("Signed-in fixture reply");
+        await expect.poll(history).toContain("Signed-in fixture reply");
         expect(fixture.requests).toContain("/models");
         expect(fixture.requests).toContain("/chat/completions");
         expect(pagePreviewRequests).toBe(0);

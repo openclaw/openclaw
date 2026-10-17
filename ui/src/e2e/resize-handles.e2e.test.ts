@@ -17,24 +17,20 @@ const sessionKey = "agent:main:main";
 const viewport = { height: 760, width: 1440 };
 
 async function openSidePanel(page: Page, dock: SidebarDock = "right") {
-  const key = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+  const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
   const column = {
     id: "side-panel-column",
     side: "right",
     panels: [{ id: "detail", slot: "detail" }],
-    activePanelId: "detail",
     height: 320,
     width: 420,
   };
-  const layout = { columns: [column], dock, open: true, expanded: false };
+  const layout = { columns: [column], dock };
   const settings = { sessionKey, sidebarSessionLayouts: { [sessionKey]: layout } };
-  await page.addInitScript(
-    ({ key: settingsKey, value }) => localStorage.setItem(settingsKey, value),
-    {
-      key,
-      value: JSON.stringify(settings),
-    },
-  );
+  await page.addInitScript(({ key, value }) => localStorage.setItem(key, value), {
+    key: storageKey,
+    value: JSON.stringify(settings),
+  });
   await installMockGateway(page, {
     featureMethods: ["sessions.diff"],
     methodResponses: {
@@ -56,22 +52,26 @@ async function openSidePanel(page: Page, dock: SidebarDock = "right") {
 
 async function lineStyle(locator: Locator) {
   return locator.evaluate((element) => {
-    const host = getComputedStyle(element);
-    const line = getComputedStyle(element, "::after");
-    return {
-      height: line.height,
-      outline: host.outlineStyle,
-      width: line.width,
-    };
+    const { height, width } = getComputedStyle(element, "::after");
+    return { height, width, outline: getComputedStyle(element).outlineStyle };
   });
 }
 
-async function waitForAnimations(locator: Locator) {
+async function expectHoverLine(locator: Locator, axis: "width" | "height") {
+  expect((await lineStyle(locator))[axis]).toBe("1px");
+  await locator.hover();
   await locator.evaluate(async (element) => {
     await Promise.all(
       element.getAnimations({ subtree: true }).map((animation) => animation.finished),
     );
   });
+  expect((await lineStyle(locator))[axis]).toBe("2px");
+}
+
+async function bounds(locator: Locator) {
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  return box!;
 }
 
 suite.define(() => {
@@ -92,17 +92,15 @@ suite.define(() => {
         }, direction);
         const divider = page.getByRole("separator", { name: "Resize side panel" });
         await divider.waitFor();
-        const bounds = await divider.boundingBox();
-        expect(bounds).not.toBeNull();
+        const initial = await bounds(divider);
         const horizontal = dock === "bottom";
         const coordinate = async () => {
-          const current = await divider.boundingBox();
-          expect(current).not.toBeNull();
-          return horizontal ? current!.y : current!.x;
+          const current = await bounds(divider);
+          return horizontal ? current.y : current.x;
         };
-        const before = horizontal ? bounds!.y : bounds!.x;
-        const x = bounds!.x + bounds!.width / 2;
-        const y = bounds!.y + bounds!.height / 2;
+        const before = horizontal ? initial.y : initial.x;
+        const x = initial.x + initial.width / 2;
+        const y = initial.y + initial.height / 2;
         const delta = horizontal ? 50 : -80;
         await page.mouse.move(x, y);
         await page.mouse.down();
@@ -135,22 +133,13 @@ suite.define(() => {
       const panel = page.locator('[data-panel-slot="detail"]');
       await sidePanel.waitFor();
 
-      const [panelBounds, sideBounds] = await Promise.all([
-        panel.boundingBox(),
-        sidePanel.boundingBox(),
-      ]);
-      expect(panelBounds).not.toBeNull();
-      expect(sideBounds).not.toBeNull();
-      expect(Math.abs(sideBounds!.x + sideBounds!.width - panelBounds!.x)).toBeLessThanOrEqual(1);
+      const [panelBox, sideBox] = await Promise.all([bounds(panel), bounds(sidePanel)]);
+      expect(Math.abs(sideBox.x + sideBox.width - panelBox.x)).toBeLessThanOrEqual(1);
       expect(
         await shellNav.evaluate((element) => getComputedStyle(element).borderInlineEndWidth),
       ).toBe("1px");
       expect((await lineStyle(navigation)).width).toBe("1px");
-      expect((await lineStyle(sidePanel)).width).toBe("1px");
-
-      await sidePanel.hover();
-      await waitForAnimations(sidePanel);
-      expect((await lineStyle(sidePanel)).width).toBe("2px");
+      await expectHoverLine(sidePanel, "width");
 
       const pointerBounds = await sidePanel.boundingBox();
       await page.mouse.move(pointerBounds!.x + pointerBounds!.width / 2, pointerBounds!.y + 80);
@@ -168,10 +157,7 @@ suite.define(() => {
 
       await dockChatSidePanel(page, "bottom");
       await expect.poll(() => sidePanel.getAttribute("orientation")).toBe("horizontal");
-      expect((await lineStyle(sidePanel)).height).toBe("1px");
-      await sidePanel.hover();
-      await waitForAnimations(sidePanel);
-      expect((await lineStyle(sidePanel)).height).toBe("2px");
+      await expectHoverLine(sidePanel, "height");
 
       await page.setViewportSize({ height: 760, width: 900 });
       await expect.poll(() => navigation.isVisible()).toBe(false);

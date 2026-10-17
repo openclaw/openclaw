@@ -1,4 +1,3 @@
-// Control UI E2E tests cover composer-replacing Gateway questions through the mocked WebSocket.
 import type { Question, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
@@ -6,7 +5,11 @@ import type { SessionsListResult } from "../api/types.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  type MockGatewayControls,
+} from "../test-helpers/control-ui-e2e.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { defineQuestionFooterTests } from "./question-footer.test-support.ts";
@@ -24,11 +27,21 @@ const mainSessionKey = "agent:main:main";
 const questionSessionKey = "agent:main:question-proof";
 
 let context: BrowserContext | undefined;
-function questionRecord(id: string, questions: Question[]) {
+function questionRecord(id: string, question: Partial<Question> | Question[] = {}) {
   const createdAtMs = Date.now();
   return {
     id,
-    questions,
+    questions: Array.isArray(question)
+      ? question
+      : [
+          {
+            questionId: "deploy_target",
+            header: "Deploy",
+            question: "Where should I deploy?",
+            options: [{ label: "Staging" }, { label: "Production" }],
+            ...question,
+          },
+        ],
     agentId: "main",
     sessionKey: questionSessionKey,
     createdAtMs,
@@ -37,26 +50,42 @@ function questionRecord(id: string, questions: Question[]) {
   };
 }
 
+async function expectResolution(gateway: MockGatewayControls, params: unknown, after = 0) {
+  expect((await gateway.waitForRequest("question.resolve", { after })).params).toEqual(params);
+}
+
+async function expectSecretInput(input: Locator, type: string, value: string) {
+  expect([await input.getAttribute("type"), await input.inputValue()]).toEqual([type, value]);
+}
+
+async function newPage(viewport = { height: 900, width: 1440 }, hasTouch = false) {
+  context = await suite.browser.newContext({
+    hasTouch,
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport,
+  });
+  return context.newPage();
+}
+
 function secretStoreQuestion(id: string) {
-  return questionRecord(id, [
-    {
-      questionId: "api_key",
-      header: "API key",
-      question: "Provide the deployment API key",
-      options: [],
-      isSecret: true,
-      secretStore: {
-        name: "DEPLOY_API_KEY",
-        kind: "secret",
-        allowedHosts: ["api.example.test"],
-        reason: "Publish the release artifacts.",
-      },
-      secretStoreExisting: {
-        updatedAtMs: Date.now() - 60_000,
-        updatedBy: "release-operator",
-      },
+  return questionRecord(id, {
+    questionId: "api_key",
+    header: "API key",
+    question: "Provide the deployment API key",
+    options: [],
+    isSecret: true,
+    secretStore: {
+      name: "DEPLOY_API_KEY",
+      kind: "secret",
+      allowedHosts: ["api.example.test"],
+      reason: "Publish the release artifacts.",
     },
-  ]);
+    secretStoreExisting: {
+      updatedAtMs: Date.now() - 60_000,
+      updatedBy: "release-operator",
+    },
+  });
 }
 
 function storedSecretAnswer(): QuestionResolveResult {
@@ -80,13 +109,7 @@ function historyMessages() {
 }
 
 async function openQuestionPage(viewport = { height: 900, width: 1440 }, hasTouch = false) {
-  context = await suite.browser.newContext({
-    hasTouch,
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport,
-  });
-  const page = await context.newPage();
+  const page = await newPage(viewport, hasTouch);
   const gateway = await installMockGateway(page, {
     featureMethods: [
       "chat.abort",
@@ -160,12 +183,30 @@ function panelFor(page: Page, prompt: string) {
   return page.locator("openclaw-chat-question-panel").filter({ hasText: prompt });
 }
 
+async function showQuestion(
+  page: Page,
+  gateway: MockGatewayControls,
+  request: ReturnType<typeof questionRecord>,
+) {
+  await gateway.emitGatewayEvent("question.requested", request);
+  const panel = panelFor(page, request.questions[0]!.question);
+  await panel.waitFor();
+  return panel;
+}
+
+async function openExternalStep(page: Page, activate: () => Promise<void>) {
+  const popupPromise = page.waitForEvent("popup");
+  await activate();
+  const popup = await popupPromise;
+  await popup.getByRole("heading", { name: "Controlled sign-in page" }).waitFor();
+  return popup;
+}
+
 async function expectQuestionAttention(page: Page, preview: string | null): Promise<void> {
   const present = preview !== null;
   const session = page.locator(`[data-session-key="${questionSessionKey}"]`).first();
   const questionAttention = session.locator('[data-session-attention="question"]');
-  const expectedCount = present ? 1 : 0;
-  await expectCount(questionAttention, expectedCount);
+  await expectCount(questionAttention, present ? 1 : 0);
   if (present) {
     await expect
       .poll(() =>
@@ -182,18 +223,16 @@ async function expectQuestionAttention(page: Page, preview: string | null): Prom
 }
 
 function scrollRegressionQuestion(id: string, prompt: string) {
-  return questionRecord(id, [
-    {
-      questionId: "release_strategy",
-      header: "Strategy",
-      question: prompt,
-      options: Array.from({ length: 4 }, (_, index) => ({
-        label: `Release strategy ${index + 1}`,
-        description: `Deterministic option ${index + 1} makes the rendered panel exceed the near-bottom threshold after layout, proving resize reconciliation follows explicit user intent instead of stale geometry.`,
-      })),
-      isOther: true,
-    },
-  ]);
+  return questionRecord(id, {
+    questionId: "release_strategy",
+    header: "Strategy",
+    question: prompt,
+    options: Array.from({ length: 4 }, (_, index) => ({
+      label: `Release strategy ${index + 1}`,
+      description: `Deterministic option ${index + 1} makes the rendered panel exceed the near-bottom threshold after layout, proving resize reconciliation follows explicit user intent instead of stale geometry.`,
+    })),
+    isOther: true,
+  });
 }
 
 suite.define(() => {
@@ -204,15 +243,7 @@ suite.define(() => {
 
   it("reveals sidebar attention on touch without navigating or closing the drawer", async () => {
     const { gateway, page } = await openQuestionPage({ width: 390, height: 844 }, true);
-    const request = questionRecord("sidebar-touch-question", [
-      {
-        questionId: "environment",
-        header: "Environment",
-        question: "Which environment should I use for the preview?",
-        options: [{ label: "Staging" }, { label: "Production" }],
-        isOther: false,
-      },
-    ]);
+    const request = questionRecord("sidebar-touch-question", { isOther: false });
 
     await gateway.emitGatewayEvent("question.requested", request);
     await page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first().tap();
@@ -257,28 +288,21 @@ suite.define(() => {
         body: "<h1>Controlled sign-in page</h1><p>Browser navigation proof; no account sign-in.</p>",
       }),
     );
-    const request = questionRecord("question-external-step", [
-      {
-        questionId: "continue",
-        header: "Continue",
-        question: prompt,
-        url,
-        options: [{ label: "I've completed this step" }, { label: "Decline" }],
-        isOther: false,
-      },
-    ]);
+    const request = questionRecord("question-external-step", {
+      questionId: "continue",
+      header: "Continue",
+      question: prompt,
+      url,
+      options: [{ label: "I've completed this step" }, { label: "Decline" }],
+      isOther: false,
+    });
 
-    await gateway.emitGatewayEvent("question.requested", request);
-    const panel = panelFor(page, prompt);
-    await panel.waitFor();
+    const panel = await showQuestion(page, gateway, request);
     const link = panel.getByRole("link", { name: "Open link", exact: true });
     await expectCount(link, 1);
     expect(await link.getAttribute("href")).toBe(url);
 
-    const popupPromise = page.waitForEvent("popup");
-    await link.click();
-    const popup = await popupPromise;
-    await popup.getByRole("heading", { name: "Controlled sign-in page" }).waitFor();
+    const popup = await openExternalStep(page, () => link.click());
     expect(popup.url()).toBe(url);
     expect(await popup.evaluate(() => window.opener)).toBeNull();
     await popup.close();
@@ -289,10 +313,7 @@ suite.define(() => {
 
     await panel.getByRole("radio", { name: /I've completed this step/ }).click();
     // Opening the link with Enter must not trigger the panel's Enter-to-submit shortcut.
-    const keyboardPopupPromise = page.waitForEvent("popup");
-    await link.press("Enter");
-    const keyboardPopup = await keyboardPopupPromise;
-    await keyboardPopup.getByRole("heading", { name: "Controlled sign-in page" }).waitFor();
+    const keyboardPopup = await openExternalStep(page, () => link.press("Enter"));
     await keyboardPopup.close();
     await panel.waitFor();
     expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
@@ -303,86 +324,72 @@ suite.define(() => {
       answers,
     } satisfies QuestionResolveResult);
     await button(panel, "Submit").click();
-    const resolved = await gateway.waitForRequest("question.resolve");
-    expect(resolved.params).toEqual({ id: request.id, answers });
+    await expectResolution(gateway, { id: request.id, answers });
     expect(await gateway.getRequests("question.resolve")).toHaveLength(1);
     await expectCount(panel, 0);
     await expectQuestionAttention(page, null);
   });
 
-  it("settles a live-edge transcript after a question enters footer flow", async () => {
-    const { gateway, page } = await openQuestionPage();
-    await waitForChatScrollIdle(page);
-    await expect
-      .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-      .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
-
-    const prompt = "Which detailed release strategy should I use?";
-    await gateway.emitGatewayEvent(
-      "question.requested",
-      scrollRegressionQuestion("question-live-edge-scroll", prompt),
-    );
-    const panel = panelFor(page, prompt);
-    await panel.waitFor();
-    await waitForChatScrollIdle(page);
-
-    await expect
-      .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-      .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
-    await expect
-      .poll(async () => {
-        const panelBox = await panel.boundingBox();
-        const conversationBox = await page.locator(".chat-main__conversation").boundingBox();
-        return Boolean(
-          panelBox &&
-          conversationBox &&
-          panelBox.y >= conversationBox.y - 1 &&
-          panelBox.y + panelBox.height <= conversationBox.y + conversationBox.height + 1,
-        );
-      })
-      .toBe(true);
-    await expectCount(page.getByRole("button", { name: "Scroll to latest" }), 0);
-  });
-
-  it("preserves explicit backscroll and keeps the latest arrow above the question", async () => {
-    const { gateway, page } = await openQuestionPage();
-    await waitForChatScrollIdle(page);
-    const thread = page.locator(".chat-thread");
-    await thread.hover();
-    await page.mouse.wheel(0, -600);
-    await expect
-      .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
-      .toBeGreaterThan(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
-    const scrollToLatest = page.getByRole("button", { name: "Scroll to latest" });
-    await scrollToLatest.waitFor({ state: "visible", timeout: 10_000 });
-    await waitForChatScrollIdle(page);
-    const readingScrollTop = await thread.evaluate((element) => element.scrollTop);
-
-    const prompt = "Which detailed release strategy should stay below my reading position?";
-    await gateway.emitGatewayEvent(
-      "question.requested",
-      scrollRegressionQuestion("question-backscroll-position", prompt),
-    );
-    const panel = panelFor(page, prompt);
-    await panel.waitFor();
-    await waitForChatScrollIdle(page);
-
-    await expect
-      .poll(
-        async () =>
-          Math.abs((await thread.evaluate((element) => element.scrollTop)) - readingScrollTop),
-        { timeout: 10_000 },
-      )
-      .toBeLessThanOrEqual(2);
-    await scrollToLatest.waitFor({ state: "visible", timeout: 10_000 });
-    await expect
-      .poll(async () => {
-        const arrowBox = await scrollToLatest.boundingBox();
-        const panelBox = await panel.boundingBox();
-        return Boolean(arrowBox && panelBox && arrowBox.y + arrowBox.height <= panelBox.y);
-      })
-      .toBe(true);
-  });
+  it.each([false, true])(
+    "reconciles question footer layout with explicit backscroll: %s",
+    async (backscroll) => {
+      const { gateway, page } = await openQuestionPage();
+      const thread = page.locator(".chat-thread");
+      const latest = page.getByRole("button", { name: "Scroll to latest" });
+      const distance = () =>
+        expect.poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 });
+      await waitForChatScrollIdle(page);
+      let readingScrollTop = 0;
+      if (backscroll) {
+        await thread.hover();
+        await page.mouse.wheel(0, -600);
+        await distance().toBeGreaterThan(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+        await latest.waitFor({ state: "visible", timeout: 10_000 });
+        await waitForChatScrollIdle(page);
+        readingScrollTop = await thread.evaluate((element) => element.scrollTop);
+      } else {
+        await distance().toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      }
+      const request = scrollRegressionQuestion(
+        "question-scroll",
+        "Which detailed release strategy should I use?",
+      );
+      const panel = await showQuestion(page, gateway, request);
+      await waitForChatScrollIdle(page);
+      if (backscroll) {
+        await expect
+          .poll(
+            async () =>
+              Math.abs((await thread.evaluate((element) => element.scrollTop)) - readingScrollTop),
+            { timeout: 10_000 },
+          )
+          .toBeLessThanOrEqual(2);
+        await latest.waitFor({ state: "visible", timeout: 10_000 });
+        await expect
+          .poll(async () => {
+            const arrowBox = await latest.boundingBox();
+            const panelBox = await panel.boundingBox();
+            return Boolean(arrowBox && panelBox && arrowBox.y + arrowBox.height <= panelBox.y);
+          })
+          .toBe(true);
+      } else {
+        await distance().toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+        await expect
+          .poll(async () => {
+            const panelBox = await panel.boundingBox();
+            const conversationBox = await page.locator(".chat-main__conversation").boundingBox();
+            return Boolean(
+              panelBox &&
+              conversationBox &&
+              panelBox.y >= conversationBox.y - 1 &&
+              panelBox.y + panelBox.height <= conversationBox.y + conversationBox.height + 1,
+            );
+          })
+          .toBe(true);
+        await expectCount(latest, 0);
+      }
+    },
+  );
 
   defineQuestionFooterTests({
     openQuestionPage,
@@ -394,28 +401,12 @@ suite.define(() => {
     const { gateway, page } = await openQuestionPage();
     const composer = page.locator(composerSelector);
     await composer.fill("Keep this release note draft");
-    const request = questionRecord("question-deploy-target", [
-      {
-        questionId: "deploy_target",
-        header: "Deploy",
-        question: "Where should I deploy?",
-        options: [
-          {
-            label: "Staging (Recommended)",
-            description: "Validate the release before production.",
-          },
-          {
-            label: "Production",
-            description: "Deploy directly to live users.",
-          },
-        ],
-        isOther: true,
-      },
-    ]);
+    const request = questionRecord("question-deploy-target", {
+      options: [{ label: "Staging (Recommended)" }, { label: "Production" }],
+      isOther: true,
+    });
 
-    await gateway.emitGatewayEvent("question.requested", request);
-    const panel = panelFor(page, "Where should I deploy?");
-    await panel.waitFor();
+    const panel = await showQuestion(page, gateway, request);
     await expectQuestionAttention(page, request.questions[0]!.question);
     await expectCount(page.locator(".chat-thread openclaw-chat-question-panel"), 0);
     await expectCount(panel.getByText("1/1", { exact: true }), 1);
@@ -463,8 +454,7 @@ suite.define(() => {
     } satisfies QuestionResolveResult);
     await panel.getByRole("radio", { name: /Staging \(Recommended\)/ }).click();
     await button(panel, "Submit").click();
-    const resolveRequest = await gateway.waitForRequest("question.resolve");
-    expect(resolveRequest.params).toEqual({ id: request.id, answers });
+    await expectResolution(gateway, { id: request.id, answers });
 
     await expectCount(panel, 0);
     await expectQuestionAttention(page, null);
@@ -485,10 +475,7 @@ suite.define(() => {
     const request = secretStoreQuestion("question-store-secret-success");
     const fakeSecret = "fake-secret-never-use-browser-proof-123";
     await gateway.setMethodResponse("question.resolve", storedSecretAnswer());
-    await gateway.emitGatewayEvent("question.requested", request);
-
-    const panel = panelFor(page, "Provide the deployment API key");
-    await panel.waitFor();
+    const panel = await showQuestion(page, gateway, request);
     await expectCount(panel.getByText("Requested by main", { exact: false }), 1);
     await expectCount(panel.getByText("Publish the release artifacts."), 1);
     await expectCount(panel.getByText("Replaces DEPLOY_API_KEY", { exact: false }), 1);
@@ -508,21 +495,18 @@ suite.define(() => {
     await secretInput.focus();
     await page.keyboard.press("Tab");
     const reveal = button(panel, "Show secret");
-    expect(await reveal.evaluate((element) => element === document.activeElement)).toBe(true);
+    await expectFocused(reveal);
     await page.keyboard.press("Enter");
-    expect(await secretInput.getAttribute("type")).toBe("text");
-    expect(await secretInput.inputValue()).toBe(fakeSecret);
+    await expectSecretInput(secretInput, "text", fakeSecret);
     const hide = button(panel, "Hide secret");
     expect(await hide.getAttribute("aria-pressed")).toBe("true");
     expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
     await page.keyboard.press("Space");
-    expect(await secretInput.getAttribute("type")).toBe("password");
-    expect(await secretInput.inputValue()).toBe(fakeSecret);
+    await expectSecretInput(secretInput, "password", fakeSecret);
     expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
 
     await button(panel, "Submit").click();
-    const resolveRequest = await gateway.waitForRequest("question.resolve");
-    expect(resolveRequest.params).toEqual({
+    await expectResolution(gateway, {
       id: request.id,
       answers: { answers: { api_key: [fakeSecret] } },
       secretStoreAllowedHosts: ["api.example.test", "uploads.example.test", "extra.example.test"],
@@ -543,9 +527,7 @@ suite.define(() => {
     await gateway.setMethodResponse("question.resolve", {
       __mockError: { code: "INVALID_REQUEST", message: validationMessage },
     });
-    await gateway.emitGatewayEvent("question.requested", request);
-
-    const panel = panelFor(page, "Provide the deployment API key");
+    const panel = await showQuestion(page, gateway, request);
     const secretInput = panel.locator('input[type="password"]');
     const hostsInput = panel.locator(".chat-question-panel__hosts");
     await secretInput.fill(fakeSecret);
@@ -561,25 +543,21 @@ suite.define(() => {
     await hostsInput.fill("corrected.example.test");
     const previousRequestCount = (await gateway.getRequests("question.resolve")).length;
     await button(panel, "Submit").click();
-    const retry = await gateway.waitForRequest("question.resolve", {
-      after: previousRequestCount,
-    });
-    expect(retry.params).toEqual({
-      id: request.id,
-      answers: { answers: { api_key: [fakeSecret] } },
-      secretStoreAllowedHosts: ["corrected.example.test"],
-    });
+    await expectResolution(
+      gateway,
+      {
+        id: request.id,
+        answers: { answers: { api_key: [fakeSecret] } },
+        secretStoreAllowedHosts: ["corrected.example.test"],
+      },
+      previousRequestCount,
+    );
     await expectCount(panel, 0);
     await expectSecretNotEchoed(page, fakeSecret);
   });
 
   it("loads a mounted /ask document and resolves its secret through the shared question card", async () => {
-    context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
+    const page = await newPage();
     const request = secretStoreQuestion("question-store-secret-deep-link");
     const fakeSecret = "fake-secret-never-use-deep-link-proof-789";
     const gateway = await installMockGateway(page, {
@@ -612,21 +590,17 @@ suite.define(() => {
     await secretInput.fill(fakeSecret);
     await expectSecretNotEchoed(page, fakeSecret, true);
     await button(panel, "Show secret").click();
-    expect(await secretInput.getAttribute("type")).toBe("text");
-    expect(await secretInput.inputValue()).toBe(fakeSecret);
+    await expectSecretInput(secretInput, "text", fakeSecret);
     await button(panel, "Submit").click();
 
-    const resolveRequest = await gateway.waitForRequest("question.resolve");
-    expect(resolveRequest.params).toEqual({
+    await expectResolution(gateway, {
       id: request.id,
       answers: { answers: { api_key: [fakeSecret] } },
       secretStoreAllowedHosts: ["api.example.test"],
     });
     const outcomeHeading = document.getByRole("heading", { name: "Answered", exact: true });
     await outcomeHeading.waitFor();
-    expect(
-      await outcomeHeading.evaluate((element) => element === element.ownerDocument.activeElement),
-    ).toBe(true);
+    await expectFocused(outcomeHeading);
     expect(await page.title()).toBe("Answered — OpenClaw");
     expect(await document.textContent()).not.toContain(fakeSecret);
     expect(await document.textContent()).not.toContain("stored");
@@ -635,25 +609,21 @@ suite.define(() => {
 
   it("retains a typed answer when navigating between pending questions", async () => {
     const { gateway, page } = await openQuestionPage();
-    const first = questionRecord("question-a-format", [
-      {
-        questionId: "format",
-        header: "Format",
-        question: "Which format should I use?",
-        options: [{ label: "Compact" }, { label: "Detailed" }],
-        isOther: true,
-      },
-    ]);
+    const first = questionRecord("question-a-format", {
+      questionId: "format",
+      header: "Format",
+      question: "Which format should I use?",
+      options: [{ label: "Compact" }, { label: "Detailed" }],
+      isOther: true,
+    });
 
-    const second = questionRecord("question-b-audience", [
-      {
-        questionId: "audience",
-        header: "Audience",
-        question: "Who should read it?",
-        options: [{ label: "Engineers" }, { label: "Everyone" }],
-        isOther: true,
-      },
-    ]);
+    const second = questionRecord("question-b-audience", {
+      questionId: "audience",
+      header: "Audience",
+      question: "Who should read it?",
+      options: [{ label: "Engineers" }, { label: "Everyone" }],
+      isOther: true,
+    });
 
     await gateway.emitGatewayEvent("question.requested", first);
     await gateway.emitGatewayEvent("question.requested", second);
@@ -686,17 +656,10 @@ suite.define(() => {
       await expectCount(panes.locator(composerSelector), 2);
       expect(await gateway.getRequests("question.list")).toHaveLength(1);
 
-      const request = questionRecord(`question-split-${status}-${closeSubmittingPane}`, [
-        {
-          questionId: "deploy_target",
-          header: "Deploy",
-          question: "Where should both panes deploy?",
-          options: [{ label: "Staging" }, { label: "Production" }],
-        },
-      ]);
+      const request = questionRecord(`question-split-${status}-${closeSubmittingPane}`);
 
       await gateway.emitGatewayEvent("question.requested", request);
-      const panels = panelFor(page, "Where should both panes deploy?");
+      const panels = panelFor(page, "Where should I deploy?");
       await expectCount(panels, 2);
       await expectQuestionAttention(page, request.questions[0]!.question);
 
@@ -750,19 +713,10 @@ suite.define(() => {
     const favicon = page.locator('link[rel="icon"][type="image/svg+xml"]');
     await expect.poll(() => favicon.getAttribute("href")).toMatch(/^\/favicon\.svg(?:\?|$)/);
     const originalFavicon = await favicon.getAttribute("href");
-    const request = questionRecord("question-expired-during-disconnect", [
-      {
-        questionId: "deploy_target",
-        header: "Deploy",
-        question: "Where should I deploy after reconnecting?",
-        options: [{ label: "Staging" }, { label: "Production" }],
-      },
-    ]);
+    const request = questionRecord("question-expired-during-disconnect");
 
     await gateway.setMethodResponse("question.list", { questions: [request] });
-    await gateway.emitGatewayEvent("question.requested", request);
-    const panel = panelFor(page, "Where should I deploy after reconnecting?");
-    await panel.waitFor();
+    const panel = await showQuestion(page, gateway, request);
     await expectQuestionAttention(page, request.questions[0]!.question);
     await expect.poll(() => favicon.getAttribute("href")).toMatch(/^data:image\/svg\+xml,/);
 
