@@ -403,6 +403,7 @@ async function connectRelay(isConnectionAllowed = () => true) {
     captureDebugger: owner.capture,
     captureAccess: (tabId, method) => tabAccessPolicy.capture(tabId, method),
     requireAccessibleTab: owner.requireTab,
+    requireInputReceipt: (tabId, epoch) => tabAccessPolicy.requireInputReceipt(tabId, epoch),
     requireNavigatedTab: (tabId, epoch) => owner.requireTab(tabId, epoch, true),
     navigateTab: (tabId, epoch, params, isCurrent, sendCommand) => {
       const generation = attachments.get(tabId);

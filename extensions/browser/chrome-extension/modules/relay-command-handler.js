@@ -10,6 +10,7 @@ export function createRelayCommandHandler({
   captureDebugger,
   captureAccess,
   requireAccessibleTab,
+  requireInputReceipt,
   requireNavigatedTab,
   navigateTab,
 }) {
@@ -51,7 +52,8 @@ export function createRelayCommandHandler({
         case "cdp": {
           const assertAttachment = captureDebugger(message.tabId);
           const epoch = captureAccess(message.tabId, message.method);
-          if (typeof message.method === "string" && message.method.startsWith("Input.")) {
+          const isInput = typeof message.method === "string" && message.method.startsWith("Input.");
+          if (isInput) {
             // Clients pipeline press/release. Keep each tab's native dispatch order
             // across policy awaits without serializing unrelated commands or replies.
             const previous = inputDispatches.get(message.tabId);
@@ -93,7 +95,11 @@ export function createRelayCommandHandler({
           await requireTab(
             message.tabId,
             epoch,
-            controlledBlank ? requireNavigatedTab : requireAccessibleTab,
+            controlledBlank
+              ? requireNavigatedTab
+              : isInput
+                ? requireInputReceipt
+                : requireAccessibleTab,
           );
           assertAttachment();
           reply({ type: "result", seq, result: result ?? {} });

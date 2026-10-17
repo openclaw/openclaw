@@ -25,4 +25,5 @@ export function createRelayCommandHandler(params: {
   ) => Promise<unknown>;
   requireNavigatedTab: RequireRelayTab;
   requireAccessibleTab: RequireRelayTab;
+  requireInputReceipt: RequireRelayTab;
 }): (message: Record<string, unknown>) => Promise<void>;

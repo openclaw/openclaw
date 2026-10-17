@@ -31,6 +31,7 @@ function createHarness() {
     captureAccess: vi.fn(() => epoch),
     navigateTab,
     requireAccessibleTab,
+    requireInputReceipt: vi.fn(async () => ({ id: 7, windowId: 3 })),
     requireNavigatedTab,
   });
   return {
