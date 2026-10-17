@@ -227,12 +227,8 @@ export async function readAdmittedConfigSnapshot(params: {
         getDatabaseEngineSelection() ??
         (await resolveDatabaseEngineSelection(selected.config, params.env));
       installDatabaseEngineSelection(selection);
-      const withStateSnapshot: typeof withOpenClawStateDatabaseReadSnapshot =
-        selection.effectiveEngines.state === "postgres"
-          ? (operation) => operation()
-          : withOpenClawStateDatabaseReadSnapshot;
       const admitted = await measureDoctorConfigPreflightStep("admission.state-snapshot", () =>
-        withStateSnapshot(
+        withOpenClawStateDatabaseReadSnapshot(
           async () => {
             const recoveryOptions = {
               configPath: selected.path,

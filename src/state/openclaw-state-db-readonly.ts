@@ -116,7 +116,7 @@ export function getActiveOpenClawStateDatabaseReadSnapshot(
   return current?.path === resolveReadOnlyPath(options) ? current : undefined;
 }
 
-/** Resolve a composite read from one online snapshot without redirecting live writers. */
+/** Use a SQLite snapshot or the PostgreSQL read owner without redirecting live writers. */
 export async function withOpenClawStateDatabaseReadSnapshot<T>(
   operation: () => Promise<T>,
   options: OpenClawStateDatabaseOptions & {
@@ -124,6 +124,10 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
     reuseCleanClose?: boolean;
   } = {},
 ): Promise<T> {
+  // PostgreSQL read transactions preserve the anchor without copying its SQLite file.
+  if (isStatePostgres()) {
+    return await operation();
+  }
   assertStateFileSnapshotAllowed();
   const pathname = resolveReadOnlyPath(options);
   const current = stateSnapshotReads.getStore();

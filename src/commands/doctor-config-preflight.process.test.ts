@@ -338,7 +338,7 @@ describe("doctor invalid config process exit", () => {
       expect(result, output).toMatchObject({ code: 0, signal: null });
       for (const message of [
         "Config invalid; doctor will run with best-effort config.",
-        "unknown: config could not be parsed; fix config (or run `openclaw doctor --fix`), then rerun",
+        "unknown: config could not be parsed; fix config",
         "Run `openclaw config validate` to inspect the parse error.",
         "Doctor complete.",
       ]) {
