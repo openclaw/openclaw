@@ -44,13 +44,7 @@ function isProcessRunning(pid: number) {
 type SettledRun = { status: "fulfilled" } | { error: unknown; status: "rejected" };
 
 function describeSettledRun(settled: SettledRun) {
-  if (settled.status === "fulfilled") {
-    return "fulfilled";
-  }
-  if (settled.error instanceof Error) {
-    return `rejected with ${settled.error.name}: ${settled.error.message}`;
-  }
-  return `rejected with ${String(settled.error)}`;
+  return settled.status === "fulfilled" ? "fulfilled" : `rejected with ${String(settled.error)}`;
 }
 
 function killKnownProcessPids(pids: ReadonlyArray<number | undefined>) {
@@ -176,6 +170,11 @@ async function initializeGitRepo(repoRoot: string) {
   ]);
 }
 
+async function addWorktree(repoRoot: string, worktreeDir: string) {
+  await fs.mkdir(path.dirname(worktreeDir), { recursive: true });
+  await runGit(repoRoot, ["worktree", "add", "--detach", "--", worktreeDir, "HEAD"]);
+}
+
 async function listGitWorktreePaths(repoRoot: string) {
   const result = await runGit(repoRoot, ["worktree", "list", "--porcelain"]);
   return result.stdout
@@ -283,8 +282,7 @@ describe("mantis before/after process runtime", () => {
       await initializeGitRepo(repoRoot);
       const worktreeDir = path.join(repoRoot, ".artifacts", "owner-bound", "baseline");
       const displacedDir = `${worktreeDir}-displaced`;
-      await fs.mkdir(path.dirname(worktreeDir), { recursive: true });
-      await runGit(repoRoot, ["worktree", "add", "--detach", "--", worktreeDir, "HEAD"]);
+      await addWorktree(repoRoot, worktreeDir);
       const ownership = await fs.lstat(worktreeDir, { bigint: true });
       const naturalExitWitness = path.join(repoRoot, "owner-bound-before-exit.json");
       const preload = path.join(repoRoot, "owner-bound-before-exit.cjs");
@@ -338,8 +336,7 @@ process.exit(result.status ?? 1);
     async () => {
       await initializeGitRepo(repoRoot);
       const worktreeDir = path.join(repoRoot, ".artifacts", "missing-worktree", "baseline");
-      await fs.mkdir(path.dirname(worktreeDir), { recursive: true });
-      await runGit(repoRoot, ["worktree", "add", "--detach", "--", worktreeDir, "HEAD"]);
+      await addWorktree(repoRoot, worktreeDir);
       await fs.rm(worktreeDir, { force: true, recursive: true });
 
       await expect(
@@ -367,9 +364,8 @@ process.exit(result.status ?? 1);
       const candidateDir = path.join(legacyRoot, "candidate");
       const unrelatedDir = path.join(legacyRoot, "unrelated-checkout");
       const unrelatedSentinel = path.join(unrelatedDir, "preserve-me.txt");
-      await fs.mkdir(legacyRoot, { recursive: true });
       for (const worktreeDir of [baselineDir, candidateDir, unrelatedDir]) {
-        await runGit(repoRoot, ["worktree", "add", "--detach", "--", worktreeDir, "HEAD"]);
+        await addWorktree(repoRoot, worktreeDir);
       }
       await fs.writeFile(unrelatedSentinel, "unrelated", "utf8");
 
@@ -405,11 +401,9 @@ process.exit(result.status ?? 1);
       expect(execution.signal).toBe(controller.signal);
       controller.abort();
       return {
-        code: 0,
+        ...successfulCommandResult(),
         killed: true,
         signal: "SIGTERM",
-        stderr: "",
-        stdout: "",
         termination: "signal",
       } satisfies StubCommandResult;
     });

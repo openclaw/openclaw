@@ -149,18 +149,15 @@ describe("mantis discord smoke runtime", () => {
       expect(text).not.toContain("1500000000000000001");
     }
     expect(summaryText).not.toContain("Mantis");
-    const summary = JSON.parse(summaryText) as {
-      bot?: { id: string; username?: string };
-      channel?: { id: string; name?: string; type?: number };
-      guild?: { id: string; name?: string };
-      message?: { id: string };
-      metadataRedaction: boolean;
-    };
-    expect(summary.metadataRedaction).toBe(true);
-    expect(summary.bot).toEqual({ id: "<redacted>", username: "<redacted>" });
-    expect(summary.guild).toEqual({ id: "<redacted>", name: "<redacted>" });
-    expect(summary.channel).toEqual({ id: "<redacted>", name: "<redacted>", type: 0 });
-    expect(summary.message?.id).toBe("<redacted>");
+    expect(JSON.parse(summaryText)).toEqual(
+      expect.objectContaining({
+        metadataRedaction: true,
+        bot: { id: "<redacted>", username: "<redacted>" },
+        guild: { id: "<redacted>", name: "<redacted>" },
+        channel: { id: "<redacted>", name: "<redacted>", type: 0 },
+        message: expect.objectContaining({ id: "<redacted>" }),
+      }),
+    );
   });
 
   it("fails before calling Discord when required ids are missing", async () => {
@@ -215,9 +212,7 @@ describe("mantis discord smoke runtime", () => {
     const errorText = await fs.readFile(path.join(result.outputDir, "error.txt"), "utf8");
     expect(errorText).toContain("/users/@me response exceeds");
     expect(errorText).toContain(`${16 * 1024 * 1024} bytes`);
-    // The byte cap trips on the first call, so the post step never runs.
     expect(fetchGuardCallsWithMethod("POST")).toHaveLength(0);
-    // The connection is still released on the fail-closed path.
     expect(release).toHaveBeenCalled();
   });
 

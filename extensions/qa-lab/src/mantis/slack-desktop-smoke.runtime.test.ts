@@ -5,6 +5,7 @@ import { runInNewContext } from "node:vm";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandRunner } from "./crabbox-runtime.js";
+import type { MantisApprovalCheckpointArtifacts } from "./slack-desktop-smoke.artifacts.js";
 import { runMantisSlackDesktopSmoke } from "./slack-desktop-smoke.runtime.js";
 import {
   SLACK_ARTIFACT_TEST_CHANNEL,
@@ -39,6 +40,19 @@ function inspectResponse(id: string, details: { slug?: string; state?: string } 
 }
 
 type RecordedCommand = { args: readonly string[]; command: string; env?: NodeJS.ProcessEnv };
+type SmokeSummary = {
+  artifacts: { approvalCheckpoints?: MantisApprovalCheckpointArtifacts };
+  crabbox: { id: string; vncCommand: string };
+  error?: string;
+  hydrateMode: string;
+  status: string;
+  timings: { phases: { name: string; status: string }[]; totalMs: number };
+  warning?: string;
+};
+
+async function readSummary(result: { summaryPath: string }): Promise<SmokeSummary> {
+  return JSON.parse(await fs.readFile(result.summaryPath, "utf8"));
+}
 
 function createRunner(
   id: string,
@@ -96,36 +110,37 @@ function expectContains(value: unknown, expected: readonly string[]) {
 }
 
 function describeFetchInput(input: RequestInfo | URL) {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.href;
-  }
-  return input.url;
+  return typeof input === "string" || input instanceof URL ? String(input) : input.url;
 }
 
 function describeFetchBody(body: BodyInit | null | undefined) {
-  if (body == null) {
-    return "";
-  }
-  if (typeof body === "string") {
-    return body;
-  }
-  if (body instanceof URLSearchParams) {
-    return body.toString();
-  }
-  return `[${body.constructor.name}]`;
+  return body == null
+    ? ""
+    : typeof body === "string" || body instanceof URLSearchParams
+      ? String(body)
+      : `[${body.constructor.name}]`;
 }
 
-function phaseStatus(
-  phases: Array<{ name: string; status: string }>,
-  name: string,
-): string | undefined {
-  return phases.find((phase) => phase.name === name)?.status;
+function findRun(commands: RecordedCommand[]) {
+  return commands.find(({ command, args }) => command === "/tmp/crabbox" && args[0] === "run");
 }
 
-function mockMantisCliRuntime(runMantisSlackDesktopSmokeCommand = vi.fn()) {
+function jsonResponse(body: unknown) {
+  return new Response(JSON.stringify(body), { status: 200 });
+}
+
+function gatewayMetadata(gatewayPid: string, workspace: string) {
+  return {
+    gatewayAlive: true,
+    gatewayPid,
+    openedUrl: `https://app.slack.com/client/${workspace}`,
+    qaExitCode: 0,
+  };
+}
+
+async function parseCli(args: string[]) {
+  vi.resetModules();
+  const runMantisSlackDesktopSmokeCommand = vi.fn(async () => undefined);
   vi.doMock("./cli.runtime.js", () => ({
     runMantisBeforeAfterCommand: vi.fn(),
     runMantisDesktopBrowserSmokeCommand: vi.fn(),
@@ -134,6 +149,11 @@ function mockMantisCliRuntime(runMantisSlackDesktopSmokeCommand = vi.fn()) {
     runMantisVisualDriverCommand: vi.fn(),
     runMantisVisualTaskCommand: vi.fn(),
   }));
+  const { registerMantisCli } = await import("./cli.js");
+  const qa = new Command("qa");
+  registerMantisCli(qa);
+  await qa.parseAsync(["node", "openclaw", "mantis", "slack-desktop-smoke", ...args]);
+  vi.doUnmock("./cli.runtime.js");
   return runMantisSlackDesktopSmokeCommand;
 }
 
@@ -205,9 +225,7 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(
       commands.every((entry) => entry.env?.OPENCLAW_LIVE_OPENAI_KEY === "openai-runtime-key"),
     ).toBe(true);
-    const runArgs = commands.find(
-      (entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run",
-    )?.args;
+    const runArgs = findRun(commands)?.args;
     expect(runArgs).toContain("--no-hydrate");
     expect(runArgs).toContain("--fresh-pr");
     expect(runArgs).toContain("openclaw/openclaw#85141");
@@ -336,12 +354,7 @@ describe("mantis Slack desktop smoke runtime", () => {
     );
     await expect(fs.readFile(result.screenshotPath ?? "", "utf8")).resolves.toBe("png");
     await expect(fs.readFile(result.videoPath ?? "", "utf8")).resolves.toBe("mp4");
-    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
-      crabbox: { id: string; vncCommand: string };
-      hydrateMode: string;
-      status: string;
-      timings: { phases: { name: string; status: string }[]; totalMs: number };
-    };
+    const summary = await readSummary(result);
     expect(summary.crabbox.id).toBe("cbx_abc123");
     expect(summary.crabbox.vncCommand).toBe(
       "/tmp/crabbox vnc --provider hetzner --id cbx_abc123 --open",
@@ -377,50 +390,38 @@ describe("mantis Slack desktop smoke runtime", () => {
 
     expect(result.status).toBe("pass");
     expect(result.approvalCheckpointScreenshotPaths).toHaveLength(4);
-    const remoteScript = commands
-      .find((entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run")
-      ?.args.at(-1);
-    expect(remoteScript).toContain("approval_checkpoints=1");
-    expect(remoteScript).toContain('export OPENCLAW_QA_SLACK_CHANNEL_ID="$slack_channel_id"');
-    expect(remoteScript).toContain("--scenario 'slack-approval-exec-native'");
-    expect(remoteScript).toContain("--scenario 'slack-approval-plugin-native'");
-    expect(remoteScript).toContain("OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR");
-    expect(remoteScript).toContain("OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS");
-    expect(remoteScript).toContain('cat >"$out/approval-checkpoint-watcher.mjs"');
-    expect(remoteScript).not.toContain('node >"$out/approval-checkpoint-watcher.mjs"');
-    expect(remoteScript).toContain("approval-checkpoint-watcher.mjs");
-    expect(remoteScript).toContain("OPENCLAW_MANTIS_APPROVAL_BROWSER_BIN");
-    expect(remoteScript).toContain("Rendered from the Slack API message observed by QA");
-    expect(remoteScript).toContain("class='wrap'");
-    expect(remoteScript).toContain("--headless=new");
-    expect(remoteScript).not.toContain('spawn("scrot", [screenshotPath]');
-    expect(remoteScript).toContain("Slack QA exited before all expected approval checkpoints");
-    expect(remoteScript).toContain('if [ "$qa_exit" -eq 0 ]; then\n        wait "$watcher_pid"');
-    expect(remoteScript).toContain(
+    const remoteScript = findRun(commands)?.args.at(-1);
+    expectContains(remoteScript, [
+      "approval_checkpoints=1",
+      'export OPENCLAW_QA_SLACK_CHANNEL_ID="$slack_channel_id"',
+      "--scenario 'slack-approval-exec-native'",
+      "--scenario 'slack-approval-plugin-native'",
+      "OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR",
+      "OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS",
+      'cat >"$out/approval-checkpoint-watcher.mjs"',
+      "approval-checkpoint-watcher.mjs",
+      "OPENCLAW_MANTIS_APPROVAL_BROWSER_BIN",
+      "Rendered from the Slack API message observed by QA",
+      "class='wrap'",
+      "--headless=new",
+      "Slack QA exited before all expected approval checkpoints",
+      'if [ "$qa_exit" -eq 0 ]; then\n        wait "$watcher_pid"',
       'cp "$out/approval-checkpoints/slack-approval-plugin-native-pending.png" "$out/slack-desktop-smoke.png"',
-    );
-    expect(remoteScript).toContain(
       'cp "$out/approval-checkpoints/slack-approval-exec-native-pending.png" "$out/slack-desktop-smoke.png"',
-    );
-    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
-      artifacts: {
-        approvalCheckpoints?: {
-          directoryPath: string;
-          screenshots: { scenarioId: string; screenshotPath: string; state: string }[];
-        };
-      };
-    };
+    ]);
+    expect(remoteScript).not.toContain('node >"$out/approval-checkpoint-watcher.mjs"');
+    expect(remoteScript).not.toContain('spawn("scrot", [screenshotPath]');
+    const summary = await readSummary(result);
     expect(summary.artifacts.approvalCheckpoints?.screenshots).toHaveLength(4);
     expect(
       summary.artifacts.approvalCheckpoints?.screenshots.map((screenshot) =>
         path.relative(result.outputDir, screenshot.screenshotPath),
       ),
-    ).toEqual([
-      "approval-checkpoints/slack-approval-exec-native-pending.png",
-      "approval-checkpoints/slack-approval-exec-native-resolved.png",
-      "approval-checkpoints/slack-approval-plugin-native-pending.png",
-      "approval-checkpoints/slack-approval-plugin-native-resolved.png",
-    ]);
+    ).toEqual(
+      expectedScenarios.flatMap((scenario) =>
+        ["pending", "resolved"].map((state) => `approval-checkpoints/${scenario}-${state}.png`),
+      ),
+    );
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain(
       "Approval checkpoint slack-approval-plugin-native resolved",
     );
@@ -439,16 +440,11 @@ describe("mantis Slack desktop smoke runtime", () => {
     });
 
     expect(result.status).toBe("pass");
-    const remoteScript = commands
-      .find((entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run")
-      ?.args.at(-1);
+    const remoteScript = findRun(commands)?.args.at(-1);
     expect(remoteScript).toContain("hydrate_mode='prehydrated'");
     expect(remoteScript).toContain("hydrate-mode=prehydrated requires node_modules");
     expect(remoteScript).toContain("hydrate-mode=prehydrated requires a built dist/ directory");
-    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
-      hydrateMode: string;
-      timings: { phases: { name: string; status: string }[] };
-    };
+    const summary = await readSummary(result);
     expect(summary.hydrateMode).toBe("prehydrated");
     expect(summary.timings.phases.map((phase) => phase.name)).not.toContain("crabbox.warmup");
   });
@@ -465,25 +461,22 @@ describe("mantis Slack desktop smoke runtime", () => {
         const url = describeFetchInput(input);
         if (url.endsWith("/acquire")) {
           events.push("acquire");
-          return new Response(
-            JSON.stringify({
-              credentialId: "cred-slack",
-              heartbeatIntervalMs: 600_000,
-              leaseToken: "lease-slack",
-              leaseTtlMs: 900_000,
-              payload: {
-                channelId: "CLEASED",
-                sutAppToken: "xapp-leased",
-                sutBotToken: "xoxb-leased",
-              },
-              status: "ok",
-            }),
-            { status: 200 },
-          );
+          return jsonResponse({
+            credentialId: "cred-slack",
+            heartbeatIntervalMs: 600_000,
+            leaseToken: "lease-slack",
+            leaseTtlMs: 900_000,
+            payload: {
+              channelId: "CLEASED",
+              sutAppToken: "xapp-leased",
+              sutBotToken: "xoxb-leased",
+            },
+            status: "ok",
+          });
         }
         if (url.endsWith("/release") || url.endsWith("/heartbeat")) {
           events.push(url.endsWith("/release") ? "release" : "heartbeat");
-          return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+          return jsonResponse({ status: "ok" });
         }
         throw new Error(`unexpected fetch: ${url} ${describeFetchBody(init?.body)}`);
       });
@@ -492,12 +485,7 @@ describe("mantis Slack desktop smoke runtime", () => {
       const { commands, runner } = createRunner("cbx_c0ffee", {
         created: true,
         details: { state: "active" },
-        metadata: {
-          gatewayAlive: true,
-          gatewayPid: "1234",
-          openedUrl: "https://app.slack.com/client/TLEASED/CLEASED",
-          qaExitCode: 0,
-        },
+        metadata: gatewayMetadata("1234", "TLEASED/CLEASED"),
         files: { "slack-desktop-command.log": "qa\n" },
         beforeCommand(command, args) {
           events.push(`${command}:${args[0]}`);
@@ -542,15 +530,15 @@ describe("mantis Slack desktop smoke runtime", () => {
       expect(events).toContain("release");
       expect(events.indexOf("acquire")).toBeGreaterThan(events.indexOf("/tmp/crabbox:inspect"));
       expect(events.indexOf("acquire")).toBeLessThan(events.indexOf("/tmp/crabbox:run"));
-      const runCommand = commands.find(
-        (entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run",
-      );
-      expect(runCommand?.env?.OPENCLAW_MANTIS_SLACK_APP_TOKEN).toBe("xapp-leased");
-      expect(runCommand?.env?.OPENCLAW_MANTIS_SLACK_BOT_TOKEN).toBe("xoxb-leased");
-      expect(runCommand?.env?.OPENCLAW_MANTIS_SLACK_CHANNEL_ID).toBe("CLEASED");
-      expect(runCommand?.env?.OPENCLAW_QA_SLACK_CHANNEL_ID).toBe("CLEASED");
-      expect(runCommand?.env?.OPENCLAW_QA_SLACK_SUT_APP_TOKEN).toBe("xapp-leased");
-      expect(runCommand?.env?.OPENCLAW_QA_SLACK_SUT_BOT_TOKEN).toBe("xoxb-leased");
+      const runCommand = findRun(commands);
+      expect(runCommand?.env).toMatchObject({
+        OPENCLAW_MANTIS_SLACK_APP_TOKEN: "xapp-leased",
+        OPENCLAW_MANTIS_SLACK_BOT_TOKEN: "xoxb-leased",
+        OPENCLAW_MANTIS_SLACK_CHANNEL_ID: "CLEASED",
+        OPENCLAW_QA_SLACK_CHANNEL_ID: "CLEASED",
+        OPENCLAW_QA_SLACK_SUT_APP_TOKEN: "xapp-leased",
+        OPENCLAW_QA_SLACK_SUT_BOT_TOKEN: "xoxb-leased",
+      });
       const remoteScript = runCommand?.args.at(-1);
       expect(remoteScript).toContain("setup_gateway=1");
       expect(remoteScript).toContain("openclaw gateway run");
@@ -579,12 +567,10 @@ describe("mantis Slack desktop smoke runtime", () => {
         },
       });
 
-      const result = await runMantisSlackDesktopSmoke({
+      const result = await runSmoke({
         commandRunner: runner,
-        crabboxBin: "/tmp/crabbox",
         keepLease: false,
         outputDir: ".artifacts/qa-e2e/mantis/slack-desktop-created-fail",
-        repoRoot,
       });
 
       expect(result.status).toBe("fail");
@@ -595,14 +581,12 @@ describe("mantis Slack desktop smoke runtime", () => {
         provider: "hetzner",
         vncCommand: "/tmp/crabbox vnc --provider hetzner --id cbx_fade123 --open",
       });
-      expect(
-        commands.some(
-          (entry) =>
-            entry.command === "/tmp/crabbox" &&
-            JSON.stringify(entry.args) ===
-              JSON.stringify(["stop", "--provider", "hetzner", "cbx_fade123"]),
-        ),
-      ).toBe(true);
+      expect(commands).toContainEqual(
+        expect.objectContaining({
+          command: "/tmp/crabbox",
+          args: ["stop", "--provider", "hetzner", "cbx_fade123"],
+        }),
+      );
     },
   );
 
@@ -610,12 +594,7 @@ describe("mantis Slack desktop smoke runtime", () => {
     const { runner } = createRunner("cbx_cafe123", {
       created: true,
       details: { state: "active" },
-      metadata: {
-        gatewayAlive: true,
-        gatewayPid: "4321",
-        openedUrl: "https://app.slack.com/client/TOK/COK",
-        qaExitCode: 0,
-      },
+      metadata: gatewayMetadata("4321", "TOK/COK"),
       beforeCommand(command, args) {
         if (command === "/tmp/crabbox" && args[0] === "run") {
           throw new Error("remote command exited 1");
@@ -637,14 +616,12 @@ describe("mantis Slack desktop smoke runtime", () => {
     });
 
     expect(result.status).toBe("pass");
-    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
-      status: string;
-      timings: { phases: { name: string; status: string }[] };
-      warning?: string;
-    };
+    const summary = await readSummary(result);
     expect(summary.status).toBe("pass");
     expect(summary.warning).toBeUndefined();
-    expect(phaseStatus(summary.timings.phases, "crabbox.remote_run")).toBe("accepted");
+    expect(
+      summary.timings.phases.find((phase) => phase.name === "crabbox.remote_run")?.status,
+    ).toBe("accepted");
   });
 
   it("reports Slack QA failure from copied remote metadata when Crabbox run exits zero", async () => {
@@ -657,28 +634,16 @@ describe("mantis Slack desktop smoke runtime", () => {
     });
 
     expect(result.status).toBe("fail");
-    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
-      error?: string;
-      status: string;
-      timings: { phases: { name: string; status: string }[] };
-    };
+    const summary = await readSummary(result);
     expect(summary.status).toBe("fail");
     expect(summary.error).toContain("Slack QA exited with code 7");
-    expect(phaseStatus(summary.timings.phases, "crabbox.remote_run")).toBe("pass");
+    expect(
+      summary.timings.phases.find((phase) => phase.name === "crabbox.remote_run")?.status,
+    ).toBe("pass");
   });
 
   it("routes the approval checkpoints CLI flag into the Slack desktop runtime", async () => {
-    vi.resetModules();
-    const runMantisSlackDesktopSmokeCommand = mockMantisCliRuntime(vi.fn(async () => undefined));
-    const { registerMantisCli } = await import("./cli.js");
-    const qa = new Command("qa");
-    registerMantisCli(qa);
-
-    await qa.parseAsync([
-      "node",
-      "openclaw",
-      "mantis",
-      "slack-desktop-smoke",
+    const runCommand = await parseCli([
       "--approval-checkpoints",
       "--market",
       "on-demand",
@@ -686,7 +651,7 @@ describe("mantis Slack desktop smoke runtime", () => {
       "slack-approval-plugin-native",
     ]);
 
-    expect(runMantisSlackDesktopSmokeCommand).toHaveBeenCalledWith(
+    expect(runCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         approvalCheckpoints: true,
         gatewaySetup: undefined,
@@ -694,30 +659,15 @@ describe("mantis Slack desktop smoke runtime", () => {
         scenarioIds: ["slack-approval-plugin-native"],
       }),
     );
-    vi.doUnmock("./cli.runtime.js");
   });
 
   it("rejects mutually exclusive approval checkpoint and gateway setup CLI flags", async () => {
-    vi.resetModules();
-    const runMantisSlackDesktopSmokeCommand = mockMantisCliRuntime(vi.fn(async () => undefined));
-    const { registerMantisCli } = await import("./cli.js");
-    const qa = new Command("qa");
-    registerMantisCli(qa);
-
-    await qa.parseAsync([
-      "node",
-      "openclaw",
-      "mantis",
-      "slack-desktop-smoke",
-      "--approval-checkpoints",
-      "--gateway-setup",
-    ]);
+    const runCommand = await parseCli(["--approval-checkpoints", "--gateway-setup"]);
     expect(stderrWrite).toHaveBeenCalledWith(
       expect.stringContaining("--approval-checkpoints cannot be used with --gateway-setup"),
     );
     expect(process.exitCode).toBe(1);
 
-    expect(runMantisSlackDesktopSmokeCommand).not.toHaveBeenCalled();
-    vi.doUnmock("./cli.runtime.js");
+    expect(runCommand).not.toHaveBeenCalled();
   });
 });
