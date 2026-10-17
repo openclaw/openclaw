@@ -1,3 +1,4 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,6 +10,40 @@ import { readTriageUpdateFailure } from "./triage-update.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("update failure triage diagnostics", () => {
+  it.skipIf(process.platform === "win32")(
+    "rejects a FIFO without waiting for a writer",
+    async () => {
+      const stateDir = tempDirs.make("openclaw-update-triage-fifo-");
+      const input = path.join(stateDir, "failure.json");
+      execFileSync("mkfifo", [input]);
+      // Isolate a regressed open: a writerless FIFO cannot be cancelled by a test timeout.
+      const probe = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          new URL("../../scripts/tsx.mjs", import.meta.url).href,
+          "--input-type=module",
+          "-e",
+          `
+          import { readTriageUpdateFailure } from ${JSON.stringify(new URL("./triage-update.ts", import.meta.url).href)};
+          try {
+            await readTriageUpdateFailure(process.argv[1], { env: {}, stateDir: process.argv[2] });
+          } catch (error) {
+            console.log(error.message);
+          }
+        `,
+          input,
+          stateDir,
+        ],
+        { encoding: "utf8", timeout: 5_000 },
+      );
+      expect(probe.error).toBeUndefined();
+      expect(probe.status).toBe(0);
+      expect(probe.stdout.trim()).toBe("Update failure diagnostics must be a regular file.");
+      expect((await fs.lstat(input)).isFIFO()).toBe(true);
+    },
+  );
+
   it.each(["package-post-install-doctor"] as const)(
     "writes bounded sanitized failure evidence without changing the result (%s)",
     async (advisoryKind) => {

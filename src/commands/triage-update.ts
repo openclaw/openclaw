@@ -402,7 +402,10 @@ export async function readTriageUpdateFailure(
   inputPath: string,
   redaction: SupportRedactionContext,
 ): Promise<TriageUpdateFailure> {
-  const file = await fs.open(inputPath, "r");
+  // A writerless FIFO must reach the descriptor check instead of blocking recovery triage.
+  const flags =
+    process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
+  const file = await fs.open(inputPath, flags);
   try {
     if (!(await file.stat()).isFile()) {
       throw new Error("Update failure diagnostics must be a regular file.");
