@@ -34,19 +34,9 @@ const DEFAULT_INPUTS = {
 };
 
 interface ParentTuple {
-  artifact: {
-    digest: string;
-    id: string;
-    name: string;
-    runAttempt: number;
-    sizeInBytes: number;
-  };
-  conclusion: string;
-  manifest: Record<string, unknown>;
+  artifact: { digest: string };
   manifestVersion: number;
-  runAttempt: number;
   runId: string;
-  status: string;
   targetSha: string;
   url: string;
   producerOnTrustedMainLineage: boolean;
@@ -63,20 +53,11 @@ interface ParentTuple {
 interface ChildTuple {
   conclusion: string;
   policyPassed?: boolean;
-  dispatchNonce: string;
-  displayTitle: string;
-  event: string;
-  headBranch: string;
-  parentJobId: string;
-  path: string;
   reportPublication?: string;
   role: string;
-  runAttempt: number;
   runId: string;
-  sourceParentAttempt: number;
   sourceParentRunId: string;
   status: string;
-  url: string;
   workflowSha: string;
 }
 
@@ -107,8 +88,6 @@ interface NormalizedEvidence {
   validationInputs: Record<string, string> | null;
   verifier: {
     schemaVersion: number;
-    script: string;
-    scriptSha256: string;
     sourceSha: string | null;
   };
 }
@@ -121,13 +100,8 @@ interface RunFixture {
   runId: string;
 }
 
-afterEach(() => {
-  tempDirs.cleanup();
-});
-
-afterAll(() => {
-  sharedTempDirs.cleanup();
-});
+afterEach(() => tempDirs.cleanup());
+afterAll(() => sharedTempDirs.cleanup());
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, {
@@ -234,54 +208,12 @@ function normalizedEvidence(options: {
     validationInputs !== null &&
     !validationInputs.telegramWaiver &&
     Boolean(validationInputs.npmTelegramPackageSpec || validationInputs.releasePackageSpec);
-  const manifest = {
-    version: 4,
-    workflowName: "Full Release Validation",
-    workflowRef,
-    workflowSha: producerSha,
-    workflowFullRef,
-    workflowRefType: "branch",
-    runId,
-    runAttempt: "2",
-    targetRef: "release/2026.7.1",
-    targetSha: options.targetSha,
-    rerunGroup: "all",
-    releaseProfile,
-    runReleaseSoak: String(soak),
-    validationInputs,
-    controls: {
-      performanceBlocking: !npmBetaCoverage,
-      performanceReportPublication: "artifact-only",
-      stableSoakRequired: releaseProfile === "stable" || releaseProfile === "full",
-    },
-    childRuns: {
-      normalCi: "201",
-      npmTelegram: npmTelegramRequired ? "205" : "",
-      pluginPrereleaseIndependent: "202",
-      pluginPrereleaseCandidate: "206",
-      releaseChecksIndependent: "203",
-      releaseChecksCandidate: "207",
-      productPerformance: {
-        blocking: !npmBetaCoverage,
-        conclusion: npmBetaCoverage ? "" : "success",
-        runId: npmBetaCoverage ? "" : "204",
-      },
-    },
-  };
+  // Model the normalized fields this consumer reads, not the upstream manifest/topology.
+  // release-ci-summary.test.ts owns construction and validation of that complete report.
   const root: ParentTuple = {
-    artifact: {
-      digest: `sha256:${"a".repeat(64)}`,
-      id: "9001",
-      name: `full-release-validation-${runId}-2`,
-      runAttempt: 2,
-      sizeInBytes: 4096,
-    },
-    conclusion: "success",
-    manifest,
+    artifact: { digest: `sha256:${"a".repeat(64)}` },
     manifestVersion: 4,
-    runAttempt: 2,
     runId,
-    status: "completed",
     targetSha: options.targetSha,
     url: `https://example.test/runs/${runId}`,
     producerOnTrustedMainLineage: !protectedTagRoute,
@@ -300,79 +232,26 @@ function normalizedEvidence(options: {
       : ".github/workflows/full-release-validation.yml",
     workflowSha: producerSha,
   };
-  const roles = [
-    ["normalCi", "201", 1, 1, "CI", "ci.yml", "-ci"],
-    [
-      "pluginPrereleaseIndependent",
-      "202",
-      2,
-      1,
-      "Plugin Prerelease",
-      "plugin-prerelease.yml",
-      "-plugin-prerelease-independent",
-    ],
-    [
-      "pluginPrereleaseCandidate",
-      "206",
-      1,
-      2,
-      "Plugin Prerelease",
-      "plugin-prerelease.yml",
-      "-plugin-prerelease-candidate",
-    ],
-    [
-      "releaseChecksIndependent",
-      "203",
-      1,
-      1,
-      "OpenClaw Release Checks",
-      "openclaw-release-checks.yml",
-      "-release-checks-independent",
-    ],
-    [
-      "releaseChecksCandidate",
-      "207",
-      1,
-      2,
-      "OpenClaw Release Checks",
-      "openclaw-release-checks.yml",
-      "-release-checks-candidate",
-    ],
-    ...(npmTelegramRequired
-      ? ([
-          [
-            "npmTelegram",
-            "205",
-            1,
-            2,
-            "NPM Telegram Beta E2E",
-            "npm-telegram-beta-e2e.yml",
-            "-npm-telegram",
-          ],
-        ] as const)
-      : []),
-    ["productPerformance", "204", 3, 2, "OpenClaw Performance", "openclaw-performance.yml", ""],
-  ] as const;
+  const roles: [string, string][] = [
+    ["normalCi", "201"],
+    ["pluginPrereleaseIndependent", "202"],
+    ["pluginPrereleaseCandidate", "206"],
+    ["releaseChecksIndependent", "203"],
+    ["releaseChecksCandidate", "207"],
+    ...(npmTelegramRequired ? [["npmTelegram", "205"]] : []),
+    ["productPerformance", "204"],
+  ];
   const children = roles
     .filter(([role]) => !npmBetaCoverage || role !== "productPerformance")
-    .map(([role, childRunId, runAttempt, sourceParentAttempt, name, workflow, suffix]) =>
+    .map(([role, childRunId]) =>
       Object.assign(
         {
           conclusion: "success",
           policyPassed: true,
-          dispatchNonce: `full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
-          displayTitle: `${name} full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
-          event: "workflow_dispatch",
-          headBranch: workflowRef,
-          parentJobId: `job-${role}`,
-          path: `.github/workflows/${workflow}`,
           role,
-          runAttempt,
           runId: childRunId,
-          sourceParentAttempt,
           sourceParentRunId: runId,
           status: "completed",
-          url: `https://example.test/runs/${childRunId}`,
           workflowSha: producerSha,
         },
         role === "productPerformance" ? { reportPublication: "artifact-only" } : {},
@@ -392,7 +271,7 @@ function normalizedEvidence(options: {
     current: structuredClone(root),
     directRoot: true,
     evidenceReuse: null,
-    manifest,
+    manifest: {},
     releaseProfile,
     repository: REPOSITORY,
     rerunGroup: "all",
@@ -406,8 +285,6 @@ function normalizedEvidence(options: {
     validationInputs,
     verifier: {
       schemaVersion: 3,
-      script: "scripts/release-ci-summary.mjs",
-      scriptSha256: "b".repeat(64),
       sourceSha: options.verifierSha === undefined ? VERIFIER_SHA : options.verifierSha,
     },
   };
@@ -686,6 +563,42 @@ function parseOutput(output: string): Record<string, string> {
   );
 }
 
+function expectReuse(
+  result: ReturnType<typeof runResolver>,
+  reuse = true,
+  fields: Record<string, string> = {},
+) {
+  expect(result.status, result.stderr).toBe(0);
+  expect(parseOutput(result.stdout), result.stderr).toMatchObject({
+    reuse: String(reuse),
+    ...fields,
+  });
+}
+
+const trustedTag = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
+const pinnedVerifierRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`;
+function protectedEvidence(options: Partial<Parameters<typeof normalizedEvidence>[0]> = {}) {
+  return normalizedEvidence({
+    producerSha: VERIFIER_SHA,
+    targetSha: getSharedRepo().priorSha,
+    trustedWorkflowRef: trustedTag,
+    workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`,
+    ...options,
+  });
+}
+
+function resolveProtectedEvidence(
+  record: NormalizedEvidence,
+  options: Partial<Parameters<typeof runResolver>[0]> = {},
+) {
+  return resolveEvidence(record, {
+    trustedWorkflowRef: trustedTag,
+    verifierOnMain: false,
+    workflowRef: pinnedVerifierRef,
+    ...options,
+  });
+}
+
 describe("scripts/github/find-reusable-release-validation.sh", () => {
   it.each(["main", `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`])(
     "selects candidate-owned evidence through admitted P on %s",
@@ -739,24 +652,13 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
     });
 
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
-      evidence_run_id: "111",
-      reuse: "true",
-    });
+    expectReuse(result, true, { evidence_run_id: "111" });
   });
 
   it.each(["", "2026.8.1"])(
     "reuses strict protected-tag evidence with Telegram waiver %j",
     (version) => {
-      const { priorSha } = getSharedRepo();
-      const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
-      const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
-      const record = normalizedEvidence({
-        producerSha: VERIFIER_SHA,
-        targetSha: priorSha,
-        trustedWorkflowRef,
-        workflowRef: producerRef,
+      const record = protectedEvidence({
         validationInputs: version
           ? {
               ...DEFAULT_INPUTS,
@@ -767,70 +669,38 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
           : DEFAULT_INPUTS,
       });
 
-      const result = resolveEvidence(record, {
+      const result = resolveProtectedEvidence(record, {
         inputs: record.validationInputs,
-        trustedWorkflowRef,
-        verifierOnMain: false,
-        workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
       });
 
-      expect(result.status).toBe(0);
-      expect(parseOutput(result.stdout)).toMatchObject({
-        evidence_run_id: "111",
-        reuse: "true",
-      });
+      expectReuse(result, true, { evidence_run_id: "111" });
     },
   );
 
   it("reuses strict evidence produced by an ancestor of the protected tooling tag", () => {
-    const { priorSha } = getSharedRepo();
     const producerSha = "d".repeat(40);
-    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
     const producerRef = `release-ci/${producerSha.slice(0, 12)}-122`;
-    const record = normalizedEvidence({
+    const record = protectedEvidence({
       producerSha,
-      targetSha: priorSha,
-      trustedWorkflowRef,
       workflowRef: producerRef,
     });
     record.current.workflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
     record.root.workflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
 
-    const result = resolveEvidence(record, {
-      trustedWorkflowRef,
-      verifierOnMain: false,
-      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
-    });
+    const result = resolveProtectedEvidence(record);
 
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({
-      evidence_run_id: "111",
-      reuse: "true",
-    });
+    expectReuse(result, true, { evidence_run_id: "111" });
   });
 
   it("rejects unrecognized protected tooling proof", () => {
     const workflowRefProof = "manifest-v3-protected-tag-diverged";
-    const { priorSha } = getSharedRepo();
-    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
-    const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
-    const record = normalizedEvidence({
-      producerSha: VERIFIER_SHA,
-      targetSha: priorSha,
-      trustedWorkflowRef,
-      workflowRef: producerRef,
-    });
+    const record = protectedEvidence();
     record.current.workflowRefProof = workflowRefProof;
     record.root.workflowRefProof = workflowRefProof;
 
-    const result = resolveEvidence(record, {
-      trustedWorkflowRef,
-      verifierOnMain: false,
-      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
-    });
+    const result = resolveProtectedEvidence(record);
 
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
+    expectReuse(result, false);
   });
 
   it.each([
@@ -853,24 +723,15 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       },
     },
   ])("rejects protected tooling identity drift: $label", ({ options }) => {
-    const { priorSha } = getSharedRepo();
-    const trustedWorkflowRef = `release-publish/${VERIFIER_SHA.slice(0, 12)}-456`;
-    const producerRef = `release-ci/${VERIFIER_SHA.slice(0, 12)}-122`;
-    const record = normalizedEvidence({
-      producerSha: VERIFIER_SHA,
-      targetSha: priorSha,
-      trustedWorkflowRef,
-      workflowRef: producerRef,
-    });
+    const record = protectedEvidence();
 
     const result = resolveEvidence(record, {
-      trustedWorkflowRef,
-      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+      trustedWorkflowRef: trustedTag,
+      workflowRef: pinnedVerifierRef,
       ...options,
     });
 
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
+    expectReuse(result, false);
   });
 
   it("reuses Telegram failures only when the strict verifier accepted their policy", () => {
@@ -895,8 +756,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       releaseProfile,
     });
 
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
+    expectReuse(result, true, { evidence_run_id: "111" });
   });
 
   it("rejects noncanonical release refs and workflow SHAs outside trusted main", () => {
@@ -930,8 +790,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       validatorPath,
     });
 
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({ evidence_run_id: "111", reuse: "true" });
+    expectReuse(result, true, { evidence_run_id: "111" });
     expect(result.stderr).toContain(
       `run 222: shared evidence validator rejected the run: evidence source mismatch ${"x".repeat(472)}...; skipping`,
     );
@@ -1037,8 +896,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
     const result = resolveEvidence(record);
 
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
+    expectReuse(result, false);
     expect(result.stderr).toContain("not a strict direct-root full validation");
   });
 
@@ -1087,8 +945,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
       const result = resolveEvidence(record, { ...resolverOptions });
 
-      expect(result.status).toBe(0);
-      expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
+      expectReuse(result, false);
       expect(result.stderr).toContain(expected);
     },
   );
@@ -1169,8 +1026,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       targetSha,
     });
 
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
+    expectReuse(result, false);
     expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
   });
 
@@ -1229,8 +1085,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       targetSha,
     });
 
-    expect(result.status).toBe(0);
-    expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
+    expectReuse(result, false);
     expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
   });
 

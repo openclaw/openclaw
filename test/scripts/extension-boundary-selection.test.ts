@@ -13,6 +13,24 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const packages = ["consumer", "direct", "unrelated", "telegram", "codex", "slack"];
+const smoke = ["telegram", "codex", "slack"];
+const selectedPackages = (selection: ReturnType<typeof selectAffectedBoundaryPackages>) =>
+  selection.selected.map((row) => row.package);
+function gitIn(cwd: string) {
+  return (...args: string[]) =>
+    execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: "pipe",
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "Boundary fixture",
+        GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+        GIT_COMMITTER_NAME: "Boundary fixture",
+        GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+      },
+    }).trim();
+}
 
 function fixture() {
   const root = tempDirs.make("boundary-selection-");
@@ -36,18 +54,7 @@ function fixture() {
   );
   write("extensions/direct/index.ts", "export const direct = 1;\n");
   write("extensions/unrelated/index.ts", "export const unrelated = 1;\n");
-  const git = (...args: string[]) =>
-    execFileSync("git", args, {
-      cwd: root,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        GIT_AUTHOR_NAME: "Boundary fixture",
-        GIT_AUTHOR_EMAIL: "fixture@example.invalid",
-        GIT_COMMITTER_NAME: "Boundary fixture",
-        GIT_COMMITTER_EMAIL: "fixture@example.invalid",
-      },
-    }).trim();
+  const git = gitIn(root);
   git("init", "-q");
   const commit = () => {
     git("add", ".");
@@ -65,12 +72,7 @@ describe("extension package PR selection", () => {
       { status: "M", path: "src/current.ts" },
       { status: "M", path: "extensions/direct/index.ts" },
     ]);
-    expect(selection.selected.map((row) => row.package)).toEqual([
-      "direct",
-      "telegram",
-      "codex",
-      "slack",
-    ]);
+    expect(selectedPackages(selection)).toEqual(["direct", ...smoke]);
     expect(selection.skipped.map((row) => row.package)).toEqual(["consumer", "unrelated"]);
     const summary = formatBoundarySelection(selection);
     expect(summary).toContain("| telegram | selected | SDK smoke sample");
@@ -93,12 +95,7 @@ describe("extension package PR selection", () => {
     const selection = selectAffectedBoundaryPackages(root, packages, [
       { status: "M", path: "src/plugin-sdk/value.ts" },
     ]);
-    expect(selection.selected.map((row) => row.package)).toEqual([
-      "consumer",
-      "telegram",
-      "codex",
-      "slack",
-    ]);
+    expect(selectedPackages(selection)).toEqual(["consumer", ...smoke]);
     expect(selection.selected[0]?.reason).toContain("direct import of changed public entry");
   });
 
@@ -124,12 +121,7 @@ describe("extension package PR selection", () => {
       const merge = git("rev-parse", "HEAD");
       git("config", "uploadpack.allowFilter", "true");
       const checkout = tempDirs.make("boundary-shallow-");
-      const checkoutGit = (...args: string[]) =>
-        execFileSync("git", args, {
-          cwd: checkout,
-          encoding: "utf8",
-          stdio: "pipe",
-        }).trim();
+      const checkoutGit = gitIn(checkout);
       checkoutGit(
         "clone",
         "--depth=1",
@@ -165,12 +157,8 @@ describe("extension package PR selection", () => {
       expect(() => checkoutGit("merge-base", base, "HEAD")).toThrow();
       const selected = resolveExtensionBoundarySelection(checkout, packages, env);
       expect(selected.mode).toBe("affected");
-      expect(selected.selected.map((row) => row.package)).toEqual(
-        change === "package"
-          ? ["direct"]
-          : change === "core"
-            ? ["telegram", "codex", "slack"]
-            : ["consumer", "telegram", "codex", "slack"],
+      expect(selectedPackages(selected)).toEqual(
+        change === "package" ? ["direct"] : change === "core" ? smoke : ["consumer", ...smoke],
       );
       expect(missing.reason).toContain("comparison base unavailable in checkout");
       // Another fetched parent is not the pinned main contribution boundary.
@@ -200,7 +188,7 @@ describe("extension package PR selection", () => {
     ]) {
       const selection = resolveExtensionBoundarySelection(root, packages, env);
       expect(selection.mode).toBe("full");
-      expect(selection.selected.map((row) => row.package)).toEqual(packages);
+      expect(selectedPackages(selection)).toEqual(packages);
       expect(selection.skipped).toEqual([]);
     }
   });
@@ -209,21 +197,22 @@ describe("extension package PR selection", () => {
     const workflow = parse(
       readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8"),
     );
-    const step = workflow.jobs["check-additional-shard"].steps.find(
-      (entry: { name?: string }) => entry.name === "Run additional check shard",
-    );
-    const baseStep = workflow.jobs["check-additional-shard"].steps.find(
-      (entry: { name?: string }) => entry.name === "Ensure additional check comparison base",
-    );
-    expect(baseStep.uses).toBe("./.ci-harness/.github/actions/ensure-base-commit");
-    expect(baseStep.with["base-sha"]).toBe("${{ needs.preflight.outputs.diff_base_revision }}");
-    expect(step.env.OPENCLAW_CI_EXTENSION_BOUNDARY_FULL).toBe(
-      "${{ vars.OPENCLAW_CI_EXTENSION_BOUNDARY_FULL }}",
-    );
-    expect(step.env.OPENCLAW_CI_EXTENSION_BOUNDARY_BASE).toBe(
-      "${{ needs.preflight.outputs.diff_base_revision }}",
-    );
-    expect(step.run).toBe("bash .ci-harness/scripts/ci-additional-checks.sh");
+    const step = (name: string) =>
+      workflow.jobs["check-additional-shard"].steps.find(
+        (entry: { name?: string }) => entry.name === name,
+      );
+    const base = "${{ needs.preflight.outputs.diff_base_revision }}";
+    expect(step("Ensure additional check comparison base")).toMatchObject({
+      uses: "./.ci-harness/.github/actions/ensure-base-commit",
+      with: { "base-sha": base },
+    });
+    expect(step("Run additional check shard")).toMatchObject({
+      env: {
+        OPENCLAW_CI_EXTENSION_BOUNDARY_FULL: "${{ vars.OPENCLAW_CI_EXTENSION_BOUNDARY_FULL }}",
+        OPENCLAW_CI_EXTENSION_BOUNDARY_BASE: base,
+      },
+      run: "bash .ci-harness/scripts/ci-additional-checks.sh",
+    });
     expect(
       readFileSync(new URL("../../scripts/ci-additional-checks.sh", import.meta.url), "utf8"),
     ).toContain(
