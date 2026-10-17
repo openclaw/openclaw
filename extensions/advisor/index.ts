@@ -143,20 +143,29 @@ export default definePluginEntry({
       if (!due) {
         return;
       }
-      session.toolCalls = 0;
-      session.since = Date.now();
       const cancel = new AbortController();
       session.review = cancel;
       // The service owns review work so it never delays the triggering tool or turn.
       scheduler.schedule({
         id: `review:${run.sessionKey}`,
         delayMs: 0,
-        run: () =>
-          review(run.sessionKey, cancel.signal).finally(() => {
+        run: async () => {
+          if (session.review !== cancel) {
+            return;
+          }
+          // A call may have started since this review was queued; stay due and retry at its result.
+          if (session.pending.size > 0) {
+            session.review = undefined;
+            return;
+          }
+          session.toolCalls = 0;
+          session.since = Date.now();
+          await review(run.sessionKey, cancel.signal).finally(() => {
             if (session.review === cancel) {
               session.review = undefined;
             }
-          }),
+          });
+        },
       });
     }
 

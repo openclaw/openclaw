@@ -208,6 +208,21 @@ describe("advisor", () => {
     expect(run.forkSession).toHaveBeenCalledOnce();
   });
 
+  it("rechecks running calls when a queued review dispatches", async () => {
+    const run = setup({ everyToolCalls: 2, everyMinutes: 0 });
+    await run.start();
+    await run.startRun();
+    await run.tool();
+    await run.tool();
+    // A third call starts after the review is queued but before the scheduler runs it.
+    await run.emit("tool", "start", "run-1", { toolCallId: "late" });
+    await run.flush();
+    expect(run.forkSession).not.toHaveBeenCalled();
+    await run.emit("tool", "result", "run-1", { toolCallId: "late" });
+    await run.flush();
+    expect(run.forkSession).toHaveBeenCalledOnce();
+  });
+
   it.each(["Looks fine to me.", "CORRECTION", "NO_CHANGE"])(
     "does not steer on a reply of %j",
     async (reply) => {
