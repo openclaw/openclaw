@@ -14,6 +14,7 @@ const resolverMocks = vi.hoisted(() => ({ resolve: vi.fn() }));
 
 type IMessageTargetParams = Parameters<typeof registerIMessageApprovalReactionTarget>[0];
 
+// mock-isolation: exercise approval handling without a live gateway.
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: resolverMocks.resolve,
 }));

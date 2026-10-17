@@ -8,6 +8,7 @@ import type { IMessagePrivateApiStatus } from "./private-api-status.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+// mock-isolation: gate effect preparation through the export-preserving test helper.
 vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
   const { withEffectPreparation } = await import("./test-support/authority.js");
@@ -25,6 +26,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
   logVerbose: logVerboseMock,
 }));
 
+// mock-isolation: keep transport effects in test-owned doubles.
 vi.mock("./cli-output.js", () => ({ runIMessageCliJsonCommand: runIMessageCliJsonCommandMock }));
 
 // Raw emitters retain the unhandled-error behavior that real streams can hide.
@@ -57,7 +59,7 @@ let IMessageRpcRequestError: typeof import("./client.js").IMessageRpcRequestErro
 let privateApiStatus: typeof import("./private-api-status.js");
 const fullDiskAccessError =
   "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
-function runtime(error: ReturnType<typeof vi.fn>) {
+function runtime(error: (...args: unknown[]) => void) {
   return { error, exit: vi.fn(), log: vi.fn() };
 }
 let child: MockChild;
@@ -261,7 +263,7 @@ describe("IMessageRpcClient child stream error handling", () => {
         await prepared.promise;
       };
       const written = Promise.withResolvers<void>();
-      const write = vi.fn(() => {
+      const write = vi.fn((): true => {
         written.resolve();
         return true;
       });

@@ -39,7 +39,7 @@ const {
 } = getOAuthProviderRuntimeMocks();
 
 function holdRefresh() {
-  const started = createDeferredCore<void>();
+  const started = createDeferredCore();
   const result = createDeferredCore<OAuthCredential>();
   refreshProviderOAuthCredentialWithPluginMock.mockImplementation(() => {
     started.resolve();

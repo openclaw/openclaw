@@ -2,7 +2,6 @@ import { afterEach, expect, vi } from "vitest";
 import type { WorkerInferenceStartParams } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import * as sessionAuthRuntime from "../../agents/auth-profiles/session-override.js";
 import * as extraParamsRuntime from "../../agents/embedded-agent-runner/extra-params.js";
-import { createEmptyPreparedModelRuntimeFixture } from "../../agents/embedded-agent-runner/model.fixture.test-support.js";
 import * as diagnosticModelCallRuntime from "../../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 import * as streamResolutionRuntime from "../../agents/embedded-agent-runner/stream-resolution.js";
 import * as modelSelectionRuntime from "../../agents/model-selection.js";
@@ -30,6 +29,14 @@ import { executeWorkerInference } from "./inference.js";
 import * as workerTurnOwners from "./placement-turn-claim-events.js";
 import { prepareWorkerTurnModel } from "./worker-turn-model.js";
 
+type Deps = {
+  applyStreamPolicy: typeof extraParamsRuntime.applyExtraParamsToAgent;
+  acquireRuntimeLease: typeof preparedRuntime.acquireAgentRunPreparedModelRuntime;
+  prepareModel: typeof simpleCompletionRuntime.prepareSimpleCompletionModel;
+  resolveSessionAuthSelection: typeof sessionAuthRuntime.resolveSessionAuthSelection;
+  resolveProviderStream: typeof providerStreamRuntime.registerProviderStreamForModel;
+  resolveStream: typeof streamResolutionRuntime.resolveEmbeddedAgentStream;
+};
 export type Execution = WorkerInferenceExecutionParams;
 
 afterEach(() => {
@@ -56,18 +63,19 @@ export const TOOL_CALL = { type: "toolCall" as const, id: "call-1", name: "looku
 const WORKSPACE_BASE = "/gateway-workspace";
 export const WORKSPACE = `${WORKSPACE_BASE}/runtime-agent`;
 
-const modelKey = `${PROVIDER}/${MODEL}`;
 export const config = {
   agents: {
     defaults: {
-      model: { primary: modelKey },
-      models: { [modelKey]: {} },
+      model: { primary: `${PROVIDER}/${MODEL}` },
+      models: { [`${PROVIDER}/${MODEL}`]: {} },
       workspace: WORKSPACE_BASE,
     },
     entries: {
       main: {},
       "runtime-agent": {
-        models: { [modelKey]: { alias: ALIAS, agentRuntime: { id: "openclaw" } } },
+        models: {
+          [`${PROVIDER}/${MODEL}`]: { alias: ALIAS, agentRuntime: { id: "openclaw" } },
+        },
         params: { temperature: 0.1 },
       },
     },
@@ -103,7 +111,13 @@ export const usage: Usage = {
   cacheRead: 3,
   cacheWrite: 2,
   totalTokens: 23,
-  cost: { input: 0.001, output: 0.002, cacheRead: 0.0001, cacheWrite: 0.0002, total: 0.0033 },
+  cost: {
+    input: 0.001,
+    output: 0.002,
+    cacheRead: 0.0001,
+    cacheWrite: 0.0002,
+    total: 0.0033,
+  },
 };
 export const logicalModel: Model = {
   id: MODEL,
@@ -130,7 +144,12 @@ export function request(model = ALIAS): WorkerInferenceStartParams {
       messages: [{ role: "user", content: "Prepared worker context", timestamp: 10 }],
       tools: [{ name: "lookup", description: "Look up a value", parameters: { type: "object" } }],
     },
-    options: { temperature: 0.25, maxTokens: 256, reasoning: "low", thinkingBudgets: { low: 96 } },
+    options: {
+      temperature: 0.25,
+      maxTokens: 256,
+      reasoning: "low",
+      thinkingBudgets: { low: 96 },
+    },
   };
 }
 
@@ -184,16 +203,25 @@ export function setup(
 ) {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(100);
+  const scope: {
+    agentDir?: string;
+    agentRuntime?: string;
+    authProfile?: string;
+    preparedModelRuntime?: boolean;
+    prepareWorkspace?: string;
+  } = {};
   const preparedModelRuntime = {
-    ...createEmptyPreparedModelRuntimeFixture({
-      agentDir: "/gateway-agent",
-      config: options.config ?? config,
-      metadataSnapshot: options.metadataSnapshot ?? createEmptyPluginMetadataSnapshot(WORKSPACE),
-      createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
-    }),
     accountCatalog: options.accountCatalog,
+    catalogOwner: undefined,
+    agentDir: "/gateway-agent",
+    activeProjectKeys: [],
     allowGatewaySubagentBinding: true,
     workspaceDir: WORKSPACE,
+    config: options.config ?? config,
+    observationConfig: options.config ?? config,
+    isCurrent: () => true,
+    authModes: {},
+    metadataSnapshot: options.metadataSnapshot ?? createEmptyPluginMetadataSnapshot(WORKSPACE),
     pluginRegistry: options.pluginRegistry ?? createEmptyPluginRegistry(),
     modelCatalog: {
       entries: [
@@ -202,91 +230,107 @@ export function setup(
       ],
       routeVariants: [],
     },
+    configuredRuntimeModels: [],
     findConfiguredRuntimeModel: () => options.configuredRuntimeModel,
+    inlineProviderModels: [],
+    createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
   } satisfies preparedRuntime.PreparedModelRuntimeSnapshot;
-  const prepareModel = vi
-    .spyOn(simpleCompletionRuntime, "prepareSimpleCompletionModel")
-    .mockImplementation(async (modelParams) => {
-      if (options.catalogOnlyModel && !modelParams.allowBundledStaticCatalogFallback) {
-        return { error: `Unknown model: ${modelParams.provider}/${modelParams.modelId}` };
-      }
-      options.afterModelPreparation?.();
-      return {
-        model: bindModelLlmRuntime(logicalModel, {
-          registry: {},
-          streamSimple: fallbackStream,
-        } as never),
-        auth: {
-          apiKey: AUTH_MARKER,
-          profileId: PROFILE,
-          source: "gateway agent profile",
-          mode: "api-key",
-        },
-      };
-    });
-  const resolveAuthSelection = vi
-    .spyOn(sessionAuthRuntime, "resolveSessionAuthSelection")
-    .mockImplementation(async () =>
-      entry.authProfileOverride
-        ? {
-            profileId: entry.authProfileOverride,
-            source: entry.authProfileOverrideSource === "auto" ? "auto" : "user",
-            routeRequirement: undefined,
-          }
-        : undefined,
-    );
+  let leasedPreparedModelRuntime: preparedRuntime.PreparedModelRuntimeSnapshot | undefined;
+  const prepareModel = vi.fn<Deps["prepareModel"]>(async (modelParams) => {
+    if (options.catalogOnlyModel && !modelParams.allowBundledStaticCatalogFallback) {
+      return { error: `Unknown model: ${modelParams.provider}/${modelParams.modelId}` };
+    }
+    scope.agentRuntime = modelParams.agentRuntimeId;
+    scope.preparedModelRuntime = modelParams.preparedModelRuntime === leasedPreparedModelRuntime;
+    scope.prepareWorkspace = modelParams.workspaceDir;
+    options.afterModelPreparation?.();
+    return {
+      model: bindModelLlmRuntime(logicalModel, {
+        registry: {},
+        streamSimple: fallbackStream,
+      } as never),
+      auth: {
+        apiKey: AUTH_MARKER,
+        profileId: PROFILE,
+        source: "gateway agent profile",
+        mode: "api-key",
+      },
+    };
+  });
+  const resolveAuthSelection = vi.fn<Deps["resolveSessionAuthSelection"]>(async () =>
+    entry.authProfileOverride
+      ? {
+          profileId: entry.authProfileOverride,
+          source: entry.authProfileOverrideSource === "auto" ? "auto" : "user",
+          routeRequirement: undefined,
+        }
+      : undefined,
+  );
   const observedRegistry = () => getPluginRuntimeGenerationRegistry() ?? getActivePluginRegistry();
   const stream = vi.fn<StreamFn>(() => {
     options.observeStage?.("execution", observedRegistry());
     return providerStream();
   });
   const fallbackStream = vi.fn<StreamFn>(() => providerStream());
-  vi.spyOn(providerStreamRuntime, "registerProviderStreamForModel").mockImplementation(() => {
+  const resolveProviderStream = vi.fn<Deps["resolveProviderStream"]>(() => {
     options.observeStage?.("factory", observedRegistry());
     return stream;
   });
-  const resolveStream = vi
-    .spyOn(streamResolutionRuntime, "resolveEmbeddedAgentStream")
-    .mockImplementation((streamParams) => ({
+  const resolveStream = vi.fn<Deps["resolveStream"]>((streamParams) => {
+    scope.authProfile = streamParams.authProfileId;
+    return {
       streamFn: streamParams.providerStreamFn ?? streamParams.currentStreamFn ?? fallbackStream,
       strategy: "provider",
-    }));
-  const applyStreamPolicy = vi
-    .spyOn(extraParamsRuntime, "applyExtraParamsToAgent")
-    .mockImplementation(() => {
-      options.observeStage?.("policy", observedRegistry());
-      return { effectiveExtraParams: {}, nativeWebSearchAllowedByToolPolicy: undefined };
-    });
+    };
+  });
+  const applyStreamPolicy = vi.fn<Deps["applyStreamPolicy"]>(() => {
+    options.observeStage?.("policy", observedRegistry());
+    return { effectiveExtraParams: {}, nativeWebSearchAllowedByToolPolicy: undefined };
+  });
   const releaseRuntime = vi.fn(async () => {});
   const readPromptCacheContext = vi
     .spyOn(workerTurnOwners, "readWorkerTurnPromptCacheContext")
     .mockReturnValue({ boundaryCount: 0 });
-  const acquireRuntimeLease = vi
-    .spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime")
-    .mockImplementation(async (runtimeParams) => {
-      const leased = { ...preparedModelRuntime, agentDir: runtimeParams.agentDir };
-      return {
-        snapshot: leased,
-        pluginGeneration: {
-          remoteCatalog: null,
-          configuredCatalogEntries: [],
-          inlineProviderModels: [],
-          pluginMetadataSnapshot: leased.metadataSnapshot,
-          pluginRegistry: leased.pluginRegistry,
-        },
-        [Symbol.asyncDispose]: releaseRuntime,
-      };
-    });
+  const acquireRuntimeLease = vi.fn<Deps["acquireRuntimeLease"]>(async (runtimeParams) => {
+    scope.agentDir = runtimeParams.agentDir;
+    const leased = { ...preparedModelRuntime, agentDir: runtimeParams.agentDir };
+    leasedPreparedModelRuntime = leased;
+    return {
+      snapshot: leased,
+      pluginGeneration: {
+        remoteCatalog: null,
+        configuredCatalogEntries: [],
+        inlineProviderModels: [],
+        pluginMetadataSnapshot: leased.metadataSnapshot,
+        pluginRegistry: leased.pluginRegistry,
+      },
+      [Symbol.asyncDispose]: releaseRuntime,
+    };
+  });
   const readSessionEntry = vi
     .spyOn(sessionEntryRuntime, "readSessionEntryInWorker")
     .mockImplementation(async (target) => {
       expect(target).toEqual(sessionTarget);
       return entry;
     });
+  vi.spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
+    acquireRuntimeLease,
+  );
   vi.spyOn(modelSelectionRuntime, "resolveDefaultModelForAgent").mockReturnValue({
     provider: PROVIDER,
     model: MODEL,
   });
+  vi.spyOn(sessionAuthRuntime, "resolveSessionAuthSelection").mockImplementation(
+    resolveAuthSelection,
+  );
+  vi.spyOn(simpleCompletionRuntime, "prepareSimpleCompletionModel").mockImplementation(
+    prepareModel,
+  );
+  vi.spyOn(providerStreamRuntime, "registerProviderStreamForModel").mockImplementation(
+    resolveProviderStream,
+  );
+  vi.spyOn(streamResolutionRuntime, "resolveEmbeddedAgentStream").mockImplementation(resolveStream);
+  vi.spyOn(extraParamsRuntime, "applyExtraParamsToAgent").mockImplementation(applyStreamPolicy);
   vi.spyOn(
     diagnosticModelCallRuntime,
     "wrapStreamFnWithDiagnosticModelCallEvents",
@@ -337,16 +381,19 @@ export function setup(
     readSessionEntry,
     readPromptCacheContext,
     resolveAuthSelection,
-    resolveStream,
+    scope,
     stream,
   };
 }
 
-export function params(input: WorkerInferenceStartParams, emit: Execution["emit"]): Execution {
+export function params(
+  inferenceRequest: WorkerInferenceStartParams,
+  emit: Execution["emit"],
+): Execution {
   return {
     identity,
     sessionTarget,
-    request: input,
+    request: inferenceRequest,
     signal: new AbortController().signal,
     emit,
     isCurrent: () => true,

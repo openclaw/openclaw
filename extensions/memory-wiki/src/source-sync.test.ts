@@ -13,8 +13,11 @@ const { syncBridgeMock, syncUnsafeLocalMock, refreshIndexesMock } = vi.hoisted((
   refreshIndexesMock: vi.fn(),
 }));
 
+// mock-isolation: test sync orchestration without source I/O or index execution.
 vi.mock("./bridge.js", () => ({ syncMemoryWikiBridgeSources: syncBridgeMock }));
+// mock-isolation: test sync orchestration without source I/O or index execution.
 vi.mock("./unsafe-local.js", () => ({ syncMemoryWikiUnsafeLocalSources: syncUnsafeLocalMock }));
+// mock-isolation: test sync orchestration without source I/O or index execution.
 vi.mock("./compile.js", () => ({ refreshMemoryWikiIndexesAfterImport: refreshIndexesMock }));
 
 const bridgeResult = {

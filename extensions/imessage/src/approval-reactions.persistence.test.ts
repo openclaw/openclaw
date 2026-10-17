@@ -18,6 +18,7 @@ import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
 const gatewayMocks = vi.hoisted(() => ({ resolve: vi.fn() }));
 
+// mock-isolation: exercise approval handling without a live gateway.
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: gatewayMocks.resolve,
 }));

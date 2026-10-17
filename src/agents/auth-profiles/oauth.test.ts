@@ -169,7 +169,7 @@ describe("setup-owned SecretRef materialization", () => {
           profileId,
           agentDir,
         });
-      const release = createDeferredCore<void>();
+      const release = createDeferredCore();
       let retained: ReturnType<typeof resolve> | undefined;
       await withSetup(
         {

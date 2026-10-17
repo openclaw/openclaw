@@ -104,13 +104,16 @@ function sendResult(
 
 vi.mock("node:timers/promises", () => ({ setTimeout: timersMock.delay }));
 
+// mock-isolation: keep transport effects in test-owned doubles.
 vi.mock("./send.js", () => ({ sendMessageIMessage: send }));
 
+// mock-isolation: keep transport effects in test-owned doubles.
 vi.mock("./probe.js", () => ({
   getCachedIMessagePrivateApiStatus: probeMock.cachedStatus,
   probeIMessagePrivateApi: probeMock.probeIMessagePrivateApi,
 }));
 
+// mock-isolation: keep transport effects in test-owned doubles.
 vi.mock("./actions.runtime.js", () => ({
   imessageActionsRuntime: {
     sendPoll: actionsMock.sendPoll,
@@ -118,6 +121,7 @@ vi.mock("./actions.runtime.js", () => ({
   },
 }));
 
+// mock-isolation: exercise approval handling without a live gateway.
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: approvalGatewayMock.resolve,
 }));

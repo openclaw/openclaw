@@ -11,7 +11,6 @@ import {
   makePluginLoaderTempDir,
   writePlugin,
 } from "./loader.test-fixtures.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import {
   resolveLoadedProviderPluginsForHooks,
@@ -21,87 +20,66 @@ import {
 import { findProviderRuntimeRegistrationInRegistry } from "./provider-registry-selection.js";
 import { resolvePluginProvidersCore } from "./providers.runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import type { PluginRegistry } from "./registry-types.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 import type { ProviderPlugin } from "./types.js";
 
-function writeOwner(
-  id: string,
-  body: string,
-  metadata: Partial<PluginManifestRecord> = {},
-  dir?: string,
+function fixture(
+  declaration: "setup" | "activation" | "cli",
+  registersProvider = true,
+  triggerProvider = "helper-provider",
 ) {
-  const plugin = writePlugin({ id, body, dir, filename: "index.cjs" });
-  const manifest = {
-    id,
-    providers: [],
-    configSchema: EMPTY_PLUGIN_SCHEMA,
-    ...metadata,
-    origin: "global" as const,
-    rootDir: plugin.dir,
-    source: plugin.file,
-  };
-  writeFileSync(path.join(plugin.dir, "openclaw.plugin.json"), JSON.stringify(manifest));
-  return manifest;
-}
-
-function disabled(config: OpenClawConfig, id: string): OpenClawConfig {
-  const plugins = config.plugins;
-  return {
-    ...config,
-    plugins: { ...plugins, entries: { ...plugins?.entries, [id]: { enabled: false } } },
-  };
-}
-
-const recorded = (file: string) => (existsSync(file) ? readFileSync(file, "utf8") : "");
-const registryLabels = (registry: PluginRegistry) =>
-  labels(registry.providers.map(({ provider }) => provider));
-
-function providerConfig(
-  api: string,
-  id = "custom",
-  overrides: { baseUrl?: string; auth?: "aws-sdk" } = {},
-): OpenClawConfig {
-  return {
-    models: {
-      providers: { [id]: { api, baseUrl: "https://example.test", models: [], ...overrides } },
-    },
-  };
-}
-
-function fixture(declaration: "setup" | "activation" | "cli", registersProvider = true) {
   const root = makePluginLoaderTempDir();
   const marker = path.join(root, "registrations.log");
-  const setupSource = path.join(root, "setup.cjs");
-  const helper = writeOwner(
-    "helper-owner",
-    `module.exports={id:"helper-owner",register(api){
+  const helper = writePlugin({
+    id: "helper-owner",
+    dir: root,
+    filename: "index.cjs",
+    body: `module.exports={id:"helper-owner",register(api){
       require("node:fs").appendFileSync(${JSON.stringify(marker)},"registered");
       ${registersProvider ? 'api.registerProvider({id:"helper-provider",label:"Helper",auth:[]});' : ""}
     }};`,
-    {
-      setupSource,
-      channels: ["setup-channel"],
-      ...(declaration === "setup"
-        ? { setup: { providers: [{ id: "helper-provider" }] } }
-        : declaration === "activation"
-          ? { activation: { onProviders: ["helper-provider"] } }
-          : { cliBackends: ["helper-cli"] }),
-    },
-    root,
-  );
-  const other = writeOwner(
-    "other-owner",
-    'module.exports={id:"other-owner",register(api){api.registerProvider({id:"other-provider",label:"Other",auth:[]});}};',
-    { providers: ["other-provider"] },
-  );
+  });
+  const other = writePlugin({
+    id: "other-owner",
+    filename: "index.cjs",
+    body: 'module.exports={id:"other-owner",register(api){api.registerProvider({id:"other-provider",label:"Other",auth:[]});}};',
+  });
+  const setupSource = path.join(root, "setup.cjs");
   writeFileSync(
     setupSource,
     'module.exports={plugin:{id:"setup-channel",meta:{id:"setup-channel",label:"Setup",selectionLabel:"Setup",docsPath:"/synthetic",blurb:"Synthetic"},capabilities:{chatTypes:["direct"]},config:{listAccountIds:()=>[],resolveAccount:()=>({})}}};',
   );
-  const snapshot = createPluginMetadataSnapshotFixture({ plugins: [helper, other] });
+  const helperManifest = {
+    id: "helper-owner",
+    origin: "global" as const,
+    rootDir: root,
+    source: helper.file,
+    setupSource,
+    channels: ["setup-channel"],
+    providers: [],
+    configSchema: EMPTY_PLUGIN_SCHEMA,
+    ...(declaration === "setup"
+      ? { setup: { providers: [{ id: "helper-provider" }] } }
+      : declaration === "activation"
+        ? { activation: { onProviders: [triggerProvider] } }
+        : { cliBackends: ["helper-cli"] }),
+  };
+  const otherManifest = {
+    id: "other-owner",
+    origin: "global" as const,
+    rootDir: other.dir,
+    source: other.file,
+    providers: ["other-provider"],
+    configSchema: EMPTY_PLUGIN_SCHEMA,
+  };
+  for (const manifest of [helperManifest, otherManifest]) {
+    writeFileSync(path.join(manifest.rootDir, "openclaw.plugin.json"), JSON.stringify(manifest));
+  }
+  const snapshot = createPluginMetadataSnapshotFixture({
+    plugins: [helperManifest, otherManifest],
+  });
   const config = {
     plugins: {
       allow: ["helper-owner", "other-owner"],
@@ -118,26 +96,9 @@ function fixture(declaration: "setup" | "activation" | "cli", registersProvider 
   return {
     query,
     snapshot,
-    helperSource: helper.source,
-    otherSource: other.source,
-    selected: (overrides: Partial<Parameters<typeof resolveProviderPluginsForHooks>[0]> = {}) =>
-      labels(resolveProviderPluginsForHooks({ ...query, ...overrides })),
-    loaded: (overrides: Partial<Parameters<typeof resolveLoadedProviderPluginsForHooks>[0]> = {}) =>
-      labels(resolveLoadedProviderPluginsForHooks({ ...query, ...overrides })),
-    inGeneration: <T>(pluginRegistry: PluginRegistry, run: () => T) =>
-      withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot, pluginRegistry }, run),
-    registrations: () => recorded(marker),
-    withRegistry: (registry: PluginRegistry, retained: boolean, run: () => void) => {
-      if (retained) {
-        withPluginRuntimeGenerationScope(
-          { metadataSnapshot: snapshot, pluginRegistry: registry },
-          run,
-        );
-      } else {
-        setActivePluginRegistry(registry, "test-active");
-        run();
-      }
-    },
+    helperSource: helper.file,
+    otherSource: other.file,
+    registrations: () => (existsSync(marker) ? readFileSync(marker, "utf8") : ""),
     load: (channelPluginLoadIntent: "setup" | "full", onlyPluginIds = query.onlyPluginIds) =>
       loadOpenClawPlugins({
         config,
@@ -168,26 +129,48 @@ describe("provider selection registration coverage", () => {
     );
     const root = makePluginLoaderTempDir();
     const marker = path.join(root, "registrations.log");
-    const bedrock = writeOwner(
-      manifest.id,
-      `module.exports={id:"amazon-bedrock",register(api){
+    const bedrock = writePlugin({
+      id: manifest.id,
+      dir: root,
+      filename: "index.cjs",
+      body: `module.exports={id:"amazon-bedrock",register(api){
         require("node:fs").appendFileSync(${JSON.stringify(marker)},"bedrock");
         api.registerProvider({id:"amazon-bedrock",label:"Bedrock",auth:[],hookAliases:["bedrock-converse-stream"]});
       }};`,
-      manifest,
-      root,
-    );
-    const unrelated = writeOwner(
-      "unrelated-owner",
-      'module.exports={id:"unrelated-owner",register(){throw new Error("unrelated owner loaded");}};',
-      { providers: ["unrelated"] },
-    );
-    const snapshot = createPluginMetadataSnapshotFixture({ plugins: [bedrock, unrelated] });
-    const config = providerConfig("bedrock-converse-stream", "amazon-bedrock-east1", {
-      baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-      auth: "aws-sdk",
     });
-    config.plugins = { allow: ["amazon-bedrock", "unrelated-owner"] };
+    const unrelated = writePlugin({
+      id: "unrelated-owner",
+      filename: "index.cjs",
+      body: 'module.exports={id:"unrelated-owner",register(){throw new Error("unrelated owner loaded");}};',
+    });
+    const plugins = [
+      { ...manifest, origin: "global" as const, rootDir: root, source: bedrock.file },
+      {
+        id: "unrelated-owner",
+        providers: ["unrelated"],
+        origin: "global" as const,
+        rootDir: unrelated.dir,
+        source: unrelated.file,
+        configSchema: EMPTY_PLUGIN_SCHEMA,
+      },
+    ];
+    for (const plugin of plugins) {
+      writeFileSync(path.join(plugin.rootDir, "openclaw.plugin.json"), JSON.stringify(plugin));
+    }
+    const snapshot = createPluginMetadataSnapshotFixture({ plugins });
+    const config: OpenClawConfig = {
+      plugins: { allow: ["amazon-bedrock", "unrelated-owner"] },
+      models: {
+        providers: {
+          "amazon-bedrock-east1": {
+            api: "bedrock-converse-stream",
+            auth: "aws-sdk",
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            models: [],
+          },
+        },
+      },
+    };
     const handle = resolveProviderRuntimePluginHandle({
       provider: "amazon-bedrock-east1",
       config,
@@ -209,7 +192,11 @@ describe("provider selection registration coverage", () => {
       source: `/plugins/${id}/index.js`,
       provider: { id, label: id, auth: [] },
     }));
-    const config = providerConfig("ollama");
+    const config: OpenClawConfig = {
+      models: {
+        providers: { custom: { api: "ollama", baseUrl: "https://example.test", models: [] } },
+      },
+    };
     const lookup = () => resolveProviderRuntimePluginHandle({ provider: "custom", config });
     const plan = vi.spyOn(activationPlanner, "resolveManifestActivationPluginIds");
     try {
@@ -234,27 +221,45 @@ describe("provider selection registration coverage", () => {
       const proof = fixture("setup");
       const loaded = proof.load("full");
       const all = ["Helper", "Other"];
-      expect(registryLabels(loaded)).toEqual(all);
+      expect(loaded.providers.map(({ provider }) => provider.label)).toEqual(all);
       const query = {
         ...proof.query,
-        config: disabled(proof.query.config, "helper-owner"),
+        config: {
+          plugins: {
+            ...proof.query.config.plugins,
+            entries: {
+              ...proof.query.config.plugins.entries,
+              "helper-owner": { enabled: false },
+            },
+          },
+        },
       };
       const verify = () => {
         const expected = scope === "retained" ? all : ["Other"];
-        expect(proof.loaded(query)).toEqual(expected);
-        expect(proof.selected(query)).toEqual(expected);
-        expect(registryLabels(loaded)).toEqual(all);
+        expect(labels(resolveLoadedProviderPluginsForHooks(query))).toEqual(expected);
+        expect(labels(resolveProviderPluginsForHooks(query))).toEqual(expected);
+        expect(loaded.providers.map(({ provider }) => provider.label)).toEqual(all);
         expect(proof.registrations()).toBe("registered");
-        expect(proof.selected()).toEqual(all);
-        expect(proof.selected({ ...query, providerRefs: ["other-provider"] })).toEqual(["Other"]);
-        expect(proof.selected({ ...query, providerRefs: ["helper-provider"] })).toEqual(
-          scope === "retained" ? ["Helper"] : [],
-        );
+        expect(labels(resolveProviderPluginsForHooks(proof.query))).toEqual(all);
+        expect(
+          labels(resolveProviderPluginsForHooks({ ...query, providerRefs: ["other-provider"] })),
+        ).toEqual(["Other"]);
+        expect(
+          labels(resolveProviderPluginsForHooks({ ...query, providerRefs: ["helper-provider"] })),
+        ).toEqual(scope === "retained" ? ["Helper"] : []);
         expect(labels(resolvePluginProvidersCore({ ...query, registryScope: "exact" }))).toEqual(
           expected,
         );
       };
-      proof.withRegistry(loaded, scope === "retained", verify);
+      if (scope === "retained") {
+        withPluginRuntimeGenerationScope(
+          { metadataSnapshot: proof.snapshot, pluginRegistry: loaded },
+          verify,
+        );
+      } else {
+        setActivePluginRegistry(loaded, "mixed-current-policy");
+        verify();
+      }
     },
   );
 
@@ -293,25 +298,37 @@ describe("provider selection registration coverage", () => {
     }
     const query = {
       ...proof.query,
-      config:
-        scope === "disabled alias owner" || scope === "retained disabled owner"
-          ? disabled(proof.query.config, "other-owner")
-          : proof.query.config,
-      pluginMetadataSnapshot:
-        scope === "replaced alias owner"
-          ? createPluginMetadataSnapshotFixture({
+      ...(scope === "disabled alias owner" || scope === "retained disabled owner"
+        ? {
+            config: {
+              plugins: {
+                ...proof.query.config.plugins,
+                entries: {
+                  ...proof.query.config.plugins.entries,
+                  "other-owner": { enabled: false },
+                },
+              },
+            },
+          }
+        : {}),
+      ...(scope === "replaced alias owner"
+        ? {
+            pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
               plugins: proof.snapshot.plugins.map((plugin) =>
                 plugin.id === "other-owner" ? { ...plugin, source: replacementSource } : plugin,
               ),
-            })
-          : proof.snapshot,
+            }),
+          }
+        : {}),
       providerRefs: ["helper-provider"],
       onlyPluginIds: missingHelper ? undefined : proof.query.onlyPluginIds,
     };
     const verify = () => {
-      expect(proof.loaded(query)).toEqual(missingHelper || blockedAlias ? undefined : ["Other"]);
+      expect(labels(resolveLoadedProviderPluginsForHooks(query))).toEqual(
+        missingHelper || blockedAlias ? undefined : ["Other"],
+      );
       expect(proof.registrations()).toBe(missingHelper ? "" : "registered");
-      expect(proof.selected(query)).toEqual(blockedAlias ? [] : ["Other"]);
+      expect(labels(resolveProviderPluginsForHooks(query))).toEqual(blockedAlias ? [] : ["Other"]);
       // Disabling A creates a new policy/scope key; the helper completes once in
       // that new registry, in addition to its original warm registration.
       const expectedRegistrations =
@@ -322,12 +339,24 @@ describe("provider selection registration coverage", () => {
       expect(
         handle.plugin?.normalizeModelId?.({ provider: "helper-provider", modelId: "legacy" }),
       ).toBe(blockedAlias ? undefined : "alias-current");
-      expect(recorded(aliasCalls)).toBe(blockedAlias ? "" : "called");
+      expect(existsSync(aliasCalls) ? readFileSync(aliasCalls, "utf8") : "").toBe(
+        blockedAlias ? "" : "called",
+      );
       expect(proof.registrations()).toBe(expectedRegistrations);
       expect(existsSync(unexpectedImport)).toBe(false);
-      expect(proof.selected({ ...query, onlyPluginIds: ["helper-owner"] })).toEqual([]);
+      expect(resolveProviderPluginsForHooks({ ...query, onlyPluginIds: ["helper-owner"] })).toEqual(
+        [],
+      );
     };
-    proof.withRegistry(loaded, scope === "retained disabled owner", verify);
+    if (scope === "retained disabled owner") {
+      withPluginRuntimeGenerationScope(
+        { metadataSnapshot: proof.snapshot, pluginRegistry: loaded },
+        verify,
+      );
+    } else {
+      setActivePluginRegistry(loaded, "active-alias");
+      verify();
+    }
   });
 
   it("keeps a failed declared receiver reserved for raw parser and hook lookups", () => {
@@ -349,11 +378,31 @@ describe("provider selection registration coverage", () => {
         ownerRefs: [],
       });
     expect(lookup()).toBeUndefined();
-    proof.inGeneration(registry, () => {
-      expect(lookup()).toBeUndefined();
-      expect(proof.selected({ providerRefs: ["helper-provider"] })).toEqual([]);
-    });
-    expect(proof.selected({ providerRefs: ["helper-provider"] })).toEqual([]);
+    withPluginRuntimeGenerationScope(
+      { metadataSnapshot: proof.snapshot, pluginRegistry: registry },
+      () => {
+        expect(lookup()).toBeUndefined();
+        expect(
+          resolveProviderPluginsForHooks({ ...proof.query, providerRefs: ["helper-provider"] }),
+        ).toEqual([]);
+      },
+    );
+    expect(
+      resolveProviderPluginsForHooks({ ...proof.query, providerRefs: ["helper-provider"] }),
+    ).toEqual([]);
+  });
+
+  it("completes a provider selected through setup metadata", () => {
+    const proof = fixture("setup");
+    const partial = proof.load("setup");
+    setActivePluginRegistry(partial, "partial");
+    expect(partial.providers.map((entry) => entry.provider.label)).toEqual(["Other"]);
+    expect(resolveLoadedProviderPluginsForHooks(proof.query)).toBeUndefined();
+    expect(labels(resolveProviderPluginsForHooks(proof.query))).toEqual(["Helper", "Other"]);
+    expect(proof.load("full").providers.map((entry) => entry.provider.label)).toEqual([
+      "Helper",
+      "Other",
+    ]);
   });
 
   it("reuses a complete active registry after a partial request with activation metadata", () => {
@@ -361,38 +410,39 @@ describe("provider selection registration coverage", () => {
     const partial = proof.load("setup");
     const complete = proof.load("full");
     setActivePluginRegistry(complete, "complete-active");
-    expect(registryLabels(partial)).toEqual(["Other"]);
+    expect(partial.providers.map(({ provider }) => provider.label)).toEqual(["Other"]);
     withPluginRuntimeRegistryScope(partial, () => {
-      expect(proof.loaded()).toEqual(["Helper", "Other"]);
-      expect(proof.selected()).toEqual(["Helper", "Other"]);
+      expect(labels(resolveLoadedProviderPluginsForHooks(proof.query))).toEqual([
+        "Helper",
+        "Other",
+      ]);
+      expect(labels(resolveProviderPluginsForHooks(proof.query))).toEqual(["Helper", "Other"]);
     });
     expect(proof.registrations()).toBe("registered");
   });
 
-  it.each([
-    ["setup", true, undefined, ["Helper", "Other"], "registered"],
-    ["activation", false, undefined, ["Other"], "registered"],
-    ["cli", false, ["Other"], ["Other"], ""],
-  ] as const)(
-    "completes setup registrations required by %s metadata",
-    (kind, provider, loaded, selected, registrations) => {
-      const proof = fixture(kind, provider);
-      const registry = proof.load("setup");
-      setActivePluginRegistry(registry, "setup");
-      if (kind === "activation") {
+  it("completes a non-provider activation helper's setup registration", () => {
+    const proof = fixture("activation", false);
+    const registry = proof.load("setup");
+    setActivePluginRegistry(registry, "setup");
+    expect(proof.registrations()).toBe("");
+    withPluginRuntimeGenerationScope(
+      { metadataSnapshot: proof.snapshot, pluginRegistry: registry },
+      () => {
+        expect(labels(resolveProviderPluginsForHooks(proof.query))).toEqual(["Other"]);
         expect(proof.registrations()).toBe("");
-        proof.inGeneration(registry, () => {
-          expect(proof.selected()).toEqual(["Other"]);
-          expect(proof.registrations()).toBe("");
-        });
-      }
-      expect(registryLabels(registry)).toEqual(["Other"]);
-      expect(proof.loaded()).toEqual(loaded);
-      expect(proof.selected()).toEqual(selected);
-      expect(proof.registrations()).toBe(registrations);
-      if (kind === "setup") {
-        expect(registryLabels(proof.load("full"))).toEqual(selected);
-      }
-    },
-  );
+      },
+    );
+    expect(resolveLoadedProviderPluginsForHooks(proof.query)).toBeUndefined();
+    expect(labels(resolveProviderPluginsForHooks(proof.query))).toEqual(["Other"]);
+    expect(proof.registrations()).toBe("registered");
+  });
+
+  it("does not require provider registration from a CLI-backend-only owner", () => {
+    const proof = fixture("cli", false);
+    setActivePluginRegistry(proof.load("setup"), "cli-only");
+    expect(labels(resolveLoadedProviderPluginsForHooks(proof.query))).toEqual(["Other"]);
+    expect(labels(resolveProviderPluginsForHooks(proof.query))).toEqual(["Other"]);
+    expect(proof.registrations()).toBe("");
+  });
 });
