@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { readFlagValue } from "./arg-utils.mts";
+import { NATIVE_COMPILER_PACKAGES, resolveTypeCheckTool } from "./local-check-runtime.mts";
 import { runManagedCommand } from "./managed-child-process.mts";
 import { findRepoRoot } from "./repo-root.mjs";
 
@@ -193,9 +194,9 @@ function provenance(cwd: string, env: NodeJS.ProcessEnv) {
   let compilerVersion: string | null = null;
   try {
     const require = createRequire(path.join(root, "package.json"));
+    const manifest = `${NATIVE_COMPILER_PACKAGES.get(resolveTypeCheckTool())}/package.json`;
     compilerVersion =
-      JSON.parse(fs.readFileSync(require.resolve("typescript/package.json"), "utf8")).version ??
-      null;
+      JSON.parse(fs.readFileSync(require.resolve(manifest), "utf8")).version ?? null;
   } catch {
     /* A missing package manifest is not a compiler failure. */
   }

@@ -606,6 +606,9 @@ importers:
       tsdown:
         specifier: 0.23.0
         version: 0.23.0(tsx@4.23.15)(typescript@7.1.0-dev.20260928.1)(unrun@0.3.1)
+      tsrs:
+        specifier: 0.16.0-ts7.1.0-dev.20260929
+        version: 0.16.0-ts7.1.0-dev.20260929
       tsx:
         specifier: 4.23.15
         version: 4.23.15
@@ -6348,6 +6351,40 @@ packages:
   '@trycua/cua-driver@0.34.0':
     resolution: {integrity: sha512-MJs5+z6dM9UnqXZuKCE9uNZPA12QZOI+7wiKjk2ZmTtGox7Scvx1w+7fv6B1CTQV+3/ZR8fVmfEILbq/90WbVg==}
 
+  '@tsrs/darwin-arm64@0.16.0-ts7.1.0-dev.20260929':
+    resolution: {integrity: sha512-9e7ZeELv0Fq06PL7xr0w7jeU45cd2UcDAejH3uloTPD37Vm6h099u/hAj90CPbY88ky15eXCiKE5hJzqvSvCBA==}
+    engines: {node: '>=16.20.0'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@tsrs/linux-arm64-gnu@0.16.0-ts7.1.0-dev.20260929':
+    resolution: {integrity: sha512-+pWQ4gnuIVeDJsUYKxwRuSF9smST209Srto2B0LrCwnomgbMHENB7hzN+kAOe+HGWvmss9sjoQiwNHME3C9nNA==}
+    engines: {node: '>=16.20.0'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@tsrs/linux-arm64-musl@0.16.0-ts7.1.0-dev.20260929':
+    resolution: {integrity: sha512-T2whHu5XbgEAnre71GVHBavdypwZu4tD/vEZDWTctfKrQ2LDbtt5QTbWhxN1SOkNS9i8EqWYaRUKQEDPjFntZg==}
+    engines: {node: '>=16.20.0'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [musl]
+
+  '@tsrs/linux-x64-gnu@0.16.0-ts7.1.0-dev.20260929':
+    resolution: {integrity: sha512-hPsRzR/oG4+wQwiCFSLM7Vct70yO1C4mHjDebEUAqyzyVlhRzZsqJVDpy+xYVyB1eebDD9VJ+c5UEzA2PuKDiw==}
+    engines: {node: '>=16.20.0'}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@tsrs/linux-x64-musl@0.16.0-ts7.1.0-dev.20260929':
+    resolution: {integrity: sha512-oW49ztnYwI0uOc/Yf8PCcXqAaVlkbvYJByLcz3u1cT2I7R8D649jDdegHWrqDfPPCa9yM7Q7WdNKstZIaQCjeg==}
+    engines: {node: '>=16.20.0'}
+    cpu: [x64]
+    os: [linux]
+    libc: [musl]
+
   '@tufjs/canonical-json@2.0.0':
     resolution: {integrity: sha512-yVtV8zsdo8qFHe+/3kw81dSLyF7D576A5cCFCi4X7B39tWT7SekaEFUnvnWJHz+9qO7qJTah1JbrDjWKqFtdWA==}
     engines: {node: ^16.14.0 || >=18.0.0}
@@ -10644,6 +10681,11 @@ packages:
     engines: {node: '>=22'}
     hasBin: true
 
+  tsrs@0.16.0-ts7.1.0-dev.20260929:
+    resolution: {integrity: sha512-/SfYc9iIH353Fj1evYYtiRWbz+/+ieYhlHuu2A3iDvA2DLjzlV1vKMzyh2eXuACPNsmFI2hc3w9EPPx6B+E8OA==}
+    engines: {node: '>=16.20.0'}
+    hasBin: true
+
   tsscmp@1.0.6:
     resolution: {integrity: sha512-LxhtAkPDTkVCMQjt2h6eBVY28KCjikZqZfMcC15YBeNjkgUpdCfBu5HoiOTDu86v6smE8yOjyEktJ8hlbANHQA==}
     engines: {node: '>=0.6.x'}
@@ -14484,6 +14526,21 @@ snapshots:
       '@trycua/cua-driver-linux-x64-gnu': 0.34.0
       '@trycua/cua-driver-win32-arm64-msvc': 0.34.0
       '@trycua/cua-driver-win32-x64-msvc': 0.34.0
+
+  '@tsrs/darwin-arm64@0.16.0-ts7.1.0-dev.20260929':
+    optional: true
+
+  '@tsrs/linux-arm64-gnu@0.16.0-ts7.1.0-dev.20260929':
+    optional: true
+
+  '@tsrs/linux-arm64-musl@0.16.0-ts7.1.0-dev.20260929':
+    optional: true
+
+  '@tsrs/linux-x64-gnu@0.16.0-ts7.1.0-dev.20260929':
+    optional: true
+
+  '@tsrs/linux-x64-musl@0.16.0-ts7.1.0-dev.20260929':
+    optional: true
 
   '@tufjs/canonical-json@2.0.0': {}
 
@@ -19206,6 +19263,14 @@ snapshots:
   tslib@2.8.1: {}
 
   tslog@5.2.0: {}
+
+  tsrs@0.16.0-ts7.1.0-dev.20260929:
+    optionalDependencies:
+      '@tsrs/darwin-arm64': 0.16.0-ts7.1.0-dev.20260929
+      '@tsrs/linux-arm64-gnu': 0.16.0-ts7.1.0-dev.20260929
+      '@tsrs/linux-arm64-musl': 0.16.0-ts7.1.0-dev.20260929
+      '@tsrs/linux-x64-gnu': 0.16.0-ts7.1.0-dev.20260929
+      '@tsrs/linux-x64-musl': 0.16.0-ts7.1.0-dev.20260929
 
   tsscmp@1.0.6: {}
 

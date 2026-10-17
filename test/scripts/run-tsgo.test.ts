@@ -39,7 +39,7 @@ it.each([true])(
     fs.writeFileSync(path.join(root, "package.json"), '{"private":true}\n');
     fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
     const sharedInstall = fs.realpathSync.native(createTempDir("native-shared-install-"));
-    const nativeRoot = path.join(sharedInstall, "node_modules/typescript");
+    const nativeRoot = path.join(sharedInstall, "node_modules/tsrs");
     const resolverExecuted = path.join(primary, "resolver-executed");
     fs.mkdirSync(path.join(nativeRoot, "lib"), { recursive: true });
     fs.writeFileSync(path.join(nativeRoot, "package.json"), '{"type":"module"}\n');

@@ -1,4 +1,5 @@
-// Runs tsgo through local resource policy and sparse-checkout guards.
+// Runs the type checker (tsrs; tsgo where tsrs ships no binary) through local resource
+// policy and sparse-checkout guards.
 import type { ChildProcess, StdioOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -14,6 +15,7 @@ import {
   applyLocalTsgoPolicy,
   resolveLocalCheckEnv,
   resolveRepoToolBinPath,
+  resolveTypeCheckTool,
 } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
@@ -67,7 +69,9 @@ export function prepareTsgoCommand(
   }
 
   // Subdirectories share checkout ownership, but another checkout's install never does.
-  const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: findRepoRoot(cwd) ?? cwd });
+  const compilerPath = resolveRepoToolBinPath(resolveTypeCheckTool(), {
+    cwd: findRepoRoot(cwd) ?? cwd,
+  });
   let timeoutMs: number | undefined;
   try {
     timeoutMs = resolveTsgoTimeoutMs(env);
@@ -78,7 +82,7 @@ export function prepareTsgoCommand(
   }
   return {
     args: finalArgs,
-    bin: tsgoPath,
+    bin: compilerPath,
     cwd,
     env,
     shell: process.platform === "win32",

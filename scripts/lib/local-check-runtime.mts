@@ -15,6 +15,14 @@ const DEFAULT_FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * GIB;
 const DEFAULT_FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const CI_PARALLEL_MIN_CPUS = 8;
 const DECLARATION_PATH_CACHE_LIMIT = 16_384;
+// Native compilers ship their platform binary behind the package's own getExePath.
+// tsgo (TypeScript 7) still owns declaration emit; tsrs owns type checking.
+export const NATIVE_COMPILER_PACKAGES = new Map([
+  ["tsgo", "typescript"],
+  ["tsrs", "tsrs"],
+]);
+// tsrs publishes no Windows or Intel macOS binary yet; those hosts keep type checking with tsgo.
+const TSRS_PLATFORMS = new Set(["darwin-arm64", "linux-arm64", "linux-x64"]);
 export const CI_PARALLEL_MIN_MEMORY_BYTES = 24 * GIB;
 
 const EXCLUSIVE_CI_TEST_CONFIGS = new Set([
@@ -162,6 +170,11 @@ export function createDeclarationInputBoundary(cwd: string) {
   };
 }
 
+/** Select the native type checker this host can run. */
+export function resolveTypeCheckTool(platform = process.platform, arch = process.arch) {
+  return TSRS_PLATFORMS.has(`${platform}-${arch}`) ? "tsrs" : "tsgo";
+}
+
 /** Resolve a repo tool from this worktree or the primary checkout's installed toolchain. */
 export function resolveRepoToolBinPath(
   toolName: string,
@@ -171,12 +184,15 @@ export function resolveRepoToolBinPath(
     resolveCommonDir = resolveGitCommonDir,
   }: RepoToolOptions = {},
 ) {
-  if (toolName === "tsgo") {
-    // Resolve this checkout's native compiler independently of the ambient tsc bin link.
+  const nativePackage = NATIVE_COMPILER_PACKAGES.get(toolName);
+  if (nativePackage) {
+    // Resolve this checkout's native compiler independently of the ambient bin links.
     const require = createRequire(import.meta.url);
     const inputs = createDeclarationInputBoundary(cwd);
     const fromCheckout = createRequire(path.join(inputs.root, "package.json"));
-    const nativeRoot = path.dirname(inputs.assert(fromCheckout.resolve("typescript/package.json")));
+    const nativeRoot = path.dirname(
+      inputs.assert(fromCheckout.resolve(`${nativePackage}/package.json`)),
+    );
     const getExePath: { default: () => string } = require(
       inputs.assert(path.join(nativeRoot, "lib/getExePath.js")),
     );

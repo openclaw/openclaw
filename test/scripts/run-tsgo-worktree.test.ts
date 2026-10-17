@@ -6,6 +6,7 @@ import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-cl
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   materializeNativeCompiler,
+  materializeTypeChecker,
   overrideNativeFixtureExecutable,
   resolveInstalledNativeCompiler,
   writeNativeFixtureFile,
@@ -90,6 +91,7 @@ function linkCheckoutTools(root: string) {
 
 function installCheckoutTools(root: string) {
   const native = materializeNativeCompiler(root, { javaScriptApi: false });
+  materializeTypeChecker(root);
   linkCheckoutTools(root);
   return native;
 }

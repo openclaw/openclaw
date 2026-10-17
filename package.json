@@ -2453,6 +2453,7 @@
     "tinyglobby": "0.2.17",
     "tree-sitter-bash": "0.25.1",
     "tsdown": "0.23.0",
+    "tsrs": "0.16.0-ts7.1.0-dev.20260929",
     "tsx": "4.23.15",
     "typescript": "7.1.0-dev.20260928.1",
     "unrun": "0.3.1",

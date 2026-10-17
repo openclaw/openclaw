@@ -10,6 +10,7 @@ import {
   ensureRepoNodeModulesLink,
   resolveLocalCheckEnv,
   resolveRepoToolBinPath,
+  resolveTypeCheckTool,
 } from "../../scripts/lib/local-check-runtime.mts";
 import { resolveTsxImport } from "../../scripts/lib/tsx-cli-shim.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -36,6 +37,13 @@ function makeEnv(overrides: NodeJS.ProcessEnv = {}) {
     ...overrides,
   };
 }
+
+it("keeps tsgo type checking on hosts without a tsrs binary", () => {
+  expect(resolveTypeCheckTool("linux", "x64")).toBe("tsrs");
+  expect(resolveTypeCheckTool("darwin", "arm64")).toBe("tsrs");
+  expect(resolveTypeCheckTool("win32", "x64")).toBe("tsgo");
+  expect(resolveTypeCheckTool("darwin", "x64")).toBe("tsgo");
+});
 
 it("resolves repo tools from the primary checkout for dependency-less worktrees", () => {
   const primaryRoot = createTempDir("openclaw-primary-checkout-");
