@@ -17,7 +17,8 @@ const stored = (parentSessionKey: string): GraphNode => ({ stored: { parentSessi
 const registered = (
   controllerSessionKey: string | null,
   requesterSessionKey: string | null,
-): GraphNode => ({ registry: { controllerSessionKey, requesterSessionKey } });
+  entry?: GraphNode["stored"],
+): GraphNode => ({ registry: { controllerSessionKey, requesterSessionKey }, stored: entry });
 const audience = (source: string) => resolveApprovalSessionAudienceWithFallback(source, "work");
 async function expectAudience(source: string, ...keys: string[]) {
   expect(await audience(source), source).toEqual(scoped(...keys));
@@ -26,17 +27,14 @@ async function expectAudience(source: string, ...keys: string[]) {
 let graph: Record<string, GraphNode> = {};
 const readConfig = vi.fn(() => ({}) as object);
 const readRun = vi.fn((sessionKey: string) => graph[sessionKey]?.registry);
-const readEntry = vi.fn((scope: { sessionKey: string }) => graph[scope.sessionKey]?.stored);
-const readIndex = vi.fn(() => ({
-  getLatestSubagentRun: readRun,
-}));
+const entryFor = (scope: { sessionKey: string }) => graph[scope.sessionKey]?.stored;
+const readEntry = vi.fn(entryFor);
+const readIndex = vi.fn(() => ({ getLatestSubagentRun: readRun }));
 const prepareRegistry = vi.fn(async () => true);
 const registrySnapshot = {};
 const readSnapshot = vi.fn<() => object | undefined>(() => registrySnapshot);
 
-vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: () => readConfig(),
-}));
+vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => readConfig() }));
 vi.mock("../agents/subagents/registry/subagent-registry-read.js", () => ({
   buildLatestSubagentSessionListReadIndex: () => readIndex(),
   getLatestLiveSubagentRunByChildSessionKey: (key: string) => readRun(key),
@@ -54,9 +52,7 @@ beforeEach(() => {
   graph = {};
   readConfig.mockReset().mockReturnValue({});
   readRun.mockClear();
-  readEntry
-    .mockReset()
-    .mockImplementation((scope: { sessionKey: string }) => graph[scope.sessionKey]?.stored);
+  readEntry.mockReset().mockImplementation(entryFor);
   readIndex.mockClear();
   prepareRegistry.mockReset().mockResolvedValue(true);
   readSnapshot.mockReset().mockReturnValue(registrySnapshot);
@@ -85,17 +81,13 @@ it("reads current memory lineage without creating a missing owner and refuses a 
   const mutate = async (operation: Parameters<NonNullable<typeof actor.storage>["mutate"]>[0]) =>
     expect((await actor.storage!.mutate(operation, authority)).kind).toBe("committed");
   try {
-    await mutate({
-      type: "session.entry.create",
-      input: {
-        entry: {
-          sessionId: "private-child",
-          updatedAt: 1,
-          incognito: true,
-          parentSessionKey: "parent",
-        },
-      },
-    });
+    const entry = {
+      sessionId: "private-child",
+      updatedAt: 1,
+      incognito: true,
+      parentSessionKey: "parent",
+    };
+    await mutate({ type: "session.entry.create", input: { entry } });
     graph = { "agent:work:parent": stored("root") };
     await expectAudience(sessionKey, "dashboard:incognito-child", "parent", "root");
     await mutate({
@@ -114,15 +106,13 @@ it("reads current memory lineage without creating a missing owner and refuses a 
 });
 
 it("canonicalizes and bounds the breadth-first audience using current lineage", async () => {
+  const chain = Array.from({ length: 70 }, (_, index) => `session-${index}`);
   const cases: [string, Record<string, GraphNode>, string[]][] = [
     [" Child ", {}, ["child"]],
     [
       "child",
       {
-        child: {
-          ...registered("controller", "requester"),
-          ...stored("stale-parent"),
-        },
+        child: registered("controller", "requester", { parentSessionKey: "stale-parent" }),
         controller: stored("controller-root"),
         requester: stored("requester-root"),
       },
@@ -131,10 +121,10 @@ it("canonicalizes and bounds the breadth-first audience using current lineage", 
     [
       "child",
       {
-        child: {
-          ...registered(" ", null),
-          stored: { parentSessionKey: "dashboard-parent", spawnedBy: "spawn-parent" },
-        },
+        child: registered(" ", null, {
+          parentSessionKey: "dashboard-parent",
+          spawnedBy: "spawn-parent",
+        }),
         "dashboard-parent": { stored: { spawnedBy: "root" } },
       },
       ["child", "dashboard-parent", "root"],
@@ -151,13 +141,8 @@ it("canonicalizes and bounds the breadth-first audience using current lineage", 
     ],
     [
       "session-0",
-      Object.fromEntries(
-        Array.from({ length: 70 }, (_, index) => [
-          `session-${index}`,
-          stored(`session-${index + 1}`),
-        ]),
-      ),
-      Array.from({ length: 64 }, (_, index) => `session-${index}`),
+      Object.fromEntries(chain.map((key, index) => [key, stored(`session-${index + 1}`)])),
+      chain.slice(0, 64),
     ],
   ];
   for (const [source, nodes, expected] of cases) {

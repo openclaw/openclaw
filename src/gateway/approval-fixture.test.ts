@@ -26,6 +26,7 @@ import { withRequestedExecApproval } from "./server-methods/exec-approval.test-s
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams, makeGatewayClient } from "./server-request-context.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
+import { createGatewayWsTestSocket } from "./server/ws-connection.test-helpers.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -218,25 +219,12 @@ it("waits for the real RPC accepted tuple after held registration", async (testC
       {
         ...reviewer,
         usesSharedGatewayAuth: false,
-        socket: {
-          ...reviewer.socket,
-          bufferedAmount: 0,
-          send: vi.fn(),
-          terminate: vi.fn(),
-          on: vi.fn(),
-          off: vi.fn(),
-          once: vi.fn(),
-        },
+        socket: createGatewayWsTestSocket(),
       },
     ]);
     const context = createGatewayRequestContext(makeContextParams({ clients }));
     context.getRuntimeConfig = () => ({});
-    const params = {
-      command: "echo fixture",
-      host: "gateway",
-      twoPhase: true,
-      timeoutMs: 60_000,
-    };
+    const params = { command: "echo fixture", host: "gateway", twoPhase: true, timeoutMs: 60_000 };
     await expectHeldRegistration(
       manager,
       async () => {

@@ -146,9 +146,15 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
           };
           const client = await connect("reader", ["operator.read"]);
           const query = { sessionKey, runId, messageRole: "assistant" };
-          const downloadArtifact = (artifactId: string, transport?: "http") =>
-            client.request<ArtifactsDownloadResult>("artifacts.download", {
+          const downloadArtifact = (
+            artifactId: string,
+            transport?: "http",
+            requester = client,
+            requestedRun = runId,
+          ) =>
+            requester.request<ArtifactsDownloadResult>("artifacts.download", {
               ...query,
+              runId: requestedRun,
               artifactId,
               ...(transport ? { transport } : {}),
             });
@@ -220,20 +226,11 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
           expect((await request("/api/artifacts/download/missing/missing")).status).toBe(404);
 
           const underscoped = await connect("approver", ["operator.approvals"]);
+          await expect(downloadArtifact(download.artifact.id, "http", underscoped)).rejects.toThrow(
+            "missing scope: operator.read",
+          );
           await expect(
-            underscoped.request("artifacts.download", {
-              ...query,
-              artifactId: download.artifact.id,
-              transport: "http",
-            }),
-          ).rejects.toThrow("missing scope: operator.read");
-          await expect(
-            client.request("artifacts.download", {
-              ...query,
-              runId: "unrelated-run",
-              artifactId: download.artifact.id,
-              transport: "http",
-            }),
+            downloadArtifact(download.artifact.id, "http", client, "unrelated-run"),
           ).rejects.toMatchObject({ details: { type: "artifact_not_found" } });
 
           const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(download.expiresAt!) + 1);
@@ -280,12 +277,8 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
             await client.stopAndWait();
           }
         },
-        async () => {
-          await dispatcher?.close();
-        },
-        async () => {
-          await server?.close({ reason: "artifact HTTPS proof complete" });
-        },
+        async () => dispatcher?.close(),
+        async () => server?.close({ reason: "artifact HTTPS proof complete" }),
         () => claim.release(),
       );
     },
