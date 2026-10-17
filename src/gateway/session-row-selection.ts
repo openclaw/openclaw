@@ -34,6 +34,7 @@ export function createSessionRowSelection(
   const winners = new Map<string, IndexedTarget>();
   const duplicates = new Set<string>();
   const pending = new Map<string, Exclude<SelectionChange, { kind: "reset" }>>();
+  let flushScheduled = false;
   const orders = new Map<
     string,
     {
@@ -288,6 +289,13 @@ export function createSessionRowSelection(
       if (!change.row) {
         // Preserve resident insertion order across removal and recreation.
         flush();
+      } else if (!flushScheduled) {
+        // Release superseded entries even when no viewer reads the list again.
+        flushScheduled = true;
+        setImmediate(() => {
+          flushScheduled = false;
+          flush();
+        }).unref();
       }
     },
     createdEntries(profileIds: ReadonlySet<string>): Iterable<SelectionTarget> {
