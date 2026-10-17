@@ -22,7 +22,7 @@ function createQueue(params: Pick<QueueParams, "consult"> & Partial<QueueParams>
   return { queue, logger, deliver };
 }
 
-function pendingConsult() {
+async function createPendingQueue(debounceMs = 1) {
   let resolve!: (value: { text: string }) => void;
   const pending = new Promise<{ text: string }>((done) => {
     resolve = done;
@@ -31,7 +31,17 @@ function pendingConsult() {
     .fn<QueueParams["consult"]>()
     .mockImplementationOnce(() => pending)
     .mockResolvedValue({ text: "queued-answer" });
-  return { consult, finish: () => resolve({ text: "first-answer" }) };
+  const fixture = createQueue({ consult, debounceMs });
+  fixture.queue.enqueue("first");
+  await vi.advanceTimersByTimeAsync(debounceMs);
+  return {
+    ...fixture,
+    consult,
+    finish: async () => {
+      resolve({ text: "first-answer" });
+      await vi.runAllTimersAsync();
+    },
+  };
 }
 
 function expectConsultCall(
@@ -53,19 +63,14 @@ describe("realtime voice agent talkback queue", () => {
   it("keeps active pending questions split by metadata", async () => {
     const ownerMetadata = { senderIsOwner: true };
     const guestMetadata = { senderIsOwner: false };
-    const { consult, finish } = pendingConsult();
+    const { queue, deliver, consult, finish } = await createPendingQueue(10);
     consult
       .mockResolvedValueOnce({ text: "owner-answer" })
       .mockResolvedValueOnce({ text: "guest-answer" });
-    const { queue, deliver } = createQueue({ debounceMs: 10, consult });
-
-    queue.enqueue("first");
-    await vi.advanceTimersByTimeAsync(10);
     queue.enqueue("owner", ownerMetadata);
     queue.enqueue("guest", guestMetadata);
     await vi.advanceTimersByTimeAsync(10);
-    finish();
-    await vi.runAllTimersAsync();
+    await finish();
 
     expectConsultCall(consult, 1, "owner", ownerMetadata);
     expectConsultCall(consult, 2, "guest", guestMetadata);
@@ -74,17 +79,12 @@ describe("realtime voice agent talkback queue", () => {
   });
 
   it("bounds merged pending question text while a consult is active", async () => {
-    const { consult, finish } = pendingConsult();
-    const { queue, logger } = createQueue({ consult });
-
-    queue.enqueue("first");
-    await vi.advanceTimersByTimeAsync(1);
+    const { queue, logger, consult, finish } = await createPendingQueue();
     const fragment = "x".repeat(4096);
     for (let index = 0; index < 10; index += 1) {
       queue.enqueue(fragment);
     }
-    finish();
-    await vi.runAllTimersAsync();
+    await finish();
 
     expectConsultCall(consult, 1, Array.from({ length: 7 }, () => fragment).join("\n"));
     expect(consult).toHaveBeenCalledTimes(2);
@@ -94,15 +94,10 @@ describe("realtime voice agent talkback queue", () => {
   });
 
   it("bounds pending question count while preserving retained order", async () => {
-    const { consult, finish } = pendingConsult();
-    const { queue, logger } = createQueue({ consult });
-
-    queue.enqueue("first");
-    await vi.advanceTimersByTimeAsync(1);
+    const { queue, logger, consult, finish } = await createPendingQueue();
     const metadata = Array.from({ length: 40 }, (_, index) => ({ index }));
     metadata.forEach((entry, index) => queue.enqueue(`question-${index}`, entry));
-    finish();
-    await vi.runAllTimersAsync();
+    await finish();
 
     expect(consult).toHaveBeenCalledTimes(33);
     expect(consult.mock.calls.slice(1).map(([request]) => request.metadata)).toStrictEqual(

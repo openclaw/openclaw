@@ -19,6 +19,7 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
 
 let state: OpenClawTestState;
+const checkedResult = () => ({ payloads: [{ text: "Checked" }], meta: { durationMs: 0 } });
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "voice-consult-store" });
 });
@@ -30,10 +31,7 @@ function createConsultFixture() {
   const cfg: OpenClawConfig = {
     agents: { entries: { main: { workspace: state.workspaceDir } } },
   };
-  const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
-    payloads: [{ text: "Checked" }],
-    meta: { durationMs: 0 },
-  }));
+  const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => checkedResult());
   const agentRuntime = { ...createRuntimeAgent(), runEmbeddedAgent };
   const consult = (params: Partial<Parameters<typeof consultRealtimeVoiceAgent>[0]>) =>
     consultRealtimeVoiceAgent({
@@ -60,8 +58,7 @@ describe("voice consult concrete store ownership", () => {
     const sessionKey = "agent:main:voice-preparation";
     const storePath = state.statePath("consult", "sessions.sqlite");
     const target = { agentId: "main", sessionKey, storePath };
-    const run = () =>
-      consult({ ...target, messageProvider: "voice", runIdPrefix: "policy-consult" });
+    const run = () => consult({ ...target, messageProvider: "voice" });
 
     const revisions = [
       ["workspace", "telegram", "chat:initial", "initial-account"],
@@ -75,15 +72,12 @@ describe("voice consult concrete store ownership", () => {
         delivery: normalizeSessionDeliveryState({ context: { channel, to, accountId } }),
       });
       await expect(run()).resolves.toEqual({ text: "Checked" });
-      expect(runEmbeddedAgent).toHaveBeenNthCalledWith(
-        revision + 1,
-        expect.objectContaining({
-          permissionMode,
-          messageProvider: channel,
-          messageTo: to,
-          agentAccountId: accountId,
-        }),
-      );
+      expect(runEmbeddedAgent.mock.calls[revision]?.[0]).toMatchObject({
+        permissionMode,
+        messageProvider: channel,
+        messageTo: to,
+        agentAccountId: accountId,
+      });
     }
   });
 
@@ -113,16 +107,14 @@ describe("voice consult concrete store ownership", () => {
         runIds,
       );
       expect(JSON.stringify(persisted)).toContain(secret);
-      return { payloads: [{ text: "Checked" }], meta: { durationMs: 0 } };
+      return checkedResult();
     });
     for (let turn = 0; turn < 2; turn++) {
       await expect(
         consult({
           sessionKey: "agent:main:voice-identity",
           runIdPrefix,
-          onRunStarted: ({ runId }) => {
-            runIds.push(runId);
-          },
+          onRunStarted: ({ runId }) => void runIds.push(runId),
         }),
       ).resolves.toEqual({ text: "Checked" });
     }
@@ -145,11 +137,7 @@ describe("voice consult concrete store ownership", () => {
       const parentStore = agentRuntime.session.resolveStorePath(cfg.session?.store, {
         agentId: parentAgentId,
       });
-      const createdActor = {
-        type: "human" as const,
-        source: "profile" as const,
-        id: "parent-creator",
-      };
+      const createdActor = { type: "human", source: "profile", id: "parent-creator" } as const;
       await replaceSessionEntry(
         { agentId: parentAgentId, sessionKey: spawnedBy, storePath: parentStore },
         {
@@ -166,32 +154,23 @@ describe("voice consult concrete store ownership", () => {
       );
       const sessionKey = "agent:main:voice-child";
       const storePath = state.statePath("consult", "sessions.sqlite");
-      const result = consult({
-        sessionKey,
-        storePath,
-        spawnedBy,
-        contextMode: "isolated",
-      });
+      const target = { agentId: "main", sessionKey, storePath };
+      const result = consult({ ...target, spawnedBy, contextMode: "isolated" });
       if (locked) {
         await expect(result).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
         expect(runEmbeddedAgent).not.toHaveBeenCalled();
-        expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
+        expect(loadSessionEntry(target)).toBeUndefined();
         return;
       }
       await expect(result).resolves.toEqual({ text: "Checked" });
-      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
-        sandbox: "required",
-        createdActor,
-        spawnedBy,
+      const child = loadSessionEntry(target);
+      expect(child).toMatchObject({ sandbox: "required", createdActor, spawnedBy });
+      expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
+        messageProvider: "discord",
+        messageTo: "channel:synthetic",
+        agentAccountId: "test-account",
+        sessionTarget: target,
       });
-      expect(runEmbeddedAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          messageProvider: "discord",
-          messageTo: "channel:synthetic",
-          agentAccountId: "test-account",
-          sessionTarget: expect.objectContaining({ agentId: "main", sessionKey, storePath }),
-        }),
-      );
     },
   );
 });
@@ -223,7 +202,6 @@ it.each([
         spawnedBy: rootKey,
         senderIsOwner,
         contextMode,
-        runIdPrefix: "lineage-consult",
       }),
     ).resolves.toEqual({ text: "Checked" });
     const child = loadSessionEntry({ agentId: "main", sessionKey, storePath })!;
