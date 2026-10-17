@@ -13,6 +13,7 @@ import {
 } from "../agents/worktrees/registry.test-support.js";
 import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -42,6 +43,31 @@ const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness(asyn
 });
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function git(cwd: string, ...args: string[]) {
+  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout;
+}
+
+type CreatedWorktreeSession = {
+  key: string;
+  sessionId: string;
+  entry: SessionEntry;
+  worktree: { id: string; path: string; branch: string };
+};
+
+function createWorktreeSession(params: Record<string, unknown>) {
+  return directSessionReq<CreatedWorktreeSession>(
+    "sessions.create",
+    { agentId: "main", worktree: true, ...params },
+    { client: { connect: { scopes: ["operator.admin"] } } as never },
+  );
+}
+
+async function cleanupWorktree(id?: string) {
+  if (id && getRegistryWorktree(process.env, id)?.removedAt === undefined) {
+    await managedWorktrees.remove({ id, reason: "test-cleanup", allowSnapshotLoss: true });
+  }
+}
 
 test("sessions.create fences the first workspace write behind its diff baseline", async () => {
   const root = tempDirs.make("openclaw-session-diff-first-write-");
@@ -91,7 +117,7 @@ test("sessions.create fences the first workspace write behind its diff baseline"
   };
 
   try {
-    const created = await directSessionReq<{ runStarted?: boolean; sessionId?: string }>(
+    const created = await directSessionReq(
       "sessions.create",
       {
         agentId: "main",
@@ -135,7 +161,6 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
   testState.sessionConfig = { sharing: { drafts: false } };
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:worktree-rollback";
-  const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
   const originalRollback = captureMethodCall("rollbackPreparation")(
     ManagedWorktreeService.prototype,
   );
@@ -153,16 +178,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       await originalRollback(this, record, withRollback);
     });
   try {
-    const failedPromise = directSessionReq(
-      "sessions.create",
-      {
-        key,
-        agentId: "main",
-        visibility: "draft",
-        worktree: true,
-      },
-      { client: adminClient },
-    );
+    const failedPromise = createWorktreeSession({ key, visibility: "draft" });
     await Promise.race([
       rollbackStarted,
       failedPromise.then((result) => {
@@ -170,22 +186,10 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       }),
     ]);
     let successorSettled = false;
-    const successorPromise = directSessionReq<{
-      entry: {
-        worktree?: {
-          id: string;
-          branch: string;
-          repoRoot: string;
-          canonicalWorkspaceDir?: string;
-        };
-      };
-      worktree: { id: string; path: string; branch: string };
-    }>("sessions.create", { key, agentId: "main", worktree: true }, { client: adminClient }).then(
-      (result) => {
-        successorSettled = true;
-        return result;
-      },
-    );
+    const successorPromise = createWorktreeSession({ key }).then((result) => {
+      successorSettled = true;
+      return result;
+    });
     await Promise.resolve();
     expect(successorSettled).toBe(false);
 
@@ -215,11 +219,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
       canonicalWorkspaceDir: workspace,
     });
 
-    const adoptedFailure = await directSessionReq(
-      "sessions.create",
-      { key, agentId: "main", visibility: "draft", worktree: true },
-      { client: adminClient },
-    );
+    const adoptedFailure = await createWorktreeSession({ key, visibility: "draft" });
     expect(adoptedFailure).toMatchObject({
       ok: false,
       error: { message: "sessions.create visibility requires a new session" },
@@ -231,16 +231,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
   } finally {
     releaseRollback();
     rollbackSpy.mockRestore();
-    if (
-      successorWorktreeId &&
-      getRegistryWorktree(process.env, successorWorktreeId)?.removedAt === undefined
-    ) {
-      await managedWorktrees.remove({
-        id: successorWorktreeId,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
+    await cleanupWorktree(successorWorktreeId);
     await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     testState.sessionConfig = undefined;
@@ -346,29 +337,16 @@ test.each([
       } else {
         expect(record?.removedAt).toEqual(expect.any(Number));
         await expect(fs.stat(worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(
-          (
-            await execFileAsync("git", [
-              "-C",
-              worktree.repoRoot,
-              "show",
-              `${record!.snapshotRef}:draft.txt`,
-            ])
-          ).stdout,
-        ).toBe("Keep the restored checkout.\n");
+        expect(await git(worktree.repoRoot, "show", `${record!.snapshotRef}:draft.txt`)).toBe(
+          "Keep the restored checkout.\n",
+        );
       }
     } finally {
       proceed.resolve();
       await Promise.allSettled([creation]);
       createSpy.mockRestore();
       createEmptySpy.mockRestore();
-      if (getRegistryWorktree(process.env, worktree.id)?.removedAt === undefined) {
-        await managedWorktrees.remove({
-          id: worktree.id,
-          reason: "test-cleanup",
-          allowSnapshotLoss: true,
-        });
-      }
+      await cleanupWorktree(worktree.id);
       diskSpace.mockRestore();
       await disposeSessionReadContexts();
       testState.agentConfig = undefined;
@@ -380,7 +358,7 @@ test.each([
 test("sessions.create provisions and reuses a session worktree for later runs", async () => {
   const root = tempDirs.make("openclaw-session-worktree-");
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, root);
-  await execFileAsync("git", ["-C", workspace, "branch", "selected-base"]);
+  await git(workspace, "branch", "selected-base");
   testState.agentConfig = { workspace };
   const { dir, storePath } = await createSessionStoreDir();
   const originalCreate = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
@@ -392,24 +370,10 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     });
   let sessionKey: string | undefined;
   try {
-    const created = await directSessionReq<{
-      key: string;
-      entry: {
-        permissionMode?: string;
-        sessionRoot?: string;
-        spawnedCwd?: string;
-      };
-      worktree: { id: string; path: string; branch: string };
-    }>(
-      "sessions.create",
-      {
-        agentId: "main",
-        label: "Release planning",
-        worktree: true,
-        worktreeBaseRef: "selected-base",
-      },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
+    const created = await createWorktreeSession({
+      label: "Release planning",
+      worktreeBaseRef: "selected-base",
+    });
 
     expect(created.ok).toBe(true);
     const key = requireNonEmptyString(created.payload?.key, "created session key");
@@ -429,27 +393,17 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
 
     const retainedDraft = path.join(worktree!.path, "session-draft.txt");
     await fs.writeFile(retainedDraft, "uncommitted work survives reuse\n");
-    const originalHead = (await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"]))
-      .stdout;
+    const originalHead = await git(worktree!.path, "rev-parse", "HEAD");
 
-    await execFileAsync("git", ["-C", workspace, "branch", "-D", "selected-base"]);
-    const recreated = await directSessionReq<{
-      entry: { spawnedCwd?: string };
-      worktree: { id: string; path: string; branch: string };
-    }>(
-      "sessions.create",
-      { key, agentId: "main", worktree: true, worktreeBaseRef: "selected-base" },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
+    await git(workspace, "branch", "-D", "selected-base");
+    const recreated = await createWorktreeSession({ key, worktreeBaseRef: "selected-base" });
     expect(recreated.ok).toBe(true);
     expect(recreated.payload?.worktree).toEqual(worktree);
     expect(recreated.payload?.entry.spawnedCwd).toBe(worktree?.path);
     await expect(fs.readFile(retainedDraft, "utf8")).resolves.toBe(
       "uncommitted work survives reuse\n",
     );
-    expect((await execFileAsync("git", ["-C", worktree!.path, "rev-parse", "HEAD"])).stdout).toBe(
-      originalHead,
-    );
+    expect(await git(worktree!.path, "rev-parse", "HEAD")).toBe(originalHead);
     expect(
       listRegistryWorktrees(process.env).filter(
         (record) =>
@@ -512,6 +466,13 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
   const { defaultRuntime } = await import("../runtime.js");
   const prepareInitialRun = createDeferredCore();
   const preparedRuntime = vi.fn<(params: { cwd?: string; workspaceDir?: string }) => void>();
+  const expectPrepared = (wait: Awaited<ReturnType<typeof rpcReq>>) => {
+    expect(wait, JSON.stringify(wait)).toMatchObject({ ok: true, payload: { status: "ok" } });
+    expect(preparedRuntime).toHaveBeenCalledExactlyOnceWith({
+      cwd: requestedCwd,
+      workspaceDir: requestedCwd,
+    });
+  };
   const mockPreparedRuntime = () =>
     mockGetReplyFromConfigOnce(async (ctx, opts) => {
       await prepareInitialRun.promise;
@@ -615,16 +576,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
     // prepares. They must see the same roster as creation, not pin the disk-only config.
     actualConfigIo.getRuntimeConfig();
     prepareInitialRun.resolve();
-    const createWait = await pendingCreateWait;
-    expect(createWait, JSON.stringify(createWait)).toMatchObject({
-      ok: true,
-      payload: { status: "ok" },
-    });
-    expect(preparedRuntime).toHaveBeenCalledTimes(1);
-    expect(preparedRuntime.mock.calls[0]?.[0]).toEqual({
-      cwd: requestedCwd,
-      workspaceDir: requestedCwd,
-    });
+    expectPrepared(await pendingCreateWait);
 
     preparedRuntime.mockClear();
     mockPreparedRuntime();
@@ -639,15 +591,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
       runId: followupRunId,
       timeoutMs: 10_000,
     });
-    expect(followupWait, JSON.stringify(followupWait)).toMatchObject({
-      ok: true,
-      payload: { status: "ok" },
-    });
-    expect(preparedRuntime).toHaveBeenCalledTimes(1);
-    expect(preparedRuntime.mock.calls[0]?.[0]).toEqual({
-      cwd: requestedCwd,
-      workspaceDir: requestedCwd,
-    });
+    expectPrepared(followupWait);
   } finally {
     prepareInitialRun.resolve();
     ws.close();
@@ -670,22 +614,11 @@ test("sessions.create preserves pending worktree intent when initial-turn admiss
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:post-commit-worktree";
   try {
-    const created = await directSessionReq<{
-      key: string;
-      runError: { code: string; message: string };
-      runStarted: boolean;
-      sessionId: string;
-    }>(
-      "sessions.create",
-      {
-        agentId: "main",
-        key,
-        message: "reject this initial input\u0000",
-        worktree: true,
-        worktreeName: "post-commit-worktree",
-      },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
+    const created = await createWorktreeSession({
+      key,
+      message: "reject this initial input\u0000",
+      worktreeName: "post-commit-worktree",
+    });
     expect(created).toMatchObject({
       ok: true,
       payload: {

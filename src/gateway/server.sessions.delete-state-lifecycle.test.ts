@@ -71,6 +71,21 @@ const {
 } = setupGatewaySessionsHandlerTestHarness();
 const companions = new Set<SessionCompanionService>();
 
+async function createStoredSession(
+  sessionId = "lifecycle-session",
+  entry: Parameters<typeof sessionStoreEntry>[1] = {},
+  sessionKey = "agent:main:lifecycle-session",
+) {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId, entry) } });
+  return { sessionKey, sessionId, storePath };
+}
+
+async function deleteSession(sessionKey: string) {
+  const response = await directSessionReq("sessions.delete", { key: sessionKey });
+  expect(response).toMatchObject({ ok: true, payload: { deleted: true } });
+}
+
 afterEach(async () => {
   for (const companion of companions) {
     companion.dispose();
@@ -87,14 +102,11 @@ afterEach(async () => {
 test.each(["sessions.reset", "sessions.delete"] as const)(
   "%s preserves the session generation until mandatory native cleanup succeeds",
   async (method) => {
-    const { storePath } = await createSessionStoreDir();
-    const sessionKey = "agent:main:dashboard:mandatory-cleanup";
-    const sessionId = "mandatory-cleanup-session";
-    await writeSessionStore({
-      entries: {
-        [sessionKey]: sessionStoreEntry(sessionId, { lifecycleRevision: "before-cleanup" }),
-      },
-    });
+    const { storePath, sessionKey, sessionId } = await createStoredSession(
+      "mandatory-cleanup-session",
+      { lifecycleRevision: "before-cleanup" },
+      "agent:main:dashboard:mandatory-cleanup",
+    );
     const before = loadSessionEntry({ sessionKey, storePath });
     const registeredHarnesses = listRegisteredAgentHarnesses();
     const cleanupFailure = new AgentHarnessSessionCleanupError("Native session is still active");
@@ -220,6 +232,8 @@ test.each(["owner grant", "retained placeholder", "folded sibling", "malformed r
       throw new Error("Repository cleanup fixture has no physical agent database");
     }
     const peer = new DatabaseSync(databasePath);
+    const readRow = () =>
+      peer.prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?").get(sessionKey);
     const successor = sessionStoreEntry("repository-cleanup-successor", {
       lifecycleRevision: "cleanup-successor-generation",
       repositoryWorkspaceId: repository.workspaceId,
@@ -227,9 +241,7 @@ test.each(["owner grant", "retained placeholder", "folded sibling", "malformed r
     let injected = false;
     let nativeAbsent = false;
     const inject = () => {
-      expect(
-        peer.prepare("SELECT session_key FROM session_nodes WHERE session_key = ?").get(sessionKey),
-      ).toBeUndefined();
+      expect(readRow()).toBeUndefined();
       if (boundary === "owner grant") {
         replaceSessionEntrySync({ agentId: "main", storePath, sessionKey }, successor);
         injected = true;
@@ -308,10 +320,7 @@ test.each(["owner grant", "retained placeholder", "folded sibling", "malformed r
       );
       expect(injected).toBe(true);
       if (boundary === "owner grant") {
-        const current = peer
-          .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-          .get(sessionKey);
-        expect(JSON.parse(String(current?.entry_json))).toEqual({
+        expect(JSON.parse(String(readRow()?.entry_json))).toEqual({
           ...successor,
           delivery: { kind: "none" },
         });
@@ -337,11 +346,7 @@ test.each(["owner grant", "retained placeholder", "folded sibling", "malformed r
         expect(nativeAbsent).toBe(true);
         expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(successor);
       } else if (boundary === "retained placeholder") {
-        expect(
-          peer
-            .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-            .get(sessionKey),
-        ).toEqual({ entry_json: "{}" });
+        expect(readRow()).toEqual({ entry_json: "{}" });
       }
     } finally {
       admission.mockRestore();
@@ -352,9 +357,7 @@ test.each(["owner grant", "retained placeholder", "folded sibling", "malformed r
 );
 
 test("sessions.delete broadcasts the removed generation after a replacement appears", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:event-generation";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("generation-a") } });
+  const { storePath, sessionKey } = await createStoredSession("generation-a");
   const broadcast = vi.fn();
   const deleted = await directSessionReq(
     "sessions.delete",
@@ -372,53 +375,33 @@ test("sessions.delete broadcasts the removed generation after a replacement appe
   );
   expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
   expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("generation-b");
+  const removedGeneration = {
+    sessionKey,
+    agentId: "main",
+    sessionId: "generation-a",
+    reason: "delete",
+    ts: expect.any(Number),
+  };
   expect(broadcast.mock.calls.map(([event, payload]) => ({ event, payload }))).toEqual([
-    {
-      event: "socket.drain",
-      payload: {
-        sessionKey,
-        agentId: "main",
-        sessionId: "generation-a",
-        reason: "delete",
-        ts: expect.any(Number),
-      },
-    },
-    {
-      event: "sessions.changed",
-      payload: {
-        sessionKey,
-        agentId: "main",
-        sessionId: "generation-a",
-        reason: "delete",
-        ts: expect.any(Number),
-      },
-    },
+    { event: "socket.drain", payload: removedGeneration },
+    { event: "sessions.changed", payload: removedGeneration },
     { event: "sessions.changed", payload: { reason: "delete", ts: expect.any(Number) } },
   ]);
 });
 
 test("sessions.delete reports an exact-entry replacement during transcript materialization", async () => {
-  const sessionKey = "agent:main:cron:materialization-race";
-  const sessionId = "materialization-race-run";
   const lifecycleRevision = "materialization-race-revision";
   const updatedAt = 1_737_600_000_000;
-  const { storePath } = await createSessionStoreDir();
+  const replacement = { label: "concurrent replacement", lifecycleRevision, updatedAt };
+  const { storePath, sessionKey, sessionId } = await createStoredSession(
+    "materialization-race-run",
+    { lifecycleRevision, updatedAt },
+    "agent:main:cron:materialization-race",
+  );
   const events = [{ type: "session" as const, id: sessionId, content: "original transcript" }];
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry(sessionId, { lifecycleRevision, updatedAt }),
-    },
-  });
   await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
   afterSessionStateMaterialization(() => {
-    replaceSessionEntrySync(
-      { sessionKey, storePath },
-      sessionStoreEntry(sessionId, {
-        label: "concurrent replacement",
-        lifecycleRevision,
-        updatedAt,
-      }),
-    );
+    replaceSessionEntrySync({ sessionKey, storePath }, sessionStoreEntry(sessionId, replacement));
   });
 
   const changed = await directSessionReq("sessions.delete", {
@@ -435,10 +418,8 @@ test("sessions.delete reports an exact-entry replacement during transcript mater
   });
 
   expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-    label: "concurrent replacement",
-    lifecycleRevision,
+    ...replacement,
     sessionId,
-    updatedAt,
   });
   await expect(loadTranscriptEvents({ sessionKey, sessionId, storePath })).resolves.toEqual(events);
 });
@@ -446,11 +427,8 @@ test("sessions.delete reports an exact-entry replacement during transcript mater
 test.each(["authorization", "placement"] as const)(
   "sessions.delete rechecks %s after transcript materialization before committing",
   async (change) => {
-    const { storePath } = await createSessionStoreDir();
-    const sessionKey = `agent:main:materialization-${change}`;
-    const sessionId = `session-materialization-${change}`;
+    const { storePath, sessionKey, sessionId } = await createStoredSession();
     const events = [{ type: "session" as const, id: sessionId, content: "preserve transcript" }];
-    await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
     await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, events);
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
     let authorized = true;
@@ -490,10 +468,7 @@ test.each(["authorization", "placement"] as const)(
 test.each(["archive-publication", "worker-queue"] as const)(
   "sessions.delete accepts postcommit placement retirement during %s",
   async (phase) => {
-    await createSessionStoreDir();
-    const sessionKey = "agent:main:postcommit-retirement";
-    const sessionId = "postcommit-retirement-session";
-    await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+    const { sessionKey, sessionId } = await createStoredSession();
     const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
     const claim = await placementStore.claimTurn({
       sessionId,
@@ -624,9 +599,7 @@ test("sessions.delete isolates Side chat for the same global key and session ID 
 });
 
 test("a delayed deletion event cannot erase Side chat for a newer generation", async () => {
-  await createSessionStoreDir();
-  const sessionKey = "agent:main:companion-late-delete";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("old-generation") } });
+  const { sessionKey } = await createStoredSession("old-generation");
   const { service } = await createCompanion();
   await ask(service, sessionKey, "Old generation question?");
   let deletion: Extract<SessionIdentityMutation, { kind: "delete" }> | undefined;
@@ -636,8 +609,7 @@ test("a delayed deletion event cannot erase Side chat for a newer generation", a
     }
   });
   try {
-    const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
-    expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+    await deleteSession(sessionKey);
   } finally {
     stop();
   }
@@ -658,9 +630,7 @@ test("a delayed deletion event cannot erase Side chat for a newer generation", a
 test("sessions.delete cancels a prepared Side chat ask before its late answer", async ({
   signal,
 }) => {
-  await createSessionStoreDir();
-  const sessionKey = "agent:main:companion-active-delete";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("active-generation") } });
+  const { sessionKey } = await createStoredSession("active-generation");
   const pending = createDeferred<string>();
   const started = createDeferred();
   const { service, run } = await createCompanion(() => {
@@ -675,8 +645,7 @@ test("sessions.delete cancels a prepared Side chat ask before its late answer", 
       signal,
     );
     expect(run).toHaveBeenCalledOnce();
-    const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
-    expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+    await deleteSession(sessionKey);
     expect(run.mock.calls[0]?.[0].signal.aborted).toBe(true);
     pending.resolve("Late answer from the deleted session.");
     await expect(failure).resolves.toMatchObject({ reason: "context-unavailable" });
