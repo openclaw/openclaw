@@ -15,178 +15,72 @@ type PackageManifest = {
 
 const COMMAND_TIMEOUT_MS = 180_000;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const names = (list: string) => list.trim().split(/\s+/u);
 
 const compatibility = {
   "@openclaw/ai/provider-types": {
     values: ["PROVIDER_CONTEXT_HANDOFF", "PROVIDER_MODEL_INPUT", "resolveProviderContext"],
-    types: [
-      "MediaContent",
-      "ModelInputContent",
-      "ProviderContext",
-      "ProviderContextHandoff",
-      "ProviderMessage",
-      "ProviderModel",
-      "ProviderStreamFunction",
-      "ProviderStreamOptions",
-      "ProviderUserMessage",
-      "VideoContent",
-    ],
+    types: names(`MediaContent ModelInputContent ProviderContext ProviderContextHandoff
+      ProviderMessage ProviderModel ProviderStreamFunction ProviderStreamOptions
+      ProviderUserMessage VideoContent`),
   },
   "@openclaw/ai/providers": {
-    values: [
-      "BUILT_IN_API_PROVIDER_SOURCE_ID",
-      "registerBuiltInApiProviders",
-      "resetApiProviders",
-      "OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH",
-      "clampOpenAIPromptCacheKey",
-    ],
+    values: names(`BUILT_IN_API_PROVIDER_SOURCE_ID registerBuiltInApiProviders resetApiProviders
+      OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH clampOpenAIPromptCacheKey`),
     types: [],
   },
   "@openclaw/ai/internal/anthropic": {
-    values: [
-      "streamAnthropic",
-      "streamSimpleAnthropic",
-      "usesFoundryBearerAuth",
-      "omitFoundryBearerCredentialHeaders",
-      "requiresClaudeDefaultSampling",
-      "requiresClaudeMandatoryAdaptiveThinking",
-      "resolveClaudeFable5ModelIdentity",
-      "resolveClaudeModelIdentity",
-      "resolveClaudeMythos5ModelIdentity",
-      "resolveClaudeNativeThinkingLevelMap",
-      "resolveClaudeOpus5ModelIdentity",
-      "resolveClaudeSonnet5ModelIdentity",
-      "supportsClaudeAdaptiveThinking",
-      "supportsClaudeNativeMaxEffort",
-      "supportsClaudeNativeXhighEffort",
-      "usesClaudeFable5MessagesContract",
-      "usesClaudeStreamingRefusalContract",
-      "requiresClaudeAdaptiveThinking",
-      "defaultsClaudeAdaptiveThinking",
-      "prepareClaudeNoPrefillRequestContext",
-      "applyClaudeRequestContract",
-      "resolveModelBoundThinkingReplayMode",
-      "applyAnthropicRefusal",
-      "ANTHROPIC_SERVER_SIDE_FALLBACK_BETA",
-      "ANTHROPIC_SERVER_SIDE_FALLBACKS",
-      "CLAUDE_OPUS_FALLBACK_MODEL_COST",
-      "resolveAnthropicFallbackServingModelCost",
-      "readAnthropicFallbackBoundary",
-      "applyAnthropicFallbackBoundary",
-      "ANTHROPIC_OMITTED_REASONING_TEXT",
-      "findActiveAnthropicToolTurnAssistantIndex",
-      "projectAnthropicTools",
-      "reconcileAnthropicToolChoice",
-      "resolveOriginalAnthropicToolName",
-      "readAnthropicUsageTokenCount",
-      "readAnthropicCacheWriteUsage",
-      "readAnthropicPromptUsageSnapshot",
-      "readLastAnthropicIterationUsage",
-    ],
-    types: [
-      "AnthropicEffort",
-      "AnthropicThinkingDisplay",
-      "AnthropicOptions",
-      "AnthropicFallbackBoundary",
-      "AnthropicToolProjection",
-      "AnthropicProjectedToolChoice",
-      "AnthropicCacheWriteUsage",
-      "AnthropicPromptUsageSnapshot",
-      "AnthropicIterationUsageSnapshot",
-      "AnthropicIterationUsageResult",
-    ],
+    values: names(`streamAnthropic streamSimpleAnthropic usesFoundryBearerAuth
+      omitFoundryBearerCredentialHeaders requiresClaudeDefaultSampling
+      requiresClaudeMandatoryAdaptiveThinking resolveClaudeFable5ModelIdentity
+      resolveClaudeModelIdentity resolveClaudeMythos5ModelIdentity resolveClaudeNativeThinkingLevelMap
+      resolveClaudeOpus5ModelIdentity resolveClaudeSonnet5ModelIdentity supportsClaudeAdaptiveThinking
+      supportsClaudeNativeMaxEffort supportsClaudeNativeXhighEffort usesClaudeFable5MessagesContract
+      usesClaudeStreamingRefusalContract requiresClaudeAdaptiveThinking defaultsClaudeAdaptiveThinking
+      prepareClaudeNoPrefillRequestContext applyClaudeRequestContract resolveModelBoundThinkingReplayMode
+      applyAnthropicRefusal ANTHROPIC_SERVER_SIDE_FALLBACK_BETA ANTHROPIC_SERVER_SIDE_FALLBACKS
+      CLAUDE_OPUS_FALLBACK_MODEL_COST resolveAnthropicFallbackServingModelCost readAnthropicFallbackBoundary
+      applyAnthropicFallbackBoundary ANTHROPIC_OMITTED_REASONING_TEXT findActiveAnthropicToolTurnAssistantIndex
+      projectAnthropicTools reconcileAnthropicToolChoice resolveOriginalAnthropicToolName
+      readAnthropicUsageTokenCount readAnthropicCacheWriteUsage readAnthropicPromptUsageSnapshot
+      readLastAnthropicIterationUsage`),
+    types:
+      names(`AnthropicEffort AnthropicThinkingDisplay AnthropicOptions AnthropicFallbackBoundary
+      AnthropicToolProjection AnthropicProjectedToolChoice AnthropicCacheWriteUsage
+      AnthropicPromptUsageSnapshot AnthropicIterationUsageSnapshot AnthropicIterationUsageResult`),
   },
   "@openclaw/ai/internal/openai": {
-    values: [
-      "streamOpenAICompletions",
-      "streamSimpleOpenAICompletions",
-      "convertMessages",
-      "parseAzureDeploymentNameMap",
-      "resolveAzureDeploymentNameFromMap",
-      "isTraditionalAzureOpenAIHost",
-      "isOpenAICompatibleAzureResponsesBaseUrl",
-      "OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH",
-      "clampOpenAIPromptCacheKey",
-      "isOpenAIGpt54MiniModel",
-      "isOpenAIGpt55Model",
-      "isOpenAIGpt56Model",
-      "normalizeOpenAIReasoningEffort",
-      "resolveOpenAISupportedReasoningEfforts",
-      "supportsOpenAITemperature",
-      "supportsOpenAIReasoningEffort",
-      "resolveOpenAIReasoningEffortForModel",
-      "streamOpenAIResponses",
-      "streamSimpleOpenAIResponses",
-      "OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE",
-      "AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE",
-      "OPENAI_RESPONSES_OUTPUT_TEXT_DELTA_EVENT_TYPE",
-      "AZURE_RESPONSES_TEXT_DELTA_EVENT_TYPE",
-      "isResponsesTextContentPartType",
-      "isResponsesTextDeltaEventType",
-      "isAzureResponsesTextDeltaEventType",
-      "isAzureResponsesTextDeltaEvent",
-      "resolveResponsesMessageSnapshotCollapse",
-      "mapResponsesTerminalUsage",
-      "readResponsesReasoningTokens",
-      "resolveResponsesTerminalStopReason",
-      "readResponsesToolCallItemIdentity",
-      "createResponsesToolCallTracker",
-      "mapOpenAIStopReason",
-      "projectOpenAITools",
-      "reconcileOpenAIResponsesToolChoice",
-      "reconcileOpenAICompletionsToolChoice",
-      "responsesPromptObserver",
-    ],
-    types: [
-      "OpenAICompletionsOptions",
-      "OpenAIReasoningEffort",
-      "OpenAIApiReasoningEffort",
-      "OpenAIResponsesOptions",
-      "ResponsesTextContentPartType",
-      "ResponsesTextDeltaEventType",
-      "AzureResponsesTextContentPart",
-      "AzureResponsesTextDeltaEvent",
-      "ResponsesMessageSnapshotCollapse",
-      "ResponsesTerminalUsagePayload",
-      "ResponsesToolCallIdentity",
-      "ResponsesToolCallState",
-      "OpenAIStopReasonResult",
-      "OpenAIToolProjection",
-      "OpenAICompletionsToolChoice",
-      "ResponsesPromptObservation",
-    ],
+    values: names(`streamOpenAICompletions streamSimpleOpenAICompletions convertMessages
+      parseAzureDeploymentNameMap resolveAzureDeploymentNameFromMap isTraditionalAzureOpenAIHost
+      isOpenAICompatibleAzureResponsesBaseUrl OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH clampOpenAIPromptCacheKey
+      isOpenAIGpt54MiniModel isOpenAIGpt55Model isOpenAIGpt56Model normalizeOpenAIReasoningEffort
+      resolveOpenAISupportedReasoningEfforts supportsOpenAITemperature supportsOpenAIReasoningEffort
+      resolveOpenAIReasoningEffortForModel streamOpenAIResponses streamSimpleOpenAIResponses
+      OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE
+      OPENAI_RESPONSES_OUTPUT_TEXT_DELTA_EVENT_TYPE AZURE_RESPONSES_TEXT_DELTA_EVENT_TYPE
+      isResponsesTextContentPartType isResponsesTextDeltaEventType isAzureResponsesTextDeltaEventType
+      isAzureResponsesTextDeltaEvent resolveResponsesMessageSnapshotCollapse mapResponsesTerminalUsage
+      readResponsesReasoningTokens resolveResponsesTerminalStopReason readResponsesToolCallItemIdentity
+      createResponsesToolCallTracker mapOpenAIStopReason projectOpenAITools
+      reconcileOpenAIResponsesToolChoice reconcileOpenAICompletionsToolChoice responsesPromptObserver`),
+    types:
+      names(`OpenAICompletionsOptions OpenAIReasoningEffort OpenAIApiReasoningEffort OpenAIResponsesOptions
+      ResponsesTextContentPartType ResponsesTextDeltaEventType AzureResponsesTextContentPart
+      AzureResponsesTextDeltaEvent ResponsesMessageSnapshotCollapse ResponsesTerminalUsagePayload
+      ResponsesToolCallIdentity ResponsesToolCallState OpenAIStopReasonResult OpenAIToolProjection
+      OpenAICompletionsToolChoice ResponsesPromptObservation`),
   },
   "@openclaw/ai/internal/tool-schema": {
-    values: [
-      "extractToolSchemaModelCompat",
-      "resolveUnsupportedToolSchemaKeywords",
-      "shouldOmitEmptyArrayItems",
-      "normalizeToolParameterSchema",
-      "GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS",
-      "cleanSchemaForGemini",
-      "LLAMACPP_GBNF_MAX_REPETITION_THRESHOLD",
-      "cleanSchemaForLlamacppGbnf",
-      "findLlamacppGbnfSchemaViolations",
-      "findOpenAIStrictSchemaViolations",
-      "normalizeOpenAIStrictCompatSchema",
-      "normalizeStrictOpenAIJsonSchema",
-      "normalizeOpenAIStrictToolParameters",
-      "isStrictOpenAIJsonSchemaCompatible",
-      "findOpenAIStrictToolProjectionDiagnostics",
-      "resolveOpenAIProjectedToolsStrictToolFlag",
-      "stripUnsupportedSchemaKeywords",
-      "projectRuntimeToolInputSchema",
-      "publishRuntimeToolInputSchema",
-      "getPublishedRuntimeToolInputSchema",
-      "prepareOpenAIFunctionTool",
-      "prepareAnthropicInputSchema",
-    ],
-    types: [
-      "ToolSchemaModelCompat",
-      "ToolParameterSchemaOptions",
-      "RuntimeToolInputSchemaJson",
-      "RuntimeToolInputSchemaProjection",
-    ],
+    values:
+      names(`extractToolSchemaModelCompat resolveUnsupportedToolSchemaKeywords shouldOmitEmptyArrayItems
+      normalizeToolParameterSchema GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS cleanSchemaForGemini
+      LLAMACPP_GBNF_MAX_REPETITION_THRESHOLD cleanSchemaForLlamacppGbnf findLlamacppGbnfSchemaViolations
+      findOpenAIStrictSchemaViolations normalizeOpenAIStrictCompatSchema normalizeStrictOpenAIJsonSchema
+      normalizeOpenAIStrictToolParameters isStrictOpenAIJsonSchemaCompatible findOpenAIStrictToolProjectionDiagnostics
+      resolveOpenAIProjectedToolsStrictToolFlag stripUnsupportedSchemaKeywords projectRuntimeToolInputSchema
+      publishRuntimeToolInputSchema getPublishedRuntimeToolInputSchema prepareOpenAIFunctionTool prepareAnthropicInputSchema`),
+    types: names(`ToolSchemaModelCompat ToolParameterSchemaOptions RuntimeToolInputSchemaJson
+      RuntimeToolInputSchemaProjection`),
   },
 } as const;
 

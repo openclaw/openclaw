@@ -7,6 +7,7 @@ import {
   context,
   registerParityHostLifecycle,
 } from "./provider-transport-parity.test-support.js";
+import { createZeroUsage } from "./usage.test-support.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./utils/system-prompt-cache-boundary.js";
 
 function markers(value: unknown, path = ""): Array<{ path: string; control: unknown }> {
@@ -23,6 +24,12 @@ function markers(value: unknown, path = ""): Array<{ path: string; control: unkn
   );
 }
 
+function markerPaths(payload: unknown) {
+  return markers(payload)
+    .map(({ path }) => path)
+    .toSorted();
+}
+
 function appendToolTurn(messages: Context["messages"], turn: number): Context["messages"] {
   return [
     ...messages,
@@ -33,14 +40,7 @@ function appendToolTurn(messages: Context["messages"], turn: number): Context["m
       model: anthropicModel.id,
       timestamp: turn * 2,
       stopReason: "toolUse",
-      usage: {
-        input: 1,
-        output: 1,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 2,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: { ...createZeroUsage(), input: 1, output: 1, totalTokens: 2 },
       content: [
         { type: "toolCall", id: `call_${turn}`, name: "lookup", arguments: { query: "value" } },
       ],
@@ -139,11 +139,7 @@ describe("Anthropic cache checkpoint transport parity", () => {
       cacheRetention: "short",
       context: { ...context, messages },
     });
-    expect(
-      markers(payload)
-        .map((marker) => marker.path)
-        .toSorted(),
-    ).toEqual(["messages[0].content[0]", "system[0]", "tools[0]"]);
+    expect(markerPaths(payload)).toEqual(["messages[0].content[0]", "system[0]", "tools[0]"]);
   });
 
   it.each([
@@ -159,11 +155,7 @@ describe("Anthropic cache checkpoint transport parity", () => {
           cacheRetention: "short",
           context: { ...context, systemPrompt },
         });
-        expect(
-          markers(payload)
-            .map((marker) => marker.path)
-            .toSorted(),
-        ).toEqual(["messages[0].content[0]", "system[1]", "tools[0]"]);
+        expect(markerPaths(payload)).toEqual(["messages[0].content[0]", "system[1]", "tools[0]"]);
         expect(payload.system).toEqual(
           expect.arrayContaining([
             {

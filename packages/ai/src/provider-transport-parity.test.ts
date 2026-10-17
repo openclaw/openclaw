@@ -32,8 +32,8 @@ vi.mock("openai", () => ({
           }
           const createIterable = () => ({
             async *[Symbol.asyncIterator]() {
-              for (const chunk of openAiMockState.chunks) {
-                yield chunk;
+              for (const item of openAiMockState.chunks) {
+                yield item;
               }
               if (openAiMockState.streamError) {
                 throw openAiMockState.streamError;
@@ -91,21 +91,28 @@ const openRouterModelWithoutBaseUrl = {
   baseUrl: undefined,
 } as unknown as Model<"openai-completions">;
 
+function chunk(delta: Record<string, unknown>, finishReason: string | null = null): OpenAIChunk {
+  return {
+    id: "chatcmpl-parity",
+    model: "gpt-5.5-response",
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+  };
+}
+
+function thinking(value: string, thinkingSignature?: string) {
+  return { type: "thinking", thinking: value, ...(thinkingSignature ? { thinkingSignature } : {}) };
+}
+
+const text = (value: string) => ({ type: "text", text: value });
+const stopped = (...deltas: Record<string, unknown>[]) => [
+  ...deltas.map((delta) => chunk(delta)),
+  chunk({}, "stop"),
+];
 const openAiChunks = [
+  chunk({ reasoning_content: "Think." }),
+  chunk({ content: "Answer." }),
   {
-    id: "chatcmpl-parity",
-    model: "gpt-5.5-response",
-    choices: [{ index: 0, delta: { reasoning_content: "Think." }, finish_reason: null }],
-  },
-  {
-    id: "chatcmpl-parity",
-    model: "gpt-5.5-response",
-    choices: [{ index: 0, delta: { content: "Answer." }, finish_reason: null }],
-  },
-  {
-    id: "chatcmpl-parity",
-    model: "gpt-5.5-response",
-    choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+    ...chunk({}, "stop"),
     usage: {
       prompt_tokens: 8,
       completion_tokens: 4,
@@ -114,117 +121,55 @@ const openAiChunks = [
       completion_tokens_details: { reasoning_tokens: 1 },
     },
   },
-] satisfies OpenAIChunk[];
-
-function makeOpenAiChunk(
-  delta: Record<string, unknown>,
-  finishReason: string | null = null,
-): OpenAIChunk {
-  return {
-    id: "chatcmpl-parity",
-    model: "gpt-5.5-response",
-    choices: [{ index: 0, delta, finish_reason: finishReason }],
-  };
-}
-
-function expectedThinking(thinking: string, thinkingSignature: string) {
-  return { type: "thinking", thinking, thinkingSignature };
-}
-
-const openAiInterleavedReasoningChunks = [
-  makeOpenAiChunk({ reasoning_content: "First thought." }),
-  makeOpenAiChunk({ content: "Interim." }),
-  makeOpenAiChunk({ reasoning_content: "Second thought." }),
-  makeOpenAiChunk({ content: "Final." }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiCoalescedReasoningChunks = [
-  makeOpenAiChunk({ reasoning_content: "First thought." }),
-  makeOpenAiChunk({ content: "Interim." }),
-  makeOpenAiChunk({ content: "Final.", reasoning_content: "Second thought." }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiTypedReasoningChunks = [
-  makeOpenAiChunk({ content: { type: "reasoning", text: "First thought." } }),
-  makeOpenAiChunk({ content: "Interim." }),
-  makeOpenAiChunk({ content: { type: "reasoning", text: "Second thought." } }),
-  makeOpenAiChunk({ content: "Final." }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiStructuredReasoningChunks = [
-  makeOpenAiChunk({
-    reasoning_details: [{ type: "reasoning.text", text: "First thought." }],
-  }),
-  makeOpenAiChunk({ content: "Interim." }),
-  makeOpenAiChunk({
-    reasoning_details: [{ type: "reasoning.text", text: "Second thought." }],
-  }),
-  makeOpenAiChunk({ content: "Final." }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiOrderedVisibleReasoningDetailsChunks = [
-  makeOpenAiChunk({
-    reasoning_details: [
-      { type: "response.output_text", text: "Visible first." },
-      { type: "reasoning.text", text: " Hidden second." },
-      { type: "response.text", text: " Visible third." },
-    ],
-  }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiSplitVisibleReasoningDetailsChunks = [
-  makeOpenAiChunk({
-    reasoning_details: [{ type: "response.output_text", text: "Visible first." }],
-  }),
-  makeOpenAiChunk({
-    reasoning_details: [{ type: "reasoning.text", text: " Hidden second." }],
-  }),
-  makeOpenAiChunk({
-    reasoning_details: [{ type: "response.text", text: " Visible third." }],
-  }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiVisibleDetailBeforeInterruptedContentChunks = [
-  makeOpenAiChunk({
-    reasoning_details: [{ type: "response.output_text", text: "Visible first." }],
-  }),
-  makeOpenAiChunk({
-    reasoning_details: [{ type: "reasoning.text", text: " Hidden second." }],
-  }),
-  makeOpenAiChunk({ content: "Interim." }),
-  makeOpenAiChunk({ reasoning_content: "Hidden fourth." }),
-  makeOpenAiChunk({ content: "Final." }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiTrailingReasoningChunks = [
-  makeOpenAiChunk({ reasoning_content: "First thought." }),
-  makeOpenAiChunk({ content: "Answer." }),
-  makeOpenAiChunk({ reasoning_content: "Trailing thought." }),
-  makeOpenAiChunk({ content: " " }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiInterleavedThenTrailingReasoningChunks = [
-  makeOpenAiChunk({ reasoning_content: "First thought." }),
-  makeOpenAiChunk({ content: "Interim." }),
-  makeOpenAiChunk({ reasoning_content: "Second thought." }),
-  makeOpenAiChunk({ content: "Final." }),
-  makeOpenAiChunk({ reasoning_content: "Trailing thought." }),
-  makeOpenAiChunk({}, "stop"),
-] satisfies OpenAIChunk[];
-
-const openAiInterruptedErrorChunks = [
-  makeOpenAiChunk({ reasoning_content: "First thought." }),
-  makeOpenAiChunk({ content: "Interim." }),
-  makeOpenAiChunk({ reasoning_content: "Second thought." }),
-] satisfies OpenAIChunk[];
+];
+const interleaved = [
+  { reasoning_content: "First thought." },
+  { content: "Interim." },
+  { reasoning_content: "Second thought." },
+  { content: "Final." },
+];
+const visibleDetails = [
+  { type: "response.output_text", text: "Visible first." },
+  { type: "reasoning.text", text: " Hidden second." },
+  { type: "response.text", text: " Visible third." },
+];
+const openAiInterleavedReasoningChunks = stopped(...interleaved);
+const openAiCoalescedReasoningChunks = stopped(...interleaved.slice(0, 2), {
+  content: "Final.",
+  reasoning_content: "Second thought.",
+});
+const openAiTypedReasoningChunks = stopped(
+  { content: { type: "reasoning", text: "First thought." } },
+  { content: "Interim." },
+  { content: { type: "reasoning", text: "Second thought." } },
+  { content: "Final." },
+);
+const openAiStructuredReasoningChunks = stopped(
+  { reasoning_details: [{ type: "reasoning.text", text: "First thought." }] },
+  { content: "Interim." },
+  { reasoning_details: [{ type: "reasoning.text", text: "Second thought." }] },
+  { content: "Final." },
+);
+const openAiOrderedVisibleReasoningDetailsChunks = stopped({ reasoning_details: visibleDetails });
+const openAiSplitVisibleReasoningDetailsChunks = stopped(
+  ...visibleDetails.map((detail) => ({ reasoning_details: [detail] })),
+);
+const openAiVisibleDetailBeforeInterruptedContentChunks = stopped(
+  ...visibleDetails.slice(0, 2).map((detail) => ({ reasoning_details: [detail] })),
+  { content: "Interim." },
+  { reasoning_content: "Hidden fourth." },
+  { content: "Final." },
+);
+const openAiTrailingReasoningChunks = stopped(
+  { reasoning_content: "First thought." },
+  { content: "Answer." },
+  { reasoning_content: "Trailing thought." },
+  { content: " " },
+);
+const openAiInterleavedThenTrailingReasoningChunks = stopped(...interleaved, {
+  reasoning_content: "Trailing thought.",
+});
+const openAiInterruptedErrorChunks = interleaved.slice(0, 3).map((delta) => chunk(delta));
 
 const anthropicFailure = {
   status: 429,
@@ -392,6 +337,18 @@ async function runAnthropic(
   };
 }
 
+async function expectContent(
+  implementation: "provider" | "transport",
+  chunks: readonly OpenAIChunk[],
+  content: unknown[],
+  emitReasoning = true,
+  model?: Model<"openai-completions">,
+) {
+  const result = await runOpenAi(implementation, "success", chunks, emitReasoning, model);
+  expect(result.terminal.content).toEqual(content);
+  return result;
+}
+
 const fixtures: ParityFixture[] = [
   {
     name: "Anthropic successful request and event trace",
@@ -460,31 +417,28 @@ describe("provider and transport observable parity fixtures", () => {
         messages: [{ role: "user", content: "Find the answer." }],
       })
       .finalMessage();
-    const thinking = `${seeded ? "seed" : ""}${deltas ? " + thought" : ""}`;
-    const text = `${seeded ? "Hello" : ""}${deltas ? " world" : ""}`;
+    const thought = `${seeded ? "seed" : ""}${deltas ? " + thought" : ""}`;
+    const answer = `${seeded ? "Hello" : ""}${deltas ? " world" : ""}`;
     const signature = deltas ? "final-signature" : "seed-signature";
     expect(sdkResult.content).toEqual([
-      { type: "thinking", thinking, signature },
-      { type: "text", text },
+      { type: "thinking", thinking: thought, signature },
+      text(answer),
     ]);
     for (const implementation of ["provider", "transport"] as const) {
       const result = await runAnthropic(implementation, "success", events);
       expect(result.terminal).toMatchObject({
         stopReason: "stop",
-        content: [
-          { type: "thinking", thinking, thinkingSignature: signature },
-          { type: "text", text },
-        ],
+        content: [thinking(thought, signature), text(answer)],
       });
       expect(result.eventTrace).toContainEqual({
         type: "thinking_end",
         contentIndex: 0,
-        content: thinking,
+        content: thought,
       });
       expect(result.eventTrace).toContainEqual({
         type: "text_end",
         contentIndex: 1,
-        content: text,
+        content: answer,
       });
     }
   });
@@ -667,75 +621,44 @@ describe("provider and transport observable parity fixtures", () => {
   it("preserves unphased content when native reasoning resumes", async () => {
     for (const implementation of ["provider", "transport"] as const) {
       for (const chunks of [openAiInterleavedReasoningChunks, openAiCoalescedReasoningChunks]) {
-        const result = await runOpenAi(implementation, "success", chunks);
-
-        expect(result.terminal.content).toEqual([
-          expectedThinking("First thought.", "reasoning_content"),
-          { type: "text", text: "Interim." },
-          expectedThinking("Second thought.", "reasoning_content"),
-          { type: "text", text: "Final." },
+        await expectContent(implementation, chunks, [
+          thinking("First thought.", "reasoning_content"),
+          text("Interim."),
+          thinking("Second thought.", "reasoning_content"),
+          text("Final."),
         ]);
       }
-
-      const typedReasoningResult = await runOpenAi(
-        implementation,
-        "success",
-        openAiTypedReasoningChunks,
-      );
-      expect(typedReasoningResult.terminal.content).toEqual([
-        { type: "thinking", thinking: "First thought." },
-        { type: "text", text: "Interim." },
-        { type: "thinking", thinking: "Second thought." },
-        { type: "text", text: "Final." },
+      await expectContent(implementation, openAiTypedReasoningChunks, [
+        thinking("First thought."),
+        text("Interim."),
+        thinking("Second thought."),
+        text("Final."),
       ]);
-
-      const structuredReasoningResult = await runOpenAi(
-        implementation,
-        "success",
-        openAiStructuredReasoningChunks,
-      );
-      expect(structuredReasoningResult.terminal.content).toEqual([
-        expectedThinking("First thought.", "reasoning_details"),
-        { type: "text", text: "Interim." },
-        expectedThinking("Second thought.", "reasoning_details"),
-        { type: "text", text: "Final." },
+      await expectContent(implementation, openAiStructuredReasoningChunks, [
+        thinking("First thought.", "reasoning_details"),
+        text("Interim."),
+        thinking("Second thought.", "reasoning_details"),
+        text("Final."),
       ]);
-
-      const hiddenReasoningResult = await runOpenAi(
+      const hidden = await expectContent(
         implementation,
-        "success",
         openAiInterleavedReasoningChunks,
+        [text("Interim."), text("Final.")],
         false,
       );
-      expect(hiddenReasoningResult.terminal.content).toEqual([
-        { type: "text", text: "Interim." },
-        { type: "text", text: "Final." },
+      expect(hidden.terminal.openclawDelivery).toBeUndefined();
+      await expectContent(implementation, openAiTrailingReasoningChunks, [
+        thinking("First thought.", "reasoning_content"),
+        text("Answer."),
+        thinking("Trailing thought.", "reasoning_content"),
+        text(" "),
       ]);
-      expect(hiddenReasoningResult.terminal.openclawDelivery).toBeUndefined();
-
-      const trailingReasoningResult = await runOpenAi(
-        implementation,
-        "success",
-        openAiTrailingReasoningChunks,
-      );
-      expect(trailingReasoningResult.terminal.content).toEqual([
-        expectedThinking("First thought.", "reasoning_content"),
-        { type: "text", text: "Answer." },
-        expectedThinking("Trailing thought.", "reasoning_content"),
-        { type: "text", text: " " },
-      ]);
-
-      const interleavedThenTrailingReasoningResult = await runOpenAi(
-        implementation,
-        "success",
-        openAiInterleavedThenTrailingReasoningChunks,
-      );
-      expect(interleavedThenTrailingReasoningResult.terminal.content).toEqual([
-        expectedThinking("First thought.", "reasoning_content"),
-        { type: "text", text: "Interim." },
-        expectedThinking("Second thought.", "reasoning_content"),
-        { type: "text", text: "Final." },
-        expectedThinking("Trailing thought.", "reasoning_content"),
+      await expectContent(implementation, openAiInterleavedThenTrailingReasoningChunks, [
+        thinking("First thought.", "reasoning_content"),
+        text("Interim."),
+        thinking("Second thought.", "reasoning_content"),
+        text("Final."),
+        thinking("Trailing thought.", "reasoning_content"),
       ]);
     }
   });
@@ -753,9 +676,9 @@ describe("provider and transport observable parity fixtures", () => {
 
       expect(result.terminal.stopReason).toBe("error");
       expect(result.terminal.content).toEqual([
-        expectedThinking("First thought.", "reasoning_content"),
-        { type: "text", text: "Interim." },
-        expectedThinking("Second thought.", "reasoning_content"),
+        thinking("First thought.", "reasoning_content"),
+        text("Interim."),
+        thinking("Second thought.", "reasoning_content"),
       ]);
     }
   });
@@ -766,13 +689,17 @@ describe("provider and transport observable parity fixtures", () => {
         openAiOrderedVisibleReasoningDetailsChunks,
         openAiSplitVisibleReasoningDetailsChunks,
       ]) {
-        const result = await runOpenAi(implementation, "success", chunks, true, openRouterModel);
-
-        expect(result.terminal.content).toEqual([
-          { type: "text", text: "Visible first." },
-          expectedThinking(" Hidden second.", "reasoning_details"),
-          { type: "text", text: " Visible third." },
-        ]);
+        await expectContent(
+          implementation,
+          chunks,
+          [
+            text("Visible first."),
+            thinking(" Hidden second.", "reasoning_details"),
+            text(" Visible third."),
+          ],
+          true,
+          openRouterModel,
+        );
       }
     }
   });
@@ -797,21 +724,19 @@ describe("provider and transport observable parity fixtures", () => {
 
   it("preserves earlier visible details when later ordinary content is interrupted", async () => {
     for (const implementation of ["provider", "transport"] as const) {
-      const result = await runOpenAi(
+      await expectContent(
         implementation,
-        "success",
         openAiVisibleDetailBeforeInterruptedContentChunks,
+        [
+          text("Visible first."),
+          thinking(" Hidden second.", "reasoning_details"),
+          text("Interim."),
+          thinking("Hidden fourth.", "reasoning_content"),
+          text("Final."),
+        ],
         true,
         openRouterModel,
       );
-
-      expect(result.terminal.content).toEqual([
-        { type: "text", text: "Visible first." },
-        expectedThinking(" Hidden second.", "reasoning_details"),
-        { type: "text", text: "Interim." },
-        expectedThinking("Hidden fourth.", "reasoning_content"),
-        { type: "text", text: "Final." },
-      ]);
     }
   });
 });
