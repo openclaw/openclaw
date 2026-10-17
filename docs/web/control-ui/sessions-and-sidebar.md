@@ -346,9 +346,9 @@ session list's empty-filter hint.
 Choose **Pin** in an agent's options menu to move it into the icon section above
 the roster. Hover or focus its avatar to read the full name and a short preview
 of its latest assistant reply. Select the avatar to open its main chat, or use
-**View sessions** in its options menu to browse its conversations. The menu also
-offers **Create new session** and a confirmed **Delete** action when permitted.
-**Unpin** returns
+**Sessions** in its options menu to browse its conversations. The menu also
+offers **Settings** and a confirmed **Delete** action when permitted. Create a
+new conversation from the Sessions page. **Unpin** returns
 the agent to the roster. Agent pins are saved in this browser profile and shared
 with the agent switcher's pin preference.
 
@@ -427,7 +427,19 @@ In both sidebar modes, **Home** stays at the bottom of the rail, not in Pages. C
 
 Choosing **Show all** defaults the shared page scope to **All agents**. Choosing a named agent tile leaves team mode and scopes pages to that agent. This sets a default once when the mode changes: you can select an individual agent afterward, and page navigation preserves your choice. Automations, Dashboards, Sessions, and Usage support all-agent views. Mixed-agent lists identify the agent on each row with an avatar and name where needed. Each identity chip includes the agent ID in its tooltip and screen-reader label, such as `Molty (agent:main)`, so agents with the same display name remain distinguishable. If no name is available, the label uses `agent:<id>`. In Settings, the agent selector below the sidebar title keeps the same target across Agents, Models, Memory, and Skills; global settings remain global. Skill Workshop uses the agent selected through chat. Open an agent's main chat from its group header to select it for Skill Workshop. Chat actions still target the conversation's agent.
 
-Personal session shortcuts stay in the icon rail in both sidebar modes, mixed with page, dashboard, and person shortcuts in your saved order. They remain available when an agent’s group is collapsed. Rail shortcuts are flat icons: pinning a parent does not move or duplicate its child tree into the rail or Pages. Each agent group still contains its ordinary sessions, including those with personal rail shortcuts, with the usual session menus, unread badges, nested child sessions, section limits, and **Show more** controls. Selecting any session switches the active agent for chat while the rail workspace button keeps its neutral identity. The **Sessions** filters apply across all agent groups. Select the separate **Users** view in the rail to see who is online. Category, person, and project grouping controls remain in chip mode; team mode always groups by agent and keeps empty agent groups visible. The open conversation keeps its selected row, including an archived conversation opened directly under the default **Active** filter. The filter button in the sidebar header keeps the same session filters. Each agent header has an options menu with **Pin/Unpin**, **Create new session**, **View sessions**, **Collapse others**, and a confirmed **Delete** action when permitted. **View sessions** opens the Sessions page and sets the shared agent filter to that agent. Agent-header metadata uses a wrapping second row, keeping the name and actions readable and the indicators visible on hover, keyboard focus, and touch. The expand control appears when the agent has other sessions or descendants to display. Session rows reserve space only for present indicators, so quiet titles can use the full row width.
+Personal session shortcuts stay in the icon rail in both sidebar modes, mixed
+with page, dashboard, and person shortcuts in your saved order. Agent pins are
+separate, larger avatar tiles above the agent roster; pinning an agent does not
+move or duplicate its conversations. In **Show all agents**, each roster row
+represents one agent rather than an expandable session tree. Its latest
+available assistant reply appears beneath the name, and an activity ring
+surrounds the avatar while the agent or one of its sessions is working. Select
+an agent to open its main chat. The agent menu offers **Pin/Unpin**, **Sessions**,
+**Settings**, and a confirmed **Delete** action when permitted. **Sessions**
+opens the Sessions page filtered to that agent, where you can browse and create
+conversations. Select the separate **Users** view in the rail to see who is
+online. Category, person, and project grouping controls remain in chip mode;
+team mode keeps empty agent rows visible.
 
 Groups share a window of at most 300 sessions across agents with [Agents home](/web/control-ui#agents-home). This bounds the session rows loaded for the groups, not the number of saved rail shortcuts; a personal pin does not reserve a place in that window. The open conversation can remain visible outside this window. **Involving me** loads the same bounded window filtered by the Gateway; the other filters apply to the loaded sessions across groups.
 
