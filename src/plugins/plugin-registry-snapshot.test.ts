@@ -1098,5 +1098,3 @@ it("keeps persisted package plugins when file hashes match", async () => {
   expect(result.diagnostics).toStrictEqual([]);
   expect(result.snapshot.plugins[0]?.sourceAdmissions).toEqual(record.sourceAdmissions);
 });
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

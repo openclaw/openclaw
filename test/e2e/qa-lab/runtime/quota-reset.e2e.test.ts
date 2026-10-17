@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   ACCOUNT_ID,
   BACKUP_API_KEY,
@@ -13,18 +13,7 @@ import {
   syntheticAccessToken,
 } from "./quota-reset.test-support.js";
 
-const newSession = () => `agent:main:quota-${randomUUID()}`;
-const ok = (marker = MARKER) => ({ status: "ok", output: [marker] });
-const usageLimit = (limited: boolean) => ({
-  rate_limit: expect.objectContaining({
-    allowed: !limited,
-    limit_reached: limited,
-    primary_window: expect.objectContaining({ used_percent: limited ? 100 : 2 }),
-    secondary_window: expect.objectContaining({ used_percent: limited ? 100 : 2 }),
-  }),
-});
-
-it.for([
+describe.each([
   ["wham", false, false, false, false],
   ["codex_rate_limits", false, false, false, false],
   ["wham", true, false, false, false],
@@ -32,310 +21,437 @@ it.for([
   ["codex_rate_limits", false, true, true, false],
   ["codex_rate_limits", false, true, false, true],
 ] as const)(
-  "recovers chat without admitting exhausted or revoked auth (%s, expired=%s, scoped=%s, available=%s, stale-success=%s)",
-  { timeout: 600_000 },
-  async (
-    [source, expiresDuringBlock, scopedCooldown, availableProbeCooldown, staleUsageAfterSuccess],
-    context,
-  ) => {
-    const fixture = await createQuotaResetFixture(context, {
-      source,
-      expiresDuringBlock,
-      scopedCooldown,
-    });
-    const { client, provider, sessionKey, access } = fixture;
-    const { advanceClock, clock, stats, evidence, turn } = fixture;
-    const check = <T>(value: T) => expect(value, evidence());
-    const askCompanion = (key = sessionKey, question = `Return ${MARKER}.`) =>
-      client.request<{ answer: string }>(
-        "sessions.companion.ask",
-        { sessionKey: key, question },
-        { timeoutMs: 100_000 },
-      );
-    type Request = (typeof provider.requests)[number];
-    const isUsage = (request: Request) => request.path === "/core-wham/usage";
-    const isResponse = (request: Request) => request.path.endsWith("/responses");
-    const isInference = (request: Request) =>
-      request.transport === "websocket" || isResponse(request);
-    const utilityCooldown = { cooldownModel: UTILITY_MODEL_ID, cooldownReason: "rate_limit" };
-    const modelBlock = { blockedModel: "gpt-5.5", blockedScope: "model" };
-    const phaseRequests = (phase: Request["phase"], match: (request: Request) => boolean) =>
-      provider.requests.filter((request) => request.phase === phase && match(request));
-    const checkSuccess = async (key = sessionKey) => check(await turn(key)).toEqual(ok());
-    const checkBlockedTurn = async (phase?: Request["phase"], advance = false) => {
-      if (phase) {
-        provider.setPhase(phase);
-      }
-      if (advance) {
-        await advanceClock();
-      }
-      const result = await turn();
-      check(result.status).toBe("error");
-      check(result.output).not.toContain(MARKER);
-    };
-    await checkSuccess();
-    if (staleUsageAfterSuccess) {
-      const companionSessionKey = newSession();
-      await checkSuccess(companionSessionKey);
-      check((await askCompanion(companionSessionKey)).answer).toBe(MARKER);
-      const beforeOverlap = stats();
-      check(beforeOverlap?.blockedUntil).toBeUndefined();
-      check(beforeOverlap?.blockedReason).toBeUndefined();
+  "Gateway quota reset (%s, expired=%s, scoped=%s, available=%s, stale-success=%s)",
+  (source, expiresDuringBlock, scopedCooldown, availableProbeCooldown, staleUsageAfterSuccess) => {
+    it(
+      "recovers the next chat after upstream capacity returns without admitting exhausted or revoked auth",
+      { timeout: 600_000 },
+      async (context) => {
+        const {
+          client,
+          provider,
+          sessionKey,
+          access,
+          advanceClock,
+          clock,
+          stats,
+          evidence,
+          turn,
+          turns,
+        } = await createQuotaResetFixture(context, {
+          source,
+          expiresDuringBlock,
+          scopedCooldown,
+        });
+        expect(await turn(), evidence()).toEqual({ status: "ok", output: [MARKER] });
+        if (staleUsageAfterSuccess) {
+          const companionSessionKey = `agent:main:quota-companion-${randomUUID()}`;
+          expect(await turn(companionSessionKey), evidence()).toEqual({
+            status: "ok",
+            output: [MARKER],
+          });
+          const warmCompanion = await client.request<{ answer: string }>(
+            "sessions.companion.ask",
+            { sessionKey: companionSessionKey, question: `Return ${MARKER}.` },
+            { timeoutMs: 100_000 },
+          );
+          turns.push({ warmCompanion });
+          expect(warmCompanion.answer, evidence()).toBe(MARKER);
+          const beforeOverlap = stats();
+          turns.push({ beforeOverlap });
+          expect(beforeOverlap?.blockedUntil, evidence()).toBeUndefined();
+          expect(beforeOverlap?.blockedReason, evidence()).toBeUndefined();
 
-      provider.setPhase("ordinary-rate-limit-with-exhausted-usage");
-      const hold = provider.holdNextUsage();
-      const olderCompanion = askCompanion(
-        companionSessionKey,
-        "Return the older request's answer.",
-      ).then(
-        (result) => ({ status: "ok", result }),
-        (error: unknown) => ({ status: "error", error: String(error) }),
-      );
-      try {
-        await expect
-          .poll(() => provider.heldUsageResponses.length, { timeout: 2800, interval: 10 })
-          .toBe(1);
-        const captured = await hold.arrived;
-        check(captured.status).toBe(200);
-        check(JSON.parse(captured.body)).toMatchObject(usageLimit(true));
-        provider.setPhase("healthy");
-        await checkSuccess();
-        const newerSuccessCompletedAt = Date.now();
-        const beforeRelease = stats();
-        check(captured.releaseReason).toBeUndefined();
-        check(beforeRelease?.blockedUntil).toBeUndefined();
-        check(newerSuccessCompletedAt).toBeGreaterThanOrEqual(captured.capturedAt);
-        hold.release();
-        check((await olderCompanion).status).toBe("error");
-        const afterRelease = stats();
-        check(captured.releaseReason).toBe("explicit");
-        check(captured.releasedAt).toBeGreaterThanOrEqual(newerSuccessCompletedAt);
-        await checkSuccess();
-        check(afterRelease?.blockedUntil).toBeUndefined();
-        check(afterRelease?.blockedReason).toBeUndefined();
-        for (const request of provider.requests.filter(
-          (entry) => isInference(entry) || isUsage(entry),
-        )) {
-          check(request.authorization).toBe(`Bearer ${access}`);
-        }
-        check(provider.errors).toEqual([]);
-      } finally {
-        hold.release();
-        await olderCompanion;
-      }
-      return;
-    }
-    const quotaSessions =
-      source === "codex_rate_limits" ? [sessionKey, newSession(), newSession()] : [sessionKey];
-    for (const key of quotaSessions.slice(1)) {
-      await checkSuccess(key);
-    }
-    provider.setPhase("initial-exhaustion");
-    for (const blocked of await Promise.all(quotaSessions.map((key) => turn(key)))) {
-      check(blocked.status).toBe("error");
-      check(blocked.output).not.toContain(MARKER);
-    }
-    check(stats()).toMatchObject({ blockedSource: source, blockedReason: "subscription_limit" });
-    check(stats()?.blockedUntil).toBeGreaterThan(Date.now() + 86_400_000);
-
-    if (availableProbeCooldown) {
-      check(stats()).toMatchObject(modelBlock);
-      await advanceClock();
-      provider.setPhase("ordinary-rate-limit-with-capacity");
-      await check(askCompanion()).rejects.toThrow();
-      const afterUtilityFailure = stats();
-      check(afterUtilityFailure).toMatchObject(utilityCooldown);
-      const utilityUntil = afterUtilityFailure?.cooldownUntil;
-      check(utilityUntil).toBeGreaterThan(Date.now() + clock.offset);
-      check(provider.responses).toContainEqual({
-        atMs: expect.any(Number),
-        status: 200,
-        transport: "http",
-        phase: "ordinary-rate-limit-with-capacity",
-        path: "/core-wham/usage",
-        value: expect.objectContaining(usageLimit(false)),
-        headers: {},
-      });
-      let beforeReply: ReturnType<typeof stats>;
-      provider.observeNextSuccess(
-        () => {
-          beforeReply = stats();
-        },
-        { model: "gpt-5.5", path: "/v1/responses" },
-      );
-      provider.setPhase("restored");
-      await checkSuccess();
-      check(beforeReply?.blockedUntil).toBeUndefined();
-      check(beforeReply).toMatchObject({ ...utilityCooldown, cooldownUntil: utilityUntil });
-      check(provider.errors).toEqual([]);
-      return;
-    }
-
-    if (scopedCooldown) {
-      provider.setPhase("ordinary-rate-limit");
-      for (let attempt = 0; attempt < 4; attempt++) {
-        await check(askCompanion()).rejects.toThrow();
-        check(stats()).toMatchObject({ ...modelBlock, ...utilityCooldown });
-        if (attempt < 3) {
-          const cooldownUntil = stats()?.cooldownUntil;
-          check(cooldownUntil).toEqual(expect.any(Number));
-          if (cooldownUntil === undefined) {
-            throw new Error("Companion failure did not persist its retry deadline");
+          provider.setPhase("ordinary-rate-limit-with-exhausted-usage");
+          const hold = provider.holdNextUsage();
+          const olderCompanion = client
+            .request(
+              "sessions.companion.ask",
+              { sessionKey: companionSessionKey, question: "Return the older request's answer." },
+              { timeoutMs: 100_000 },
+            )
+            .then(
+              (result) => ({ status: "ok", result }),
+              (error: unknown) => ({ status: "error", error: String(error) }),
+            );
+          try {
+            await expect
+              .poll(() => provider.heldUsageResponses.length, { timeout: 2800, interval: 10 })
+              .toBe(1);
+            const captured = await hold.arrived;
+            expect(captured.status, evidence()).toBe(200);
+            expect(JSON.parse(captured.body), evidence()).toMatchObject({
+              rate_limit: {
+                allowed: false,
+                limit_reached: true,
+                primary_window: { used_percent: 100 },
+                secondary_window: { used_percent: 100 },
+              },
+            });
+            provider.setPhase("healthy");
+            expect(await turn(), evidence()).toEqual({ status: "ok", output: [MARKER] });
+            const newerSuccessCompletedAt = Date.now();
+            const beforeRelease = stats();
+            turns.push({ newerSuccessCompletedAt, beforeRelease });
+            expect(captured.releaseReason, evidence()).toBeUndefined();
+            expect(beforeRelease?.blockedUntil, evidence()).toBeUndefined();
+            expect(newerSuccessCompletedAt, evidence()).toBeGreaterThanOrEqual(captured.capturedAt);
+            hold.release();
+            const olderResult = await olderCompanion;
+            const afterRelease = stats();
+            turns.push({ olderResult, afterRelease });
+            expect(olderResult.status, evidence()).toBe("error");
+            expect(captured.releaseReason, evidence()).toBe("explicit");
+            expect(captured.releasedAt, evidence()).toBeGreaterThanOrEqual(newerSuccessCompletedAt);
+            expect(await turn(), evidence()).toEqual({ status: "ok", output: [MARKER] });
+            expect(afterRelease?.blockedUntil, evidence()).toBeUndefined();
+            expect(afterRelease?.blockedReason, evidence()).toBeUndefined();
+            for (const request of provider.requests.filter(
+              (entry) => entry.path.endsWith("/responses") || entry.path === "/core-wham/usage",
+            )) {
+              expect(request.authorization, evidence()).toBe(`Bearer ${access}`);
+            }
+            expect(provider.errors, evidence()).toEqual([]);
+          } finally {
+            hold.release();
+            await olderCompanion;
           }
-          await advanceClock(Math.max(1, cooldownUntil - Date.now() - clock.offset + 1));
+          return;
         }
-      }
-      provider.setPhase("restored");
-      await advanceClock();
-      check(stats()?.cooldownUntil).toBeGreaterThan(Date.now() + clock.offset);
-      await checkSuccess();
-      check(stats()?.blockedUntil).toBeUndefined();
-      check(provider.errors).toEqual([]);
-      return;
-    }
+        const quotaSessions =
+          source === "codex_rate_limits"
+            ? [sessionKey, `agent:main:quota-${randomUUID()}`, `agent:main:quota-${randomUUID()}`]
+            : [sessionKey];
+        for (const key of quotaSessions.slice(1)) {
+          expect(await turn(key), evidence()).toEqual({ status: "ok", output: [MARKER] });
+        }
+        provider.setPhase("initial-exhaustion");
+        for (const blocked of await Promise.all(quotaSessions.map((key) => turn(key)))) {
+          expect(blocked.status, evidence()).toBe("error");
+          expect(blocked.output, evidence()).not.toContain(MARKER);
+        }
+        expect(stats(), evidence()).toMatchObject({
+          blockedSource: source,
+          blockedReason: "subscription_limit",
+        });
+        expect(stats()?.blockedUntil, evidence()).toBeGreaterThan(Date.now() + 86_400_000);
 
-    if (source === "codex_rate_limits") {
-      const originalGeneration = stats();
-      check(originalGeneration?.lastFailureAt).toEqual(expect.any(Number));
-      check(originalGeneration?.failureCounts?.rate_limit).toBeGreaterThan(0);
-      for (const phase of [
-        "additional-exhaustion",
-        "workspace-exhaustion",
-        "spending-exhaustion",
-        "malformed-usage",
-      ] as const) {
-        await checkBlockedTurn(phase, true);
-        const retained = stats();
-        check(retained?.blockedReason).toBe("subscription_limit");
-        check(retained?.blockedUntil).toBeGreaterThan(Date.now() + clock.offset);
-        check(retained?.lastFailureAt).toBe(originalGeneration?.lastFailureAt);
-        check(retained?.failureCounts).toEqual(originalGeneration?.failureCounts);
-        check(phaseRequests(phase, isUsage)).not.toHaveLength(0);
-        // A fresh exhausted bucket must not become another failed inference attempt.
-        check(phaseRequests(phase, isInference)).toEqual([]);
-      }
-    }
+        if (availableProbeCooldown) {
+          expect(stats(), evidence()).toMatchObject({
+            blockedModel: "gpt-5.5",
+            blockedScope: "model",
+          });
+          await advanceClock();
+          provider.setPhase("ordinary-rate-limit-with-capacity");
+          await expect(
+            client.request(
+              "sessions.companion.ask",
+              { sessionKey, question: `Return ${MARKER}.` },
+              { timeoutMs: 100_000 },
+            ),
+            evidence(),
+          ).rejects.toThrow();
+          const afterUtilityFailure = stats();
+          turns.push({ afterUtilityFailure });
+          expect(afterUtilityFailure, evidence()).toMatchObject({
+            cooldownModel: UTILITY_MODEL_ID,
+            cooldownReason: "rate_limit",
+          });
+          const ordinaryCooldown = afterUtilityFailure?.cooldownUntil;
+          expect(ordinaryCooldown, evidence()).toBeGreaterThan(Date.now() + clock.offset);
+          expect(provider.responses, evidence()).toContainEqual({
+            atMs: expect.any(Number),
+            status: 200,
+            transport: "http",
+            phase: "ordinary-rate-limit-with-capacity",
+            path: "/core-wham/usage",
+            value: expect.objectContaining({
+              rate_limit: expect.objectContaining({
+                allowed: true,
+                limit_reached: false,
+                primary_window: expect.objectContaining({ used_percent: 2 }),
+                secondary_window: expect.objectContaining({ used_percent: 2 }),
+              }),
+            }),
+            headers: {},
+          });
+          let beforeRecoveryReply: ReturnType<typeof stats>;
+          provider.observeNextSuccess(
+            () => {
+              beforeRecoveryReply = stats();
+              turns.push({ beforeRecoveryReply });
+            },
+            { model: "gpt-5.5", path: "/v1/responses" },
+          );
+          provider.setPhase("restored");
+          expect(await turn(), evidence()).toEqual({ status: "ok", output: [MARKER] });
+          expect(beforeRecoveryReply?.blockedUntil, evidence()).toBeUndefined();
+          expect(beforeRecoveryReply, evidence()).toMatchObject({
+            cooldownModel: UTILITY_MODEL_ID,
+            cooldownReason: "rate_limit",
+            cooldownUntil: ordinaryCooldown,
+          });
+          expect(provider.errors, evidence()).toEqual([]);
+          return;
+        }
 
-    await checkBlockedTurn("exhausted", !expiresDuringBlock);
-    check(stats()?.blockedUntil).toBeGreaterThan(Date.now() + clock.offset);
+        if (scopedCooldown) {
+          provider.setPhase("ordinary-rate-limit");
+          for (let attempt = 0; attempt < 4; attempt++) {
+            await expect(
+              client.request(
+                "sessions.companion.ask",
+                {
+                  sessionKey,
+                  question: `Return ${MARKER}.`,
+                },
+                { timeoutMs: 100_000 },
+              ),
+              evidence(),
+            ).rejects.toThrow();
+            expect(stats(), evidence()).toMatchObject({
+              blockedModel: "gpt-5.5",
+              blockedScope: "model",
+              cooldownModel: UTILITY_MODEL_ID,
+              cooldownReason: "rate_limit",
+            });
+            if (attempt < 3) {
+              const cooldownUntil = stats()?.cooldownUntil;
+              expect(cooldownUntil, evidence()).toEqual(expect.any(Number));
+              if (cooldownUntil === undefined) {
+                throw new Error("Companion failure did not persist its retry deadline");
+              }
+              await advanceClock(Math.max(1, cooldownUntil - Date.now() - clock.offset + 1));
+            }
+          }
+          provider.setPhase("restored");
+          await advanceClock();
+          expect(stats()?.cooldownUntil, evidence()).toBeGreaterThan(Date.now() + clock.offset);
+          expect(await turn(), evidence()).toEqual({ status: "ok", output: [MARKER] });
+          expect(stats()?.blockedUntil, evidence()).toBeUndefined();
+          expect(provider.errors, evidence()).toEqual([]);
+          return;
+        }
 
-    await checkBlockedTurn("restored");
-    check(phaseRequests("restored", isUsage)).toEqual([]);
-    await advanceClock();
-    await checkSuccess();
-    check(stats()?.blockedUntil).toBeUndefined();
-    if (expiresDuringBlock) {
-      const refreshes = provider.requests.filter((request) => request.path === "/oauth/token");
-      check(refreshes).toHaveLength(1);
-      check(refreshes[0]?.body).toContain("synthetic-refresh");
-    }
-    check(phaseRequests("restored", isUsage)).not.toHaveLength(0);
-    check(phaseRequests("restored", isResponse)).not.toHaveLength(0);
+        if (source === "codex_rate_limits") {
+          const originalGeneration = stats();
+          expect(originalGeneration?.lastFailureAt, evidence()).toEqual(expect.any(Number));
+          expect(originalGeneration?.failureCounts?.rate_limit, evidence()).toBeGreaterThan(0);
+          for (const phase of [
+            "additional-exhaustion",
+            "workspace-exhaustion",
+            "spending-exhaustion",
+            "malformed-usage",
+          ] as const) {
+            provider.setPhase(phase);
+            await advanceClock();
+            const additionalLimitTurn = await turn();
+            expect(additionalLimitTurn.status, evidence()).toBe("error");
+            expect(additionalLimitTurn.output, evidence()).not.toContain(MARKER);
+            const retained = stats();
+            expect(retained?.blockedReason, evidence()).toBe("subscription_limit");
+            expect(retained?.blockedUntil, evidence()).toBeGreaterThan(Date.now() + clock.offset);
+            expect(retained?.lastFailureAt, evidence()).toBe(originalGeneration?.lastFailureAt);
+            expect(retained?.failureCounts, evidence()).toEqual(originalGeneration?.failureCounts);
+            const additionalLimitRequests = provider.requests.filter(
+              (request) => request.phase === phase,
+            );
+            expect(
+              additionalLimitRequests.filter((request) => request.path === "/core-wham/usage"),
+              evidence(),
+            ).not.toHaveLength(0);
+            // A fresh exhausted bucket must not become another failed inference attempt.
+            expect(
+              additionalLimitRequests.filter(
+                (request) =>
+                  request.transport === "websocket" || request.path.endsWith("/responses"),
+              ),
+              evidence(),
+            ).toEqual([]);
+          }
+        }
 
-    await checkBlockedTurn("revoked");
-    await checkBlockedTurn(undefined, true);
-    for (const request of provider.requests.filter(
-      (entry) => isResponse(entry) || isUsage(entry),
-    )) {
-      const refreshed =
-        expiresDuringBlock && (request.phase === "restored" || request.phase === "revoked");
-      // The native process retains its real clock and may reuse the bound session's token.
-      const nativeRefresh = refreshed && isResponse(request);
-      const allowed = [refreshed ? syntheticAccessToken() : access];
-      if (nativeRefresh) {
-        allowed.push(access);
-      }
-      check(allowed.map((token) => `Bearer ${token}`)).toContain(request.authorization);
-      if (nativeRefresh || isUsage(request)) {
-        check(request.accountId).toBe(ACCOUNT_ID);
-      }
-    }
-    check(provider.errors).toEqual([]);
+        provider.setPhase("exhausted");
+        if (!expiresDuringBlock) {
+          await advanceClock();
+        }
+        const exhaustedTurn = await turn();
+        expect(exhaustedTurn.status, evidence()).toBe("error");
+        expect(exhaustedTurn.output, evidence()).not.toContain(MARKER);
+        expect(stats()?.blockedUntil, evidence()).toBeGreaterThan(Date.now() + clock.offset);
+
+        provider.setPhase("restored");
+        const earlyRetry = await turn();
+        expect(earlyRetry.status, evidence()).toBe("error");
+        expect(earlyRetry.output, evidence()).not.toContain(MARKER);
+        expect(
+          provider.requests.filter(
+            (request) => request.phase === "restored" && request.path === "/core-wham/usage",
+          ),
+          evidence(),
+        ).toEqual([]);
+        await advanceClock();
+        expect(await turn(), evidence()).toEqual({ status: "ok", output: [MARKER] });
+        expect(stats()?.blockedUntil, evidence()).toBeUndefined();
+        if (expiresDuringBlock) {
+          const refreshRequests = provider.requests.filter(
+            (request) => request.path === "/oauth/token",
+          );
+          expect(refreshRequests, evidence()).toHaveLength(1);
+          expect(refreshRequests[0]?.body, evidence()).toContain("synthetic-refresh");
+        }
+        expect(
+          provider.requests.filter(
+            (request) => request.phase === "restored" && request.path === "/core-wham/usage",
+          ),
+          evidence(),
+        ).not.toHaveLength(0);
+        expect(
+          provider.requests.filter(
+            (request) => request.phase === "restored" && request.path.endsWith("/responses"),
+          ),
+          evidence(),
+        ).not.toHaveLength(0);
+
+        provider.setPhase("revoked");
+        const revoked = await turn();
+        expect(revoked.status, evidence()).toBe("error");
+        expect(revoked.output, evidence()).not.toContain(MARKER);
+        await advanceClock();
+        const revokedAgain = await turn();
+        expect(revokedAgain.status, evidence()).toBe("error");
+        expect(revokedAgain.output, evidence()).not.toContain(MARKER);
+        for (const request of provider.requests.filter(
+          (entry) => entry.path.endsWith("/responses") || entry.path === "/core-wham/usage",
+        )) {
+          const refreshed =
+            expiresDuringBlock && (request.phase === "restored" || request.phase === "revoked");
+          // The native process retains its real clock and may reuse the bound session's token.
+          if (refreshed && request.path.endsWith("/responses")) {
+            expect([`Bearer ${access}`, `Bearer ${syntheticAccessToken()}`], evidence()).toContain(
+              request.authorization,
+            );
+            expect(request.accountId, evidence()).toBe(ACCOUNT_ID);
+          } else {
+            expect(request.authorization, evidence()).toBe(
+              `Bearer ${refreshed ? syntheticAccessToken() : access}`,
+            );
+          }
+        }
+        for (const request of provider.requests.filter(
+          (entry) => entry.path === "/core-wham/usage",
+        )) {
+          expect(request.accountId, evidence()).toBe(ACCOUNT_ID);
+        }
+        expect(provider.errors, evidence()).toEqual([]);
+      },
+    );
   },
 );
 
-it.for([
+describe.each([
   { write: "claim", failure: "io" },
   { write: "result", failure: "io" },
   { write: "claim", failure: "constraint" },
-] as const)(
-  "preserves healthy fallback and refuses constraints for quota $write write $failure failure",
-  { timeout: 600_000, skip: process.platform === "win32" },
-  async ({ write, failure }, context) => {
-    const { client, provider, gateway, turn, stats, evidence, advanceClock, storageFaultFile } =
-      await createQuotaResetFixture(context, {
-        source: "codex_rate_limits",
-        includeBackup: true,
-        limitGatewayFileSize: true,
+] as const)("Quota $write write $failure failure", ({ write, failure }) => {
+  it.skipIf(process.platform === "win32")(
+    "preserves healthy fallback for operational writes and refuses constraint failures through chat.send",
+    { timeout: 600_000 },
+    async (context) => {
+      const { client, provider, gateway, turn, stats, evidence, advanceClock, storageFaultFile } =
+        await createQuotaResetFixture(context, {
+          source: "codex_rate_limits",
+          includeBackup: true,
+          limitGatewayFileSize: true,
+        });
+      expect(await turn(), evidence()).toEqual({ status: "ok", output: [MARKER] });
+
+      const directBackupSession = `agent:main:quota-backup-${randomUUID()}`;
+      await client.request("sessions.patch", { key: directBackupSession, model: BACKUP_MODEL });
+      expect(await turn(directBackupSession), evidence()).toEqual({
+        status: "ok",
+        output: [BACKUP_MARKER],
       });
-    const check = <T>(value: T) => expect(value, evidence());
-    const checkBackup = (result: Awaited<ReturnType<typeof turn>>) =>
-      check(result).toEqual(ok(BACKUP_MARKER));
-    check(await turn()).toEqual(ok());
 
-    const directBackupSession = newSession();
-    await client.request("sessions.patch", { key: directBackupSession, model: BACKUP_MODEL });
-    checkBackup(await turn(directBackupSession));
+      provider.setPhase("initial-exhaustion");
+      const initialFallback = await turn(`agent:main:quota-initial-fallback-${randomUUID()}`);
+      expect(initialFallback.status, evidence()).toBe("ok");
+      expect(initialFallback.output, evidence()).toContain(BACKUP_MARKER);
+      expect(stats(), evidence()).toMatchObject({
+        blockedSource: "codex_rate_limits",
+        blockedReason: "subscription_limit",
+      });
+      const blockedUntil = stats()?.blockedUntil;
+      expect(blockedUntil, evidence()).toBeGreaterThan(Date.now() + 86_400_000);
 
-    provider.setPhase("initial-exhaustion");
-    const initialFallback = await turn(newSession());
-    check(initialFallback.status).toBe("ok");
-    check(initialFallback.output).toContain(BACKUP_MARKER);
-    check(stats()).toMatchObject({
-      blockedSource: "codex_rate_limits",
-      blockedReason: "subscription_limit",
-    });
-    const blockedUntil = stats()?.blockedUntil;
-    check(blockedUntil).toBeGreaterThan(Date.now() + 86_400_000);
-
-    provider.setPhase("restored");
-    await advanceClock();
-    const fault = await installQuotaStateWriteFault(gateway, storageFaultFile, write, failure);
-    try {
-      checkBackup(await turn(directBackupSession, "Before fault"));
-      const beforeFault = provider.requests.length;
-      const prompt = `Quota ${write} ${failure}`;
-      // Fresh sessions use configured order, not a previous turn's automatic fallback.
-      const fallback = await turn(newSession(), prompt);
-      const backupAfterFault = await turn(directBackupSession, "After fault");
-
-      check(gateway.logs()).toContain(
-        failure === "io" ? "disk I/O error" : "quota test constraint invariant",
-      );
-      check(gateway.logs()).toContain(`errcode: ${failure === "io" ? 778 : 1811}`);
-      check(fault.scratchCommitted()).toBe(false);
-      checkBackup(backupAfterFault);
-      check(fallback.status).toBe(failure === "io" ? "ok" : "error");
-      check(fallback.output.includes(BACKUP_MARKER)).toBe(failure === "io");
-      const faultRequests = provider.requests.slice(beforeFault);
-      check(
-        faultRequests.filter(
-          (request) =>
-            request.path !== BACKUP_RESPONSES_PATH &&
-            (request.transport === "websocket" || request.path.endsWith("/responses")),
-        ),
-      ).toEqual([]);
-      check(faultRequests.filter((request) => request.path === "/core-wham/usage")).toHaveLength(
-        write === "claim" ? 0 : 1,
-      );
-      const fallbackRequests = faultRequests.filter((request) => request.body?.includes(prompt));
-      if (failure === "io") {
-        check(fallbackRequests).toContainEqual(
-          expect.objectContaining({
-            path: BACKUP_RESPONSES_PATH,
-            authorization: `Bearer ${BACKUP_API_KEY}`,
-          }),
+      provider.setPhase("restored");
+      await advanceClock();
+      const fault = await installQuotaStateWriteFault(gateway, storageFaultFile, write, failure);
+      try {
+        expect(
+          await turn(directBackupSession, `Direct backup before ${write} I/O failure.`),
+          evidence(),
+        ).toEqual({ status: "ok", output: [BACKUP_MARKER] });
+        const beforeFault = provider.requests.length;
+        const prompt = `Ordinary chat during the quota ${write} write ${failure} failure.`;
+        // A new ordinary session uses configured primary/fallback order instead
+        // of a previous turn's automatic model preference.
+        const fallback = await turn(`agent:main:quota-storage-fallback-${randomUUID()}`, prompt);
+        const backupAfterFault = await turn(
+          directBackupSession,
+          `Direct backup after ${write} I/O failure.`,
         );
-      } else {
-        check(fallbackRequests).toEqual([]);
+
+        expect(gateway.logs(), evidence()).toContain(
+          failure === "io" ? "disk I/O error" : "quota test constraint invariant",
+        );
+        expect(gateway.logs(), evidence()).toContain(`errcode: ${failure === "io" ? 778 : 1811}`);
+        expect(fault.scratchCommitted(), evidence()).toBe(false);
+        expect(backupAfterFault, evidence()).toEqual({ status: "ok", output: [BACKUP_MARKER] });
+        expect(fallback.status, evidence()).toBe(failure === "io" ? "ok" : "error");
+        if (failure === "io") {
+          expect(fallback.output, evidence()).toContain(BACKUP_MARKER);
+        } else {
+          expect(fallback.output, evidence()).not.toContain(BACKUP_MARKER);
+        }
+        const faultRequests = provider.requests.slice(beforeFault);
+        expect(
+          faultRequests.filter(
+            (request) =>
+              request.path !== BACKUP_RESPONSES_PATH &&
+              (request.transport === "websocket" || request.path.endsWith("/responses")),
+          ),
+          evidence(),
+        ).toEqual([]);
+        expect(
+          faultRequests.filter((request) => request.path === "/core-wham/usage"),
+          evidence(),
+        ).toHaveLength(write === "claim" ? 0 : 1);
+        const fallbackRequests = faultRequests.filter((request) => request.body?.includes(prompt));
+        if (failure === "io") {
+          expect(fallbackRequests, evidence()).toContainEqual(
+            expect.objectContaining({
+              path: BACKUP_RESPONSES_PATH,
+              authorization: `Bearer ${BACKUP_API_KEY}`,
+            }),
+          );
+        } else {
+          expect(fallbackRequests, evidence()).toEqual([]);
+        }
+        expect(stats(), evidence()).toMatchObject({
+          blockedReason: "subscription_limit",
+          blockedUntil,
+        });
+        expect(provider.errors, evidence()).toEqual([]);
+      } finally {
+        await fault.remove();
       }
-      check(stats()).toMatchObject({ blockedReason: "subscription_limit", blockedUntil });
-      check(provider.errors).toEqual([]);
-    } finally {
-      await fault.remove();
-    }
-    await advanceClock();
-    check(await turn(newSession())).toEqual(ok());
-    check(stats()?.blockedUntil).toBeUndefined();
-  },
-);
+      await advanceClock();
+      expect(await turn(`agent:main:quota-after-fault-${randomUUID()}`), evidence()).toEqual({
+        status: "ok",
+        output: [MARKER],
+      });
+      expect(stats()?.blockedUntil, evidence()).toBeUndefined();
+    },
+  );
+});

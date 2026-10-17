@@ -13,6 +13,8 @@ import { prepareTailscalePublishedOrigin } from "../../tailscale-published-origi
 import { getHealthCache } from "../health-state.js";
 import type { GatewayWsClient } from "../ws-types.js";
 
+// Hello update-scope tests cover authenticated role/scope and recovery ownership projection.
+
 const {
   buildGatewaySnapshotMock,
   emitGatewayAuthSecurityEventMock,
@@ -64,7 +66,6 @@ const {
   }),
 }));
 
-// mock-isolation: Supply deterministic update facts without starting health services.
 vi.mock("../health-state.js", () => ({
   buildGatewaySnapshot: buildGatewaySnapshotMock,
   getHealthCache: vi.fn(() => null),
@@ -81,14 +82,12 @@ vi.mock("../../../state/user-profile-list.js", async (importOriginal) => ({
   hasMultipleResidentSessionSharingIdentities: vi.fn(() => false),
 }));
 
-// mock-isolation: Control plugin UI descriptors independently of the active registry.
 vi.mock("../../control-ui-plugin-tabs.js", () => ({
   listControlUiLinkReaders: vi.fn(() => []),
   listControlUiPluginTabs: listControlUiPluginTabsMock,
   listControlUiPluginWidgetKinds: listControlUiPluginWidgetKindsMock,
 }));
 
-// mock-isolation: Observe security events without publishing them outside the fixture.
 vi.mock("./connect-auth-security.js", () => ({
   emitGatewayAuthSecurityEvent: emitGatewayAuthSecurityEventMock,
 }));
@@ -108,8 +107,8 @@ vi.mock("../../../infra/tailscale.js", () => ({
 import { sendGatewayHello } from "./connect-hello.js";
 
 function makeContext(
-  role: "operator" | "node" = "operator",
-  scopes: string[] = ["operator.read"],
+  role: "operator" | "node",
+  scopes: string[],
   client?: Pick<GatewayWsClient, "internal" | "preparedSessionProfile">,
 ) {
   return {
@@ -143,7 +142,7 @@ function makeContext(
   };
 }
 
-function makeState(role: "operator" | "node" = "operator", scopes: string[] = ["operator.read"]) {
+function makeState(role: "operator" | "node", scopes: string[]) {
   return {
     resolvedAuth: { mode: "none" },
     role,
@@ -170,11 +169,6 @@ function helloSnapshot(context: ReturnType<typeof makeContext>) {
 }
 
 function expectRedactedHelloSnapshot(context: ReturnType<typeof makeContext>) {
-  expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
-    client: null,
-    includeSensitive: false,
-    includeUpdateDetails: false,
-  });
   expect(helloSnapshot(context)).toEqual(
     expect.objectContaining({
       updateAvailable: {
@@ -185,28 +179,6 @@ function expectRedactedHelloSnapshot(context: ReturnType<typeof makeContext>) {
     }),
   );
   expect(helloSnapshot(context)?.updateSchedule).toBeUndefined();
-}
-
-function publishRoute(
-  origin = "https://gateway.tailnet.ts.net",
-  mode: "serve" | "funnel" = "serve",
-) {
-  return prepareTailscalePublishedOrigin({ origin, mode });
-}
-
-function tailscaleState() {
-  return { ...makeState(), resolvedAuth: { mode: "token", allowTailscale: true } };
-}
-
-async function sendHello(
-  context: ReturnType<typeof makeContext>,
-  state: Parameters<typeof sendGatewayHello>[1] = makeState(
-    context.connectParams.role,
-    context.connectParams.scopes,
-  ) as never,
-  principal?: string,
-) {
-  await sendGatewayHello(context as never, state, {}, principal);
 }
 
 describe("sendGatewayHello update detail scope", () => {
@@ -270,8 +242,13 @@ describe("sendGatewayHello update detail scope", () => {
         }),
       };
       getSessionRowProjectionMock.mockReturnValue(projection);
-      const context = makeContext();
-      await sendHello(context);
+      const context = makeContext("operator", ["operator.read"]);
+
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
 
       expect(projection.needsMembershipPreparation).not.toHaveBeenCalled();
       expect(projection.prepareMembership).not.toHaveBeenCalled();
@@ -288,8 +265,9 @@ describe("sendGatewayHello update detail scope", () => {
       prepareMembership: vi.fn(() => new Promise<void>(() => {})),
     };
     getSessionRowProjectionMock.mockReturnValue(projection);
-    const context = makeContext();
-    await sendHello(context);
+    const context = makeContext("operator", ["operator.read"]);
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
 
     expect(context.sendFrame).toHaveBeenCalledOnce();
     expect(projection.prepareMembership).not.toHaveBeenCalled();
@@ -323,7 +301,11 @@ describe("sendGatewayHello update detail scope", () => {
         } satisfies OpenClawConfig;
       }
 
-      await sendHello(context);
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.write"]) as never,
+        {},
+      );
 
       const auth = helloPayload(context)?.auth;
       if (sessionCap === undefined) {
@@ -350,7 +332,10 @@ describe("sendGatewayHello update detail scope", () => {
     "advertises the personal dashboard for resolved $mode auth with $tailscale",
     async ({ mode, tailscale, expected, ...options }) => {
       if (tailscale !== "off") {
-        publishRoute(undefined, tailscale);
+        prepareTailscalePublishedOrigin({
+          origin: "https://gateway.tailnet.ts.net",
+          mode: tailscale,
+        });
       }
       const config: OpenClawConfig = {
         gateway: {
@@ -364,17 +349,17 @@ describe("sendGatewayHello update detail scope", () => {
           controlUi: { basePath: " /team/ " },
         },
       };
-      const context = makeContext();
+      const context = makeContext("operator", ["operator.read"]);
       context.configSnapshot = config;
       const state = {
-        ...makeState(),
+        ...makeState("operator", ["operator.read"]),
         resolvedAuth: resolveGatewayAuth({
           authConfig: config.gateway?.auth,
           tailscaleMode: tailscale,
           env: {},
         }),
       };
-      await sendHello(context, state as never);
+      await sendGatewayHello(context as never, state as never, {});
       expect(helloSnapshot(context)?.controlUiIdentityUrl).toBe(
         expected
           ? mode === "trusted-proxy"
@@ -394,8 +379,15 @@ describe("sendGatewayHello update detail scope", () => {
   it.each(["before hello delivery", "after hello delivery", "during hello delivery"] as const)(
     "releases only live announcement owners when withdrawn %s",
     async (phase) => {
-      const clear = publishRoute();
-      const context = makeContext();
+      const clear = prepareTailscalePublishedOrigin({
+        origin: "https://gateway.tailnet.ts.net",
+        mode: "serve",
+      });
+      const context = makeContext("operator", ["operator.read"]);
+      const state = {
+        ...makeState("operator", ["operator.read"]),
+        resolvedAuth: { mode: "token", allowTailscale: true },
+      };
       if (phase === "before hello delivery") {
         context.handler.isClosed.mockReturnValue(true);
         context.handler.socket.emit("close");
@@ -405,7 +397,7 @@ describe("sendGatewayHello update detail scope", () => {
           clear();
         });
       }
-      await sendHello(context, tailscaleState() as never);
+      await sendGatewayHello(context as never, state as never, {});
       if (phase !== "during hello delivery") {
         if (phase === "after hello delivery") {
           context.handler.socket.emit("close");
@@ -447,7 +439,11 @@ describe("sendGatewayHello update detail scope", () => {
         clients.push(client);
         await once(client, "open");
         const [socket] = (await accepted) as [WebSocket];
-        const context = makeContext();
+        const context = makeContext("operator", ["operator.read"]);
+        const state = {
+          ...makeState("operator", ["operator.read"]),
+          resolvedAuth: { mode: "token", allowTailscale: true },
+        };
         const response = once(client, "message");
         await sendGatewayHello(
           {
@@ -463,7 +459,7 @@ describe("sendGatewayHello update detail scope", () => {
                 socket.send(JSON.stringify(frame), (error) => (error ? reject(error) : resolve()));
               }),
           } as never,
-          tailscaleState() as never,
+          state as never,
           {},
         );
         const [frame] = await response;
@@ -482,7 +478,10 @@ describe("sendGatewayHello update detail scope", () => {
         } else if (withdrawal === "cleanup") {
           await cleanup?.();
         } else {
-          publishRoute("https://replacement.tailnet.ts.net");
+          prepareTailscalePublishedOrigin({
+            origin: "https://replacement.tailnet.ts.net",
+            mode: "serve",
+          });
           // A late old cleanup must not withdraw the replacement's announcement.
           await cleanup?.();
         }
@@ -518,7 +517,10 @@ describe("sendGatewayHello update detail scope", () => {
   ] as const)(
     "does not advertise unavailable browser identity ($role, $origin, $enabled)",
     async (testCase) => {
-      const clear = publishRoute();
+      const clear = prepareTailscalePublishedOrigin({
+        origin: "https://gateway.tailnet.ts.net",
+        mode: "serve",
+      });
       const context = makeContext(testCase.role, ["operator.read"]);
       context.configSnapshot = {
         gateway: { publicOrigin: testCase.origin, controlUi: { enabled: testCase.enabled } },
@@ -527,7 +529,7 @@ describe("sendGatewayHello update detail scope", () => {
         ...makeState(testCase.role, ["operator.read"]),
         resolvedAuth: { mode: "trusted-proxy", allowTailscale: false },
       };
-      await sendHello(context, state as never);
+      await sendGatewayHello(context as never, state as never, {});
       expect(helloSnapshot(context)).not.toHaveProperty("controlUiIdentityUrl");
       clear();
       expect(context.handler.close).not.toHaveBeenCalled();
@@ -539,29 +541,52 @@ describe("sendGatewayHello update detail scope", () => {
     { label: "node", role: "node" as const, scopes: ["operator.read"] },
   ])("omits update details for a $label", async ({ role, scopes }) => {
     const context = makeContext(role, scopes);
-    await sendHello(context);
+    await sendGatewayHello(context as never, makeState(role, scopes) as never, {});
+
+    expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
+      client: null,
+      includeSensitive: false,
+      includeUpdateDetails: false,
+    });
     expectRedactedHelloSnapshot(context);
     expect(helloPayload(context)?.features.capabilities).toContain("node-permission-errors");
     expect(helloPayload(context)?.features.capabilities).toContain("agent-session-id-create-v1");
   });
 
   it.each([
-    ["default bundled UI", undefined, "bundled", true],
-    ["enabled bundled UI", { enabled: true }, "bundled", true],
-    ["disabled bundled UI", { enabled: false }, "bundled", false],
-    ["configured UI", { root: "/custom/ui" }, "configured", false],
-  ] as const)(
-    "reports Gateway build identity and browser focus support for %s",
-    async (_label, controlUi, source, browserFocus) => {
-      const context = makeContext();
+    { label: "default bundled UI", controlUi: undefined, source: "bundled", browserFocus: true },
+    {
+      label: "enabled bundled UI",
+      controlUi: { enabled: true },
+      source: "bundled",
+      browserFocus: true,
+    },
+    {
+      label: "disabled bundled UI",
+      controlUi: { enabled: false },
+      source: "bundled",
+      browserFocus: false,
+    },
+    {
+      label: "configured UI",
+      controlUi: { root: "/custom/ui" },
+      source: "configured",
+      browserFocus: false,
+    },
+  ])(
+    "reports Gateway build identity and browser focus support for $label",
+    async ({ controlUi, source, browserFocus }) => {
+      const context = makeContext("operator", ["operator.read"]);
       context.configSnapshot = { gateway: { controlUi } };
 
-      await sendHello(context);
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
 
-      expect(helloPayload(context)?.server).toMatchObject({
-        buildId: "build-a",
-        controlUiBuildSource: source,
-      });
+      expect(helloPayload(context)?.server.buildId).toBe("build-a");
+      expect(helloPayload(context)?.server.controlUiBuildSource).toBe(source);
       expect(
         helloPayload(context)?.features.capabilities?.includes("control-ui-browser-focus"),
       ).toBe(browserFocus);
@@ -576,9 +601,9 @@ describe("sendGatewayHello update detail scope", () => {
     [{ publicOrigin: "https://gateway.example.test", controlUi: { enabled: false } }, undefined],
     [{}, undefined],
   ])("advertises the configured Control UI address: %j", async (gateway, controlUiUrl) => {
-    const context = makeContext();
+    const context = makeContext("operator", ["operator.read"]);
     context.configSnapshot = { gateway };
-    await sendHello(context);
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
     expect(helloPayload(context)?.controlUiUrl).toBe(controlUiUrl);
     if (controlUiUrl === undefined) {
       expect(helloPayload(context)).not.toHaveProperty("controlUiUrl");
@@ -597,7 +622,13 @@ describe("sendGatewayHello update detail scope", () => {
     };
 
     const context = makeContext("operator", ["operator.pairing"]);
-    await sendHello(context, state as never, "owner-profile");
+    await sendGatewayHello(context as never, state as never, {}, "owner-profile");
+
+    expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
+      client: null,
+      includeSensitive: false,
+      includeUpdateDetails: false,
+    });
     expectRedactedHelloSnapshot(context);
     expect(helloPayload(context)?.auth).toEqual({
       method: "none",
@@ -619,9 +650,9 @@ describe("sendGatewayHello update detail scope", () => {
 
   it("keeps recovery scope owned by the canonical authenticated principal", async () => {
     const sendFor = async (principal: string, token: string, generation: string) => {
-      const context = makeContext();
+      const context = makeContext("operator", ["operator.read"]);
       const state = {
-        ...makeState(),
+        ...makeState("operator", ["operator.read"]),
         authResult: { ok: true, method: "trusted-proxy", user: `${principal}@example.test` },
         device: { id: "device-a" },
         deviceToken: {
@@ -632,7 +663,7 @@ describe("sendGatewayHello update detail scope", () => {
         },
         sessionSharedGatewaySessionGeneration: generation,
       };
-      await sendHello(context, state as never, principal);
+      await sendGatewayHello(context as never, state as never, {}, principal);
       const auth = helloPayload(context)?.auth;
       expect(auth?.recoveryMigrationAllowed).toBeUndefined();
       return auth?.recoveryScope;

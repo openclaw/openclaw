@@ -177,7 +177,7 @@ describe("authenticated request mutation custody", () => {
       const guest = {
         sessions: { others: "none" as const },
         agents: "*" as const,
-        scopes: ["operator.admin"],
+        scopes: ["operator.admin" as const],
         modelPolicy: { allow: ["fixture/family-*"] },
       };
       let committedConfig: OpenClawConfig = {
@@ -284,8 +284,8 @@ describe("authenticated request mutation custody", () => {
       const identity = "retained@example.test";
       const profile = ensureProfileForEmail(identity);
       const identityScopes = {
-        [identity]: ["operator.admin"],
-        "other@example.test": ["operator.read"],
+        [identity]: ["operator.admin" as const],
+        "other@example.test": ["operator.read" as const],
       };
       let committedConfig: OpenClawConfig = {
         gateway: { auth: { identityScopes } },

@@ -130,7 +130,9 @@ async function createFixture() {
   };
 }
 
-const moveHead = () => f.git("update-ref", "refs/heads/main", f.headCommit, f.previousHead);
+const moveHead = async () => {
+  await f.git("update-ref", "refs/heads/main", f.headCommit, f.previousHead);
+};
 
 async function interruptAcceptedUpdate() {
   await rejects(
