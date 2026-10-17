@@ -10,19 +10,18 @@ import { resolveGatewayAuth } from "../../auth-resolve.js";
 import type { HealthSummary } from "../../health/types.js";
 import { startGatewayTailscaleExposure } from "../../server-tailscale.js";
 import { prepareTailscalePublishedOrigin } from "../../tailscale-published-origin.js";
+import { getHealthCache } from "../health-state.js";
 import type { GatewayWsClient } from "../ws-types.js";
 
 // Hello update-scope tests cover authenticated role/scope and recovery ownership projection.
 
 const {
   buildGatewaySnapshotMock,
-  getHealthCacheMock,
   emitGatewayAuthSecurityEventMock,
   getSessionRowProjectionMock,
   listControlUiPluginTabsMock,
   listControlUiPluginWidgetKindsMock,
 } = vi.hoisted(() => ({
-  getHealthCacheMock: vi.fn<() => HealthSummary | null>(() => null),
   emitGatewayAuthSecurityEventMock: vi.fn(),
   getSessionRowProjectionMock: vi.fn(),
   listControlUiPluginTabsMock: vi.fn((_scopes: readonly string[]) => []),
@@ -69,7 +68,7 @@ const {
 
 vi.mock("../health-state.js", () => ({
   buildGatewaySnapshot: buildGatewaySnapshotMock,
-  getHealthCache: getHealthCacheMock,
+  getHealthCache: vi.fn(() => null),
   getHealthVersion: vi.fn(() => 1),
 }));
 
@@ -191,7 +190,7 @@ describe("sendGatewayHello update detail scope", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    getHealthCacheMock.mockReturnValue(null);
+    vi.mocked(getHealthCache).mockReturnValue(null);
   });
 
   it.each([false, true])(
@@ -208,7 +207,7 @@ describe("sendGatewayHello update detail scope", () => {
         agents: [],
         sessions: { path: "", count: 5000, recent: [] },
       };
-      getHealthCacheMock.mockReturnValue(health);
+      vi.mocked(getHealthCache).mockReturnValue(health);
       const context = makeContext("operator", ["operator.read"]);
       context.connectParams = {
         ...context.connectParams,
