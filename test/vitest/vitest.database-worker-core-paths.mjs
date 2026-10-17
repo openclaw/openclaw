@@ -95,6 +95,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-state-db-cron-delivery-migration.test.ts",
   "src/state/openclaw-quarantine-store.test.ts",
   "src/state/openclaw-agent-db-readonly-scope.test.ts",
+  "src/state/openclaw-agent-db-schema-refresh.test.ts",
   "src/state/openclaw-agent-db-validation-cache.test.ts",
   "packages/memory-host-sdk/src/host/memory-schema-admission.test.ts",
   "src/agents/command-runtime.incognito.test.ts",

@@ -470,26 +470,27 @@ describe("audit event persistence", () => {
     }
     const expiredAt = occurredAt + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1;
 
+    const prune = () =>
+      pruneExpiredAuditEventsInDatabase({
+        database: { ...database, database: openOpenClawStateDatabase(database) },
+        now: expiredAt,
+      });
+    const rollback = new Error("fixture outer rollback");
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        expect(prune()).toBe(AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT);
+        throw rollback;
+      }, database),
+    ).toThrow(rollback);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
+      count: AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT + 1,
+    });
+
     expect((await listAuditEvents({ database, limit: 10, now: expiredAt })).events).toEqual([]);
-    expect(
-      pruneExpiredAuditEventsInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now: expiredAt,
-      }),
-    ).toBe(AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT);
+    expect(prune()).toBe(AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT);
     expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 1 });
-    expect(
-      pruneExpiredAuditEventsInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now: expiredAt,
-      }),
-    ).toBe(1);
-    expect(
-      pruneExpiredAuditEventsInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now: expiredAt,
-      }),
-    ).toBe(0);
+    expect(prune()).toBe(1);
+    expect(prune()).toBe(0);
   });
 });
 

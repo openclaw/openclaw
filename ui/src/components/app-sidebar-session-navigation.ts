@@ -85,7 +85,7 @@ import {
 } from "./app-sidebar-session-types.ts";
 import type { SessionAttention } from "./session-attention.ts";
 import { SessionDataOwner } from "./session-data.ts";
-import type { SessionOrganizerController } from "./session-organizer-controller.ts";
+import type { SessionOrganizer } from "./session-organizer.ts";
 import { SessionOwnerFilter } from "./session-owner-filter.ts";
 import { SidebarEmptyGroupsPreference } from "./sidebar-empty-groups.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
@@ -288,7 +288,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   abstract get sidebarNarrationLines(): ReadonlyMap<string, string>;
   abstract get sidebarTools(): ReadonlyMap<string, SidebarToolActivity>;
   abstract get sidebarObserverDigests(): ReadonlyMap<string, SessionObserverDigest>;
-  declare readonly sessionOrganizer: SessionOrganizerController;
+  declare readonly sessionOrganizer: SessionOrganizer;
   declare readonly sidebarMenus: SidebarMenusController;
 
   get sessionDataContext() {

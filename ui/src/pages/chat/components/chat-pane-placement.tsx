@@ -118,7 +118,10 @@ export function ChatPanePlacement(props: {
         {
           id: "move",
           visible: placementState === "active" || Boolean(retry),
-          className: `chat-pane__placement-move ${destructiveMove ? "session-menu__item--destructive" : ""}`,
+          className: [
+            "chat-pane__placement-move",
+            { "session-menu__item--destructive": destructiveMove },
+          ],
           destructive: destructiveMove,
           disabledReason: moveDisabledReason,
           icon: "monitor" as const,
@@ -160,7 +163,7 @@ export function ChatPanePlacement(props: {
       .map((action) => ({
         id: action.id,
         label: action.label,
-        class: `session-menu__item ${action.className}`,
+        class: ["session-menu__item", action.className],
         variant: action.destructive ? "danger" : undefined,
         disabled: Boolean(action.disabledReason),
         attributes: { title: action.disabledReason },

@@ -130,7 +130,7 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
         </div>
       </Show>
       <span class="chat-working-indicator__status">
-        <span class={working() && !continuation() && indicator() !== "none" ? "sr-only" : ""}>
+        <span class={{ "sr-only": working() && !continuation() && indicator() !== "none" }}>
           <Show
             when={!waitingApproval() && props.options.retryAt !== undefined}
             fallback={statusLabel()}

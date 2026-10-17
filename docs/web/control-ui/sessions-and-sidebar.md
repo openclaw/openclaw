@@ -580,9 +580,11 @@ Choose **Advanced → Icon & color** from a session menu and select a color swat
 
 ## Direct session shortcuts
 
-- **⌘⇧O** on Mac or **Ctrl+Shift+O** on Windows/Linux opens **New Session**
+- In desktop apps, **⌘N** on Mac or **Ctrl+N** on Windows/Linux opens **New Session**.
+  Web browsers keep **⌘⇧O** on Mac or **Ctrl+Shift+O** on Windows/Linux.
+  The shortcut opens **New Session**
   and focuses its composer. It opens a draft, without creating an empty session
-  or sending a message. **⌘N / Ctrl+N** remains **New Window**.
+  or sending a message. In web browsers, **⌘N / Ctrl+N** remains **New Window**.
 - **⌘⇧A** on Mac or **Ctrl+Shift+A** on Windows/Linux requests **Archive**
   for the current chat pane only, not other sessions selected in the sidebar.
   It uses the same permissions, protected-session checks, archive lifecycle, and

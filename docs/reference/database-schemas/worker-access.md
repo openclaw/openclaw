@@ -83,10 +83,14 @@ each response still checks current disclosure authority for the sessions it uses
 Complete single-statement effects can use SQLite autocommit through
 `runSqliteSingleStatementSync`. Prepare the result, admission, and commit receipt
 before the statement, then install committed facts before notifying observers.
-Warm participant contributions and non-message audit inserts use this path;
-new participants, audit pruning, and execution bindings retain transactions.
-Each effect still commits separately. PostgreSQL writes retain their adapter's
-transaction custody.
+Warm participant contributions, config-health conditional patches, non-message
+audit inserts, and standalone bounded audit expiry use this path. New participants,
+audit insert-and-prune operations, and execution bindings retain transactions.
+Each effect still commits separately, and nested writes remain subject to outer
+rollback. PostgreSQL writes retain their adapter's transaction custody.
+
+A journal owner listing uses one SELECT's snapshot without a separate read
+transaction. Placement and journal reads retain their multi-statement snapshots.
 
 Gateway startup binds existing auth-file observers to its read-only scope and
 spawn broker, including observations retained across an in-process restart.
@@ -415,6 +419,14 @@ publication; PostgreSQL writes still use `runTransaction` for writer custody.
 Keep an explicit snapshot for related reads that must agree. The shared helpers
 live in [`sqlite-transaction.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/sqlite-transaction.ts).
 
+Unsigned external plugin catalogs use one upsert without rereading the current
+snapshot. Signed catalogs keep their rollback and
+equivocation checks in the writer transaction.
+
+Agent schema refresh reuses the index inspection's catalog for full validation
+inside the same unchanged read snapshot. Index repairs, including skipped
+column migrations, validate against a fresh catalog before publishing readiness.
+
 Do not move size-limiting JSON projections out of SQL: selecting full transcript
 bodies or blobs to discard most fields in TypeScript adds transfer and parsing
 cost. Engine-specific projections belong behind the engine's helper. See
@@ -659,6 +671,12 @@ another exact-entry read. Releasing a mutation's source leaves its selecting rea
 current; releasing that reader revokes every borrower. The destination worker keeps
 its transaction-local source comparison before the effect.
 
+During initial selection, the publication owner retains concurrent committed row
+facts and compares them with the selecting read before granting authority. A
+metadata-only change does not invalidate an unchanged policy. Once selected,
+policy or lifecycle changes still revoke the prepared check, independently of
+unrelated agent deletion and topology publications.
+
 Bundled native harnesses prepare session lineage once and retain the same entry
 predicate through terminal cleanup. Final lineage checks use published facts;
 tool policy and caller liveness still authorize each effect. Cleanup may borrow
@@ -859,6 +877,14 @@ methods or opaque transaction callbacks still call them. Incognito access uses
 the memory actor. A worker caller does not make the shared kernel worker-only. The
 inventory retains those calls as migration debt; raw-row removal guarded by
 Doctor's `expectedRawEntryJson` variant is an offline repair exception.
+
+Scheduled source replies preserve the admitted run's prepared authority through
+delivery capabilities. The transcript worker checks its source predicates in the
+write transaction, then obtains the live delivery owner's grant before commit.
+Manual `sessions.compact` requests use the same prepared request-authority boundary;
+revocation rolls back the replacement. Neither path needs a native transcript
+adapter. Released synchronous transcript SDK callbacks retain their separate
+native compatibility contract.
 
 Status presentation prepares bounded usage and terminal-model facts through the
 existing history worker before rendering. Goal mutations with ordinary host
@@ -1223,6 +1249,10 @@ Gateway combined listings, search preparation, cron owner discovery, delivery
 context recovery, and ordered runtime candidate selection await the existing
 session history/discovery worker. Target selection returns logical and physical
 store facts together; durable reads do not run SQLite on the Gateway thread.
+Canonical per-agent paths already identify their owner, so discovery does not
+queue a shared-state registry read for them. Fixed and shared stores still require
+registry ownership before selecting a target, and an unavailable registry refuses
+those selections.
 Combined topology and row reads share the federation policy used by the native
 maintenance entrypoint. Bound and unbound incognito targets use the memory actor
 without opening a SQLite database or allocating a database worker.
@@ -2867,10 +2897,11 @@ phases, including those still waiting for foreground admission. Schemas, stored
 bytes, retention, SDK signatures, and update behavior are unchanged.
 
 Transcript preparation carries that selected physical owner into history reads.
-Admitted delta, watermark, and anchor reads borrow the same prepared execution
-as exact-path reads. Inside a matching transcript write lock, they join its
-settlement queue and read through its existing worker, retaining generation and
-physical-file checks without waiting on independent history-reader custody.
+Ordinary delta, watermark, and anchor reads use the retained history reader's WAL
+snapshots without borrowing an unrelated executor generation. Inside a matching
+transcript write lock, they join its settlement queue and read through its existing
+worker, retaining generation and physical-file checks without waiting on
+independent history-reader custody.
 Anchor reads with synchronous acceptance use the reserved discovery lane when
 their sequence selection requires a history reader, so eviction and failure
 cleanup remain safe while writer admission is held.
@@ -4179,6 +4210,12 @@ transactions invalidate it. The same lifecycle fact records when no active inten
 remain, so matching returns without opening a transaction or querying FTS until
 a mutation invalidates that fact. This absence result has no write or external
 effect to authorize; nonempty matches retain live commit admission.
+The maintenance service retains that committed absence on the Gateway host, so
+later empty matches do not send a worker request. Standing-intent commands and
+receipt publication share one per-database owner queue; a create cannot be hidden
+by an earlier empty result. Executed commands clear the fact before publication,
+and stopping or reloading maintenance discards it. Active matching still runs
+in the worker with its existing scope and live-authority checks.
 A nonempty active set still uses the full matching query and eligibility filters.
 Reopening a connection reloads the deadline and active-intent fact. Expiry
 comparison and fired-row numeric validation retain their existing semantics.
@@ -5577,20 +5614,20 @@ so reset sessions remain untouched. Durable delivery and transcript append
 retain their own effect-time generation checks. Delivery errors record a warning
 without rereading the generation solely to classify the log message.
 
-Raw and visible transcript deltas, watermarks, pre-reset Memory capture, and final context
-validation borrow an already-prepared agent executor when one exists for the
-captured physical store. The reader captures its generation before yielding and
-joins the existing writer FIFO; replacement or retirement refuses the read instead
-of selecting a successor. Sources without an eligible prepared executor retain
-their read-only history owner, including offline inspection.
+Raw and visible transcript deltas, watermarks, pre-reset Memory capture, and final
+context validation retain their captured physical history source and read-only
+worker, including offline inspection. An unrelated executor retiring does not
+discard that source's completed snapshot or select a successor. Native reads still
+carry the expected physical identity, and current authority stays with the
+disclosure or mutation effect that consumes the result.
 Touched-file scans retain one physical source through all pages; each next
 snapshot reads current committed rows and keeps the existing cursor reset behavior.
 Admission and projection consume one deferred snapshot, reusing admitted facts
 across unchanged transactions. Pre-reset Memory capture preserves reset windows,
 raw fallback, and the existing byte and message limits. Codex history keeps lazy
 evidence projection in its plugin worker and validates the resulting version or
-admitted input through the retained source before disclosure. Alias revocation
-remains registered until borrowed execution and cleanup settle.
+admitted input through the retained source before disclosure. Physical source
+authority and cleanup remain with the retained history owner.
 Inside a transcript write lock, matching reads use that lock's retained worker
 and settlement queue. Asynchronous append preparation drains its own reads before
 committing; cancelled or closed read scopes cannot dispatch later work.

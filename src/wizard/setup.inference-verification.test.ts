@@ -52,7 +52,11 @@ function verifyWithMemoryConfig(
     },
     read: async () => ({ config: current, write: target.write }),
   };
-  return offerLiveModelVerification({ ...params, configTarget: target });
+  return offerLiveModelVerification({
+    ...params,
+    assertCurrent: params.assertCurrent ?? (() => {}),
+    configTarget: target,
+  });
 }
 
 const tempRoots = createTempDirTracker();

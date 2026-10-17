@@ -8,11 +8,8 @@ import {
   createTempDirTracker,
   useAutoCleanupTempDirTracker,
 } from "../../../test/helpers/temp-dir.js";
-import { captureGatewayToolReceiptAssertion } from "../../agents/tools/gateway-caller-context.js";
-import { readGatewayRequestMutationAuthority } from "../../gateway/server-methods/session-mutation-guards.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { createVerifiedSqliteSnapshot } from "../../infra/sqlite-snapshot.js";
-import { composeSessionTranscriptWriteAssertion } from "../../plugin-sdk/session-transcript-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -59,11 +56,7 @@ import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
 import { maintenanceConfig } from "./session-cold-storage.test-support.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
-import {
-  captureExternalSessionCommitGuard,
-  composeSessionSourceAssertion,
-  type SessionSourceAssertion,
-} from "./session-source-authority.js";
+import type { SessionSourceAssertion } from "./session-source-authority.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { createManualCompactRecords } from "./transcript-message.test-support.js";
 import type { SessionEntry } from "./types.js";
@@ -381,52 +374,6 @@ function createCompactAuthority(
   };
 }
 
-const compactSourceModes = ["prepared", "opaque sibling", "SDK wrapper", "SDK transport"] as const;
-
-function composeCompactSource(
-  source: SessionSourceAssertion,
-  fixture: Fixture,
-  mode: (typeof compactSourceModes)[number],
-  inCommitGrant: () => boolean,
-) {
-  const opaque = vi.fn(() => {
-    if (inCommitGrant()) {
-      throw new Error("Opaque callback entered a restoration commit grant");
-    }
-    expect(loadSessionEntry(fixture.scope)?.sessionId).toBe(fixture.scope.sessionId);
-  });
-  let composed = source;
-  switch (mode) {
-    case "prepared":
-      break;
-    case "opaque sibling":
-      composed = captureGatewayToolReceiptAssertion(
-        composeSessionSourceAssertion([source, captureExternalSessionCommitGuard(opaque)]),
-      );
-      break;
-    case "SDK wrapper":
-      composed = composeSessionTranscriptWriteAssertion([source], (assertSources) => {
-        opaque();
-        assertSources();
-      });
-      break;
-    case "SDK transport":
-      composed = composeSessionSourceAssertion([
-        source,
-        readGatewayRequestMutationAuthority({
-          req: { type: "req", id: "compact-sdk-transport", method: "sessions.compact", params: {} },
-          client: null,
-          hasCurrentClientAuthority: () => {
-            opaque();
-            return true;
-          },
-        }).assertCurrent,
-      ]);
-      break;
-  }
-  return { source: composed, opaque };
-}
-
 const actions = [
   "reset",
   "batched reset",
@@ -739,21 +686,15 @@ describe("cold current transcript lifecycle", () => {
     },
   );
 
-  it.each(compactSourceModes)(
-    "rolls back restoration when %s authority is revoked at commit",
-    async (mode) => {
-      const fixture = await createColdCurrentSession();
-      const before = fixture.snapshot();
-      const authority = createCompactAuthority(fixture);
-      const commit = observeCommit(authority.revoke);
-      const mixed = composeCompactSource(authority.source, fixture, mode, () => commit.inGrant);
-      await expect(authority.trim(mixed.source)).rejects.toThrow(
-        "Compaction source authority revoked",
-      );
-      expect(commit.requested).toBe(true);
-      expect(fixture.snapshot()).toEqual(before);
-    },
-  );
+  it("rolls back restoration when prepared authority is revoked at commit", async () => {
+    const fixture = await createColdCurrentSession();
+    const before = fixture.snapshot();
+    const authority = createCompactAuthority(fixture);
+    const commit = observeCommit(authority.revoke);
+    await expect(authority.trim()).rejects.toThrow("Compaction source authority revoked");
+    expect(commit.requested).toBe(true);
+    expect(fixture.snapshot()).toEqual(before);
+  });
 
   it.each(["foreign row", "alias path"])(
     "rolls back restoration when a %s changes at the commit grant",
@@ -796,39 +737,28 @@ describe("cold current transcript lifecycle", () => {
     },
   );
 
-  it.each(compactSourceModes)(
-    "restores and trims cold history with authorized %s authority",
-    async (mode) => {
-      const fixture = await createColdCurrentSession();
-      const authority = createCompactAuthority(fixture);
-      const commit = observeCommit();
-      const mixed = composeCompactSource(authority.source, fixture, mode, () => commit.inGrant);
-      await expect(authority.trim(mixed.source)).resolves.toEqual({
-        compacted: true,
-        kept: 3,
-      });
-      if (mode !== "prepared") {
-        expect(mixed.opaque).toHaveBeenCalled();
-      }
-      expect(coldDescriptor(fixture)).toBeUndefined();
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual([
-        fixture.original[0],
-        {
-          type: "message",
-          id: "alternate",
-          parentId: null,
-          message: { role: "assistant", content: "Alternate answer" },
-        },
-        {
-          type: "leaf",
-          id: "selection",
-          parentId: "alternate",
-          targetId: null,
-          appendParentId: null,
-        },
-      ]);
-    },
-  );
+  it("restores and trims cold history with prepared authority", async () => {
+    const fixture = await createColdCurrentSession();
+    const authority = createCompactAuthority(fixture);
+    await expect(authority.trim()).resolves.toEqual({ compacted: true, kept: 3 });
+    expect(coldDescriptor(fixture)).toBeUndefined();
+    expect(loadTranscriptEventsSync(fixture.scope)).toEqual([
+      fixture.original[0],
+      {
+        type: "message",
+        id: "alternate",
+        parentId: null,
+        message: { role: "assistant", content: "Alternate answer" },
+      },
+      {
+        type: "leaf",
+        id: "selection",
+        parentId: "alternate",
+        targetId: null,
+        appendParentId: null,
+      },
+    ]);
+  });
 
   it.each(actions)("restores exact history before %s", async (action) => {
     const fixture = await createColdCurrentSession();

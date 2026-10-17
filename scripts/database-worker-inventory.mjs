@@ -1152,6 +1152,19 @@ const reviewedOperations = new Map([
     "src/config/sessions/session-accessor.sqlite-transcript-state.ts",
     [
       {
+        tier: "T3",
+        operations: ["deleteTranscriptEventsInTransaction"],
+        evidence:
+          "Full replacement only: manual/message-rewrite workers, maintenance-worker branching, internal correction behind !isMainThread, and Doctor header repair. The native manual-compaction adapter is deleted; released SDK append/suffix callbacks do not expose full replacement.",
+      },
+      {
+        tier: "T3",
+        operations: ["pruneTranscriptReactionsInTransaction"],
+        guard: "removedEventIds === undefined",
+        evidence:
+          "Only full transcript replacement passes no removed IDs, via workers, worker-guarded correction, or Doctor header repair after native manual compaction removal. The bounded suffix branch still serves released synchronous SessionManager.removeTrailingEntries and remains T1.",
+      },
+      {
         tier: "W",
         operations: ["advanceTranscriptMutationAtInTransaction"],
         guard: "actor?.window",
