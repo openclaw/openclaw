@@ -50,49 +50,41 @@ beforeEach(() => {
 });
 afterEach(() => vi.resetAllMocks());
 
-it.each([{ migrateState: true, running: true }])(
-  "keeps history read failure advisory without refreshing update activity (migrateState=$migrateState, running=$running)",
-  async ({ migrateState, running }) => {
-    await withOpenClawTestState({ label: "update-history-refusal" }, async () => {
-      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - ABANDONED_UPDATE_RUN_MS - 1);
-      let run: UpdateRunRecord;
-      try {
-        run = createUpdateRun({ trigger: "cli" });
-      } finally {
-        clock.mockRestore();
-      }
-      const completed = running ? run : finishUpdateRun(run.runId, { status: "succeeded" });
-      const failure = Object.assign(
-        new Error("runtime binary not executable: /fixture/node (EACCES)"),
-        {
-          code: "EACCES",
-        },
-      );
-      vi.mocked(readInterruptedUpdateCandidateAsync).mockRejectedValue(failure);
-      vi.mocked(listUpdateRunsAsync).mockRejectedValue(failure);
+it("keeps history read failure advisory without refreshing a running update", async () => {
+  await withOpenClawTestState({ label: "update-history-refusal" }, async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - ABANDONED_UPDATE_RUN_MS - 1);
+    let run: UpdateRunRecord;
+    try {
+      run = createUpdateRun({ trigger: "cli" });
+    } finally {
+      clock.mockRestore();
+    }
+    const failure = Object.assign(
+      new Error("runtime binary not executable: /fixture/node (EACCES)"),
+      {
+        code: "EACCES",
+      },
+    );
+    vi.mocked(readInterruptedUpdateCandidateAsync).mockRejectedValue(failure);
+    vi.mocked(listUpdateRunsAsync).mockRejectedValue(failure);
 
-      await expect(noteStaleUpdateRuns({ migrateState })).resolves.toBeUndefined();
+    await expect(noteStaleUpdateRuns({ migrateState: true })).resolves.toBeUndefined();
 
-      expect(note).toHaveBeenCalledWith(expect.stringContaining(failure.message), "Update history");
-      const saved = getUpdateRun(run.runId)!;
-      expect(saved.status).toBe(completed.status);
-      expect(saved.finishedAtMs).toBe(completed.finishedAtMs);
-      expect(saved.updatedAtMs).toBe(completed.updatedAtMs);
-      expect(isStaleIdentitylessUpdateRun(saved)).toBe(running);
-      if (migrateState) {
-        expect(saved.steps).toContainEqual(
-          expect.objectContaining({
-            step: "warning:update-history-reconciliation",
-            status: "completed",
-            detail: expect.stringContaining(failure.message),
-          }),
-        );
-      } else {
-        expect(saved).toEqual(completed);
-      }
-    });
-  },
-);
+    expect(note).toHaveBeenCalledWith(expect.stringContaining(failure.message), "Update history");
+    const saved = getUpdateRun(run.runId)!;
+    expect(saved.status).toBe(run.status);
+    expect(saved.finishedAtMs).toBe(run.finishedAtMs);
+    expect(saved.updatedAtMs).toBe(run.updatedAtMs);
+    expect(isStaleIdentitylessUpdateRun(saved)).toBe(true);
+    expect(saved.steps).toContainEqual(
+      expect.objectContaining({
+        step: "warning:update-history-reconciliation",
+        status: "completed",
+        detail: expect.stringContaining(failure.message),
+      }),
+    );
+  });
+});
 
 it("repairs config after update history discovery cannot launch its runtime", async () => {
   await withOpenClawTestState(
@@ -150,75 +142,65 @@ it("does not admit mutations while a history child still has unsettled process c
   await expect(noteStaleUpdateRuns()).rejects.toBe(failure);
 });
 
-it.each([{ reason: "global-install-foreign-destination", nextAction: undefined }])(
-  "keeps $reason remediation visible until a later successful update",
-  async (failure) => {
-    let latest: UpdateRunRecord = {
-      runId: "6631ecee-adbf-41e8-a0e3-1b88b28b0a59",
-      createdAtMs: 1,
-      updatedAtMs: 2,
-      trigger: "cli",
-      phase: "finished",
-      status: "failed",
-      reason: failure.reason,
-      origin: { nextAction: failure.nextAction },
-      target: { kind: "package", version: "2026.9.4" },
-      before: { version: "2026.7.1-2" },
-      after: {},
-      steps: [{ step: failure.reason, status: "failed", detail: failure.nextAction }],
-      verification: {},
-      repair: [],
-      confirmedAtMs: null,
-      finishedAtMs: 2,
-      downtimeMs: null,
-    };
-    vi.mocked(listUpdateRunsAsync).mockImplementation(async (input) =>
-      input?.active ? [] : [latest],
-    );
-    vi.mocked(readInterruptedUpdateCandidateAsync).mockResolvedValue(latest);
+it("keeps foreign-destination remediation visible until a later successful update", async () => {
+  let latest: UpdateRunRecord = {
+    runId: "6631ecee-adbf-41e8-a0e3-1b88b28b0a59",
+    createdAtMs: 1,
+    updatedAtMs: 2,
+    trigger: "cli",
+    phase: "finished",
+    status: "failed",
+    reason: "global-install-foreign-destination",
+    origin: { nextAction: undefined },
+    target: { kind: "package", version: "2026.9.4" },
+    before: { version: "2026.7.1-2" },
+    after: {},
+    steps: [{ step: "global-install-foreign-destination", status: "failed", detail: undefined }],
+    verification: {},
+    repair: [],
+    confirmedAtMs: null,
+    finishedAtMs: 2,
+    downtimeMs: null,
+  };
+  vi.mocked(listUpdateRunsAsync).mockImplementation(async (input) =>
+    input?.active ? [] : [latest],
+  );
+  vi.mocked(readInterruptedUpdateCandidateAsync).mockResolvedValue(latest);
 
-    await noteStaleUpdateRuns({});
+  await noteStaleUpdateRuns({});
 
-    expect(note).toHaveBeenCalledOnce();
-    // Runtime preflight failures carry the plain-language headline plus a reason-code line;
-    // every other failure keeps the reason in the headline.
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(
-        failure.reason === "node-runtime-preflight"
-          ? `Reason code: ${failure.reason}`
-          : `OpenClaw update failed: ${failure.reason}.`,
-      ),
-      "Update history",
-    );
-    expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: latest });
-    expect(listUpdateRunsAsync).toHaveBeenCalledTimes(2);
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining(
-        failure.nextAction ??
-          "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
-      ),
-      "Update history",
-    );
+  expect(note).toHaveBeenCalledOnce();
+  expect(note).toHaveBeenCalledWith(
+    expect.stringContaining("OpenClaw update failed: global-install-foreign-destination."),
+    "Update history",
+  );
+  expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: latest });
+  expect(listUpdateRunsAsync).toHaveBeenCalledTimes(2);
+  expect(note).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
+    ),
+    "Update history",
+  );
 
-    latest = {
-      ...latest,
-      runId: "e8a1ac89-4a31-41f6-b401-4b225b661728",
-      createdAtMs: 3,
-      updatedAtMs: 4,
-      finishedAtMs: 4,
-      status: "succeeded",
-      reason: null,
-      origin: {},
-      after: { version: "2026.9.4" },
-      steps: [],
-    };
-    vi.mocked(note).mockClear();
+  latest = {
+    ...latest,
+    runId: "e8a1ac89-4a31-41f6-b401-4b225b661728",
+    createdAtMs: 3,
+    updatedAtMs: 4,
+    finishedAtMs: 4,
+    status: "succeeded",
+    reason: null,
+    origin: {},
+    after: { version: "2026.9.4" },
+    steps: [],
+  };
+  vi.mocked(note).mockClear();
 
-    await noteStaleUpdateRuns({});
+  await noteStaleUpdateRuns({});
 
-    expect(note).not.toHaveBeenCalled();
-  },
-);
+  expect(note).not.toHaveBeenCalled();
+});
 
 it("refreshes history outside the discovery snapshot after settling an interrupted update", async () => {
   const abandoned: UpdateRunRecord = {
@@ -269,73 +251,70 @@ it("refreshes history outside the discovery snapshot after settling an interrupt
   );
 });
 
-it.each(["state migration is pending"])(
-  "stops replaying resolved %s warnings without erasing history",
-  async (wording) => {
-    await withOpenClawTestState({ label: "update-warning-resolution" }, async () => {
-      const pending = (pluginId: string) => ({
-        pluginId,
-        reason: "The plugin has not reported completion.",
-        command: "openclaw doctor --fix",
-      });
-      await recordDeferredPluginMigrations({
-        pending: [pending("resolved"), pending("unfinished")],
-      });
-      const warnings = [
-        `Plugin "unrecorded" ${wording}: Completion has never been recorded.`,
-        `Plugin "unfinished" ${wording}: The plugin has not reported completion.`,
-        "Unrelated update warning",
-        `Plugin "resolved" ${wording}: The plugin has not reported completion.`,
-      ];
-      const run = createUpdateRun({ trigger: "cli" });
-      for (const [index, detail] of warnings.entries()) {
-        recordUpdateRunStep(run.runId, {
-          step: `warning:openclaw doctor:${index}`,
-          status: "completed",
-          detail,
-          endedAtMs: 1,
-        });
-      }
-      const history = finishUpdateRun(run.runId, { status: "succeeded" });
-      let latestRunId = run.runId;
-      vi.mocked(listUpdateRunsAsync).mockImplementation(async (input) =>
-        input?.active ? [] : [getUpdateRun(latestRunId)!],
-      );
-      const output = async () => {
-        vi.mocked(note).mockClear();
-        await noteStaleUpdateRuns({ migrateState: false });
-        return vi
-          .mocked(note)
-          .mock.calls.map(([message]) => message)
-          .join("\n");
-      };
-      expect(await output()).toContain(warnings[3]);
-
-      await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: ["resolved"] });
-      const repaired = await output();
-      expect(repaired).not.toContain(warnings[3]);
-      expect(repaired).not.toContain(warnings[0]);
-      for (const warning of warnings.slice(1, 3)) {
-        expect(repaired).toContain(warning);
-      }
-      expect(getUpdateRun(run.runId)).toEqual(history);
-
-      await recordDeferredPluginMigrations({ pending: [pending("resolved")] });
-      expect(await output()).toContain(warnings[3]);
-      expect(getUpdateRun(run.runId)).toEqual(history);
-
-      await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: ["resolved"] });
-      const later = createUpdateRun({ trigger: "cli" });
-      recordUpdateRunStep(later.runId, {
-        step: "warning:openclaw doctor",
-        status: "completed",
-        detail: warnings[3],
-        endedAtMs: Date.now() + 60_000,
-      });
-      const laterHistory = finishUpdateRun(later.runId, { status: "succeeded" });
-      latestRunId = later.runId;
-      expect(await output()).not.toContain(warnings[3]);
-      expect(getUpdateRun(later.runId)).toEqual(laterHistory);
+it("stops replaying resolved state migration warnings without erasing history", async () => {
+  await withOpenClawTestState({ label: "update-warning-resolution" }, async () => {
+    const pending = (pluginId: string) => ({
+      pluginId,
+      reason: "The plugin has not reported completion.",
+      command: "openclaw doctor --fix",
     });
-  },
-);
+    await recordDeferredPluginMigrations({
+      pending: [pending("resolved"), pending("unfinished")],
+    });
+    const warnings = [
+      'Plugin "unrecorded" state migration is pending: Completion has never been recorded.',
+      'Plugin "unfinished" state migration is pending: The plugin has not reported completion.',
+      "Unrelated update warning",
+      'Plugin "resolved" state migration is pending: The plugin has not reported completion.',
+    ];
+    const run = createUpdateRun({ trigger: "cli" });
+    for (const [index, detail] of warnings.entries()) {
+      recordUpdateRunStep(run.runId, {
+        step: `warning:openclaw doctor:${index}`,
+        status: "completed",
+        detail,
+        endedAtMs: 1,
+      });
+    }
+    const history = finishUpdateRun(run.runId, { status: "succeeded" });
+    let latestRunId = run.runId;
+    vi.mocked(listUpdateRunsAsync).mockImplementation(async (input) =>
+      input?.active ? [] : [getUpdateRun(latestRunId)!],
+    );
+    const output = async () => {
+      vi.mocked(note).mockClear();
+      await noteStaleUpdateRuns({ migrateState: false });
+      return vi
+        .mocked(note)
+        .mock.calls.map(([message]) => message)
+        .join("\n");
+    };
+    expect(await output()).toContain(warnings[3]);
+
+    await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: ["resolved"] });
+    const repaired = await output();
+    expect(repaired).not.toContain(warnings[3]);
+    expect(repaired).not.toContain(warnings[0]);
+    for (const warning of warnings.slice(1, 3)) {
+      expect(repaired).toContain(warning);
+    }
+    expect(getUpdateRun(run.runId)).toEqual(history);
+
+    await recordDeferredPluginMigrations({ pending: [pending("resolved")] });
+    expect(await output()).toContain(warnings[3]);
+    expect(getUpdateRun(run.runId)).toEqual(history);
+
+    await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: ["resolved"] });
+    const later = createUpdateRun({ trigger: "cli" });
+    recordUpdateRunStep(later.runId, {
+      step: "warning:openclaw doctor",
+      status: "completed",
+      detail: warnings[3],
+      endedAtMs: Date.now() + 60_000,
+    });
+    const laterHistory = finishUpdateRun(later.runId, { status: "succeeded" });
+    latestRunId = later.runId;
+    expect(await output()).not.toContain(warnings[3]);
+    expect(getUpdateRun(later.runId)).toEqual(laterHistory);
+  });
+});
