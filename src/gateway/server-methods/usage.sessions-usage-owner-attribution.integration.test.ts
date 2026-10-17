@@ -10,6 +10,7 @@ import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/co
 import {
   listSessionTranscriptInstances,
   loadSessionEntryReadOnly,
+  patchSessionEntryCore,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
   upsertSessionEntryCore,

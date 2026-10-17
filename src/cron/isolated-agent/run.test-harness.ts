@@ -360,7 +360,6 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<SessionAccessorModule>(
     "../../config/sessions/session-accessor.js",
   );
-  actualReplaceSessionEntry = actual.replaceSessionEntry;
   return {
     ...actual,
     replaceSessionEntry: replaceSessionEntryMock,
@@ -371,6 +370,7 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
 vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../config/sessions/session-accessor.sqlite-entry.js")>();
+  actualReplaceSessionEntry = actual.replaceSessionEntry;
   const { projectSessionEntryPatch } =
     await import("../../config/sessions/session-entry-patch-operation.js");
   return {
