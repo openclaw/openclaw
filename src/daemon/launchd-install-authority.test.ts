@@ -32,6 +32,45 @@ vi.mock("./launchd-current-service.js", () => ({
 }));
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
+const commandResult = (code: number, stdout: string, stderr = "") => ({
+  code,
+  stdout,
+  stderr,
+  signal: null,
+  killed: false,
+  termination: "exit" as const,
+});
+const checkCurrent = async () => {
+  assertGatewayServiceUpdateCurrent();
+};
+const rejectTask = async () => {
+  throw new Error("Unexpected task publication");
+};
+const definitionTransaction = {
+  assertCurrent: assertGatewayServiceUpdateCurrent,
+  beforeWrite: checkCurrent,
+  filePrepared: checkCurrent,
+  fileWritten: checkCurrent,
+  taskPrepared: rejectTask,
+  taskWritten: rejectTask,
+};
+
+function installWithAuthority(
+  args: Parameters<typeof installLaunchAgent>[0],
+  isCurrent: () => boolean,
+  message = "Doctor maintenance custody released",
+) {
+  return withGatewayServiceUpdateAuthority(
+    () => {
+      if (!isCurrent()) {
+        throw new Error(message);
+      }
+    },
+    () => installLaunchAgent(args),
+    { updateOwned: false, assertRecoveryCurrent: () => {} },
+  );
+}
+
 beforeEach(() => {
   native.command.mockReset();
   native.ownership.mockReset().mockResolvedValue(undefined);
@@ -110,14 +149,11 @@ it.each([
       if (action === boundary || (boundary === "snapshot-read" && action === "print")) {
         current = false;
       }
-      return {
-        code: action === "print" && !loaded ? 1 : 0,
-        stdout: action === "print" && loaded ? `${target} = {\n\tstate = waiting\n}` : "",
-        stderr: action === "print" && !loaded ? "Could not find service" : "",
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      return commandResult(
+        action === "print" && !loaded ? 1 : 0,
+        action === "print" && loaded ? `${target} = {\n\tstate = waiting\n}` : "",
+        action === "print" && !loaded ? "Could not find service" : "",
+      );
     });
     if (boundary === "before-write") {
       native.ownership.mockImplementationOnce(async () => {
@@ -149,39 +185,9 @@ it.each([
       }
     });
 
-    const installation = withGatewayServiceUpdateAuthority(
-      () => {
-        if (!current) {
-          throw new Error("Doctor maintenance custody released");
-        }
-      },
-      () =>
-        installLaunchAgent({
-          ...args,
-          ...(transaction
-            ? {
-                definitionTransaction: {
-                  assertCurrent: assertGatewayServiceUpdateCurrent,
-                  beforeWrite: async () => {
-                    assertGatewayServiceUpdateCurrent();
-                  },
-                  filePrepared: async () => {
-                    assertGatewayServiceUpdateCurrent();
-                  },
-                  fileWritten: async () => {
-                    assertGatewayServiceUpdateCurrent();
-                  },
-                  taskPrepared: async () => {
-                    throw new Error("Unexpected task publication");
-                  },
-                  taskWritten: async () => {
-                    throw new Error("Unexpected task publication");
-                  },
-                },
-              }
-            : {}),
-        }),
-      { updateOwned: false, assertRecoveryCurrent: () => {} },
+    const installation = installWithAuthority(
+      { ...args, ...(transaction ? { definitionTransaction } : {}) },
+      () => current,
     );
     if (boundary === "publication-error") {
       await expect(installation).rejects.toThrow("publication confirmation failed after rename");
@@ -231,14 +237,9 @@ it.each([
 it("retains another writer's artifact instead of claiming successful LaunchAgent recovery", async () => {
   const { args, plist, environment } = await fixture();
   let current = true;
-  native.command.mockImplementation(async (argv) => ({
-    code: 0,
-    stdout: `${argv[2]} = {\n\tstate = waiting\n}`,
-    stderr: "",
-    signal: null,
-    killed: false,
-    termination: "exit",
-  }));
+  native.command.mockImplementation(async (argv) =>
+    commandResult(0, `${argv[2]} = {\n\tstate = waiting\n}`),
+  );
   const rename = fs.rename;
   vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
     await rename(from, to);
@@ -248,15 +249,7 @@ it("retains another writer's artifact instead of claiming successful LaunchAgent
     }
   });
   await expect(
-    withGatewayServiceUpdateAuthority(
-      () => {
-        if (!current) {
-          throw new Error("Competing update admitted");
-        }
-      },
-      () => installLaunchAgent(args),
-      { updateOwned: false, assertRecoveryCurrent: () => {} },
-    ),
+    installWithAuthority(args, () => current, "Competing update admitted"),
   ).rejects.toMatchObject({ code: "service-authority-revoked", outcome: "recovery-pending" });
   expect(await fs.readFile(environment, "utf8")).toBe("external replacement\n");
   expect(await fs.readFile(plist, "utf8")).toContain("/candidate/openclaw/dist/index.js");
