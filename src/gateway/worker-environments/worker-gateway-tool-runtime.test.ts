@@ -10,9 +10,15 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
+import { wrapToolWithBeforeToolCallHook } from "../../agents/agent-tools.before-tool-call.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { createSessionsYieldTool } from "../../agents/tools/sessions-yield-tool.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -104,6 +110,31 @@ function request(
 }
 
 describe("worker Gateway tool runtime", () => {
+  it("denies a cached worker handle after the Gateway policy tightens", async () => {
+    const config: OpenClawConfig = { tools: { gatewayPolicy: { allow: ["remote"] } } };
+    setRuntimeConfigSnapshot(config);
+    const execute = vi.fn().mockResolvedValue(success);
+    const { runtime } = fixture([
+      wrapToolWithBeforeToolCallHook(tool("remote", execute), { config }),
+    ]);
+    try {
+      const surface = await runtime.getSurface(identity);
+      await expect(runtime.invoke(identity, request(surface, "allowed"), sink)).resolves.toEqual(
+        success,
+      );
+      setRuntimeConfigSnapshot({ tools: { gatewayPolicy: { allow: [] } } });
+      await expect(
+        runtime.invoke(identity, request(surface, "denied"), sink),
+      ).resolves.toMatchObject({
+        details: { status: "error", error: expect.stringContaining("Gateway tool policy denies") },
+      });
+      expect(execute).toHaveBeenCalledTimes(1);
+    } finally {
+      await runtime.close();
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
   it("prepares deferred discovery guidance with the model tool projection", async () => {
     const { runtime } = fixture([], async () => ({
       tools: [tool("web_fetch")],
@@ -456,6 +487,7 @@ describe("worker Gateway tool runtime", () => {
           { type: "text", text: JSON.stringify({ status: "error", error: message }, null, 2) },
         ],
         details: { status: "error", error: message },
+        isError: true,
       });
       expect(execute).toHaveBeenCalledOnce();
     } finally {

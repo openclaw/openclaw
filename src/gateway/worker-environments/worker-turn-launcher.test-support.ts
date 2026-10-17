@@ -10,9 +10,11 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
 import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import type { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { CORE_WORKER_LAUNCH_TOOL_NAMES } from "../../agents/tool-catalog.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
@@ -75,6 +77,72 @@ export const OWNER_EPOCH = 3;
 const BUNDLE_HASH = "a".repeat(64);
 export const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
+
+export const workerTurnTerminalReplyCases: Array<{
+  name: string;
+  content: Parameters<typeof makeAgentAssistantMessage>[0]["content"];
+  visibleText?: string;
+  rawText?: string;
+  terminalReply?: AgentRunTerminalReplySnapshot;
+  costs?: { first: number; last: number; total: number };
+}> = [
+  {
+    name: "visible final answer",
+    costs: { first: 0.125, last: 0.25, total: 0.375 },
+    content: [
+      { type: "thinking", thinking: "Private reasoning" },
+      {
+        type: "text",
+        text: "Working...",
+        textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
+      },
+      {
+        type: "text",
+        text: "Usage reply",
+        textSignature: JSON.stringify({ v: 1, id: "final", phase: "final_answer" }),
+      },
+    ],
+    visibleText: "Usage reply",
+    rawText: "Usage reply",
+    terminalReply: { disposition: "visible", text: "Usage reply" },
+  },
+  {
+    name: "explicit silence",
+    content: [{ type: "text", text: "NO_REPLY" }],
+    visibleText: "",
+    rawText: "NO_REPLY",
+    terminalReply: { disposition: "silent" },
+  },
+  ...(
+    [
+      ["<think>Private reasoning</think>Usage reply", "Usage reply"],
+      ["NO_REPLY.", "NO_REPLY."],
+      ['"NO_REPLY"', '"NO_REPLY"'],
+      ['{"reply":"NO_REPLY"}', '{"reply":"NO_REPLY"}'],
+      ["no_reply", "no_reply"],
+      ["NO_REPLY\nNO_REPLY", "NO_REPLY"],
+      ["NO_REPLY\n<final></final>", ""],
+      ["[[reply_to_current]]", "", false],
+    ] satisfies Array<[string, string, boolean?]>
+  ).map(([rawText, visibleText, preservesRawText = true]) => ({
+    name: `prepared final ${JSON.stringify(rawText)}`,
+    content: [{ type: "text" as const, text: rawText }],
+    rawText: preservesRawText ? rawText : undefined,
+    visibleText,
+    terminalReply: visibleText
+      ? { disposition: "visible" as const, text: visibleText }
+      : { disposition: "empty" as const },
+  })),
+  {
+    name: "reasoning-only completion",
+    content: [{ type: "thinking", thinking: "Private reasoning" }],
+  },
+  {
+    name: "tool-only completion",
+    content: [{ type: "toolCall", id: "call-final", name: "read", arguments: {} }],
+  },
+  { name: "empty final answer", content: [] },
+];
 
 export const readLaunchToolNames: WorkerTurnTunnelHandle["readLaunchToolNames"] = async () =>
   CORE_WORKER_LAUNCH_TOOL_NAMES;

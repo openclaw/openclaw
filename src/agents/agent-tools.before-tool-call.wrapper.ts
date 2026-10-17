@@ -79,6 +79,7 @@ import {
   normalizeCodeModeExecBeforeHookParams,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
+import { createGatewayToolPolicyAssertion } from "./gateway-tool-policy.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import {
   appendToolLoopWarning,
@@ -256,6 +257,7 @@ export function wrapToolWithBeforeToolCallHook(
   options: Partial<BeforeToolCallDiagnosticOptions> = {},
 ): AnyAgentTool {
   const execute = tool.execute;
+  const assertGatewayToolPolicy = createGatewayToolPolicyAssertion(tool, ctx?.config);
   const refresh = captureAgentPluginRuntimeRefresh();
   // Only the exact host wait control may drain work admitted before a reload.
   const assertAgentPluginRuntimeCurrent =
@@ -486,6 +488,7 @@ export function wrapToolWithBeforeToolCallHook(
               // Charge the invocation after the source read, at the effect boundary.
               signal?.throwIfAborted();
               assertAgentPluginRuntimeCurrent();
+              assertGatewayToolPolicy(executeParams);
               admitExecution?.();
               onImplementationStart?.();
               recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);

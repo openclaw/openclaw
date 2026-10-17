@@ -37,6 +37,10 @@ type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
 type RunBeforeToolCallHookResult = Awaited<ReturnType<RunBeforeToolCallHook>>;
 
 const hookMocks = vi.hoisted(() => ({
+  gatewayPolicyExecute: vi.fn<AnyAgentTool["execute"]>(async () => ({
+    content: [],
+    details: { completed: true },
+  })),
   uploadToolExecute: vi.fn<AnyAgentTool["execute"]>(async () => ({
     ok: true,
     content: [],
@@ -189,6 +193,16 @@ vi.mock("../agents/openclaw-tools.js", async () => {
         throw toolInputError("invalid args");
       },
     },
+    {
+      name: "policy_action",
+      label: "Policy action",
+      description: "Gateway policy fixture",
+      parameters: {
+        type: "object",
+        properties: { action: { type: "string", enum: ["read", "write"] } },
+      },
+      execute: hookMocks.gatewayPolicyExecute,
+    },
     successfulTool("automations", "automations"),
     successfulTool("exec", "exec"),
     successfulTool("apply_patch", "apply_patch"),
@@ -299,6 +313,7 @@ beforeEach(() => {
   server.resetContext();
   lastCreateOpenClawToolsContext = undefined;
   hookMocks.uploadToolExecute.mockClear();
+  hookMocks.gatewayPolicyExecute.mockClear();
   sessionEntries.clear();
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
@@ -498,6 +513,34 @@ describe("POST /tools/invoke", () => {
     setMainAllowedTools,
     invokeToolAuthed,
     expectOkInvokeResponse,
+  });
+
+  it("enforces action policy for administrator tool calls after hook rewrites", async () => {
+    cfg = {
+      tools: { gatewayPolicy: { allow: ["policy_action"], actions: { policy_action: ["read"] } } },
+    };
+    const invoke = (action: string) =>
+      invokeTool({
+        port: sharedPort,
+        headers: gatewayAdminHeaders(),
+        tool: "policy_action",
+        action,
+      });
+    const allowed = await invoke("read");
+    expect(allowed.status).toBe(200);
+    expect(hookMocks.gatewayPolicyExecute).toHaveBeenCalledTimes(1);
+    const denied = await invoke("write");
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({
+      error: { message: expect.stringContaining("Gateway tool policy denies") },
+    });
+    hookMocks.runBeforeToolCallHook.mockImplementationOnce(async () => ({
+      blocked: false,
+      params: { action: "write" },
+    }));
+    const rewritten = await invoke("read");
+    expect(rewritten.status).toBe(403);
+    expect(hookMocks.gatewayPolicyExecute).toHaveBeenCalledTimes(1);
   });
 
   it("blocks an operator-triggered session spawn targeting an agent outside the role", async () => {

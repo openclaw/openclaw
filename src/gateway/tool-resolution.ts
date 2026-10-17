@@ -15,6 +15,7 @@ import { resolveConversationQuestionInputMode } from "../agents/conversation-cap
 import { resolveCoreToolFactoryFamily } from "../agents/core-tool-factory-descriptors.js";
 import { applyDelegationCapability } from "../agents/delegation-capability.js";
 import { prepareExecDefaults, resolvePreparedExecDefaultsAsync } from "../agents/exec-defaults.js";
+import { applyGatewayToolPolicy } from "../agents/gateway-tool-policy.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
 import { filterRequesterYieldTools } from "../agents/openclaw-tools.requester-yield.js";
@@ -644,15 +645,18 @@ export async function resolveGatewayScopedTools(
       ...excludedToolNames,
     ].map(normalizeToolPolicyName),
   );
-  const tools = applySwarmCollectorToolContract(
-    applyDelegationCapability(
-      policyFiltered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
-      params.delegationCapability,
+  const tools = applyGatewayToolPolicy(
+    applySwarmCollectorToolContract(
+      applyDelegationCapability(
+        policyFiltered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
+        params.delegationCapability,
+      ),
+      {
+        swarmCollector: Boolean(swarmCollectorContext),
+        structuredOutputTool: openClawTools.find((tool) => tool.name === "structured_output"),
+      },
     ),
-    {
-      swarmCollector: Boolean(swarmCollectorContext),
-      structuredOutputTool: openClawTools.find((tool) => tool.name === "structured_output"),
-    },
+    params.cfg,
   );
   // The loopback exec tool is node-only. Do not let a raw `exec` capability get
   // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.

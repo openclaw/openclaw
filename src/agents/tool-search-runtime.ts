@@ -10,6 +10,7 @@ import {
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
+import { createGatewayToolPolicyAssertion } from "./gateway-tool-policy.js";
 import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -446,6 +447,9 @@ export class ToolSearchRuntime {
     const executeTool =
       this.ctx.executeTool ??
       (async (params: Parameters<ToolSearchCatalogToolExecutor>[0]) => {
+        if (entry.source !== "client") {
+          createGatewayToolPolicyAssertion(params.tool, this.ctx.config)(params.input);
+        }
         const result = await params.tool.execute(
           params.toolCallId,
           params.input,

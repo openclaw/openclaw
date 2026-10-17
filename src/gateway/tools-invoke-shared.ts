@@ -12,6 +12,7 @@ import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 import { readEmbeddedMessageDeliveryFact } from "../agents/embedded-agent-message-delivery.js";
+import { createGatewayToolPolicyAssertion } from "../agents/gateway-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { resolveStoredSessionPermissionPolicy } from "../agents/tool-fs-policy.js";
@@ -581,6 +582,7 @@ async function invokeGatewayToolWithSignal(
       async () => {
         assertInvocationCurrent();
         assertCapturedInputCommitAllowed();
+        createGatewayToolPolicyAssertion(tool, params.cfg)(hookResult.params);
         return await tool.execute?.(toolCallId, hookResult.params, params.signal);
       },
     );
