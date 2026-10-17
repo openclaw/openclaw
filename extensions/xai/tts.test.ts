@@ -1,4 +1,3 @@
-// Xai tests cover tts plugin behavior.
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../test-support/streaming-error-response.js";
@@ -37,10 +36,7 @@ const { FakeWebSocket } = vi.hoisted(() => {
     }
 
     once(event: string, listener: Listener): this {
-      const listeners = this.listeners.get(event) ?? [];
-      listeners.push(listener);
-      this.listeners.set(event, listeners);
-      return this;
+      return this.on(event, listener);
     }
 
     on(event: string, listener: Listener): this {
@@ -66,8 +62,7 @@ const { FakeWebSocket } = vi.hoisted(() => {
     }
 
     terminate(): void {
-      this.readyState = MockWebSocket.CLOSED;
-      this.emit("close");
+      this.close();
     }
   }
 
@@ -82,6 +77,20 @@ function mockFetch(response: Response) {
   const fetchMock = vi.fn<typeof fetch>(async () => response);
   globalThis.fetch = fetchMock;
   return fetchMock;
+}
+
+function stream(overrides: Partial<Parameters<typeof xaiTTSStream>[0]> = {}) {
+  const pending = xaiTTSStream({ ...ttsRequest, ...overrides });
+  const ws = FakeWebSocket.instances.at(0);
+  return { pending, ws };
+}
+
+const audioOptions = { language: "en", responseFormat: "mp3" };
+
+async function openStream(overrides: Partial<Parameters<typeof xaiTTSStream>[0]> = {}) {
+  const { pending, ws } = stream(overrides);
+  ws?.emit("open");
+  return { result: await pending, ws };
 }
 
 describe("xai tts", () => {
@@ -156,21 +165,20 @@ describe("xai tts", () => {
 
   describe("xaiTTSStream", () => {
     it("streams decoded audio chunks without buffering the full body", async () => {
-      const resultPromise = xaiTTSStream({
-        ...ttsRequest,
-        language: "en",
-        responseFormat: "mp3",
+      const { pending: resultPromise, ws } = stream({
+        ...audioOptions,
         speed: 1.1,
         maxBytes: 3_000,
       });
-      const ws = FakeWebSocket.instances.at(0);
       const wsUrl = new URL(ws?.url ?? "");
       expect(wsUrl.protocol).toBe("wss:");
       expect(wsUrl.pathname).toBe("/v1/tts");
-      expect(wsUrl.searchParams.get("voice")).toBe("eve");
-      expect(wsUrl.searchParams.get("language")).toBe("en");
-      expect(wsUrl.searchParams.get("codec")).toBe("mp3");
-      expect(wsUrl.searchParams.get("speed")).toBe("1.1");
+      expect(Object.fromEntries(wsUrl.searchParams)).toMatchObject({
+        voice: "eve",
+        language: "en",
+        codec: "mp3",
+        speed: "1.1",
+      });
       expect(ws?.headers?.Authorization).toBe(["Bearer", "dummy"].join(" "));
       expect(ws?.maxPayload).toBe(5_024);
       ws?.emit("open");
@@ -194,12 +202,7 @@ describe("xai tts", () => {
     });
 
     it("errors and releases the stream for malformed audio base64", async () => {
-      const resultPromise = xaiTTSStream({
-        ...ttsRequest,
-      });
-      const ws = FakeWebSocket.instances.at(0);
-      ws?.emit("open");
-      const result = await resultPromise;
+      const { result, ws } = await openStream();
       const reader = result.audioStream.getReader();
 
       ws?.emit("message", JSON.stringify({ type: "audio.delta", delta: "not-base64!" }));
@@ -212,12 +215,7 @@ describe("xai tts", () => {
     });
 
     it("rejects upgrade failures before streaming starts", async () => {
-      const resultPromise = xaiTTSStream({
-        ...ttsRequest,
-        language: "en",
-        responseFormat: "mp3",
-      });
-      const ws = FakeWebSocket.instances.at(0);
+      const { pending: resultPromise, ws } = stream(audioOptions);
       ws?.emit("unexpected-response", {}, { statusCode: 401, statusMessage: "Unauthorized" });
       await expect(resultPromise).rejects.toThrow(
         "xAI TTS stream connection failed (401): Unauthorized",
@@ -229,8 +227,7 @@ describe("xai tts", () => {
         xaiTTSStream({
           ...ttsRequest,
           baseUrl: "https://proxy.example/v1",
-          language: "en",
-          responseFormat: "mp3",
+          ...audioOptions,
         }),
       ).rejects.toThrow('only supports the native api.x.ai endpoint; got host "proxy.example"');
       expect(FakeWebSocket.instances).toHaveLength(0);
@@ -241,8 +238,7 @@ describe("xai tts", () => {
         xaiTTSStream({
           ...ttsRequest,
           baseUrl: "http://api.x.ai/v1",
-          language: "en",
-          responseFormat: "mp3",
+          ...audioOptions,
         }),
       ).rejects.toThrow("only supports HTTPS for the native api.x.ai endpoint");
       expect(FakeWebSocket.instances).toHaveLength(0);
@@ -262,26 +258,16 @@ describe("xai tts", () => {
     );
 
     it("fails promptly when the socket closes before open", async () => {
-      const resultPromise = xaiTTSStream({
-        ...ttsRequest,
-        language: "en",
-        responseFormat: "mp3",
+      const { pending: resultPromise, ws } = stream({
+        ...audioOptions,
         timeoutMs: 60_000,
       });
-      const ws = FakeWebSocket.instances.at(0);
       ws?.emit("close");
       await expect(resultPromise).rejects.toThrow("xAI TTS stream connection closed before open");
     });
 
     it("closes idempotently when released before audio.done", async () => {
-      const resultPromise = xaiTTSStream({
-        ...ttsRequest,
-        language: "en",
-        responseFormat: "mp3",
-      });
-      const ws = FakeWebSocket.instances.at(0);
-      ws?.emit("open");
-      const result = await resultPromise;
+      const { result, ws } = await openStream(audioOptions);
       await result.release();
       ws?.emit("close");
       await result.release();
@@ -293,14 +279,7 @@ describe("xai tts", () => {
 
     it("refreshes the synthesis idle timeout for each audio chunk", async () => {
       vi.useFakeTimers();
-      const resultPromise = xaiTTSStream({
-        ...ttsRequest,
-        language: "en",
-        responseFormat: "mp3",
-      });
-      const ws = FakeWebSocket.instances.at(0);
-      ws?.emit("open");
-      const result = await resultPromise;
+      const { result, ws } = await openStream(audioOptions);
       const reader = result.audioStream.getReader();
 
       vi.advanceTimersByTime(4_000);
@@ -317,13 +296,10 @@ describe("xai tts", () => {
     });
 
     it("caps streamed audio responses instead of forwarding oversized output", async () => {
-      const resultPromise = xaiTTSStream({
-        ...ttsRequest,
-        language: "en",
-        responseFormat: "mp3",
+      const { pending: resultPromise, ws } = stream({
+        ...audioOptions,
         maxBytes: 4,
       });
-      const ws = FakeWebSocket.instances.at(0);
       ws?.emit("open");
       const chunk = Buffer.from("abcdef").toString("base64");
       ws?.emit("message", JSON.stringify({ type: "audio.delta", delta: chunk }));
@@ -350,8 +326,7 @@ describe("xai tts", () => {
         xaiTTS({
           ...ttsRequest,
           apiKey: "ok-key",
-          language: "en",
-          responseFormat: "mp3",
+          ...audioOptions,
           maxBytes: 2048,
         }),
       ).rejects.toThrow("xAI TTS audio response exceeds 2048 bytes");
@@ -369,8 +344,7 @@ describe("xai tts", () => {
       xaiTTS({
         ...ttsRequest,
         apiKey: "ok-key",
-        language: "en",
-        responseFormat: "mp3",
+        ...audioOptions,
       }),
     ).rejects.toThrow("xAI TTS API error: malformed audio response");
   });

@@ -55,12 +55,7 @@ async function captureRealtimeOutcome(
         if (clientEvent.type === "response.create" && options.queuedUserMessage) {
           if (options.completeQueuedResponse) {
             ws.send(JSON.stringify({ type: "response.created", response: { id: "response_2" } }));
-            ws.send(
-              JSON.stringify({
-                type: "response.done",
-                response: { id: "response_2", status: "completed" },
-              }),
-            );
+            ws.send(JSON.stringify(terminal({ id: "response_2", status: "completed" })));
           }
           serverEventHandled.resolve();
           return;
@@ -181,19 +176,37 @@ const expectedTool = {
   args: { city: "Paris" },
 };
 
+function terminal(response: Record<string, unknown>) {
+  return { type: "response.done", response };
+}
+
+function scenario(
+  name: string,
+  event: Parameters<typeof captureRealtimeOutcome>[0],
+  overrides: Partial<Pick<RealtimeOutcome, "errors" | "transcripts" | "tools">> = {},
+) {
+  return { name, event, expected: { errors: [], transcripts: [], tools: [], ...overrides } };
+}
+
+function assistantAudio(transcript: string) {
+  return { type: "message", role: "assistant", content: [{ type: "output_audio", transcript }] };
+}
+
+const toolArguments = {
+  type: "response.function_call_arguments.done",
+  item_id: completedTool.id,
+  call_id: completedTool.call_id,
+  name: completedTool.name,
+  arguments: completedTool.arguments,
+};
+
 describe("xAI realtime terminal event ownership", () => {
   it("drains a queued follow-up when the terminal consumer throws", async () => {
-    const outcome = await captureRealtimeOutcome(
-      {
-        type: "response.done",
-        response: { id: "response_1", status: "failed" },
-      },
-      {
-        completeQueuedResponse: true,
-        queuedUserMessage: "Continue after the terminal callback fails.",
-        throwOnResponseDone: true,
-      },
-    );
+    const outcome = await captureRealtimeOutcome(terminal({ id: "response_1", status: "failed" }), {
+      completeQueuedResponse: true,
+      queuedUserMessage: "Continue after the terminal callback fails.",
+      throwOnResponseDone: true,
+    });
 
     expect(outcome.errors).toEqual([]);
     expect(outcome.outcomes).toEqual([
@@ -210,10 +223,7 @@ describe("xAI realtime terminal event ownership", () => {
     const clientEventTypes: string[] = [];
 
     const outcome = await captureRealtimeOutcome(
-      {
-        type: "response.done",
-        response: { status: "completed", output: [null] },
-      },
+      terminal({ status: "completed", output: [null] }),
       {
         queuedUserMessage: "Continue after malformed terminal output.",
         onClientEvent: (event) => {
@@ -248,11 +258,7 @@ describe("xAI realtime terminal event ownership", () => {
           output: [
             completedTool,
             { ...completedTool, id: "item_late", call_id: "call_late" },
-            {
-              type: "message",
-              role: "assistant",
-              content: [{ type: "output_audio", transcript: "late answer" }],
-            },
+            assistantAudio("late answer"),
           ],
         },
       },
@@ -267,147 +273,84 @@ describe("xAI realtime terminal event ownership", () => {
   });
 
   it.each([
-    {
-      name: "preserves assistant transcripts carried only by terminal output",
-      event: {
+    scenario(
+      "preserves assistant transcripts carried only by terminal output",
+      {
         type: "response.done",
         response: {
           status: "completed",
-          output: [
-            {
-              type: "message",
-              role: "assistant",
-              content: [{ type: "output_audio", transcript: "terminal answer" }],
-            },
-          ],
+          output: [assistantAudio("terminal answer")],
         },
       },
-      expected: {
-        errors: [],
+      {
         transcripts: [{ speaker: "assistant", text: "terminal answer", final: true }],
-        tools: [],
       },
-    },
-    {
-      name: "surfaces failed responses with provider error details",
-      event: {
-        type: "response.done",
-        response: { status: "failed", status_details: { error: { code: "rate_limit_exceeded" } } },
-      },
-      expected: {
-        errors: ["xAI realtime voice response failed: rate_limit_exceeded"],
-        transcripts: [],
-        tools: [],
-      },
-    },
-    {
-      name: "surfaces incomplete responses with their authoritative reason",
-      event: {
-        type: "response.done",
-        response: { status: "incomplete", status_details: { reason: "max_output_tokens" } },
-      },
-      expected: {
-        errors: ["xAI realtime voice response incomplete: max_output_tokens"],
-        transcripts: [],
-        tools: [],
-      },
-    },
-    {
-      name: "does not mistake intentional cancellation for a provider failure",
-      event: {
-        type: "response.done",
-        response: { status: "cancelled", status_details: { reason: "client_cancelled" } },
-      },
-      expected: { errors: [], transcripts: [], tools: [] },
-    },
-    {
-      name: "ignores output-item events and waits for canonical terminal output",
-      event: { type: "response.output_item.done", item: completedTool },
-      expected: { errors: [], transcripts: [], tools: [] },
-    },
-    {
-      name: "buffers authoritative function-call arguments until response completion",
-      event: {
-        type: "response.function_call_arguments.done",
-        item_id: completedTool.id,
-        call_id: completedTool.call_id,
-        name: completedTool.name,
-        arguments: completedTool.arguments,
-      },
-      expected: { errors: [], transcripts: [], tools: [] },
-    },
-    {
-      name: "preserves required streamed-call timing when the response later fails",
-      event: [
-        {
-          type: "response.function_call_arguments.done",
-          item_id: completedTool.id,
-          call_id: completedTool.call_id,
-          name: completedTool.name,
-          arguments: completedTool.arguments,
-        },
-        { type: "response.done", response: { status: "failed", output: [] } },
-      ],
-      expected: {
-        errors: ["xAI realtime voice response failed"],
-        transcripts: [],
-        tools: [],
-      },
-    },
-    {
-      name: "does not dispatch incomplete replayed function-call items",
-      event: {
-        type: "conversation.item.created",
-        item: { ...completedTool, status: "incomplete" },
-      },
-      expected: { errors: [], transcripts: [], tools: [] },
-    },
-    {
-      name: "recovers completed tool calls from terminal response output",
-      event: {
-        type: "response.done",
-        response: { status: "completed", output: [completedTool] },
-      },
-      expected: { errors: [], transcripts: [], tools: [expectedTool] },
-    },
-    {
-      name: "does not recover terminal-output tool calls from a failed response",
-      event: {
-        type: "response.done",
-        response: { status: "failed", output: [completedTool] },
-      },
-      expected: {
-        errors: ["xAI realtime voice response failed"],
-        transcripts: [],
-        tools: [],
-      },
-    },
-    {
-      name: "does not dispatch incomplete items from a completed terminal response",
-      event: {
-        type: "response.done",
-        response: { status: "completed", output: [{ ...completedTool, status: "incomplete" }] },
-      },
-      expected: { errors: [], transcripts: [], tools: [] },
-    },
-    {
-      name: "fails closed when response status is missing",
-      event: { type: "response.done", response: {} },
-      expected: {
+    ),
+    scenario(
+      "surfaces failed responses with provider error details",
+      terminal({
+        status: "failed",
+        status_details: { error: { code: "rate_limit_exceeded" } },
+      }),
+      { errors: ["xAI realtime voice response failed: rate_limit_exceeded"] },
+    ),
+    scenario(
+      "surfaces incomplete responses with their authoritative reason",
+      terminal({ status: "incomplete", status_details: { reason: "max_output_tokens" } }),
+      { errors: ["xAI realtime voice response incomplete: max_output_tokens"] },
+    ),
+    scenario(
+      "does not mistake intentional cancellation for a provider failure",
+      terminal({ status: "cancelled", status_details: { reason: "client_cancelled" } }),
+    ),
+    scenario("ignores output-item events and waits for canonical terminal output", {
+      type: "response.output_item.done",
+      item: completedTool,
+    }),
+    scenario(
+      "buffers authoritative function-call arguments until response completion",
+      toolArguments,
+    ),
+    scenario(
+      "preserves required streamed-call timing when the response later fails",
+      [toolArguments, { type: "response.done", response: { status: "failed", output: [] } }],
+      { errors: ["xAI realtime voice response failed"] },
+    ),
+    scenario("does not dispatch incomplete replayed function-call items", {
+      type: "conversation.item.created",
+      item: { ...completedTool, status: "incomplete" },
+    }),
+    scenario(
+      "recovers completed tool calls from terminal response output",
+      terminal({ status: "completed", output: [completedTool] }),
+      { tools: [expectedTool] },
+    ),
+    scenario(
+      "does not recover terminal-output tool calls from a failed response",
+      terminal({ status: "failed", output: [completedTool] }),
+      { errors: ["xAI realtime voice response failed"] },
+    ),
+    scenario(
+      "does not dispatch incomplete items from a completed terminal response",
+      terminal({
+        status: "completed",
+        output: [{ ...completedTool, status: "incomplete" }],
+      }),
+    ),
+    scenario(
+      "fails closed when response status is missing",
+      { type: "response.done", response: {} },
+      {
         errors: ["xAI realtime voice response failed: missing terminal status"],
-        transcripts: [],
-        tools: [],
       },
-    },
-    {
-      name: "fails closed when response status is invalid",
-      event: { type: "response.done", response: { status: "in_progress" } },
-      expected: {
+    ),
+    scenario(
+      "fails closed when response status is invalid",
+      { type: "response.done", response: { status: "in_progress" } },
+      {
         errors: ["xAI realtime voice response failed: invalid status in_progress"],
-        transcripts: [],
-        tools: [],
       },
-    },
+    ),
   ])("$name", async ({ event, expected }) => {
     const actual = await captureRealtimeOutcome(event);
     expect(actual.errors).toEqual([]);

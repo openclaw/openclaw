@@ -1,4 +1,3 @@
-// Xai tests cover web search plugin behavior.
 import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { jsonResponse, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
@@ -40,6 +39,8 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => {
   };
 });
 
+const resolveAuth = providerAuthRuntimeMocks.resolveApiKeyForProvider;
+
 function profileAuth(
   apiKey: string,
   mode: "oauth" | "api-key" = "oauth",
@@ -59,14 +60,16 @@ function xaiAnswerResponse(text: string): Response {
   });
 }
 
-function textResponse(body: string, init: ResponseInit = {}): Response {
-  return new Response(body, init);
-}
-
-function installXaiWebSearchFetch() {
+function installXaiWebSearchFetch(...responses: Response[]) {
   const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
     Promise.resolve(xaiAnswerResponse("Grounded Grok answer")),
   );
+  if (responses.length) {
+    mockFetch.mockReset();
+  }
+  for (const response of responses) {
+    mockFetch.mockResolvedValueOnce(response);
+  }
   vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
   return mockFetch;
 }
@@ -91,18 +94,7 @@ function fetchCallHeader(
   name: string,
 ): string | undefined {
   const init = mockFetch.mock.calls[index]?.[1] as RequestInit | undefined;
-  const headers = init?.headers;
-  if (!headers) {
-    return undefined;
-  }
-  if (headers instanceof Headers) {
-    return headers.get(name) ?? undefined;
-  }
-  if (Array.isArray(headers)) {
-    const lowerName = name.toLowerCase();
-    return headers.find(([key]) => key.toLowerCase() === lowerName)?.[1];
-  }
-  return (headers as Record<string, string | undefined>)[name];
+  return new Headers(init?.headers).get(name) ?? undefined;
 }
 
 function xaiPluginConfig({
@@ -130,7 +122,9 @@ function xaiPluginConfig({
 }
 
 function requireXaiWebSearchTool(
-  ctx: Parameters<ReturnType<typeof createXaiWebSearchProvider>["createTool"]>[0],
+  ctx: Parameters<ReturnType<typeof createXaiWebSearchProvider>["createTool"]>[0] = {
+    config: xaiPluginConfig({ webSearch: { apiKey: "xai-test-key" } }),
+  },
 ) {
   const tool = createXaiWebSearchProvider().createTool(ctx);
   if (!tool) {
@@ -154,6 +148,14 @@ function createAuthSearchTool() {
   });
 }
 
+function cacheSearch(query: string) {
+  return (cacheTtlMinutes: number) =>
+    requireXaiWebSearchTool({
+      config: xaiPluginConfig({ webSearch: { apiKey: "xai-cache-key" } }),
+      searchConfig: { cacheTtlMinutes },
+    }).execute({ query });
+}
+
 function resolveForwardModel(modelId: string) {
   return resolveXaiForwardCompatModel({
     providerId: "xai",
@@ -173,9 +175,7 @@ afterEach(() => {
     agentDir: "",
     profileIds: [],
   });
-  providerAuthRuntimeMocks.resolveApiKeyForProvider
-    .mockReset()
-    .mockResolvedValue({ source: "test", mode: "api-key" });
+  resolveAuth.mockReset().mockResolvedValue({ source: "test", mode: "api-key" });
 });
 
 describe("xai web search config resolution", () => {
@@ -206,9 +206,7 @@ describe("xai web search config resolution", () => {
   });
 
   it("uses the active agentDir for xAI OAuth web search auth", async () => {
-    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue(
-      profileAuth("active-agent-oauth-token", "oauth", "xai:active"),
-    );
+    resolveAuth.mockResolvedValue(profileAuth("active-agent-oauth-token", "oauth", "xai:active"));
     const mockFetch = installXaiWebSearchFetch();
     const tool = requireXaiWebSearchTool({
       agentDir: "/tmp/openclaw-xai-active-agent",
@@ -224,7 +222,7 @@ describe("xai web search config resolution", () => {
 
     await tool.execute({ query: "OpenClaw Grok active agent OAuth web search" });
 
-    expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenCalledWith(
+    expect(resolveAuth).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "xai",
         agentDir: "/tmp/openclaw-xai-active-agent",
@@ -234,20 +232,19 @@ describe("xai web search config resolution", () => {
   });
 
   it("refreshes xAI OAuth auth and retries web search after a 401", async () => {
-    providerAuthRuntimeMocks.resolveApiKeyForProvider
+    resolveAuth
       .mockResolvedValueOnce(profileAuth("expired-oauth-token"))
       .mockResolvedValueOnce(profileAuth("fresh-oauth-token"));
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValueOnce(textResponse("expired", { status: 401, statusText: "Unauthorized" }))
-      .mockResolvedValueOnce(xaiAnswerResponse("Fresh OAuth Grok answer"));
-    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
+    const mockFetch = installXaiWebSearchFetch(
+      new Response("expired", { status: 401, statusText: "Unauthorized" }),
+      xaiAnswerResponse("Fresh OAuth Grok answer"),
+    );
     const tool = createAuthSearchTool();
 
     const result = await tool.execute({ query: "OpenClaw Grok OAuth refresh test" });
 
     expect(result.content).toContain("Fresh OAuth Grok answer");
-    expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenNthCalledWith(
+    expect(resolveAuth).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         provider: "xai",
@@ -262,7 +259,7 @@ describe("xai web search config resolution", () => {
   });
 
   it("falls back to an xAI API-key auth profile when stale OAuth remains first", async () => {
-    providerAuthRuntimeMocks.resolveApiKeyForProvider
+    resolveAuth
       .mockResolvedValueOnce(profileAuth("expired-oauth-token"))
       .mockResolvedValueOnce(profileAuth("expired-oauth-token"))
       .mockResolvedValueOnce(profileAuth("expired-oauth-token"))
@@ -271,17 +268,16 @@ describe("xai web search config resolution", () => {
       agentDir: "/tmp/openclaw-xai-main-agent",
       profileIds: ["xai:key"],
     });
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValueOnce(textResponse("revoked", { status: 401, statusText: "Unauthorized" }))
-      .mockResolvedValueOnce(xaiAnswerResponse("Profile API key Grok answer"));
-    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
+    const mockFetch = installXaiWebSearchFetch(
+      new Response("revoked", { status: 401, statusText: "Unauthorized" }),
+      xaiAnswerResponse("Profile API key Grok answer"),
+    );
     const tool = createAuthSearchTool();
 
     const result = await tool.execute({ query: "OpenClaw Grok profile fallback test" });
 
     expect(result.content).toContain("Profile API key Grok answer");
-    expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenNthCalledWith(
+    expect(resolveAuth).toHaveBeenNthCalledWith(
       4,
       expect.objectContaining({
         provider: "xai",
@@ -294,26 +290,23 @@ describe("xai web search config resolution", () => {
   });
 
   it("falls back to env auth after a stale xAI API-key auth profile returns unauthorized", async () => {
-    providerAuthRuntimeMocks.resolveApiKeyForProvider
+    resolveAuth
       .mockResolvedValueOnce(profileAuth("stale-profile-key", "api-key"))
       .mockResolvedValueOnce({
         apiKey: "xai-env-fallback-key",
         source: "XAI_API_KEY",
         mode: "api-key",
       });
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValueOnce(
-        textResponse("stale api key", { status: 401, statusText: "Unauthorized" }),
-      )
-      .mockResolvedValueOnce(xaiAnswerResponse("Env fallback Grok answer"));
-    vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
+    const mockFetch = installXaiWebSearchFetch(
+      new Response("stale api key", { status: 401, statusText: "Unauthorized" }),
+      xaiAnswerResponse("Env fallback Grok answer"),
+    );
     const tool = createAuthSearchTool();
 
     const result = await tool.execute({ query: "OpenClaw Grok API-key fallback test" });
 
     expect(result.content).toContain("Env fallback Grok answer");
-    expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenNthCalledWith(
+    expect(resolveAuth).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         provider: "xai",
@@ -420,9 +413,7 @@ describe("xai web search config resolution", () => {
       Promise.resolve(jsonResponse({ status: "incomplete", output: [] })),
     );
     vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
-    const tool = requireXaiWebSearchTool({
-      config: xaiPluginConfig({ webSearch: { apiKey: "xai-test-key" } }),
-    });
+    const tool = requireXaiWebSearchTool();
 
     await expect(tool.execute({ query: "OpenClaw" })).rejects.toThrow(
       "xAI web search failed: no answer text returned; try a simpler request",
@@ -432,9 +423,7 @@ describe("xai web search config resolution", () => {
   it("converts internal xAI timeout aborts into structured tool errors", async () => {
     const abort = new DOMException("This operation was aborted", "AbortError");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(abort));
-    const tool = requireXaiWebSearchTool({
-      config: xaiPluginConfig({ webSearch: { apiKey: "xai-test-key" } }),
-    });
+    const tool = requireXaiWebSearchTool();
     await expect(tool.execute({ query: "OpenClaw timeout" })).rejects.toMatchObject({
       name: "TimeoutError",
       cause: abort,
@@ -448,9 +437,7 @@ describe("xai web search config resolution", () => {
       jsonResponse({ output_text: "<s>".repeat(6_666), citations: [] }),
     );
     vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
-    const tool = requireXaiWebSearchTool({
-      config: xaiPluginConfig({ webSearch: { apiKey: "xai-sanitized-key" } }),
-    });
+    const tool = requireXaiWebSearchTool();
 
     const result = await tool.execute({ query: "bounded sanitized xAI answer" });
 
@@ -474,9 +461,7 @@ describe("xai web search config resolution", () => {
         }),
     );
     vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
-    const tool = requireXaiWebSearchTool({
-      config: xaiPluginConfig({ webSearch: { apiKey: "xai-cancel-key" } }),
-    });
+    const tool = requireXaiWebSearchTool();
 
     await expect(
       tool.execute({ query: "generic xAI provider cancellation" }, { signal: controller.signal }),
@@ -497,9 +482,7 @@ describe("xai web search config resolution", () => {
       })
       .mockResolvedValueOnce(xaiAnswerResponse("Recovered Grok answer"));
     vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
-    const tool = requireXaiWebSearchTool({
-      config: xaiPluginConfig({ webSearch: { apiKey: "xai-cancel-cache-key" } }),
-    });
+    const tool = requireXaiWebSearchTool();
     const query = "unique Grok late-cancel cache regression";
 
     await expect(tool.execute({ query }, { signal: controller.signal })).rejects.toBe(reason);
@@ -514,11 +497,7 @@ describe("xai web search config resolution", () => {
     const mockFetch = vi.fn(async () => xaiAnswerResponse("Fresh Grok answer"));
     vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const query = "Grok zero TTL cache policy true";
-    const search = (cacheTtlMinutes: number) =>
-      requireXaiWebSearchTool({
-        config: xaiPluginConfig({ webSearch: { apiKey: "xai-cache-key" } }),
-        searchConfig: { cacheTtlMinutes },
-      }).execute({ query });
+    const search = cacheSearch(query);
     mockFetch.mockResolvedValueOnce(xaiAnswerResponse("Original Grok answer"));
     await search(15);
 
@@ -541,11 +520,7 @@ describe("xai web search config resolution", () => {
       .mockResolvedValueOnce(xaiAnswerResponse("Original Grok answer"));
     vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
     const query = "Grok shortened TTL cache policy";
-    const search = (cacheTtlMinutes: number) =>
-      requireXaiWebSearchTool({
-        config: xaiPluginConfig({ webSearch: { apiKey: "xai-cache-key" } }),
-        searchConfig: { cacheTtlMinutes },
-      }).execute({ query });
+    const search = cacheSearch(query);
     await search(15);
     now.mockReturnValue(1_060_000);
 
@@ -564,9 +539,7 @@ describe("xai web search config resolution", () => {
     const controller = new AbortController();
     const reason = new Error("generic xAI request cancelled before billing");
     controller.abort(reason);
-    const tool = requireXaiWebSearchTool({
-      config: xaiPluginConfig({ webSearch: { apiKey: "xai-cancel-key" } }),
-    });
+    const tool = requireXaiWebSearchTool();
 
     await expect(
       tool.execute({ query: "cancelled generic request" }, { signal: controller.signal }),
@@ -589,73 +562,37 @@ describe("xai provider models", () => {
   });
 
   it("builds forward-compatible runtime models for newer Grok ids", () => {
-    const grok41 = resolveForwardModel("grok-4-1-fast");
-    const grok420 = resolveForwardModel("grok-4.20-0309-reasoning");
-    const grok43Alias = resolveForwardModel("grok-4.3-latest");
-    const grok45Alias = resolveForwardModel("grok-4.5-latest");
-    const grok3Mini = resolveForwardModel("grok-3-mini-fast");
-
-    expect(grok41?.provider).toBe("xai");
-    expect(grok41?.id).toBe("grok-4-1-fast");
-    expect(grok41?.api).toBe("openai-responses");
-    expect(grok41?.baseUrl).toBe("https://api.x.ai/v1");
-    expect(grok41?.reasoning).toBe(true);
-    expect(grok41?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-    expect(grok41?.contextWindow).toBe(1_000_000);
-    expect(grok41?.maxTokens).toBe(64_000);
-
-    expect(grok45Alias?.provider).toBe("xai");
-    expect(grok45Alias?.id).toBe("grok-4.5");
-    expect(grok45Alias?.api).toBe("openai-responses");
-    expect(grok45Alias?.baseUrl).toBe("https://api.x.ai/v1");
-    expect(grok45Alias?.reasoning).toBe(true);
-    expect(grok45Alias?.thinkingLevelMap).toEqual({
-      off: null,
-      minimal: "low",
-      low: "low",
-      medium: "medium",
-      high: "high",
-      xhigh: "high",
+    const expectModel = (input: string, id: string, fields: Record<string, unknown> = {}) => {
+      expect(resolveForwardModel(input)).toEqual(
+        expect.objectContaining({
+          provider: "xai",
+          api: "openai-responses",
+          baseUrl: "https://api.x.ai/v1",
+          reasoning: true,
+          contextWindow: 1_000_000,
+          maxTokens: 64_000,
+          id,
+          ...fields,
+        }),
+      );
+    };
+    const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const thinking = { minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "high" };
+    expectModel("grok-4-1-fast", "grok-4-1-fast", { cost: zeroCost });
+    expectModel("grok-4.5-latest", "grok-4.5", {
+      thinkingLevelMap: { off: null, ...thinking },
+      input: ["text", "image"],
+      contextWindow: 500_000,
     });
-    expect(grok45Alias?.input).toEqual(["text", "image"]);
-    expect(grok45Alias?.contextWindow).toBe(500_000);
-    expect(grok45Alias?.maxTokens).toBe(64_000);
-
-    expect(grok43Alias?.provider).toBe("xai");
-    expect(grok43Alias?.id).toBe("grok-4.3");
-    expect(grok43Alias?.api).toBe("openai-responses");
-    expect(grok43Alias?.baseUrl).toBe("https://api.x.ai/v1");
-    expect(grok43Alias?.reasoning).toBe(true);
-    expect(grok43Alias?.thinkingLevelMap).toEqual({
-      off: "none",
-      minimal: "low",
-      low: "low",
-      medium: "medium",
-      high: "high",
-      xhigh: "high",
+    expectModel("grok-4.3-latest", "grok-4.3", {
+      thinkingLevelMap: { off: "none", ...thinking },
+      input: ["text", "image"],
     });
-    expect(grok43Alias?.input).toEqual(["text", "image"]);
-    expect(grok43Alias?.contextWindow).toBe(1_000_000);
-    expect(grok43Alias?.maxTokens).toBe(64_000);
-
-    expect(grok420?.provider).toBe("xai");
-    expect(grok420?.id).toBe("grok-4.20-0309-reasoning");
-    expect(grok420?.api).toBe("openai-responses");
-    expect(grok420?.baseUrl).toBe("https://api.x.ai/v1");
-    expect(grok420?.reasoning).toBe(true);
-    expect(grok420?.input).toEqual(["text", "image"]);
-    expect(grok420?.contextWindow).toBe(1_000_000);
-    expect(grok420?.maxTokens).toBe(30_000);
-
-    expect(grok3Mini?.provider).toBe("xai");
-    expect(grok3Mini?.id).toBe("grok-3-mini-fast");
-    expect(grok3Mini?.api).toBe("openai-responses");
-    expect(grok3Mini?.baseUrl).toBe("https://api.x.ai/v1");
-    expect(grok3Mini?.reasoning).toBe(true);
-    expect(grok3Mini?.input).toEqual(["text"]);
-    expect(grok3Mini?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-    expect(grok3Mini?.contextWindow).toBe(1_000_000);
-    expect(grok3Mini?.maxTokens).toBe(64_000);
+    expectModel("grok-4.20-0309-reasoning", "grok-4.20-0309-reasoning", {
+      input: ["text", "image"],
+      maxTokens: 30_000,
+    });
+    expectModel("grok-3-mini-fast", "grok-3-mini-fast", { input: ["text"], cost: zeroCost });
   });
 
   it("refuses the unsupported multi-agent endpoint ids", () => {
