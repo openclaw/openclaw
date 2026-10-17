@@ -461,9 +461,7 @@ it.each(["identity", "token", "origin-token", "socket", "import-claim"] as const
             key: {
               device_id: "synthetic-device",
               role: "operator",
-              ...(material === "origin-token"
-                ? { gateway_scope: "https://example.invalid" }
-                : {}),
+              ...(material === "origin-token" ? { gateway_scope: "https://example.invalid" } : {}),
             },
             token: {
               device_id: "synthetic-device",

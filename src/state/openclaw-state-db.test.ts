@@ -208,7 +208,7 @@ function withReadOnlyDatabase(pathname: string, read: (database: DatabaseSync) =
 }
 
 async function expectRepair(
-  options: Parameters<typeof repairOpenClawStateDatabaseSchema>[0],
+  options: NonNullable<Parameters<typeof repairOpenClawStateDatabaseSchema>[0]>,
   changes: unknown[],
   warnings: unknown[] = [],
 ) {
