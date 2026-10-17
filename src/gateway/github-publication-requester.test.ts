@@ -668,14 +668,14 @@ describe("shared GitHub publication requester authority", () => {
     "preserves terminal %s receipts after removal of legacy requester metadata",
     async (backend) => {
       const f = await fixture(backend);
-      const published = await f.coordinator.requestForSessionV2(f.request("complete", f.guest));
-      expect(published.status).toBe("published");
+      const publication = await f.coordinator.requestForSessionV2(f.request("complete", f.guest));
+      expect(publication.status).toBe("published");
       const writes = [...f.externalWrites];
-      f.removeRequesterSnapshot(published.requestId);
+      f.removeRequesterSnapshot(publication.requestId);
       await f.revoke();
       const restarted = f.restart();
       await restarted.resumeSessionRequests();
-      expect(await restarted.readAsync(published.requestId)).toEqual(published);
+      expect(await restarted.readAsync(publication.requestId)).toEqual(publication);
       expect(f.externalWrites).toEqual(writes);
     },
   );

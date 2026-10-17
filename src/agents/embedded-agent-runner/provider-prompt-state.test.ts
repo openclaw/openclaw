@@ -248,8 +248,8 @@ describe("provider prompt state", () => {
 
   it("does not compare rejected payloads across effective context scopes", async () => {
     const runId = "changed-context-scope";
-    const state = getProviderPromptState(runId);
-    const context = { systemPrompt: "system", messages: [], tools: [] } as Context;
+    const scopedState = getProviderPromptState(runId);
+    const scopedContext = { systemPrompt: "system", messages: [], tools: [] } as Context;
     const payload = { input: "same", model: model.id };
     const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
       await options?.onPayload?.(payload, model);
@@ -257,19 +257,19 @@ describe("provider prompt state", () => {
     });
     const firstWrapped = wrapStreamFnWithProviderPromptState({
       streamFn: transport,
-      state,
+      state: scopedState,
       effectiveContextTokenBudget: 64_000,
     });
-    const first = await firstWrapped(model, context);
+    const first = await firstWrapped(model, scopedContext);
     await first.result();
-    markLastProviderPromptContextRejected(state);
+    markLastProviderPromptContextRejected(scopedState);
 
     const secondWrapped = wrapStreamFnWithProviderPromptState({
       streamFn: transport,
-      state,
+      state: scopedState,
       effectiveContextTokenBudget: 128_000,
     });
-    const second = await secondWrapped(model, context);
+    const second = await secondWrapped(model, scopedContext);
     await second.result();
 
     expect(transport).toHaveBeenCalledTimes(2);
