@@ -186,6 +186,38 @@ const worktree: ManagedWorktreeRecord = {
   lastActiveAt: 1,
 };
 
+async function memoryFixture(sessionKey: string, activeWriterRunId?: string) {
+  const selected = { ...session, sessionKey };
+  const authority = { assertCurrent() {}, authorize() {} };
+  const location = {
+    agentId: selected.agentId,
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: selected.agentId }),
+  };
+  const owner = memorySessionActorOwners.get(location);
+  const actor = await owner.acquire(
+    { database: owner.identity, sessionKey },
+    { assertCurrent() {}, assertReadable() {} },
+  );
+  readSessionActorStorageResult(
+    await actor.storage!.mutate(
+      {
+        type: "session.entry.create",
+        input: {
+          entry: {
+            ...mocks.session().entry,
+            ...(activeWriterRunId ? { activeWriterRunId } : {}),
+            updatedAt: Date.now(),
+          },
+        },
+      },
+      authority,
+    ),
+  );
+  await deleteRegistryWorktree(process.env, worktree.id);
+  await insertRegistryWorktree(process.env, { ...worktree, ownerId: sessionKey });
+  return { selected, location, actor, binding: { ...location, actor, authority } };
+}
+
 beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("publication-worktree-read-"));
   mocks.config.mockReset().mockReturnValue({});
@@ -232,10 +264,7 @@ it("rejects an unbound session without dispatching a worktree read", async () =>
   const worker = await import("../state/openclaw-state-worker-store.js");
   const execute = vi.spyOn(worker, "executeOpenClawStateWorker");
   mocks.session.mockReturnValue({
-    canonicalKey: session.sessionKey,
-    agentId: session.agentId,
-    storePath: sessionStorePath,
-    readSource: sessionReadSource,
+    ...mocks.session(),
     entry: { sessionId: session.sessionId, lifecycleRevision: "lifecycle" },
   });
   expect(await prepareGitHubPublicationAvailability(session)).toBe(false);
@@ -361,31 +390,9 @@ it("keeps target discovery on the captured physical store across session prepara
 it.each(["branch replacement", "turn cancellation and release"])(
   "qualifies memory-only private worktrees without host session SQL across %s",
   async (change) => {
-    const authority = { assertCurrent() {}, authorize() {} };
-    const selected = {
-      ...session,
-      sessionKey: "agent:main:dashboard:incognito-publication-availability",
-    };
-    const location = {
-      agentId: selected.agentId,
-      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: selected.agentId }),
-    };
-    const owner = memorySessionActorOwners.get(location);
-    const actor = await owner.acquire(
-      { database: owner.identity, sessionKey: selected.sessionKey },
-      { assertCurrent() {}, assertReadable() {} },
+    const { selected, location, actor } = await memoryFixture(
+      "agent:main:dashboard:incognito-publication-availability",
     );
-    readSessionActorStorageResult(
-      await actor.storage!.mutate(
-        {
-          type: "session.entry.create",
-          input: { entry: { ...mocks.session().entry, updatedAt: Date.now() } },
-        },
-        authority,
-      ),
-    );
-    await deleteRegistryWorktree(process.env, worktree.id);
-    await insertRegistryWorktree(process.env, { ...worktree, ownerId: selected.sessionKey });
     mocks.session.mockImplementation(() => {
       throw new Error("Private authority must not read host session SQL");
     });
@@ -440,31 +447,10 @@ it.each(["branch replacement", "turn cancellation and release"])(
 );
 
 it("retains the memory session outside its async scope and rejects a replacement writer", async () => {
-  const selected = { ...session, sessionKey: "agent:main:dashboard:incognito-retained-writer" };
-  await deleteRegistryWorktree(process.env, worktree.id);
-  await insertRegistryWorktree(process.env, { ...worktree, ownerId: selected.sessionKey });
-  const authority = { assertCurrent() {}, authorize() {} };
-  const location = {
-    agentId: selected.agentId,
-    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: selected.agentId }),
-  };
-  const owner = memorySessionActorOwners.get(location);
-  const actor = await owner.acquire(
-    { database: owner.identity, sessionKey: selected.sessionKey },
-    { assertCurrent() {}, assertReadable() {} },
+  const { selected, location, actor, binding } = await memoryFixture(
+    "agent:main:dashboard:incognito-retained-writer",
+    "writer",
   );
-  readSessionActorStorageResult(
-    await actor.storage!.mutate(
-      {
-        type: "session.entry.create",
-        input: {
-          entry: { ...mocks.session().entry, activeWriterRunId: "writer", updatedAt: Date.now() },
-        },
-      },
-      authority,
-    ),
-  );
-  const binding = { ...location, actor, authority };
   let prepared: Awaited<ReturnType<typeof prepareGitHubPublicationWorkspaceOwner>> | undefined;
   try {
     prepared = await runWithSessionActorStorage(binding, () =>

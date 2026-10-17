@@ -54,6 +54,17 @@ vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
 }));
 
 const fixture = createRequesterPublicationFixture.bind(undefined, checkpoint);
+type Fixture = Awaited<ReturnType<typeof fixture>>;
+const guestRequester = (f: Fixture) =>
+  createGitHubPublicationRequesterFixture({
+    profileId: f.guestProfile,
+    scopes: guestScopes,
+    ...f.guestSource.session,
+  });
+const published = {
+  status: "published",
+  publisher: { accountId: 42, login: "roboclaw-bot" },
+} as const;
 
 describe("shared GitHub publication requester authority", () => {
   installGitHubPublicationTestHarness({
@@ -263,11 +274,7 @@ describe("shared GitHub publication requester authority", () => {
           email,
           days: 1,
         });
-        const original = await createGitHubPublicationRequesterFixture({
-          profileId: f.guestProfile,
-          scopes: guestScopes,
-          ...f.guestSource.session,
-        });
+        const original = await guestRequester(f);
         const claim = await holdWorkerTurn(f);
         const accepted = await f.coordinator.requestForSessionV2(
           f.request("policy-readiness", original.requester),
@@ -427,10 +434,7 @@ describe("shared GitHub publication requester authority", () => {
     }
 
     expect(await f.coordinator.readAsync(guest.requestId)).toMatchObject({ status: "failed" });
-    expect(await f.coordinator.readAsync(maintainer.requestId)).toMatchObject({
-      status: "published",
-      publisher: { accountId: 42, login: "roboclaw-bot" },
-    });
+    expect(await f.coordinator.readAsync(maintainer.requestId)).toMatchObject(published);
     expect(f.publishedTitles).toEqual(["maintainer-publication"]);
   });
 
@@ -465,11 +469,7 @@ describe("shared GitHub publication requester authority", () => {
         const email = "publication-guest@example.test";
         await visitors.execute("visitor_invite", { email, days: 1 });
         const first = (await visitors.store.lookup(email))!;
-        const original = await createGitHubPublicationRequesterFixture({
-          profileId: f.guestProfile,
-          scopes: guestScopes,
-          ...f.guestSource.session,
-        });
+        const original = await guestRequester(f);
         const claim = await holdWorkerTurn(f);
         if (ending === "renewal") {
           expect(original.requester.snapshot.grant).toMatchObject({
@@ -496,10 +496,7 @@ describe("shared GitHub publication requester authority", () => {
           expect(f.externalWrites).toEqual([]);
           await visitors.start();
           await restarted.resumeSessionRequests();
-          expect(await restarted.readAsync(accepted.requestId)).toMatchObject({
-            status: "published",
-            publisher: { accountId: 42, login: "roboclaw-bot" },
-          });
+          expect(await restarted.readAsync(accepted.requestId)).toMatchObject(published);
           expect(f.publishedTitles).toEqual(["visitor-renewal"]);
           expect(f.readRequester(accepted.requestId)).toEqual(original.requester.snapshot);
           return;
@@ -523,11 +520,7 @@ describe("shared GitHub publication requester authority", () => {
         const replacement = (await visitors.store.lookup(email))!;
         expect(replacement.grantId).not.toBe(first.grantId);
         vi.useRealTimers();
-        const reinvited = await createGitHubPublicationRequesterFixture({
-          profileId: f.guestProfile,
-          scopes: guestScopes,
-          ...f.guestSource.session,
-        });
+        const reinvited = await guestRequester(f);
         expect(reinvited.requester.snapshot.grant).toMatchObject({
           pluginId: "visitor-access",
           grantId: replacement.grantId,
@@ -554,10 +547,7 @@ describe("shared GitHub publication requester authority", () => {
           code: "identity_changed",
         });
         expect(f.readRequester(ended.requestId)).toEqual(original.requester.snapshot);
-        expect(await restarted.readAsync(staff.requestId)).toMatchObject({
-          status: "published",
-          publisher: { accountId: 42, login: "roboclaw-bot" },
-        });
+        expect(await restarted.readAsync(staff.requestId)).toMatchObject(published);
         expect(f.publishedTitles).toEqual(["independent-maintainer"]);
       } finally {
         vi.useRealTimers();
@@ -601,10 +591,7 @@ describe("shared GitHub publication requester authority", () => {
       const restarted = f.restart();
       await restarted.resumeSessionRequests();
       if (change === "ingress released") {
-        expect(await restarted.readAsync(accepted.requestId)).toMatchObject({
-          status: "published",
-          publisher: { accountId: 42, login: "roboclaw-bot" },
-        });
+        expect(await restarted.readAsync(accepted.requestId)).toMatchObject(published);
         expect(f.publishedTitles).toEqual([key]);
       } else {
         expect(await restarted.readAsync(accepted.requestId)).toMatchObject({ status: "failed" });

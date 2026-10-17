@@ -63,6 +63,16 @@ function responses(publishedTree = "4".repeat(40), compared: unknown = compariso
   );
 }
 const current = () => {};
+const check = (
+  fetchImpl: typeof fetch,
+  accepted: SnapshotInput["accepted"] = {},
+  pullRequests = [pr],
+  assertCurrent = current,
+) =>
+  isGitHubPublicationSuperseded({ ...snapshot, ...accepted }, pullRequests, {
+    fetchImpl,
+    assertCurrent,
+  });
 
 it.each(["github.com", "ghe.example.test"])(
   "reads publication history at the recorded %s host on an Enterprise Gateway",
@@ -79,16 +89,9 @@ it.each(["github.com", "ghe.example.test"])(
       },
     });
     const fetchImpl = responses(tree);
-    expect(
-      await isGitHubPublicationSuperseded(
-        snapshot,
-        [{ ...pr, url: `https://${host}/owner/repo/pull/1` }],
-        {
-          fetchImpl,
-          assertCurrent: current,
-        },
-      ),
-    ).toBe(true);
+    expect(await check(fetchImpl, {}, [{ ...pr, url: `https://${host}/owner/repo/pull/1` }])).toBe(
+      true,
+    );
     expect(fetchImpl).toHaveBeenCalledOnce();
     const [url, init] = fetchImpl.mock.calls[0]!;
     expect(url).toBe(
@@ -100,17 +103,13 @@ it.each(["github.com", "ghe.example.test"])(
   },
 );
 
-type SnapshotCase = [
-  name: string,
-  input: {
-    accepted?: Partial<Parameters<typeof isGitHubPublicationSuperseded>[0]>;
-    pullRequest?: Partial<ControlUiSessionPullRequest>;
-    publishedTree?: string;
-    compared?: unknown;
-  },
-  superseded: boolean,
-  calls?: number,
-];
+type SnapshotInput = {
+  accepted?: Partial<Parameters<typeof isGitHubPublicationSuperseded>[0]>;
+  pullRequest?: Partial<ControlUiSessionPullRequest>;
+  publishedTree?: string;
+  compared?: unknown;
+};
+type SnapshotCase = [name: string, input: SnapshotInput, superseded: boolean, calls?: number];
 const snapshotCases: SnapshotCase[] = [
   ["committed open history", { pullRequest: { state: "open" } }, true, 2],
   ["committed draft history", { pullRequest: { state: "draft" } }, true, 2],
@@ -134,13 +133,9 @@ it.each(snapshotCases)(
   "checks publication coverage for %s",
   async (_name, input, superseded, calls) => {
     const fetchImpl = responses(input.publishedTree, input.compared);
-    expect(
-      await isGitHubPublicationSuperseded(
-        { ...snapshot, ...input.accepted },
-        [{ ...pr, ...input.pullRequest }],
-        { fetchImpl, assertCurrent: current },
-      ),
-    ).toBe(superseded);
+    expect(await check(fetchImpl, input.accepted, [{ ...pr, ...input.pullRequest }])).toBe(
+      superseded,
+    );
     if (calls !== undefined) {
       expect(fetchImpl).toHaveBeenCalledTimes(calls);
     }
@@ -162,12 +157,7 @@ it.each(["missing", "malformed"])("checks later matching PRs after a %s head", a
     }
     return new Response(JSON.stringify({ sha: head, tree: { sha: tree } }));
   });
-  expect(
-    await isGitHubPublicationSuperseded(snapshot, [{ ...pr, headSha: missingHead }, pr], {
-      fetchImpl,
-      assertCurrent: current,
-    }),
-  ).toBe(true);
+  expect(await check(fetchImpl, {}, [{ ...pr, headSha: missingHead }, pr])).toBe(true);
   expect(fetchImpl).toHaveBeenCalledTimes(2);
 });
 
@@ -176,9 +166,7 @@ it("honors rate-limit cooldown without retrying anonymously or treating it as co
     async () => new Response("limited", { status: 429, headers: { "retry-after": "60" } }),
   );
   for (let attempt = 0; attempt < 2; attempt++) {
-    expect(
-      await isGitHubPublicationSuperseded(snapshot, [pr], { fetchImpl, assertCurrent: current }),
-    ).toBe(false);
+    expect(await check(fetchImpl)).toBe(false);
   }
   expect(fetchImpl).toHaveBeenCalledOnce();
 });
@@ -190,13 +178,10 @@ it("revalidates session authority after an awaited response before retiring a fa
     return new Response(JSON.stringify({ sha: head, tree: { sha: tree } }));
   });
   await expect(
-    isGitHubPublicationSuperseded(snapshot, [pr], {
-      fetchImpl,
-      assertCurrent: () => {
-        if (!active) {
-          throw new Error("Session retired");
-        }
-      },
+    check(fetchImpl, {}, [pr], () => {
+      if (!active) {
+        throw new Error("Session retired");
+      }
     }),
   ).rejects.toThrow("Session retired");
   expect(fetchImpl).toHaveBeenCalledOnce();

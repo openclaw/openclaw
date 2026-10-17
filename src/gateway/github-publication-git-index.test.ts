@@ -95,6 +95,29 @@ function publicationIndexParams(fixture: Awaited<ReturnType<typeof createFixture
   };
 }
 
+type Fixture = Awaited<ReturnType<typeof createFixture>>;
+const moveHead = (fixture: Fixture) =>
+  git(fixture.cwd, ["update-ref", "refs/heads/main", fixture.headCommit, fixture.previousHead]);
+
+function recoveryParams(fixture: Fixture) {
+  return {
+    ...publicationIndexParams(fixture),
+    sourceHeadCommit: fixture.previousHead,
+  };
+}
+
+async function interruptAcceptedUpdate(fixture: Fixture) {
+  await expect(
+    updateGitHubPublicationBranchAndIndex({
+      ...publicationIndexParams(fixture),
+      updateRef: async () => {
+        await moveHead(fixture);
+        throw new Error("response lost");
+      },
+    }),
+  ).rejects.toThrow("workspace recovery is pending");
+}
+
 describe("GitHub publication index update", () => {
   it.each(["reset", "created"] as const)(
     "pins a conditional push when the remote branch was %s after admission",
@@ -205,12 +228,7 @@ describe("GitHub publication index update", () => {
     );
     await git(fixture.cwd, [...hardenedGit, "add", "artifact.txt"], undefined, hookEnv);
     await recoverGitHubPublicationBranchAndIndex({
-      cwd: fixture.cwd,
-      requestId: REQUEST_ID,
-      branch: "main",
-      sourceHeadCommit: fixture.previousHead,
-      workspaceTree: fixture.workspaceTree,
-      assertCustody: () => undefined,
+      ...recoveryParams(fixture),
       run: async (argv, options) =>
         await git(fixture.cwd, argv.slice(1), options?.input, options?.env ?? hookEnv),
     });
@@ -248,12 +266,7 @@ describe("GitHub publication index update", () => {
         }
       },
       updateRef: async () => {
-        await git(fixture.cwd, [
-          "update-ref",
-          "refs/heads/main",
-          fixture.headCommit,
-          fixture.previousHead,
-        ]);
+        await moveHead(fixture);
         current = false;
       },
     });
@@ -309,12 +322,7 @@ describe("GitHub publication index update", () => {
     await updateGitHubPublicationBranchAndIndex({
       ...publicationIndexParams(fixture),
       updateRef: async () => {
-        await git(fixture.cwd, [
-          "update-ref",
-          "refs/heads/main",
-          fixture.headCommit,
-          fixture.previousHead,
-        ]);
+        await moveHead(fixture);
       },
     });
     expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.headCommit);
@@ -324,31 +332,11 @@ describe("GitHub publication index update", () => {
   it("installs a retained recovery index when an ambiguous ref CAS moved", async () => {
     const fixture = await createFixture();
 
-    await expect(
-      updateGitHubPublicationBranchAndIndex({
-        ...publicationIndexParams(fixture),
-        updateRef: async () => {
-          await git(fixture.cwd, [
-            "update-ref",
-            "refs/heads/main",
-            fixture.headCommit,
-            fixture.previousHead,
-          ]);
-          throw new Error("response lost");
-        },
-      }),
-    ).rejects.toThrow("workspace recovery is pending");
+    await interruptAcceptedUpdate(fixture);
 
     expect(await git(fixture.cwd, ["rev-parse", "HEAD"])).toBe(fixture.headCommit);
     await recoverGitHubPublicationBranchAndIndex({
-      cwd: fixture.cwd,
-      requestId: REQUEST_ID,
-      branch: "main",
-      sourceHeadCommit: fixture.previousHead,
-      workspaceTree: fixture.workspaceTree,
-      assertCustody: () => undefined,
-      run: async (argv, options) =>
-        await git(fixture.cwd, argv.slice(1), options?.input, options?.env),
+      ...recoveryParams(fixture),
     });
     expect(await git(fixture.cwd, ["write-tree"])).toBe(fixture.workspaceTree);
     expect(await git(fixture.cwd, ["status", "--porcelain"])).toBe("");
@@ -358,29 +346,12 @@ describe("GitHub publication index update", () => {
   it("does not install a recovered index after custody changes during Git probes", async () => {
     const fixture = await createFixture();
 
-    await expect(
-      updateGitHubPublicationBranchAndIndex({
-        ...publicationIndexParams(fixture),
-        updateRef: async () => {
-          await git(fixture.cwd, [
-            "update-ref",
-            "refs/heads/main",
-            fixture.headCommit,
-            fixture.previousHead,
-          ]);
-          throw new Error("response lost");
-        },
-      }),
-    ).rejects.toThrow("workspace recovery is pending");
+    await interruptAcceptedUpdate(fixture);
 
     let current = true;
     await expect(
       recoverGitHubPublicationBranchAndIndex({
-        cwd: fixture.cwd,
-        requestId: REQUEST_ID,
-        branch: "main",
-        sourceHeadCommit: fixture.previousHead,
-        workspaceTree: fixture.workspaceTree,
+        ...recoveryParams(fixture),
         assertCustody: () => {
           if (!current) {
             throw new Error("publication authority changed");
