@@ -10,24 +10,13 @@ export const API_KEY_FIELD = ["api", "Key"].join("") as "apiKey";
 const REQUIRE_API_KEY_FIELD = ["require", "ApiKey"].join("");
 const SET_RUNTIME_API_KEY_FIELD = ["setRuntime", "ApiKey"].join("");
 
+type FixtureAuth = { apiKey: string; source: string; mode: string; profileId?: string };
+
 const imageRuntimeMocks = vi.hoisted(() => ({
   completeMock: vi.fn(),
   ensureOpenClawModelsJsonMock: vi.fn(async () => {}),
-  getApiKeyForModelMock: vi.fn<
-    () => Promise<{
-      apiKey: string;
-      source: string;
-      mode: string;
-      profileId?: string;
-    }>
-  >(),
-  resolveApiKeyForProviderCoreMock: vi.fn<
-    () => Promise<{
-      apiKey: string;
-      source: string;
-      mode: string;
-    }>
-  >(),
+  getApiKeyForModelMock: vi.fn<() => Promise<FixtureAuth>>(),
+  resolveApiKeyForProviderCoreMock: vi.fn<() => Promise<Omit<FixtureAuth, "profileId">>>(),
   requireApiKeyMock: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
   setRuntimeApiKeyMock: vi.fn(),
   discoverModelsMock: vi.fn(),
@@ -38,31 +27,19 @@ const imageRuntimeMocks = vi.hoisted(() => ({
   acquireAgentRunPreparedModelRuntimeMock: vi.fn(),
   releasePreparedModelRuntimeMock: vi.fn(async () => {}),
   resolveModelAsyncMock: vi.fn(),
-  resolveModelWithRegistryMock: vi.fn(),
   shouldPreferProviderRuntimeResolvedModelMock: vi.fn(() => false),
   unwrapSecretSentinelsForProviderEgressMock: vi.fn((value: string) => value),
 }));
 const m = imageRuntimeMocks;
 export const preparedAuthStorage = { [SET_RUNTIME_API_KEY_FIELD]: m.setRuntimeApiKeyMock };
 
-type ResolveModelWithRegistryTestParams = {
-  modelRegistry: { find: (provider: string, modelId: string) => unknown };
-  provider: string;
-  modelId: string;
-};
+vi.mock("../llm/stream.js", async (original) => ({
+  ...(await original<typeof import("../llm/stream.js")>()),
+  complete: m.completeMock,
+}));
 
-vi.mock("../llm/stream.js", async () => {
-  const actual = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
-  return {
-    ...actual,
-    complete: m.completeMock,
-  };
-});
-
-vi.mock("../agents/models-config.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/models-config.js")>(
-    "../agents/models-config.js",
-  )),
+vi.mock("../agents/models-config.js", async (original) => ({
+  ...(await original<typeof import("../agents/models-config.js")>()),
   ensureOpenClawModelsJson: m.ensureOpenClawModelsJsonMock,
 }));
 
@@ -81,10 +58,8 @@ vi.mock("../agents/sessions/model-registry-runtime.js", () => ({
   getModelRegistryRuntime: () => ({ apiRegistry: {}, llmRuntime: {} }),
 }));
 
-vi.mock("../agents/provider-secret-egress.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/provider-secret-egress.js")>(
-    "../agents/provider-secret-egress.js",
-  )),
+vi.mock("../agents/provider-secret-egress.js", async (original) => ({
+  ...(await original<typeof import("../agents/provider-secret-egress.js")>()),
   unwrapSecretSentinelsForProviderEgress: m.unwrapSecretSentinelsForProviderEgressMock,
 }));
 
@@ -99,10 +74,8 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: m.acquireAgentRunPreparedModelRuntimeMock,
 }));
 
-vi.mock("../plugins/provider-runtime.js", async () => ({
-  ...(await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  )),
+vi.mock("../plugins/provider-runtime.js", async (original) => ({
+  ...(await original<typeof import("../plugins/provider-runtime.js")>()),
   prepareProviderDynamicModel: m.prepareProviderDynamicModelMock,
   shouldPreferProviderRuntimeResolvedModel: m.shouldPreferProviderRuntimeResolvedModelMock,
 }));
@@ -116,15 +89,10 @@ vi.mock("../agents/embedded-agent-runner/model.js", () => ({
 }));
 
 const imageTestFetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
-vi.mock("../infra/net/fetch-guard.js", async () => {
-  const mod = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
-    "../infra/net/fetch-guard.js",
-  );
-  return {
-    ...mod,
-    fetchWithSsrFGuard: imageTestFetchWithSsrFGuardMock,
-  };
-});
+vi.mock("../infra/net/fetch-guard.js", async (original) => ({
+  ...(await original<typeof import("../infra/net/fetch-guard.js")>()),
+  fetchWithSsrFGuard: imageTestFetchWithSsrFGuardMock,
+}));
 
 export function installImageRuntimeTestHooks({
   apiKey = "test-token",
@@ -141,8 +109,7 @@ export function installImageRuntimeTestHooks({
   });
 
   beforeEach(() => {
-    // Provider endpoint policy comes from manifests. Pin source manifests so a
-    // prior local build cannot make this source-checkout test read partial dist output.
+    // Pin source manifests; partial local dist builds must not change endpoint policy.
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
     vi.stubGlobal("fetch", m.fetchMock);
     for (const mock of Object.values(imageRuntimeMocks)) {
@@ -167,22 +134,15 @@ export function installImageRuntimeTestHooks({
             config: input.config,
             workspaceDir: input.workspaceDir,
             metadataSnapshot,
-            createStores: () => ({
-              authStorage: preparedAuthStorage,
-              modelRegistry: {},
-            }),
+            createStores: () => ({ authStorage: preparedAuthStorage, modelRegistry: {} }),
           },
           [Symbol.asyncDispose]: m.releasePreparedModelRuntimeMock,
         };
       },
     );
     m.fetchMock.mockImplementation(async () =>
-      Response.json({
-        base_resp: { status_code: 0 },
-        content: "portal ok",
-      }),
+      Response.json({ base_resp: { status_code: 0 }, content: "portal ok" }),
     );
-    // Guarded requests must reach m.fetchMock for endpoint and payload assertions.
     imageTestFetchWithSsrFGuardMock.mockImplementation(
       async (opts: { url: string; init: RequestInit; timeoutMs?: number }) => {
         const signal = AbortSignal.timeout(opts.timeoutMs ?? 60_000);
@@ -199,27 +159,16 @@ export function installImageRuntimeTestHooks({
         baseUrl: "https://api.minimax.io/anthropic",
       })),
     });
-    m.resolveModelWithRegistryMock.mockImplementation(
-      // Per-case discovery overrides must reach model dispatch.
-      ({ modelRegistry, provider, modelId }: ResolveModelWithRegistryTestParams) =>
-        modelRegistry.find(provider, modelId),
-    );
     m.resolveModelAsyncMock.mockImplementation(
-      async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) => {
+      async (provider: string, modelId: string, agentDir?: string) => {
         const authStorage = { [SET_RUNTIME_API_KEY_FIELD]: m.setRuntimeApiKeyMock };
         const modelRegistry = m.discoverModelsMock(authStorage, agentDir);
-        const model = m.resolveModelWithRegistryMock({
-          provider,
-          modelId,
-          modelRegistry,
-          cfg,
-          agentDir,
-        });
+        const model = modelRegistry.find(provider, modelId);
         return { authStorage, model, modelRegistry };
       },
     );
-    m.prepareProviderRuntimeAuthMock.mockImplementation(async (params: { provider: string }) => {
-      return params.provider === "github-copilot"
+    m.prepareProviderRuntimeAuthMock.mockImplementation(async (params: { provider: string }) =>
+      params.provider === "github-copilot"
         ? {
             [API_KEY_FIELD]: apiKey,
             baseUrl: "https://api.githubcopilot.com",
@@ -231,8 +180,8 @@ export function installImageRuntimeTestHooks({
               },
             },
           }
-        : undefined;
-    });
+        : undefined,
+    );
   });
 }
 

@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProviderAuthError } from "../agents/model-auth-runtime-shared.js";
+import { hasAvailableAuthForProvider, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createWhisperExecutable } from "./local-audio.test-support.js";
@@ -15,6 +17,21 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
   const { createEmptyCapabilityProviderMockModule } = await import("./runner.test-mocks.js");
   return createEmptyCapabilityProviderMockModule();
 });
+
+const hasAuth = vi.mocked(hasAvailableAuthForProvider);
+const resolveAuth = vi.mocked(resolveApiKeyForProviderCore);
+afterEach(() => {
+  hasAuth.mockReset().mockResolvedValue(true);
+  resolveAuth
+    .mockReset()
+    .mockResolvedValue({ apiKey: "test-key", source: "test", mode: "api-key" });
+});
+function mediaConfig(
+  media: NonNullable<OpenClawConfig["tools"]>["media"],
+  providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = remoteProviders,
+): OpenClawConfig {
+  return { models: { providers }, tools: { media } };
+}
 
 function registry(providers: Record<string, MediaUnderstandingProvider>) {
   return new Map(Object.entries(providers));
@@ -61,8 +78,6 @@ async function runAudio(
 
 describe("runCapability audio", () => {
   it("auto-selects provider-owned audio with subscription auth and its audio default", async () => {
-    const { hasAvailableAuthForProvider } = await import("../agents/model-auth.js");
-    const hasAuth = vi.mocked(hasAvailableAuthForProvider);
     hasAuth.mockImplementation(
       async (params) => params.provider === "openai" && params.modelApi === undefined,
     );
@@ -73,52 +88,39 @@ describe("runCapability audio", () => {
         return { ok: true as const, value: { text: "subscription transcript" } };
       },
     );
-    try {
-      const result = await runAudio({
-        cfg: {},
-        activeModel,
-        providerRegistry: registry({
-          openai: audioProvider("openai", {
-            defaultModels: { audio: "transcription-default" },
-            transcribeAudioWithContext,
-          }),
+    const result = await runAudio({
+      cfg: {},
+      activeModel,
+      providerRegistry: registry({
+        openai: audioProvider("openai", {
+          defaultModels: { audio: "transcription-default" },
+          transcribeAudioWithContext,
         }),
-      });
-      expect(result.decision.outcome).toBe("success");
-      expect(result.outputs[0]).toMatchObject({
-        text: "subscription transcript",
-        model: "transcription-default",
-      });
-      expect(transcribeAudioWithContext).toHaveBeenCalledTimes(1);
-    } finally {
-      hasAuth.mockReset().mockResolvedValue(true);
-    }
+      }),
+    });
+    expect(result.decision.outcome).toBe("success");
+    expect(result.outputs[0]).toMatchObject({
+      text: "subscription transcript",
+      model: "transcription-default",
+    });
+    expect(transcribeAudioWithContext).toHaveBeenCalledTimes(1);
   });
 
   it.each([false, true])(
     "retries failed uploads only with an explicit fallback list: %s",
     async (explicit) => {
-      const { hasAvailableAuthForProvider } = await import("../agents/model-auth.js");
-      const hasAuth = vi.mocked(hasAvailableAuthForProvider);
       hasAuth.mockClear();
       const rejected = new Error("Audio transcription failed (HTTP 403)");
       const transcribeAudio = vi.fn(async () => ({ text: "authored fallback transcript" }));
       const result = await runAudio({
-        cfg: {
-          models: { providers: remoteProviders },
-          ...(explicit
-            ? {
-                tools: {
-                  media: {
-                    models: [
-                      { provider: "openai", capabilities: ["audio" as const] },
-                      { provider: "mistral", capabilities: ["audio" as const] },
-                    ],
-                  },
-                },
-              }
-            : {}),
-        },
+        cfg: explicit
+          ? mediaConfig({
+              models: [
+                { provider: "openai", capabilities: ["audio"] },
+                { provider: "mistral", capabilities: ["audio"] },
+              ],
+            })
+          : { models: { providers: remoteProviders } },
         activeModel,
         providerRegistry: registry({
           openai: audioProvider("openai", {
@@ -162,12 +164,10 @@ describe("runCapability audio", () => {
           ctx,
           media,
           attachments: cache,
-          cfg: {
-            models: {
-              providers: { openai: { baseUrl: "https://custom.example/v1", models: [] } },
-            },
-            tools: { media: { audio: { prompt: "Preserve names." } } },
-          },
+          cfg: mediaConfig(
+            { audio: { prompt: "Preserve names." } },
+            { openai: { baseUrl: "https://custom.example/v1", models: [] } },
+          ),
           activeModel,
           providerRegistry: registry({
             openai: audioProvider("openai", { transcribeAudioWithContext }),
@@ -209,9 +209,6 @@ describe("runCapability audio", () => {
   });
 
   it("skips OpenAI audio auto-selection when only ChatGPT OAuth is available", async () => {
-    const auth = await import("../agents/model-auth.js");
-    const hasAuth = vi.mocked(auth.hasAvailableAuthForProvider);
-    const resolveAuth = vi.mocked(auth.resolveApiKeyForProviderCore);
     hasAuth.mockImplementation(async ({ provider, modelApi }) =>
       provider === "openai" ? modelApi === undefined : provider === "mistral",
     );
@@ -225,43 +222,34 @@ describe("runCapability audio", () => {
       text: `mistral:${req.apiKey}`,
       model: req.model,
     }));
-    try {
-      const result = await runAudio({
-        cfg: {
-          models: { providers: remoteProviders },
-        },
-        providerRegistry: registry({
-          openai: audioProvider("openai", {
-            defaultModels: { audio: "gpt-4o-transcribe" },
-            transcribeAudio: openai,
-          }),
-          mistral: audioProvider("mistral", {
-            defaultModels: { audio: "voxtral-mini-latest" },
-            transcribeAudio: mistral,
-          }),
+    const result = await runAudio({
+      cfg: { models: { providers: remoteProviders } },
+      providerRegistry: registry({
+        openai: audioProvider("openai", {
+          defaultModels: { audio: "gpt-4o-transcribe" },
+          transcribeAudio: openai,
         }),
-      });
-      expect(result.decision.outcome).toBe("success");
-      expect(result.outputs).toEqual([
-        {
-          kind: "audio.transcription",
-          attachmentIndex: 0,
-          provider: "mistral",
-          model: "voxtral-mini-latest",
-          text: "mistral:mistral-key",
-        },
-      ]);
-      expect(openai).not.toHaveBeenCalled();
-      expect(mistral).toHaveBeenCalledTimes(1);
-      expect(hasAuth).toHaveBeenCalledWith(
-        expect.objectContaining({ provider: "openai", modelApi: "openai-audio-transcriptions" }),
-      );
-    } finally {
-      hasAuth.mockReset().mockResolvedValue(true);
-      resolveAuth
-        .mockReset()
-        .mockResolvedValue({ apiKey: "test-key", source: "test", mode: "api-key" });
-    }
+        mistral: audioProvider("mistral", {
+          defaultModels: { audio: "voxtral-mini-latest" },
+          transcribeAudio: mistral,
+        }),
+      }),
+    });
+    expect(result.decision.outcome).toBe("success");
+    expect(result.outputs).toEqual([
+      {
+        kind: "audio.transcription",
+        attachmentIndex: 0,
+        provider: "mistral",
+        model: "voxtral-mini-latest",
+        text: "mistral:mistral-key",
+      },
+    ]);
+    expect(openai).not.toHaveBeenCalled();
+    expect(mistral).toHaveBeenCalledTimes(1);
+    expect(hasAuth).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", modelApi: "openai-audio-transcriptions" }),
+    );
   });
 
   it("skips tiny audio before calling the provider", async () => {
@@ -318,44 +306,42 @@ describe("runCapability provider options", () => {
     };
     let seen: AudioTranscriptionRequest | undefined;
     const result = await runAudio({
-      cfg: {
-        models: { providers: { deepgram: provider } },
-        tools: {
-          media: {
-            audio: {
-              enabled: true,
-              baseUrl: "https://config.example",
-              headers: configHeaders,
-              request: {
-                headers: { "X-Config-Request": "cfg" },
-                auth: { mode: "header", headerName: "x-config-auth", value: "cfg-secret" },
-              },
-              providerOptions: { deepgram: { detect_language: true, punctuate: true } },
+      cfg: mediaConfig(
+        {
+          audio: {
+            enabled: true,
+            baseUrl: "https://config.example",
+            headers: configHeaders,
+            request: {
+              headers: { "X-Config-Request": "cfg" },
+              auth: { mode: "header", headerName: "x-config-auth", value: "cfg-secret" },
             },
-            models: [
-              {
-                provider: "deepgram",
-                model: "nova-3",
-                capabilities: ["audio"],
-                baseUrl: "https://entry.example",
-                headers: entryHeaders,
-                request: {
-                  headers: { "X-Entry-Request": "entry" },
-                  tls: { serverName: "deepgram.internal" },
-                },
-                providerOptions: {
-                  deepgram: {
-                    ["__proto__"]: "ignored",
-                    detectLanguage: false,
-                    punctuate: false,
-                    smart_format: true,
-                  },
+            providerOptions: { deepgram: { detect_language: true, punctuate: true } },
+          },
+          models: [
+            {
+              provider: "deepgram",
+              model: "nova-3",
+              capabilities: ["audio"],
+              baseUrl: "https://entry.example",
+              headers: entryHeaders,
+              request: {
+                headers: { "X-Entry-Request": "entry" },
+                tls: { serverName: "deepgram.internal" },
+              },
+              providerOptions: {
+                deepgram: {
+                  ["__proto__"]: "ignored",
+                  detectLanguage: false,
+                  punctuate: false,
+                  smart_format: true,
                 },
               },
-            ],
-          },
+            },
+          ],
         },
-      },
+        { deepgram: provider },
+      ),
       providerRegistry: buildProviderRegistry({
         deepgram: {
           id: "deepgram",
@@ -367,20 +353,21 @@ describe("runCapability provider options", () => {
         },
       }),
     });
-    expect(result.outputs).toHaveLength(1);
-    expect(result.outputs[0]?.text).toBe("ok");
-    expect(seen?.baseUrl).toBe("https://entry.example");
-    expect(seen?.headers).toStrictEqual({ ...providerHeaders, ...configHeaders, ...entryHeaders });
-    expect(seen?.query).toStrictEqual({
-      detect_language: false,
-      punctuate: false,
-      smart_format: true,
-    });
-    expect(seen?.query?.detectLanguage).toBeUndefined();
-    expect(seen?.request).toEqual({
-      headers: { "X-Config-Request": "cfg", "X-Entry-Request": "entry" },
-      auth: { mode: "header", headerName: "x-config-auth", value: "cfg-secret" },
-      tls: { serverName: "deepgram.internal" },
+    expect(result.outputs).toMatchObject([{ text: "ok" }]);
+    expect({
+      baseUrl: seen?.baseUrl,
+      headers: seen?.headers,
+      query: seen?.query,
+      request: seen?.request,
+    }).toStrictEqual({
+      baseUrl: "https://entry.example",
+      headers: { ...providerHeaders, ...configHeaders, ...entryHeaders },
+      query: { detect_language: false, punctuate: false, smart_format: true },
+      request: {
+        headers: { "X-Config-Request": "cfg", "X-Entry-Request": "entry" },
+        auth: { mode: "header", headerName: "x-config-auth", value: "cfg-secret" },
+        tls: { serverName: "deepgram.internal" },
+      },
     });
   });
 });
