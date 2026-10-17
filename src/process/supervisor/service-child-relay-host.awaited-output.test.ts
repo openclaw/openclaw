@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
@@ -18,10 +19,6 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 let platformMock: ReturnType<typeof mockProcessPlatform> | undefined;
-const nextTurn = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 const cleanups: Array<() => void> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) {
@@ -35,19 +32,52 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
+function mockLinuxRelay() {
+  platformMock = mockProcessPlatform("linux");
+  const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+    // This fixture negotiates legacy group ownership, then reports the group absent.
+    if (pid === 0 && signal === 0) {
+      return true;
+    }
+    throw Object.assign(new Error("fixture group absent"), { code: "ESRCH" });
+  });
+  const stub = createWritableRelayChild();
+  mocks.spawn.mockReturnValue(stub.child);
+  return { ...stub, killSpy };
+}
+
+function relayPeer(stub: ReturnType<typeof mockLinuxRelay>) {
+  const start = firstMockArg(stub.sendMock, "service start");
+  if (!isRecord(start) || typeof start.generation !== "string") {
+    throw new Error("Expected an admitted service generation");
+  }
+  const generation = start.generation;
+  let sequence = 0;
+  return {
+    start,
+    emit: (payload: ServiceChildAnchorPayload) =>
+      stub.control.push(
+        Buffer.from(
+          encodeServiceChildMessage({
+            ...(payload.type === "ready" && start.treeOwnership === "linux-subreaper"
+              ? { treeOwnership: "linux-subreaper" as const }
+              : {}),
+            ...(payload.type === "closing" && start.treeOwnership === "linux-subreaper"
+              ? { descendantsReaped: true as const }
+              : {}),
+            ...payload,
+            generation,
+            sequence: ++sequence,
+          }),
+        ),
+      ),
+  };
+}
+
 it.each([false, true])(
   "joins accepted stdout after identity loss while preserving an observed root (root observed=%s)",
   async (rootObserved) => {
-    platformMock = mockProcessPlatform("linux");
-    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-      // This worker intentionally negotiates the legacy group contract.
-      if (pid === 0 && signal === 0) {
-        return true;
-      }
-      throw Object.assign(new Error("synthetic missing process group"), { code: "ESRCH" });
-    });
-    const stub = createWritableRelayChild();
-    mocks.spawn.mockReturnValue(stub.child);
+    const stub = mockLinuxRelay();
     const starting = startServiceChildRelayAdapter({
       command: "synthetic-command",
       args: [],
@@ -64,19 +94,9 @@ it.each([false, true])(
         supervisor: { pid: 101, startTime: 1 },
       },
     });
-    const start = firstMockArg(stub.sendMock, "service start");
-    if (!isRecord(start) || typeof start.generation !== "string") {
-      throw new Error("Expected an admitted service generation");
-    }
+    const { start, emit } = relayPeer(stub);
     expect(start.treeOwnership).toBeUndefined();
-    expect(killSpy).toHaveBeenCalledWith(0, 0);
-    const generation = start.generation;
-    let sequence = 0;
-    const emit = (payload: ServiceChildAnchorPayload) => {
-      stub.control.push(
-        Buffer.from(encodeServiceChildMessage({ ...payload, generation, sequence: ++sequence })),
-      );
-    };
+    expect(stub.killSpy).toHaveBeenCalledWith(0, 0);
     emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
     const { adapter, ready } = await starting;
     await ready;
@@ -136,8 +156,7 @@ it.each([false, true])(
           { status: "rejected" },
         ]);
         expect(chunks).toEqual(["accepted"]);
-        expect(stub.stdout.destroyed).toBe(false);
-        expect(stub.stdout.readableEnded).toBe(false);
+        expect(stub.stdout).toMatchObject({ destroyed: false, readableEnded: false });
         stub.stderr.end();
       }
       stub.lineage.end();
@@ -170,15 +189,7 @@ it.each([false, true])(
 async function startSupervisedRelay(
   options: { timeoutMs?: number; noOutputTimeoutMs?: number } = {},
 ) {
-  platformMock = mockProcessPlatform("linux");
-  vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-    if (pid === 0 && signal === 0) {
-      return true;
-    }
-    throw Object.assign(new Error("fixture group absent"), { code: "ESRCH" });
-  });
-  const stub = createWritableRelayChild();
-  mocks.spawn.mockReturnValue(stub.child);
+  const stub = mockLinuxRelay();
   const supervisor = createProcessSupervisor();
   const closeScope = supervisor.acquireScopeCleanup("relay-output", {
     processTree: "required-all",
@@ -191,28 +202,7 @@ async function startSupervisedRelay(
   });
   // Scope admission is asynchronous; this is not a readiness delay in the product.
   await nextTurn();
-  const start = firstMockArg(stub.sendMock, "supervised service start");
-  if (!isRecord(start) || typeof start.generation !== "string") {
-    throw new Error("missing generation");
-  }
-  const generation = start.generation;
-  let sequence = 0;
-  const emit = (payload: ServiceChildAnchorPayload) =>
-    stub.control.push(
-      Buffer.from(
-        encodeServiceChildMessage({
-          ...(payload.type === "ready" && start.treeOwnership === "linux-subreaper"
-            ? { treeOwnership: "linux-subreaper" as const }
-            : {}),
-          ...(payload.type === "closing" && start.treeOwnership === "linux-subreaper"
-            ? { descendantsReaped: true as const }
-            : {}),
-          ...payload,
-          generation,
-          sequence: ++sequence,
-        }),
-      ),
-    );
+  const { emit } = relayPeer(stub);
   const finish = () => {
     emit({ type: "closing", reason: "lineage-closed" });
     stub.lineage.end();
@@ -352,8 +342,7 @@ it("reports native cleanup failure without waiting for output during shutdown", 
   } finally {
     f.endOutput();
     const result = await run.wait();
-    expect(result.stdout).toBe("retained root output");
-    expect(result.exitCode).toBe(23);
+    expect(result).toMatchObject({ stdout: "retained root output", exitCode: 23 });
     await cleanup.catch(() => undefined);
     await f.closeScope().catch(() => undefined);
     vi.useRealTimers();

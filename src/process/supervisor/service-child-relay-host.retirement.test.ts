@@ -4,11 +4,7 @@ import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Duplex } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
@@ -17,6 +13,7 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
+import { readLines } from "./service-child-group-anchor.preparation.test-support.js";
 import type {
   ServiceChildAnchorMessage,
   ServiceChildControlMessage,
@@ -46,8 +43,7 @@ afterEach(() => {
 it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
   "confirms process-group retirement completed before the deadline while the Node host was blocked",
   async ({ signal }) => {
-    // The two-process group relay reaps its anchor independently of the blocked host.
-    // Native custody has no such relay.
+    // Native custody has no independent reaper to exercise while this host is blocked.
     mockProcessPlatform("darwin");
     const root = tempDirs.make("openclaw-retirement-dispatch-");
     const input = path.join(root, "observe.json");
@@ -88,8 +84,8 @@ it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       { stdio: ["ignore", "ignore", "inherit", "ipc"] },
     );
     const observerExit = once(observer, "exit");
-    const relayExit = createDeferred();
-    const controlClose = createDeferred();
+    let relayExit: Promise<unknown> | undefined;
+    let controlClose: Promise<unknown> | undefined;
     let relay: ChildProcess | undefined;
     let adapter: Awaited<ReturnType<typeof createServiceChildRelayAdapter>>["adapter"] | undefined;
     let anchorPid: number | undefined;
@@ -117,32 +113,16 @@ it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           return;
         }
         relay = child;
-        child.once("exit", () => {
-          delivered.push("relay-exit");
-          relayExit.resolve();
-        });
+        relayExit = once(child, "exit").then(() => delivered.push("relay-exit"));
         const control = child.stdio[3];
         if (!(control instanceof Duplex)) {
           throw new Error("Expected the private control pipe");
         }
-        control.once("close", () => {
-          delivered.push("control-close");
-          controlClose.resolve();
-        });
-        let pending = "";
-        control.on("data", (chunk: Buffer) => {
-          pending += chunk.toString();
-          for (;;) {
-            const newline = pending.indexOf("\n");
-            if (newline < 0) {
-              return;
-            }
-            // The real anchor is the sole writer on its private protocol channel.
-            const message = JSON.parse(pending.slice(0, newline)) as ServiceChildAnchorMessage;
-            pending = pending.slice(newline + 1);
-            if (message.type === "ready") {
-              anchorPid = message.anchorPid;
-            }
+        controlClose = once(control, "close").then(() => delivered.push("control-close"));
+        readLines(control, (line) => {
+          const message = JSON.parse(line) as ServiceChildAnchorMessage;
+          if (message.type === "ready") {
+            anchorPid = message.anchorPid;
           }
         });
         const write = control.write.bind(control);
@@ -184,7 +164,7 @@ it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       adapter = startup.adapter;
       await startup.ready;
       const results = await Promise.allSettled([adapter.wait(), adapter.waitForExtinction()]);
-      await Promise.all([relayExit.promise, controlClose.promise]);
+      await Promise.all([relayExit, controlClose]);
       expect((await observerExit)[0]).toBe(0);
       const observed = JSON.parse(readFileSync(receipt, "utf8")) as {
         ackAt: number;
@@ -207,7 +187,7 @@ it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       if (relay) {
         adapter?.kill("SIGKILL");
         relay.kill("SIGTERM");
-        await relayExit.promise;
+        await relayExit;
       }
       adapter?.dispose();
     }

@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -26,10 +27,6 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 let platformMock: ReturnType<typeof mockProcessPlatform> | undefined;
-const nextTurn = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 const cleanups: Array<() => void> = [];
 afterEach(async () => {
   vi.useRealTimers();
@@ -91,10 +88,10 @@ function closeStub(stub: ReturnType<typeof createWritableRelayChild>) {
   stub.emitExit(0);
 }
 
-function observeSettlement(promise: Promise<unknown>) {
+function observeSettlement<T>(promise: Promise<T>) {
   const settled = vi.fn();
   void promise.then(settled, settled);
-  return settled;
+  return [promise, settled] as const;
 }
 
 it.each(["before", "after"] as const)(
@@ -363,53 +360,55 @@ it.each(["fragmented", "completed"] as const)(
   },
 );
 
-it("publishes root exit before drain, replays it, and acknowledges only the closing receipt", async () => {
-  const { adapter, start, acknowledgements, emit, completeRoot, close } =
-    await createRelay("darwin");
-  expect(start.acknowledgeClosing).toBe(true);
-  const onExit = vi.fn();
-  adapter.onExit(onExit);
-  emit({ type: "root-result", code: 0, signal: null });
-  await nextTurn();
-  expect(onExit).toHaveBeenCalledExactlyOnceWith(0, null);
-  const lateExit = vi.fn();
-  adapter.onExit(lateExit);
-  expect(lateExit).toHaveBeenCalledExactlyOnceWith(0, null);
-  completeRoot();
-  await adapter.wait();
-  const closing = emit({ type: "closing", reason: "lineage-closed" });
-  const extinction = adapter.waitForExtinction();
-  const settled = observeSettlement(extinction);
-  await nextTurn();
-  expect(acknowledgements).toEqual([
-    {
-      type: "closing-ack",
-      generation: closing.generation,
-      sequence: 1,
-      closingSequence: closing.sequence,
-    },
-  ]);
-  expect(settled).not.toHaveBeenCalled();
-  close();
-  await expect(extinction).resolves.toBeUndefined();
-});
-
-it("publishes confirmed cancellation when the root result is missing", async () => {
-  const { adapter, emit, endOutput, close } = await createRelay("darwin");
-  const onExit = vi.fn();
-  adapter.onExit(onExit);
-  adapter.kill("SIGKILL");
-  endOutput();
-  emit({ type: "closing", reason: "lineage-closed" });
-  await nextTurn();
-  close();
-  await expect(adapter.wait()).resolves.toEqual({ code: null, signal: "SIGKILL" });
-  await expect(adapter.waitForExtinction()).resolves.toBeUndefined();
-  expect(onExit).toHaveBeenCalledExactlyOnceWith(null, "SIGKILL");
-  const lateExit = vi.fn();
-  adapter.onExit(lateExit);
-  expect(lateExit).toHaveBeenCalledExactlyOnceWith(null, "SIGKILL");
-});
+it.each(["root", "cancellation"] as const)(
+  "publishes and replays %s exit while retaining the independent closing receipt",
+  async (source) => {
+    const { adapter, start, acknowledgements, emit, completeRoot, endOutput, close } =
+      await createRelay("darwin");
+    const onExit = vi.fn();
+    adapter.onExit(onExit);
+    const exit = source === "root" ? [0, null] : [null, "SIGKILL"];
+    if (source === "root") {
+      expect(start.acknowledgeClosing).toBe(true);
+      emit({ type: "root-result", code: 0, signal: null });
+      await nextTurn();
+      expect(onExit).toHaveBeenCalledExactlyOnceWith(...exit);
+      const lateExit = vi.fn();
+      adapter.onExit(lateExit);
+      expect(lateExit).toHaveBeenCalledExactlyOnceWith(...exit);
+      completeRoot();
+      await adapter.wait();
+    } else {
+      adapter.kill("SIGKILL");
+      endOutput();
+    }
+    const closing = emit({ type: "closing", reason: "lineage-closed" });
+    const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
+    await nextTurn();
+    if (source === "root") {
+      expect(acknowledgements).toEqual([
+        {
+          type: "closing-ack",
+          generation: closing.generation,
+          sequence: 1,
+          closingSequence: closing.sequence,
+        },
+      ]);
+      expect(settled).not.toHaveBeenCalled();
+    }
+    close();
+    if (source === "cancellation") {
+      await expect(adapter.wait()).resolves.toEqual({ code: null, signal: "SIGKILL" });
+    }
+    await expect(extinction).resolves.toBeUndefined();
+    if (source === "cancellation") {
+      expect(onExit).toHaveBeenCalledExactlyOnceWith(...exit);
+      const lateExit = vi.fn();
+      adapter.onExit(lateExit);
+      expect(lateExit).toHaveBeenCalledExactlyOnceWith(...exit);
+    }
+  },
+);
 
 it("keeps cleanup authority when a root-exit consumer ends already-closed stdin", async () => {
   const stub = mockWritableRelay();
@@ -459,8 +458,7 @@ it("keeps an observed Windows root result independent of failed extinction", asy
   adapter.kill("SIGTERM");
   emit({ type: "root-result", code: 23, signal: null });
   await nextTurn();
-  const root = adapter.wait();
-  const settled = observeSettlement(root);
+  const [root, settled] = observeSettlement(adapter.wait());
   close();
   await expect(adapter.waitForExtinction()).rejects.toThrow("cleanup identity lost");
   expect(settled).not.toHaveBeenCalled();
@@ -474,8 +472,7 @@ it.each(["darwin", "win32"] as const)(
     const { adapter, cancellations, emit, completeRoot, close } = await createRelay(platform);
     completeRoot();
     await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
-    const extinction = adapter.waitForExtinction();
-    const settled = observeSettlement(extinction);
+    const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
     adapter.kill();
     expect(cancellations).toHaveLength(1);
     emit({ type: "closing", reason: "lineage-closed" });
@@ -511,8 +508,7 @@ it.each(["EOF", "close"])("joins outside-group lineage with %s", async (ending) 
   await adapter.wait();
   emit({ type: "closing", reason: "cancel" });
   await nextTurn();
-  const extinction = adapter.waitForExtinction();
-  const settled = observeSettlement(extinction);
+  const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
   close();
   await nextTurn();
   expect(settled).not.toHaveBeenCalled();
@@ -538,8 +534,7 @@ it("waits for relay reaping before confirming extinction", async () => {
   await nextTurn();
   emit({ type: "closing", reason: "lineage-closed" });
   await nextTurn();
-  const extinction = adapter.waitForExtinction();
-  const settled = observeSettlement(extinction);
+  const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
   closeControl();
   await nextTurn();
   expect(settled).not.toHaveBeenCalled();
@@ -560,8 +555,7 @@ it.each(["before", "after"])(
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const now = vi.spyOn(performance, "now").mockReturnValue(10_000);
     const warn = vi.fn();
-    const extinction = adapter.waitForExtinction();
-    const settled = observeSettlement(extinction);
+    const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
     if (order === "before") {
       runWithProcessCleanupBudget({ deadline: 20_000, warn }, () => adapter.kill("SIGTERM"));
     }
@@ -617,8 +611,7 @@ it("retires a queued ordinary expiry when shutdown adopts the pending cleanup", 
     await createRelay("darwin");
   const now = vi.spyOn(performance, "now").mockReturnValue(10_000);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setImmediate", "clearImmediate"] });
-  const extinction = adapter.waitForExtinction();
-  const settled = observeSettlement(extinction);
+  const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
   completeRoot();
   emit({ type: "closing", reason: "cancel" });
   lineage.end();
@@ -679,8 +672,7 @@ it("retains extinction ownership after EPERM until ESRCH", async () => {
   });
   completeRoot();
   await adapter.wait();
-  const extinction = adapter.waitForExtinction();
-  const settled = observeSettlement(extinction);
+  const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
   emit({ type: "closing", reason: "lineage-closed" });
   await nextTurn();
   expect(groupProbe).not.toHaveBeenCalled();
@@ -717,15 +709,12 @@ it.each(["before", "after"])(
     emit({ type: "closing", reason: "lineage-closed" });
     await nextTurn();
     expect(acknowledgements).toContainEqual(expect.objectContaining({ type: "closing-ack" }));
-    const extinct = vi.fn();
-    void adapter.waitForExtinction().then(extinct, extinct);
+    const [, extinct] = observeSettlement(adapter.waitForExtinction());
     if (controlCloses === "before") {
       closeControl();
       await nextTurn();
     }
-    const finished = vi.fn();
-    const closing = closeOwnedStdioProcess(adapter, { force: true });
-    void closing.then(finished, finished);
+    const [closing, finished] = observeSettlement(closeOwnedStdioProcess(adapter, { force: true }));
     await vi.advanceTimersByTimeAsync(500);
     expect(finished).not.toHaveBeenCalled();
     expect(extinct).not.toHaveBeenCalled();

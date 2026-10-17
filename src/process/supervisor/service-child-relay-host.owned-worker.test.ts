@@ -209,7 +209,6 @@ it
         });
         expect(onWorkerMessage).toHaveBeenCalledTimes(action === "force-descendant" ? 3 : 2);
         expect(await readFile(marker, "utf8")).toBe("started\n");
-        expect(output.length).toBe(expectedOutput.length);
         expect(output).toBe(expectedOutput);
       } else {
         adapter.closeStartGate!();
