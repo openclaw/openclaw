@@ -50,14 +50,7 @@ vi.mock("../plugins/providers.runtime.js", () => ({
       {
         id: "openai",
         label: "OpenAI",
-        auth: [
-          {
-            id: "oauth",
-            label: "OAuth",
-            kind: "oauth",
-            run: mocks.runAuth,
-          },
-        ],
+        auth: [{ id: "oauth", label: "OAuth", kind: "oauth", run: mocks.runAuth }],
       },
     ] satisfies ProviderPlugin[],
 }));
@@ -97,8 +90,8 @@ describe("models auth login owner integration", () => {
     vi.clearAllMocks();
   });
 
-  it("promotes a relocated shared login through the shipped CLI command", async () => {
-    await withOpenClawTestState(
+  function withLoginState(run: Parameters<typeof withOpenClawTestState>[1]) {
+    return withOpenClawTestState(
       { label: "models-auth-login-owner", scenario: "minimal" },
       async (state) => {
         await state.writeConfig({
@@ -107,96 +100,88 @@ describe("models auth login owner integration", () => {
         });
         writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
         restoreStdin = makeStdinInteractive();
-
-        await runRegisteredCli({
-          register: registerModelsCli,
-          argv: ["models", "auth", "login", "--provider", "openai", "--agent", "main"],
-        });
-
-        expect(mocks.runAuth).toHaveBeenCalledOnce();
-        expect(loadPersistedAuthProfileStore()?.profiles[FRESH_PROFILE_ID]).toMatchObject({
-          type: "oauth",
-          provider: "openai",
-        });
-        expect(
-          loadPersistedAuthProfileStore(state.agentDir())?.profiles[FRESH_PROFILE_ID],
-        ).toBeUndefined();
-        expect(loadAuthProfileStoreForRuntime(state.agentDir()).order?.openai).toEqual([
-          FRESH_PROFILE_ID,
-          STALE_PROFILE_ID,
-        ]);
-        expect(mocks.callGateway).toHaveBeenCalledWith(
-          expect.objectContaining({
-            method: "models.authRefresh",
-            params: { operation: "login", agentId: "main" },
-            requireLocalBackendSharedAuth: true,
-          }),
-        );
-      },
-    );
-  });
-
-  it("reports partial success when the local order owner is busy", async () => {
-    await withOpenClawTestState(
-      { label: "models-auth-login-order-busy", scenario: "minimal" },
-      async (state) => {
-        await state.writeConfig({
-          agents: { entries: { main: {} } },
-          auth: { order: { openai: [STALE_PROFILE_ID] } },
-        });
-        writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
-        expect(
-          await setAuthProfileOrder({
-            agentDir: state.agentDir(),
-            provider: "openai",
-            order: [STALE_PROFILE_ID],
-          }),
-        ).not.toBeNull();
-        restoreStdin = makeStdinInteractive();
-        const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-        const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-        const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
-          throw new Error(`exit:${code}`);
-        });
-        const persist = providerAuthPersistence.persistProviderAuthProfilesAfterLogin;
-        const credentialSave = vi
-          .spyOn(providerAuthPersistence, "persistProviderAuthProfilesAfterLogin")
-          .mockImplementationOnce(async (params) => {
-            const profiles = await persist(params);
-            lock = new DatabaseSync(resolveAuthProfileDatabasePath(state.agentDir()));
-            lock.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE;");
-            return profiles;
-          });
-
         try {
-          await expect(
-            runRegisteredCli({
-              register: registerModelsCli,
-              argv: ["models", "auth", "login", "--provider", "openai", "--agent", "main"],
-            }),
-          ).rejects.toThrow("exit:1");
-
-          expect(error).toHaveBeenCalledWith(ORDER_BUSY_MESSAGE);
-          expect(exit).toHaveBeenCalledWith(1);
-          expect(log).not.toHaveBeenCalledWith(
-            expect.stringContaining(`Auth profile: ${FRESH_PROFILE_ID}`),
-          );
-          expect(mocks.callGateway).not.toHaveBeenCalled();
-          expect(loadPersistedAuthProfileStore()?.profiles[FRESH_PROFILE_ID]).toMatchObject({
-            type: "oauth",
-            provider: "openai",
-          });
-          expect(loadPersistedAuthProfileStore(state.agentDir())?.order?.openai).toEqual([
-            STALE_PROFILE_ID,
-          ]);
+          return await run(state);
         } finally {
-          credentialSave.mockRestore();
+          // Restore before the state fixture removes its database files.
           releaseLock();
-          error.mockRestore();
-          log.mockRestore();
-          exit.mockRestore();
+          vi.restoreAllMocks();
         }
       },
     );
+  }
+
+  const login = () =>
+    runRegisteredCli({
+      register: registerModelsCli,
+      argv: ["models", "auth", "login", "--provider", "openai", "--agent", "main"],
+    });
+  const expectSavedCredential = () =>
+    expect(loadPersistedAuthProfileStore()?.profiles[FRESH_PROFILE_ID]).toMatchObject({
+      type: "oauth",
+      provider: "openai",
+    });
+
+  it("promotes a relocated shared login through the shipped CLI command", async () => {
+    await withLoginState(async (state) => {
+      await login();
+
+      expect(mocks.runAuth).toHaveBeenCalledOnce();
+      expectSavedCredential();
+      expect(
+        loadPersistedAuthProfileStore(state.agentDir())?.profiles[FRESH_PROFILE_ID],
+      ).toBeUndefined();
+      expect(loadAuthProfileStoreForRuntime(state.agentDir()).order?.openai).toEqual([
+        FRESH_PROFILE_ID,
+        STALE_PROFILE_ID,
+      ]);
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "models.authRefresh",
+          params: { operation: "login", agentId: "main" },
+          requireLocalBackendSharedAuth: true,
+        }),
+      );
+    });
+  });
+
+  it("reports partial success when the local order owner is busy", async () => {
+    await withLoginState(async (state) => {
+      expect(
+        await setAuthProfileOrder({
+          agentDir: state.agentDir(),
+          provider: "openai",
+          order: [STALE_PROFILE_ID],
+        }),
+      ).not.toBeNull();
+      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+        throw new Error(`exit:${code}`);
+      });
+      const persist = providerAuthPersistence.persistProviderAuthProfilesAfterLogin;
+      vi.spyOn(
+        providerAuthPersistence,
+        "persistProviderAuthProfilesAfterLogin",
+      ).mockImplementationOnce(async (params) => {
+        const profiles = await persist(params);
+        lock = new DatabaseSync(resolveAuthProfileDatabasePath(state.agentDir()));
+        lock.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE;");
+        return profiles;
+      });
+
+      await expect(login()).rejects.toThrow("exit:1");
+
+      expect(error).toHaveBeenCalledWith(ORDER_BUSY_MESSAGE);
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(log).not.toHaveBeenCalledWith(
+        expect.stringContaining(`Auth profile: ${FRESH_PROFILE_ID}`),
+      );
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expectSavedCredential();
+      expect(loadPersistedAuthProfileStore(state.agentDir())?.order?.openai).toEqual([
+        STALE_PROFILE_ID,
+      ]);
+    });
   });
 });

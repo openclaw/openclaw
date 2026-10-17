@@ -33,9 +33,7 @@ vi.mock("../config/config.js", () => ({
   captureRuntimeConfigAsyncReader: () => async () => mocks.getRuntimeConfig(),
 }));
 // mock-isolation: Supply inert key input without reading the test runner's terminal.
-vi.mock("../commands/models/auth-gateway.js", () => ({
-  readGatewayApiKeyParams: mocks.readKey,
-}));
+vi.mock("../commands/models/auth-gateway.js", () => ({ readGatewayApiKeyParams: mocks.readKey }));
 // mock-isolation: Routing tests must not prompt for or execute provider authentication.
 vi.mock("../commands/models/auth-login-gateway.js", () => ({
   readGatewayLoginParams: mocks.readLogin,
@@ -90,6 +88,17 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+async function runAuth(args: string[]) {
+  const program = new Command().enablePositionalOptions();
+  registerModelsCli(program);
+  await program.parseAsync(["models", ...args], { from: "user" });
+}
+
+function expectNoLocalAdmission() {
+  expect(mocks.domain).not.toHaveBeenCalled();
+  expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+}
+
 it.each(
   [
     ["add"],
@@ -105,26 +114,17 @@ it.each(
 )(
   "refuses models auth $command before config or credential admission when the Gateway owns state",
   async ({ args }) => {
-    const program = new Command().enablePositionalOptions();
-    registerModelsCli(program);
-    await expect(
-      program.parseAsync(["models", "auth", ...args], { from: "user" }).then(() => undefined),
-    ).rejects.toMatchObject({
+    await expect(runAuth(["auth", ...args])).rejects.toMatchObject({
       code: "OWNER_UNAVAILABLE",
       message: expect.stringContaining("stop the Gateway"),
     });
     expect(mocks.gateway).not.toHaveBeenCalled();
-    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
-    expect(mocks.domain).not.toHaveBeenCalled();
+    expectNoLocalAdmission();
   },
 );
 
 it("delegates paste-api-key to the live owner without local credential admission", async () => {
-  const program = new Command().enablePositionalOptions();
-  registerModelsCli(program);
-  await program.parseAsync(["models", "auth", "paste-api-key", "--provider", "openai"], {
-    from: "user",
-  });
+  await runAuth(["auth", "paste-api-key", "--provider", "openai"]);
   expect(mocks.gateway).toHaveBeenCalledWith(
     expect.objectContaining({
       method: "models.authSetApiKey",
@@ -146,16 +146,13 @@ it("delegates paste-api-key to the live owner without local credential admission
     { provider: "openai", agent: undefined },
     expect.any(AbortSignal),
   );
-  expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
-  expect(mocks.domain).not.toHaveBeenCalled();
+  expectNoLocalAdmission();
 });
 
 it.each([["login", "--provider", "fixture", "--method", "device"], ["login-github-copilot"]])(
   "delegates %j without loading local credential state",
   async (...args) => {
-    const program = new Command().enablePositionalOptions();
-    registerModelsCli(program);
-    await program.parseAsync(["models", "--agent", "writer", "auth", ...args], { from: "user" });
+    await runAuth(["--agent", "writer", "auth", ...args]);
     expect(mocks.gateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "models.authLogin",
@@ -176,8 +173,7 @@ it.each([["login", "--provider", "fixture", "--method", "device"], ["login-githu
       expect.any(String),
       expect.any(AbortSignal),
     );
-    expect(mocks.domain).not.toHaveBeenCalled();
-    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+    expectNoLocalAdmission();
   },
 );
 
@@ -188,13 +184,8 @@ it.each(["--profile-id", "--force", "--set-default"])(
     vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
       throw new ExitError(code);
     });
-    const program = new Command().enablePositionalOptions();
-    registerModelsCli(program);
     await expect(
-      program.parseAsync(
-        ["models", "auth", "login", option, ...(option === "--profile-id" ? ["custom"] : [])],
-        { from: "user" },
-      ),
+      runAuth(["auth", "login", option, ...(option === "--profile-id" ? ["custom"] : [])]),
     ).rejects.toMatchObject({ code: 1 });
     expect(error).toHaveBeenCalledWith(expect.stringContaining("cannot be represented"));
     expect(mocks.gateway).not.toHaveBeenCalled();
@@ -205,34 +196,22 @@ it.each(["--profile-id", "--force", "--set-default"])(
 
 it("cancels API-key input without calling the Gateway or admitting local credentials", async () => {
   mocks.readKey.mockRejectedValueOnce(new ExitError(0));
-  const program = new Command().enablePositionalOptions();
-  registerModelsCli(program);
-  await expect(
-    program.parseAsync(["models", "auth", "paste-api-key", "--provider", "openai"], {
-      from: "user",
-    }),
-  ).rejects.toMatchObject({ code: 0 });
+  await expect(runAuth(["auth", "paste-api-key", "--provider", "openai"])).rejects.toMatchObject({
+    code: 0,
+  });
   expect(mocks.gateway).not.toHaveBeenCalled();
-  expect(mocks.domain).not.toHaveBeenCalled();
-  expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+  expectNoLocalAdmission();
 });
 
 it("does not fall back locally when the Gateway lacks owner-bound API-key support", async () => {
   mocks.gateway.mockRejectedValueOnce(
     new Error('Gateway does not support required capability "models-auth-set-api-key-owner-v1"'),
   );
-  const program = new Command().enablePositionalOptions();
-  registerModelsCli(program);
-  await expect(
-    program.parseAsync(["models", "auth", "paste-api-key", "--provider", "openai"], {
-      from: "user",
-    }),
-  ).rejects.toMatchObject({
+  await expect(runAuth(["auth", "paste-api-key", "--provider", "openai"])).rejects.toMatchObject({
     code: "OWNER_REFUSED",
     message: expect.stringContaining("Update the Gateway"),
   });
-  expect(mocks.domain).not.toHaveBeenCalled();
-  expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+  expectNoLocalAdmission();
 });
 
 it.each([
@@ -266,12 +245,7 @@ it.each([
       expect(resolved.deviceIdentity).toBeNull();
       return { provider: "openai", profileId: "openai:manual" };
     });
-    const program = new Command().enablePositionalOptions();
-    registerModelsCli(program);
-    await program.parseAsync(["models", "auth", ...args], {
-      from: "user",
-    });
-    expect(mocks.domain).not.toHaveBeenCalled();
-    expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+    await runAuth(["auth", ...args]);
+    expectNoLocalAdmission();
   },
 );
