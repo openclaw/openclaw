@@ -1,4 +1,3 @@
-// Claude CLI session history importer.
 // Converts Claude project JSONL into OpenClaw transcript-compatible messages.
 import fs from "node:fs";
 import path from "node:path";
