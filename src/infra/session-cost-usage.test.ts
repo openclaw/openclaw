@@ -894,7 +894,7 @@ describe("session cost usage", () => {
     await writeEntries(sessionFile, [
       transcriptEntry("2026-02-12T10:00:00Z", { role: "user", content: "hello" }),
     ]);
-    for (const limit of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    for (const limit of [0, -1, 0.5, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       await expect(loadSessionLogs({ agentId: "main", sessionFile, limit })).resolves.toEqual([]);
     }
   });

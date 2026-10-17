@@ -291,7 +291,7 @@ export async function loadSessionLogs(
   return withSessionUsageDiagnosticSource(params, async (scoped, sessionFile) => {
     const logs: SessionLogEntry[] = [];
     if (scoped.limit !== undefined && scoped.limit !== null) {
-      if (!Number.isFinite(scoped.limit) || scoped.limit <= 0) {
+      if (!Number.isInteger(scoped.limit) || scoped.limit <= 0) {
         return [];
       }
     }
