@@ -1,8 +1,4 @@
-import {
-  createAssistantMessageEventStream,
-  type AssistantMessage,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
@@ -12,55 +8,18 @@ import {
 import { createStubSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { Agent } from "../../runtime/index.js";
-import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { createMessageTool } from "../../tools/message-tool-execution.js";
 import { resolveSourceReplyDelivery } from "../delivery-evidence.js";
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
 import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
+import {
+  terminalModel as model,
+  terminalResponse,
+  terminalToolCall,
+} from "./message-tool-terminal.test-support.js";
 import { buildPayloads } from "./payloads.test-helpers.js";
 
-const model: Model = {
-  id: "test-model",
-  name: "Test Model",
-  api: "openai-responses",
-  provider: "test-provider",
-  baseUrl: "https://example.test",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1_000,
-  maxTokens: 1_000,
-};
-
-function response(
-  content: AssistantMessage["content"],
-  stopReason: "toolUse" | "error" | "stop",
-  timestamp: number,
-) {
-  const message: AssistantMessage = {
-    role: "assistant",
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: createZeroUsageFixture(),
-    timestamp,
-    content,
-    stopReason,
-    ...(stopReason === "error"
-      ? { errorMessage: "Provider failed answering steered input B" }
-      : {}),
-  };
-  const stream = createAssistantMessageEventStream();
-  queueMicrotask(() => {
-    if (stopReason === "error") {
-      stream.push({ type: "error", reason: "error", error: message });
-    } else {
-      stream.push({ type: "done", reason: stopReason, message });
-    }
-    stream.end();
-  });
-  return stream;
-}
+const answer = "Answer for input A.";
 
 describe("confirmed message-tool turn completion", () => {
   it.each([false, true])(
@@ -116,19 +75,23 @@ describe("confirmed message-tool turn completion", () => {
         },
         streamFn: () => {
           requests += 1;
-          return response(
+          return terminalResponse(
             requests === 1
               ? [
-                  {
-                    type: "toolCall",
-                    id: "source-a",
-                    name: "message",
-                    arguments: { action: "send", message: "Answer for input A.", final },
-                  },
+                  terminalToolCall("message", "source-a", {
+                    action: "send",
+                    message: answer,
+                    final,
+                  }),
                 ]
               : [],
             requests === 1 ? "toolUse" : "error",
-            requests,
+            {
+              timestamp: requests,
+              ...(requests === 1
+                ? {}
+                : { errorMessage: "Provider failed answering steered input B" }),
+            },
           );
         },
       });
@@ -159,16 +122,15 @@ describe("confirmed message-tool turn completion", () => {
       try {
         await agent.prompt("Input A: reply through the message tool.");
         await subscription.waitForPendingEvents();
-        expect(requests).toBe(2);
-        expect(delivered).toBe(final);
-        expect(subscription.getSourceReplyDeliveryState()).toBe("missing");
+        const sourceReplyDeliveryState = subscription.getSourceReplyDeliveryState();
+        expect([requests, delivered, sourceReplyDeliveryState]).toEqual([2, final, "missing"]);
         expect(subscription.answerSegments).toEqual([
           expect.objectContaining({ sourceReplyDeliveryState: final ? "delivered" : "missing" }),
         ]);
-        const messagingToolSourceReplyPayloads = subscription.getMessagingToolSourceReplyPayloads();
-        expect(messagingToolSourceReplyPayloads).toEqual([
+        const replies = subscription.getMessagingToolSourceReplyPayloads();
+        expect(replies).toEqual([
           expect.objectContaining({
-            text: "Answer for input A.",
+            text: answer,
             ...(final ? { sourceReplyFinal: true } : {}),
           }),
         ]);
@@ -178,18 +140,16 @@ describe("confirmed message-tool turn completion", () => {
         expect(lastAssistant?.stopReason).toBe("error");
         const payloads = buildPayloads({
           sourceReplyDeliveryMode: "automatic",
-          sourceReplyDeliveryState: subscription.getSourceReplyDeliveryState(),
+          sourceReplyDeliveryState,
           assistantTexts: subscription.assistantTexts,
           answerSegments: subscription.answerSegments,
           messagingToolSentTargets: subscription.getMessagingToolSentTargets(),
-          messagingToolSourceReplyPayloads,
+          messagingToolSourceReplyPayloads: replies,
           didDeliverSourceReplyViaMessageTool:
-            resolveSourceReplyDelivery({
-              sourceReplyDeliveryState: subscription.getSourceReplyDeliveryState(),
-            }) === "delivered",
+            resolveSourceReplyDelivery({ sourceReplyDeliveryState }) === "delivered",
           lastAssistant,
         });
-        expect(payloads).toContainEqual(expect.objectContaining({ text: "Answer for input A." }));
+        expect(payloads).toContainEqual(expect.objectContaining({ text: answer }));
         expect(payloads.some((payload) => payload.isError === true)).toBe(true);
       } finally {
         unsubscribe();
@@ -250,16 +210,11 @@ describe("confirmed message-tool turn completion", () => {
           const content: AssistantMessage["content"] =
             requests === 1
               ? [
-                  {
-                    type: "toolCall",
-                    id: "source-reply",
-                    name: "message",
-                    arguments: { action: "send", final },
-                  },
-                  { type: "toolCall", id: "lookup", name: "lookup", arguments: {} },
+                  terminalToolCall("message", "source-reply", { action: "send", final }),
+                  terminalToolCall("lookup", "lookup"),
                 ]
               : [{ type: "text", text: "Another visible answer." }];
-          return response(content, requests === 1 ? "toolUse" : "stop", 0);
+          return terminalResponse(content, requests === 1 ? "toolUse" : "stop");
         },
       });
       agent.afterToolCall = async (context) => {
@@ -280,9 +235,11 @@ describe("confirmed message-tool turn completion", () => {
 
       await agent.prompt("Answer with a source reply.");
 
-      expect(executed).toEqual(["message", "lookup"]);
-      expect(deliveries).toBe(1);
-      expect(requests).toBe(final ? 1 : 2);
+      expect({ executed, deliveries, requests }).toEqual({
+        executed: ["message", "lookup"],
+        deliveries: 1,
+        requests: final ? 1 : 2,
+      });
       expect(
         agent.state.messages.some(
           (message) =>
