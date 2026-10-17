@@ -5,6 +5,7 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import * as entryFacts from "../config/sessions/session-entry-read-facts.js";
+import * as storeCandidates from "../config/sessions/session-store-read-candidates.js";
 import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
 import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -169,6 +170,18 @@ async function withObserver(
     }
   });
 }
+
+it("does not discover physical stores for unwatched assistant deltas", async () => {
+  await withObserver(async ({ observer, watch }) => {
+    watch(false);
+    await observer.handleEventAsync(event({ stream: "lifecycle", data: { phase: "start" } }));
+    const discover = vi.spyOn(storeCandidates, "captureSessionStoreReadCandidate");
+    for (const delta of ["Checking ", "the implementation."]) {
+      await observer.handleEventAsync(event({ stream: "assistant", data: { delta } }));
+    }
+    expect(discover).not.toHaveBeenCalled();
+  });
+});
 
 it("moves observer admission, publication, terminal and companion reads off the caller and observes foreign resets", async () => {
   await withObserver(
