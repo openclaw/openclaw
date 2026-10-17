@@ -1,9 +1,20 @@
 // @vitest-environment node
 import { describe, expect, it, test } from "vitest";
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
-import type { SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { resolveChatThinkingSelectState } from "../chat/thinking.ts";
 import { reconcileSessionChanged, reconcileSessionHistory } from "./reconcile.ts";
+
+const key = "agent:main:main";
+const identity = {
+  modelProvider: "test-provider",
+  model: "reasoning-model",
+  agentRuntime: { id: "openclaw", source: "model" as const },
+};
+const thinkingLevels = ["max", "ultra"].map((id) => ({ id, label: id }));
+function sessionRow(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+  return { key, kind: "direct", updatedAt: 1, ...overrides };
+}
 
 function buildResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
   return {
@@ -18,8 +29,8 @@ function buildResult(sessions: SessionsListResult["sessions"]): SessionsListResu
 describe("history defaults ownership", () => {
   it.each(["unknown"] as const)(
     "replaces the selected %s owner without donating another owner's presentation",
-    (key) => {
-      const row = { key, kind: key, sessionId: "shared-session", updatedAt: 1 };
+    (sourceKey) => {
+      const row = { key: sourceKey, kind: sourceKey, sessionId: "shared-session", updatedAt: 1 };
       const current = buildResult([
         {
           ...row,
@@ -40,14 +51,9 @@ describe("history defaults ownership", () => {
   );
 
   it.each([
-    { name: "keeps an empty roster's own inherited thinking", agentId: "main", existing: true },
-    { name: "accepts the same agent's updated defaults", agentId: "work", existing: true },
-  ])("$name", ({ agentId, existing }) => {
-    const identity = {
-      modelProvider: "test-provider",
-      model: "reasoning-model",
-      agentRuntime: { id: "openclaw", source: "model" as const },
-    };
+    { name: "keeps an empty roster's own inherited thinking", agentId: "main" },
+    { name: "accepts the same agent's updated defaults", agentId: "work" },
+  ])("$name", ({ agentId }) => {
     const defaults: SessionsListResult["defaults"] = {
       ...identity,
       contextTokens: 128_000,
@@ -57,7 +63,7 @@ describe("history defaults ownership", () => {
         { id: "high", label: "High" },
       ],
     };
-    const current = existing ? { ...buildResult([]), defaults } : null;
+    const current = { ...buildResult([]), defaults };
     const workDefaults = { ...defaults, thinkingDefault: "high" };
     const next = reconcileSessionHistory(
       current,
@@ -73,10 +79,6 @@ describe("history defaults ownership", () => {
       { resultAgentId: agentId, selectedGlobalAgentId: "work" },
     );
 
-    if (!existing) {
-      expect(next).toBeNull();
-      return;
-    }
     const ownAgent = agentId === "work";
     expect(
       resolveChatThinkingSelectState({ catalog: [], sessionKey: "global", sessionsResult: next })
@@ -92,21 +94,18 @@ describe("history defaults ownership", () => {
 
 test("enrichment survives omitted fields but not explicit transcript clearing receipts", () => {
   const initial = buildResult([
-    {
-      key: "agent:main:main",
-      kind: "direct",
+    sessionRow({
       sessionId: "same-session",
-      updatedAt: 1,
       derivedTitle: "Task",
       lastMessagePreview: "Last message",
       lastAssistantMessage: { text: "Assistant reply", timestamp: 1 },
-    },
+    }),
   ]);
   const event = {
-    sessionKey: "agent:main:main",
+    sessionKey: key,
     agentId: "main",
     reason: "transcript",
-    session: { key: "agent:main:main", kind: "direct", sessionId: "same-session", updatedAt: 2 },
+    session: sessionRow({ sessionId: "same-session", updatedAt: 2 }),
   };
   const omitted = reconcileSessionChanged(initial, event).result;
   expect(omitted?.sessions[0]?.lastAssistantMessage).toEqual({
@@ -129,9 +128,9 @@ test("enrichment survives omitted fields but not explicit transcript clearing re
 });
 
 test("reconciling the same sessions.changed twice keeps result identity on the second pass", () => {
-  const result = buildResult([{ key: "agent:main:main", kind: "direct", updatedAt: 1 }]);
+  const result = buildResult([sessionRow()]);
   const payload = {
-    sessionKey: "agent:main:main",
+    sessionKey: key,
     reason: "patch",
     catalogChanged: true,
     ts: 2,
@@ -146,9 +145,7 @@ test("reconciling the same sessions.changed twice keeps result identity on the s
   expect(first.result?.sessions[0]).not.toHaveProperty("catalogChanged");
   expect(first.result?.ts).toBe(2);
 
-  // The capability handler and the chat page both drive the same event; the
-  // second reconcile must return the identical result object so downstream
-  // result === state.result publish gates skip the duplicate re-render.
+  // Duplicate capability/page delivery must not trigger another render.
   const second = reconcileSessionChanged(first.result ?? null, payload);
   expect(second.result).toBe(first.result);
 });
@@ -158,7 +155,7 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
   // about; these five leaked literal null into rows typed optional-not-null.
   const result = buildResult([
     {
-      key: "agent:main:main",
+      key,
       kind: "direct",
       updatedAt: 1,
       toolOverrides: { profile: "coding" },
@@ -180,10 +177,10 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
   ]);
 
   const reconciled = reconcileSessionChanged(result, {
-    sessionKey: "agent:main:main",
+    sessionKey: key,
     reason: "patch",
     session: {
-      key: "agent:main:main",
+      key,
       kind: "direct",
       updatedAt: 2,
       toolOverrides: null,
@@ -219,12 +216,11 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
 });
 
 test("sessions.changed preserves the owner facet when ownership is unchanged", () => {
-  const key = "agent:main:main";
   const createdActor = { type: "human" as const, id: "profile-ada", label: "Ada" };
   const result = buildResult([
-    { key, kind: "global", updatedAt: 1, createdActor, owner: { actor: createdActor } },
+    sessionRow({ kind: "global", createdActor, owner: { actor: createdActor } }),
   ]);
-  result.owners = [{ type: createdActor.type, id: createdActor.id, label: createdActor.label }];
+  result.owners = [createdActor];
 
   const reconciled = reconcileSessionChanged(result, {
     sessionKey: key,
@@ -234,9 +230,7 @@ test("sessions.changed preserves the owner facet when ownership is unchanged", (
     owner: { actor: createdActor },
   });
 
-  expect(reconciled.result?.owners).toEqual([
-    { type: createdActor.type, id: createdActor.id, label: createdActor.label },
-  ]);
+  expect(reconciled.result?.owners).toEqual([createdActor]);
 });
 
 test("ownerless raw-global events invalidate without contaminating the selected agent row", () => {
@@ -338,11 +332,6 @@ describe("reconcileSessionChanged", () => {
   ])(
     "preserves $name when history omits prepared thinking metadata",
     ({ thinkingDefault, thinkingLevel, levels }) => {
-      const identity = {
-        modelProvider: "test-provider",
-        model: "reasoning-model",
-        agentRuntime: { id: "openclaw", source: "model" as const },
-      };
       const row = {
         ...identity,
         key: "agent:main:main",
@@ -385,10 +374,8 @@ describe("reconcileSessionChanged", () => {
   );
 
   it("does not let stale chat history overwrite a newer runtime switch", () => {
-    const key = "agent:main:main";
     const current = buildResult([
-      {
-        key,
+      sessionRow({
         kind: "global",
         updatedAt: 3,
         sessionId: "s1",
@@ -396,23 +383,16 @@ describe("reconcileSessionChanged", () => {
         model: "gpt-5.6-luna",
         agentRuntime: { id: "codex", source: "session-key" },
         thinkingLevels: [{ id: "max", label: "max" }],
-      },
+      }),
     ]);
 
     const next = reconcileSessionHistory(
       current,
       {
-        key,
-        kind: "global",
+        ...current.sessions[0]!,
         updatedAt: 2,
-        sessionId: "s1",
-        modelProvider: "openai",
-        model: "gpt-5.6-luna",
         agentRuntime: { id: "openclaw", source: "session-key" },
-        thinkingLevels: [
-          { id: "max", label: "max" },
-          { id: "ultra", label: "ultra" },
-        ],
+        thinkingLevels,
       },
       undefined,
     );
@@ -421,14 +401,8 @@ describe("reconcileSessionChanged", () => {
   });
 
   it("preserves catalog-backed options when an event omits picker metadata", () => {
-    const key = "agent:main:main";
-    const thinkingLevels = [
-      { id: "max", label: "max" },
-      { id: "ultra", label: "ultra" },
-    ];
     const result = buildResult([
-      {
-        key,
+      sessionRow({
         kind: "global",
         updatedAt: 1,
         sessionId: "s1",
@@ -437,7 +411,7 @@ describe("reconcileSessionChanged", () => {
         agentRuntime: { id: "codex", source: "model" },
         thinkingLevels,
         thinkingOptions: ["max", "ultra"],
-      },
+      }),
     ]);
     const next = reconcileSessionChanged(result, {
       sessionKey: key,
@@ -455,15 +429,13 @@ describe("reconcileSessionChanged", () => {
   });
 
   it("clears a thinking override when the event carries null", () => {
-    const key = "agent:main:main";
     const result = buildResult([
-      {
-        key,
+      sessionRow({
         kind: "global",
         updatedAt: 1,
         sessionId: "s1",
         thinkingLevel: "ultra",
-      },
+      }),
     ]);
     const next = reconcileSessionChanged(result, {
       sessionKey: key,

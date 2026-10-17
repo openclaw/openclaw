@@ -18,6 +18,18 @@ const initial: GatewaySessionRow = {
   category: "Alpha",
   pinned: false,
 };
+const result = (overrides: Partial<GatewaySessionRow>, ts = 2) =>
+  sessionsResult([{ ...initial, ...overrides }], ts);
+const receipt = (overrides: Partial<GatewaySessionRow>, updatedAt = 2) => ({
+  ok: true,
+  key: initial.key,
+  path: "",
+  entry: { ...initial, updatedAt, ...overrides },
+});
+const flushRead = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 
 function setup() {
   const replies = [createDeferred<unknown>(), createDeferred<unknown>()];
@@ -34,7 +46,7 @@ function setup() {
     }
     if (method === "sessions.list") {
       if (++reads === 1) {
-        return sessionsResult([initial], 1);
+        return result({}, 1);
       }
       listStarted.resolve();
       return list.promise;
@@ -44,12 +56,7 @@ function setup() {
   const harness = createGatewayHarness(client);
   const sessions = createTestSessionCapability(harness.gateway);
   const confirm = (index: number, category: string | undefined, updatedAt = index + 2) =>
-    replies[index]!.resolve({
-      ok: true,
-      key: initial.key,
-      path: "",
-      entry: { ...initial, category, updatedAt },
-    });
+    replies[index]!.resolve(receipt({ category }, updatedAt));
   return {
     ...harness,
     sessions,
@@ -93,12 +100,7 @@ describe("session category mutations", () => {
       }
       expect(h.category()).toBeUndefined();
       if (pin) {
-        h.replies[0]!.resolve({
-          ok: true,
-          path: "",
-          key: initial.key,
-          entry: { ...initial, category: undefined, pinnedAt: 7, updatedAt: 7 },
-        });
+        h.replies[0]!.resolve(receipt({ category: undefined, pinnedAt: 7 }, 7));
       } else {
         h.confirm(0, undefined);
       }
@@ -107,18 +109,11 @@ describe("session category mutations", () => {
       await expect(pending).resolves.toMatchObject({ ok: true });
       if (pin) {
         expect(h.sessions.state.result?.sessions[0]).toMatchObject({ pinned: true, pinnedAt: 7 });
-        h.list.resolve(
-          sessionsResult(
-            [{ ...initial, category: undefined, pinned: true, pinnedAt: 7, updatedAt: 7 }],
-            7,
-          ),
-        );
+        h.list.resolve(result({ category: undefined, pinned: true, pinnedAt: 7, updatedAt: 7 }, 7));
       } else {
         h.list.reject(new Error("injected list failure"));
         await h.list.promise.catch(() => undefined);
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await flushRead();
         expect(h.category()).toBeUndefined();
         expect(h.sessions.state.error).toContain("The session move was saved");
         expect(h.sessions.state.error).toContain("injected list failure");
@@ -169,7 +164,7 @@ describe("session category mutations", () => {
     await expect(pending).rejects.toThrow("could not be confirmed");
     expect(h.category()).toBe("Beta");
     await h.listStarted.promise;
-    h.list.resolve(sessionsResult([{ ...initial, category: "Beta", updatedAt: 2 }], 2));
+    h.list.resolve(result({ category: "Beta", updatedAt: 2 }));
     await h.list.promise;
   });
 
@@ -180,10 +175,7 @@ describe("session category mutations", () => {
       if (owner === "session") {
         const reading = h.sessions.refresh({ agentId: "main", force: true });
         h.list.resolve(
-          sessionsResult(
-            [{ ...initial, sessionId: "replacement", category: "Replacement", updatedAt: 9 }],
-            9,
-          ),
+          result({ sessionId: "replacement", category: "Replacement", updatedAt: 9 }, 9),
         );
         await reading;
       } else {
@@ -204,7 +196,7 @@ describe("session category mutations", () => {
     const pending = h.move("Beta");
     h.confirm(0, "Beta");
     await pending;
-    h.list.resolve(sessionsResult([{ ...initial }], 1));
+    h.list.resolve(result({}, 1));
     await reading;
     expect(h.category()).toBe("Beta");
   });
@@ -237,7 +229,7 @@ it.each(["different", "returned"] as const)(
         if (committed && ++scopedReads === 1) {
           return oldRead.promise;
         }
-        return sessionsResult([{ ...initial, category: committed ? "External" : "Alpha" }], 4);
+        return result({ category: committed ? "External" : "Alpha" }, 4);
       }
       throw new Error(`Unexpected method: ${method}`);
     });
@@ -247,11 +239,7 @@ it.each(["different", "returned"] as const)(
     const move = sessions.patch(initial.key, { category: "Beta" }, options);
     await sessions.refresh({ agentId: "writer", force: true });
     committed = true;
-    reply.resolve({
-      ok: true,
-      key: initial.key,
-      entry: { ...initial, category: "Beta", updatedAt: 2 },
-    });
+    reply.resolve(receipt({ category: "Beta" }));
     await move;
     await vi.waitFor(() => expect(scopedReads).toBe(1));
     if (selection === "returned") {
@@ -259,9 +247,7 @@ it.each(["different", "returned"] as const)(
     }
     oldRead.reject(new Error("old agent read failed"));
     // Let the completed read propagate through the refresh promise chain.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await flushRead();
     expect(sessions.state.agentId).toBe(selection === "returned" ? "main" : "writer");
     expect(sessions.state.error).toBeNull();
   },

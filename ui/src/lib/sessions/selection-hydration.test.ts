@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -20,7 +20,21 @@ import {
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
+function writerRequest(writer: SessionsListResult) {
+  return vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    if (method === "sessions.subscribe") {
+      return { subscribed: true };
+    }
+    if (method === "sessions.list") {
+      return params?.agentId === "writer" ? writer : sessionsResult([], 1);
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+}
+
 describe("session selection hydration", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
   it.each([
     { finalAgent: "main" },
     { finalAgent: "research" },
@@ -33,7 +47,6 @@ describe("session selection hydration", () => {
   ])(
     "retires a slow intermediate agent when automatic selection moves main to writer to $finalAgent (queued explicit: $queuedExplicit, observer recovery: $recover, remembered refresh: $remembered)",
     async ({ finalAgent, queuedExplicit, recover, direct, remembered }) => {
-      vi.useFakeTimers();
       const writer = createDeferred<SessionsListResult>();
       const subscription = createDeferred<{ subscribed: boolean }>();
       let subscriptions = 0;
@@ -148,7 +161,6 @@ describe("session selection hydration", () => {
         await superseded;
         selection.dispose();
         coordinator.reset();
-        vi.useRealTimers();
       }
     },
   );
@@ -162,7 +174,6 @@ describe("session selection hydration", () => {
     { name: "the same owner and SID", agentId: "main", preview: undefined },
     { name: "a present Work preview", agentId: "writer", preview: "Work preview" },
   ])("keeps presentation with its owner across $name", async ({ agentId, preview }) => {
-    vi.useFakeTimers();
     const sharedSid = "00000000-0000-4000-8000-000000000101";
     const main: GatewaySessionRow = {
       key: "global",
@@ -250,12 +261,10 @@ describe("session selection hydration", () => {
       replacement.resolve(sessionsResult([incoming], 30));
       await vi.advanceTimersByTimeAsync(0);
       await sameOwnerRefresh;
-      vi.useRealTimers();
     }
   });
 
   it("discards a delayed default-agent bootstrap after the route selects another agent", async () => {
-    vi.useFakeTimers();
     const bootstrap = createDeferred<SessionsListResult>();
     const writerList = createDeferred<SessionsListResult>();
     const writerResult = sessionsResult(
@@ -319,26 +328,15 @@ describe("session selection hydration", () => {
       sessions.dispose();
       bootstrap.resolve(runningSessionsResult());
       writerList.resolve(writerResult);
-      vi.useRealTimers();
     }
   });
 
   it("hydrates the saved agent before hello and retains its roster when page scope widens", async () => {
-    vi.useFakeTimers();
     const writerResult = sessionsResult(
       [{ key: "agent:writer:dashboard:one", kind: "direct", updatedAt: 1 }],
       1,
     );
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      const list = params?.agentId === "writer" ? writerResult : sessionsResult([], 1);
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return list;
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
+    const request = writerRequest(writerResult);
     const { gateway, selection, sessions, connect } = createSubscriptionHydrationHarness(
       request,
       "writer",
@@ -366,26 +364,15 @@ describe("session selection hydration", () => {
       expect(request).toHaveBeenCalledTimes(requestsBeforeScopeChange);
     } finally {
       sessions.dispose();
-      vi.useRealTimers();
     }
   });
 
   it("retains an offline agent selection and list filters through reconnect refreshes", async () => {
-    vi.useFakeTimers();
     const writerResult = sessionsResult(
       [{ key: "agent:writer:draft", kind: "direct", updatedAt: 1, archived: true }],
       1,
     );
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      const list = params?.agentId === "writer" ? writerResult : sessionsResult([], 1);
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return list;
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
+    const request = writerRequest(writerResult);
     const { selection, sessions, connect, disconnect } =
       createSubscriptionHydrationHarness(request);
     const writerQuery = { agentId: "writer", search: "draft", archived: true, limit: 25 };
@@ -423,7 +410,6 @@ describe("session selection hydration", () => {
       expect(sessions.state.result?.sessions).toEqual(writerResult.sessions);
     } finally {
       sessions.dispose();
-      vi.useRealTimers();
     }
   });
 });

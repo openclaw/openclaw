@@ -5,6 +5,21 @@ import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import { createSessionCapability } from "./index.ts";
 import type { SessionGateway } from "./session-capability.ts";
 
+function listeners<T>() {
+  const callbacks = new Set<(value: T) => void>();
+  return {
+    subscribe(callback: (value: T) => void) {
+      callbacks.add(callback);
+      return () => callbacks.delete(callback);
+    },
+    emit(value: T) {
+      for (const callback of callbacks) {
+        callback(value);
+      }
+    },
+  };
+}
+
 export function createTestSessionCapability(gateway: SessionGateway, selectedId = "main") {
   const sessions = createSessionCapability(gateway, {
     state: { selectedId },
@@ -77,36 +92,24 @@ export function createGatewayHarness(
         : ({ features: { methods: featureMethods } } as GatewayHelloOk),
     selfUser: options?.selfUser ?? null,
   };
-  const listeners = new Set<(next: typeof snapshot) => void>();
-  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
+  const changes = listeners<typeof snapshot>();
+  const events = listeners<GatewayEventFrame>();
   return {
     gateway: {
       get snapshot() {
         return snapshot;
       },
-      subscribe(listener: (next: typeof snapshot) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      subscribeEvents(listener: (event: GatewayEventFrame) => void) {
-        eventListeners.add(listener);
-        return () => eventListeners.delete(listener);
-      },
+      subscribe: changes.subscribe,
+      subscribeEvents: events.subscribe,
     },
-    emitEvent: (event: GatewayEventFrame) => {
-      for (const listener of eventListeners) {
-        listener(event);
-      }
-    },
+    emitEvent: events.emit,
     publish: (connected: boolean, nextClient: GatewayBrowserClient | null = snapshot.client) => {
       snapshot = {
         ...snapshot,
         client: nextClient,
         phase: connected ? "connected" : "reconnecting",
       };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      changes.emit(snapshot);
     },
   };
 }
@@ -145,22 +148,16 @@ export function createSubscriptionHydrationHarness(
     assistantAgentId: null as string | null,
     hello: null as GatewayHelloOk | null,
   };
-  const gatewayListeners = new Set<(next: typeof snapshot) => void>();
-  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
-  const publish = () => gatewayListeners.forEach((listener) => listener(snapshot));
+  const changes = listeners<typeof snapshot>();
+  const events = listeners<GatewayEventFrame>();
+  const publish = () => changes.emit(snapshot);
   const gateway = {
     connection: { gatewayUrl: "ws://gateway.example.test" },
     get snapshot() {
       return snapshot;
     },
-    subscribe(listener: (next: typeof snapshot) => void) {
-      gatewayListeners.add(listener);
-      return () => gatewayListeners.delete(listener);
-    },
-    subscribeEvents(listener: (event: GatewayEventFrame) => void) {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
+    subscribe: changes.subscribe,
+    subscribeEvents: events.subscribe,
     setSessionKey(sessionKey: string) {
       snapshot = { ...snapshot, sessionKey };
       publish();
@@ -174,10 +171,7 @@ export function createSubscriptionHydrationHarness(
           defaultId: "main",
           mainKey: "main",
           scope: "per-sender",
-          agents: [
-            { id: "main", kind: "agent" },
-            { id: "writer", kind: "agent" },
-          ],
+          agents: ["main", "writer"].map((id) => ({ id, kind: "agent" as const })),
         },
       },
       subscribe: () => () => undefined,
@@ -190,11 +184,7 @@ export function createSubscriptionHydrationHarness(
     gateway,
     selection,
     sessions,
-    emitEvent: (event: GatewayEventFrame) => {
-      for (const listener of eventListeners) {
-        listener(event);
-      }
-    },
+    emitEvent: events.emit,
     connect: () => {
       snapshot = { ...snapshot, client, phase: "connected", assistantAgentId: "main" };
       publish();

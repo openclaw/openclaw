@@ -30,6 +30,11 @@ function harness() {
     read,
     subscribe,
     list,
+    pending: () => {
+      const deferred = createDeferred<{ session: GatewaySessionRow }>();
+      read.mockReturnValueOnce(deferred.promise);
+      return deferred;
+    },
     setRow: (next: GatewaySessionRow) => {
       row = next;
     },
@@ -37,16 +42,18 @@ function harness() {
 }
 
 describe("session descriptor reads", () => {
-  beforeEach(() => vi.useFakeTimers());
+  let h: ReturnType<typeof harness>;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    h = harness();
+  });
   afterEach(() => vi.useRealTimers());
 
   it("reuses concurrent implied-agent descriptors and their runtime sample, isolating other agents", async () => {
-    const h = harness();
     const running: GatewaySessionRow = { ...initial, runtimeMs: 500, status: "running" };
     h.setRow(running);
     vi.setSystemTime(1_000);
-    const pending = createDeferred<{ session: GatewaySessionRow }>();
-    h.read.mockReturnValueOnce(pending.promise);
+    const pending = h.pending();
     const reads = [
       h.sessions.describe({ key }),
       h.sessions.describe({ key }),
@@ -66,7 +73,6 @@ describe("session descriptor reads", () => {
   });
 
   it("keeps session, agent, preview parameters and request timeout distinct", async () => {
-    const h = harness();
     for (const params of [
       { key },
       { key: "agent:main:other" },
@@ -86,7 +92,6 @@ describe("session descriptor reads", () => {
   });
 
   it("reuses a descriptor across unchanged row observations without a time limit", async () => {
-    const h = harness();
     const first = { ...initial, snapshotAt: 1 };
     h.setRow(first);
     await h.sessions.refresh({ agentId: "main" });
@@ -111,12 +116,10 @@ describe("session descriptor reads", () => {
     { cause: "refresh", phase: "pending" },
     { cause: "first observed revision", phase: "pending" },
   ] as const)("supersedes a $phase descriptor after $cause", async ({ cause, phase }) => {
-    const h = harness();
     if (cause === "observed revision") {
       await h.sessions.refresh({ agentId: "main" });
     }
-    const pending = createDeferred<{ session: GatewaySessionRow }>();
-    h.read.mockReturnValueOnce(pending.promise);
+    const pending = h.pending();
     const old = h.sessions.describe({ key });
     if (phase === "completed") {
       pending.resolve({ session: initial });
@@ -164,11 +167,9 @@ describe("session descriptor reads", () => {
   )(
     "checks ancestor coverage before reusing a $phase $parentKey descriptor ($coverage)",
     async ({ phase, coverage, parentKey }) => {
-      const h = harness();
       const parent = { ...initial, key: parentKey };
       h.setRow(parent);
-      const pending = createDeferred<{ session: GatewaySessionRow }>();
-      h.read.mockReturnValueOnce(pending.promise);
+      const pending = h.pending();
       const previous = h.sessions.describe({ key: parentKey });
       if (phase === "completed") {
         pending.resolve({ session: parent });
@@ -204,7 +205,6 @@ describe("session descriptor reads", () => {
   it.each(["pending", "completed"] as const)(
     "reuses a %s parent descriptor across unchanged ancestor references",
     async (phase) => {
-      const h = harness();
       const parent = { ...initial, lifecycleRevision: "first-life" };
       h.setRow(parent);
       const child = {
@@ -235,8 +235,7 @@ describe("session descriptor reads", () => {
           },
         });
       emit(2, true);
-      const pending = createDeferred<{ session: GatewaySessionRow }>();
-      h.read.mockReturnValueOnce(pending.promise);
+      const pending = h.pending();
       const first = h.sessions.describe({ key });
       if (phase === "completed") {
         pending.resolve({ session: parent });
@@ -257,7 +256,6 @@ describe("session descriptor reads", () => {
   );
 
   it("does not retain descriptors read during an event-subscription outage", async () => {
-    const h = harness();
     h.list.mockResolvedValue(sessionsResult([], 1));
     h.subscribe.mockRejectedValueOnce(
       new GatewayRequestError({
@@ -281,10 +279,8 @@ describe("session descriptor reads", () => {
   it.each(["same client", "replacement client"])(
     "retires completed and pending reads on a %s epoch",
     async (kind) => {
-      const h = harness();
       await h.sessions.describe({ key });
-      const pending = createDeferred<{ session: GatewaySessionRow }>();
-      h.read.mockReturnValueOnce(pending.promise);
+      const pending = h.pending();
       const old = h.sessions.describe({ key }, { refresh: true });
       const next = { ...initial, sessionId: "replacement", updatedAt: 2 };
       h.setRow(next);
@@ -311,9 +307,7 @@ describe("session descriptor reads", () => {
   );
 
   it("delivers failures to every reader and allows a later retry", async () => {
-    const h = harness();
-    const pending = createDeferred<{ session: GatewaySessionRow }>();
-    h.read.mockReturnValueOnce(pending.promise);
+    const pending = h.pending();
     const first = h.sessions.describe({ key }).catch((error: unknown) => error);
     const second = h.sessions.describe({ key }).catch((error: unknown) => error);
     const error = new Error("describe failed");
@@ -324,7 +318,6 @@ describe("session descriptor reads", () => {
   });
 
   it("keeps fresh settlement on its captured client without populating the new connection", async () => {
-    const h = harness();
     const replacement = createTestGatewayClient(async () => ({
       session: { ...initial, sessionId: "other" },
     }));
