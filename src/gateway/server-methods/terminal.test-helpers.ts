@@ -1,8 +1,11 @@
 import { vi } from "vitest";
 import type { TerminalUploadResult } from "../../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createTerminalLaunchPolicy } from "../terminal/launch.js";
 import type { TerminalSessionSummary } from "../terminal/session-types.js";
+import type { terminalHandlers } from "./terminal.js";
 
-export function makeTerminalSessionMocks() {
+function makeTerminalSessionMocks() {
   return {
     open: vi.fn(async (_request: unknown) => ({
       ok: true as const,
@@ -30,5 +33,56 @@ export function makeTerminalSessionMocks() {
       path: "/tmp/upload/report.pdf",
       size: 4,
     })),
+  };
+}
+
+export function makeTerminalGatewayOpts(
+  params: Record<string, unknown> = { cols: 80, rows: 24 },
+  {
+    enabled = true,
+    preparedConfig,
+    nodeRegistry = { get: () => undefined },
+  }: {
+    enabled?: boolean;
+    preparedConfig?: OpenClawConfig;
+    nodeRegistry?: {
+      get: (nodeId: string) => unknown;
+      invoke?: (params: unknown) => Promise<unknown>;
+    };
+  } = {},
+) {
+  const sessions = makeTerminalSessionMocks();
+  const runtimeConfig: OpenClawConfig = { gateway: { terminal: { enabled } } };
+  const policy = createTerminalLaunchPolicy(runtimeConfig);
+  if (preparedConfig) {
+    policy.prepareConfig(preparedConfig, { restartPending: true });
+  }
+  const respond = vi.fn();
+  const isConnectionActive = vi.fn(() => true);
+  const isTerminalEnabled = vi.fn(() => policy.isEnabled());
+  const resolveTerminalLaunchPolicy = vi.fn((agentId?: string) => policy.resolve(agentId));
+  const context = {
+    getRuntimeConfig: () => runtimeConfig,
+    resolveTerminalLaunchPolicy,
+    isTerminalEnabled,
+    terminalSessions: sessions,
+    nodeRegistry: { invoke: vi.fn(), ...nodeRegistry },
+    isConnectionActive,
+    logGateway: { info: vi.fn() },
+  } as unknown as Parameters<(typeof terminalHandlers)["terminal.input"]>[0]["context"];
+  const opts = {
+    params,
+    respond,
+    context,
+    client: { connId: "conn-1", connect: {} },
+  } as unknown as Parameters<(typeof terminalHandlers)["terminal.input"]>[0];
+  return {
+    opts,
+    sessions,
+    respond,
+    isConnectionActive,
+    isTerminalEnabled,
+    resolveTerminalLaunchPolicy,
+    runtimeConfig,
   };
 }

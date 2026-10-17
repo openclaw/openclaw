@@ -3,16 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
-import { createTerminalLaunchPolicy } from "../terminal/launch.js";
-import { TerminalSessionManager } from "../terminal/session-manager.js";
-import { makeFakePty } from "../terminal/session-manager.test-helpers.js";
-import { openTerminalSession, terminalHandlers, TERMINAL_OPEN_DEADLINE_MS } from "./terminal.js";
-import { makeTerminalSessionMocks } from "./terminal.test-helpers.js";
+import { terminalHandlers, TERMINAL_OPEN_DEADLINE_MS } from "./terminal.js";
+import { makeTerminalGatewayOpts as makeOpts } from "./terminal.test-helpers.js";
 
 function waitForFast<T>(callback: () => T | Promise<T>) {
   return vi.waitFor(callback, { interval: 1 });
@@ -27,18 +23,6 @@ const policyMocks = vi.hoisted(() => ({
     async () => null,
   ),
 }));
-const sessionMocks = vi.hoisted(() => ({
-  loadGatewaySessionEntryReadOnly: vi.fn(
-    (
-      _sessionKey: string,
-      _opts?: unknown,
-    ): {
-      entry?: Pick<InternalSessionEntry, "sessionId" | "pendingProjectGitUrl" | "pendingWorktree">;
-    } => ({
-      entry: { sessionId: "ui-session-id" },
-    }),
-  ),
-}));
 
 vi.mock("../node-command-policy.js", () => ({
   resolveNodeCommandAllowlist: policyMocks.resolveNodeCommandAllowlist,
@@ -48,67 +32,6 @@ vi.mock("../node-command-policy.js", () => ({
 vi.mock("../node-invoke-plugin-policy.js", () => ({
   applyPluginNodeInvokePolicy: policyMocks.applyPluginNodeInvokePolicy,
 }));
-
-vi.mock("../session-utils.js", async () => ({
-  ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
-  loadGatewaySessionEntryReadOnlyAsync: sessionMocks.loadGatewaySessionEntryReadOnly,
-}));
-
-vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
-  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
-    sessionMocks.loadGatewaySessionEntryReadOnly(params.key, { agentId: params.agentId }),
-}));
-
-function makeOpts(
-  params: Record<string, unknown> = { cols: 80, rows: 24 },
-  {
-    enabled = true,
-    preparedConfig,
-    nodeRegistry = { get: () => undefined },
-  }: {
-    enabled?: boolean;
-    preparedConfig?: OpenClawConfig;
-    nodeRegistry?: {
-      get: (nodeId: string) => unknown;
-      invoke?: (params: unknown) => Promise<unknown>;
-    };
-  } = {},
-) {
-  const sessions = makeTerminalSessionMocks();
-  const runtimeConfig: OpenClawConfig = { gateway: { terminal: { enabled } } };
-  const policy = createTerminalLaunchPolicy(runtimeConfig);
-  if (preparedConfig) {
-    policy.prepareConfig(preparedConfig, { restartPending: true });
-  }
-  const respond = vi.fn();
-  const isConnectionActive = vi.fn(() => true);
-  const isTerminalEnabled = vi.fn(() => policy.isEnabled());
-  const resolveTerminalLaunchPolicy = vi.fn((agentId?: string) => policy.resolve(agentId));
-  const context = {
-    getRuntimeConfig: () => runtimeConfig,
-    resolveTerminalLaunchPolicy,
-    isTerminalEnabled,
-    terminalSessions: sessions,
-    nodeRegistry: { invoke: vi.fn(), ...nodeRegistry },
-    isConnectionActive,
-    logGateway: { info: vi.fn() },
-  } as unknown as Parameters<(typeof terminalHandlers)["terminal.input"]>[0]["context"];
-  const opts = {
-    params,
-    respond,
-    context,
-    client: { connId: "conn-1", connect: {} },
-  } as unknown as Parameters<(typeof terminalHandlers)["terminal.input"]>[0];
-  return {
-    opts,
-    sessions,
-    respond,
-    isConnectionActive,
-    isTerminalEnabled,
-    resolveTerminalLaunchPolicy,
-  };
-}
 
 type OpenTerminal = NonNullable<SessionCatalogProvider["openTerminal"]>;
 function installTerminalCatalog(openTerminal: OpenTerminal, id = "codex") {
@@ -177,87 +100,9 @@ afterEach(() => {
   policyMocks.resolveNodeCommandAllowlist.mockReset();
   policyMocks.isNodeCommandAllowed.mockReset().mockReturnValue({ ok: true });
   policyMocks.applyPluginNodeInvokePolicy.mockReset().mockResolvedValue(null);
-  sessionMocks.loadGatewaySessionEntryReadOnly.mockReset().mockReturnValue({
-    entry: { sessionId: "ui-session-id" },
-  });
 });
 
 describe("terminal gateway policy", () => {
-  it("binds a UI terminal to its exact agent session while keeping the UI attached", async () => {
-    const backend = makeFakePty();
-    const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => backend });
-    const agentSessionKey = "agent:main:ui-session";
-    const agentOwner = {
-      kind: "agent",
-      agentSessionKey,
-      agentSessionId: "ui-session-id",
-      agentId: "main",
-    } as const;
-    const { opts, respond } = makeOpts({});
-    opts.context.terminalSessions = manager;
-
-    await openTerminalSession(opts, {
-      agentId: "main",
-      sessionKey: agentSessionKey,
-      cols: 80,
-      rows: 24,
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ agentId: "main", sessionId: expect.any(String) }),
-    );
-    const owned = manager.listAgent(agentOwner);
-    expect(owned).toHaveLength(1);
-    const session = expectDefined(owned[0], "session-owned UI terminal");
-    expect(session).toMatchObject({ attached: true, owner: `agent:${agentSessionKey}` });
-    expect(manager.write("conn-1", session.sessionId, "operator input\n")).toBe(true);
-
-    backend.emitData("ui session output");
-    expect(manager.snapshotAgent(agentOwner, session.sessionId)).toContain("ui session output");
-    expect(
-      manager.listAgent({ ...agentOwner, agentSessionKey: "agent:main:other-session" }),
-    ).toEqual([]);
-    expect(
-      manager.snapshotAgent({ ...agentOwner, agentId: "research" }, session.sessionId),
-    ).toBeUndefined();
-    expect(sessionMocks.loadGatewaySessionEntryReadOnly).toHaveBeenCalledWith(agentSessionKey, {
-      agentId: "main",
-    });
-  });
-
-  it.each([
-    { state: "is missing", entry: undefined, error: { code: ErrorCodes.UNAVAILABLE } },
-    {
-      state: "awaits worktree preparation",
-      entry: {
-        sessionId: "ui-session-id",
-        pendingWorktree: {
-          workspace: "/tmp/project",
-          titleSource: "Prepare workspace",
-        },
-      },
-      error: {
-        code: ErrorCodes.INVALID_REQUEST,
-        message:
-          'Session "agent:main:pending" workspace is not ready. Wait for setup to finish or retry in chat.',
-      },
-    },
-  ])("rejects UI ownership when the session $state", async ({ entry, error }) => {
-    sessionMocks.loadGatewaySessionEntryReadOnly.mockReturnValue({ entry });
-    const { opts, sessions, respond } = makeOpts({});
-
-    await openTerminalSession(opts, {
-      agentId: "main",
-      sessionKey: "agent:main:pending",
-      cols: 80,
-      rows: 24,
-    });
-
-    expect(sessions.open).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
-  });
-
   it("lists agent-owned sessions with their owner marker", async () => {
     const { opts, sessions, respond } = makeOpts({});
     const listed = {
@@ -319,22 +164,6 @@ describe("terminal gateway policy", () => {
     await runTerminal("terminal.open", opts);
     expect(sessions.open).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
-  });
-
-  it("reports a missing explicit owner as invalid request", async () => {
-    const { opts, sessions, respond, resolveTerminalLaunchPolicy } = makeOpts();
-    resolveTerminalLaunchPolicy.mockReturnValue({
-      ok: false,
-      block: { kind: "owner-required", message: "terminal requires an explicit owner" },
-    });
-
-    await runTerminal("terminal.open", opts);
-
-    expect(sessions.open).not.toHaveBeenCalled();
-    expectFailure(respond, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: "terminal requires an explicit owner",
-    });
   });
 
   it("opens a provider-built local resume plan for a selected source and returns its title", async () => {
