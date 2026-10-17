@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
@@ -25,13 +24,10 @@ import {
 } from "./chat-outbox-payloads.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
-const plainHttpHost = "plain-http.test";
 const retainedText = "Mock Gateway: retained v3 Blob submission";
 const upgradeText = "Mock Gateway: upgrade this inline queue";
 const originalBytes = file.buffer.toString("base64");
-const suite = createChatFlowE2eSuite({
-  args: [`--host-resolver-rules=MAP ${plainHttpHost} 127.0.0.1`],
-});
+const suite = createChatFlowE2eSuite();
 
 // Legacy metadata shares the v4 prefix but is not the current account's admitted queue.
 async function readQueue(page: Page): Promise<ChatQueueItem[]> {
@@ -53,8 +49,8 @@ async function readQueue(page: Page): Promise<ChatQueueItem[]> {
 suite.define(() => {
   it.each(["agent:main:topic", "global"])(
     "preserves landed v3 %s Blobs through migration, reload, explicit retry and retirement",
-    async (legacySessionKey) => {
-      await suite.withPage(
+    (legacySessionKey) =>
+      suite.withPage(
         { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
           const pane = paneFor(page);
@@ -110,32 +106,22 @@ suite.define(() => {
               if (!raw) {
                 throw new Error("Missing admitted metadata");
               }
-              const current = JSON.parse(raw) as {
-                gatewayOwner: string;
-              };
-              const key = `openclaw.control.chatComposer.v3:${encodeURIComponent(current.gatewayOwner)}`;
               const { storageScope: _storageScope, ...legacyItem } = item;
+              const queue = [
+                {
+                  ...legacyItem,
+                  sessionKey,
+                  agentId: "main",
+                  sendAttempts: 1,
+                  sendState: "unconfirmed",
+                },
+              ];
+              const session = { updatedAt: 10, draftRevision: 42, queue };
+              const scopeKey = `${sessionKey}\u0000agent:main`;
+              const key = `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayOwner)}`;
               sessionStorage.setItem(
                 key,
-                JSON.stringify({
-                  version: 3,
-                  gatewayOwner: current.gatewayOwner,
-                  sessions: {
-                    [`${sessionKey}\u0000agent:main`]: {
-                      updatedAt: 10,
-                      draftRevision: 42,
-                      queue: [
-                        {
-                          ...legacyItem,
-                          sessionKey,
-                          agentId: "main",
-                          sendAttempts: 1,
-                          sendState: "unconfirmed",
-                        },
-                      ],
-                    },
-                  },
-                }),
+                JSON.stringify({ version: 3, gatewayOwner, sessions: { [scopeKey]: session } }),
               );
               sessionStorage.removeItem(currentKey);
               return key;
@@ -167,13 +153,6 @@ suite.define(() => {
                 : /Add this saved copy to “topic”/,
             )
             .waitFor();
-          await page.screenshot({
-            path: path.join(
-              suite.artifactDir,
-              `v3-${legacySessionKey === "global" ? "global" : "named"}-destination-confirmation.png`,
-            ),
-            animations: "disabled",
-          });
           await dialog.getByRole("button", { name: "Restore", exact: true }).click();
           await pane.getByText("Delivery unconfirmed", { exact: true }).waitFor();
           await page.reload();
@@ -189,14 +168,6 @@ suite.define(() => {
           });
           expect(await readPayloadBytes(page, reference.key)).toEqual([originalBytes]);
           await expectRequestCountStable(gateway, "chat.send", 0);
-          await page.screenshot({
-            path: path.join(
-              suite.artifactDir,
-              `v3-${legacySessionKey === "global" ? "recovered" : "named"}-paused.png`,
-            ),
-            fullPage: true,
-            animations: "disabled",
-          });
           await pane.locator(".chat-group.user").getByRole("button", { name: /Retry/i }).click();
           const sent = await gateway.waitForRequest("chat.send");
           expect(sent.params).toMatchObject({
@@ -219,12 +190,11 @@ suite.define(() => {
           await expect.poll(() => payloadCount(page)).toBe(0);
           await expectRequestCountStable(gateway, "chat.send", 1);
         },
-      );
-    },
+      ),
   );
 
-  it("upgrades inline queues and the existing draft database, then edits and cancels without touching a newer composer", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+  it("upgrades inline queues and the existing draft database, then edits and cancels without touching a newer composer", () =>
+    suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const pane = paneFor(page);
       const composer = composerFor(page);
       await page.route("**/outbox-upgrade", (route) =>
@@ -234,35 +204,25 @@ suite.define(() => {
       await page.evaluate(async (content) => {
         const gatewayOwner = `ws://${location.host}`;
         const scopeKey = "agent:main:main\u0000agent:main";
+        const attachment = {
+          id: "legacy-file",
+          mimeType: "text/plain",
+          fileName: "mock-original.txt",
+          dataUrl: `data:text/plain;base64,${content}`,
+        };
+        const item = {
+          id: "legacy-input",
+          text: "Mock Gateway: upgrade this inline queue",
+          createdAt: Date.now(),
+          sendRunId: "legacy-idempotency",
+          sendAttempts: 0,
+          sendState: "waiting-reconnect",
+          attachments: [attachment],
+        };
+        const sessions = { [scopeKey]: { updatedAt: Date.now(), queue: [item] } };
         sessionStorage.setItem(
           `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayOwner)}`,
-          JSON.stringify({
-            version: 2,
-            gatewayOwner,
-            sessions: {
-              [scopeKey]: {
-                updatedAt: Date.now(),
-                queue: [
-                  {
-                    id: "legacy-input",
-                    text: "Mock Gateway: upgrade this inline queue",
-                    createdAt: Date.now(),
-                    sendRunId: "legacy-idempotency",
-                    sendAttempts: 0,
-                    sendState: "waiting-reconnect",
-                    attachments: [
-                      {
-                        id: "legacy-file",
-                        mimeType: "text/plain",
-                        fileName: "mock-original.txt",
-                        dataUrl: `data:text/plain;base64,${content}`,
-                      },
-                    ],
-                  },
-                ],
-              },
-            },
-          }),
+          JSON.stringify({ version: 2, gatewayOwner, sessions }),
         );
         const database = await new Promise<IDBDatabase>((resolve, reject) => {
           const request = indexedDB.open("openclaw-control-ui", 1);
@@ -363,6 +323,5 @@ suite.define(() => {
       await expect.poll(() => payloadCount(page)).toBe(0);
       expect(await composer.inputValue()).toBe("Mock Gateway: newer independent draft");
       await expectRequestCountStable(gateway, "chat.send", 0);
-    });
-  });
+    }));
 });

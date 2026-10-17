@@ -1,6 +1,4 @@
-import { writeFile } from "node:fs/promises";
 import type { Server as HttpServer } from "node:http";
-import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { afterAll, beforeAll, expect, it } from "vitest";
@@ -8,7 +6,6 @@ import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -139,7 +136,6 @@ suite.define(() => {
               key: sessionKey,
               sessionId: "page-chat-session",
               kind: "direct",
-              displayName: "Release overview",
               boardFace: "dashboard",
               boardPresentation: "expanded",
               updatedAt: Date.now(),
@@ -153,13 +149,7 @@ suite.define(() => {
             "sessions.describe",
             "sessions.resolve",
           ],
-          historyMessages: [
-            { role: "user", content: "Show me the release overview." },
-            {
-              role: "assistant",
-              content: "The release overview is ready. We can review the remaining changes here.",
-            },
-          ],
+          historyMessages: [{ role: "assistant", content: "The release overview is ready." }],
           methodResponses: {
             "cron.list": { jobs: [], total: 0, hasMore: false },
             "board.get": boardResponse(
@@ -178,13 +168,6 @@ suite.define(() => {
         const header = page.locator(".chat-pane__header");
         const chat = header.getByRole("button", { name: "Chat", exact: true });
         const composer = page.locator(".agent-chat__composer-combobox textarea");
-        const capture = async (name: string) => {
-          const frame = await takeControlUiScreenshotFrame(page, header, [header], {
-            animations: "disabled",
-          });
-          await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
-        };
-        await capture("page-chat-closed");
         await chat.waitFor();
         expect(await chat.getAttribute("aria-pressed")).toBe("false");
         expect(await composer.isVisible()).toBe(false);
@@ -194,23 +177,20 @@ suite.define(() => {
         const details = page.getByRole("dialog", { name: "Details", exact: true });
         await details.waitFor();
         expect(await composer.isVisible()).toBe(false);
-        await capture("page-details-open");
         await details.getByRole("button", { name: "Close details", exact: true }).click();
         await chat.click();
         await composer.fill("Let's review the eight remaining changes.");
         await page.getByText("The release overview is ready.", { exact: false }).waitFor();
         expect(await chat.getAttribute("aria-pressed")).toBe("true");
         expect(await input.isVisible()).toBe(true);
-        // Opening Chat must not demote the main page to a fixed-height grid card.
+        // Allow the card inset, but not a fixed-height row when opening Chat.
         const pageHeight = await regionSize(
           page.locator('[data-region="main"]:not([hidden])'),
           "height",
         );
-        // Allow the card presentation's content inset, but not a fixed-height grid row.
         expect(await regionSize(page.locator(".board-widget__frame"), "height")).toBeGreaterThan(
           pageHeight - 32,
         );
-        await capture("page-chat-open");
         await chat.click();
         await composer.waitFor({ state: "hidden" });
         await chat.click();
@@ -219,11 +199,9 @@ suite.define(() => {
         await page.setViewportSize({ width: 390, height: 844 });
         await composer.waitFor();
         await expect.poll(() => input.isVisible()).toBe(false);
-        await capture("mobile-chat-open");
         await chat.click();
         await input.waitFor();
         await composer.waitFor({ state: "hidden" });
-        await capture("mobile-page");
         await chat.click();
         await page.setViewportSize({ width: 1440, height: 960 });
         await input.waitFor();
@@ -297,40 +275,34 @@ suite.define(() => {
             };
           }),
         );
+      const expectTargets = (actual: Awaited<ReturnType<typeof targets>>, label: string) => {
+        for (const target of actual) {
+          expect(target).toMatchObject({
+            withinPane: true,
+            role: "region",
+            label,
+            hasComposer: label === "Chat",
+            dashboardPanel: label === "Dashboard",
+          });
+        }
+      };
+      const swapPanes = async (region: "main" | "side") => {
+        for (const pane of await panes.all()) {
+          await pane.locator(".agent-chat__composer-combobox textarea").click();
+          await selectChatLayoutAction(pane, /^Swap /);
+          await pane.locator(`.sidebar-region__primary[data-region="${region}"]`).waitFor();
+        }
+      };
       const original = await targets();
       expect(await page.getByRole("region", { name: "Side panel", exact: true }).count()).toBe(0);
       expect(new Set(original.map((target) => target.tabId)).size).toBe(2);
       expect(new Set(original.map((target) => target.targetId)).size).toBe(2);
-      for (const target of original) {
-        expect(target).toMatchObject({
-          withinPane: true,
-          role: "region",
-          label: "Dashboard",
-          hasComposer: false,
-          dashboardPanel: true,
-        });
-      }
-      for (const pane of await panes.all()) {
-        await pane.locator(".agent-chat__composer-combobox textarea").click();
-        await selectChatLayoutAction(pane, /^Swap /);
-        await pane.locator('.sidebar-region__primary[data-region="side"]').waitFor();
-      }
+      expectTargets(original, "Dashboard");
+      await swapPanes("side");
       const swapped = await targets();
       expect(new Set(swapped.map((target) => target.targetId)).size).toBe(2);
-      for (const target of swapped) {
-        expect(target).toMatchObject({
-          withinPane: true,
-          role: "region",
-          label: "Chat",
-          hasComposer: true,
-          dashboardPanel: false,
-        });
-      }
-      for (const pane of await panes.all()) {
-        await pane.locator(".agent-chat__composer-combobox textarea").click();
-        await selectChatLayoutAction(pane, /^Swap /);
-        await pane.locator('.sidebar-region__primary[data-region="main"]').waitFor();
-      }
+      expectTargets(swapped, "Chat");
+      await swapPanes("main");
       expect(await targets()).toEqual(original);
       for (const root of roots) {
         expect(
@@ -391,7 +363,6 @@ suite.define(() => {
         await expectPaneHeaderGeometry(page, "right");
         // Side focus never swaps or reparents either live view.
         const dashboardTab = sideHeader.locator('.tabstrip-tab[data-tab-value="dashboard"]');
-        await page.screenshot({ path: path.join(suite.artifactDir, "side-before.png") });
         for (const dock of ["right", "left", "bottom"] as const) {
           await dockChatSidePanel(page, dock);
           const priorSize = await dashboard.boundingBox();
@@ -404,16 +375,10 @@ suite.define(() => {
             0,
           );
           await expectContinuity();
-          if (dock === "right") {
-            await page.screenshot({ path: path.join(suite.artifactDir, "side-expanded.png") });
-          }
           await layoutAndWait(paneHeader, "Restore split", chat);
           expect(await dashboard.boundingBox()).toEqual(priorSize);
           await expectPaneHeaderGeometry(page, dock);
           await expectContinuity();
-          if (dock === "right") {
-            await page.screenshot({ path: path.join(suite.artifactDir, "side-restored.png") });
-          }
           await layoutAndWait(paneHeader, "Expand Dashboard", dashboard, chat);
           await dashboardTab.focus();
           await page.keyboard.press("Space");

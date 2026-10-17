@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { BrowserContext, Page } from "playwright/test";
 import { assert, expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
@@ -7,7 +5,6 @@ import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createChatFlowE2eSuite,
   expectRequestCountStable,
@@ -28,7 +25,6 @@ import {
   outboxChatUrl as chatUrl,
 } from "./chat-outbox-payloads.test-support.ts";
 
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const plainHttpHost = "plain-http.test";
 const suite = createChatFlowE2eSuite({
   args: [`--host-resolver-rules=MAP ${plainHttpHost} 127.0.0.1`],
@@ -62,96 +58,84 @@ const send = (page: Page) =>
   paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
 const expectPayload = async (page: Page, key: string) =>
   expect(await readPayloadBytes(page, key)).toEqual([attachment.content]);
+async function queueAttachment(page: Page, message: string) {
+  await stage(page, message);
+  await send(page);
+  await expect.poll(async () => (await readQueue(page)).length).toBe(1);
+  return (await readQueue(page))[0]!;
+}
+async function disconnect(page: Page, gateway: Awaited<ReturnType<typeof installGateway>>) {
+  await gateway.setOnline(false);
+  await waitForControlUiGatewayReconnecting(page);
+}
 const duplicateTab = async (context: BrowserContext, page: Page) => {
   const popup = context.waitForEvent("page");
   await page.evaluate(() => window.open("about:blank"));
   return popup;
 };
-const proofOptions = (video: string) => ({
-  serviceWorkers: "block" as const,
-  viewport: { width: 1280, height: 900 },
-  recordVideo: captureUiProof ? { dir: path.join(suite.artifactDir, video) } : undefined,
-});
-const screenshot = (page: Page, name: string, fullPage = false) =>
-  page.screenshot({ path: path.join(suite.artifactDir, name), animations: "disabled", fullPage });
+const pageOptions = { serviceWorkers: "block" as const, viewport: { width: 1280, height: 900 } };
 
 suite.define(() => {
-  it("sends and explicitly retries an attachment after a non-local plain HTTP reload", async () => {
-    await suite.withPage(
-      { ...proofOptions("plain-http-video"), locale: "en-US" },
-      async ({ context, page }) => {
-        const url = await chatUrl(context, suite.server.baseUrl, "plain HTTP");
-        const gateway = await installGateway(page, true);
-        await page.goto(url, { waitUntil: "domcontentloaded" });
-        await waitForControlUiGatewayReady(page);
-        expect(
-          await page.evaluate(() => ({
-            indexedDB: typeof indexedDB,
-            isSecureContext,
-            locks: typeof navigator.locks,
-            randomUUID: typeof crypto.randomUUID,
-          })),
-        ).toEqual({
-          indexedDB: "object",
-          isSecureContext: false,
-          locks: "undefined",
-          randomUUID: "undefined",
-        });
-        const message = "Mock Gateway: plain HTTP attachment";
-        await stage(page, message);
-        await screenshot(page, "plain-http-before-send.png");
-        await send(page);
-        const sent = await gateway.waitForRequest("chat.send");
-        expectAttachmentSend(sent.params, { message });
-        const original = (await readQueue(page))[0]!;
-        assert(original.attachmentPayload);
-        const releasePreviewReads = await holdOutboxPreviewReads(page);
-        await page.reload();
-        await waitForControlUiGatewayReady(page);
-        await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
-        await expectRequestCountStable(gateway, "chat.send", 0);
-        // Reconnect parks the captured row while its real Blob read is pending.
-        // Adoption must preserve that newer delivery state and the original bytes.
-        expect(await releasePreviewReads()).toBeGreaterThan(0);
-        await expect
-          .poll(async () => (await readQueue(page))[0]?.attachmentPayload?.key)
-          .not.toBe(original.attachmentPayload.key);
-        const recovered = (await readQueue(page))[0]!;
-        assert(recovered.attachmentPayload);
-        expect(recovered.sendRunId).toBe(original.sendRunId);
-        expect(recovered.attachmentPayload.tabId).not.toBe(original.attachmentPayload.tabId);
-        expect(recovered.attachmentPayload.key).not.toBe(original.attachmentPayload.key);
-        await expectPayload(page, original.attachmentPayload.key);
-        await expectPayload(page, recovered.attachmentPayload.key);
-        await expectRequestCountStable(gateway, "chat.send", 0);
-        await screenshot(page, "plain-http-reload-unconfirmed.png");
-        await paneFor(page)
-          .locator(".chat-group.user")
-          .getByRole("button", { name: /Retry/i })
-          .click();
-        const retried = await gateway.waitForRequest("chat.send");
-        expect(retried.params).toEqual(sent.params);
-        await gateway.resolveDeferred("chat.send");
-        await expect.poll(async () => (await readQueue(page)).length).toBe(0);
-        await expect
-          .poll(() => readPayloadBytes(page, recovered.attachmentPayload!.key))
-          .toBeNull();
-        await expectPayload(page, original.attachmentPayload.key);
-        await screenshot(page, "plain-http-after-retry.png");
-      },
-    );
-  });
+  it("sends and explicitly retries an attachment after a non-local plain HTTP reload", () =>
+    suite.withPage({ ...pageOptions, locale: "en-US" }, async ({ context, page }) => {
+      const url = await chatUrl(context, suite.server.baseUrl, "plain HTTP");
+      const gateway = await installGateway(page, true);
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      await waitForControlUiGatewayReady(page);
+      expect(
+        await page.evaluate(() => [
+          typeof indexedDB,
+          isSecureContext,
+          typeof navigator.locks,
+          typeof crypto.randomUUID,
+        ]),
+      ).toEqual(["object", false, "undefined", "undefined"]);
+      const message = "Mock Gateway: plain HTTP attachment";
+      await stage(page, message);
 
-  it("reloads an offline Blob queue with exact bytes and idempotency, and never replays a lost ACK", async () => {
-    await suite.withPage(proofOptions("lifecycle-video"), async ({ page }) => {
+      await send(page);
+      const sent = await gateway.waitForRequest("chat.send");
+      expectAttachmentSend(sent.params, { message });
+      const original = (await readQueue(page))[0]!;
+      assert(original.attachmentPayload);
+      const releasePreviewReads = await holdOutboxPreviewReads(page);
+      await page.reload();
+      await waitForControlUiGatewayReady(page);
+      await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
+      await expectRequestCountStable(gateway, "chat.send", 0);
+      // Reconnect parks the captured row while its real Blob read is pending.
+      // Adoption must preserve that newer delivery state and the original bytes.
+      expect(await releasePreviewReads()).toBeGreaterThan(0);
+      await expect
+        .poll(async () => (await readQueue(page))[0]?.attachmentPayload?.key)
+        .not.toBe(original.attachmentPayload.key);
+      const recovered = (await readQueue(page))[0]!;
+      assert(recovered.attachmentPayload);
+      expect(recovered.sendRunId).toBe(original.sendRunId);
+      expect(recovered.attachmentPayload.tabId).not.toBe(original.attachmentPayload.tabId);
+      expect(recovered.attachmentPayload.key).not.toBe(original.attachmentPayload.key);
+      await expectPayload(page, original.attachmentPayload.key);
+      await expectPayload(page, recovered.attachmentPayload.key);
+      await expectRequestCountStable(gateway, "chat.send", 0);
+
+      await paneFor(page)
+        .locator(".chat-group.user")
+        .getByRole("button", { name: /Retry/i })
+        .click();
+      const retried = await gateway.waitForRequest("chat.send");
+      expect(retried.params).toEqual(sent.params);
+      await gateway.resolveDeferred("chat.send");
+      await expect.poll(async () => (await readQueue(page)).length).toBe(0);
+      await expect.poll(() => readPayloadBytes(page, recovered.attachmentPayload!.key)).toBeNull();
+      await expectPayload(page, original.attachmentPayload.key);
+    }));
+
+  it("reloads an offline Blob queue with exact bytes and idempotency, and never replays a lost ACK", () =>
+    suite.withPage(pageOptions, async ({ page }) => {
       const gateway = await installGateway(page, true);
       await openChat(page);
-      await gateway.setOnline(false);
-      await waitForControlUiGatewayReconnecting(page);
-      await stage(page, "Mock Gateway: offline binary submission");
-      await send(page);
-      await expect.poll(async () => (await readQueue(page)).length).toBe(1);
-      const queued = (await readQueue(page))[0]!;
+      await disconnect(page, gateway);
+      const queued = await queueAttachment(page, "Mock Gateway: offline binary submission");
       expect(queued.attachmentPayload).toBeDefined();
       expect(queued.sendAttempts).toBe(0);
       await expect.poll(() => composerFor(page).inputValue()).toBe("");
@@ -167,25 +151,17 @@ suite.define(() => {
       await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
       await expectRequestCountStable(gateway, "chat.send", 0);
       expect((await readQueue(page))[0]?.sendRunId).toBe(queued.sendRunId);
-      await writeFile(
-        path.join(suite.artifactDir, "reload-unconfirmed.png"),
-        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-          paneFor(page).getByText("Delivery unconfirmed", { exact: true }),
-        ]),
-      );
-    });
-  });
+    }));
 
-  it("queues complete attachment bytes while the browser and Gateway are offline", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
+  it("queues complete attachment bytes while the browser and Gateway are offline", () =>
+    suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
       const gateway = await installGateway(page, true);
       await openChat(page);
       await waitForControlUiGatewayReady(page);
       const message = "Mock Gateway: retain complete input while offline";
       await stage(page, message);
       await context.setOffline(true);
-      await gateway.setOnline(false);
-      await waitForControlUiGatewayReconnecting(page);
+      await disconnect(page, gateway);
       await send(page);
       await expect.poll(async () => (await readQueue(page)).length).toBe(1);
       const queued = (await readQueue(page))[0]!;
@@ -199,11 +175,10 @@ suite.define(() => {
       const sent = await gateway.waitForRequest("chat.send");
       expectAttachmentSend(sent.params, { message, idempotencyKey: queued.sendRunId });
       await expectRequestCountStable(gateway, "chat.send", 1);
-    });
-  });
+    }));
 
-  it("retains the full composer without sending when a real IndexedDB upgrade is blocked", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
+  it("retains the full composer without sending when a real IndexedDB upgrade is blocked", () =>
+    suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
       const blocker = await context.newPage();
       await blocker.route("**/outbox-blocker", (route) =>
         route.fulfill({ contentType: "text/html", body: "Mock storage blocker" }),
@@ -237,23 +212,18 @@ suite.define(() => {
       expect(await readQueue(page)).toEqual([]);
       await connection.evaluate((database) => database.close());
       await connection.dispose();
-    });
-  });
+    }));
 
   it.each(["localhost", "plain HTTP"] as const)(
     "isolates independent and copied tabs on %s without replay or foreign deletion",
-    async (origin) => {
-      await suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
+    (origin) =>
+      suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
         const url = await chatUrl(context, suite.server.baseUrl, origin);
         const gateway = await installGateway(page);
         await page.goto(url, { waitUntil: "domcontentloaded" });
         await waitForHistory(page);
-        await gateway.setOnline(false);
-        await waitForControlUiGatewayReconnecting(page);
-        await stage(page, "Mock Gateway: one logical submission");
-        await send(page);
-        await expect.poll(async () => (await readQueue(page)).length).toBe(1);
-        const original = (await readQueue(page))[0]!;
+        await disconnect(page, gateway);
+        const original = await queueAttachment(page, "Mock Gateway: one logical submission");
         const independent = await context.newPage();
         const independentGateway = await installGateway(independent);
         await independent.goto(url, { waitUntil: "domcontentloaded" });
@@ -269,8 +239,7 @@ suite.define(() => {
           .toBe("unconfirmed");
         await expectRequestCountStable(duplicateGateway, "chat.send", 0);
         const copied = (await readQueue(duplicate))[0]!;
-        expect(copied.id).toBe(original.id);
-        expect(copied.sendRunId).toBe(original.sendRunId);
+        expect(copied).toMatchObject({ id: original.id, sendRunId: original.sendRunId });
         expect(copied.attachmentPayload?.key).not.toBe(original.attachmentPayload?.key);
         await expect.poll(() => payloadCount(page)).toBe(2);
         assert(original.attachmentPayload);
@@ -307,22 +276,17 @@ suite.define(() => {
           .toBe("missing");
         await expectRequestCountStable(lateGateway, "chat.send", 0);
         expect((await readQueue(lateDuplicate))[0]?.sendRunId).toBe(original.sendRunId);
-      });
-    },
+      }),
   );
-  it("keeps source Blob bytes when a duplicate removes its row before lock-confirmed adoption", async () => {
-    await suite.withPage(
+  it("keeps source Blob bytes when a duplicate removes its row before lock-confirmed adoption", () =>
+    suite.withPage(
       { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
       async ({ context, page }) => {
         const gateway = await installGateway(page, true);
         await openChat(page);
-        await gateway.setOnline(false);
-        await waitForControlUiGatewayReconnecting(page);
+        await disconnect(page, gateway);
         const message = "Mock Gateway: source keeps its pre-adoption bytes";
-        await stage(page, message);
-        await send(page);
-        await expect.poll(async () => (await readQueue(page)).length).toBe(1);
-        const original = (await readQueue(page))[0];
+        const original = await queueAttachment(page, message);
         assert(
           original?.attachmentPayload && original.sendRunId,
           "Expected a durable source submission",
@@ -410,7 +374,7 @@ suite.define(() => {
           expect((await readQueue(duplicate))[0]?.attachmentPayload).toEqual(reference);
           const row = paneFor(duplicate).locator(".chat-queue__item");
           await expect.poll(() => row.count()).toBe(1);
-          await screenshot(duplicate, "duplicate-before-claim-removal.png", true);
+
           await row.getByRole("button", { name: "Remove queued message", exact: true }).click();
           await expect.poll(async () => (await readQueue(duplicate)).length).toBe(0);
           await expect.poll(() => row.count()).toBe(0);
@@ -441,7 +405,7 @@ suite.define(() => {
             attachmentPayload: reference,
           });
           await page.bringToFront();
-          await screenshot(page, "source-after-duplicate-removal.png", true);
+
           const sourceBytes = await readPayloadBytes(page, reference.key);
           assert(
             sourceBytes !== null,
@@ -459,11 +423,10 @@ suite.define(() => {
             .catch(() => undefined);
         }
       },
-    );
-  });
+    ));
 
-  it("does not clear newer composer input while native Blob admission is waiting", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+  it("does not clear newer composer input while native Blob admission is waiting", () =>
+    suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installGateway(page, true);
       await openChat(page);
       await stage(page, "Mock Gateway: captured before storage wait");
@@ -518,10 +481,9 @@ suite.define(() => {
       expect(nextParams.message).toBe("Mock Gateway: newer input must survive");
       expect(nextParams).not.toHaveProperty("attachments");
       expect(requireString(nextParams.idempotencyKey, "second send run id")).not.toBe(firstRunId);
-    });
-  });
-  it("keeps another credential owner isolated and retains a corrupt bundle without sending partial content", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+    }));
+  it("keeps another credential owner isolated and retains a corrupt bundle without sending partial content", () =>
+    suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installGateway(page);
       await openChat(page);
       const hello = await evaluateControlUiContext(
@@ -529,12 +491,8 @@ suite.define(() => {
         (context) => context.gateway.snapshot.hello,
       );
       assert(hello);
-      await gateway.setOnline(false);
-      await waitForControlUiGatewayReconnecting(page);
-      await stage(page, "Mock Gateway: credential-owned bytes");
-      await send(page);
-      await expect.poll(async () => (await readQueue(page)).length).toBe(1);
-      const original = (await readQueue(page))[0]!;
+      await disconnect(page, gateway);
+      const original = await queueAttachment(page, "Mock Gateway: credential-owned bytes");
       await gateway.setMethodResponse("connect", {
         ...hello,
         auth: { ...hello.auth, recoveryScope: "e2e-other-owner" },
@@ -582,8 +540,7 @@ suite.define(() => {
         });
         database.close();
       });
-      await gateway.setOnline(false);
-      await waitForControlUiGatewayReconnecting(page);
+      await disconnect(page, gateway);
       await gateway.setMethodResponse("connect", hello);
       await gateway.setOnline(true);
       await expect
@@ -594,7 +551,5 @@ suite.define(() => {
         .toContain("Queued attachments are missing or unreadable");
       await expectRequestCountStable(gateway, "chat.send", 0);
       expect((await readQueue(page))[0]?.id).toBe(original.id);
-      await screenshot(page, "corrupt-payload-retained.png", true);
-    });
-  });
+    }));
 });

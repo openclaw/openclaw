@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   buildControlUiCspHeader,
@@ -24,12 +24,25 @@ const contextOptions = {
   permissions: ["clipboard-read", "clipboard-write"],
   viewport: { height: 900, width: 1280 },
 };
-const fact = (text: string, fileName: string, origin?: "paste" | "file") => ({
+const fact = (
+  text: string,
+  fileName: string,
+  origin?: "paste" | "file",
+  extra: { url?: string; sizeBytes?: number } = {},
+) => ({
   url: `data:text/plain;base64,${Buffer.from(text).toString("base64")}`,
   contentType: "text/plain",
   fileName,
   ...(origin ? { origin } : {}),
+  ...extra,
 });
+
+const button = (root: Page | Locator, name: string) =>
+  root.getByRole("button", { name, exact: true });
+const expectPastedText = (preview: Locator) =>
+  expect
+    .poll(() => preview.locator(".sidebar-attachment-preview__text").textContent())
+    .toBe(pastedText);
 const history = <T extends ReturnType<typeof fact>>(media: T[], content = "", timestamp = 1) => ({
   role: "user" as const,
   content,
@@ -68,95 +81,79 @@ async function paste(composer: Locator) {
     const clipboard = new DataTransfer();
     clipboard.setData("text/plain", text);
     element.dispatchEvent(
-      new ClipboardEvent("paste", {
-        bubbles: true,
-        cancelable: true,
-        clipboardData: clipboard,
-      }),
+      new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: clipboard }),
     );
   }, pastedText);
 }
 
 suite.define(() => {
   it.each([1280, 390])("restores pasted text directly from the %ipx composer", async (width) => {
-    await suite.withPage(
-      { ...contextOptions, viewport: { width, height: 900 } },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}chat`);
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await composer.waitFor({ state: "visible" });
-        await composer.fill("Keep this draft");
-        await paste(composer);
-        const fileName = "launch-preview.html";
-        const fileCard = page.locator(".chat-attachment-file__name", { hasText: fileName });
-        await page.locator(".agent-chat__file-input").setInputFiles({
-          name: fileName,
-          mimeType: "text/html",
-          buffer: Buffer.from("<!doctype html><title>Preview</title>"),
-        });
-        await fileCard.waitFor();
-        const pastedCard = page.locator(
-          ".chat-attachments-preview openclaw-chat-pasted-text .chat-attachment-thumb--file",
-        );
-        await pastedCard.getByRole("button", { name: pastedTextLabel, exact: true }).waitFor();
-        for (const theme of ["dark", "light"]) {
-          await page.evaluate((mode) => {
-            document.documentElement.dataset.themeMode = mode;
-          }, theme);
-          expect(
-            await pastedCard.evaluate((card) => {
-              const other = document.querySelector(
-                ".chat-attachments-preview .chat-attachment-thumb--file:not(openclaw-chat-pasted-text *)",
-              )!;
-              const name = card.querySelector(".chat-attachment-file__name")!;
-              const action = card.querySelector(".chat-attachment-text-action")!;
-              const rect = card.getBoundingClientRect();
-              const actionRect = action.getBoundingClientRect();
-              const style = getComputedStyle(card);
-              const otherStyle = getComputedStyle(other);
-              return {
-                sameSize:
-                  rect.width === other.getBoundingClientRect().width &&
-                  rect.height === other.getBoundingClientRect().height,
-                sameBorder:
-                  style.border === otherStyle.border &&
-                  style.borderRadius === otherStyle.borderRadius,
-                secondRow: actionRect.top >= name.getBoundingClientRect().bottom,
-                inside:
-                  actionRect.left >= rect.left &&
-                  actionRect.right <= rect.right &&
-                  actionRect.bottom < rect.bottom,
-                readable: action.clientWidth >= action.scrollWidth,
-                nestedControls: card.querySelectorAll(
-                  "button button, button a, [role=button] button",
-                ).length,
-              };
-            }),
-          ).toEqual({
-            sameSize: true,
-            sameBorder: true,
-            secondRow: true,
-            inside: true,
-            readable: true,
-            nestedControls: 0,
-          });
-        }
-        const restore = pastedCard.getByRole("button", {
-          name: "Show in text field",
-          exact: true,
-        });
-        await restore.focus();
-        await page.keyboard.press("Enter");
-        await expect.poll(() => composer.inputValue()).toBe(`Keep this draft\n\n${pastedText}`);
+    const options = { ...contextOptions, viewport: { width, height: 900 } };
+    await suite.withPage(options, async ({ page }) => {
+      const gateway = await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible" });
+      await composer.fill("Keep this draft");
+      await paste(composer);
+      const fileName = "launch-preview.html";
+      const fileCard = page.locator(".chat-attachment-file__name", { hasText: fileName });
+      await page.locator(".agent-chat__file-input").setInputFiles({
+        name: fileName,
+        mimeType: "text/html",
+        buffer: Buffer.from("<!doctype html><title>Preview</title>"),
+      });
+      await fileCard.waitFor();
+      const pastedCard = page.locator(
+        ".chat-attachments-preview openclaw-chat-pasted-text .chat-attachment-thumb--file",
+      );
+      await button(pastedCard, pastedTextLabel).waitFor();
+      for (const theme of ["dark", "light"]) {
+        await page.evaluate((mode) => {
+          document.documentElement.dataset.themeMode = mode;
+        }, theme);
         expect(
-          await page.locator(".chat-attachments-preview openclaw-chat-pasted-text").count(),
-        ).toBe(0);
-        expect(await fileCard.count()).toBe(1);
-        expect(await page.locator("openclaw-chat-detail-panel:visible").count()).toBe(0);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      },
-    );
+          await pastedCard.evaluate((card) => {
+            const other = document.querySelector(
+              ".chat-attachments-preview .chat-attachment-thumb--file:not(openclaw-chat-pasted-text *)",
+            )!;
+            const name = card.querySelector(".chat-attachment-file__name")!;
+            const action = card.querySelector(".chat-attachment-text-action")!;
+            const rect = card.getBoundingClientRect();
+            const otherRect = other.getBoundingClientRect();
+            const { left, right, top, bottom } = action.getBoundingClientRect();
+            const { border, borderRadius } = getComputedStyle(card);
+            const otherStyle = getComputedStyle(other);
+            return {
+              sameSize: rect.width === otherRect.width && rect.height === otherRect.height,
+              sameBorder: border === otherStyle.border && borderRadius === otherStyle.borderRadius,
+              secondRow: top >= name.getBoundingClientRect().bottom,
+              inside: left >= rect.left && right <= rect.right && bottom < rect.bottom,
+              readable: action.clientWidth >= action.scrollWidth,
+              nestedControls: card.querySelectorAll("button button, button a, [role=button] button")
+                .length,
+            };
+          }),
+        ).toEqual({
+          sameSize: true,
+          sameBorder: true,
+          secondRow: true,
+          inside: true,
+          readable: true,
+          nestedControls: 0,
+        });
+      }
+      const restore = button(pastedCard, "Show in text field");
+      await restore.focus();
+      await page.keyboard.press("Enter");
+      await expect.poll(() => composer.inputValue()).toBe(`Keep this draft\n\n${pastedText}`);
+      expect(
+        await page.locator(".chat-attachments-preview openclaw-chat-pasted-text").count(),
+      ).toBe(0);
+      expect(await fileCard.count()).toBe(1);
+      expect(await page.locator("openclaw-chat-detail-panel:visible").count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    });
   });
 
   it("opens, copies, and restores exact pasted text under the Gateway CSP", async () => {
@@ -182,7 +179,7 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await composer.waitFor({ state: "visible" });
       await paste(composer);
-      const chip = page.getByRole("button", { name: pastedTextLabel, exact: true });
+      const chip = button(page, pastedTextLabel);
       await chip.focus();
       await page.keyboard.press("Enter");
       const preview = page.locator("openclaw-chat-detail-panel:visible");
@@ -195,9 +192,9 @@ suite.define(() => {
       expect(await content.evaluate((element) => getComputedStyle(element).fontFamily)).toMatch(
         /mono/i,
       );
-      await preview.getByRole("button", { name: "Copy", exact: true }).click();
+      await button(preview, "Copy").click();
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(pastedText);
-      await preview.getByRole("button", { name: "Show in text field", exact: true }).click();
+      await button(preview, "Show in text field").click();
       await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
       await expect.poll(() => composer.inputValue()).toBe(pastedText);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
@@ -275,29 +272,23 @@ suite.define(() => {
         { scopeKey, legacy },
       );
       await page.reload();
-      const chip = page.getByRole("button", { name: pastedTextLabel, exact: true });
+      const chip = button(page, pastedTextLabel);
       await chip.click();
       const preview = page.locator("openclaw-chat-detail-panel:visible");
-      await expect
-        .poll(() => preview.locator(".sidebar-attachment-preview__text").textContent())
-        .toBe(pastedText);
+      await expectPastedText(preview);
       await composer.click();
-      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      await button(page, "Send message").click();
       await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(1);
       const params = (await gateway.getRequests("chat.send"))[0]!.params;
-      expect(params).toEqual(
-        expect.objectContaining({
-          attachments: [
-            {
-              type: "file",
-              mimeType: "text/plain",
-              fileName,
-              ...(!legacy ? { origin: "paste" } : {}),
-              content: Buffer.from(pastedText).toString("base64"),
-            },
-          ],
-        }),
-      );
+      expect(params).toHaveProperty("attachments", [
+        {
+          type: "file",
+          mimeType: "text/plain",
+          fileName,
+          ...(!legacy ? { origin: "paste" } : {}),
+          content: Buffer.from(pastedText).toString("base64"),
+        },
+      ]);
       expect(fileName).toMatch(/^pasted-text-\d+\.txt$/);
     });
   });
@@ -308,19 +299,19 @@ suite.define(() => {
         "Selected text:\nReview this\n\nUser comment:\nKeep spacing.\n\nSource session: agent:main:main\nSelected text UTF-16 length: 11\nDOM text UTF-16 range: [0, 11)";
       const retryUrl = `${suite.server.baseUrl}pasted-note-retry.txt`;
       let sourceAvailable = false;
-      await page.route(retryUrl, (route) => {
-        return route.fulfill({
+      await page.route(retryUrl, (route) =>
+        route.fulfill({
           status: sourceAvailable ? 200 : 503,
           contentType: "text/plain; charset=utf-8",
           body: sourceAvailable ? pastedText : "Temporarily unavailable",
-        });
-      });
+        }),
+      );
       await installMockGateway(page, {
         historyMessages: [
           history(
             [
               fact(comment, "selection-comment.txt", "file"),
-              { ...fact(pastedText, "renamed-note.md", "paste"), url: retryUrl },
+              fact(pastedText, "renamed-note.md", "paste", { url: retryUrl }),
               fact("Legacy pasted text", "pasted-text-123.txt"),
             ],
             "Please review the attached notes.",
@@ -372,16 +363,14 @@ suite.define(() => {
         });
       await chips.nth(1).click();
       const preview = page.locator("openclaw-chat-detail-panel:visible");
-      const retry = preview.getByRole("button", { name: "Retry", exact: true });
+      const retry = button(preview, "Retry");
       await retry.waitFor();
       const download = preview.getByRole("link", { name: "Download renamed-note.md", exact: true });
       expect(await download.getAttribute("href")).toBe(retryUrl);
       expect(await download.getAttribute("download")).toBe("renamed-note.md");
       sourceAvailable = true;
       await retry.click();
-      await expect
-        .poll(() => preview.locator(".sidebar-attachment-preview__text").textContent())
-        .toBe(pastedText);
+      await expectPastedText(preview);
       expect(await preview.locator("article").count()).toBe(0);
       expect((await chips.allTextContents()).map((label) => label.trim())).toEqual(labels);
     });
@@ -394,19 +383,10 @@ suite.define(() => {
       const fileName = "pasted-text-987.txt";
       expect(bytes.length).toBeGreaterThan(256 * 1024);
       await installMockGateway(page, {
-        historyMessages: [
-          history([
-            {
-              ...fact(text, fileName, "paste"),
-              sizeBytes: bytes.length,
-            },
-          ]),
-        ],
+        historyMessages: [history([fact(text, fileName, "paste", { sizeBytes: bytes.length })])],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page
-        .getByRole("button", { name: "Preserve the original UTF-8 te…", exact: true })
-        .click();
+      await button(page, "Preserve the original UTF-8 te…").click();
       const preview = page.locator("openclaw-chat-detail-panel:visible");
       await preview
         .getByText(

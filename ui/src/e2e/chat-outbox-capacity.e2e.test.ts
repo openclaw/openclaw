@@ -1,11 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { crc32, deflateSync } from "node:zlib";
 import type { Locator, Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import type { StoredComposerState } from "../lib/chat/outbox-store.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createChatFlowE2eSuite,
   expectRequestCountStable,
@@ -18,7 +14,6 @@ import {
 } from "./chat-outbox-payloads.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const proofRoot = path.resolve(".artifacts/control-ui-e2e/outbox-capacity/after");
 const largePngBytes = 2_404_765;
 const smallPngBytes = 25_536;
 const storageError =
@@ -164,17 +159,12 @@ suite.define(() => {
     { name: "two-large", sizes: [largePngBytes, largePngBytes] },
   ])(
     "durably admits $name PNG attachments before steering an active run (mock Gateway)",
-    async ({ name, sizes }) => {
-      const proofDir = createControlUiE2eArtifactDir(`outbox-capacity-${name}`, proofRoot);
-      await suite.withPage(
+    ({ name, sizes }) =>
+      suite.withPage(
         {
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { width: 1280, height: 900 },
-          recordVideo:
-            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-              ? { dir: path.join(proofDir, "video"), size: { width: 1280, height: 900 } }
-              : undefined,
         },
         async ({ page }) => {
           const runId = "mock-active-capacity-run";
@@ -192,13 +182,16 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat`);
           const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
           const composer = pane.locator(".agent-chat__composer-combobox textarea");
+          const stop = pane.getByRole("button", { name: "Stop generating" });
           const steer = pane.getByRole("button", {
             name: "Steer into the active run",
             exact: true,
           });
-          await pane.getByText(historyText, { exact: true }).waitFor();
-          await pane.getByText(activeText, { exact: true }).waitFor();
-          await pane.getByRole("button", { name: "Stop generating" }).waitFor();
+          const history = pane.getByText(historyText, { exact: true });
+          const active = pane.getByText(activeText, { exact: true });
+          await history.waitFor();
+          await active.waitFor();
+          await stop.waitFor();
           const files = sizes.map((size, index) => ({
             name: `mock-${name}-${index + 1}.png`,
             mimeType: "image/png",
@@ -244,30 +237,20 @@ suite.define(() => {
               attachmentPreviews: await previews.count(),
               queueRows: await pane.locator(".chat-queue__item").count(),
             };
-            await writeFile(
-              path.join(proofDir, `${name}.json`),
-              `${JSON.stringify(evidence, null, 2)}\n`,
-            );
             // Failed admission must retain the entire draft, with no phantom queue
             // entry or send. The success contract below still fails on that outcome.
             if (outcome === "storage-rejected") {
-              expect(evidence.draft).toBe(message);
-              expect(evidence.attachmentPreviews).toBe(files.length);
-              expect(evidence.queueRows).toBe(0);
+              expect(evidence).toMatchObject({
+                draft: message,
+                attachmentPreviews: files.length,
+                queueRows: 0,
+              });
               await expectRequestCountStable(gateway, "chat.send", 0);
             }
             const captureImages = pane.locator(".chat-attachment-thumb img, .chat-message-image");
             await expectImages(captureImages, files.length);
-            await pane.getByText(historyText, { exact: true }).waitFor();
-            await pane.getByText(activeText, { exact: true }).waitFor();
-            await writeFile(
-              path.join(proofDir, `${name}-${outcome}.png`),
-              await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-                pane.getByText(historyText, { exact: true }),
-                pane.getByText(activeText, { exact: true }),
-                captureImages.first(),
-              ]),
-            );
+            await history.waitFor();
+            await active.waitFor();
 
             expect(outcome, JSON.stringify(evidence)).toBe("sent");
             const payload = (await readOutboxQueue(page))[0]?.attachmentPayload;
@@ -305,12 +288,12 @@ suite.define(() => {
             await expect.poll(() => previews.count()).toBe(0);
             await pane.locator(".chat-group.user", { hasText: message }).waitFor();
             expect(await pane.locator(".chat-queue__item").count()).toBe(0);
-            await pane.getByRole("button", { name: "Stop generating" }).waitFor();
+            await stop.waitFor();
             await expectRequestCountStable(gateway, "chat.send", 1);
             const sent = sends[0];
             assert(sent, "Expected the observed chat.send before emitting its terminal");
             await gateway.resolveDeferred("chat.send");
-            await pane.getByRole("button", { name: "Stop generating" }).waitFor();
+            await stop.waitFor();
             await gateway.deferNext("chat.history");
             await gateway.emitChatFinal({
               runId: sent.runId,
@@ -331,18 +314,11 @@ suite.define(() => {
             expect(deliveredBytes).toEqual(files.map((file) => file.buffer.toString("base64")));
             await expect.poll(() => countOutboxPayloads(page)).toBe(0);
             await expectRequestCountStable(gateway, "chat.send", 1);
-            await writeFile(
-              path.join(proofDir, `${name}-terminal-handoff.png`),
-              await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-                deliveredImages.first(),
-              ]),
-            );
           } finally {
             await observation.evaluate((proof) => proof.dispose());
             await observation.dispose();
           }
         },
-      );
-    },
+      ),
   );
 });
