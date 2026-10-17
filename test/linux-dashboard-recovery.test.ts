@@ -45,9 +45,11 @@ async function mountDashboard(
   search: string,
   openReleasePage = () => Promise.resolve(),
   bootstrap = { phase: "connected", setupError: undefined as string | undefined },
+  invokeOverride?: (command: string, args?: Record<string, unknown>) => unknown,
 ) {
   const elements = new Map<string, ReturnType<typeof fakeElement>>();
   const invoked: string[] = [];
+  const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
   const listeners = new Map<string, (event: { payload: Record<string, unknown> }) => void>();
   const document = {
     createElement: fakeElement,
@@ -61,8 +63,12 @@ async function mountDashboard(
   const window = {
     __TAURI__: {
       core: {
-        invoke(command: string) {
+        invoke(command: string, args?: Record<string, unknown>) {
           invoked.push(command);
+          calls.push({ command, args });
+          if (invokeOverride) {
+            return invokeOverride(command, args);
+          }
           if (command === "discover_gateways") {
             return Promise.resolve([]);
           }
@@ -89,14 +95,16 @@ async function mountDashboard(
     setInterval() {},
   };
 
-  await vm.runInNewContext(`(async () => { ${dashboardSource}\n})()`, {
-    document,
-    URLSearchParams,
-    window,
-  });
+  const actions = await vm.runInNewContext(
+    `(async () => { ${dashboardSource}\nreturn { renderConnectionChoices, continueLocalSetup, install }; })()`,
+    { document, URLSearchParams, window },
+  );
 
   return {
     invoked,
+    calls,
+    elements,
+    actions,
     element: (selector: string) => {
       const element = elements.get(selector);
       assert.ok(element);
@@ -261,56 +269,29 @@ test.each([
 ])(
   "Connection Settings preserves a native Back action for $name",
   async ({ remote, failure, entry, lateRetry }) => {
-    const elements = new Map<string, ReturnType<typeof fakeElement>>();
-    const invoked: Array<{ command: string; args: unknown }> = [];
     const retry = createDeferred<{ phase: string }>();
-    const document = {
-      createElement: fakeElement,
-      querySelector(selector: string) {
-        if (!elements.has(selector)) {
-          elements.set(selector, fakeElement());
+    const { elements, calls: invoked } = await mountDashboard(
+      entry === "settings"
+        ? "?mode=connectionSettings"
+        : entry === "recovery"
+          ? "?mode=remoteError"
+          : "",
+      undefined,
+      undefined,
+      async (command, args) => {
+        if (command === "bootstrap") {
+          return args?.remoteRetry
+            ? retry.promise
+            : args?.connectionSettings
+              ? { remote }
+              : { phase: "remoteError" };
         }
-        return elements.get(selector);
+        if (command === "close_connection_settings" && failure) {
+          throw new Error("The previous dashboard is unavailable. Try again.");
+        }
+        return [];
       },
-    };
-    const window = {
-      __TAURI__: {
-        core: {
-          async invoke(
-            command: string,
-            args?: { connectionSettings?: boolean; remoteRetry?: boolean },
-          ) {
-            invoked.push({ command, args });
-            if (command === "bootstrap") {
-              if (args?.remoteRetry) {
-                return retry.promise;
-              }
-              return args?.connectionSettings ? { remote } : { phase: "remoteError" };
-            }
-            if (command === "close_connection_settings" && failure) {
-              throw new Error("The previous dashboard is unavailable. Try again.");
-            }
-            return [];
-          },
-        },
-        event: { listen: async () => () => {} },
-      },
-      location: {
-        search:
-          entry === "settings"
-            ? "?mode=connectionSettings"
-            : entry === "recovery"
-              ? "?mode=remoteError"
-              : "",
-      },
-      setInterval() {},
-    };
-
-    await vm.runInNewContext(`(async () => { ${dashboardSource}\n})()`, {
-      document,
-      URLSearchParams,
-      window,
-    });
+    );
 
     if (entry !== "settings") {
       assert.equal(elements.get("#title")?.textContent, "Connection needs attention");
@@ -365,43 +346,22 @@ test.each(
   async ({ platform, externalService, releaseBuild }) => {
     for (const phase of ["unconfigured", "missingCli"]) {
       const installFailure = "Fixture: start the Gateway with openclaw gateway run, then retry.";
-      const elements = new Map<string, ReturnType<typeof fakeElement>>();
-      const invoked: { command: string; args?: Record<string, unknown> }[] = [];
-      const document = {
-        createElement: fakeElement,
-        querySelector(selector: string) {
-          if (!elements.has(selector)) {
-            elements.set(selector, fakeElement());
-          }
-          return elements.get(selector);
-        },
-      };
-      const window = {
-        __TAURI__: {
-          core: {
-            async invoke(command: string, args?: Record<string, unknown>) {
-              invoked.push({ command, args });
-              if (command === "discover_gateways") {
-                return [];
-              }
-              if (command === "build_info") {
-                return { platform, releaseBuild };
-              }
-              if (command === "install_cli") {
-                throw new Error(installFailure);
-              }
-              return { phase };
-            },
-          },
-          event: { listen: async () => () => {} },
-        },
-        location: { search: "" },
-        setInterval() {},
-      };
-      const actions = await vm.runInNewContext(
-        `(async () => { ${dashboardSource}\nreturn { renderConnectionChoices, continueLocalSetup, install }; })()`,
-        { document, URLSearchParams, window },
-      );
+      const {
+        elements,
+        calls: invoked,
+        actions,
+      } = await mountDashboard("", undefined, undefined, async (command) => {
+        if (command === "discover_gateways") {
+          return [];
+        }
+        if (command === "build_info") {
+          return { platform, releaseBuild };
+        }
+        if (command === "install_cli") {
+          throw new Error(installFailure);
+        }
+        return { phase };
+      });
       actions.renderConnectionChoices();
       const description = elements.get("#description")?.textContent ?? "";
       const subtitle = elements.get("#local-subtitle")?.textContent ?? "";

@@ -54,10 +54,8 @@ vi.mock("../src/plugins/http-registry.js", async (importOriginal) => ({
   },
 }));
 
-// The existing entry test loader keeps the public plugin module in Vitest's graph,
-// so Gateway transport and store IO are intercepted. Seed the actual public runtime
-// store below; the unchanged broad bootstrap sidecar loader is outside this fixture.
-// No private plugin imports or production exports are added for this test.
+// Keep the public plugin in Vitest's graph to intercept Gateway/store IO;
+// seed its actual runtime store below rather than using the bootstrap sidecar.
 const createEntryLoader: typeof createJiti = (...loaderArgs) =>
   new Proxy(createJiti(...loaderArgs), {
     apply(target, thisArg, args) {
@@ -124,6 +122,9 @@ function scenario(name: string, overrides: Partial<Scenario> = {}): Scenario {
   };
 }
 
+const terminal = (name: string, overrides: Partial<Scenario> = {}) =>
+  scenario(name, { lookup: "terminal", writes: 0, replies: 1, ...overrides });
+
 const scenarios = [
   scenario("allowed pending answer"),
   scenario("initially forbidden", { paired: false, policy: "allowlist", writes: 0 }),
@@ -136,55 +137,42 @@ const scenarios = [
   scenario("revoked during pending lookup", { revoke: "read", writes: 0 }),
   scenario("revoked during terminal lookup", { lookup: "terminal", revoke: "read", writes: 0 }),
   scenario("revoked during failed lookup", { lookup: "failed", revoke: "read", writes: 0 }),
-  scenario("allowed terminal notice", { lookup: "terminal", writes: 0, replies: 1 }),
+  terminal("allowed terminal notice"),
   scenario("allowed failed lookup notice", { lookup: "failed", writes: 0, replies: 1 }),
-  scenario("revoked during failed reply prevents push", {
-    lookup: "terminal",
+  terminal("revoked during failed reply prevents push", {
     revoke: "reply",
     reply: "reject",
-    writes: 0,
-    replies: 1,
   }),
-  scenario("allowed failed reply falls back to push", {
-    lookup: "terminal",
+  terminal("allowed failed reply falls back to push", {
     reply: "reject",
-    writes: 0,
-    replies: 1,
     pushes: 1,
   }),
-  scenario("partial reply never duplicates as push", {
-    lookup: "terminal",
+  terminal("partial reply never duplicates as push", {
     reply: "partial",
-    writes: 0,
-    replies: 1,
   }),
-  scenario("revoked terminal notice without reply token", {
-    lookup: "terminal",
+  terminal("revoked terminal notice without reply token", {
     revoke: "read",
     replyToken: "",
-    writes: 0,
+    replies: 0,
   }),
   ...(["server-error", "transport-error"] as const).flatMap((push) => [
-    scenario(`revoked after ${push} prevents push retry`, {
-      lookup: "terminal",
+    terminal(`revoked after ${push} prevents push retry`, {
       replyToken: "",
       revoke: "push",
       push,
-      writes: 0,
+      replies: 0,
       pushes: 1,
     }),
-    scenario(`allowed ${push} retries under the same key`, {
-      lookup: "terminal",
+    terminal(`allowed ${push} retries under the same key`, {
       replyToken: "",
       push,
-      writes: 0,
+      replies: 0,
       pushes: 2,
     }),
   ]),
-  scenario("allowed terminal notice without reply token", {
-    lookup: "terminal",
+  terminal("allowed terminal notice without reply token", {
     replyToken: "",
-    writes: 0,
+    replies: 0,
     pushes: 1,
   }),
 ];

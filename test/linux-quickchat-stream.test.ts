@@ -45,22 +45,26 @@ const { chatMessageWidgets, resolveInlineWidgetUrl } = context.helpers as {
   resolveInlineWidgetUrl: (surface: unknown, target: unknown) => string | null;
 };
 
-function canvasMessage(role: string, url: string) {
+function canvasBlock(url: string, overrides: Record<string, unknown> = {}) {
   return {
-    role,
-    content: [
-      {
-        type: "canvas",
-        preview: {
-          kind: "canvas",
-          surface: "assistant_message",
-          render: "url",
-          sandbox: "scripts",
-          url,
-        },
-      },
-    ],
+    type: "canvas",
+    preview: {
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      sandbox: "scripts",
+      url,
+      ...overrides,
+    },
   };
+}
+
+function canvasMessage(role: string, url: string) {
+  return { role, content: [canvasBlock(url)] };
+}
+
+function chatTarget(runId: string) {
+  return { sessionKey: "global", agentId: "work", runId };
 }
 
 function createFakeElement(tagName = "div") {
@@ -485,6 +489,13 @@ ${options.initialize ? `${quickchatSource.slice(browserBindingsEnd)}\n})()` : ""
   };
 }
 
+function readyHarness(message: string) {
+  const harness = createQuickChatHarness();
+  harness.setGatewayUp();
+  harness.setMessage(message);
+  return harness;
+}
+
 for (const fireBeforeReady of [false, true]) {
   test(`startup preserves Escape when its timer fires ${fireBeforeReady ? "before" : "after"} native admission`, async () => {
     const harness = createQuickChatHarness({
@@ -616,19 +627,11 @@ test("canvas previews are accepted only for safe assistant widgets", () => {
   const [widget] = chatMessageWidgets({
     role: "assistant",
     content: [
-      {
-        type: "canvas",
-        preview: {
-          kind: "canvas",
-          surface: "assistant_message",
-          render: "url",
-          sandbox: "scripts",
-          title: "Build status",
-          preferredHeight: 2_000,
-          viewId: "build-status",
-          url: "/__openclaw__/canvas/documents/build-status/index.html",
-        },
-      },
+      canvasBlock("/__openclaw__/canvas/documents/build-status/index.html", {
+        title: "Build status",
+        preferredHeight: 2_000,
+        viewId: "build-status",
+      }),
     ],
   });
 
@@ -644,41 +647,11 @@ test("canvas previews are accepted only for safe assistant widgets", () => {
   );
   const duplicateWidgets = chatMessageWidgets({
     role: "assistant",
-    content: [
-      {
-        type: "canvas",
-        preview: {
-          kind: "canvas",
-          surface: "assistant_message",
-          render: "url",
-          sandbox: "scripts",
-          viewId: "duplicate",
-          url: "/__openclaw__/canvas/documents/first/index.html",
-        },
-      },
-      {
-        type: "canvas",
-        preview: {
-          kind: "canvas",
-          surface: "assistant_message",
-          render: "url",
-          sandbox: "scripts",
-          viewId: "duplicate",
-          url: "/__openclaw__/canvas/documents/second/index.html",
-        },
-      },
-      {
-        type: "canvas",
-        preview: {
-          kind: "canvas",
-          surface: "assistant_message",
-          render: "url",
-          sandbox: "scripts",
-          viewId: "duplicate-2",
-          url: "/__openclaw__/canvas/documents/third/index.html",
-        },
-      },
-    ],
+    content: ["first", "second", "third"].map((name, index) =>
+      canvasBlock(`/__openclaw__/canvas/documents/${name}/index.html`, {
+        viewId: index === 2 ? "duplicate-2" : "duplicate",
+      }),
+    ),
   });
   assert.equal(duplicateWidgets.length, 3);
   assert.equal(duplicateWidgets[0]?.key, "duplicate");
@@ -692,17 +665,7 @@ test("canvas previews are accepted only for safe assistant widgets", () => {
   const [emojiWidget] = chatMessageWidgets({
     role: "assistant",
     content: [
-      {
-        type: "canvas",
-        preview: {
-          kind: "canvas",
-          surface: "assistant_message",
-          render: "url",
-          sandbox: "scripts",
-          viewId: emojiViewId,
-          url: "/__openclaw__/canvas/documents/emoji/index.html",
-        },
-      },
+      canvasBlock("/__openclaw__/canvas/documents/emoji/index.html", { viewId: emojiViewId }),
     ],
   });
   assert.notEqual(emojiWidget?.key, emojiViewId);
@@ -710,19 +673,7 @@ test("canvas previews are accepted only for safe assistant widgets", () => {
   const cjkViewId = "界".repeat(201);
   const [cjkWidget] = chatMessageWidgets({
     role: "assistant",
-    content: [
-      {
-        type: "canvas",
-        preview: {
-          kind: "canvas",
-          surface: "assistant_message",
-          render: "url",
-          sandbox: "scripts",
-          viewId: cjkViewId,
-          url: "/__openclaw__/canvas/documents/cjk/index.html",
-        },
-      },
-    ],
+    content: [canvasBlock("/__openclaw__/canvas/documents/cjk/index.html", { viewId: cjkViewId })],
   });
   assert.notEqual(cjkWidget?.key, cjkViewId);
   assert.ok(Buffer.byteLength(cjkWidget?.key ?? "", "utf8") <= 256);
@@ -733,18 +684,7 @@ test("canvas previews are accepted only for safe assistant widgets", () => {
   );
   assert.equal(
     chatMessageWidgets({
-      content: [
-        {
-          type: "canvas",
-          preview: {
-            kind: "canvas",
-            surface: "assistant_message",
-            render: "url",
-            sandbox: "scripts",
-            url: "/__openclaw__/canvas/documents/roleless/index.html",
-          },
-        },
-      ],
+      content: [canvasBlock("/__openclaw__/canvas/documents/roleless/index.html")],
     }).length,
     0,
   );
@@ -757,61 +697,37 @@ test("canvas previews are accepted only for safe assistant widgets", () => {
 });
 
 test("widget URLs stay inside the capability-scoped Canvas host", () => {
+  const target = "/__openclaw__/canvas/documents/widget-1/index.html";
+  const surface = "https://gateway.example/base/__openclaw__/cap/fixture-capability";
   assert.equal(
-    resolveInlineWidgetUrl(
-      "https://gateway.example/base/__openclaw__/cap/fixture-capability",
-      "/__openclaw__/canvas/documents/widget-1/index.html?mode=compact#result",
-    ),
+    resolveInlineWidgetUrl(surface, `${target}?mode=compact#result`),
     "https://gateway.example/base/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/widget-1/index.html?mode=compact#result",
   );
   assert.equal(
-    resolveInlineWidgetUrl(
-      "http://gateway.example/__openclaw__/cap/fixture-capability",
-      "/__openclaw__/canvas/documents/widget-1/index.html",
-    ),
+    resolveInlineWidgetUrl("http://gateway.example/__openclaw__/cap/fixture-capability", target),
     null,
   );
   assert.equal(
-    resolveInlineWidgetUrl(
-      "http://localhost:18789/__openclaw__/cap/fixture-capability",
-      "/__openclaw__/canvas/documents/widget-1/index.html",
-    ),
+    resolveInlineWidgetUrl("http://localhost:18789/__openclaw__/cap/fixture-capability", target),
     "http://localhost:18789/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/widget-1/index.html",
   );
   assert.equal(
-    resolveInlineWidgetUrl(
-      "http://[::1]:18789/__openclaw__/cap/fixture-capability",
-      "/__openclaw__/canvas/documents/widget-1/index.html",
-    ),
+    resolveInlineWidgetUrl("http://[::1]:18789/__openclaw__/cap/fixture-capability", target),
     "http://[::1]:18789/__openclaw__/cap/fixture-capability/__openclaw__/canvas/documents/widget-1/index.html",
   );
-  assert.equal(
-    resolveInlineWidgetUrl(
-      "https://gateway.example/base/__openclaw__/cap/fixture-capability?leak=1",
-      "/__openclaw__/canvas/documents/widget-1/index.html",
-    ),
-    null,
-  );
+  assert.equal(resolveInlineWidgetUrl(`${surface}?leak=1`, target), null);
   assert.equal(
     resolveInlineWidgetUrl(
       "https://gateway.example/base/__openclaw__/cap/%252f..%252fother",
-      "/__openclaw__/canvas/documents/widget-1/index.html",
+      target,
     ),
     null,
   );
-  assert.equal(
-    resolveInlineWidgetUrl(
-      "https://gateway.example/base/__openclaw__/cap/fixture-capability",
-      "https://evil.example/widget.html",
-    ),
-    null,
-  );
+  assert.equal(resolveInlineWidgetUrl(surface, "https://evil.example/widget.html"), null);
 });
 
 test("a cached terminal retry presents the recovered reply and unlocks without another event", async () => {
-  const harness = createQuickChatHarness();
-  harness.setGatewayUp();
-  harness.setMessage("recover my reply");
+  const harness = readyHarness("recover my reply");
   const first = harness.send(false);
   harness.rejectSend("ACK connection closed");
   await first;
@@ -821,9 +737,7 @@ test("a cached terminal retry presents the recovered reply and unlocks without a
   harness.setGatewayUp();
   const retry = harness.send(false);
   harness.resolveSend({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "retained-key",
+    ...chatTarget("retained-key"),
     status: "ok",
     recoveredMessages: [
       { role: "assistant", content: [{ type: "text", text: "The saved answer." }] },
@@ -835,9 +749,7 @@ test("a cached terminal retry presents the recovered reply and unlocks without a
   assert.equal(harness.thinking(), false);
   assert.equal(harness.readOnly(), false);
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "other-run",
+    ...chatTarget("other-run"),
     state: "final",
     message: { role: "assistant", content: "unrelated" },
   });
@@ -845,7 +757,7 @@ test("a cached terminal retry presents the recovered reply and unlocks without a
   harness.setMessage("next turn");
   const next = harness.send(false);
   assert.equal(harness.sendCount(), 3);
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "next-key" });
+  harness.resolveSend(chatTarget("next-key"));
   await next;
   await harness.advanceTime(450);
   assert.equal(harness.readOnly(), false, "the next draft stays editable during the reply");
@@ -854,16 +766,12 @@ test("a cached terminal retry presents the recovered reply and unlocks without a
   await harness.send(false);
   assert.equal(harness.sendCount(), 3, "ordinary started ACK still waits for its final");
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "other-run",
+    ...chatTarget("other-run"),
     state: "final",
   });
   assert.equal(harness.sendDisabled(), true);
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "next-key",
+    ...chatTarget("next-key"),
     state: "final",
   });
   assert.equal(harness.readOnly(), false);
@@ -872,28 +780,20 @@ test("a cached terminal retry presents the recovered reply and unlocks without a
 });
 
 test("a buffered matching final wins over terminal history recovery", async () => {
-  const harness = createQuickChatHarness();
-  harness.setGatewayUp();
-  harness.setMessage("answer");
+  const harness = readyHarness("answer");
   const sending = harness.send(false);
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "reply-key",
+    ...chatTarget("reply-key"),
     state: "status",
     status: { phase: "starting_model" },
   });
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "reply-key",
+    ...chatTarget("reply-key"),
     state: "final",
     message: { role: "assistant", content: "Live final" },
   });
   harness.resolveSend({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "reply-key",
+    ...chatTarget("reply-key"),
     status: "ok",
     recoveredMessages: [{ role: "assistant", content: "Recovered text" }],
   });
@@ -904,11 +804,9 @@ test("a buffered matching final wins over terminal history recovery", async () =
 });
 
 test("collapse preserves live replies, drafts, and widget instances and wins a delayed acknowledgement", async () => {
-  const harness = createQuickChatHarness();
-  harness.setGatewayUp();
-  harness.setMessage("Show the current status");
+  const harness = readyHarness("Show the current status");
   const first = harness.send(false);
-  const target = { sessionKey: "global", agentId: "work", runId: "first-run" };
+  const target = chatTarget("first-run");
   harness.resolveSend(target);
   await first;
   await harness.advanceTime(450);
@@ -968,23 +866,12 @@ test("collapse preserves live replies, drafts, and widget instances and wins a d
 function widgetFinal(gatewayGeneration = 1) {
   return {
     gatewayGeneration,
-    sessionKey: "global",
-    agentId: "work",
-    runId: "widget-owner-run",
+    ...chatTarget("widget-owner-run"),
     state: "final",
     message: {
       role: "assistant",
       content: [
-        {
-          type: "canvas",
-          preview: {
-            kind: "canvas",
-            surface: "assistant_message",
-            render: "url",
-            sandbox: "strict",
-            url: "/__openclaw__/canvas/documents/owner-a/index.html",
-          },
-        },
+        canvasBlock("/__openclaw__/canvas/documents/owner-a/index.html", { sandbox: "strict" }),
       ],
     },
   };
@@ -1008,11 +895,9 @@ function updateWidgetKeys(harness: Record<string, any>, keys: string[]) {
 }
 
 async function createSlowWidgetHarness() {
-  const harness = createQuickChatHarness();
-  harness.setGatewayUp();
-  harness.setMessage("show widgets");
+  const harness = readyHarness("show widgets");
   const sending = harness.send(false);
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "widget-owner-run" });
+  harness.resolveSend(chatTarget("widget-owner-run"));
   await sending;
   await harness.flushWidgets();
   harness.deferWidgetSync();
@@ -1078,7 +963,7 @@ test("widget sync allows a newer reply to supersede a pending clear", async () =
   harness.setMessage("new reply");
   const sending = harness.send(false);
   await harness.drain();
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "new-run" });
+  harness.resolveSend(chatTarget("new-run"));
   await sending;
   harness.handleChatEvent({ ...widgetFinal(), runId: "new-run" });
   await harness.drain();
@@ -1204,7 +1089,7 @@ test("retained widgets reconnect only to their original generation, including sa
   harness.setGatewayUp(surfaceA, 1);
   harness.setMessage("widget");
   const sending = harness.send(false);
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "widget-owner-run" });
+  harness.resolveSend(chatTarget("widget-owner-run"));
   await sending;
   harness.handleChatEvent(widgetFinal());
   await harness.flushWidgets();
@@ -1241,7 +1126,7 @@ for (const outcome of ["success", "failure"] as const) {
     harness.expireCanvasSurface();
     harness.setMessage("A widget");
     const first = harness.send(false);
-    harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "widget-owner-run" });
+    harness.resolveSend(chatTarget("widget-owner-run"));
     await first;
     harness.handleChatEvent(widgetFinal());
     await harness.advanceTime(450);
@@ -1254,9 +1139,7 @@ for (const outcome of ["success", "failure"] as const) {
     const second = harness.send(false);
     harness.resolveSend({
       gatewayGeneration: 2,
-      sessionKey: "global",
-      agentId: "work",
-      runId: "widget-owner-run",
+      ...chatTarget("widget-owner-run"),
     });
     await second;
     const event = widgetFinal(2);
@@ -1298,17 +1181,13 @@ for (const outcome of ["success", "failure"] as const) {
 }
 
 test("prepared request keeps its pre-ack text and widgets across more than 64 foreign runs", async () => {
-  const harness = createQuickChatHarness();
-  harness.setGatewayUp();
-  harness.setMessage("hello");
+  const harness = readyHarness("hello");
   const sending = harness.send(false);
-  harness.prepareSend({ sessionKey: "global", agentId: "work", runId: "right-run" });
+  harness.prepareSend(chatTarget("right-run"));
   const foreignRuns = () => {
     for (let index = 0; index < 65; index += 1) {
       harness.handleChatEvent({
-        sessionKey: "global",
-        agentId: "work",
-        runId: `foreign-${index}`,
+        ...chatTarget(`foreign-${index}`),
         state: "delta",
         deltaText: "foreign",
         message: { role: "assistant", content: "foreign" },
@@ -1317,24 +1196,18 @@ test("prepared request keeps its pre-ack text and widgets across more than 64 fo
   };
   foreignRuns();
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "right-run",
+    ...chatTarget("right-run"),
     state: "status",
     status: { phase: "starting_model" },
   });
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "wrong-run",
+    ...chatTarget("wrong-run"),
     state: "delta",
     deltaText: "wrong",
     message: { role: "assistant", content: "wrong" },
   });
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "right-run",
+    ...chatTarget("right-run"),
     state: "delta",
     deltaText: "right",
     message: {
@@ -1348,16 +1221,14 @@ test("prepared request keeps its pre-ack text and widgets across more than 64 fo
   foreignRuns();
   for (let index = 0; index < 64; index += 1) {
     harness.handleChatEvent({
-      sessionKey: "global",
-      agentId: "work",
-      runId: "right-run",
+      ...chatTarget("right-run"),
       state: "delta",
       deltaText: "x",
     });
   }
   assert.ok(harness.pendingCount() <= 64);
 
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "right-run" });
+  harness.resolveSend(chatTarget("right-run"));
   await sending;
   await harness.drain();
 
@@ -1367,9 +1238,7 @@ test("prepared request keeps its pre-ack text and widgets across more than 64 fo
   assert.equal(harness.syncedWidgets().length, 1);
 
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: " right-run ",
+    ...chatTarget(" right-run "),
     state: "delta",
     deltaText: " whitespace-id",
   });
@@ -1381,9 +1250,7 @@ test("prepared request keeps its pre-ack text and widgets across more than 64 fo
     deltaText: " wrong-agent",
   });
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "right-run",
+    ...chatTarget("right-run"),
     state: "delta",
     deltaText: "!",
   });
@@ -1392,11 +1259,9 @@ test("prepared request keeps its pre-ack text and widgets across more than 64 fo
 
 for (const outcome of ["retained", "evicted", "repaired", "recovered"] as const) {
   test(`a retry prefix received before preparation is ${outcome} explicitly`, async () => {
-    const harness = createQuickChatHarness();
-    harness.setGatewayUp();
-    harness.setMessage("retry my reply");
+    const harness = readyHarness("retry my reply");
     const sending = harness.send(false);
-    const target = { sessionKey: "global", agentId: "work", runId: "retry-run" };
+    const target = chatTarget("retry-run");
     harness.handleChatEvent({
       ...target,
       state: "delta",
@@ -1453,12 +1318,10 @@ test("unchanged gateway state does not renew a failed Canvas capability", async 
   harness.setWidgetSurfaceRefreshFails(true);
   harness.setMessage("show status");
   const sending = harness.send(false);
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "state-run" });
+  harness.resolveSend(chatTarget("state-run"));
   await sending;
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "state-run",
+    ...chatTarget("state-run"),
     state: "delta",
     message: canvasMessage("assistant", "/__openclaw__/canvas/documents/status/index.html"),
   });
@@ -1471,9 +1334,7 @@ test("unchanged gateway state does not renew a failed Canvas capability", async 
   harness.setWidgetSurfaceRefreshFails(false);
   await harness.advanceTime(1);
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "state-run",
+    ...chatTarget("state-run"),
     state: "delta",
     message: canvasMessage("assistant", "/__openclaw__/canvas/documents/retry/index.html"),
   });
@@ -1482,29 +1343,15 @@ test("unchanged gateway state does not renew a failed Canvas capability", async 
 });
 
 test("adding a widget preserves the existing native webview identity", async () => {
-  const harness = createQuickChatHarness();
-  harness.setGatewayUp();
-  harness.setMessage("show status");
+  const harness = readyHarness("show status");
   const sending = harness.send(false);
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "widget-run" });
+  harness.resolveSend(chatTarget("widget-run"));
   await sending;
-  const widgetBlock = (id: string) => ({
-    type: "canvas",
-    preview: {
-      kind: "canvas",
-      surface: "assistant_message",
-      render: "url",
-      sandbox: "scripts",
-      title: id,
-      viewId: id,
-      url: `/__openclaw__/canvas/documents/${id}/index.html`,
-    },
-  });
+  const widgetBlock = (id: string) =>
+    canvasBlock(`/__openclaw__/canvas/documents/${id}/index.html`, { title: id, viewId: id });
 
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "widget-run",
+    ...chatTarget("widget-run"),
     state: "delta",
     message: { role: "assistant", content: [widgetBlock("first")] },
   });
@@ -1512,9 +1359,7 @@ test("adding a widget preserves the existing native webview identity", async () 
   const firstLayout = { ...harness.syncedWidgets()[0] };
   const syncCountBeforeText = harness.widgetSyncCount();
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "widget-run",
+    ...chatTarget("widget-run"),
     state: "delta",
     deltaText: "status update",
   });
@@ -1522,9 +1367,7 @@ test("adding a widget preserves the existing native webview identity", async () 
   assert.ok(harness.widgetSyncCount() > syncCountBeforeText);
 
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "widget-run",
+    ...chatTarget("widget-run"),
     state: "delta",
     message: { role: "assistant", content: [widgetBlock("first"), widgetBlock("second")] },
   });
@@ -1538,14 +1381,10 @@ test("adding a widget preserves the existing native webview identity", async () 
 });
 
 test("hiding clears buffered pre-ack frames", async () => {
-  const harness = createQuickChatHarness();
-  harness.setGatewayUp();
-  harness.setMessage("hello");
+  const harness = readyHarness("hello");
   const sending = harness.send(false);
   harness.handleChatEvent({
-    sessionKey: "global",
-    agentId: "work",
-    runId: "right-run",
+    ...chatTarget("right-run"),
     state: "delta",
     deltaText: "buffered",
   });
@@ -1553,7 +1392,7 @@ test("hiding clears buffered pre-ack frames", async () => {
 
   await harness.requestHide();
   assert.equal(harness.pendingCount(), 0);
-  harness.resolveSend({ sessionKey: "global", agentId: "work", runId: "right-run" });
+  harness.resolveSend(chatTarget("right-run"));
   await sending;
   assert.equal(harness.replyText(), "");
 });

@@ -59,6 +59,26 @@ process.exitCode = ${exitCode};
   );
 }
 
+function captureFixture(stream: number, oversized = false) {
+  const dir = fixture();
+  const token = oversized ? "SYNTHETIC_CAPTURE_".padEnd(128, "x") : literals[0];
+  if (oversized) {
+    writeFileSync(path.join(dir, rulePath), `${token}\n`);
+  }
+  stage(dir, "payload.ts", "clean\n");
+  const payload = oversized
+    ? ".".repeat(16 * 1024 * 1024 - 131168) + token.repeat(2048) + "ACTIONABLE_TAIL\n"
+    : ".".repeat(256) + `${token}\n`.repeat(2048) + "ACTIONABLE_TAIL\n";
+  writeFileSync(path.join(dir, "payload.ts"), payload);
+  diagnosticFormatter(dir, stream, 23);
+  return { dir, payload };
+}
+
+const gitPath = (dir: string, state: string) =>
+  path.resolve(dir, run(dir, "git", ["rev-parse", "--git-path", state]));
+const recordFormatting = (dir: string) =>
+  installFormattingRecorder(dir, "printf '// formatted\\n' >> changed.ts\nprintf formatted");
+
 describe("pre-commit Git path identity", () => {
   it("blocks the only BOM-prefixed path when staged", () => {
     const dir = fixture();
@@ -183,14 +203,7 @@ describe("pre-commit Git path identity", () => {
 
 describe("pre-commit formatter capture", () => {
   it("discards incomplete overflow captures from stderr", () => {
-    const dir = fixture();
-    const token = "SYNTHETIC_CAPTURE_".padEnd(128, "x");
-    writeFileSync(path.join(dir, rulePath), `${token}\n`);
-    stage(dir, "payload.ts", "clean\n");
-    const cap = 16 * 1024 * 1024;
-    const payload = ".".repeat(cap - 131168) + token.repeat(2048) + "ACTIONABLE_TAIL\n";
-    writeFileSync(path.join(dir, "payload.ts"), payload);
-    diagnosticFormatter(dir, 2, 23);
+    const { dir } = captureFixture(2, true);
     const result = runFailure(dir, "git", commitArgs);
     const output = result.stdout + result.stderr;
     expect(output).toContain("Formatter could not complete");
@@ -203,14 +216,7 @@ describe("pre-commit formatter capture", () => {
 
   it("keeps oversized formatter stdout out of the diagnostics capture", () => {
     // Stdin-mode stdout is formatted content, so a huge result never overflows the pipes.
-    const dir = fixture();
-    const token = "SYNTHETIC_CAPTURE_".padEnd(128, "x");
-    writeFileSync(path.join(dir, rulePath), `${token}\n`);
-    stage(dir, "payload.ts", "clean\n");
-    const cap = 16 * 1024 * 1024;
-    const payload = ".".repeat(cap - 131168) + token.repeat(2048) + "ACTIONABLE_TAIL\n";
-    writeFileSync(path.join(dir, "payload.ts"), payload);
-    diagnosticFormatter(dir, 1, 23);
+    const { dir } = captureFixture(1, true);
     const result = runFailure(dir, "git", commitArgs);
     const output = result.stdout + result.stderr;
     expect(output).toContain("Formatter failed");
@@ -222,11 +228,7 @@ describe("pre-commit formatter capture", () => {
   });
 
   it("preserves and redacts complete below-cap stderr diagnostics", () => {
-    const dir = fixture();
-    stage(dir, "payload.ts", "clean\n");
-    const payload = ".".repeat(256) + `${literals[0]}\n`.repeat(2048) + "ACTIONABLE_TAIL\n";
-    writeFileSync(path.join(dir, "payload.ts"), payload);
-    diagnosticFormatter(dir, 2, 23);
+    const { dir, payload } = captureFixture(2);
     const result = runFailure(dir, "bash", ["git-hooks/pre-commit"]);
     const output = result.stdout + result.stderr;
     expect(result.status).toBe(23);
@@ -238,11 +240,7 @@ describe("pre-commit formatter capture", () => {
   });
 
   it("stages formatter stdout for partially staged files and rescans it", () => {
-    const dir = fixture();
-    stage(dir, "payload.ts", "clean\n");
-    const payload = ".".repeat(256) + `${literals[0]}\n`.repeat(2048) + "ACTIONABLE_TAIL\n";
-    writeFileSync(path.join(dir, "payload.ts"), payload);
-    diagnosticFormatter(dir, 1, 23);
+    const { dir } = captureFixture(1);
     const failed = runFailure(dir, "bash", ["git-hooks/pre-commit"]);
     expect(failed.status).toBe(23);
     // Content on stdout is never replayed as diagnostics, redacted or otherwise.
@@ -277,11 +275,11 @@ kill -TERM "$PPID"
     stage(dir, "payload.txt", "clean\n");
     const bin = path.join(dir, "bin");
     symlinkSync(process.execPath, path.join(bin, "node"));
-    const [git, gitPath] = [run(dir, "which", ["git"]), process.env.PATH ?? ""].map(
+    const [git, originalPath] = [run(dir, "which", ["git"]), process.env.PATH ?? ""].map(
       (value) => `'${value.replaceAll("'", "'\\''")}'`,
     );
     // Git may itself be a wrapper; only the formatter child must lack Bash.
-    writeExecutable(bin, "git", `#!/bin/sh\nPATH=${gitPath} exec ${git} "$@"\n`);
+    writeExecutable(bin, "git", `#!/bin/sh\nPATH=${originalPath} exec ${git} "$@"\n`);
     expect(run(dir, "git", ["rev-parse", "--show-toplevel"], { PATH: bin })).toBe(dir);
     const result = runFailure(dir, "/bin/bash", ["git-hooks/pre-commit"], { PATH: bin });
     expect(result.status).toBe(1);
@@ -372,7 +370,7 @@ describe.each([false, true])("Git operation state (linked=%s)", (linked) => {
     const { dir, primary } = createOperationFixture(linked, operation.startsWith("revert"));
     expect(runFailure(dir, "git", args).status).toBe(1);
     expect(run(dir, "git", ["ls-files", "--unmerged"])).not.toBe("");
-    const metadata = path.resolve(dir, run(dir, "git", ["rev-parse", "--git-path", state]));
+    const metadata = gitPath(dir, state);
     if (linked) {
       expect(existsSync(path.join(primary, ".git", state))).toBe(false);
     }
@@ -381,9 +379,7 @@ describe.each([false, true])("Git operation state (linked=%s)", (linked) => {
       // A real resolution commit clears the per-step ref while later steps remain queued.
       run(dir, "git", commitArgs);
       for (const ref of ["CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD"]) {
-        expect(
-          existsSync(path.resolve(dir, run(dir, "git", ["rev-parse", "--git-path", ref]))),
-        ).toBe(false);
+        expect(existsSync(gitPath(dir, ref))).toBe(false);
       }
     }
     const before = readFileSync(metadata);
@@ -392,10 +388,7 @@ describe.each([false, true])("Git operation state (linked=%s)", (linked) => {
     stage(dir, "changed.ts", staged);
     const stagedOid = run(dir, "git", ["rev-parse", ":changed.ts"]);
     writeFileSync(path.join(dir, "changed.ts"), unstaged);
-    const log = installFormattingRecorder(
-      dir,
-      "printf '// formatted\\n' >> changed.ts\nprintf formatted",
-    );
+    const log = recordFormatting(dir);
 
     expect(run(dir, "bash", ["git-hooks/pre-commit"])).toBe("");
     expect(readFormatterLog(log)).toEqual([]);
@@ -432,19 +425,14 @@ describe.each([false, true])("Git operation state (linked=%s)", (linked) => {
       "rebase-apply",
       "sequencer",
     ]) {
-      expect(
-        existsSync(path.resolve(dir, run(dir, "git", ["rev-parse", "--git-path", state]))),
-      ).toBe(false);
+      expect(existsSync(gitPath(dir, state))).toBe(false);
     }
     expect(runFailure(dir, "git", ["rebase", "--continue"]).stderr).toContain(
       "no rebase in progress",
     );
     const working = "export const value=5;\n";
     stage(dir, "changed.ts", working);
-    const log = installFormattingRecorder(
-      dir,
-      "printf '// formatted\\n' >> changed.ts\nprintf formatted",
-    );
+    const log = recordFormatting(dir);
     expect(run(dir, "bash", ["git-hooks/pre-commit"])).toBe("formatted");
     expect(readFormatterLog(log)).toEqual([
       "oxfmt --write --threads=1 --no-error-on-unmatched-pattern changed.ts",

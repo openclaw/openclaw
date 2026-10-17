@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -108,50 +109,35 @@ describe("Hugging Face OpenClaw local-app CLI contract", () => {
 });
 
 function messageContainsHello(message: { content?: unknown }): boolean {
+  const containsHello = (text: string) => text.includes("Hello from Hugging Face");
   const content = message.content;
   if (typeof content === "string") {
-    return content.includes("Hello from Hugging Face");
+    return containsHello(content);
   }
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some((part) => {
-    if (typeof part === "string") {
-      return part.includes("Hello from Hugging Face");
-    }
-    if (part && typeof part === "object" && "text" in part) {
-      return String(part.text).includes("Hello from Hugging Face");
-    }
-    return false;
-  });
+  return (
+    Array.isArray(content) &&
+    content.some((part) =>
+      typeof part === "string"
+        ? containsHello(part)
+        : part && typeof part === "object" && "text" in part && containsHello(String(part.text)),
+    )
+  );
 }
 
 async function expectConfiguredLocalProvider(
   configPath: string,
   expected: { baseUrl: string; modelId: string; providerId: string },
 ): Promise<void> {
-  const config = JSON.parse(await fs.readFile(configPath, "utf8")) as {
-    agents?: {
-      defaults?: {
-        model?: { primary?: string };
-      };
-    };
-    models?: {
-      providers?: Record<
-        string,
-        { api?: string; baseUrl?: string; models?: Array<{ id?: string }> }
-      >;
-    };
-  };
+  const config: OpenClawConfig = JSON.parse(await fs.readFile(configPath, "utf8"));
   const provider = config.models?.providers?.[expected.providerId];
   expect(provider).toMatchObject({
     api: "openai-completions",
     baseUrl: expected.baseUrl,
   });
   expect(provider?.models?.some((model) => model.id === expected.modelId)).toBe(true);
-  expect(config.agents?.defaults?.model?.primary).toBe(
-    `${expected.providerId}/${expected.modelId}`,
-  );
+  expect(config.agents?.defaults?.model).toMatchObject({
+    primary: `${expected.providerId}/${expected.modelId}`,
+  });
 }
 
 async function startFakeOpenAiServer(params: { modelId: string }): Promise<FakeOpenAiServer> {
@@ -217,12 +203,14 @@ async function handleFakeOpenAiRequest(
     "content-type": "text/event-stream; charset=utf-8",
   });
   const providerId = modelId.startsWith("mlx-community/") ? "mlx-lm" : "llama-cpp";
-  const created = Math.floor(Date.now() / 1000);
-  writeSse(res, {
+  const chunk = {
     id: "chatcmpl-hf-openclaw-contract",
     object: "chat.completion.chunk",
-    created,
+    created: Math.floor(Date.now() / 1000),
     model: modelId,
+  };
+  writeSse(res, {
+    ...chunk,
     choices: [
       {
         index: 0,
@@ -232,10 +220,7 @@ async function handleFakeOpenAiRequest(
     ],
   });
   writeSse(res, {
-    id: "chatcmpl-hf-openclaw-contract",
-    object: "chat.completion.chunk",
-    created,
-    model: modelId,
+    ...chunk,
     choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
     usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
   });
