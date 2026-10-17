@@ -2,6 +2,7 @@ import process from "node:process";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi, type MockInstance } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ConfigSnapshotReadOptions } from "../config/io.types.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
 import { loggingState } from "../logging/state.js";
@@ -18,6 +19,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type RunMainModule = typeof import("./run-main.js");
 
 let runCli: RunMainModule["runCli"];
+let startupConfig: typeof import("../commands/config-preflight-snapshot.js");
 
 export type ConfigSnapshotStub = {
   exists: boolean;
@@ -104,8 +106,8 @@ const readLocalOnboardingStateMock = vi.hoisted(() =>
     (
       configPath: string,
       config: { wizard?: { securityAcknowledgedAt?: string } },
-    ) => LocalOnboardingState | undefined
-  >(() => undefined),
+    ) => Promise<LocalOnboardingState | undefined>
+  >(async () => undefined),
 );
 const setupWizardCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runRemoteGatewayInferenceOnboardingMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -401,7 +403,7 @@ vi.mock("../config/io.factory.js", () => ({
 }));
 
 vi.mock("../state/local-onboarding-state.js", () => ({
-  readLocalOnboardingStateForConfig: readLocalOnboardingStateMock,
+  readLocalOnboardingStateForConfigAsync: readLocalOnboardingStateMock,
 }));
 
 vi.mock("../commands/onboard.js", () => ({ setupWizardCommand: setupWizardCommandMock }));
@@ -538,6 +540,7 @@ export function installRunMainTestHooks(): void {
     const runMainModule = await import("./run-main.js");
     expect(dotenvModuleImportState.count).toBe(0);
     runCli = runMainModule.runCli;
+    startupConfig = await import("../commands/config-preflight-snapshot.js");
   });
 
   afterAll(() => {
@@ -555,8 +558,11 @@ export function installRunMainTestHooks(): void {
     delete process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV];
     existsSyncOverride.value = undefined;
     vi.clearAllMocks();
+    vi.spyOn(startupConfig, "readConfigSnapshotForEngineSelection").mockResolvedValue(
+      createSnapshot({ hash: "fixture", sourceConfig: {} }),
+    );
     readConfigFileSnapshotMock.mockResolvedValue(validConfig({ gateway: { mode: "local" } }));
-    readLocalOnboardingStateMock.mockReset().mockReturnValue(undefined);
+    readLocalOnboardingStateMock.mockReset().mockResolvedValue(undefined);
     probeGatewayConfiguredModelMock.mockResolvedValue({ kind: "configured" });
     readActiveGatewayLockPortMock.mockReset().mockResolvedValue(undefined);
     inspectGatewayTlsCertificateMock

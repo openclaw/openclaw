@@ -23,7 +23,7 @@ const resolveApiKeyForProfile = vi.hoisted(() =>
   }),
 );
 vi.mock("../../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore: vi.fn(() => authStore),
+  ensureAuthProfileStoreAsync: vi.fn(async () => authStore),
   resolveApiKeyForProfile,
   resolveAuthProfileOrder: vi.fn(() => Object.keys(authStore.profiles)),
 }));
