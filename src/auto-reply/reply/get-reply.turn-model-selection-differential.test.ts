@@ -3,7 +3,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import {
   createOpenClawTestState,
@@ -50,24 +49,6 @@ let resolveChannelModelOverrideMock: typeof import("../../channels/model-overrid
 let resolveModelRefFromStringMock: typeof import("../../agents/model-selection.js").resolveModelRefFromString;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 
-function createConfig(params: {
-  storePath: string;
-  workspaceDir: string;
-  modelByChannel?: Record<string, Record<string, string>>;
-}): OpenClawConfig {
-  return markCompleteReplyConfig({
-    session: { store: params.storePath },
-    agents: {
-      defaults: {
-        model: { primary: turnModelRefLabel(TURN_MODEL_DEFAULT_REF) },
-        modelPolicy: { allow: ["*/*"] },
-        workspace: params.workspaceDir,
-      },
-    },
-    channels: params.modelByChannel ? { modelByChannel: params.modelByChannel } : undefined,
-  } as OpenClawConfig);
-}
-
 async function seedFixtureStore(
   storePath: string,
   sessionKey: string,
@@ -84,13 +65,26 @@ async function seedFixtureStore(
   return store;
 }
 
-async function observeReplySelection(params: {
-  fixture: Pick<TurnModelDifferentialFixture, "name" | "ctx" | "child" | "heartbeat" | "locked">;
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  sessionStore: Record<string, SessionEntry>;
-}): Promise<TurnModelSelectionVerdict> {
-  const { fixture, cfg, sessionKey, sessionStore } = params;
+async function observeReplySelection(
+  fixture: Pick<
+    TurnModelDifferentialFixture,
+    "name" | "ctx" | "child" | "parent" | "heartbeat" | "locked" | "modelByChannel"
+  >,
+  sessionKey: string,
+): Promise<TurnModelSelectionVerdict> {
+  const storePath = path.join(state.sessionsDir("main"), "sessions.json");
+  const sessionStore = await seedFixtureStore(storePath, sessionKey, fixture);
+  const cfg = markCompleteReplyConfig({
+    session: { store: storePath },
+    agents: {
+      defaults: {
+        model: { primary: turnModelRefLabel(TURN_MODEL_DEFAULT_REF) },
+        modelPolicy: { allow: ["*/*"] },
+        workspace: state.workspaceDir,
+      },
+    },
+    channels: fixture.modelByChannel ? { modelByChannel: fixture.modelByChannel } : undefined,
+  });
   mocks.initSessionState.mockResolvedValue(
     createGetReplySessionState({
       sessionCtx: fixture.ctx,
@@ -98,7 +92,7 @@ async function observeReplySelection(params: {
       sessionStore,
       sessionKey,
       sessionId: fixture.child.sessionId,
-      storePath: cfg.session?.store,
+      storePath,
       groupResolution:
         fixture.child.chatType === "group"
           ? { channel: undefined, id: fixture.child.groupId, type: "group" }
@@ -169,35 +163,35 @@ beforeEach(async () => {
       defaultProvider: TURN_MODEL_DEFAULT_REF.provider,
     }),
   });
-  mocks.resolveReplyDirectives.mockImplementation(async (input: unknown) => {
-    const params = input as {
+  mocks.resolveReplyDirectives.mockImplementation(
+    async (params: {
       provider: string;
       model: string;
       sessionKey: string;
       triggerBodyNormalized: string;
-    };
-    return createGetReplyContinueDirectivesResult({
-      body: params.triggerBodyNormalized,
-      abortKey: params.sessionKey,
-      from: "sender",
-      to: "target",
-      senderId: "sender",
-      commandSource: "text",
-      senderIsOwner: true,
-      resetHookTriggered: false,
-      provider: params.provider,
-      model: params.model,
-    });
-  });
-  mocks.handleInlineActions.mockImplementation(async (input: unknown) => {
-    const params = input as { directives?: unknown; cleanedBody?: string };
-    return {
+    }) => {
+      return createGetReplyContinueDirectivesResult({
+        body: params.triggerBodyNormalized,
+        abortKey: params.sessionKey,
+        from: "sender",
+        to: "target",
+        senderId: "sender",
+        commandSource: "text",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+        provider: params.provider,
+        model: params.model,
+      });
+    },
+  );
+  mocks.handleInlineActions.mockImplementation(
+    async (params: { directives?: unknown; cleanedBody?: string }) => ({
       kind: "continue",
       directives: params.directives ?? {},
       cleanedBody: params.cleanedBody ?? "hello",
       abortedLastRun: false,
-    };
-  });
+    }),
+  );
   vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
 });
 
@@ -207,8 +201,6 @@ afterEach(async () => {
 
 describe("getReplyFromConfig channel model input boundary", () => {
   it("selects the live channel exact conversation", async () => {
-    const storePath = path.join(state.sessionsDir("main"), "sessions.json");
-    const sessionKey = "agent:main:telegram:group:room";
     const child = createTurnModelEntry({
       chatType: "group",
       groupId: "room",
@@ -230,15 +222,9 @@ describe("getReplyFromConfig channel model input boundary", () => {
         },
       },
     };
-    const sessionStore = await seedFixtureStore(storePath, sessionKey, fixture);
-    const cfg = createConfig({
-      storePath,
-      workspaceDir: state.workspaceDir,
-      modelByChannel: fixture.modelByChannel,
-    });
-    await expect(
-      observeReplySelection({ fixture, cfg, sessionKey, sessionStore }),
-    ).resolves.toEqual(turnModelVerdict(TURN_MODEL_LIVE_CHANNEL_REF));
+    await expect(observeReplySelection(fixture, "agent:main:telegram:group:room")).resolves.toEqual(
+      turnModelVerdict(TURN_MODEL_LIVE_CHANNEL_REF),
+    );
   });
 });
 
@@ -249,17 +235,8 @@ describe("turn model selection reply-path differential", () => {
       name === "explicit default rejects stale child and parent overrides",
   );
   it.each(fixtures)("pins observed $name behavior", async (fixture) => {
-    const storePath = path.join(state.sessionsDir("main"), "sessions.json");
-    const sessionKey = "agent:main:telegram:group:selection";
-    const sessionStore = await seedFixtureStore(storePath, sessionKey, fixture);
-    const cfg = createConfig({
-      storePath,
-      workspaceDir: state.workspaceDir,
-      modelByChannel: fixture.modelByChannel,
-    });
-
     await expect(
-      observeReplySelection({ fixture, cfg, sessionKey, sessionStore }),
+      observeReplySelection(fixture, "agent:main:telegram:group:selection"),
     ).resolves.toEqual(fixture.expected.reply);
   });
 });

@@ -57,85 +57,7 @@ export async function expectContinueResult(
 }
 
 export function parseInlineDirectivesForTargetSessionTest(body: string) {
-  const normalized = body.trim();
-  const modelDirective = normalized.match(/(?:^|\n)\/model\s+(\S+)/)?.[1];
-  if (modelDirective) {
-    return {
-      cleaned: normalized.replace(/(?:^|\n)\/model\s+\S+/, "").trim(),
-      hasThinkDirective: false,
-      hasVerboseDirective: false,
-      hasTraceDirective: false,
-      traceLevel: undefined,
-      rawTraceLevel: undefined,
-      hasFastDirective: false,
-      hasReasoningDirective: false,
-      hasElevatedDirective: false,
-      hasExecDirective: false,
-      hasModelDirective: true,
-      hasQueueDirective: false,
-      hasStatusDirective: false,
-      queueReset: false,
-      thinkLevel: undefined,
-      verboseLevel: undefined,
-      fastMode: undefined,
-      reasoningLevel: undefined,
-      elevatedLevel: undefined,
-      rawElevatedLevel: undefined,
-      rawModelDirective: modelDirective,
-    };
-  }
-  if (normalized === "/reasoning stream") {
-    return {
-      cleaned: "",
-      hasThinkDirective: false,
-      hasVerboseDirective: false,
-      hasTraceDirective: false,
-      traceLevel: undefined,
-      rawTraceLevel: undefined,
-      hasFastDirective: false,
-      hasReasoningDirective: true,
-      reasoningLevel: "stream",
-      rawReasoningLevel: "stream",
-      hasElevatedDirective: false,
-      hasExecDirective: false,
-      hasModelDirective: false,
-      hasQueueDirective: false,
-      hasStatusDirective: false,
-      queueReset: false,
-      thinkLevel: undefined,
-      verboseLevel: undefined,
-      fastMode: undefined,
-      elevatedLevel: undefined,
-      rawElevatedLevel: undefined,
-      rawModelDirective: undefined,
-    };
-  }
-  if (normalized === "/trace on") {
-    return {
-      cleaned: "",
-      hasThinkDirective: false,
-      hasVerboseDirective: false,
-      hasTraceDirective: true,
-      traceLevel: "on",
-      rawTraceLevel: "on",
-      hasFastDirective: false,
-      hasReasoningDirective: false,
-      hasElevatedDirective: false,
-      hasExecDirective: false,
-      hasModelDirective: false,
-      hasQueueDirective: false,
-      hasStatusDirective: false,
-      queueReset: false,
-      thinkLevel: undefined,
-      verboseLevel: undefined,
-      fastMode: undefined,
-      reasoningLevel: undefined,
-      elevatedLevel: undefined,
-      rawElevatedLevel: undefined,
-      rawModelDirective: undefined,
-    };
-  }
-  return {
+  const base = {
     cleaned: body,
     hasThinkDirective: false,
     hasVerboseDirective: false,
@@ -158,4 +80,27 @@ export function parseInlineDirectivesForTargetSessionTest(body: string) {
     rawElevatedLevel: undefined,
     rawModelDirective: undefined,
   };
+  const normalized = body.trim();
+  const modelDirective = normalized.match(/(?:^|\n)\/model\s+(\S+)/)?.[1];
+  if (modelDirective) {
+    return {
+      ...base,
+      cleaned: normalized.replace(/(?:^|\n)\/model\s+\S+/, "").trim(),
+      hasModelDirective: true,
+      rawModelDirective: modelDirective,
+    };
+  }
+  if (normalized === "/reasoning stream") {
+    return {
+      ...base,
+      cleaned: "",
+      hasReasoningDirective: true,
+      reasoningLevel: "stream",
+      rawReasoningLevel: "stream",
+    };
+  }
+  if (normalized === "/trace on") {
+    return { ...base, cleaned: "", hasTraceDirective: true, traceLevel: "on", rawTraceLevel: "on" };
+  }
+  return base;
 }

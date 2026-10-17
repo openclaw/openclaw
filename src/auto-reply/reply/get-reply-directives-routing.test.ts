@@ -14,6 +14,26 @@ vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => (
       : undefined,
 }));
 
+function route(
+  ctx: ReturnType<typeof buildTestCtx>,
+  overrides: Partial<Parameters<typeof resolveReplyDirectiveRouting>[0]> = {},
+) {
+  return resolveReplyDirectiveRouting({
+    commandText: ctx.commandText,
+    agentText: ctx.agentText,
+    modelAliases: [],
+    canInterpretTextDirectives: true,
+    isAuthorizedSender: true,
+    isGroup: false,
+    wasMentioned: false,
+    ctx,
+    cfg: { commands: { text: true } },
+    agentId: "main",
+    resetTriggered: false,
+    ...overrides,
+  });
+}
+
 describe("sender-owned directive projection", () => {
   it.each([
     {
@@ -21,31 +41,24 @@ describe("sender-owned directive projection", () => {
       rawText: "<@BOT> (Bek (Ops)) Please /help continue",
       commandText: "Please /help continue",
       expected: "<@BOT> (Bek (Ops)) Please continue",
-      chatType: "channel" as const,
-      isGroup: true,
     },
     {
       name: "selects an inline shortcut when the rendered mention trails the text",
       rawText: "Please /help continue <@BOT> (Bek (Ops))",
       commandText: "Please /help continue",
       expected: "Please continue <@BOT> (Bek (Ops))",
-      chatType: "channel" as const,
-      isGroup: true,
     },
     {
       name: "selects an inline shortcut on a later line after a rendered mention",
       rawText: "<@BOT> (Bek (Ops)) Please summarize\n/help",
       commandText: "Please summarize /help",
       expected: "<@BOT> (Bek (Ops)) Please summarize\n",
-      chatType: "channel" as const,
-      isGroup: true,
     },
     {
       name: "selects an inline shortcut after mention rendering in a direct message",
       rawText: "<@BOT> (Bek (Ops)) Please /help continue",
       commandText: "Please /help continue",
       expected: "<@BOT> (Bek (Ops)) Please continue",
-      chatType: "direct" as const,
       isGroup: false,
     },
     {
@@ -54,34 +67,20 @@ describe("sender-owned directive projection", () => {
       commandSourceText: "<@BOT> (Bek (Ops)) Please /help\ncontinue",
       commandText: "Please /help continue",
       expected: "<@BOT> (Bek (Ops)) Please\ncontinue\n[slack attachment unavailable]",
-      chatType: "channel" as const,
-      isGroup: true,
     },
-  ])("$name", ({ rawText, commandSourceText, commandText, expected, chatType, isGroup }) => {
+  ])("$name", ({ rawText, commandSourceText, commandText, expected, isGroup = true }) => {
     const preparedSource = commandSourceText ?? rawText;
     const ctx = buildTestCtx({
       Provider: "slack",
       Surface: "slack",
-      ChatType: chatType,
+      ChatType: isGroup ? "channel" : "direct",
       CommandBody: commandText,
       RawBody: rawText,
       BodyForAgent: rawText,
       CommandAuthorized: true,
       ChannelContext: { chat: { commandSourceText: preparedSource } },
     });
-    const result = resolveReplyDirectiveRouting({
-      commandText: ctx.commandText,
-      agentText: ctx.agentText,
-      modelAliases: [],
-      canInterpretTextDirectives: true,
-      isAuthorizedSender: true,
-      isGroup,
-      wasMentioned: true,
-      ctx,
-      cfg: { commands: { text: true } },
-      agentId: "main",
-      resetTriggered: false,
-    });
+    const result = route(ctx, { isGroup, wasMentioned: true });
     expect(result.inlineCommand).toBe("/help");
     expect(result.cleanedBody).toBe(expected);
   });
@@ -100,19 +99,7 @@ describe("sender-owned directive projection", () => {
         chat: { commandSourceText: "<@BOT> (Bek (Ops)) different /help text" },
       },
     });
-    const result = resolveReplyDirectiveRouting({
-      commandText: ctx.commandText,
-      agentText: ctx.agentText,
-      modelAliases: [],
-      canInterpretTextDirectives: true,
-      isAuthorizedSender: true,
-      isGroup: true,
-      wasMentioned: true,
-      ctx,
-      cfg: { commands: { text: true } },
-      agentId: "main",
-      resetTriggered: false,
-    });
+    const result = route(ctx, { isGroup: true, wasMentioned: true });
     expect(result.inlineCommand).toBeUndefined();
     expect(result.cleanedBody).toBe(agentText);
   });
@@ -121,7 +108,6 @@ describe("sender-owned directive projection", () => {
     {
       name: "preserves forwarded status text beside an ordinary caption",
       commandText: "Please summarize",
-      rawText: "Please summarize",
       agentText: "Please summarize\n[Forwarded message]\n/status marker",
       expected: "Please summarize\n[Forwarded message]\n/status marker",
       inlineStatus: false,
@@ -129,7 +115,6 @@ describe("sender-owned directive projection", () => {
     {
       name: "removes sender status while preserving forwarded status",
       commandText: "Please /status summarize",
-      rawText: "Please /status summarize",
       agentText: "Please /status summarize\n[Forwarded message]\n/status marker",
       expected: "Please summarize\n[Forwarded message]\n/status marker",
       inlineStatus: true,
@@ -137,7 +122,6 @@ describe("sender-owned directive projection", () => {
     {
       name: "preserves forwarded session directives beside a caption",
       commandText: "Please summarize",
-      rawText: "Please summarize",
       agentText: "Please summarize\n[Forwarded message]\n/think high\n  code()",
       expected: "Please summarize\n[Forwarded message]\n/think high\n  code()",
       inlineStatus: false,
@@ -145,7 +129,6 @@ describe("sender-owned directive projection", () => {
     {
       name: "keeps an empty sender projection distinct from forwarded content",
       commandText: "",
-      rawText: "",
       agentText: "[Forwarded message]\n/status marker",
       expected: "[Forwarded message]\n/status marker",
       inlineStatus: false,
@@ -153,7 +136,6 @@ describe("sender-owned directive projection", () => {
     {
       name: "strips repeated sender status without changing remaining whitespace",
       commandText: "Please /status summarize /status\n  code()",
-      rawText: "Please /status summarize /status\n  code()",
       agentText: "Please /status summarize /status\n  code()",
       expected: "Please summarize\n  code()",
       inlineStatus: true,
@@ -161,7 +143,6 @@ describe("sender-owned directive projection", () => {
     {
       name: "keeps flat history opaque to command cleanup",
       commandText: "hello",
-      rawText: "hello",
       agentText:
         "[Chat messages since your last reply - for context]\nOther: /think high\n[Current message - respond to this]\nOwner: hello /status",
       expected:
@@ -171,7 +152,6 @@ describe("sender-owned directive projection", () => {
     {
       name: "does not resurrect a consumed reset body",
       commandText: "new session",
-      rawText: "new session",
       agentText: "",
       expected: "",
       inlineStatus: false,
@@ -193,28 +173,19 @@ describe("sender-owned directive projection", () => {
       expected: "/think high\n  code()",
       inlineStatus: false,
     },
-  ])("$name", ({ commandText, rawText, agentText, expected, inlineStatus, resetTriggered }) => {
-    const ctx = buildTestCtx({
-      CommandBody: commandText,
-      RawBody: rawText,
-      BodyForAgent: agentText,
-      CommandAuthorized: true,
-    });
-    const result = resolveReplyDirectiveRouting({
-      commandText: ctx.commandText,
-      agentText: ctx.agentText,
-      modelAliases: [],
-      canInterpretTextDirectives: true,
-      isAuthorizedSender: true,
-      isGroup: false,
-      wasMentioned: false,
-      ctx,
-      cfg: { commands: { text: true } },
-      agentId: "main",
-      resetTriggered: resetTriggered === true,
-    });
-    expect(result.cleanedBody).toBe(expected);
-    expect(result.hasInlineStatus).toBe(inlineStatus);
-    expect(result.directives.hasThinkDirective).toBe(false);
-  });
+  ])(
+    "$name",
+    ({ commandText, rawText = commandText, agentText, expected, inlineStatus, resetTriggered }) => {
+      const ctx = buildTestCtx({
+        CommandBody: commandText,
+        RawBody: rawText,
+        BodyForAgent: agentText,
+        CommandAuthorized: true,
+      });
+      const result = route(ctx, { resetTriggered: resetTriggered === true });
+      expect(result.cleanedBody).toBe(expected);
+      expect(result.hasInlineStatus).toBe(inlineStatus);
+      expect(result.directives.hasThinkDirective).toBe(false);
+    },
+  );
 });

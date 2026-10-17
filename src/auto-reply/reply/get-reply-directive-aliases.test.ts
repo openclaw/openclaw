@@ -93,18 +93,19 @@ function configWithModelAlias(alias: string, agentId?: string): OpenClawConfig {
 }
 
 function createAliasIndex(): ModelAliasIndex {
+  const alias = { alias: "fable", ref: { provider: "anthropic", model: "claude-opus-4-6" } };
   return {
-    byAlias: new Map([
-      [
-        "fable",
-        {
-          alias: "fable",
-          ref: { provider: "anthropic", model: "claude-opus-4-6" },
-        },
-      ],
-    ]),
+    byAlias: new Map([["fable", alias]]),
     byKey: new Map([["anthropic/claude-opus-4-6", ["fable"]]]),
   };
+}
+
+function continued(result: Awaited<ReturnType<typeof resolveReplyDirectives>>) {
+  expect(result.kind).toBe("continue");
+  if (result.kind !== "continue") {
+    throw new Error(`expected continue result, got ${result.kind}`);
+  }
+  return result.result;
 }
 
 function createSessionEntry(): SessionEntry {
@@ -251,9 +252,7 @@ describe("reply directive resolution", () => {
       agentCfg: testCase.agentCfg,
       opts: "opts" in testCase ? testCase.opts : undefined,
     });
-    if (result.kind !== "continue") {
-      throw new Error(`expected continue result, got ${result.kind}`);
-    }
+    const resolved = continued(result);
     const delivered: ReplyPayload[] = [];
     const onPartialReply = vi.fn();
     const handleBlockReply = createBlockReplyDeliveryHandler({
@@ -267,7 +266,7 @@ describe("reply directive resolution", () => {
         mode: "never",
         isHeartbeat: false,
       }),
-      blockStreamingEnabled: result.result.blockStreamingEnabled,
+      blockStreamingEnabled: resolved.blockStreamingEnabled,
       blockReplyPipeline: null,
       directBlockDeliveries: [],
     });
@@ -275,7 +274,7 @@ describe("reply directive resolution", () => {
       runId: "media-caption-directives",
       onBlockReply: handleBlockReply,
       onPartialReply,
-      blockReplyBreak: result.result.resolvedBlockStreamingBreak,
+      blockReplyBreak: resolved.resolvedBlockStreamingBreak,
     });
     const mediaUrl = "/tmp/attachment.txt";
     const text = `${testCase.caption}\nMEDIA:${mediaUrl}`.trimStart();
@@ -321,27 +320,21 @@ describe("reply directive resolution", () => {
     }
   });
 
-  it.each([
-    {
+  it("routes model scope at the full reply boundary: /think high/fable now", async () => {
+    const { result, sessionEntry, sessionCtx } = await resolveModelDirective({
       body: "/think high/fable now",
-      expected: {
+    });
+    expect(continued(result)).toMatchObject({
+      directives: {
         cleaned: "now",
         hasThinkDirective: true,
         thinkLevel: "high",
         hasModelDirective: true,
         rawModelDirective: "fable",
       },
-    },
-  ])("routes model scope at the full reply boundary: $body", async ({ body, expected }) => {
-    const { result, sessionEntry, sessionCtx } = await resolveModelDirective({ body });
-
-    expect(result.kind).toBe("continue");
-    if (result.kind !== "continue") {
-      throw new Error(`expected continue result, got ${result.kind}`);
-    }
-    expect(result.result.directives).toMatchObject(expected);
-    expect(result.result.cleanedBody).toBe(expected.cleaned);
-    expect(sessionCtx.Body).toBe(expected.cleaned);
+      cleanedBody: "now",
+    });
+    expect(sessionCtx.Body).toBe("now");
     expect(sessionEntry).toEqual(createSessionEntry());
   });
 
@@ -351,10 +344,7 @@ describe("reply directive resolution", () => {
       cfg: configWithModelAlias("localfast", "main"),
     });
 
-    if (result.kind !== "continue") {
-      throw new Error(`expected continue result, got ${result.kind}`);
-    }
-    expect(result.result.directives).toMatchObject({
+    expect(continued(result).directives).toMatchObject({
       hasModelDirective: true,
       rawModelDirective: "localfast",
       cleaned: "",
@@ -371,20 +361,19 @@ describe("reply directive resolution", () => {
       authorized: false,
     });
 
-    expect(result.kind).toBe("continue");
-    if (result.kind !== "continue") {
-      throw new Error(`expected continue result, got ${result.kind}`);
-    }
-    expect(result.result.directives).toEqual(clearInlineDirectives(body));
-    expect(result.result.cleanedBody).toBe(agentText);
+    const resolved = continued(result);
+    expect(resolved.directives).toEqual(clearInlineDirectives(body));
+    expect(resolved).toMatchObject({
+      cleanedBody: agentText,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
     expect(sessionCtx).toMatchObject({
       agentText,
       Body: agentText,
       BodyForAgent: agentText,
       BodyStripped: agentText,
     });
-    expect(result.result.provider).toBe("anthropic");
-    expect(result.result.model).toBe("claude-opus-4-6");
     expect(directiveApplyMocks.apply).toHaveBeenCalledWith(
       expect.objectContaining({
         directives: expect.objectContaining({ hasModelDirective: false }),
@@ -430,15 +419,10 @@ describe("reply directive resolution", () => {
       surface: "webchat",
     });
 
-    expect(result.kind).toBe("continue");
-    if (result.kind !== "continue") {
-      throw new Error(`expected continue result, got ${result.kind}`);
-    }
-    expect(result.result.directives).toMatchObject({
-      hasModelDirective: true,
-      rawModelDirective: "anthropic/claude-opus-4-6",
+    expect(continued(result)).toMatchObject({
+      directives: { hasModelDirective: true, rawModelDirective: "anthropic/claude-opus-4-6" },
+      cleanedBody: "Please use $missing_skill then",
     });
-    expect(result.result.cleanedBody).toBe("Please use $missing_skill then");
   });
 
   it("keeps commands.text:false model syntax literal, including an empty agent projection", async () => {
@@ -453,12 +437,9 @@ describe("reply directive resolution", () => {
       surface: "discord",
     });
 
-    expect(result.kind).toBe("continue");
-    if (result.kind !== "continue") {
-      throw new Error(`expected continue result, got ${result.kind}`);
-    }
-    expect(result.result.directives).toEqual(clearInlineDirectives(body));
-    expect(result.result.cleanedBody).toBe("");
+    const resolved = continued(result);
+    expect(resolved.directives).toEqual(clearInlineDirectives(body));
+    expect(resolved.cleanedBody).toBe("");
     expect(sessionCtx).toMatchObject({
       agentText: "",
       Body: "",
