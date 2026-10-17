@@ -463,7 +463,8 @@ describe("createGatewayKernel", () => {
         dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
       ).resolves.toEqual({ runId, status: "ok" });
 
-      const { promise: firstStop, resolve: releaseFirstStop } = createDeferred();
+      const cleanupError = new Error("lifetime sidecar cleanup failed");
+      const { promise: firstStop, reject: rejectFirstStop } = createDeferred();
       const reentrantSidecar = { stop: vi.fn(async () => {}) };
       let reentrantStop!: Promise<void>;
       const lifetimeSidecar = {
@@ -477,13 +478,15 @@ describe("createGatewayKernel", () => {
       const trailingSidecar = vi.fn(async () => {});
       kernel.registerGatewayLifetimeSidecars(lifetimeSidecar, { stop: trailingSidecar });
 
-      const { promise: firstPostReadyStop, resolve: releasePostReadyStop } = createDeferred();
+      const postReadyError = new Error("post-ready sidecar cleanup failed");
+      const { promise: firstPostReadyStop, reject: rejectPostReadyStop } = createDeferred();
       const postReadySidecar = vi
         .fn<() => Promise<void>>()
         .mockImplementationOnce(() => firstPostReadyStop)
         .mockResolvedValue(undefined);
       kernel.registerPostReadySidecars({ stop: postReadySidecar });
 
+      const connectionStopError = new Error("remote worker stop failed");
       const connectionStopEntered = createDeferred();
       const releaseConnectionStop = createDeferred();
       const releaseLateConnectionStop = createDeferred();
@@ -493,6 +496,7 @@ describe("createGatewayKernel", () => {
           .mockImplementationOnce(async () => {
             connectionStopEntered.resolve();
             await releaseConnectionStop.promise;
+            throw connectionStopError;
           })
           .mockResolvedValue(undefined),
       };
@@ -521,14 +525,14 @@ describe("createGatewayKernel", () => {
         expect(lifetimeSidecar.stop).toHaveBeenCalledOnce();
       });
       expect(closeTransport).toHaveBeenCalledOnce();
-      expect(connectionSidecar.stop).toHaveBeenCalledOnce();
+      expect(connectionSidecar.stop).toHaveBeenCalledTimes(2);
       expect(() => kernel?.registerConnectionDependentSidecars(lateConnectionSidecar)).toThrow(
         "cannot publish a Gateway sidecar after shutdown sealed its owner",
       );
       const lateSidecar = { stop: vi.fn(async () => {}) };
       kernel.registerGatewayLifetimeSidecars(lifetimeSidecar, lateSidecar);
       const lateStop = kernel.stopRegisteredGatewayLifetimeSidecars();
-      releaseFirstStop();
+      rejectFirstStop(cleanupError);
 
       await expect(reentrantStop).resolves.toBeUndefined();
       await expect(lateStop).resolves.toBeUndefined();
@@ -547,7 +551,7 @@ describe("createGatewayKernel", () => {
           closeSettled = true;
         },
       );
-      releasePostReadyStop();
+      rejectPostReadyStop(postReadyError);
       await vi.waitFor(() => {
         expect(closePreludeReached).toHaveBeenCalledOnce();
       });
@@ -557,14 +561,14 @@ describe("createGatewayKernel", () => {
       releaseLateLifetimeStop();
       await expect(closing).resolves.toBeUndefined();
       closePreludeReached.mockRestore();
-      expect(lifetimeSidecar.stop).toHaveBeenCalledOnce();
+      expect(lifetimeSidecar.stop).toHaveBeenCalledTimes(2);
       expect(trailingSidecar).toHaveBeenCalledOnce();
       expect(lateGeneralSidecar.stop).toHaveBeenCalledOnce();
       expect(latePostReadySidecar.stop).toHaveBeenCalledOnce();
       expect(reentrantSidecar.stop).toHaveBeenCalledOnce();
       expect(lateSidecar.stop).toHaveBeenCalledOnce();
       expect(duringSealSidecar.stop).toHaveBeenCalledOnce();
-      expect(postReadySidecar).toHaveBeenCalledOnce();
+      expect(postReadySidecar).toHaveBeenCalledTimes(2);
       expect(kernel.runtimeState.gatewayLifetimeSidecars.snapshot()).toEqual([]);
       expect(kernel.runtimeState.postReadySidecars.snapshot()).toEqual([]);
 
@@ -578,6 +582,7 @@ describe("createGatewayKernel", () => {
       const persistentError = new Error("persistent sidecar cleanup failed");
       const persistentStop = vi
         .fn<() => Promise<void>>()
+        .mockRejectedValueOnce(persistentError)
         .mockRejectedValueOnce(persistentError)
         .mockResolvedValue(undefined);
       const persistentSidecar = { stop: persistentStop };
@@ -599,12 +604,12 @@ describe("createGatewayKernel", () => {
           },
         ],
       });
-      expect(persistentStop).toHaveBeenCalledOnce();
+      expect(persistentStop).toHaveBeenCalledTimes(2);
       expect(successfulPeer.stop).toHaveBeenCalledOnce();
       expect(kernel.runtimeState.gatewayLifetimeSidecars.snapshot()).toEqual([persistentSidecar]);
 
       await expect(kernel.closeOnStartupFailure()).resolves.toBeUndefined();
-      expect(persistentStop).toHaveBeenCalledTimes(2);
+      expect(persistentStop).toHaveBeenCalledTimes(3);
       expect(successfulPeer.stop).toHaveBeenCalledOnce();
       expect(kernel.runtimeState.gatewayLifetimeSidecars.snapshot()).toEqual([]);
     } finally {

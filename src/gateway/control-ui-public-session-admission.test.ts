@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
 
 const gates: ReturnType<typeof createControlUiPublicSessionRequestGate>[] = [];
@@ -100,6 +101,16 @@ describe("public reader admission", () => {
     expect(work).toHaveBeenCalledTimes(2);
   });
 
+  it("does not release stale content when publication changes during a build", async () => {
+    const gate = createGate();
+    const release = createDeferred<string>();
+    const pending = gate.run({ ...request(), work: () => release.promise });
+    await Promise.resolve();
+    sessionChanges.emit({ sessionKey: request().sessionKey });
+    release.resolve("Revoked content");
+    expect(await pending).toEqual({ kind: "unavailable" });
+  });
+
   it("retains a late completion under byte pressure and evicts the least-recent result", async () => {
     const gate = createGate();
     const release = createDeferred<Buffer>();
@@ -118,6 +129,8 @@ describe("public reader admission", () => {
       throw new Error("Public builds did not return their representations");
     }
     expect(completed.value.body).toBe(body);
+    expect(completed.value.isCurrent()).toBe(true);
+    expect(fast.value.isCurrent()).toBe(false);
     const cached = await gate.run({ ...request(0), work: slowWork });
     expect(cached).toEqual({ kind: "ok", value: completed.value });
     expect(slowWork).toHaveBeenCalledTimes(1);
@@ -127,13 +140,8 @@ describe("public reader admission", () => {
       ...request(2),
       work: async () => Buffer.alloc(8 * 1024 * 1024, "b"),
     });
-    expect(next.kind === "ok" && Buffer.isBuffer(next.value?.body)).toBe(true);
-    expect(completed.value.body).toBe(body);
-    expect(await gate.run({ ...request(0), work: slowWork })).toMatchObject({
-      kind: "ok",
-      value: { body },
-    });
-    expect(slowWork).toHaveBeenCalledTimes(2);
+    expect(next.kind === "ok" && next.value?.isCurrent()).toBe(true);
+    expect(completed.value.isCurrent()).toBe(false);
   });
 
   it("keeps client and publication rate budgets even for cached responses", async () => {

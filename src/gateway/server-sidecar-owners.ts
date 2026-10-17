@@ -50,15 +50,20 @@ export function createGatewaySidecarStopOwner() {
             break;
           }
           sidecars.forEach(remove);
-          const results = await Promise.allSettled(
-            sidecars.map(
-              async (sidecar) =>
-                await runWithProcessCleanupBudget(cleanupBudget, () => sidecar.stop()),
-            ),
-          );
-          const pending = sidecars.filter(
-            (_sidecar, index) => results[index]?.status === "rejected",
-          );
+          let pending = sidecars;
+          let results: PromiseSettledResult<void>[] = [];
+          for (let attempt = 0; attempt < 2; attempt += 1) {
+            results = await Promise.allSettled(
+              pending.map(
+                async (sidecar) =>
+                  await runWithProcessCleanupBudget(cleanupBudget, () => sidecar.stop()),
+              ),
+            );
+            pending = pending.filter((_sidecar, index) => results[index]?.status === "rejected");
+            if (pending.length === 0) {
+              break;
+            }
+          }
           // A late publisher can report a handle already being stopped. Keep its new owners,
           // but remove duplicate ownership of this batch before draining the next batch.
           sidecars.forEach(remove);
@@ -74,7 +79,7 @@ export function createGatewaySidecarStopOwner() {
           }
         }
         if (failure) {
-          // Preserve failed handles and report the failure. A later close can try again.
+          // Preserve ownership after the bounded shutdown retry. A later close can try again.
           registered = new Set([...failedSidecars, ...registered]);
           throw failure;
         }

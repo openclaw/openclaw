@@ -7,6 +7,7 @@ import {
 } from "../infra/sqlite-readonly-worker.js";
 import { readDatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateReadContext } from "../state/openclaw-state-worker-context.js";
 import type { PreparedStartupSessionDatabase } from "./server-startup-session-migration.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
 
@@ -24,15 +25,18 @@ export async function warmGatewayDatabasePageCache(params: {
     return;
   }
   const statePath = resolveOpenClawStateSqlitePath();
+  const state = captureOpenClawStateReadContext(statePath);
   const targets = [
     {
       path: statePath,
       kind: "state" as const,
+      assertCurrent: () => state.admission.assertCurrent(),
       env: process.env,
     },
-    ...params.databases.map(({ database }) => ({
+    ...params.databases.map(({ database, assertCurrent }) => ({
       path: database.path,
       kind: "agent" as const,
+      assertCurrent,
       env: database.env ?? process.env,
     })),
   ];
@@ -44,7 +48,9 @@ export async function warmGatewayDatabasePageCache(params: {
     // Best-effort maintenance never retains a worker beyond its bounded warm window.
     const signal = AbortSignal.any([params.signal, AbortSignal.timeout(3 * 60 * 1000)]);
     try {
+      target.assertCurrent();
       const identity = await readDatabasePathIdentity(target.path);
+      target.assertCurrent();
       const options = {
         source: "canonical" as const,
         expectedIdentity: identity.key,
@@ -96,6 +102,7 @@ export async function warmGatewayDatabasePageCache(params: {
               undefined,
               { signal },
             );
+            target.assertCurrent();
             previousBytes = Math.max(progress.readBytes, progress.diskBytes);
             chunkStarted = performance.now();
             progress = await runSqliteReadOnlyOperation(
@@ -108,6 +115,7 @@ export async function warmGatewayDatabasePageCache(params: {
               reportedAt = performance.now();
             }
           }
+          target.assertCurrent();
           remaining -= Math.max(progress.readBytes, progress.diskBytes);
           report("complete", progress);
           params.log.info(

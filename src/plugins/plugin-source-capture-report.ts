@@ -6,9 +6,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
 import { walkDirectory } from "../infra/fs-safe.js";
 import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
+import type { preparePersistedInstalledPluginIndexCacheEntry } from "./installed-plugin-index-record-state.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
 import { parseInstalledPluginIndex } from "./installed-plugin-index-store.js";
-import type { PersistedInstalledPluginIndexCacheEntry } from "./plugin-cache-management.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
 import { prunePluginNativeCaptureDirectories } from "./plugin-source-capture-directory.js";
 import { isLegacyPluginSourceCaptureName } from "./plugin-source-capture-path.js";
@@ -204,18 +204,22 @@ export async function pruneUnreferencedPluginNativeCaptures(
   env?: NodeJS.ProcessEnv,
   options: {
     startup?: boolean;
-    installedIndex?: PersistedInstalledPluginIndexCacheEntry;
+    installedIndex?: Awaited<ReturnType<typeof preparePersistedInstalledPluginIndexCacheEntry>>;
   } = {},
 ) {
-  try {
+  const assertCleanupCurrent = async () => {
     await assertCurrent();
-    let state = options.installedIndex?.state;
+    options.installedIndex?.assertCurrent();
+  };
+  try {
+    await assertCleanupCurrent();
+    let state = options.installedIndex?.entry.state;
     if (!state) {
       const row = await readPluginMetadataStateRow(
         "installed-index",
         resolveInstalledPluginIndexStateDatabaseOptions({ stateDir, env }),
       );
-      await assertCurrent();
+      await assertCleanupCurrent();
       state = row
         ? { status: "present", value: JSON.parse(row.value_json) }
         : { status: "missing" };
@@ -247,9 +251,12 @@ export async function pruneUnreferencedPluginNativeCaptures(
         }
       }
     }
-    return await prunePluginNativeCaptureDirectories(stateDir, retainedPaths, assertCurrent, {
-      startup: options.startup,
-    });
+    return await prunePluginNativeCaptureDirectories(
+      stateDir,
+      retainedPaths,
+      assertCleanupCurrent,
+      { startup: options.startup },
+    );
   } catch (error) {
     return { removed: [], warnings: [`Native capture cleanup skipped: ${String(error)}`] };
   }

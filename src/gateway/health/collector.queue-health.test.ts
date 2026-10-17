@@ -31,7 +31,7 @@ const [collector, pluginRuntime, degradedState] = await Promise.all([
 const pluginRegistrySnapshot = pluginRuntime.captureActivePluginRegistrySnapshot();
 const degradedPluginsSnapshot = degradedState.listActiveDegradedPlugins();
 const collectHealth = () =>
-  collector.collectGatewayHealthSnapshot({ audience: "admin", probe: false, timeoutMs: 10 });
+  collector.collectGatewayHealthSnapshot({ audience: "admin", probe: false });
 
 describe("queue health collector", () => {
   beforeEach(() => {

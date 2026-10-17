@@ -41,6 +41,7 @@ export function createSessionObserverWork(params: {
   let nativeEvent = false;
   const acceptedWork = new AsyncWorkScope();
   let eventTail = Promise.resolve();
+  const pending = new Set<{ scopeKey: string; current: boolean }>();
   const resetting = new Map<string, object>();
   const reportError = params.reportError;
   const background = (run: () => Promise<unknown>) => {
@@ -55,21 +56,35 @@ export function createSessionObserverWork(params: {
         : undefined;
     return state?.runId === event.runId && state.agentId === agentId ? state.reader : undefined;
   };
-  const enqueue = <T>(run: (assertOpen: () => void) => Promise<T>): Promise<T> => {
+  const enqueue = <T>(
+    scopeKey: string,
+    run: (assertCurrent: () => void, bindScope: (scopeKey: string) => void) => Promise<T>,
+  ): Promise<T> => {
     if (disposal) {
       return Promise.reject(new Error("Session observer is closed"));
     }
-    const assertOpen = () => {
-      if (disposed) {
+    const operation = { scopeKey, current: true };
+    pending.add(operation);
+    const assertCurrent = () => {
+      if (!operation.current || disposed) {
         throw new Error("Session observer lifecycle changed");
       }
     };
-    const result = acceptedWork.track(() => eventTail.then(() => run(assertOpen)));
-    // A failed event rejects its caller without breaking FIFO for later events.
-    eventTail = result.then(
-      () => undefined,
-      () => undefined,
+    const result = acceptedWork.track(() =>
+      eventTail.then(() =>
+        run(assertCurrent, (selectedScope) => {
+          operation.scopeKey = selectedScope;
+          if (resetting.has(selectedScope)) {
+            operation.current = false;
+          }
+          assertCurrent();
+        }),
+      ),
     );
+    const clearPending = () => {
+      pending.delete(operation);
+    };
+    eventTail = result.then(clearPending, clearPending);
     return result;
   };
   function handleEvent(event: SessionObserverEvent, settledError = false) {
@@ -123,28 +138,32 @@ export function createSessionObserverWork(params: {
       (sessionKey && agentId
         ? captureSessionObserverRead(params.deps, sessionKey, agentId)
         : undefined);
-    return enqueue(async (assertOpen) => {
-      assertOpen();
-      const steps = params.handleEventSteps(event, settledError, reader);
-      let next = steps.next();
-      while (!next.done) {
-        if ("work" in next.value) {
-          await next.value.work;
-          assertOpen();
-          next = steps.next(undefined);
-        } else {
-          const source = next.value.reader ?? reader;
-          if (!source) {
-            throw new Error("Session observer event has no captured source");
+    return enqueue(
+      resolveSessionSubscriptionKey(sessionKey, agentId),
+      async (assertCurrent, bindScope) => {
+        assertCurrent();
+        const steps = params.handleEventSteps(event, settledError, reader);
+        let next = steps.next();
+        while (!next.done) {
+          if ("work" in next.value) {
+            await next.value.work;
+            assertCurrent();
+            next = steps.next(undefined);
+          } else {
+            bindScope(resolveSessionSubscriptionKey(next.value.sessionKey, next.value.agentId));
+            const source = next.value.reader ?? reader;
+            if (!source) {
+              throw new Error("Session observer event has no captured source");
+            }
+            next = await source.withRead((session) => {
+              assertCurrent();
+              source.assertCurrent();
+              return steps.next(session);
+            });
           }
-          next = await source.withRead((session) => {
-            assertOpen();
-            source.assertCurrent();
-            return steps.next(session);
-          });
         }
-      }
-    });
+      },
+    );
   }
 
   function disposeAsync() {
@@ -212,16 +231,21 @@ export function createSessionObserverWork(params: {
       consume: (session: SessionEntry | undefined) => void,
     ) {
       const scopeKey = resolveSessionSubscriptionKey(sessionKey, agentId);
+      for (const operation of pending) {
+        if (operation.scopeKey === scopeKey) {
+          operation.current = false;
+        }
+      }
       if (disposal) {
         return;
       }
       const reader = captureSessionObserverRead(params.deps, sessionKey, agentId);
       const reset = {};
       resetting.set(scopeKey, reset);
-      void enqueue(async (assertOpen) => {
+      void enqueue(scopeKey, async (assertCurrent) => {
         try {
           await reader.withRead((session) => {
-            assertOpen();
+            assertCurrent();
             reader.assertCurrent();
             consume(session);
           });
@@ -261,12 +285,14 @@ export function createSessionObserverWork(params: {
         target.canonicalSessionKey,
         target.agentId,
       );
-      return enqueue(async (assertOpen) =>
-        reader.withRead((session) => {
-          assertOpen();
-          reader.assertCurrent();
-          return params.companionReader.read(target, session);
-        }),
+      return enqueue(
+        resolveSessionSubscriptionKey(target.canonicalSessionKey, target.agentId),
+        async (assertCurrent) =>
+          reader.withRead((session) => {
+            assertCurrent();
+            reader.assertCurrent();
+            return params.companionReader.read(target, session);
+          }),
       );
     },
   };

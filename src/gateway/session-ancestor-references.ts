@@ -3,6 +3,7 @@ import type {
   SessionAncestorRef,
   SessionRow,
 } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 
 const MAX_ROWS = 128;
 const MAX_CONTENT_CHARS = 128 * 1024;
@@ -31,8 +32,10 @@ export function prepareSessionAncestor(row: SessionRow) {
     content: createHash("sha256").update(serialized).digest("base64url"),
     chars: serialized.length,
   };
-  // The presenter owns immutable snapshots; replacement retires their prepared content.
-  preparedAncestors.set(row, prepared);
+  // Presentation replacement retires these facts; mutable callers still encode each sample.
+  if (isDeeplyFrozenPlainData(row)) {
+    preparedAncestors.set(row, prepared);
+  }
   return prepared;
 }
 

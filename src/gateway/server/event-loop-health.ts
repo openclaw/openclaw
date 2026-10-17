@@ -101,7 +101,14 @@ function cpuUsageDelta(
 function readHostCpuTimes(): CpuInfo["times"][] | undefined {
   try {
     const times = cpus().map((cpu) => cpu.times);
-    return times.length ? times : undefined;
+    return times.length &&
+      times.every((cpu) =>
+        [cpu.user, cpu.nice, cpu.sys, cpu.idle, cpu.irq].every(
+          (value) => Number.isFinite(value) && value >= 0,
+        ),
+      )
+      ? times
+      : undefined;
   } catch {
     return undefined;
   }

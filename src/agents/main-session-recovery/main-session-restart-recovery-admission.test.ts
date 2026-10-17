@@ -10,7 +10,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { callGateway } from "../../gateway/call.js";
 import { createChannelAutostartRecovery } from "../../gateway/server-channel-autostart-recovery.js";
-import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
 import { markGatewayStartupMainSessionOrphans } from "../../gateway/server-startup-observers.js";
 import * as transcriptReaders from "../../gateway/session-transcript-readers.js";
@@ -273,7 +272,7 @@ describe("startup recovery admission", () => {
         throw new Error("Preparation must not dispatch through the instance facade");
       };
       const instance = createGatewayInstanceRuntime({
-        context: createDirectChatContext(),
+        getContext: unused,
         getMethodRegistry: unused,
         isDispatchAvailable: () => !closed,
       });

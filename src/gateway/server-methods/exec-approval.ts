@@ -184,6 +184,13 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      if (
+        host === "node" &&
+        (!Array.isArray(effectiveCommandArgv) || effectiveCommandArgv.length === 0)
+      ) {
+        rejectRequest("commandArgv is required for host=node");
+        return;
+      }
       const envBinding = buildSystemRunApprovalEnvBinding(p.env);
       const warningText = normalizeOptionalString(p.warningText);
       const runtimeConfig = context.getRuntimeConfig();
@@ -495,7 +502,7 @@ export function createExecApprovalHandlers(
       const overrideDays = params.grantExpiresInDays;
       const grantExpiresAtMs =
         decision === "allow-always" && typeof overrideDays === "number"
-          ? Date.now() + overrideDays * 86_400_000
+          ? Date.now() + Math.floor(overrideDays) * 86_400_000
           : undefined;
       let autoReviewResolution = false;
       await handleApprovalResolve({

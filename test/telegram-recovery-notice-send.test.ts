@@ -139,7 +139,8 @@ describe("recovery notice final transport fence", () => {
         "default",
       );
       const runtime = createGatewayInstanceRuntime({
-        context: { deps: {}, getRuntimeConfig: () => currentCfg } as GatewayRequestContext,
+        getContext: () =>
+          ({ deps: {}, getRuntimeConfig: () => currentCfg }) as GatewayRequestContext,
         getMethodRegistry: () => {
           throw new Error("Notice must not use RPC");
         },
@@ -365,7 +366,8 @@ describe("recovery typing final transport fence", () => {
         "default",
       );
       const runtime = createGatewayInstanceRuntime({
-        context: { deps: {}, getRuntimeConfig: () => currentCfg } as GatewayRequestContext,
+        getContext: () =>
+          ({ deps: {}, getRuntimeConfig: () => currentCfg }) as GatewayRequestContext,
         getMethodRegistry: () => {
           throw new Error("Typing must not use RPC");
         },

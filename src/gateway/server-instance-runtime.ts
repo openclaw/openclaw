@@ -64,7 +64,7 @@ const RECOVERY_NOTICE_COMPLETION_RETENTION = {
 } as const;
 
 type GatewayInstanceRuntimeOptions = {
-  context: GatewayRequestContext;
+  getContext: () => GatewayRequestContext;
   getMethodRegistry: () => GatewayMethodRegistry;
   isDispatchAvailable: () => boolean;
   logError?: (message: string) => void;
@@ -75,13 +75,12 @@ type GatewayInstanceRuntimeOptions = {
 export function createGatewayInstanceRuntime(
   options: GatewayInstanceRuntimeOptions,
 ): GatewayInstanceRuntime {
-  const { context } = options;
   const approvalSubscribers = new Set<GatewayApprovalEventSubscriber>();
   const routeCoordinator = createApprovalNativeRouteCoordinator();
   let closed = false;
   const recoveryTyping = createRecoveryTypingManager({
     isAvailable: () => !closed && options.isDispatchAvailable(),
-    getConfig: () => context.getRuntimeConfig(),
+    getConfig: () => options.getContext().getRuntimeConfig(),
     resolveAdapter: async (channel) =>
       (await loadRecoveryTypingAdapter()).getLoadedChannelPlugin(channel)?.heartbeat,
     onError: () => options.logError?.("recovery typing unavailable; final delivery continues"),
@@ -101,7 +100,7 @@ export function createGatewayInstanceRuntime(
     return createInternalAgentTurnFacade({
       ...principal,
       assertContextCurrent,
-      getContext: () => context,
+      getContext: options.getContext,
       getMethodRegistry: options.getMethodRegistry,
     });
   };
@@ -119,8 +118,12 @@ export function createGatewayInstanceRuntime(
     if (!params.allowedMethods.has(params.method)) {
       throw new Error(`Gateway internal principal cannot dispatch ${params.method}`);
     }
+    const context = options.getContext();
     const assertCurrent = () => {
       assertDispatchAvailable(params.method);
+      if (options.getContext() !== context) {
+        throw new Error(`Gateway instance dispatch unavailable for ${params.method}`);
+      }
       params.assertCurrent?.();
     };
     assertCurrent();
@@ -212,6 +215,7 @@ export function createGatewayInstanceRuntime(
         }
       };
       assertRecoveryTarget();
+      const context = options.getContext();
       let startOwner: AgentTurnStartOwner | undefined;
       let ownerLost = false;
       const assertRecoveryCurrent = () => {
@@ -221,7 +225,9 @@ export function createGatewayInstanceRuntime(
         dispatchOptions.signal?.throwIfAborted();
         // Capture the actual registration, not its reusable run id. Once lost,
         // retained tools cannot acquire a successor registration's authority.
-        ownerLost ||= startOwner !== undefined && startOwner.observe() === undefined;
+        ownerLost ||=
+          options.getContext() !== context ||
+          (startOwner !== undefined && startOwner.observe() === undefined);
         if (ownerLost) {
           throw new Error("Restart recovery operator run is no longer active.");
         }
@@ -270,6 +276,13 @@ export function createGatewayInstanceRuntime(
                   ? [...restoredOperator.authority.scopes]
                   : (dispatchOptions.scopes ?? dispatchOptions.syntheticScopes),
               }),
+              // The start owner's observe closure calls this assertion. Keep it
+              // independent of assertRecoveryCurrent to avoid a recursive owner check.
+              assertContextCurrent: () => {
+                if (options.getContext() !== context) {
+                  throw new Error("Gateway recovery context changed.");
+                }
+              },
             })
           : recoveryAgentTurns;
         return await agentTurns.dispatch<T>(payload, {
@@ -304,12 +317,13 @@ export function createGatewayInstanceRuntime(
         if (
           closed ||
           !options.isDispatchAvailable() ||
-          payload.isCurrent?.(context.getRuntimeConfig()) === false
+          payload.isCurrent?.(options.getContext().getRuntimeConfig()) === false
         ) {
           throw new Error("Recovery notice owner retired before delivery");
         }
       };
       assertNoticeCurrent();
+      const context = options.getContext();
       const result = await sendMessage({
         cfg: context.getRuntimeConfig(),
         deps: createOutboundSendDeps(context.deps),

@@ -54,7 +54,7 @@ function createRuntime({
     })),
   );
   const runtime = createGatewayInstanceRuntime({
-    context,
+    getContext: () => context,
     getMethodRegistry: () => registry,
     isDispatchAvailable: () => true,
     ...options,

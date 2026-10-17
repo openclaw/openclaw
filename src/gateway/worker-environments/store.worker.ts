@@ -2,6 +2,7 @@ import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
+import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -26,6 +27,7 @@ import { pruneObservedTerminalWorkerEnvironments } from "./terminal-environment-
 type Method = keyof WorkerEnvironmentMutationMethods | "initialize";
 type Input<Name extends Method> = {
   nowMs?: number;
+  publicationIncarnation: string;
 } & (Name extends keyof WorkerEnvironmentMutationMethods
   ? { input: WorkerEnvironmentMutationInput<Name> }
   : unknown);
@@ -63,7 +65,13 @@ function mutation<Name extends Method, Result>(
         const receipt = {
           result,
           changed,
-          publication: createWorkerEnvironmentReceipt(facts),
+          publication: createWorkerEnvironmentReceipt(
+            {
+              identity: requireOpenClawStateDatabaseIdentity({ db }).key,
+              incarnation: input.publicationIncarnation,
+            },
+            facts,
+          ),
         };
         deferSqliteWorkerCommitReceipt(db, receipt);
         requestSqliteWorkerOperationAdmission({

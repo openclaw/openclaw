@@ -16,7 +16,7 @@ import {
 import { renewChatRunExecutionDeadline } from "./chat-run-deadline.js";
 import { createChatRunState } from "./server-chat-state.js";
 
-function registeredRun() {
+function registeredRun(onRemoved?: () => void) {
   const entries = new Map<string, ChatAbortControllerEntry>();
   const runId = "terminal-drain";
   const registration = registerChatAbortController({
@@ -25,6 +25,7 @@ function registeredRun() {
     sessionId: "terminal-session",
     sessionKey: "agent:main:terminal",
     timeoutMs: 60_000,
+    onRemoved,
   });
   const entry = registration.entry;
   if (!entry) {
@@ -107,6 +108,52 @@ it("marks only the captured registration when an abort listener replaces the run
   expect(replacement).toBeDefined();
   expect(entries.get(runId)).toBe(replacement);
 });
+
+it.each(["fulfilled", "rejected"] as const)(
+  "drains a promise-only registration after it is %s",
+  async (outcome) => {
+    const onRemoved = vi.fn();
+    const { entries, runId, entry, registration, drain } = registeredRun(onRemoved);
+    const persistence = createDeferred();
+    entry.projectSessionTerminalPersistence = persistence.promise;
+    const result = drain();
+    registration.cleanup();
+    expect(entries.get(runId)).toBe(entry);
+    expect(onRemoved).not.toHaveBeenCalled();
+    if (outcome === "fulfilled") {
+      persistence.resolve();
+    } else {
+      persistence.reject(new Error("terminal write failed"));
+    }
+    expect(await result).toBe(outcome === "fulfilled");
+    expect(entries.has(runId)).toBe(false);
+    expect(onRemoved).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["fulfilled", "rejected"] as const)(
+  "does not retire a replacement persistence owner when an older write is %s",
+  async (outcome) => {
+    const { entries, runId, entry, registration, drain } = registeredRun();
+    const previous = createDeferred();
+    const current = createDeferred();
+    entry.projectSessionTerminalPersistence = previous.promise;
+    registration.cleanup();
+    entry.projectSessionTerminalPersistence = current.promise;
+    if (outcome === "fulfilled") {
+      previous.resolve();
+    } else {
+      previous.reject(new Error("older terminal write failed"));
+    }
+    await previous.promise.catch(() => {});
+    await Promise.resolve();
+    expect(entries.get(runId)).toBe(entry);
+    const result = drain();
+    registration.cleanup();
+    current.resolve();
+    expect(await result).toBe(true);
+  },
+);
 
 it.each(["settled", "pending", "writing", "failed", "dispatch-failed"] as const)(
   "self-drain preserves %s terminal ownership and still joins its sibling",
@@ -325,6 +372,28 @@ it("rejects public Stop after logical cleanup while retaining raw disposal", asy
     finish.resolve();
     await execution;
   }
+  expect(entries.has(runId)).toBe(false);
+});
+
+it("joins its own terminal write without waiting for its own raw completion", async () => {
+  const { entries, runId, entry, registration } = registeredRun();
+  const persistence = createDeferred();
+  await runWithChatAbortExecution(
+    entry,
+    async () => {
+      entry.projectSessionTerminalPersistence = persistence.promise;
+      registration.cleanup();
+      const draining = waitForChatAbortControllerRemoval({
+        entries,
+        targets: [{ runId, entry }],
+        timeoutMs: 1_000,
+      });
+      persistence.resolve();
+      expect(await draining).toBe(true);
+      expect(entry.executionSettlement?.status).toBe("pending");
+    },
+    registration.cleanup,
+  );
   expect(entries.has(runId)).toBe(false);
 });
 

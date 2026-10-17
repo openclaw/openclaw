@@ -302,7 +302,7 @@ describe("built-in session tool role authority", () => {
         createAgentHarnessCompletionScope({ requesterSessionKey: REQUESTER }),
       );
       const runtime = createGatewayInstanceRuntime({
-        context,
+        getContext: () => context,
         getMethodRegistry: createRequestGatewayMethodRegistry,
         isDispatchAvailable: () => true,
       });

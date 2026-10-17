@@ -183,7 +183,25 @@ export function registerChatAbortController(params: {
       notifyGatewayWorkMetricsChanged();
       // Terminal event handling owns final removal once the event has been
       // observed. Runs that never emitted a terminal event still clean up here.
-      if (entry.projectSessionTerminalPending === true || entry.projectSessionTerminalPersistence) {
+      if (entry.projectSessionTerminalPending === true) {
+        return;
+      }
+      const persistence = entry.projectSessionTerminalPersistence;
+      if (persistence) {
+        const removeAfterPersistence = (persisted: boolean) => {
+          if (
+            params.chatAbortControllers.get(params.runId)?.controller === controller &&
+            entry.projectSessionTerminalPersistence === persistence
+          ) {
+            if (persisted) {
+              entry.projectSessionTerminalPersistence = undefined;
+            }
+            removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
+          }
+        };
+        void persistence
+          .then(() => removeAfterPersistence(true))
+          .catch(() => removeAfterPersistence(false));
         return;
       }
       removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);

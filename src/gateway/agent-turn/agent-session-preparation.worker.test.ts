@@ -11,7 +11,6 @@ import {
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
 import { prepareAgentRequestRouting } from "./agent-request-routing.js";
 
@@ -85,20 +84,8 @@ describe("agent session preparation worker boundary", () => {
               preAttachmentSession: routing?.preAttachmentSession,
               respond,
             });
-            if (!prepared) {
-              throw new Error("Session preparation did not return a candidate");
-            }
-            const patch = await buildAgentSessionPatch({
-              ...prepared,
-              freshEntry: prepared.entry,
-              initialEntry: prepared.entry,
-              sessionAgentId: prepared.canonicalSessionAgentId,
-              canonicalSessionKey: prepared.canonicalKey,
-              normalizedSpawned: {},
-              requestDeliveryHint: undefined,
-              hasRestoredCronContinuation: false,
-            });
-            expect(patch.patch.sessionId === kind).toBe(kind !== "failed-missing");
+            expect(prepared).toBeDefined();
+            expect(prepared?.sessionId === kind).toBe(kind !== "failed-missing");
             expect(respond).not.toHaveBeenCalled();
           }
           expect(observation.queries.filter(isSessionEntryDataSql)).toEqual([]);

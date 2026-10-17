@@ -167,7 +167,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     () => import("./server-instance-runtime.js"),
   );
   const gatewayInstanceRuntime = createGatewayInstanceRuntime({
-    context: gatewayRequestContext,
+    getContext: () => gatewayRequestContext,
     getMethodRegistry: () => getAttachedGatewayMethodRegistry(),
     // Request entry fences new calls during the prelude. Retained principals
     // stay current until run shutdown records recovery and cancels execution.
