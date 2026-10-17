@@ -219,6 +219,10 @@ method-to-count inventory. Private capture text and profile preambles are never
 included in the report. The report preserves each run's shares/counts, prints
 median and IQR, and exits nonzero unless at least 15 of the top 20 unique live app
 locations fall within 0.5–2× live share and every method is within ±1 in every run.
+It requires a successful capture and every requested reload's metrics/profile pair;
+an aborted capture cannot pass using only its completed iterations. Each benchmark
+frame can match at most one live function, with a unique name taking priority over
+a stale source-line match.
 Functions absent from the analyzer's top-70 output are reported as not observed
 and fail the gate; absence is not a measured zero CPU share. Same-line aliases
 use their maximum inclusive time. Inspect matching locations across revisions: semantic names bridge line

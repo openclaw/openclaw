@@ -340,6 +340,7 @@ let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
 const results = [];
+let completed = false;
 try {
   const prepared = await prepareControlUiMockGatewayScenario({
     ...fixture.scenario,
@@ -1067,6 +1068,7 @@ try {
     }
   }
   await context.close();
+  completed = true;
 } finally {
   await browser?.close();
   await server.close();
@@ -1098,6 +1100,8 @@ try {
         latencyMs,
         frameGapMs,
         captureMs,
+        requestedRuns: runs,
+        completed,
         results,
       },
       null,

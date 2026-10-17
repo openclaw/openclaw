@@ -6,6 +6,29 @@ import {
 } from "./control-ui-e2e-diagnostics.ts";
 import { controlUiE2eWaitTimeoutMs } from "./control-ui-e2e-readiness.ts";
 
+let mockRequestBindingSequence = 0;
+
+export async function installMockGatewayScript(
+  page: Page,
+  initScript: string,
+  handlers?: Record<string, (params: unknown) => unknown>,
+): Promise<void> {
+  if (handlers) {
+    const binding = `__openclawMockRequest${++mockRequestBindingSequence}`;
+    await page.exposeBinding(binding, (_source, method: string, params: unknown) =>
+      handlers[method]!(params),
+    );
+    initScript += `;for (const method of ${JSON.stringify(Object.keys(handlers))}) {
+      window.openclawControlUiE2eGateway.setRequestHandler(method, ({ params, respond }) => {
+        window[${JSON.stringify(binding)}](method, params).then(respond, (error) => respond({
+          __mockError: { code: "MOCK_REQUEST_HANDLER_FAILED", message: String(error) }
+        }));
+      });
+    }`;
+  }
+  await page.addInitScript({ content: initScript });
+}
+
 export function createMockGatewayControls(
   page: Page,
   defaultSessionKey: string,
