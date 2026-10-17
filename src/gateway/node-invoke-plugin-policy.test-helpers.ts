@@ -1,4 +1,3 @@
-/** Shared harness for node invoke plugin-policy tests. */
 import { expect, vi } from "vitest";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
@@ -40,31 +39,32 @@ export function nodeCommandsConfig(commands: { allow?: string[]; deny?: string[]
   return { gateway: { nodes: { commands } } };
 }
 
-export function createContext(opts?: {
-  pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
-  getApprovalClientConnIds?: GatewayRequestContext["getApprovalClientConnIds"];
-  getRuntimeConfig?: GatewayRequestContext["getRuntimeConfig"];
-  nodeSession?: NodeSession;
-  hasExecApprovalClients?: GatewayRequestContext["hasExecApprovalClients"];
-  forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
-  pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
-  validateAgentRuntimeApprovalAuthority?: GatewayRequestContext["validateAgentRuntimeApprovalAuthority"];
-}) {
-  const nodeSession = opts?.nodeSession ?? createNodeSession();
+type ContextOptions = Partial<
+  Pick<
+    GatewayRequestContext,
+    | "pluginApprovalManager"
+    | "getApprovalClientConnIds"
+    | "getRuntimeConfig"
+    | "hasExecApprovalClients"
+    | "forwardPluginApprovalRequest"
+    | "pluginApprovalIosPushDelivery"
+    | "validateAgentRuntimeApprovalAuthority"
+  >
+> & { nodeSession?: NodeSession };
+
+export function createContext({
+  nodeSession = createNodeSession(),
+  getRuntimeConfig = () => nodeCommandsConfig({ allow: [DEMO_COMMAND] }),
+  ...options
+}: ContextOptions = {}) {
   const invoke = vi.fn<NodeRegistry["invoke"]>(async (params) => {
     params.onDispatchReady?.("invoke-1");
-    return {
-      ok: true,
-      payload: { ok: true, value: 1 },
-      payloadJSON: null,
-      error: null,
-    };
+    return { ok: true, payload: { ok: true, value: 1 }, payloadJSON: null, error: null };
   });
   return {
     context: {
       trackExecution: trackAsyncWork,
-      getRuntimeConfig:
-        opts?.getRuntimeConfig ?? (() => nodeCommandsConfig({ allow: [DEMO_COMMAND] })),
+      getRuntimeConfig,
       nodeRegistry: {
         get: () => nodeSession,
         getForPairingGeneration: () => nodeSession,
@@ -72,23 +72,14 @@ export function createContext(opts?: {
       },
       broadcast: vi.fn(),
       broadcastToConnIds: vi.fn(),
-      pluginApprovalManager: opts?.pluginApprovalManager,
-      getApprovalClientConnIds: opts?.getApprovalClientConnIds,
-      hasExecApprovalClients: opts?.hasExecApprovalClients,
-      forwardPluginApprovalRequest: opts?.forwardPluginApprovalRequest,
-      pluginApprovalIosPushDelivery: opts?.pluginApprovalIosPushDelivery,
-      validateAgentRuntimeApprovalAuthority: opts?.validateAgentRuntimeApprovalAuthority,
+      ...options,
     } as unknown as GatewayRequestContext,
     invoke,
   };
 }
 
 export function createOperatorClient(connId = "conn-requester"): GatewayClient {
-  return createApprovalClient({
-    connId,
-    clientId: "client-owner",
-    deviceId: "device-owner",
-  });
+  return createApprovalClient({ connId, clientId: "client-owner", deviceId: "device-owner" });
 }
 
 export type NodeInvokePolicyRegistration = PluginRegistry["nodeInvokePolicies"][number];
@@ -100,10 +91,7 @@ export type PluginApprovalRecord = Awaited<
 export function createDemoPolicy(handle: NodeInvokePolicyHandler): NodeInvokePolicyRegistration {
   return {
     pluginId: DEMO_PLUGIN_ID,
-    policy: {
-      commands: [DEMO_COMMAND],
-      handle,
-    },
+    policy: { commands: [DEMO_COMMAND], handle },
     pluginConfig: { enabled: true },
     source: "test",
   };
@@ -119,14 +107,9 @@ export function createApprovalRequestPolicy(params?: {
 }): NodeInvokePolicyRegistration {
   return createDemoPolicy(async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
     const approval = await ctx.approvals?.request({
+      ...params,
       title: params?.title ?? "Sensitive action",
       description: params?.description ?? "Needs approval",
-      ...(params?.toolName === undefined ? {} : { toolName: params.toolName }),
-      ...(params?.agentId === undefined ? {} : { agentId: params.agentId }),
-      ...(params?.allowedDecisions === undefined
-        ? {}
-        : { allowedDecisions: params.allowedDecisions }),
-      ...(params?.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
     });
     return { ok: true, payload: approval ?? null };
   });
@@ -145,11 +128,7 @@ export function setDangerousDemoCommandRegistry(policies: NodeInvokePolicyRegist
   );
   registry.nodeHostCommands.push({
     pluginId: DEMO_PLUGIN_ID,
-    command: {
-      command: DEMO_COMMAND,
-      dangerous: true,
-      handle: async () => "{}",
-    },
+    command: { command: DEMO_COMMAND, dangerous: true, handle: async () => "{}" },
     source: "test",
   });
   registry.nodeInvokePolicies.push(...policies);

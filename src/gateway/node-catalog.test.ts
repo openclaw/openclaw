@@ -85,6 +85,27 @@ function makeCatalog(overrides: Partial<CatalogInput> = {}) {
   });
 }
 
+function catalogNode({
+  device,
+  paired,
+  pending,
+  live,
+  ...rest
+}: Partial<CatalogInput> & {
+  device?: Partial<TestPairedDevice>;
+  paired?: Partial<TestPairedNode>;
+  pending?: Partial<TestPendingNode>;
+  live?: Partial<TestConnectedNode>;
+}) {
+  return makeCatalog({
+    ...(device && { pairedDevices: [pairedDevice(device)] }),
+    ...(paired && { pairedNodes: [pairedNode(paired)] }),
+    ...(pending && { pendingNodes: [pendingNode(pending)] }),
+    ...(live && { connectedNodes: [connectedNode(live)] }),
+    ...rest,
+  }).get(live?.nodeId ?? pending?.nodeId ?? paired?.nodeId ?? device?.deviceId ?? "mac-1");
+}
+
 function approvedCamera() {
   return pairedNode({ commands: ["screen.snapshot"], permissions: { camera: true } });
 }
@@ -105,70 +126,43 @@ function liveCamera(overrides: Partial<TestConnectedNode> = {}) {
 
 describe("gateway/node-catalog", () => {
   it("never projects private worker controls from persisted or pending state", () => {
-    const nodes = makeCatalog({
-      pairedNodes: [pairedNode({ commands: ["system.run", ...NODE_WORKER_PRIVATE_COMMANDS] })],
-      pendingNodes: [
-        pendingNode({ commands: ["screen.snapshot", ...NODE_WORKER_PRIVATE_COMMANDS] }),
-      ],
+    const node = catalogNode({
+      paired: { commands: ["system.run", ...NODE_WORKER_PRIVATE_COMMANDS] },
+      pending: { commands: ["screen.snapshot", ...NODE_WORKER_PRIVATE_COMMANDS] },
     });
-
-    const node = nodes.get("mac-1");
     expect(node?.commands).toEqual(["system.run"]);
     expect(node?.pendingDeclaredCommands).toEqual(["screen.snapshot"]);
   });
 
   it("keeps the operator node name across live metadata and reconnects", () => {
-    const pairedDevices = [pairedDevice({ displayName: "Device Name" })];
-    const pairedNodes = [pairedNode({ displayName: "Operator Name" })];
-
-    const connected = createKnownNodeCatalog({
-      pairedDevices,
-      pairedNodes,
-      connectedNodes: [connectedNode({ connId: "conn-1", displayName: "Live Name" })],
-    });
+    const namedCatalog = (connId: string, displayName: string, approvedName?: string) =>
+      makeCatalog({
+        pairedDevices: [pairedDevice({ displayName: "Device Name" })],
+        pairedNodes: [pairedNode({ displayName: approvedName })],
+        connectedNodes: [connectedNode({ connId, displayName })],
+      });
+    const connected = namedCatalog("conn-1", "Live Name", "Operator Name");
     expect(listKnownNodes(connected)[0]?.displayName).toBe("Operator Name");
     expect(connected.get("mac-1")?.displayName).toBe("Operator Name");
 
-    const reconnected = createKnownNodeCatalog({
-      pairedDevices,
-      pairedNodes,
-      connectedNodes: [connectedNode({ connId: "conn-2", displayName: "Replacement Live Name" })],
-    });
+    const reconnected = namedCatalog("conn-2", "Replacement Live Name", "Operator Name");
     expect(reconnected.get("mac-1")?.displayName).toBe("Operator Name");
 
-    const liveFallback = createKnownNodeCatalog({
-      pairedDevices,
-      pairedNodes: [pairedNode({ displayName: undefined })],
-      connectedNodes: [connectedNode({ connId: "conn-3", displayName: "Live Fallback" })],
-    });
+    const liveFallback = namedCatalog("conn-3", "Live Fallback");
     expect(liveFallback.get("mac-1")?.displayName).toBe("Live Fallback");
   });
 
   it("lets live runner consent override stored session-host history", () => {
-    const liveNode = connectedNode();
-    const storedHostDisabledLive = makeCatalog({
-      pairedNodes: [pairedNode({ sessionHost: true })],
-      connectedNodes: [liveNode],
-      sessionHostNodeIds: new Set(),
-      workerSlotsByNodeId: new Map([["mac-1", { total: 2, available: 0 }]]),
-    });
-    expect(storedHostDisabledLive.get("mac-1")).toMatchObject({
-      connected: true,
-      sessionHost: false,
-      workerSlots: { total: 2, available: 0 },
-    });
-
-    const storedDisabledLiveHost = makeCatalog({
-      pairedNodes: [pairedNode({ sessionHost: false })],
-      connectedNodes: [liveNode],
-      sessionHostNodeIds: new Set(["mac-1"]),
-      workerSlotsByNodeId: new Map([["mac-1", { total: 2, available: 1 }]]),
-    });
-    expect(storedDisabledLiveHost.get("mac-1")).toMatchObject({
-      connected: true,
-      sessionHost: true,
-      workerSlots: { total: 2, available: 1 },
-    });
+    for (const sessionHost of [false, true]) {
+      const workerSlots = { total: 2, available: Number(sessionHost) };
+      const node = catalogNode({
+        paired: { sessionHost: !sessionHost },
+        live: {},
+        sessionHostNodeIds: new Set(sessionHost ? ["mac-1"] : []),
+        workerSlotsByNodeId: new Map([["mac-1", workerSlots]]),
+      });
+      expect(node).toMatchObject({ connected: true, sessionHost, workerSlots });
+    }
   });
 
   it("publishes existing-folder consent only for a connected device", () => {
@@ -186,33 +180,29 @@ describe("gateway/node-catalog", () => {
   });
 
   it("uses the newest durable last-seen source for offline nodes", () => {
-    const nodes = makeCatalog({
-      pairedDevices: [
-        pairedDevice({
-          deviceId: "ios-1",
-          displayName: "iPhone",
-          lastSeenAtMs: 300,
-          lastSeenReason: "silent_push",
-          approvedAtMs: 10,
-        }),
-      ],
-      pairedNodes: [
-        pairedNode({
-          nodeId: "ios-1",
-          platform: "ios",
-          caps: [],
-          commands: [],
-          sessionHost: true,
-          lastConnectedAtMs: 200,
-          lastDisconnectedAtMs: 250,
-          lastSeenAtMs: 100,
-          lastSeenReason: "bg_app_refresh",
-          approvedAtMs: 11,
-        }),
-      ],
+    const node = catalogNode({
+      device: {
+        deviceId: "ios-1",
+        displayName: "iPhone",
+        lastSeenAtMs: 300,
+        lastSeenReason: "silent_push",
+        approvedAtMs: 10,
+      },
+      paired: {
+        nodeId: "ios-1",
+        platform: "ios",
+        caps: [],
+        commands: [],
+        sessionHost: true,
+        lastConnectedAtMs: 200,
+        lastDisconnectedAtMs: 250,
+        lastSeenAtMs: 100,
+        lastSeenReason: "bg_app_refresh",
+        approvedAtMs: 11,
+      },
     });
 
-    expect(nodes.get("ios-1")).toMatchObject({
+    expect(node).toMatchObject({
       lastConnectedAtMs: 200,
       lastDisconnectedAtMs: 250,
       lastSeenAtMs: 300,
@@ -236,8 +226,8 @@ describe("gateway/node-catalog", () => {
       modelIdentifier: "x86_64",
       remoteIp: "100.0.0.20",
     };
-    const nodes = makeCatalog({ pairedDevices: [], pendingNodes: [pendingNode(metadata)] });
-    expect(nodes.get("new-node")).toMatchObject({
+    const node = catalogNode({ pairedDevices: [], pending: metadata });
+    expect(node).toMatchObject({
       ...metadata,
       approvalState: "pending-approval",
       pendingRequestId: "request-1",
@@ -246,50 +236,42 @@ describe("gateway/node-catalog", () => {
       paired: false,
       connected: false,
     });
-    expect(nodes.get("new-node")?.permissions).toBeUndefined();
+    expect(node?.permissions).toBeUndefined();
   });
 
   it("preserves pending first approval when a metadata reconnect omits permissions", () => {
-    const nodes = makeCatalog({
-      pairedDevices: [pairedDevice({ deviceId: "new-node" })],
-      pairedNodes: [],
-      pendingNodes: [pendingNode({ nodeId: "new-node" })],
-      connectedNodes: [
-        connectedNode({
-          nodeId: "new-node",
-          displayName: "New Node",
-          platform: "macos",
-          declaredCaps: ["camera", "screen"],
-          declaredCommands: ["screen.snapshot", "system.run"],
-        }),
-      ],
+    const node = catalogNode({
+      device: { deviceId: "new-node" },
+      pending: { nodeId: "new-node" },
+      live: {
+        nodeId: "new-node",
+        displayName: "New Node",
+        platform: "macos",
+        declaredCaps: ["camera", "screen"],
+        declaredCommands: ["screen.snapshot", "system.run"],
+      },
     });
 
-    expect(nodes.get("new-node")).toMatchObject({
+    expect(node).toMatchObject({
       approvalState: "pending-approval",
       pendingRequestId: "request-1",
       permissions: undefined,
     });
-    expect(nodes.get("new-node")?.pendingDeclaredPermissions).toEqual({
-      camera: true,
-      screen: true,
-    });
+    expect(node?.pendingDeclaredPermissions).toEqual({ camera: true, screen: true });
   });
 
   it("reports pending reapproval without making declarations effective", () => {
-    const nodes = makeCatalog({
-      pairedNodes: [approvedCamera()],
-      pendingNodes: [pendingNode()],
-      connectedNodes: [
-        liveCamera({
-          declaredCaps: ["camera", "screen"],
-          declaredCommands: ["screen.snapshot", "system.run"],
-          declaredPermissions: { camera: true, screen: true },
-        }),
-      ],
+    const node = catalogNode({
+      paired: approvedCamera(),
+      pending: {},
+      live: liveCamera({
+        declaredCaps: ["camera", "screen"],
+        declaredCommands: ["screen.snapshot", "system.run"],
+        declaredPermissions: { camera: true, screen: true },
+      }),
     });
 
-    expect(nodes.get("mac-1")).toMatchObject({
+    expect(node).toMatchObject({
       approvalState: "pending-reapproval",
       pendingRequestId: "request-1",
       pendingDeclaredCaps: ["camera", "screen"],
@@ -297,18 +279,14 @@ describe("gateway/node-catalog", () => {
       caps: ["camera"],
       commands: ["screen.snapshot"],
     });
-    expect(nodes.get("mac-1")?.pendingDeclaredPermissions).toEqual({ camera: true, screen: true });
-    expect(nodes.get("mac-1")?.permissions).toEqual({ camera: true });
+    expect(node?.pendingDeclaredPermissions).toEqual({ camera: true, screen: true });
+    expect(node?.permissions).toEqual({ camera: true });
   });
 
   it("ignores a pending reapproval that no longer matches the live declaration", () => {
-    const nodes = makeCatalog({
-      pairedNodes: [approvedCamera()],
-      pendingNodes: [pendingNode()],
-      connectedNodes: [liveCamera()],
-    });
+    const node = catalogNode({ paired: approvedCamera(), pending: {}, live: liveCamera() });
 
-    expect(nodes.get("mac-1")).toMatchObject({
+    expect(node).toMatchObject({
       approvalState: "approved",
       pendingRequestId: undefined,
       pendingDeclaredCaps: undefined,
@@ -317,7 +295,7 @@ describe("gateway/node-catalog", () => {
       caps: ["camera"],
       commands: ["screen.snapshot"],
     });
-    expect(nodes.get("mac-1")?.permissions).toEqual({ camera: true });
+    expect(node?.permissions).toEqual({ camera: true });
   });
 
   it("ignores malformed node capability entries instead of throwing", () => {
@@ -345,32 +323,24 @@ describe("gateway/node-catalog", () => {
   });
 
   it("normalizes non-string scalar fields from malformed pairing records (no nodes-status crash)", () => {
-    // Paired/pending records are blind-cast from disk, so every formatter-facing scalar can be a
-    // non-string; before this guard a `nodes status` formatter (.trim() / sanitizeTerminalText) threw.
-    const catalog = createKnownNodeCatalog({
-      pairedDevices: [
-        pairedDevice({
-          deviceId: "mac-1",
-          displayName: 654 as unknown as string,
-          clientId: 456 as unknown as string,
-          clientMode: 789 as unknown as string,
-        }),
-      ],
-      pairedNodes: [
-        pairedNode({
-          nodeId: "mac-1",
-          version: 123 as unknown as string,
-          displayName: 321 as unknown as string,
-          platform: "linux",
-          remoteIp: 22 as unknown as string,
-          deviceFamily: 33 as unknown as string,
-          modelIdentifier: 44 as unknown as string,
-        }),
-      ],
-      connectedNodes: [connectedNode({ platform: {} as unknown as string })],
+    // Corrupt disk scalars must not reach status formatters' string operations.
+    const node = catalogNode({
+      device: {
+        displayName: 654 as unknown as string,
+        clientId: 456 as unknown as string,
+        clientMode: 789 as unknown as string,
+      },
+      paired: {
+        version: 123 as unknown as string,
+        displayName: 321 as unknown as string,
+        platform: "linux",
+        remoteIp: 22 as unknown as string,
+        deviceFamily: 33 as unknown as string,
+        modelIdentifier: 44 as unknown as string,
+      },
+      live: { platform: {} as unknown as string },
     });
 
-    const node = catalog.get("mac-1");
     expect(node?.version).toBeUndefined();
     expect(node?.displayName).toBeUndefined();
     expect(node?.clientId).toBeUndefined();
@@ -385,8 +355,7 @@ describe("gateway/node-catalog", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [
         pairedDevice({ deviceId: "good-node" }),
-        // A corrupted pairing file can carry a non-string id; without the catalog id guard
-        // these would key the maps and crash listKnownNodes' nodeId.localeCompare sort.
+        // Invalid IDs must not reach listKnownNodes' localeCompare sort.
         pairedDevice({ deviceId: 7 as unknown as string }),
       ],
       pairedNodes: [

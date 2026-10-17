@@ -93,39 +93,13 @@ function computerUseDescriptor(): ComputerUseCapabilityDescriptor {
   };
 }
 
-function expectNodePairingRequest(
-  requestPairing: ReturnType<typeof makePendingPairingRequest>,
-  expected: Partial<NodePairingRequestInput>,
-) {
-  expect(requestPairing).toHaveBeenCalledWith({
-    nodeId: "openclaw-ios",
-    clientId: undefined,
-    clientMode: undefined,
-    displayName: undefined,
-    platform: "ios",
-    version: "test",
-    deviceFamily: undefined,
-    modelIdentifier: undefined,
-    caps: [],
-    commands: [],
-    permissions: undefined,
-    remoteIp: undefined,
-    ...expected,
-  });
-}
-
 describe("reconcileNodePairingOnConnect", () => {
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-  });
+  afterEach(resetPluginRuntimeStateForTest);
 
   it("marks the first-surface request silent when device pairing was non-interactive", async () => {
     const requestPairing = makePendingPairingRequest("req-silent");
 
-    await reconcile({
-      initialSurfaceSilent: true,
-      requestPairing,
-    });
+    await reconcile({ initialSurfaceSilent: true, requestPairing });
 
     expect(requestPairing).toHaveBeenCalledWith(expect.objectContaining({ silent: true }));
   });
@@ -422,9 +396,19 @@ describe("reconcileNodePairingOnConnect", () => {
       requestPairing,
     });
 
-    expectNodePairingRequest(requestPairing, {
+    expect(requestPairing).toHaveBeenCalledWith({
+      nodeId: "openclaw-ios",
+      clientId: undefined,
+      clientMode: undefined,
+      displayName: undefined,
+      platform: "ios",
+      version: "test",
+      deviceFamily: undefined,
+      modelIdentifier: undefined,
+      caps: [],
       commands: [],
       permissions: { camera: true, notifications: true },
+      remoteIp: undefined,
     });
     expect(result.effectiveCommands).toEqual([]);
     expect(result.effectivePermissions).toEqual({ camera: true, notifications: false });

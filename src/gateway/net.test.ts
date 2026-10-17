@@ -380,22 +380,14 @@ describe("defaultGatewayBindMode", () => {
     expect(defaultGatewayBindMode()).toBe("loopback");
   });
 
-  it("returns auto inside a container", () => {
+  it.each([
+    [undefined, "auto"],
+    ["serve", "loopback"],
+    ["off", "auto"],
+  ] as const)("with tailscale %s, defaults to %s inside a container", (tailscaleMode, expected) => {
     const fs = require("node:fs");
     vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
-    expect(defaultGatewayBindMode()).toBe("auto");
-  });
-
-  it("returns loopback inside a container when tailscale serve is active", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
-    expect(defaultGatewayBindMode("serve")).toBe("loopback");
-  });
-
-  it("returns auto inside a container when tailscale is off", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
-    expect(defaultGatewayBindMode("off")).toBe("auto");
+    expect(defaultGatewayBindMode(tailscaleMode)).toBe(expected);
   });
 });
 
