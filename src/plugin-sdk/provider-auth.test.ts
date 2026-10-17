@@ -1,10 +1,8 @@
 import type { execSync } from "node:child_process";
-// Provider auth tests cover credential resolution, setup state, and auth method contracts.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -21,6 +19,34 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+async function writeJson(file: string, value: unknown) {
+  await fs.writeFile(file, JSON.stringify(value));
+}
+
+function readKeychain(
+  execSyncImpl: typeof execSync,
+  overrides: Omit<
+    NonNullable<Parameters<typeof readClaudeCliCredentialsCached>[0]>,
+    "execSync" | "platform"
+  >,
+) {
+  return readClaudeCliCredentialsCached({
+    execSync: execSyncImpl,
+    platform: "darwin",
+    ...overrides,
+  });
+}
+
+function oauthProfile(): AuthProfileCredential {
+  return {
+    type: "oauth",
+    provider: "openai",
+    access: "oauth-access",
+    refresh: "oauth-refresh",
+    expires: Date.now() + 60_000,
+  };
+}
+
 function claudeCredentialJson(
   accessToken: string,
   refreshToken: string,
@@ -32,6 +58,7 @@ function claudeCredentialJson(
 }
 
 describe("provider auth public SDK", () => {
+  afterEach(() => vi.unstubAllEnvs());
   it("keeps the shipped Claude credential reader functional during its deprecation window", async () => {
     const homeDir = tempDirs.make("openclaw-sdk-claude-auth-");
     const credentialsDir = path.join(homeDir, ".claude");
@@ -57,22 +84,17 @@ describe("provider auth public SDK", () => {
       path.join(configDir, ".credentials.json"),
       claudeCredentialJson("configured-access", "configured-refresh"),
     );
-    await fs.writeFile(
-      path.join(configDir, ".claude.json"),
-      JSON.stringify({ oauthAccount: { emailAddress: "configured@example.com" } }),
-    );
+    await writeJson(path.join(configDir, ".claude.json"), {
+      oauthAccount: { emailAddress: "configured@example.com" },
+    });
     vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
 
-    try {
-      expect(readClaudeCliCredentialsCached({ platform: "linux", ttlMs: 0 })).toMatchObject({
-        type: "oauth",
-        access: "configured-access",
-        refresh: "configured-refresh",
-        email: "configured@example.com",
-      });
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    expect(readClaudeCliCredentialsCached({ platform: "linux", ttlMs: 0 })).toMatchObject({
+      type: "oauth",
+      access: "configured-access",
+      refresh: "configured-refresh",
+      email: "configured@example.com",
+    });
   });
 
   it("does not attach shared config identity to split-store credentials", async () => {
@@ -89,16 +111,12 @@ describe("provider auth public SDK", () => {
     vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
     vi.stubEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR", secureStorageDir);
 
-    try {
-      const credential = readClaudeCliCredentialsCached({ platform: "linux", ttlMs: 0 });
-      expect(credential).toMatchObject({
-        access: "secure-storage-access",
-        refresh: "secure-storage-refresh",
-      });
-      expect(credential).not.toHaveProperty("email");
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    const credential = readClaudeCliCredentialsCached({ platform: "linux", ttlMs: 0 });
+    expect(credential).toMatchObject({
+      access: "secure-storage-access",
+      refresh: "secure-storage-refresh",
+    });
+    expect(credential).not.toHaveProperty("email");
   });
 
   it("isolates cached config metadata when profiles share secure storage", async () => {
@@ -109,30 +127,26 @@ describe("provider auth public SDK", () => {
     const secondHelper = "second-profile-helper";
     const firstSettingsPath = path.join(firstConfigDir, "settings.json");
     const secondSettingsPath = path.join(secondConfigDir, "settings.json");
-    await fs.writeFile(firstSettingsPath, JSON.stringify({ apiKeyHelper: firstHelper }));
-    await fs.writeFile(secondSettingsPath, JSON.stringify({ apiKeyHelper: secondHelper }));
+    await writeJson(firstSettingsPath, { apiKeyHelper: firstHelper });
+    await writeJson(secondSettingsPath, { apiKeyHelper: secondHelper });
     const sharedMtime = new Date(1_800_000_000_000);
     await fs.utimes(firstSettingsPath, sharedMtime, sharedMtime);
     await fs.utimes(secondSettingsPath, sharedMtime, sharedMtime);
     vi.stubEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR", secureStorageDir);
 
-    try {
-      vi.stubEnv("CLAUDE_CONFIG_DIR", firstConfigDir);
-      expect(readClaudeCliCredentialsCached({ platform: "linux", ttlMs: 60_000 })).toEqual({
-        type: "api_key_helper",
-        provider: "anthropic",
-        helperHash: createHash("sha256").update(firstHelper).digest("hex"),
-      });
+    vi.stubEnv("CLAUDE_CONFIG_DIR", firstConfigDir);
+    expect(readClaudeCliCredentialsCached({ platform: "linux", ttlMs: 60_000 })).toEqual({
+      type: "api_key_helper",
+      provider: "anthropic",
+      helperHash: createHash("sha256").update(firstHelper).digest("hex"),
+    });
 
-      vi.stubEnv("CLAUDE_CONFIG_DIR", secondConfigDir);
-      expect(readClaudeCliCredentialsCached({ platform: "linux", ttlMs: 60_000 })).toEqual({
-        type: "api_key_helper",
-        provider: "anthropic",
-        helperHash: createHash("sha256").update(secondHelper).digest("hex"),
-      });
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    vi.stubEnv("CLAUDE_CONFIG_DIR", secondConfigDir);
+    expect(readClaudeCliCredentialsCached({ platform: "linux", ttlMs: 60_000 })).toEqual({
+      type: "api_key_helper",
+      provider: "anthropic",
+      helperHash: createHash("sha256").update(secondHelper).digest("hex"),
+    });
   });
 
   it("pins an empty secure-storage override to the default credential store", async () => {
@@ -148,14 +162,10 @@ describe("provider auth public SDK", () => {
     vi.stubEnv("CLAUDE_CONFIG_DIR", configDir);
     vi.stubEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR", "");
 
-    try {
-      expect(readClaudeCliCredentialsCached({ platform: "linux", ttlMs: 0 })).toMatchObject({
-        access: "default-store-access",
-        refresh: "default-store-refresh",
-      });
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    expect(readClaudeCliCredentialsCached({ platform: "linux", ttlMs: 0 })).toMatchObject({
+      access: "default-store-access",
+      refresh: "default-store-refresh",
+    });
   });
 
   it("selects and caches the macOS Keychain service by secure-storage config", () => {
@@ -177,18 +187,14 @@ describe("provider auth public SDK", () => {
 
     vi.stubEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR", firstDir);
     expect(
-      readClaudeCliCredentialsCached({
-        execSync: execSyncImpl,
-        platform: "darwin",
+      readKeychain(execSyncImpl, {
         ttlMs: 60_000,
       }),
     ).toMatchObject({ access: "first-access" });
 
     vi.stubEnv("CLAUDE_SECURESTORAGE_CONFIG_DIR", secondDir);
     expect(
-      readClaudeCliCredentialsCached({
-        execSync: execSyncImpl,
-        platform: "darwin",
+      readKeychain(execSyncImpl, {
         ttlMs: 60_000,
       }),
     ).toMatchObject({ access: "second-access" });
@@ -209,10 +215,8 @@ describe("provider auth public SDK", () => {
     const onStoredCredentialUnreadable = vi.fn();
 
     expect(
-      readClaudeCliCredentialsCached({
+      readKeychain(execSyncImpl, {
         allowKeychainPrompt: false,
-        execSync: execSyncImpl,
-        platform: "darwin",
         tryKeychainWithoutPrompt: true,
         onStoredCredentialUnreadable,
         ttlMs: 0,
@@ -231,21 +235,17 @@ describe("provider auth public SDK", () => {
     ) as unknown as typeof execSync;
 
     expect(
-      readClaudeCliCredentialsCached({
+      readKeychain(execSyncImpl, {
         allowKeychainPrompt: false,
-        execSync: execSyncImpl,
         homeDir,
-        platform: "darwin",
         tryKeychainWithoutPrompt: true,
         ttlMs: 60_000,
       }),
     ).toBeNull();
     expect(
-      readClaudeCliCredentialsCached({
+      readKeychain(execSyncImpl, {
         allowKeychainPrompt: true,
-        execSync: execSyncImpl,
         homeDir,
-        platform: "darwin",
         tryKeychainWithoutPrompt: true,
         ttlMs: 60_000,
       }),
@@ -322,30 +322,77 @@ describe("provider API-key readiness", () => {
     async ({ credential, expected, profileTypes }) => {
       vi.stubEnv("MEDIA_PROFILE_MISSING_SECRET", "");
       const profileId = `${provider}:selected`;
-      const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-profile-binding-"));
-      try {
-        saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir, {
-          filterExternalAuthProfiles: false,
-          syncExternalCli: false,
-        });
+      const agentDir = tempDirs.make("openclaw-media-profile-binding-");
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: credential } }, agentDir, {
+        filterExternalAuthProfiles: false,
+        syncExternalCli: false,
+      });
 
-        expect(
-          isProviderApiKeyConfigured({
-            provider,
-            agentDir,
-            cfg: configuredProvider(profileId),
-            profileTypes,
-          }),
-        ).toBe(expected);
-      } finally {
-        clearRuntimeAuthProfileStoreSnapshots();
-        await fs.rm(agentDir, { force: true, recursive: true });
-      }
+      expect(
+        isProviderApiKeyConfigured({
+          provider,
+          agentDir,
+          cfg: configuredProvider(profileId),
+          profileTypes,
+        }),
+      ).toBe(expected);
     },
   );
 });
 
 describe("provider auth profile helpers", () => {
+  async function mockProfileAvailability(
+    store: AuthProfileStore,
+    loadStore = vi.fn((_agentDir?: string, _options?: { externalCli?: unknown }) => store),
+  ) {
+    // mock-isolation: Use synthetic profiles while retaining real availability decisions.
+    vi.doMock("../plugins/provider-auth-availability.js", async () => {
+      const { createProviderAuthAvailability } =
+        await import("../plugins/provider-auth-availability-core.js");
+      const { findPersistedAuthProfileCredential } =
+        await import("../agents/auth-profiles/store.js");
+      const { findPersistedAuthProfileCredentialAsync } =
+        await import("../agents/auth-profiles/store-runtime.js");
+      return createProviderAuthAvailability({
+        findPersistedAuthProfileCredential,
+        findPersistedAuthProfileCredentialAsync,
+        ensureAuthProfileStore: vi.fn(() => store),
+        ensureAuthProfileStoreAsync: vi.fn(async () => store),
+        loadAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => ({
+          version: 1,
+          profiles: {},
+        })),
+        loadAuthProfileStoreForRuntimeAsync: vi.fn(async (...args: Parameters<typeof loadStore>) =>
+          loadStore(...args),
+        ),
+        loadAuthProfileStoreForSecretsRuntime: loadStore,
+        loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
+      });
+    });
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.doMock("../agents/agent-scope-config.js", async () => {
+      const { resolveAgentDir } = await vi.importActual<
+        typeof import("../agents/agent-scope-config.js")
+      >("../agents/agent-scope-config.js");
+      return { resolveAgentDir, resolveDefaultAgentDir: () => "/tmp/openclaw-agent" };
+    });
+    vi.doMock("../agents/auth-profiles/order.js", () => ({
+      resolveAuthProfileOrder: ({
+        provider,
+        store,
+      }: {
+        provider: string;
+        store: AuthProfileStore;
+      }) =>
+        Object.entries(store.profiles)
+          .filter(([, profile]) => profile.provider === provider)
+          .map(([profileId]) => profileId),
+    }));
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -360,18 +407,10 @@ describe("provider auth profile helpers", () => {
   });
 
   it("filters auth profile API-key resolution by credential type", async () => {
-    vi.resetModules();
-
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:oauth": {
-          type: "oauth",
-          provider: "openai",
-          access: "oauth-access",
-          refresh: "oauth-refresh",
-          expires: Date.now() + 60_000,
-        },
+        "openai:oauth": oauthProfile(),
         "openai:key": {
           type: "api_key",
           provider: "openai",
@@ -402,49 +441,10 @@ describe("provider auth profile helpers", () => {
       },
     );
 
-    vi.doMock("../agents/agent-scope-config.js", async () => {
-      const { resolveAgentDir } = await vi.importActual<
-        typeof import("../agents/agent-scope-config.js")
-      >("../agents/agent-scope-config.js");
-      return { resolveAgentDir, resolveDefaultAgentDir: () => "/tmp/openclaw-agent" };
-    });
     vi.doMock("../agents/auth-profiles/oauth.js", () => ({
       resolveApiKeyForProfile,
     }));
-    vi.doMock("../agents/auth-profiles/order.js", () => ({
-      resolveAuthProfileOrder: ({
-        provider,
-        store: profileStore,
-      }: {
-        provider: string;
-        store: AuthProfileStore;
-      }) =>
-        Object.entries(profileStore.profiles)
-          .filter(([, profile]) => profile.provider === provider)
-          .map(([profileId]) => profileId),
-    }));
-    // mock-isolation: Profile-list tests use this synthetic credential snapshot.
-    vi.doMock("../plugins/provider-auth-availability.js", async () => {
-      const { createProviderAuthAvailability } =
-        await import("../plugins/provider-auth-availability-core.js");
-      const { findPersistedAuthProfileCredential } =
-        await import("../agents/auth-profiles/store.js");
-      const { findPersistedAuthProfileCredentialAsync } =
-        await import("../agents/auth-profiles/store-runtime.js");
-      return createProviderAuthAvailability({
-        findPersistedAuthProfileCredential,
-        findPersistedAuthProfileCredentialAsync,
-        ensureAuthProfileStore: vi.fn(() => store),
-        ensureAuthProfileStoreAsync: vi.fn(async () => store),
-        loadAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => ({
-          version: 1,
-          profiles: {},
-        })),
-        loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => store),
-        loadAuthProfileStoreForSecretsRuntime: vi.fn(() => store),
-        loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
-      });
-    });
+    await mockProfileAvailability(store);
 
     const { resolveProviderAuthProfileApiKey } = await import("./provider-auth.js");
 
@@ -461,8 +461,6 @@ describe("provider auth profile helpers", () => {
   });
 
   it("only discovers external CLI auth when provider resolution opts in", async () => {
-    vi.resetModules();
-
     const primaryStore: AuthProfileStore = {
       version: 1,
       profiles: {},
@@ -470,13 +468,7 @@ describe("provider auth profile helpers", () => {
     const externalStore: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai:default": {
-          type: "oauth",
-          provider: "openai",
-          access: "oauth-access",
-          refresh: "oauth-refresh",
-          expires: Date.now() + 60_000,
-        },
+        "openai:default": oauthProfile(),
       },
     };
     const externalCli = { mode: "scoped", providerIds: ["openai"] };
@@ -485,55 +477,13 @@ describe("provider auth profile helpers", () => {
         options?.externalCli ? externalStore : primaryStore,
     );
 
-    vi.doMock("../agents/agent-scope-config.js", async () => {
-      const { resolveAgentDir } = await vi.importActual<
-        typeof import("../agents/agent-scope-config.js")
-      >("../agents/agent-scope-config.js");
-      return { resolveAgentDir, resolveDefaultAgentDir: () => "/tmp/openclaw-agent" };
-    });
     vi.doMock("../agents/auth-profiles/external-cli-discovery.js", () => ({
       externalCliDiscoveryForProviderAuth: vi.fn(() => externalCli),
     }));
     vi.doMock("../agents/auth-profiles/oauth.js", () => ({
       resolveApiKeyForProfile: vi.fn(),
     }));
-    vi.doMock("../agents/auth-profiles/order.js", () => ({
-      resolveAuthProfileOrder: ({
-        provider,
-        store,
-      }: {
-        provider: string;
-        store: AuthProfileStore;
-      }) =>
-        Object.entries(store.profiles)
-          .filter(([, profile]) => profile.provider === provider)
-          .map(([profileId]) => profileId),
-    }));
-    // mock-isolation: Availability controls the synthetic external CLI discovery snapshots.
-    vi.doMock("../plugins/provider-auth-availability.js", async () => {
-      const { createProviderAuthAvailability } =
-        await import("../plugins/provider-auth-availability-core.js");
-      const { findPersistedAuthProfileCredential } =
-        await import("../agents/auth-profiles/store.js");
-      const { findPersistedAuthProfileCredentialAsync } =
-        await import("../agents/auth-profiles/store-runtime.js");
-      return createProviderAuthAvailability({
-        findPersistedAuthProfileCredential,
-        findPersistedAuthProfileCredentialAsync,
-        ensureAuthProfileStore: vi.fn(() => primaryStore),
-        ensureAuthProfileStoreAsync: vi.fn(async () => primaryStore),
-        loadAuthProfileStoreWithoutExternalProfilesAsync: vi.fn(async () => ({
-          version: 1,
-          profiles: {},
-        })),
-        loadAuthProfileStoreForRuntimeAsync: vi.fn(
-          async (...args: Parameters<typeof loadAuthProfileStoreForSecretsRuntime>) =>
-            loadAuthProfileStoreForSecretsRuntime(...args),
-        ),
-        loadAuthProfileStoreForSecretsRuntime,
-        loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({ version: 1, profiles: {} })),
-      });
-    });
+    await mockProfileAvailability(primaryStore, loadAuthProfileStoreForSecretsRuntime);
 
     const { isProviderAuthProfileConfigured } = await import("./provider-auth.js");
 

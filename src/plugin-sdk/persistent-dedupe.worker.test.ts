@@ -19,7 +19,22 @@ const options = {
   ttlMs: 60_000,
 };
 
+const strictOptions = {
+  ...options,
+  onDiskError: (error: unknown) => {
+    throw error;
+  },
+};
 afterEach(() => vi.restoreAllMocks());
+
+function pauseObservation() {
+  const observe = workerClient.observePluginStateInWorker;
+  const paused = pauseWorkerResult();
+  vi.spyOn(workerClient, "observePluginStateInWorker").mockImplementationOnce((params) =>
+    paused.wait(observe(params)),
+  );
+  return paused;
+}
 
 function pauseWorkerResult() {
   const ready = createDeferredCore();
@@ -63,12 +78,7 @@ describe("persistent dedupe worker", () => {
             (params) => wait(compare(params)),
           );
         }
-        const dedupe = createClaimableDedupe({
-          ...options,
-          onDiskError: (error: unknown) => {
-            throw error;
-          },
-        });
+        const dedupe = createClaimableDedupe(strictOptions);
         if (phase === "commit") {
           expect(await dedupe.claim("shared")).toEqual({ kind: "claimed" });
         }
@@ -142,12 +152,7 @@ describe("persistent dedupe worker", () => {
     async (operation) => {
       await withOpenClawTestState({ label: "dedupe-write-settlement" }, async () => {
         const guard = createChannelReplayGuard<{ keys: string[] }>({
-          dedupe: {
-            ...options,
-            onDiskError: (error: unknown) => {
-              throw error;
-            },
-          },
+          dedupe: strictOptions,
           buildReplayKey: (event) => event.keys,
         });
         const event = { keys: ["first", "second"] };
@@ -290,42 +295,33 @@ describe("persistent dedupe worker", () => {
     });
   });
 
-  it.each([true])(
-    "orders forget after an unfinished recording (legacy alias=%s)",
-    async (legacyAlias) => {
-      await withOpenClawTestState({ label: "dedupe-forget-order" }, async (state) => {
-        const observe = workerClient.observePluginStateInWorker;
-        const { ready, gate, wait } = pauseWorkerResult();
-        vi.spyOn(workerClient, "observePluginStateInWorker").mockImplementationOnce((params) =>
-          wait(observe(params)),
-        );
-        const createDedupe = () =>
-          legacyAlias
-            ? createPersistentDedupe({
-                ttlMs: options.ttlMs,
-                memoryMaxSize: 0,
-                fileMaxEntries: options.stateMaxEntries,
-                resolveFilePath: () => state.path("shared.json"),
-              })
-            : createPersistentDedupe({ ...options, memoryMaxSize: 10 });
-        const dedupe = createDedupe();
-        const recording = dedupe.checkAndRecord("forgotten", { namespace: "first" });
-        await ready.promise;
-        const forgotten = dedupe.forget("forgotten", {
-          namespace: legacyAlias ? "alias" : "first",
+  it("orders forget after an unfinished recording through a legacy namespace alias", async () => {
+    await withOpenClawTestState({ label: "dedupe-forget-order" }, async (state) => {
+      const { ready, gate } = pauseObservation();
+      const createDedupe = () =>
+        createPersistentDedupe({
+          ttlMs: options.ttlMs,
+          memoryMaxSize: 0,
+          fileMaxEntries: options.stateMaxEntries,
+          resolveFilePath: () => state.path("shared.json"),
         });
-        try {
-          expect(dedupe.memorySize()).toBe(0);
-        } finally {
-          gate.resolve();
-        }
-        expect(await recording).toBe(true);
-        expect(await forgotten).toBe(true);
-        expect(dedupe.memorySize()).toBe(0);
-        expect(await createDedupe().hasRecent("forgotten", { namespace: "first" })).toBe(false);
+      const dedupe = createDedupe();
+      const recording = dedupe.checkAndRecord("forgotten", { namespace: "first" });
+      await ready.promise;
+      const forgotten = dedupe.forget("forgotten", {
+        namespace: "alias",
       });
-    },
-  );
+      try {
+        expect(dedupe.memorySize()).toBe(0);
+      } finally {
+        gate.resolve();
+      }
+      expect(await recording).toBe(true);
+      expect(await forgotten).toBe(true);
+      expect(dedupe.memorySize()).toBe(0);
+      expect(await createDedupe().hasRecent("forgotten", { namespace: "first" })).toBe(false);
+    });
+  });
 
   it("records again after an intervening forget and retains the replacement operation", async () => {
     await withOpenClawTestState({ label: "dedupe-record-forget-record" }, async () => {
@@ -341,13 +337,7 @@ describe("persistent dedupe worker", () => {
         await gates[current]?.promise;
         return result;
       });
-      const dedupe = createPersistentDedupe({
-        ...options,
-        memoryMaxSize: 10,
-        onDiskError: (error: unknown) => {
-          throw error;
-        },
-      });
+      const dedupe = createPersistentDedupe({ ...strictOptions, memoryMaxSize: 10 });
       const first = dedupe.checkAndRecord("shared");
       await entered[0]!.promise;
       const forgetting = dedupe.forget("shared");
@@ -388,11 +378,7 @@ describe("persistent dedupe worker", () => {
       await withOpenClawTestState(
         { label: "dedupe-next-source", applyEnv: false },
         async (other) => {
-          const observe = workerClient.observePluginStateInWorker;
-          const { ready, gate, wait } = pauseWorkerResult();
-          vi.spyOn(workerClient, "observePluginStateInWorker").mockImplementationOnce((params) =>
-            wait(observe(params)),
-          );
+          const { ready, gate } = pauseObservation();
           const dedupe = createPersistentDedupe(options);
           const first = dedupe.checkAndRecord("first");
           await ready.promise;
@@ -420,17 +406,8 @@ describe("persistent dedupe worker", () => {
 
   it("refuses queued writes from a closed admission after the same database is reopened", async () => {
     await withOpenClawTestState({ label: "dedupe-queued-close" }, async () => {
-      const observe = workerClient.observePluginStateInWorker;
-      const { ready, gate, wait } = pauseWorkerResult();
-      vi.spyOn(workerClient, "observePluginStateInWorker").mockImplementationOnce((params) =>
-        wait(observe(params)),
-      );
-      const dedupe = createPersistentDedupe({
-        ...options,
-        onDiskError: (error: unknown) => {
-          throw error;
-        },
-      });
+      const { ready, gate } = pauseObservation();
+      const dedupe = createPersistentDedupe(strictOptions);
       const first = dedupe.checkAndRecord("first");
       await ready.promise;
       const queued = dedupe.checkAndRecord("queued");

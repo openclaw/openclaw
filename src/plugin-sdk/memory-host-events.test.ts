@@ -1,6 +1,3 @@
-/**
- * Tests memory host event log helpers and persisted event behavior.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +21,37 @@ import { createPluginSdkTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createPluginSdkTestHarness();
 
+async function eventFixture() {
+  const workspaceDir = await createTempDir("memory-host-events-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+  const append = (query: string) => appendMemoryHostEvent(workspaceDir, recall(query), { env });
+  return { workspaceDir, env, append };
+}
+
+function recall(query: string) {
+  return {
+    type: "memory.recall.recorded" as const,
+    timestamp: "2026-09-10T12:00:00.000Z",
+    query,
+    resultCount: 0,
+    results: [],
+  };
+}
+
+function delayJournalCommit() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const register = pluginStateStore.registerPluginStateSequencedJournalEntry;
+  vi.spyOn(pluginStateStore, "registerPluginStateSequencedJournalEntry").mockImplementationOnce(
+    async (params) => {
+      entered.resolve();
+      await release.promise;
+      return await register(params);
+    },
+  );
+  return { entered, release };
+}
+
 function createDedupe(root: string, overrides?: { ttlMs?: number }) {
   return createPersistentDedupe({
     ttlMs: overrides?.ttlMs ?? 24 * 60 * 60 * 1000,
@@ -45,8 +73,7 @@ afterEach(async () => {
 
 describe("memory host event journal helpers", () => {
   it("limits matching event types before returning journal history", async () => {
-    const workspaceDir = await createTempDir("memory-host-events-filtered-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+    const { workspaceDir, env } = await eventFixture();
     const phase = {
       type: "memory.dream.completed" as const,
       timestamp: "2026-10-15T04:15:00.000Z",
@@ -59,13 +86,7 @@ describe("memory host event journal helpers", () => {
     await appendMemoryHostEvent(workspaceDir, phase, { env });
     await appendMemoryHostEvent(
       workspaceDir,
-      {
-        type: "memory.recall.recorded",
-        timestamp: "2026-10-15T04:16:00.000Z",
-        query: "newer unrelated event",
-        resultCount: 0,
-        results: [],
-      },
+      { ...recall("newer unrelated event"), timestamp: "2026-10-15T04:16:00.000Z" },
       { env },
     );
 
@@ -80,33 +101,11 @@ describe("memory host event journal helpers", () => {
   });
 
   it("uses the retained tail when a cursor retires during a delayed append", async () => {
-    const workspaceDir = await createTempDir("memory-host-events-retired-cursor-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
-    const append = (query: string) =>
-      appendMemoryHostEvent(
-        workspaceDir,
-        {
-          type: "memory.recall.recorded",
-          timestamp: "2026-09-10T12:00:00.000Z",
-          query,
-          resultCount: 0,
-          results: [],
-        },
-        { env },
-      );
+    const { workspaceDir, env, append } = await eventFixture();
     for (let index = 1; index <= 9; index++) {
       await append(`event-${index}`);
     }
-    const entered = createDeferred();
-    const release = createDeferred();
-    const register = pluginStateStore.registerPluginStateSequencedJournalEntry;
-    vi.spyOn(pluginStateStore, "registerPluginStateSequencedJournalEntry").mockImplementationOnce(
-      async (params) => {
-        entered.resolve();
-        await release.promise;
-        return await register(params);
-      },
-    );
+    const { entered, release } = delayJournalCommit();
     const pending = append("delayed").catch((error: unknown) => error);
     try {
       await entered.promise;
@@ -131,30 +130,10 @@ describe("memory host event journal helpers", () => {
   });
 
   it("waits for the journal commit before completing an append", async () => {
-    const workspaceDir = await createTempDir("memory-host-events-delayed-commit-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
-    const entered = createDeferred();
-    const release = createDeferred();
-    const register = pluginStateStore.registerPluginStateSequencedJournalEntry;
-    vi.spyOn(pluginStateStore, "registerPluginStateSequencedJournalEntry").mockImplementationOnce(
-      async (params) => {
-        entered.resolve();
-        await release.promise;
-        return await register(params);
-      },
-    );
+    const { workspaceDir, env, append } = await eventFixture();
+    const { entered, release } = delayJournalCommit();
     const completed = vi.fn();
-    const pending = appendMemoryHostEvent(
-      workspaceDir,
-      {
-        type: "memory.recall.recorded",
-        timestamp: "2026-09-10T12:00:00.000Z",
-        query: "delayed commit",
-        resultCount: 0,
-        results: [],
-      },
-      { env },
-    ).then(completed);
+    const pending = append("delayed commit").then(completed);
     try {
       await entered.promise;
       expect(completed).not.toHaveBeenCalled();
@@ -169,19 +148,8 @@ describe("memory host event journal helpers", () => {
   });
 
   it("awaits event reads and propagates read rejection through the public helpers", async () => {
-    const workspaceDir = await createTempDir("memory-host-events-delayed-read-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
-    await appendMemoryHostEvent(
-      workspaceDir,
-      {
-        type: "memory.recall.recorded",
-        timestamp: "2026-09-10T12:00:00.000Z",
-        query: "delayed read",
-        resultCount: 0,
-        results: [],
-      },
-      { env },
-    );
+    const { workspaceDir, env, append } = await eventFixture();
+    await append("delayed read");
     const entered = createDeferred();
     const release = createDeferred();
     const list = eventStore.listStoredMemoryHostEvents;
@@ -208,21 +176,8 @@ describe("memory host event journal helpers", () => {
   });
 
   it("allocates unique sequences for concurrent appends and continues after reopen", async () => {
-    const workspaceDir = await createTempDir("memory-host-events-concurrent-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
-    const append = (index: number) =>
-      appendMemoryHostEvent(
-        workspaceDir,
-        {
-          type: "memory.recall.recorded",
-          timestamp: "2026-09-10T12:00:00.000Z",
-          query: `event-${index}`,
-          resultCount: 0,
-          results: [],
-        },
-        { env },
-      );
-    await Promise.all(Array.from({ length: 24 }, (_, index) => append(index + 1)));
+    const { workspaceDir, env, append } = await eventFixture();
+    await Promise.all(Array.from({ length: 24 }, (_, index) => append(`event-${index + 1}`)));
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     const stored = await listStoredMemoryHostEvents({ workspaceDir, env });
@@ -230,28 +185,15 @@ describe("memory host event journal helpers", () => {
       Array.from({ length: 24 }, (_, index) => index + 1),
     );
     expect(new Set(stored.map((entry) => entry.key)).size).toBe(24);
-    await append(25);
+    await append("event-25");
     expect(
       (await listStoredMemoryHostEvents({ workspaceDir, env, limit: 1 }))[0]?.value.sequence,
     ).toBe(25);
   });
 
   it("rolls back cursor allocation and retention when journal insertion fails", async () => {
-    const workspaceDir = await createTempDir("memory-host-events-rollback-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+    const { workspaceDir, env, append } = await eventFixture();
     setMaxMemoryHostEventsForTests(1);
-    const append = (query: string) =>
-      appendMemoryHostEvent(
-        workspaceDir,
-        {
-          type: "memory.recall.recorded",
-          timestamp: "2026-09-10T12:00:00.000Z",
-          query,
-          resultCount: 0,
-          results: [],
-        },
-        { env },
-      );
     await append("retained");
     const before = await listStoredMemoryHostEvents({ workspaceDir, env });
     const { db } = openOpenClawStateDatabase({ env });
@@ -271,70 +213,48 @@ describe("memory host event journal helpers", () => {
   });
 
   it("keeps legacy event readers stable when diagnostic records are present", async () => {
-    const workspaceDir = await createTempDir("memory-host-events-diagnostics-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: workspaceDir };
+    const { workspaceDir, env } = await eventFixture();
 
+    const result = (filePath: string, startLine: number, endLine: number, score: number) => ({
+      path: filePath,
+      startLine,
+      endLine,
+      score,
+    });
+    const skipped = (
+      query: string,
+      timestamp: string,
+      line: number,
+      score: number,
+      eligibleResultCount: number,
+    ) =>
+      appendMemoryHostEvent(
+        workspaceDir,
+        {
+          type: "memory.recall.skipped",
+          timestamp,
+          query,
+          reason: "non-short-term-memory-path",
+          eligibleResultCount,
+          skippedResultCount: 1,
+          results: [
+            { ...result("MEMORY.md", line, line, score), reason: "non-short-term-memory-path" },
+          ],
+        },
+        { env },
+      );
+    await skipped("durable memory", "2026-04-05T12:00:00.000Z", 3, 0.9, 0);
     await appendMemoryHostEvent(
       workspaceDir,
       {
-        type: "memory.recall.skipped",
-        timestamp: "2026-04-05T12:00:00.000Z",
-        query: "durable memory",
-        reason: "non-short-term-memory-path",
-        eligibleResultCount: 0,
-        skippedResultCount: 1,
-        results: [
-          {
-            path: "MEMORY.md",
-            startLine: 3,
-            endLine: 3,
-            score: 0.9,
-            reason: "non-short-term-memory-path",
-          },
-        ],
-      },
-      { env },
-    );
-
-    await appendMemoryHostEvent(
-      workspaceDir,
-      {
-        type: "memory.recall.recorded",
+        ...recall("daily memory"),
         timestamp: "2026-04-05T12:05:00.000Z",
-        query: "daily memory",
         resultCount: 1,
-        results: [
-          {
-            path: "memory/2026-04-05.md",
-            startLine: 1,
-            endLine: 3,
-            score: 0.95,
-          },
-        ],
+        results: [result("memory/2026-04-05.md", 1, 3, 0.95)],
       },
       { env },
     );
-    await appendMemoryHostEvent(
-      workspaceDir,
-      {
-        type: "memory.recall.skipped",
-        timestamp: "2026-04-05T12:10:00.000Z",
-        query: "durable memory again",
-        reason: "non-short-term-memory-path",
-        eligibleResultCount: 1,
-        skippedResultCount: 1,
-        results: [
-          {
-            path: "MEMORY.md",
-            startLine: 4,
-            endLine: 4,
-            score: 0.8,
-            reason: "non-short-term-memory-path",
-          },
-        ],
-      },
-      { env },
-    );
+    await skipped("durable memory again", "2026-04-05T12:10:00.000Z", 4, 0.8, 1);
 
     const legacyEvents = await readMemoryHostEvents({ workspaceDir, env });
     const legacyTail = await readMemoryHostEvents({ workspaceDir, limit: 1, env });

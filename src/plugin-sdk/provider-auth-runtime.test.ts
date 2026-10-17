@@ -1,4 +1,3 @@
-// Provider auth runtime tests cover OAuth callback handling and provider auth flow helpers.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -59,14 +58,20 @@ afterEach(async () => {
 });
 
 function startCallback(
-  params: Omit<
+  params: Partial<
+    Omit<
     Parameters<typeof providerAuthRuntime.waitForLocalOAuthCallback>[0],
     "signal" | "port" | "redirectUri"
-  >,
+    >
+  > = {},
   controller = new AbortController(),
 ) {
   const { promise: ready, resolve, reject } = createDeferredCore<number>();
   const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+    expectedState: "state-1",
+    timeoutMs: 5_000,
+    callbackPath: "/callback",
+    successTitle: "OAuth complete",
     ...params,
     port: 61040,
     redirectUri: "http://127.0.0.1:61040/callback",
@@ -83,6 +88,31 @@ function startCallback(
   // Cancellation does not await readiness; startup failure must still be observed.
   void ready.catch(() => undefined);
   return { callback, ready };
+}
+
+function callbackUrl(port: number) {
+  return `http://127.0.0.1:${port}/callback`;
+}
+function finishCallback(port: number, origin?: string) {
+  return fetch(
+    `${callbackUrl(port)}?code=code-1&state=state-1`,
+    origin ? { headers: { Origin: origin } } : {},
+  );
+}
+function preflight(port: number, origin: string, privateNetwork = true) {
+  return fetch(callbackUrl(port), {
+    method: "OPTIONS",
+    headers: {
+      Origin: origin,
+      "Access-Control-Request-Method": "GET",
+      ...(privateNetwork
+        ? {
+            "Access-Control-Request-Headers": "content-type",
+            "Access-Control-Request-Private-Network": "true",
+          }
+        : {}),
+    },
+  });
 }
 
 describe("plugin-sdk provider-auth-runtime", () => {
@@ -110,23 +140,12 @@ describe("plugin-sdk provider-auth-runtime", () => {
       agentDir,
     );
 
-    expect(
-      providerAuthRuntime.resolveProviderAuthProfileMetadata({
-        provider: "openai",
-        profileId: "openai:chatgpt",
-        agentDir,
-      }),
-    ).toEqual({
-      profileId: "openai:chatgpt",
-      accountId: "acct-openai-workspace",
-    });
     const params = { provider: "openai", profileId: "openai:chatgpt", agentDir };
+    const expected = { profileId: "openai:chatgpt", accountId: "acct-openai-workspace" };
+    expect(providerAuthRuntime.resolveProviderAuthProfileMetadata(params)).toEqual(expected);
     await expect(
       providerAuthRuntime.resolveProviderAuthProfileMetadataAsync(params),
-    ).resolves.toEqual({
-      profileId: "openai:chatgpt",
-      accountId: "acct-openai-workspace",
-    });
+    ).resolves.toEqual(expected);
     await updateAuthProfileStoreWithLock({
       agentDir,
       updater(store) {
@@ -167,34 +186,19 @@ describe("plugin-sdk provider-auth-runtime", () => {
 
   it("allows browser IdP pages to probe the localhost callback with CORS", async () => {
     const { callback, ready } = startCallback({
-      expectedState: "state-1",
-      timeoutMs: 5_000,
-      callbackPath: "/callback",
       successTitle: `OAuth <complete>&"'`,
       corsOriginAllowlist: ["auth.x.ai", "accounts.x.ai"],
     });
 
     const port = await ready;
-    const preflight = await fetch(`http://127.0.0.1:${port}/callback`, {
-      method: "OPTIONS",
-      headers: {
-        Origin: "https://auth.x.ai",
-        "Access-Control-Request-Method": "GET",
-        "Access-Control-Request-Headers": "content-type",
-        "Access-Control-Request-Private-Network": "true",
-      },
-    });
+    const probe = await preflight(port, "https://auth.x.ai");
 
-    expect(preflight.status).toBe(204);
-    expect(preflight.headers.get("access-control-allow-origin")).toBe("https://auth.x.ai");
-    expect(preflight.headers.get("access-control-allow-methods")).toContain("GET");
-    expect(preflight.headers.get("access-control-allow-private-network")).toBe("true");
+    expect(probe.status).toBe(204);
+    expect(probe.headers.get("access-control-allow-origin")).toBe("https://auth.x.ai");
+    expect(probe.headers.get("access-control-allow-methods")).toContain("GET");
+    expect(probe.headers.get("access-control-allow-private-network")).toBe("true");
 
-    const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`, {
-      headers: {
-        Origin: "https://auth.x.ai",
-      },
-    });
+    const response = await finishCallback(port, "https://auth.x.ai");
 
     expect(response.status).toBe(200);
     expect(response.headers.get("access-control-allow-origin")).toBe("https://auth.x.ai");
@@ -206,11 +210,7 @@ describe("plugin-sdk provider-auth-runtime", () => {
     const controller = new AbortController();
     const { callback } = startCallback(
       {
-        expectedState: "state-1",
-        timeoutMs: 5_000,
-        callbackPath: "/callback",
         hostname: "127.0.0.1",
-        successTitle: "OAuth complete",
       },
       controller,
     );
@@ -223,10 +223,6 @@ describe("plugin-sdk provider-auth-runtime", () => {
   it("closes the localhost listener when progress reporting throws", async () => {
     const failure = new Error("Progress reporter failed");
     const { callback } = startCallback({
-      expectedState: "state-1",
-      timeoutMs: 5_000,
-      callbackPath: "/callback",
-      successTitle: "OAuth complete",
       onProgress: () => {
         throw failure;
       },
@@ -253,36 +249,20 @@ describe("plugin-sdk provider-auth-runtime", () => {
   });
   it("does not echo CORS for unallowlisted callback origins but keeps waiting", async () => {
     const { callback, ready } = startCallback({
-      expectedState: "state-1",
-      timeoutMs: 5_000,
-      callbackPath: "/callback",
       hostname: "127.0.0.1",
-      successTitle: "OAuth complete",
       corsOriginAllowlist: ["auth.x.ai"],
     });
 
     const port = await ready;
-    const preflight = await fetch(`http://127.0.0.1:${port}/callback`, {
-      method: "OPTIONS",
-      headers: {
-        Origin: "https://attacker.example",
-        "Access-Control-Request-Method": "GET",
-        "Access-Control-Request-Headers": "content-type",
-        "Access-Control-Request-Private-Network": "true",
-      },
-    });
+    const probe = await preflight(port, "https://attacker.example");
 
-    expect(preflight.status).toBe(204);
-    expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
-    expect(preflight.headers.get("access-control-allow-methods")).toBeNull();
-    expect(preflight.headers.get("access-control-allow-headers")).toBeNull();
-    expect(preflight.headers.get("access-control-allow-private-network")).toBeNull();
+    expect(probe.status).toBe(204);
+    expect(probe.headers.get("access-control-allow-origin")).toBeNull();
+    expect(probe.headers.get("access-control-allow-methods")).toBeNull();
+    expect(probe.headers.get("access-control-allow-headers")).toBeNull();
+    expect(probe.headers.get("access-control-allow-private-network")).toBeNull();
 
-    const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`, {
-      headers: {
-        Origin: "https://auth.x.ai",
-      },
-    });
+    const response = await finishCallback(port, "https://auth.x.ai");
 
     expect(response.status).toBe(200);
     expect(response.headers.get("access-control-allow-origin")).toBe("https://auth.x.ai");
@@ -291,27 +271,17 @@ describe("plugin-sdk provider-auth-runtime", () => {
 
   it("preserves legacy permissive CORS behavior when no allowlist is passed", async () => {
     const { callback, ready } = startCallback({
-      expectedState: "state-1",
-      timeoutMs: 5_000,
-      callbackPath: "/callback",
       hostname: "127.0.0.1",
-      successTitle: "OAuth complete",
     });
 
     const port = await ready;
-    const preflight = await fetch(`http://127.0.0.1:${port}/callback`, {
-      method: "OPTIONS",
-      headers: {
-        Origin: "https://legacy.example",
-        "Access-Control-Request-Method": "GET",
-      },
-    });
+    const probe = await preflight(port, "https://legacy.example", false);
 
-    expect(preflight.status).toBe(204);
-    expect(preflight.headers.get("access-control-allow-origin")).toBe("https://legacy.example");
-    expect(preflight.headers.get("access-control-allow-methods")).toContain("GET");
+    expect(probe.status).toBe(204);
+    expect(probe.headers.get("access-control-allow-origin")).toBe("https://legacy.example");
+    expect(probe.headers.get("access-control-allow-methods")).toContain("GET");
 
-    const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
+    const response = await finishCallback(port);
     expect(response.status).toBe(200);
     await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
   });
@@ -320,15 +290,12 @@ describe("plugin-sdk provider-auth-runtime", () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const { callback, ready } = startCallback({
-        expectedState: "state-1",
         timeoutMs: Number.MAX_SAFE_INTEGER,
-        callbackPath: "/callback",
         hostname: "127.0.0.1",
-        successTitle: "OAuth complete",
       });
       const port = await ready;
 
-      const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
+      const response = await finishCallback(port);
 
       expect(response.status).toBe(200);
       await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
