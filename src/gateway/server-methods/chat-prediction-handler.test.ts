@@ -18,28 +18,12 @@ import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { chatRpc } from "./chat-rpc-fixture.test-support.js";
 import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const { complete } = vi.hoisted(() => ({ complete: vi.fn() }));
 // mock-isolation: Exercise real RPC and persistence while keeping model dispatch and credentials outside this fixture.
 vi.mock("../composer-prediction-completion.js", () => ({ completeComposerPrediction: complete }));
 
 beforeEach(() => complete.mockReset().mockResolvedValue("What should I try next?"));
-
-async function request(
-  context: GatewayRequestContext,
-  client: GatewayClient,
-  runId = "completed",
-  signal?: AbortSignal,
-) {
-  return chatRpc(
-    context,
-    client,
-    "chat.predict",
-    { sessionKey: "agent:main:prediction", runId },
-    signal,
-  );
-}
 
 async function fixture(enabled = true) {
   const feature = { enabled };
@@ -87,7 +71,8 @@ async function fixture(enabled = true) {
     client,
     scope,
     context,
-    predict: (runId?: string, signal?: AbortSignal) => request(context, client, runId, signal),
+    predict: (runId = "completed", signal?: AbortSignal, caller = client) =>
+      chatRpc(context, caller, "chat.predict", { sessionKey: scope.sessionKey, runId }, signal),
   };
 }
 
@@ -106,8 +91,8 @@ async function withPredictionTest(
   });
 }
 
-it("gates disabled, stale, and nonterminal requests before inference", async () => {
-  await withPredictionTest(async (f) => {
+it("gates disabled, stale, and nonterminal requests before inference", () =>
+  withPredictionTest(async (f) => {
     expect(await f.predict()).toMatchObject([true, { text: null }]);
     f.feature.enabled = true;
     expect(await f.predict("old-run")).toMatchObject([true, { text: null }]);
@@ -117,27 +102,25 @@ it("gates disabled, stale, and nonterminal requests before inference", async () 
     }));
     expect(await f.predict()).toMatchObject([true, { text: null }]);
     expect(complete).not.toHaveBeenCalled();
-  }, false);
-});
+  }, false));
 
-it("enforces read and compose authority at the registered RPC", async () => {
-  await withPredictionTest(async (f) => {
+it("enforces read and compose authority at the registered RPC", () =>
+  withPredictionTest(async (f) => {
     for (const role of ["view", "none"] as const) {
       const client = roleClient(role, "prediction-" + role);
       client.connId = role;
-      expect((await request(f.context, client))[0]).toBe(false);
+      expect((await f.predict(undefined, undefined, client))[0]).toBe(false);
     }
     const readOnlyClient = {
       ...f.client,
       connect: { ...f.client.connect, scopes: ["operator.read"] },
     };
-    expect((await request(f.context, readOnlyClient))[0]).toBe(false);
+    expect((await f.predict(undefined, undefined, readOnlyClient))[0]).toBe(false);
     expect(complete).not.toHaveBeenCalled();
-  });
-});
+  }));
 
-it("uses only bounded visible dialogue and never appends a prediction", async () => {
-  await withPredictionTest(async (f) => {
+it("uses only bounded visible dialogue and never appends a prediction", () =>
+  withPredictionTest(async (f) => {
     f.client.connect.scopes = ["operator.sessions.read", "operator.sessions.write"];
     const before = await loadTranscriptEvents(f.scope);
     expect(await f.predict()).toMatchObject([true, { text: "What should I try next?" }]);
@@ -149,13 +132,12 @@ it("uses only bounded visible dialogue and never appends a prediction", async ()
       { role: "assistant", text: "Here are the tradeoffs." },
     ]);
     expect(await loadTranscriptEvents(f.scope)).toEqual(before);
-  });
-});
+  }));
 
 it.each(["suggestion", "disabled", "cancelled"] as const)(
   "waits for final-event terminal persistence before prediction (%s)",
-  async (outcome) => {
-    await withPredictionTest(async (f) => {
+  (outcome) =>
+    withPredictionTest(async (f) => {
       const runId = "completed";
       await patchSessionEntryCore(f.scope, () => ({
         status: undefined,
@@ -205,7 +187,7 @@ it.each(["suggestion", "disabled", "cancelled"] as const)(
           return originalWait(pending);
         });
       const controller = new AbortController();
-      let prediction: ReturnType<typeof request> | undefined;
+      let prediction: ReturnType<typeof f.predict> | undefined;
       try {
         h.register(runId, f.scope.sessionKey, runId, { agentId: f.scope.agentId });
         h.chatRunState.getOrCreate(runId).buffer = "Here are the tradeoffs.";
@@ -245,12 +227,11 @@ it.each(["suggestion", "disabled", "cancelled"] as const)(
         registration.cleanup();
         await h.handler.dispose();
       }
-    });
-  },
+    }),
 );
 
-it("discards a paid result if the feature or completed anchor changes", async () => {
-  await withPredictionTest(async (f) => {
+it("discards a paid result if the feature or completed anchor changes", () =>
+  withPredictionTest(async (f) => {
     complete.mockImplementationOnce(async () => {
       f.feature.enabled = false;
       return "stale suggestion";
@@ -262,5 +243,4 @@ it("discards a paid result if the feature or completed anchor changes", async ()
       return "stale suggestion";
     });
     expect(await f.predict()).toMatchObject([true, { text: null }]);
-  });
-});
+  }));

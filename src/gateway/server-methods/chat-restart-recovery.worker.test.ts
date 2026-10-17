@@ -61,8 +61,8 @@ async function seedTerminalTarget(storePath: string, source = false, lifecycle =
   return target;
 }
 
-it("settles restart-safe chat claims without caller-thread SQL", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("settles restart-safe chat claims without caller-thread SQL", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const target = await seedTerminalTarget(state.statePath("terminal.sqlite"), true);
     await appendTranscriptMessage(
       { ...target, sessionId },
@@ -85,7 +85,7 @@ it("settles restart-safe chat claims without caller-thread SQL", async () => {
     }
     expect(loadSessionEntry(target)).toMatchObject({
       status: "failed",
-      lastRunId: "terminal-run",
+      lastRunId: clientRunId,
       restartRecoveryTerminalRunIds: ["source-run"],
     });
     expect(loadSessionEntry(target)?.restartRecoveryDeliveryRunId).toBeUndefined();
@@ -95,11 +95,10 @@ it("settles restart-safe chat claims without caller-thread SQL", async () => {
         details: expect.objectContaining({ runId: "terminal-run" }),
       }),
     );
-  });
-});
+  }));
 
-it("terminalizes the current source of the same admitted run without tombstoning stale source facts", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("terminalizes the current source of the same admitted run without tombstoning stale source facts", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const target = await seedTerminalTarget(state.statePath("terminal.sqlite"), true);
     const terminal = await prepareTerminalTarget(target);
     const foreign = new DatabaseSync(target.storePath);
@@ -134,7 +133,7 @@ it("terminalizes the current source of the same admitted run without tombstoning
       const entry = loadSessionEntry(target);
       expect(entry).toMatchObject({
         status: "killed",
-        lastRunId: "terminal-run",
+        lastRunId: clientRunId,
         restartRecoveryTerminalRunIds: ["current-source"],
       });
       expect(entry?.restartRecoveryDeliveryRunId).toBeUndefined();
@@ -143,11 +142,10 @@ it("terminalizes the current source of the same admitted run without tombstoning
       spy.mockRestore();
       foreign.close();
     }
-  });
-});
+  }));
 
-it("does not terminalize a replacement physical store containing the same claim", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("does not terminalize a replacement physical store containing the same claim", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot({});
     const scope = await seedTerminalTarget(path.join(state.agentDir(), "openclaw-agent.sqlite"));
     const terminal = await prepareTerminalTarget(scope);
@@ -160,12 +158,11 @@ it("does not terminalize a replacement physical store containing the same claim"
       /identity changed/u,
     );
     expect(await readFile(scope.storePath)).toEqual(replacement);
-  });
-});
+  }));
 it.each(["claim", "lifecycle", "authority"] as const)(
   "refuses queued terminal settlement after its %s changes",
-  async (changed) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  (changed) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       setRuntimeConfigSnapshot({});
       const scope = await seedTerminalTarget(
         path.join(state.agentDir(), "openclaw-agent.sqlite"),
@@ -194,24 +191,18 @@ it.each(["claim", "lifecycle", "authority"] as const)(
           }
         },
       });
-      const observed = terminal.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const observed = terminal.catch((error: unknown) => error);
       current = changed !== "authority";
       resume.resolve();
       await writer;
-      if (changed === "authority") {
-        expect(await observed).toMatchObject({
-          error: expect.objectContaining({ message: "terminal owner released" }),
-        });
-      } else {
-        expect(await observed).toEqual({ value: false });
-      }
+      expect(await observed).toEqual(
+        changed === "authority"
+          ? expect.objectContaining({ message: "terminal owner released" })
+          : false,
+      );
       expect(loadSessionEntry(scope)?.status).toBeUndefined();
       expect(loadSessionEntry(scope)?.restartRecoveryDeliveryRunId).toBe(
-        changed === "claim" ? "successor-run" : "terminal-run",
+        changed === "claim" ? "successor-run" : clientRunId,
       );
-    });
-  },
+    }),
 );

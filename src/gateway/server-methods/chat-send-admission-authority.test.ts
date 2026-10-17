@@ -20,7 +20,7 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { captureGatewayDeviceRevocation } from "../device-revocation.js";
-import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { SessionMutationAuthorizationChangedError as AuthorizationChangedError } from "../session-sharing.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { admitChatSend } from "./chat-send-admission.js";
@@ -39,6 +39,15 @@ const createBrowserFollowupFixture = useBrowserFollowupFixture();
 async function authorize(fixture: Parameters<typeof prepareAuthorizedChatAdmission>[0]) {
   return { ...(await prepareAuthorizedChatAdmission(fixture)), respond: vi.fn() };
 }
+const outcomeOf = <T>(promise: Promise<T>) =>
+  promise.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+const expectFailed = (outcome: { value: unknown } | { error: unknown }) =>
+  expect(outcome).toEqual(
+    "error" in outcome ? { error: expect.any(Error) } : { value: { ok: false } },
+  );
 function lifecycleRelease(fixture: Awaited<ReturnType<typeof createBrowserFollowupFixture>>) {
   return getSessionWorkAdmissionRelease({
     scope: fixture.scope.storePath,
@@ -65,39 +74,33 @@ it.each([
       assertCurrent();
       return consume();
     };
+    const revoke = async () => {
+      current = false;
+      return true;
+    };
     const admitting = admitChatSend({
       ...prepared,
       respond: vi.fn(),
       ...(scoped ? { assertCurrent, withCurrent } : {}),
-      assertCurrentAsync: async () => {
-        await withCurrent(assertCurrent);
-      },
-      onAdmissionOwned: revokeInCallback
-        ? async () => {
-            current = false;
-            return true;
-          }
-        : undefined,
+      assertCurrentAsync: () => withCurrent(assertCurrent),
+      onAdmissionOwned: revokeInCallback ? revoke : undefined,
     });
     if (revokeInCallback) {
       await expect(admitting).rejects.toThrow("caller revoked during admission");
       expect(fixture.context.chatAbortControllers.size).toBe(0);
     } else {
       const admitted = await admitting;
-      expect(admitted.ok).toBe(true);
-      if (admitted.ok) {
-        admitted.value.cleanupAdmittedRun();
-      }
+      assert(admitted.ok);
+      admitted.value.cleanupAdmittedRun();
     }
   },
 );
 it("clears a pending reservation when its retained reader is revoked after publication", async () => {
   await using fixture = await createBrowserFollowupFixture();
-  const prepare = () => authorize(fixture);
   let closing: Promise<void> | undefined;
   let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
   try {
-    const first = await prepare();
+    const first = await authorize(fixture);
     const pendingKey = first.session.pendingChatSendKey;
     let reservedIdentity: string | undefined;
     const withCurrent: NonNullable<SessionMutationAuthorization["withCurrent"]> = (consume) =>
@@ -111,18 +114,8 @@ it("clears a pending reservation when its retained reader is revoked after publi
         }
         return value;
       });
-    const revoked = await admitChatSend({
-      ...first,
-      withCurrent,
-    }).then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
-    if ("error" in revoked) {
-      expect(revoked.error).toBeInstanceOf(Error);
-    } else {
-      expect(revoked.value).toEqual({ ok: false });
-    }
+    const revoked = await outcomeOf(admitChatSend({ ...first, withCurrent }));
+    expectFailed(revoked);
     expect(reservedIdentity).toBe(first.request.requestIdentity);
     await closing;
     expect(fixture.context.dedupe.has(pendingKey)).toBe(false);
@@ -130,7 +123,7 @@ it("clears a pending reservation when its retained reader is revoked after publi
     expect(lifecycleRelease(fixture)).toBeUndefined();
 
     fixture.params.message = "Corrected input after the failed reservation.";
-    admitted = await admitChatSend(await prepare());
+    admitted = await admitChatSend(await authorize(fixture));
     expect(admitted.ok).toBe(true);
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   } finally {
@@ -145,19 +138,15 @@ it("clears a pending reservation when its retained reader is revoked after publi
 it("retains callback custody during database closure", async () => {
   await using fixture = await createBrowserFollowupFixture();
   const prepared = await authorize(fixture);
-  const { authorization } = prepared;
   let retainedRead: Promise<unknown> | undefined;
-  const withCurrent: NonNullable<SessionMutationAuthorization["withCurrent"]> = (consume) => {
-    const read = authorization.withCurrent!(consume);
-    retainedRead = read;
-    return read;
-  };
+  const withCurrent: NonNullable<SessionMutationAuthorization["withCurrent"]> = (consume) =>
+    (retainedRead = prepared.authorization.withCurrent!(consume));
   const rootsBefore = getActiveGatewayRootWorkCount();
   const root = tryBeginGatewayRootWorkAdmission("chat-admission-reader-failure");
   assert(root, "Expected root admission");
   const caller = captureGatewayDeviceRevocation(
     fixture.context,
-    { deviceId: "reader-failure-caller", role: "operator" },
+    { deviceId: "caller", role: "operator" },
     () => true,
   );
   const entered = createDeferred();
@@ -180,10 +169,7 @@ it("retains callback custody during database closure", async () => {
       onAdmissionOwned,
     }),
   );
-  const outcome = admitting.then(
-    (value) => ({ value }),
-    (error: unknown) => ({ error }),
-  );
+  const outcome = outcomeOf(admitting);
   try {
     await awaitGateBeforeSettlement(
       entered.promise,
@@ -191,7 +177,6 @@ it("retains callback custody during database closure", async () => {
       "chat admission settled before its owned callback",
     );
     assert(retainedRead, "Expected the callback's retained worker read");
-    // Closure can reach the reader after its synchronous consumption finishes.
     const [readerOutcome] = await Promise.allSettled([retainedRead]);
     const released = lifecycleRelease(fixture);
     expect(released).toBeDefined();
@@ -203,10 +188,8 @@ it("retains callback custody during database closure", async () => {
     if (readerOutcome.status === "rejected") {
       expect(readerOutcome.reason).toBeInstanceOf(Error);
       expect(result).toEqual({ error: readerOutcome.reason });
-    } else if ("error" in result) {
-      expect(result.error).toBeInstanceOf(Error);
     } else {
-      expect(result.value).toEqual({ ok: false });
+      expectFailed(result);
     }
     await released;
     expect(getActiveGatewayRootWorkCount()).toBe(rootsBefore);
@@ -259,7 +242,6 @@ it("rejects membership revoked inside retained chat admission before dispatch", 
 
 it("joins a session write still publishing when durable recovery reconciliation resumes", async () => {
   const fixture = await createBrowserFollowupFixture({ active: false });
-  // A cancelled restart-safe turn keeps its recovery claim until its terminal write lands.
   await patchSessionEntryCore(fixture.scope, () => ({
     status: "failed",
     restartRecoveryRuns: [{ runId: "cancelled-turn", lifecycleGeneration: "cancelled" }],
@@ -272,7 +254,6 @@ it("joins a session write still publishing when durable recovery reconciliation 
     openOpenClawAgentDatabase({ agentId: "main", path: storePath }),
   );
   assert(typeof identity === "string", "Expected durable session store identity");
-  // The cancelled turn still owns its lifecycle, so reconciliation leaves its claim alone.
   const cancelledTurn = await beginSessionWorkAdmission({
     scope: session.storePath,
     identities: [session.sessionKey, fixture.scope.sessionId],
@@ -287,29 +268,21 @@ it("joins a session write still publishing when durable recovery reconciliation 
     const read = authorization.withCurrent!(consume);
     if (terminalPublication === "pending") {
       terminalPublication = "publishing";
-      // The terminal write starts publishing after the initial decision, while recovery reconciles.
       return read.finally(() => {
         terminalWrite.begin([session.sessionKey], []);
-        expect(() => authorization.assertCurrent()).toThrow(
-          SessionMutationAuthorizationChangedError,
-        );
+        expect(() => authorization.assertCurrent()).toThrow(AuthorizationChangedError);
       });
     }
     if (terminalPublication === "publishing") {
-      // It settles only after the next authority read has joined its publication.
       terminalPublication = "settled";
       terminalWrite.settle(undefined, false);
     }
     return read;
   };
   try {
-    await expect(
-      runChatSendPreAdmission({
-        ...prepared,
-        session,
-        withCurrent,
-      }),
-    ).resolves.toBe(true);
+    await expect(runChatSendPreAdmission({ ...prepared, session, withCurrent })).resolves.toBe(
+      true,
+    );
     expect(terminalPublication).toBe("settled");
     expect(respond).not.toHaveBeenCalled();
   } finally {

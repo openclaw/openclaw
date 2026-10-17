@@ -37,10 +37,12 @@ async function withReadFixture(
     { scenario: "minimal", prepareProfileCatalog: true },
     async (state) => {
       const cfg = policy ? rolePolicyConfig() : await captureRuntimeConfigAsyncReader()();
+      const owner = roleClient("write", "read-owner");
+      const client =
+        actor === "owner" ? owner : roleClient(actor === "admin" ? "write" : actor, "reader");
       if (actor === "admin") {
-        expectDefined(cfg.gateway?.roles?.definitions.write, "admin role").scopes = [
-          "operator.admin",
-        ];
+        expectDefined(cfg.gateway?.roles?.definitions.write, "admin role").scopes =
+          client.connect.scopes = ["operator.admin"];
       }
       if (policy) {
         await state.writeConfig(cfg);
@@ -48,12 +50,6 @@ async function withReadFixture(
       }
       ensureUserProfilesSchema({});
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      const owner = roleClient("write", "read-owner");
-      const client =
-        actor === "owner" ? owner : roleClient(actor === "admin" ? "write" : actor, "reader");
-      if (actor === "admin") {
-        client.connect.scopes = ["operator.admin"];
-      }
       const scope = {
         agentId: "main",
         sessionKey: keyedIncognito ? "agent:main:dashboard:incognito-read" : "agent:main:read",
@@ -113,8 +109,8 @@ it.each([
   ["view", "shared", false, true, true],
 ] as const)(
   "%s/%s history and message visibility (allowed=%s, incognito=%s, keyed=%s)",
-  async (actor, visibility, allowed, incognito, keyed) => {
-    await withReadFixture(
+  (actor, visibility, allowed, incognito, keyed) =>
+    withReadFixture(
       async ({ call, scope, createdActor }) => {
         await seed(scope, { visibility, createdActor, ...(incognito ? { incognito } : {}) });
         await appendTranscriptMessage(scope, {
@@ -141,12 +137,11 @@ it.each([
       },
       actor,
       keyed,
-    );
-  },
+    ),
 );
 
-it("traverses a full hidden page and keeps raw custody counts separate from execution", async () => {
-  await withReadFixture(
+it("traverses a full hidden page and keeps raw custody counts separate from execution", () =>
+  withReadFixture(
     async ({ call, scope }) => {
       await seed(scope);
       const receipts: SessionPendingInputReceipt[] = [];
@@ -193,10 +188,7 @@ it("traverses a full hidden page and keeps raw custody counts separate from exec
         await queued.run(() => appendTranscriptMessage(scope, { message: queued.message }));
         queued.finish("interrupted");
         expect(await history(first.nextBefore)).toMatchObject({ total: 22, items: retainedItems });
-        await upsertSessionEntryCore(scope, {
-          sessionId: "replacement-physical-session",
-          updatedAt: 2,
-        });
+        await seed(scope, { sessionId: "replacement-physical-session", updatedAt: 2 });
         expect(await history()).toEqual({ items: [], total: 0, queuedCount: 0 });
       } finally {
         for (const receipt of receipts) {
@@ -207,13 +199,12 @@ it("traverses a full hidden page and keeps raw custody counts separate from exec
     "owner",
     false,
     false,
-  );
-});
+  ));
 
 it.each(["draft", "replacement"] as const)(
   "rechecks %s after an asynchronous transcript read",
-  async (change) => {
-    await withReadFixture(async ({ call, scope, createdActor }) => {
+  (change) =>
+    withReadFixture(async ({ call, scope, createdActor }) => {
       await seed(scope, { visibility: "shared", createdActor });
       await appendTranscriptMessage(scope, {
         eventId: "message",
@@ -243,6 +234,5 @@ it.each(["draft", "replacement"] as const)(
         release.resolve();
         await lookup;
       }
-    }, "view");
-  },
+    }, "view"),
 );

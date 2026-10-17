@@ -48,6 +48,34 @@ import { prepareChatSendSession } from "./chat-send-session.js";
 
 type Admission = Awaited<ReturnType<typeof admitChatSend>>;
 type Session = Awaited<ReturnType<typeof prepareChatAdmission>>["session"];
+function admissionFixture(cfg: OpenClawConfig, runId: string) {
+  const scope = { agentId: "main", sessionKey: `agent:main:dashboard:${runId}` };
+  const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+  return {
+    cfg,
+    scope,
+    context,
+    runId,
+    seed(overrides: Partial<SessionEntry> = {}) {
+      const entry = { sessionId: `${runId}-session`, updatedAt: 1, ...overrides };
+      replaceSessionEntrySync(scope, entry);
+      return entry;
+    },
+    prepare({ params, ...options }: Partial<Parameters<typeof prepareChatAdmission>[0]> = {}) {
+      return prepareChatAdmission({
+        context,
+        client: null,
+        ...options,
+        params: {
+          sessionKey: scope.sessionKey,
+          message: "Hello",
+          idempotencyKey: runId,
+          ...params,
+        },
+      });
+    },
+  };
+}
 function cleanupAdmission(admitted: Admission | undefined, runId: string) {
   if (admitted?.ok) {
     admitted.value.cleanupAdmittedRun();
@@ -89,10 +117,22 @@ async function pendingWorkspaceResult(
   await placements.acceptWorkspaceResult(claim);
   return claim;
 }
+function pausePlacement(placements: ReturnType<typeof createWorkerSessionPlacementStore>) {
+  const observed = createDeferred();
+  const resume = createDeferred();
+  const prepare = placements.prepareSessionPlacement.bind(placements);
+  const spy = vi.spyOn(placements, "prepareSessionPlacement").mockImplementationOnce(async (id) => {
+    const facts = await prepare(id);
+    observed.resolve();
+    await resume.promise;
+    return facts;
+  });
+  return { observed, resume, [Symbol.dispose]: () => spy.mockRestore() };
+}
 
 async function withAdmissionTest(
   label: string,
-  run: (cfg: OpenClawConfig) => Promise<void>,
+  run: (fixture: ReturnType<typeof admissionFixture>) => Promise<void>,
   overrides: OpenClawConfig = {},
 ) {
   await withOpenClawTestState({ label }, async () => {
@@ -102,7 +142,7 @@ async function withAdmissionTest(
       ...overrides,
     };
     setRuntimeConfigSnapshot(cfg, cfg);
-    await run(cfg);
+    await run(admissionFixture(cfg, label));
   });
 }
 
@@ -147,10 +187,10 @@ async function withServingMetadata(cfg: OpenClawConfig, run: () => Promise<void>
 
 it.each(["absent", "admitted"] as const)(
   "prepares and authorizes a first chat turn without caller-thread SQL with an %s agent store",
-  async (store) => {
-    await withAdmissionTest(
+  (store) =>
+    withAdmissionTest(
       `chat-first-turn-${store}`,
-      async (cfg) => {
+      async ({ cfg, context }) => {
         const client = roleClient("write", `first-turn-${store}`);
         if (store === "admitted") {
           replaceSessionEntrySync(
@@ -171,7 +211,6 @@ it.each(["absent", "admitted"] as const)(
           expect(existsSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }))).toBe(
             store === "admitted",
           );
-          const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
           await withoutHostSql(async () => {
             const authorized = await resolveSessionMutationAuthorizationAsync({
               client,
@@ -208,34 +247,25 @@ it.each(["absent", "admitted"] as const)(
         });
       },
       rolePolicyConfig(),
-    );
-  },
+    ),
 );
 
 it.each(["unchanged", "caller revoked", "session replaced"] as const)(
   "joins native worker result completion before chat admission (%s)",
-  async (change) => {
-    await withAdmissionTest("chat-placement-settlement", async (cfg) => {
-      const sessionKey = "agent:main:dashboard:placement-settlement";
-      const runId = "chat-placement-settlement";
-      const scope = { agentId: "main", sessionKey };
-      const entry: SessionEntry = { sessionId: "placement-settlement-session", updatedAt: 1 };
-      replaceSessionEntrySync(scope, entry);
+  (change) =>
+    withAdmissionTest("chat-placement-settlement", async (f) => {
+      const { scope, runId, context } = f;
+      const entry = f.seed();
       const database = openOpenClawStateDatabase();
       const placements = createWorkerSessionPlacementStore({ database });
       const claim = await pendingWorkspaceResult(placements, database, {
         ...scope,
         sessionId: entry.sessionId,
       });
-      const context = createDirectChatContext({
-        getRuntimeConfig: () => cfg,
-        workerSessionPlacementService: placements,
-      });
-      const admission = await prepareChatAdmission({
-        params: { sessionKey, message: "Continue", idempotencyKey: runId },
-        client: null,
-        context,
+      context.workerSessionPlacementService = placements;
+      const admission = await f.prepare({
         isDirectExternalUser: true,
+        params: { message: "Continue" },
       });
       let clock = 0;
       using _ = vi.spyOn(performance, "now").mockImplementation(() => clock);
@@ -250,19 +280,10 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
         await begin.promise;
         return beginAdmission(params);
       });
-      const acquired = createDeferred();
-      const consume = createDeferred();
+      using placement = pausePlacement(placements);
       const committed = createDeferred();
       const consuming = createDeferred();
       const releaseReply = createDeferred();
-      const preparePlacement = placements.prepareSessionPlacement.bind(placements);
-      using delayedRead = vi.spyOn(placements, "prepareSessionPlacement");
-      delayedRead.mockImplementationOnce(async (sessionId) => {
-        const facts = await preparePlacement(sessionId);
-        acquired.resolve();
-        await consume.promise;
-        return facts;
-      });
       const observeCommit = operationAdmission.observeSqliteWorkerCommittedFacts;
       let publishCommit: (() => void) | undefined;
       using delayedPublication = vi.spyOn(operationAdmission, "observeSqliteWorkerCommittedFacts");
@@ -329,7 +350,7 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
         clock = 300;
         begin.resolve();
         await awaitGateBeforeSettlement(
-          acquired.promise,
+          placement.observed.promise,
           pending,
           "chat skipped placement acquisition",
         );
@@ -341,7 +362,7 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
         );
         clock = 600;
         nativePending = true;
-        consume.resolve();
+        placement.resume.resolve();
         await awaitGateBeforeSettlement(
           consuming.promise,
           pending,
@@ -379,35 +400,23 @@ it.each(["unchanged", "caller revoked", "session replaced"] as const)(
         }
       } finally {
         begin.resolve();
-        consume.resolve();
+        placement.resume.resolve();
         publishCommit?.();
         releaseReply.resolve();
         await Promise.allSettled([pending, ...(completion ? [completion] : [])]);
         cleanupAdmission(admitted, runId);
       }
-    });
-  },
+    }),
 );
 
 it.each([
-  {
-    name: "canonical free ACP",
-    sessionKey: "agent:external-harness:acp:canonical",
-    withMetadata: true,
-  },
-  {
-    name: "unconfirmed free ACP",
-    sessionKey: "agent:external-harness:acp:unconfirmed",
-    withMetadata: false,
-  },
-  {
-    name: "deleted ordinary owner",
-    sessionKey: "agent:external-harness:dashboard:deleted",
-    withMetadata: false,
-  },
-])("prepares $name without caller-thread SQL", async ({ name, sessionKey, withMetadata }) => {
-  await withAdmissionTest("chat-unconfigured-owner", async (cfg) => {
+  ["canonical free ACP", "acp:canonical", true],
+  ["unconfirmed free ACP", "acp:unconfirmed", false],
+  ["deleted ordinary owner", "dashboard:deleted", false],
+] as const)("prepares %s without caller-thread SQL", (name, suffix, withMetadata) =>
+  withAdmissionTest("chat-unconfigured-owner", async ({ cfg, context }) => {
     const agentId = "external-harness";
+    const sessionKey = `agent:${agentId}:${suffix}`;
     const entry: SessionEntry = {
       sessionId: "unconfigured-owner-session",
       lifecycleRevision: "unconfigured-owner-lifecycle",
@@ -435,7 +444,6 @@ it.each([
     });
     assert(request.ok, "Request normalization failed");
     await withServingMetadata(cfg, async () => {
-      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       await withoutHostSql(async () => {
         const prepared = await prepareChatSendSession({
           request: request.value,
@@ -452,26 +460,22 @@ it.each([
         );
       });
     });
-  });
-});
+  }),
+);
 
 it.each(["ordinary", "fresh header", "stale header"] as const)(
   "uses current worker-prepared admission settings and freshness without host SQL (%s)",
-  async (freshness) => {
-    await withAdmissionTest(
+  (freshness) =>
+    withAdmissionTest(
       "chat-admission-read-count",
-      async (cfg) => {
+      async (f) => {
+        const { scope, runId } = f;
         const restartSafe = freshness !== "ordinary";
         const now = Date.now();
-        const sessionKey = "agent:main:dashboard:admission-reads";
-        const runId = "chat-admission-read-count";
-        const scope = { agentId: "main", sessionKey };
-        const entry: SessionEntry = {
-          sessionId: "admission-session",
+        const entry = f.seed({
           updatedAt: now,
           skillsSnapshot: { prompt: "saved prompt".repeat(4096), skills: [] },
-        };
-        replaceSessionEntrySync(scope, entry);
+        });
         if (restartSafe) {
           await appendHeader(
             scope,
@@ -479,13 +483,7 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
             now - (freshness === "stale header" ? 2 * 24 * 60 * 60 * 1000 : 0),
           );
         }
-        const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-        const admission = await prepareChatAdmission({
-          params: { sessionKey, message: "Hello", idempotencyKey: runId },
-          isDirectExternalUser: restartSafe,
-          client: null,
-          context,
-        });
+        const admission = await f.prepare({ isDirectExternalUser: restartSafe });
         const { session } = admission;
         let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
         try {
@@ -516,19 +514,15 @@ it.each(["ordinary", "fresh header", "stale header"] as const)(
         }
       },
       { session: { reset: { mode: "daily" } } },
-    );
-  },
+    ),
 );
 
-it("releases rejected upload reservations so corrected input can reuse its key", async () => {
-  await withAdmissionTest(
+it("releases rejected upload reservations so corrected input can reuse its key", () =>
+  withAdmissionTest(
     "chat-upload-reservation",
-    async (cfg) => {
-      const sessionKey = "agent:main:dashboard:upload-retry";
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey },
-        { sessionId: "upload-session", updatedAt: 1 },
-      );
+    async (f) => {
+      const { cfg } = f;
+      f.seed();
       for (const failure of ["denied", "throws"] as const) {
         const runId = `upload-retry-${failure}`;
         const policyError = new Error("fixture upload policy unavailable");
@@ -539,12 +533,9 @@ it("releases rejected upload reservations so corrected input can reuse its key",
           }
           return cfg;
         };
-        const blocked = await prepareChatAdmission({
+        const blocked = await f.prepare({
           context,
-          client: null,
           params: {
-            sessionKey,
-            message: "Hello",
             idempotencyKey: runId,
             attachments: [
               {
@@ -567,10 +558,9 @@ it("releases rejected upload reservations so corrected input can reuse its key",
         }
         expect(context.dedupe.has(blocked.session.pendingChatSendKey)).toBe(false);
         expect(context.chatAbortControllers.size).toBe(0);
-        const corrected = await prepareChatAdmission({
+        const corrected = await f.prepare({
           context,
-          client: null,
-          params: { sessionKey, message: "Hello", idempotencyKey: runId },
+          params: { idempotencyKey: runId },
         });
         let retried: Awaited<ReturnType<typeof admitChatSend>> | undefined;
         try {
@@ -585,35 +575,21 @@ it("releases rejected upload reservations so corrected input can reuse its key",
       }
     },
     { gateway: { uploads: { enabled: false } } },
-  );
-});
+  ));
 it.each(["known-source", "new-terminal", "new-receipt"] as const)(
   "refuses a conflicting or unprepared %s after admission waits",
-  async (source) => {
-    await withAdmissionTest("chat-admission-retry-comparison", async (cfg) => {
-      const sessionKey = "agent:main:dashboard:retry-comparison";
-      const runId = "chat-admission-retry-comparison";
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "retry-comparison-session",
-          updatedAt: 1,
-          ...(source === "known-source" ? { restartRecoveryTerminalRunIds: [runId] } : {}),
-        },
-      );
-      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-      const admission = await prepareChatAdmission({
-        params: { sessionKey, message: "Hello", idempotencyKey: runId },
-        client: null,
-        context,
-      });
+  (source) =>
+    withAdmissionTest("chat-admission-retry-comparison", async (f) => {
+      const { scope, runId, context } = f;
+      f.seed(source === "known-source" ? { restartRecoveryTerminalRunIds: [runId] } : {});
+      const admission = await f.prepare();
       const { session } = admission;
       if (source === "new-terminal") {
         // The prepared request predates this receipt; its own reservation is not retry evidence.
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey },
-          { ...session.entry!, restartRecoveryTerminalRunIds: [runId] },
-        );
+        replaceSessionEntrySync(scope, {
+          ...session.entry!,
+          restartRecoveryTerminalRunIds: [runId],
+        });
       }
       const comparison = vi.spyOn(sessionAccessor, "readSessionSubmittedInput");
       if (source === "known-source") {
@@ -673,8 +649,7 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
         comparison.mockRestore();
         cleanupAdmission(admitted, runId);
       }
-    });
-  },
+    }),
 );
 
 it.each([
@@ -686,18 +661,15 @@ it.each([
   "indeterminate publication",
   "service replacement",
   "unavailable reader",
-] as const)("handles %s while preparing placement admission", async (change) => {
-  await withAdmissionTest("chat-placement-admission", async (cfg) => {
-    const sessionKey = "agent:main:dashboard:placement-admission";
-    const runId = "chat-placement-admission";
-    const scope = { agentId: "main", sessionKey };
+] as const)("handles %s while preparing placement admission", (change) =>
+  withAdmissionTest("chat-placement-admission", async (f) => {
+    const { scope, runId, context } = f;
     const now = Date.now();
-    const entry: SessionEntry = { sessionId: "placement-session", updatedAt: now };
+    const entry = f.seed({ updatedAt: now });
     const accepted =
       change === "completed workspace result" ||
       change === "new remote placement" ||
       change === "retired placement";
-    replaceSessionEntrySync(scope, entry);
     if (accepted) {
       await appendHeader(scope, entry, now);
     }
@@ -726,30 +698,16 @@ it.each([
           )
         : undefined;
     const getMany = vi.fn(() => new Map());
-    const context = createDirectChatContext({
-      getRuntimeConfig: () => cfg,
-      workerSessionPlacementService: change === "unavailable reader" ? { getMany } : placements,
-    });
-    const admission = await prepareChatAdmission({
-      params: { sessionKey, message: "Hello", idempotencyKey: runId },
+    context.workerSessionPlacementService =
+      change === "unavailable reader" ? { getMany } : placements;
+    const admission = await f.prepare({
       isDirectExternalUser: accepted,
       client,
-      context,
     });
     expect(admission.prepared.restartSafeRequest).toBeDefined();
     const { session } = admission;
     const initialEntry = structuredClone(sessionAccessor.loadSessionEntry(scope));
-    const observed = createDeferred();
-    const resume = createDeferred();
-    const preparePlacement = placements.prepareSessionPlacement.bind(placements);
-    const delayed = vi
-      .spyOn(placements, "prepareSessionPlacement")
-      .mockImplementationOnce(async (sessionId) => {
-        const facts = await preparePlacement(sessionId);
-        observed.resolve();
-        await resume.promise;
-        return facts;
-      });
+    using placement = pausePlacement(placements);
     const respond = vi.fn();
     let callerCurrent = true;
     let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
@@ -764,7 +722,11 @@ it.each([
     }).then((result) => (admitted = result));
     try {
       if (change !== "unavailable reader") {
-        await awaitGateBeforeSettlement(observed.promise, pending, "chat skipped placement facts");
+        await awaitGateBeforeSettlement(
+          placement.observed.promise,
+          pending,
+          "chat skipped placement facts",
+        );
         if (change === "caller revocation") {
           callerCurrent = false;
         } else if (change === "lifecycle rotation") {
@@ -780,21 +742,21 @@ it.each([
             expectedGeneration: retiredPlacement!.generation,
           });
         } else if (change === "indeterminate publication") {
-          const placement = await placements.startDispatch({
+          const publication = await placements.startDispatch({
             ...scope,
             sessionId: entry.sessionId,
           });
           stagePlacementTurnClaimWorkerPublication(
             requireOpenClawStateDatabaseIdentity({ db: database.db }),
-            placement,
+            publication,
             undefined,
-            placement.state,
-            placement,
+            publication.state,
+            publication,
           ).invalidate();
         } else {
           context.workerSessionPlacementService = createWorkerSessionPlacementStore();
         }
-        resume.resolve();
+        placement.resume.resolve();
       }
       const result = await pending;
       expect(result.ok).toBe(accepted);
@@ -822,9 +784,8 @@ it.each([
         );
       }
     } finally {
-      resume.resolve();
+      placement.resume.resolve();
       await Promise.allSettled([pending]);
-      delayed.mockRestore();
       cleanupAdmission(admitted, runId);
     }
     expect(context.chatAbortControllers.size).toBe(0);
@@ -832,5 +793,5 @@ it.each([
     if (admitted?.ok) {
       expect(admitted.value.gatewayWorkAdmission.isActive()).toBe(false);
     }
-  });
-});
+  }),
+);

@@ -91,6 +91,16 @@ describe("WebChat reply media workspace ownership", () => {
     expect(await fs.readFile(expectDefined(staged, "staged image"))).toEqual(PNG_BYTES);
   }
 
+  async function mediaFiles(directories: string[], labels: string[]) {
+    const images = directories.map((dir, i) => path.join(dir, `${labels[i]}.png`));
+    const audio = directories.map((dir, i) => path.join(dir, `${labels[i]}.mp3`));
+    for (const [i, image] of images.entries()) {
+      await writeMedia(image);
+      await writeMedia(audio[i]!, AUDIO_BYTES);
+    }
+    return { images, audio };
+  }
+
   it("stops staging before file content I/O when the workspace changes", async () => {
     const { cfg } = createMediaTestContext({ allowRead: true });
     cfg.tools = { ...cfg.tools, fs: { workspaceOnly: true } };
@@ -158,16 +168,7 @@ describe("WebChat reply media workspace ownership", () => {
         testState.path("outside"),
       ];
       const labels = ["selected", "agent", "sibling", "outside"];
-      const imagePaths = directories.map((directory, index) =>
-        path.join(directory, `${labels[index]}.png`),
-      );
-      const audioPaths = directories.map((directory, index) =>
-        path.join(directory, `${labels[index]}.mp3`),
-      );
-      for (const [index, directory] of directories.entries()) {
-        await writeMedia(path.join(directory, `${labels[index]}.png`));
-        await writeMedia(audioPaths[index]!, AUDIO_BYTES);
-      }
+      const { images: imagePaths, audio: audioPaths } = await mediaFiles(directories, labels);
       const scope = await seedScope(cfg, {
         sessionRoot: selected,
         permissionMode: mode,
@@ -254,16 +255,10 @@ describe("WebChat reply media workspace ownership", () => {
       const remoteWorkspace = testState.statePath("worktrees", "remote");
       const storePath = testState.statePath("sessions", "session.sqlite");
       const rawDirectories = [workspaceDir, remoteWorkspace, path.dirname(storePath)];
-      const rawImages = rawDirectories.map((directory, index) =>
-        path.join(directory, `local-${index}.png`),
+      const { images: rawImages, audio: rawAudio } = await mediaFiles(
+        rawDirectories,
+        rawDirectories.map((_, index) => `local-${index}`),
       );
-      const rawAudio = rawDirectories.map((directory, index) =>
-        path.join(directory, `local-${index}.mp3`),
-      );
-      for (const [index, directory] of rawDirectories.entries()) {
-        await writeMedia(path.join(directory, `local-${index}.png`));
-        await writeMedia(rawAudio[index]!, AUDIO_BYTES);
-      }
       const sessionEntry: SessionEntry = {
         sessionId: "remote-policy-session",
         updatedAt: 1,
