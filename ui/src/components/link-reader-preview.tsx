@@ -199,7 +199,9 @@ const renderLoadingContent = createPreviewRenderer(() => {
         {(row) => (
           <div class={"link-reader-hovercard__" + row[0]}>
             <For each={row[1]}>
-              {(part) => <span class={"skeleton link-reader-hovercard__placeholder--" + part} />}
+              {(part) => (
+                <span class={["skeleton", `link-reader-hovercard__placeholder--${part}`]} />
+              )}
             </For>
           </div>
         )}
