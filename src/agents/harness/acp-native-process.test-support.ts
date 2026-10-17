@@ -1,9 +1,8 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
-import type { AcpxRuntime } from "acpx/runtime";
 import { afterEach, beforeEach, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
@@ -23,11 +22,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import type {
-  OpenClawPluginDefinition,
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
-} from "../../plugins/types.js";
+import type { OpenClawPluginDefinition } from "../../plugins/types.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -41,17 +36,7 @@ import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture
 import { registerAgentHarness } from "./registry.js";
 
 const agents = ["opencode", "qwen", "pi", "kilocode"] as const;
-type ServiceModule = {
-  createAcpxRuntimeService: () => OpenClawPluginService & {
-    getRuntime: (
-      ctx: OpenClawPluginServiceContext,
-    ) => Promise<
-      Pick<AcpRuntime, "ensureSession"> &
-        Required<Pick<AcpRuntime, "setMode">> &
-        Pick<AcpxRuntime, "getStatus" | "setModel">
-    >;
-  };
-};
+type ServiceModule = typeof import("../../../extensions/acpx/register.runtime.js");
 export function useNativeProcessFixture() {
   let snapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
   let lifetime: ReturnType<typeof createFixtureLifetime>;
@@ -136,20 +121,14 @@ export async function registerNative(
     registerAgentHarness: (harness) => registerAgentHarness(harness, { ownerPluginId: "acpx" }),
     registerReload: (registration) => {
       const registry = getActivePluginRegistry();
-      if (!registry) {
-        throw new Error("Native process test registry missing");
-      }
+      assert(registry, "Native process test registry missing");
       registry.reloads.push({ pluginId: "acpx", pluginName: "ACPX", source: "test", registration });
     },
   });
-  if (!plugin.register) {
-    throw new Error("ACPX registration missing");
-  }
+  assert(plugin.register, "ACPX registration missing");
   plugin.register(api);
   const result = factory.mock.results.at(-1);
-  if (!result || result.type !== "return") {
-    throw new Error("ACPX service missing");
-  }
+  assert(result?.type === "return", "ACPX service missing");
   const service = result.value;
   const context = {
     config,

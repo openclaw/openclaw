@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
@@ -168,9 +169,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
                 transcript,
               );
               const harness = getRegisteredAgentHarness("acp-qwen")?.harness;
-              if (!harness?.loadModelCatalog) {
-                throw new Error("Native catalog operation missing");
-              }
+              assert(harness?.loadModelCatalog, "Native catalog operation missing");
               await expect(
                 harness.loadModelCatalog({
                   config: disabledConfig,
@@ -196,9 +195,7 @@ it.for(["allow", "deny", "cancel", "always-only"] as const)(
         }
       } finally {
         stopWatchingAuthority();
-        if (native) {
-          await native.service.stop?.(native.context);
-        }
+        await native?.service.stop?.(native.context);
         await manager.drain();
         await gatewayWork.drain();
       }

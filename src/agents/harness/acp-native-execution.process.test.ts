@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -79,10 +80,13 @@ async function withNativeAttempt(
 }
 
 async function fixtureEnteredBeforeSettlement(
-  filename: string,
+  directory: string,
+  control: string,
   completion: Promise<unknown>,
+  signal: AbortSignal,
   expected = "",
 ): Promise<void> {
+  const filename = path.join(directory, `${control}-entered`);
   const matches = async () => {
     const value = await fs.readFile(filename, "utf8").catch((error: unknown) => {
       if (hasErrnoCode(error, "ENOENT")) {
@@ -92,22 +96,22 @@ async function fixtureEnteredBeforeSettlement(
     });
     return value.length > 0 && (!expected || value === expected);
   };
+  const checkSettlement = async (status: "exited" | "failed", cause?: unknown) => {
+    if (!(await matches())) {
+      throw new Error(`Child ${status} before writing ${filename}`, { cause });
+    }
+  };
   // The peer writes the marker before its receipt or reply; separate transports can reorder.
-  await Promise.race([
-    receipts.waitFor(filename, expected),
-    completion.then(
-      async () => {
-        if (!(await matches())) {
-          throw new Error(`Child exited before writing ${filename}`);
-        }
-      },
-      async (error: unknown) => {
-        if (!(await matches())) {
-          throw new Error(`Child failed before writing ${filename}`, { cause: error });
-        }
-      },
-    ),
-  ]);
+  await withinTest(
+    Promise.race([
+      receipts.waitFor(filename, expected),
+      completion.then(
+        () => checkSettlement("exited"),
+        (error: unknown) => checkSettlement("failed", error),
+      ),
+    ]),
+    signal,
+  );
 }
 
 type PeerState = { history: string[]; currentModelId: string; modelChanges: string[] };
@@ -188,9 +192,7 @@ it.each(policyCases)(
           expect(assistant?.idempotencyKey).toBe(outcome.value?.assistantTranscriptIdempotencyKey);
           expect.soft(effects).toHaveLength(1);
           const harness = getRegisteredAgentHarness(`acp-${agent}`)?.harness;
-          if (!harness?.loadModelCatalog) {
-            throw new Error("Native catalog operation missing");
-          }
+          assert(harness?.loadModelCatalog, "Native catalog operation missing");
           expect(
             await harness.loadModelCatalog({
               config,
@@ -262,13 +264,7 @@ it.for(["complete", "revoke"] as const)(
         });
         void run.catch(() => {});
         try {
-          await withinTest(
-            fixtureEnteredBeforeSettlement(
-              path.join(native.peerDirectory, "prompt-reply-entered"),
-              run,
-            ),
-            signal,
-          );
+          await fixtureEnteredBeforeSettlement(native.peerDirectory, "prompt-reply", run, signal);
           await expect.poll(() => updates.at(-1)?.data.text).toBe("First chunk");
           expect(finished).toBe(false);
           expect(updates[0]?.sessionKey).toBe(attempt.target.sessionKey);
@@ -345,13 +341,12 @@ it.for([
           const before = await peerStates(native.peerDirectory);
           holdingControl = runtime.setMode({ handle, mode: "review" });
           void holdingControl.catch(() => {});
-          await withinTest(
-            fixtureEnteredBeforeSettlement(
-              path.join(native.peerDirectory, "mode-control-entered"),
-              holdingControl,
-              "review",
-            ),
+          await fixtureEnteredBeforeSettlement(
+            native.peerDirectory,
+            "mode-control",
+            holdingControl,
             signal,
+            "review",
           );
           const require = createRequire(
             new URL("../../../extensions/acpx/package.json", import.meta.url),

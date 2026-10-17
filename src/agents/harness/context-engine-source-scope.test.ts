@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
@@ -26,11 +26,39 @@ const promptParams = {
   isOpenAIResponsesApi: false,
 };
 function prepareSource(id: string, source?: Parameters<typeof prepareSystemAgentRunAdmission>[4]) {
-  return prepareSystemAgentRunAdmission({}, id, "main", "test", source);
+  const prepared = prepareSystemAgentRunAdmission({}, id, "main", "test", source);
+  onTestFinished(() => prepared.close());
+  return prepared;
 }
-function sourceScope(release = vi.fn()) {
-  const open = vi.fn(async () => ({ checks: [], assertCurrent: () => {}, release }));
-  return { open, release, source: Object.assign(vi.fn(), { prepareSessionSourceScope: open }) };
+function sourceScope(
+  hooks: {
+    prepare?: () => void;
+    assertCurrent?: () => void;
+    release?: () => void | Promise<void>;
+    unscoped?: () => void;
+  } = {},
+) {
+  const release = vi.fn(hooks.release ?? (() => {}));
+  const open = vi.fn(async () => {
+    hooks.prepare?.();
+    return { checks: [], assertCurrent: hooks.assertCurrent ?? (() => {}), release };
+  });
+  return {
+    open,
+    release,
+    source: Object.assign(vi.fn(hooks.unscoped), { prepareSessionSourceScope: open }),
+  };
+}
+function runEngine(
+  operation: "bootstrap" | "assemble" | "prompt",
+  params: Parameters<typeof prepareHarnessContextEnginePrompt>[0] &
+    Pick<Parameters<typeof bootstrapHarnessContextEngine>[0], "runMaintenance">,
+) {
+  return operation === "bootstrap"
+    ? bootstrapHarnessContextEngine({ ...params, hadSessionFile: true })
+    : operation === "assemble"
+      ? assembleHarnessContextEngine(params)
+      : prepareHarnessContextEnginePrompt(params);
 }
 
 describe("harness context engine source scopes", () => {
@@ -69,17 +97,11 @@ describe("harness context engine source scopes", () => {
           },
         }),
       });
-      const rejected = expect(run).rejects.toThrow(/closed|no longer active/);
-      try {
-        await rejected;
-        expect(open).not.toHaveBeenCalled();
-        expect(release).not.toHaveBeenCalled();
-        expect(source).not.toHaveBeenCalled();
-        expect(() => prepared.assertSourceCurrent()).not.toThrow();
-      } finally {
-        await run.catch(() => {});
-        prepared.close();
-      }
+      await expect(run).rejects.toThrow(/closed|no longer active/);
+      expect(open).not.toHaveBeenCalled();
+      expect(release).not.toHaveBeenCalled();
+      expect(source).not.toHaveBeenCalled();
+      expect(() => prepared.assertSourceCurrent()).not.toThrow();
     },
   );
 
@@ -95,15 +117,11 @@ describe("harness context engine source scopes", () => {
         admittedRunContext,
         contextEngine: createContextEngine(),
       });
-    try {
-      await expect(assemble({ ...admitted })).rejects.toThrow("no longer active");
-      expect(open).not.toHaveBeenCalled();
-      await expect(assemble(admitted)).resolves.toMatchObject({ messages: [] });
-      expect(open).toHaveBeenCalledOnce();
-      expect(release).toHaveBeenCalledOnce();
-    } finally {
-      prepared.close();
-    }
+    await expect(assemble({ ...admitted })).rejects.toThrow("no longer active");
+    expect(open).not.toHaveBeenCalled();
+    await expect(assemble(admitted)).resolves.toMatchObject({ messages: [] });
+    expect(open).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it.each(
@@ -117,26 +135,16 @@ describe("harness context engine source scopes", () => {
     "refuses $operation when source authority fails during $phase",
     async ({ operation, phase }) => {
       const failure = new Error(`source authority failed during ${phase}`);
-      const release = vi.fn(async () => {
-        if (phase === "release") {
+      const failAt = (boundary: typeof phase) => () => {
+        if (phase === boundary) {
           throw failure;
         }
+      };
+      const { release, open, source } = sourceScope({
+        prepare: failAt("prepare"),
+        assertCurrent: failAt("assert"),
+        release: async () => failAt("release")(),
       });
-      const open = vi.fn(async () => {
-        if (phase === "prepare") {
-          throw failure;
-        }
-        return {
-          checks: [],
-          assertCurrent: () => {
-            if (phase === "assert") {
-              throw failure;
-            }
-          },
-          release,
-        };
-      });
-      const source = Object.assign(() => {}, { prepareSessionSourceScope: open });
       const prepared = prepareSource(`failure-${operation}-${phase}`, source);
       const warn = vi.fn();
       const params = {
@@ -144,28 +152,14 @@ describe("harness context engine source scopes", () => {
         preparedRunAdmission: prepared,
         contextEngine: createContextEngine({
           bootstrap: async () => ({ bootstrapped: true }),
-          assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
         }),
+        runMaintenance: async () => undefined,
         warn,
       };
-      try {
-        const run =
-          operation === "bootstrap"
-            ? bootstrapHarnessContextEngine({
-                ...params,
-                hadSessionFile: true,
-                runMaintenance: async () => undefined,
-              })
-            : operation === "assemble"
-              ? assembleHarnessContextEngine(params)
-              : prepareHarnessContextEnginePrompt(params);
-        await expect(run).rejects.toThrow("source authority failed");
-        expect(open).toHaveBeenCalledOnce();
-        expect(release).toHaveBeenCalledTimes(phase === "prepare" ? 0 : 1);
-        expect(warn).not.toHaveBeenCalled();
-      } finally {
-        prepared.close();
-      }
+      await expect(runEngine(operation, params)).rejects.toThrow("source authority failed");
+      expect(open).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledTimes(phase === "prepare" ? 0 : 1);
+      expect(warn).not.toHaveBeenCalled();
     },
   );
 
@@ -187,23 +181,17 @@ describe("harness context engine source scopes", () => {
         messages,
         warn,
       };
-      try {
-        if (operation === "bootstrap") {
-          await expect(
-            bootstrapHarnessContextEngine({ ...params, hadSessionFile: true }),
-          ).resolves.toBeUndefined();
-        } else {
-          await expect(prepareHarnessContextEnginePrompt(params)).resolves.toMatchObject({
-            messages,
-            systemPrompt: "system",
-          });
-        }
-        expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("plugin failed"));
-        expect(open).toHaveBeenCalledOnce();
-        expect(release).toHaveBeenCalledOnce();
-      } finally {
-        prepared.close();
+      if (operation === "bootstrap") {
+        await expect(runEngine(operation, params)).resolves.toBeUndefined();
+      } else {
+        await expect(runEngine(operation, params)).resolves.toMatchObject({
+          messages,
+          systemPrompt: "system",
+        });
       }
+      expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("plugin failed"));
+      expect(open).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
     },
   );
 
@@ -228,32 +216,25 @@ describe("harness context engine source scopes", () => {
       const releaseStarted = createDeferred();
       const finishRelease = createDeferred();
       const events: string[] = [];
-      const source = composeSessionSourceAssertion([
-        Object.assign(
-          () => {
-            throw new Error("this source requires a prepared scope");
-          },
-          {
-            prepareSessionSourceScope: async () => {
-              expect(resolveSessionTranscriptReadFence(admission)).toBe(admission);
-              events.push("open");
-              return {
-                checks: [],
-                assertCurrent: () => {
-                  expect(events).not.toContain("release");
-                },
-                release: async () => {
-                  events.push("release");
-                  releaseStarted.resolve();
-                  await finishRelease.promise;
-                  events.push("released");
-                },
-              };
-            },
-          },
-        ),
-      ]);
-      const prepared = prepareSource(`scope-${operation}`, source);
+      const { source } = sourceScope({
+        unscoped: () => {
+          throw new Error("this source requires a prepared scope");
+        },
+        prepare: () => {
+          expect(resolveSessionTranscriptReadFence(admission)).toBe(admission);
+          events.push("open");
+        },
+        assertCurrent: () => {
+          expect(events).not.toContain("release");
+        },
+        release: async () => {
+          events.push("release");
+          releaseStarted.resolve();
+          await finishRelease.promise;
+          events.push("released");
+        },
+      });
+      const prepared = prepareSource(`scope-${operation}`, composeSessionSourceAssertion([source]));
       const consume = async () => {
         prepared.assertSourceCurrent();
         consumerStarted.resolve();
@@ -262,37 +243,25 @@ describe("harness context engine source scopes", () => {
         events.push("consumed");
       };
       const params = {
-        ...sessionParams,
+        ...promptParams,
         preparedRunAdmission: prepared,
         transcriptReadFence: admission,
+        contextEngine: createContextEngine({
+          bootstrap: async () => ({ bootstrapped: true }),
+          assemble: async ({ messages }) => {
+            await consume();
+            return { messages, estimatedTokens: 0 };
+          },
+        }),
+        runMaintenance: async () => {
+          await consume();
+          return undefined;
+        },
+        warn: (message: string) => {
+          throw new Error(message);
+        },
       };
-      const run =
-        operation === "bootstrap"
-          ? bootstrapHarnessContextEngine({
-              ...params,
-              hadSessionFile: true,
-              contextEngine: createContextEngine({
-                bootstrap: async () => ({ bootstrapped: true }),
-              }),
-              runMaintenance: async () => {
-                await consume();
-                return undefined;
-              },
-              warn: (message) => {
-                throw new Error(message);
-              },
-            })
-          : assembleHarnessContextEngine({
-              ...params,
-              contextEngine: createContextEngine({
-                assemble: async ({ messages }) => {
-                  await consume();
-                  return { messages, estimatedTokens: 0 };
-                },
-              }),
-              messages: [],
-              modelId: "test-model",
-            });
+      const run = runEngine(operation, params);
       try {
         await awaitGateBeforeSettlement(
           consumerStarted.promise,
@@ -310,7 +279,6 @@ describe("harness context engine source scopes", () => {
         finishConsumer.resolve();
         finishRelease.resolve();
         await run.catch(() => {});
-        prepared.close();
       }
     },
   );
