@@ -3,7 +3,7 @@ import {
   decodePostgresError,
   decodePostgresRows,
   isPostgresConnectionError,
-  rewritePostgresPlaceholders,
+  preparePostgresQuery,
   validatePostgresBindings,
 } from "./protocol.js";
 
@@ -21,17 +21,31 @@ describe("experimental PostgreSQL SQL boundary", () => {
     ["SELECT $$?$$, $tag$?$tag$, ?", "SELECT $$?$$, $tag$?$tag$, $1"],
     ["SELECT data ?? ?, data ??| ?", "SELECT data ? $1, data ?| $2"],
   ])("rewrites only anonymous placeholders: %s", (input, expected) => {
-    expect(rewritePostgresPlaceholders(input)).toBe(expected);
+    expect(preparePostgresQuery(input).sql).toBe(expected);
   });
 
   it.each(["SELECT 1; /* x */ pragma foreign_keys"])(
     "refuses unsupported PRAGMA commands: %s",
     (input) => {
-      expect(() => rewritePostgresPlaceholders(input)).toThrow(
+      expect(() => preparePostgresQuery(input)).toThrow(
         "The experimental PostgreSQL engine does not support PRAGMA statements",
       );
     },
   );
+
+  it.each([
+    ["WITH changed AS (UPDATE entries SET value = ? RETURNING *) SELECT * FROM changed", true],
+    [
+      "WITH changed AS (WITH input AS (SELECT 1) DELETE FROM entries RETURNING *) SELECT * FROM changed",
+      true,
+    ],
+    ["SELECT * INTO copied_entries FROM entries", true],
+    ["SELECT * FROM entries FOR UPDATE", false],
+    ["SELECT * FROM entries FOR NO KEY UPDATE", false],
+    ["SELECT 1 AS update, 'DELETE', $$INSERT$$, E'UPDATE\\\' INTO' /* MERGE */", false],
+  ] as const)("retains mutation evidence while preparing %s", (input, expected) => {
+    expect(preparePostgresQuery(input).mayWrite).toBe(expected);
+  });
 
   it("accepts SQLite scalar and binary bindings", () => {
     expect(() =>

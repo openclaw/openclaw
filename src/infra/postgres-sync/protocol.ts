@@ -3,6 +3,7 @@ import type { MessagePort } from "node:worker_threads";
 
 export type PostgresResult = {
   command?: string;
+  mutation?: "scoped" | "unscoped";
   rows: Record<string, unknown>[];
   rowCount: number;
   fields: { name: string; dataTypeID: number }[];
@@ -40,11 +41,13 @@ export type BridgeWorkerData = {
   statementTimeoutMs: number;
 };
 
-/** Rewrite anonymous bindings without changing quoted SQL, comments, or escaped ?? operators. */
-export function rewritePostgresPlaceholders(sql: string): string {
+/** Prepare bindings and mutation hints without interpreting quoted text as SQL. */
+export function preparePostgresQuery(sql: string): { sql: string; mayWrite: boolean } {
   let result = "";
   let parameter = 0;
   let statementStart = true;
+  let previousKeyword: string | undefined;
+  let mayWrite = false;
   for (let i = 0; i < sql.length;) {
     const rest = sql.slice(i);
     const quoted =
@@ -84,7 +87,24 @@ export function rewritePostgresPlaceholders(sql: string): string {
       if (statementStart && /^pragma\b/i.test(rest)) {
         throw new Error("The experimental PostgreSQL engine does not support PRAGMA statements");
       }
+      const word = /^[A-Za-z_][A-Za-z_0-9$]*/.exec(rest)?.[0];
+      if (word) {
+        const keyword = word.toUpperCase();
+        // SELECT tags can hide modifying CTEs or SELECT INTO. Row locks and labels do not write.
+        mayWrite ||=
+          /^(?:INSERT|UPDATE|DELETE|MERGE|INTO)$/.test(keyword) &&
+          previousKeyword !== "AS" &&
+          !(keyword === "UPDATE" && (previousKeyword === "FOR" || previousKeyword === "KEY"));
+        previousKeyword = keyword;
+        result += word;
+        i += word.length;
+        statementStart = false;
+        continue;
+      }
       const character = sql.charAt(i);
+      if (!/\s/.test(character)) {
+        previousKeyword = undefined;
+      }
       if (character === "?" && sql[i + 1] === "?") {
         result += "?";
         i += 2;
@@ -102,7 +122,7 @@ export function rewritePostgresPlaceholders(sql: string): string {
       }
     }
   }
-  return result;
+  return { sql: result, mayWrite };
 }
 
 export function validatePostgresBindings(parameters: readonly unknown[]): void {

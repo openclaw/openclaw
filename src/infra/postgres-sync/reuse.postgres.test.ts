@@ -4,6 +4,11 @@ import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
+import {
+  readSqliteDatabasePendingScopedWriteToken,
+  readSqliteDatabaseScopedWriteToken,
+  withSqliteDatabaseWriteScope,
+} from "../sqlite-database-admission.js";
 import { PostgresSyncConnection } from "./connection.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
@@ -58,6 +63,51 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
       count: 0,
     });
     run(() => reader.close());
+  });
+
+  it("retains unrelated replicas and predicts only the written scope across commits", () => {
+    const db = open();
+    run(() => db.exec("CREATE TABLE scoped_entries (id integer)"));
+    const before = readSqliteDatabaseScopedWriteToken(db, "first");
+    const second = readSqliteDatabaseScopedWriteToken(db, "second");
+    let pending: string | undefined;
+    run(() =>
+      db.runTransaction(() =>
+        withSqliteDatabaseWriteScope(db, ["second"], () => {
+          db.prepare("INSERT INTO scoped_entries VALUES (?)").run(7);
+          pending = readSqliteDatabasePendingScopedWriteToken(db, "second");
+          expect(readSqliteDatabasePendingScopedWriteToken(db, "first")).toBe(before);
+          // Closing another handle to this anchor cannot settle the writer's pending receipt.
+          const reader = open();
+          reader.close();
+          expect(readSqliteDatabaseScopedWriteToken(db, "second")).toBe(second);
+        }),
+      ),
+    );
+    expect(pending).not.toBe(second);
+    expect(readSqliteDatabaseScopedWriteToken(db, "second")).toBe(pending);
+    expect(readSqliteDatabaseScopedWriteToken(db, "first")).toBe(before);
+
+    run(() => db.runTransaction(() => db.prepare("SELECT count(*) FROM scoped_entries").get()));
+    run(() => db.runTransaction(() => {}));
+    expect(readSqliteDatabaseScopedWriteToken(db, "first")).toBe(before);
+    expect(readSqliteDatabaseScopedWriteToken(db, "second")).toBe(pending);
+
+    // Uncertified writes still invalidate both scopes.
+    run(() => db.runTransaction(() => db.exec("INSERT INTO scoped_entries VALUES (8); SELECT 1")));
+    expect(readSqliteDatabaseScopedWriteToken(db, "first")).not.toBe(before);
+    expect(readSqliteDatabaseScopedWriteToken(db, "second")).not.toBe(pending);
+    const beforeCte = readSqliteDatabaseScopedWriteToken(db, "first");
+    run(() =>
+      db.runTransaction(() =>
+        db.exec(
+          "WITH changed AS (UPDATE scoped_entries SET id = id + 1 RETURNING *) SELECT * FROM changed",
+        ),
+      ),
+    );
+    expect(readSqliteDatabaseScopedWriteToken(db, "first")).not.toBe(beforeCte);
+    run(() => db.exec("DROP TABLE scoped_entries"));
+    run(() => db.close());
   });
 
   it("reconnects after an idle backend is terminated, without reusing the broken backend", async () => {

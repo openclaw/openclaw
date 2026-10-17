@@ -88,6 +88,9 @@ function transportFixture(
               id: mode === "mismatched" && pending.operation === "query" ? id + 1 : id,
               result: {
                 command,
+                mutation: /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command ?? "")
+                  ? "scoped"
+                  : undefined,
                 rows: [{ value: 7 }],
                 rowCount: 1,
                 fields: [{ name: "value", dataTypeID: 23 }],
@@ -144,7 +147,7 @@ describe("PostgreSQL bridge request correlation", () => {
   });
 
   it.each(["COMMIT", "ROLLBACK"])(
-    "changes the anchor token for COMMIT, retaining it for ROLLBACK (%s)",
+    "retains scoped replicas when an empty transaction ends with %s",
     (command) => {
       const fixture = transportFixture("normal");
       fixture.command(command);
@@ -152,7 +155,7 @@ describe("PostgreSQL bridge request correlation", () => {
       const before = readSqliteDatabaseScopedWriteToken(fixture.db.anchor, "entry");
       fixture.db.exec(command);
       const after = readSqliteDatabaseScopedWriteToken(fixture.db.anchor, "entry");
-      expect(after === before).toBe(command === "ROLLBACK");
+      expect(after).toBe(before);
     },
   );
 

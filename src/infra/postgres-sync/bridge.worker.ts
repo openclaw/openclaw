@@ -105,10 +105,24 @@ async function handleRequest(request: BridgeRequest) {
         if (!result) {
           throw new Error("PostgreSQL returned no query result");
         }
+        // A trailing SELECT must not hide an earlier write in the same SQL batch.
+        const commands = (Array.isArray(results) ? results : [results]).map(
+          ({ command }) => command,
+        );
+        const mutation = commands.some((command) =>
+          /^(?:CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE|COPY|CALL|DO|REFRESH)$/.test(
+            command,
+          ),
+        )
+          ? "unscoped"
+          : commands.some((command) => /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command))
+            ? "scoped"
+            : undefined;
         reply = {
           id: request.id,
           result: {
             command: result.command,
+            mutation,
             rows: result.rows,
             rowCount: result.rowCount ?? 0,
             fields: result.fields.map(({ name, dataTypeID }) => ({ name, dataTypeID })),
