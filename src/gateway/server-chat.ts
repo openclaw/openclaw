@@ -443,15 +443,8 @@ export function createAgentEventHandler({
         ? persistGatewaySessionLifecycleEventForEvent({
             sessionKey,
             agentId: sessionAgentId,
-            event: {
-              ...evt,
-              ...(evt.contextClaimId ? { contextClaimId: evt.contextClaimId } : {}),
-              ...(clientRunId !== evt.runId ? { clientRunId } : {}),
-              ...(evt.lifecycleGeneration ? { lifecycleGeneration: evt.lifecycleGeneration } : {}),
-              ...(evt.mainSessionRestartRecovery === true
-                ? { mainSessionRestartRecovery: true as const }
-                : {}),
-            },
+            event: evt,
+            ...(clientRunId !== evt.runId ? { clientRunId } : {}),
           })
         : undefined;
     // Completion retires the registration even when no visible terminal is published.
