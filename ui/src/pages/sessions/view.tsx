@@ -19,6 +19,7 @@ import {
   type SessionRowGroup,
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
+import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import { getAgentIdentity, SessionRows, sessionsTableColumnCount } from "./session-row.tsx";
 import {
   categoryDropHandlers,
