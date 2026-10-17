@@ -4,6 +4,9 @@ import type { ResolvedDiscordAccount } from "./accounts.js";
 import { collectDiscordSecurityAuditFindings } from "./security-audit.js";
 
 type DiscordAccountConfig = ResolvedDiscordAccount["config"];
+const memberLists = (users: string[], channelUsers: string[]) => ({
+  "123": { users, channels: { general: { users: channelUsers } } },
+});
 
 const { readChannelAllowFromStoreMock } = vi.hoisted(() => ({
   readChannelAllowFromStoreMock: vi.fn(async () => [] as string[]),
@@ -13,66 +16,12 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   readChannelAllowFromStore: readChannelAllowFromStoreMock,
 }));
 
-function createAccount(
-  config: DiscordAccountConfig,
-  accountId = "default",
-): ResolvedDiscordAccount {
-  return {
-    accountId,
-    enabled: true,
-    token: "t",
-    tokenSource: "config",
-    tokenStatus: "available",
-    config,
-  };
-}
-
 function guildConfig(
   guild: NonNullable<DiscordAccountConfig["guilds"]>[string],
   key = "team-space",
 ): DiscordAccountConfig {
   return { groupPolicy: "allowlist", guilds: { [key]: guild } };
 }
-
-const broadMemberCases = [
-  {
-    name: "warns for a whole-guild wildcard target",
-    config: guildConfig({}, "*"),
-    expectedPath: "channels.discord.guilds.*",
-    expectFinding: true,
-  },
-  {
-    name: "warns for slug and wildcard channel targets",
-    config: guildConfig({ channels: { "*": { enabled: true } } }),
-    expectedPath: "channels.discord.guilds.team-space.channels.*",
-    expectFinding: true,
-  },
-  {
-    name: "inherits a narrow guild member restriction",
-    config: guildConfig({
-      users: ["123456789012345678"],
-      channels: { general: { enabled: true } },
-    }),
-    expectFinding: false,
-  },
-  {
-    name: "treats wildcard users as broad",
-    config: guildConfig({ users: ["*"] }),
-    expectedPath: "channels.discord.guilds.team-space",
-    expectFinding: true,
-  },
-  {
-    name: "treats wildcard roles as broad",
-    config: guildConfig({ roles: ["*"] }),
-    expectedPath: "channels.discord.guilds.team-space",
-    expectFinding: true,
-  },
-  {
-    name: "ignores disabled channel targets",
-    config: guildConfig({ channels: { general: { enabled: false } } }),
-    expectFinding: false,
-  },
-];
 
 async function collectFindings(params: {
   cfg?: OpenClawConfig;
@@ -85,7 +34,14 @@ async function collectFindings(params: {
   readChannelAllowFromStoreMock.mockResolvedValue(params.storeAllowFrom ?? []);
   return await collectDiscordSecurityAuditFindings({
     cfg: params.cfg ?? { channels: { discord: params.config } },
-    account: createAccount(params.config, params.accountId),
+    account: {
+      accountId: params.accountId ?? "default",
+      enabled: true,
+      token: "t",
+      tokenSource: "config",
+      tokenStatus: "available",
+      config: params.config,
+    },
     accountId: params.accountId ?? "default",
     orderedAccountIds: params.orderedAccountIds ?? ["default"],
     hasExplicitAccountPath: params.hasExplicitAccountPath ?? false,
@@ -93,16 +49,33 @@ async function collectFindings(params: {
 }
 
 describe("Discord security audit findings", () => {
-  it.each(broadMemberCases)("$name", async (testCase) => {
-    const findings = await collectFindings({ config: testCase.config });
-    const finding = findings.find(
+  it.each([
+    ["whole-guild wildcard", guildConfig({}, "*"), "*"],
+    [
+      "wildcard channel",
+      guildConfig({ channels: { "*": { enabled: true } } }),
+      "team-space.channels.*",
+    ],
+    [
+      "inherited member restriction",
+      guildConfig({ users: ["123456789012345678"], channels: { general: { enabled: true } } }),
+      undefined,
+    ],
+    ["wildcard users", guildConfig({ users: ["*"] }), "team-space"],
+    ["wildcard roles", guildConfig({ roles: ["*"] }), "team-space"],
+    ["disabled channel", guildConfig({ channels: { general: { enabled: false } } }), undefined],
+  ] as const)("audits %s", async (_name, config, path) => {
+    const finding = (await collectFindings({ config })).find(
       (entry) => entry.checkId === "channels.discord.allowlisted_groups.broad_members",
     );
-    expect(Boolean(finding)).toBe(testCase.expectFinding);
-    if ("expectedPath" in testCase) {
-      expect(finding?.detail).toContain(testCase.expectedPath);
+    if (path === undefined) {
+      expect(finding).toBeUndefined();
+    } else {
+      expect(finding).toMatchObject({
+        severity: "warn",
+        detail: expect.stringContaining(`channels.discord.guilds.${path}`),
+      });
     }
-    expect(finding?.severity).toBe(testCase.expectFinding ? "warn" : undefined);
   });
 
   it("uses the account-specific path for broad member warnings", async () => {
@@ -122,58 +95,38 @@ describe("Discord security audit findings", () => {
   });
 
   it.each([
-    { name: "flags missing guild user allowlists", dm: undefined, expectFinding: true },
-    {
-      name: "does not flag when dm.allowFrom includes a Discord snowflake id",
-      dm: { allowFrom: ["387380367612706819"] },
-      expectFinding: false,
-    },
-    {
-      name: "respects an empty canonical allowlist over nested aliases",
-      allowFrom: [],
-      dm: { allowFrom: ["387380367612706819"] },
-      expectFinding: true,
-    },
-    {
-      name: "does not flag a canonical account allowFrom list",
-      allowFrom: ["387380367612706819"],
-      dm: undefined,
-      expectFinding: false,
-    },
-  ])("$name", async ({ dm, allowFrom, expectFinding }) => {
-    // Exercise legacy dm.allowFrom input, which is no longer in the config schema.
-    const config = {
-      ...guildConfig({ channels: { general: { enabled: true } } }, "123"),
-      dm,
-      allowFrom,
-    } as unknown as DiscordAccountConfig;
-    const findings = await collectFindings({
-      cfg: { commands: { native: true }, channels: { discord: config } },
-      config,
-    });
+    ["missing", undefined, undefined, true],
+    ["legacy", { allowFrom: ["387380367612706819"] }, undefined, false],
+    ["canonical empty overrides legacy", { allowFrom: ["387380367612706819"] }, [], true],
+    ["canonical", undefined, ["387380367612706819"], false],
+  ] as const)(
+    "audits %s native-command allowlists",
+    async (_name, dm, allowFrom, expectFinding) => {
+      // Exercise legacy dm.allowFrom input, which is no longer in the config schema.
+      const config = {
+        ...guildConfig({ channels: { general: { enabled: true } } }, "123"),
+        dm,
+        allowFrom,
+      } as unknown as DiscordAccountConfig;
+      const findings = await collectFindings({
+        cfg: { commands: { native: true }, channels: { discord: config } },
+        config,
+      });
 
-    expect(
-      findings.some(
-        (finding) => finding.checkId === "channels.discord.commands.native.no_allowlists",
-      ),
-    ).toBe(expectFinding);
-  });
+      expect(
+        findings.some(
+          (finding) => finding.checkId === "channels.discord.commands.native.no_allowlists",
+        ),
+      ).toBe(expectFinding);
+    },
+  );
 
   it.each([
     {
       name: "warns when Discord allowlists contain name-based entries",
       config: {
         allowFrom: ["Alice#1234", " Alice#1234 ", "second.operator", "<@123456789012345678>"],
-        guilds: {
-          "123": {
-            users: ["trusted.operator"],
-            channels: {
-              general: {
-                users: ["987654321098765432", "security-team"],
-              },
-            },
-          },
-        },
+        guilds: memberLists(["trusted.operator"], ["987654321098765432", "security-team"]),
       } satisfies DiscordAccountConfig,
       storeAllowFrom: ["team.owner"],
       expectNameBasedSeverity: "warn",
@@ -226,16 +179,10 @@ describe("Discord security audit findings", () => {
           "discord:423456789012345678",
           "pk:member-123",
         ],
-        guilds: {
-          "123": {
-            users: ["523456789012345678", "<@623456789012345678>", "pk:member-456"],
-            channels: {
-              general: {
-                users: ["723456789012345678", "user:823456789012345678"],
-              },
-            },
-          },
-        },
+        guilds: memberLists(
+          ["523456789012345678", "<@623456789012345678>", "pk:member-456"],
+          ["723456789012345678", "user:823456789012345678"],
+        ),
       } satisfies DiscordAccountConfig,
       expectNoNameBasedFinding: true,
     },

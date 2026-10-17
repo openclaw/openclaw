@@ -4,7 +4,7 @@ import {
   MessageFlags,
   type APIContainerComponent,
 } from "discord-api-types/v10";
-import { beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { DiscordComponentMessageSpec } from "./components.js";
 import { createDiscordLoopbackRest, makeDiscordRest, requestBody } from "./send.test-harness.js";
 
@@ -44,15 +44,27 @@ vi.mock("openclaw/plugin-sdk/outbound-media", async () => ({
   )),
   loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
 }));
-let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
-let editDiscordComponentMessage: typeof import("./send.components.js").editDiscordComponentMessage;
-let sendDiscordComponentMessage: typeof import("./send.components.js").sendDiscordComponentMessage;
+import { registerDiscordComponentEntries } from "./components-registry.js";
+import { editDiscordComponentMessage, sendDiscordComponentMessage } from "./send.components.js";
 
-beforeAll(async () => {
-  ({ registerDiscordComponentEntries } = await import("./components-registry.js"));
-  ({ editDiscordComponentMessage, sendDiscordComponentMessage } =
-    await import("./send.components.js"));
-});
+async function editComponents(
+  spec: DiscordComponentMessageSpec,
+  options: Parameters<typeof editDiscordComponentMessage>[3] = {},
+  to = "channel:chan-1",
+  messageId = "1001",
+) {
+  const loopback = await loopbackRest();
+  await editDiscordComponentMessage(to, messageId, spec, {
+    ...OPTIONS,
+    rest: loopback.rest,
+    ...options,
+  });
+  const patch = loopback.requests.find((request) => request.method === "PATCH");
+  const body: { flags?: number; components?: APIContainerComponent[] } = JSON.parse(
+    patch?.body ?? "{}",
+  );
+  return { patch, body, components: body.components?.[0]?.components };
+}
 beforeEach(() => {
   vi.clearAllMocks();
   sendMessageDiscordMock.mockReset().mockResolvedValue({ messageId: "1001", channelId: "chan-1" });
@@ -62,15 +74,15 @@ beforeEach(() => {
     contentType: "application/pdf",
   });
 });
-function channelRest() {
-  const mocks = makeDiscordRest();
-  mocks.getMock.mockResolvedValueOnce({ type: ChannelType.GuildText, id: "chan-1" });
-  mocks.postMock.mockResolvedValueOnce({ id: "1001", channel_id: "chan-1" });
-  return mocks;
-}
 function mediaOptions(rest?: ReturnType<typeof makeDiscordRest>["rest"]) {
   return { ...OPTIONS, rest, mediaUrl: "https://example.com/report.pdf" };
 }
+const textBlock = (text: string) => ({ type: "text" as const, text });
+const delivery = {
+  messageId: "1002",
+  channelId: "dm-1",
+  receipt: { platformMessageIds: ["1002"] },
+};
 
 it.each(["send", "edit"] as const)("awaits registry settlement after %s", async (operation) => {
   const { rest, postMock, patchMock, getMock } = makeDiscordRest();
@@ -97,24 +109,18 @@ it.each(["send", "edit"] as const)("awaits registry settlement after %s", async 
     onDeliveryResult,
     allowedMentions: { parse: [] },
   };
-  let finished = false;
+  let finished: { value?: unknown; error?: unknown } | undefined;
   const pending =
     operation === "send"
       ? sendDiscordComponentMessage("channel:dm-1", BUTTON, opts)
       : editDiscordComponentMessage("channel:dm-1", "1002", BUTTON, opts);
   const outcome = pending.then(
-    (value) => {
-      finished = true;
-      return { value };
-    },
-    (error: unknown) => {
-      finished = true;
-      return { error };
-    },
+    (value) => (finished = { value }),
+    (error: unknown) => (finished = { error }),
   );
   try {
     await registered.promise;
-    expect(finished).toBe(false);
+    expect(finished).toBeUndefined();
     expect(registerMock).toHaveBeenCalledOnce();
     expect(registerMock.mock.calls[0]?.[0]).toMatchObject({
       messageId: "1002",
@@ -125,25 +131,14 @@ it.each(["send", "edit"] as const)("awaits registry settlement after %s", async 
     expect(platformMock).toHaveBeenCalledOnce();
     expect(requestBody(platformMock)).toMatchObject({ allowed_mentions: { parse: [] } });
     if (operation === "send") {
-      expect(onDeliveryResult).toHaveBeenCalledOnce();
-      expect(onDeliveryResult.mock.calls[0]?.[0]).toMatchObject({
-        messageId: "1002",
-        channelId: "dm-1",
-        receipt: { platformMessageIds: ["1002"] },
-      });
+      expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(delivery));
       const error = new Error("registry write failed");
       registration.reject(error);
       expect(await outcome).toEqual({ error });
     } else {
       expect(onDeliveryResult).not.toHaveBeenCalled();
       registration.resolve();
-      expect(await outcome).toMatchObject({
-        value: {
-          messageId: "1002",
-          channelId: "dm-1",
-          receipt: { platformMessageIds: ["1002"] },
-        },
-      });
+      expect(await outcome).toMatchObject({ value: delivery });
     }
   } finally {
     registration.resolve();
@@ -180,10 +175,7 @@ it("rechecks delivery authority before each retried component post", async () =>
 });
 
 it("edits select messages without create nonces and refreshes registry entries", async () => {
-  const loopback = await loopbackRest();
-  await editDiscordComponentMessage(
-    "channel:chan-1",
-    "1001",
+  const { patch, body, components } = await editComponents(
     {
       text: "Updated picker",
       blocks: [
@@ -194,21 +186,13 @@ it("edits select messages without create nonces and refreshes registry entries",
       ],
     },
     {
-      ...OPTIONS,
-      rest: loopback.rest,
       sessionKey: "agent:main:discord:channel:chan-1",
       agentId: "main",
     },
   );
-  const patch = loopback.requests.find((request) => request.method === "PATCH");
   expect(patch?.path).toBe("/v10/channels/chan-1/messages/1001");
-  const body: { flags?: number; components?: APIContainerComponent[] } = JSON.parse(
-    patch?.body ?? "{}",
-  );
   expect(body.flags).toBe(MessageFlags.IsComponentsV2);
-  const row = body.components?.[0]?.components.find(
-    (entry) => entry.type === ComponentType.ActionRow,
-  );
+  const row = components?.find((entry) => entry.type === ComponentType.ActionRow);
   expect(row?.components[0]?.type).toBe(ComponentType.StringSelect);
   expect(body).not.toHaveProperty("nonce");
   expect(body).not.toHaveProperty("enforce_nonce");
@@ -221,7 +205,6 @@ it("edits select messages without create nonces and refreshes registry entries",
 });
 
 it("preserves link-button emoji in rows and sections", async () => {
-  const loopback = await loopbackRest();
   const docs = {
     label: "Docs",
     url: "https://example.test/docs",
@@ -233,9 +216,7 @@ it("preserves link-button emoji in rows and sections", async () => {
     url: "https://example.test/guide",
     emoji: { id: "123456789012345678", name: "guide", animated: true },
   };
-  await editDiscordComponentMessage(
-    "channel:789",
-    "1003",
+  const { components } = await editComponents(
     {
       blocks: [
         { type: "actions", buttons: [docs] },
@@ -249,11 +230,10 @@ it("preserves link-button emoji in rows and sections", async () => {
         },
       ],
     },
-    { ...OPTIONS, rest: loopback.rest },
+    {},
+    "channel:789",
+    "1003",
   );
-  const patch = loopback.requests.find((entry) => entry.method === "PATCH");
-  const body: { components?: APIContainerComponent[] } = JSON.parse(patch?.body ?? "{}");
-  const components = body.components?.[0]?.components;
   const row = components?.find((entry) => entry.type === ComponentType.ActionRow);
   const section = components?.find((entry) => entry.type === ComponentType.Section);
   expect(row?.components[0]).toMatchObject({
@@ -269,60 +249,43 @@ it("preserves link-button emoji in rows and sections", async () => {
     expect.objectContaining({ entries: [], modals: [] }),
   );
 });
-it("forwards the media access capability and delivery callback", async () => {
+it.each([
+  {
+    name: "forwards media access and delivery callback",
+    spec: { blocks: [textBlock("report")] },
+    text: "report",
+    forwardAccess: true,
+  },
+  {
+    name: "preserves indentation and later repetitions while removing the leading fallback duplicate",
+    spec: { text: "    code", blocks: ["    code", " \n\t ", "code", "    code"].map(textBlock) },
+    text: "    code\n\ncode\n\n    code",
+    forwardAccess: false,
+  },
+])("$name", async ({ spec, text, forwardAccess }) => {
   const readFile = vi.fn().mockResolvedValue(Buffer.from("pdf"));
   const mediaAccess = { localRoots: ["/tmp"], readFile };
   const onDeliveryResult = vi.fn();
-  await sendDiscordComponentMessage(
+  const forwarded = forwardAccess ? { mediaReadFile: readFile, mediaAccess, onDeliveryResult } : {};
+  await sendDiscordComponentMessage("channel:chan-1", spec, { ...mediaOptions(), ...forwarded });
+  expect(sendMessageDiscordMock).toHaveBeenCalledExactlyOnceWith(
     "channel:chan-1",
-    { blocks: [{ type: "text", text: "report" }] },
-    {
-      ...mediaOptions(),
-      mediaReadFile: readFile,
-      mediaAccess,
-      onDeliveryResult,
-    },
-  );
-  expect(sendMessageDiscordMock).toHaveBeenCalledOnce();
-  expect(sendMessageDiscordMock).toHaveBeenCalledWith(
-    "channel:chan-1",
-    "report",
-    expect.objectContaining({
-      mediaReadFile: readFile,
-      mediaAccess,
-      onDeliveryResult,
-    }),
+    text,
+    expect.objectContaining(forwarded),
   );
 });
 
-it("preserves indentation and later repetitions while removing only the leading fallback duplicate", async () => {
-  await sendDiscordComponentMessage(
-    "channel:chan-1",
-    {
-      text: "    code",
-      blocks: [
-        { type: "text", text: "    code" },
-        { type: "text", text: " \n\t " },
-        { type: "text", text: "code" },
-        { type: "text", text: "    code" },
-      ],
-    },
-    mediaOptions(),
-  );
-  expect(sendMessageDiscordMock).toHaveBeenCalledOnce();
-  expect(sendMessageDiscordMock.mock.calls[0]?.[1]).toBe("    code\n\ncode\n\n    code");
+it("derives upload for unnamed application/x-unknown media", async () => {
+  const { rest, getMock, postMock } = makeDiscordRest();
+  getMock.mockResolvedValueOnce({ type: ChannelType.GuildText, id: "chan-1" });
+  postMock.mockResolvedValueOnce({ id: "1001", channel_id: "chan-1" });
+  loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+    buffer: Buffer.from("media"),
+    contentType: "application/x-unknown",
+  });
+  await sendDiscordComponentMessage("channel:chan-1", MODAL, mediaOptions(rest));
+  expect(requestBody(postMock)).toMatchObject({
+    files: [expect.objectContaining({ name: "upload" })],
+  });
+  expect(sendMessageDiscordMock).not.toHaveBeenCalled();
 });
-
-it.each([{ contentType: "application/x-unknown", name: "upload" }])(
-  "derives $name for unnamed $contentType media",
-  async ({ contentType, name }) => {
-    const { rest, postMock } = channelRest();
-    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
-      buffer: Buffer.from("media"),
-      contentType,
-    });
-    await sendDiscordComponentMessage("channel:chan-1", MODAL, mediaOptions(rest));
-    expect(requestBody(postMock)).toMatchObject({ files: [expect.objectContaining({ name })] });
-    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
-  },
-);

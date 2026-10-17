@@ -1,5 +1,5 @@
 import { ChannelType, Routes } from "discord-api-types/v10";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hasDiscordMessageCreateAmbiguity } from "./retry.js";
 import { registerSendAssetsAndRetriesTests } from "./send.assets-and-retries.test-support.js";
 import { makeDiscordRest, requestBody, requestPath } from "./send.test-harness.js";
@@ -9,11 +9,13 @@ vi.mock("openclaw/plugin-sdk/web-media", async () => {
   return discordWebMediaMockFactory();
 });
 
-let send: typeof import("./send.js");
-let discordOutbound: typeof import("./outbound-adapter.js").discordOutbound;
+import { discordOutbound } from "./outbound-adapter.js";
+import * as send from "./send.js";
 const cfg = { channels: { discord: { accounts: { default: {} } } } };
 const retry = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
 const multiline = Array.from({ length: 18 }, (_, index) => `line ${index + 1}`).join("\n");
+const timeoutMember = (rest: ReturnType<typeof makeDiscordRest>["rest"], durationMinutes: number) =>
+  send.timeoutMemberDiscord({ guildId: "g1", userId: "u1", durationMinutes }, clientOpts(rest));
 const clientOpts = (rest: ReturnType<typeof makeDiscordRest>["rest"]) => ({
   cfg,
   rest,
@@ -24,7 +26,15 @@ function threadHarness(type = ChannelType.GuildText) {
   const mocks = makeDiscordRest();
   mocks.getMock.mockResolvedValue({ type });
   mocks.postMock.mockResolvedValue({ id: "t1", channel_id: "t1" });
-  return { ...mocks, opts: clientOpts(mocks.rest) };
+  const opts = clientOpts(mocks.rest);
+  return {
+    ...mocks,
+    opts,
+    create: (
+      spec: Partial<Parameters<typeof send.createThreadDiscord>[1]> = {},
+      options: Parameters<typeof send.createThreadDiscord>[2] = opts,
+    ) => send.createThreadDiscord("chan1", { name: "thread", ...spec }, options),
+  };
 }
 
 function forumPayloadHarness() {
@@ -62,10 +72,6 @@ function forumPayloadHarness() {
   };
 }
 
-beforeAll(async () => {
-  send = await import("./send.js");
-  ({ discordOutbound } = await import("./outbound-adapter.js"));
-});
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => {
   vi.useRealTimers();
@@ -90,11 +96,9 @@ describe("forum outbound delivery", () => {
       Routes.channelMessages("701"),
       Routes.channelMessages("701"),
     ]);
-    expect(onDeliveryResult.mock.calls.map(([delivery]) => delivery.target)).toEqual([
-      { kind: "channel", id: "701" },
-      { kind: "channel", id: "701" },
-      { kind: "channel", id: "701" },
-    ]);
+    expect(onDeliveryResult.mock.calls.map(([delivery]) => delivery.target)).toEqual(
+      Array.from({ length: 3 }, () => ({ kind: "channel", id: "701" })),
+    );
     expect(result?.receipt).toMatchObject({
       threadId: "701",
       platformMessageIds: ["starter", "message-1", "message-2"],
@@ -108,8 +112,10 @@ describe("forum outbound delivery", () => {
       Routes.channelMessages("701"),
       Routes.channelMessages("701"),
     ]);
-    expect(result?.receipt?.threadId).toBeUndefined();
-    expect(result?.receipt?.platformMessageIds).toEqual(["message-2"]);
+    expect(result?.receipt).toMatchObject({
+      threadId: undefined,
+      platformMessageIds: ["message-2"],
+    });
   });
 
   it("does not follow up when delivery bookkeeping rejects the starter", async () => {
@@ -125,12 +131,8 @@ describe("forum outbound delivery", () => {
 
 describe("createThreadDiscord", () => {
   it("creates a message-attached thread with an archive override and one multiline initial message", async () => {
-    const { opts, getMock, postMock } = threadHarness();
-    await send.createThreadDiscord(
-      "chan1",
-      { name: "thread", messageId: "1", autoArchiveMinutes: 4320, content: multiline },
-      opts,
-    );
+    const { create, getMock, postMock } = threadHarness();
+    await create({ messageId: "1", autoArchiveMinutes: 4320, content: multiline });
     expect(getMock).not.toHaveBeenCalled();
     expect(postMock).toHaveBeenCalledTimes(2);
     expect(requestPath(postMock)).toBe(Routes.threads("chan1", "1"));
@@ -162,16 +164,12 @@ describe("createThreadDiscord", () => {
   });
 
   it("inherits forum archive defaults and uses the tagged thread name as its starter", async () => {
-    const { opts, getMock, postMock } = threadHarness(ChannelType.GuildForum);
+    const { create, getMock, postMock } = threadHarness(ChannelType.GuildForum);
     getMock.mockResolvedValue({
       type: ChannelType.GuildForum,
       default_auto_archive_duration: 1440,
     });
-    await send.createThreadDiscord(
-      "chan1",
-      { name: "thread", appliedTags: ["tag1", "tag2"] },
-      opts,
-    );
+    await create({ appliedTags: ["tag1", "tag2"] });
     expect(requestBody(postMock)).toEqual({
       name: "thread",
       auto_archive_duration: 1440,
@@ -181,15 +179,15 @@ describe("createThreadDiscord", () => {
   });
 
   it("falls back to a public thread without forum tags when channel lookup fails", async () => {
-    const { opts, getMock, postMock } = threadHarness();
+    const { create, getMock, postMock } = threadHarness();
     getMock.mockRejectedValue(new Error("lookup failed"));
-    await send.createThreadDiscord("chan1", { name: "thread", appliedTags: ["tag1"] }, opts);
+    await create({ appliedTags: ["tag1"] });
     expect(requestPath(postMock)).toBe(Routes.threads("chan1"));
     expect(requestBody(postMock)).toEqual({ name: "thread", type: ChannelType.PublicThread });
   });
 
   it("chunks a private thread's initial message and retries with a stable nonce per chunk", async () => {
-    const { opts, getMock, postMock } = threadHarness();
+    const { create, opts, getMock, postMock } = threadHarness();
     getMock.mockResolvedValue({
       type: ChannelType.GuildText,
       default_auto_archive_duration: 10080,
@@ -199,9 +197,8 @@ describe("createThreadDiscord", () => {
       .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
       .mockResolvedValueOnce({ id: "msg1", channel_id: "t1" })
       .mockResolvedValueOnce({ id: "msg2", channel_id: "t1" });
-    await send.createThreadDiscord(
-      "chan1",
-      { name: "thread", type: ChannelType.PrivateThread, content: "a".repeat(2001) },
+    await create(
+      { type: ChannelType.PrivateThread, content: "a".repeat(2001) },
       { ...opts, retry },
     );
     expect(postMock).toHaveBeenCalledTimes(4);
@@ -220,12 +217,10 @@ describe("createThreadDiscord", () => {
   });
 
   it("keeps created thread details when the first initial-message send fails", async () => {
-    const { opts, postMock } = threadHarness();
+    const { create, postMock } = threadHarness();
     const thread = { id: "t1", name: "thread", type: ChannelType.PublicThread };
     postMock.mockResolvedValueOnce(thread).mockRejectedValueOnce(new Error("missing access"));
-    const error = await send
-      .createThreadDiscord("chan1", { name: "thread", content: "Hello thread!" }, opts)
-      .catch((failure: unknown) => failure);
+    const error = await create({ content: "Hello thread!" }).catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(send.DiscordThreadInitialMessageError);
     expect(error).toMatchObject({
       name: "DiscordThreadInitialMessageError",
@@ -241,16 +236,12 @@ describe("createThreadDiscord", () => {
   ])(
     "reports partial initial delivery for a forum and HTTP $status",
     async ({ status, delivered }) => {
-      const { opts, postMock } = threadHarness(ChannelType.GuildForum);
+      const { create, opts, postMock } = threadHarness(ChannelType.GuildForum);
       postMock.mockResolvedValueOnce({ id: "t1", message: { id: "starter1", channel_id: "t1" } });
       postMock.mockRejectedValue(Object.assign(new Error("send failed"), { status }));
-      const error = await send
-        .createThreadDiscord(
-          "chan1",
-          { name: "thread", content: "a".repeat(2001) },
-          { ...opts, retry },
-        )
-        .catch((failure: unknown) => failure);
+      const error = await create({ content: "a".repeat(2001) }, { ...opts, retry }).catch(
+        (failure: unknown) => failure,
+      );
       expect(error).toBeInstanceOf(send.DiscordThreadInitialMessageError);
       expect(hasDiscordMessageCreateAmbiguity(error)).toBe(status === 502);
       expect(error).toMatchObject({
@@ -282,10 +273,7 @@ describe("thread and member administration", () => {
   it("times out a member", async () => {
     const { rest, patchMock } = makeDiscordRest();
     patchMock.mockResolvedValue({ id: "m1" });
-    await send.timeoutMemberDiscord(
-      { guildId: "g1", userId: "u1", durationMinutes: 10 },
-      clientOpts(rest),
-    );
+    await timeoutMember(rest, 10);
     expect(requestPath(patchMock)).toBe(Routes.guildMember("g1", "u1"));
     expect(requestBody(patchMock).communication_disabled_until).toBeTypeOf("string");
   });
@@ -293,12 +281,9 @@ describe("thread and member administration", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(8_640_000_000_000_000));
     const { rest, patchMock } = makeDiscordRest();
-    await expect(
-      send.timeoutMemberDiscord(
-        { guildId: "g1", userId: "u1", durationMinutes: 1 },
-        clientOpts(rest),
-      ),
-    ).rejects.toThrow("Discord timeout duration is outside the supported Date range");
+    await expect(timeoutMember(rest, 1)).rejects.toThrow(
+      "Discord timeout duration is outside the supported Date range",
+    );
     expect(patchMock).not.toHaveBeenCalled();
   });
   it("adds and removes roles", async () => {
