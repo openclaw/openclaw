@@ -13,7 +13,10 @@ import {
   buildReleaseExecutionPlan,
   buildReleaseExecutionPlanArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
-import { fullReleaseCandidateBindingFixture } from "../helpers/full-release-candidate.js";
+import {
+  fullReleaseCandidateBindingFixture,
+  fullReleaseCandidateRequestInput,
+} from "../helpers/full-release-candidate.js";
 
 export const SCRIPT = resolve("scripts/full-release-validation-state.mjs");
 export const SHA = "a".repeat(40);
@@ -44,21 +47,12 @@ export function runCollector(mode: string, overrides: NodeJS.ProcessEnv) {
 }
 
 export function candidateRequestInput(overrides: Record<string, unknown> = {}) {
-  return {
-    repository: "openclaw/openclaw",
+  return fullReleaseCandidateRequestInput({
     targetSha: TARGET_SHA,
     toolingSha: SHA,
-    releaseProfile: "stable",
-    releaseSoak: true,
     upgradeSurvivorBaseline: "openclaw@latest",
-    upgradeSurvivorBaselines: "",
-    upgradeSurvivorScenarios: "reported-issues",
-    allowFrozenTargetScenarioOmissions: false,
-    allowUnreleasedChangelog: false,
-    packagePublished: false,
-    sharedImagePolicy: "no-push-artifact",
     ...overrides,
-  };
+  });
 }
 
 export function canonicalCandidateRequest(overrides: Record<string, unknown> = {}) {
@@ -66,10 +60,7 @@ export function canonicalCandidateRequest(overrides: Record<string, unknown> = {
 }
 
 export function candidateBinding(requestOverrides: Record<string, unknown> = {}) {
-  return fullReleaseCandidateBindingFixture({
-    ...candidateRequestInput(requestOverrides),
-    ...requestOverrides,
-  });
+  return fullReleaseCandidateBindingFixture(candidateRequestInput(requestOverrides));
 }
 
 export function evidenceManifest() {

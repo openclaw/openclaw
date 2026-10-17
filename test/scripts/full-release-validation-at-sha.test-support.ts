@@ -53,7 +53,6 @@ export function createDispatchFixture(
     dispatchFailure?: boolean;
     acceptedDispatchFailure?: boolean;
     dispatchReturnsRunUrl?: boolean;
-    duplicateRuns?: boolean;
     duplicateOnSecondPage?: boolean;
     runIdentityOverrides?: Record<string, unknown>;
     runPathStyle?: "bare" | "short-ref" | "full-ref";
@@ -70,8 +69,6 @@ export function createDispatchFixture(
     archiveEscapeFlag?: "required" | "unsupported";
     oversizedArtifactMetadata?: boolean;
     archiveFailure?: "oversized" | "truncated" | "corrupt" | "digest";
-    inventoryError?: string;
-    malformedInventory?: boolean;
     incompletePagination?: boolean;
     dispatchHttpStatus?: number;
     failIntentWrite?: boolean;
@@ -510,14 +507,9 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
 } else if (args[0] === "api" && endpoint.endsWith("/actions/workflows/full-release-validation.yml")) {
   console.log(JSON.stringify({ id: 17, path: ".github/workflows/full-release-validation.yml" }));
 } else if (args[0] === "api" && /\\/actions\\/workflows\\/(?:17|full-release-validation.yml)\\/runs$/.test(endpoint)) {
-  if (${JSON.stringify(options.inventoryError ?? "")}) {
-    console.error(${JSON.stringify(options.inventoryError ?? "")});
-    process.exit(1);
-  }
   const index = Number(fs.readFileSync(runDiscoveryIndexPath, "utf8"));
   fs.writeFileSync(runDiscoveryIndexPath, String(index + 1));
-  const ids = ${JSON.stringify(options.duplicateOnSecondPage ?? false)} ? Array.from({ length: 21 }, (_, i) => 123 + i)
-    : ${JSON.stringify(options.duplicateRuns ?? false)} ? [123, 124] : [123];
+  const ids = ${JSON.stringify(options.duplicateOnSecondPage ?? false)} ? Array.from({ length: 21 }, (_, i) => 123 + i) : [123];
   const runs = index < ${JSON.stringify(options.runDiscoveryMisses ?? 0)} || !fs.existsSync(acceptedRunPath)
     ? []
     : ids.map((id) => runMetadata(id));
@@ -530,7 +522,7 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
     }
     process.stdout.write(headers + "\\r\\n");
   }
-  console.log(${JSON.stringify(options.malformedInventory ?? false)} ? "{" : JSON.stringify({ total_count: runs.length, workflow_runs: runs.slice((page - 1) * 20, page * 20) }));
+  console.log(JSON.stringify({ total_count: runs.length, workflow_runs: runs.slice((page - 1) * 20, page * 20) }));
 } else if (args[0] === "api" && endpoint.endsWith("/actions/runs/123")) {
   const index = Number(fs.readFileSync(parentRunIndexPath, "utf8"));
   const state = parentRunStates[Math.max(0, Math.min(index, parentRunStates.length - 1))];
