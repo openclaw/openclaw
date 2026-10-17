@@ -1,9 +1,6 @@
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
-import type {
-  GatewayRequestContext,
-  GatewayRequestHandlerOptions,
-} from "../../gateway/server-methods/types.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import type { WorkerTunnelHandle } from "../../gateway/worker-environments/tunnel.js";
 import {
   createFollowupRun,
@@ -107,6 +104,7 @@ it.each(cases)(
       SESSION_KEY,
       sessionTarget,
       unusedEnvironments,
+      workerTurnRequest,
     } = fixture;
     await upsertSessionEntryCore(sessionTarget, { permissionMode: "full" });
     await seedActivePlacement("remote-exec");
@@ -188,7 +186,7 @@ it.each(cases)(
           name: "node.invoke",
           owner: { kind: "core", area: "nodes" },
           scope: "operator.write",
-          async handler(options: GatewayRequestHandlerOptions) {
+          async handler(options) {
             const result = await applyPluginNodeInvokePolicy({
               context: options.context,
               client: options.client,
@@ -249,27 +247,15 @@ it.each(cases)(
         const admission = originalParams.preparedRunAdmission!;
         const params = { ...originalParams, runId: admission.operationalRunInstance.runId };
         return placement.executeTurn(
-          {
-            sessionId: SESSION_ID,
-            sessionKey: SESSION_KEY,
-            agentId: "main",
-            runId: params.runId,
-          },
+          workerTurnRequest(params.runId),
           { ...params, sessionFile: SESSION_KEY, sessionTarget },
           async () => {
             const admittedRunContext = await admission.admit("plugin-harness");
             const host = createAgentHarnessHostCapabilities({
               attempt: {
+                ...params,
                 admittedRunContext,
-                runId: params.runId,
-                agentId: params.agentId,
-                sessionId: params.sessionId,
-                sessionKey: params.sessionKey,
                 sessionTarget,
-                permissionMode: params.permissionMode,
-                abortSignal: params.abortSignal,
-                config: params.config,
-                workspaceDir: params.workspaceDir,
               },
               pluginId: record.id,
               requiredNodeCommands,
@@ -387,28 +373,29 @@ it.each(cases)(
       expect(reply).toMatchObject({ kind: "success" });
     }
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    if (mode === "full" || mode === "shared" || mode === "gateway-republished") {
-      expect(launchErrors).toEqual([]);
-      expect(prompt).not.toHaveBeenCalled();
-      expect(invoke).toHaveBeenCalledOnce();
+    const accepted = ["full", "shared", "gateway-republished"].includes(mode);
+    const approvalRequired = [
+      "workspace",
+      "raw",
+      "unrelated-command",
+      "missing-descriptor",
+      "expanded-descriptor",
+    ].includes(mode);
+    expect(prompt.mock.calls).toHaveLength(approvalRequired ? 1 : 0);
+    expect(invoke.mock.calls).toHaveLength(accepted ? 1 : 0);
+    expect(launchErrors).toEqual(
+      accepted
+        ? []
+        : [
+            approvalRequired
+              ? "one-time approval required"
+              : expect.stringMatching(/no longer (active|current)/),
+          ],
+    );
+    if (accepted) {
       expect(invoke.mock.calls[0]?.[0]).toMatchObject({
         params: { placement: workspace, authorization: "session-full" },
       });
-    } else if (
-      mode === "workspace" ||
-      mode === "raw" ||
-      mode === "unrelated-command" ||
-      mode === "missing-descriptor" ||
-      mode === "expanded-descriptor"
-    ) {
-      expect(invoke).not.toHaveBeenCalled();
-      expect(launchErrors).toEqual(["one-time approval required"]);
-      expect(prompt).toHaveBeenCalledOnce();
-    } else {
-      expect(launchErrors).toHaveLength(1);
-      expect(launchErrors[0]).toMatch(/no longer (active|current)/);
-      expect(prompt).not.toHaveBeenCalled();
-      expect(invoke).not.toHaveBeenCalled();
     }
     currentContext = undefined;
   },

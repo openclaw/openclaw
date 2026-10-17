@@ -3,96 +3,52 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import {
-  loadSessionEntry,
-  persistSessionTranscriptTurn,
-  replaceSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils-row.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { readSessionFallbackModelAsync } from "../../status/session-fallback-model.js";
-import { useAccountingDatabase } from "./agent-runner-accounting.test-support.js";
-import { withAgentTurnCompletion } from "./agent-runner-completion.js";
+import { useAccountingFixture } from "./agent-runner-accounting.test-support.js";
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
-import { createMockFollowupRun } from "./test-helpers.js";
 
 const diagnostic = { provider: "primary-fixture", model: "thinking" };
-const database = useAccountingDatabase("openclaw-fallback-projection-");
-let sequence = 0;
-const operations: ReplyOperation[] = [];
-afterEach(() => {
-  for (const operation of operations.splice(0)) {
-    operation.complete();
-  }
-  clearRuntimeConfigSnapshot();
-});
+const { database, createFixture: createAccounting } = useAccountingFixture(
+  "openclaw-fallback-projection-",
+);
+afterEach(clearRuntimeConfigSnapshot);
 
 async function createFixture(selected = diagnostic) {
-  const { root, storePath } = database;
-  const id = ++sequence;
-  const sessionKey = `agent:main:fallback-${id}`;
+  const { storePath } = database;
+  const cfg: OpenClawConfig = { session: { store: storePath } };
+  setRuntimeConfigSnapshot(cfg);
+  const f = await createAccounting();
+  const { context, sessionId } = f;
+  const sessionKey = context.sessionKey!;
   const entry: InternalSessionEntry = {
-    sessionId: `fallback-session-${id}`,
+    sessionId,
     lifecycleRevision: "generation-1",
     updatedAt: 1,
     modelProvider: selected.provider,
     model: selected.model,
   };
-  const cfg: OpenClawConfig = { session: { store: storePath } };
-  setRuntimeConfigSnapshot(cfg);
-  await replaceSessionEntry({ storePath, sessionKey }, entry);
-  const replyOperation = createReplyOperation({
-    sessionId: entry.sessionId,
-    sessionKey,
-    resetTriggered: false,
-  });
-  operations.push(replyOperation);
-  replyOperation.setPhase("running");
-  const context: Parameters<typeof accountAgentTurn>[0] = {
-    activeSessionEntry: entry,
-    activeSessionStore: { [sessionKey]: entry },
-    blockReplyPipeline: null,
-    cfg,
-    defaultModel: selected.model,
-    followupRun: createMockFollowupRun({
-      run: {
-        sessionId: entry.sessionId,
-        sessionKey,
-        agentDir: root,
-        workspaceDir: root,
-        config: cfg,
-        provider: selected.provider,
-        model: selected.model,
-      },
-    }),
-    isHeartbeat: false,
-    pendingToolTasks: new Set(),
-    preflightCompactionApplied: false,
-    resolvedVerboseLevel: "off",
-    execution: {
-      kind: "settled",
-      status: "ok",
-      result: { payloads: [{ text: "done" }], meta: { durationMs: 1 } },
-      resolved: selected,
-      fallback: { exhausted: false, attempts: [] },
-      autoCompactionCount: 0,
-    },
-    runId: `fallback-run-${id}`,
-    runStartedAt: Date.now(),
-    replyOperation,
-    sessionCtx: {},
-    sessionKey,
-    shouldInjectGroupIntro: false,
-    storePath,
+  // Preserve the projection suite's unpinned entry and minimal runtime outcome.
+  await f.replace(entry);
+  context.activeSessionEntry = context.activeSessionStore![sessionKey] = entry;
+  context.cfg = cfg;
+  context.defaultModel = selected.model;
+  Object.assign(context.followupRun.run, selected, { config: cfg });
+  context.execution = {
+    kind: "settled",
+    status: "ok",
+    result: { payloads: [{ text: "done" }], meta: { durationMs: 1 } },
+    resolved: selected,
+    fallback: { exhausted: false, attempts: [] },
+    autoCompactionCount: 0,
   };
   const scope = { agentId: "main", storePath, sessionKey, sessionId: entry.sessionId };
   return {
-    context,
-    read: () => loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
-    replace: (next: InternalSessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
+    ...f,
     persist: (
       route: { provider: string; model: string },
       {
@@ -146,20 +102,7 @@ async function createFixture(selected = diagnostic) {
         contextTokens: 1_000,
         ...route,
       };
-      return withAgentTurnCompletion(
-        {
-          agentId: "main",
-          storePath,
-          sessionKey,
-          entry: context.activeSessionEntry,
-          operation: replyOperation,
-          publish(next) {
-            context.activeSessionEntry = next;
-            context.activeSessionStore![sessionKey] = next;
-          },
-        },
-        (completion) => accountAgentTurn({ ...context, completion }),
-      );
+      return f.withCompletion((completion) => accountAgentTurn({ ...context, completion }));
     },
   };
 }
