@@ -1,13 +1,11 @@
-import { createEffect, createMemo, createSignal, For, onSettled, Show, untrack } from "solid-js";
+import { createEffect, createMemo, For, onSettled, Show, untrack } from "solid-js";
 import { isSessionRouteId, pathForAgentPanel } from "../app-route-paths.ts";
 import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
-import { loadSettings, patchSettings } from "../app/settings.ts";
 import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
@@ -16,17 +14,10 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
-import {
-  renderSessionListFrame,
-  renderSessionSection as SessionSection,
-} from "./app-sidebar-session-list-render.tsx";
+import { renderSessionListFrame } from "./app-sidebar-session-list-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
-import {
-  renderChildSessionLoadError,
-  renderSessionTree as SessionTree,
-  renderSidebarSessionIndicators,
-} from "./app-sidebar-session-row-render.tsx";
+import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { showConfirmDialog } from "./confirm-dialog.ts";
 import { SidebarPinnedAgent } from "./sidebar-pinned-agent.tsx";
@@ -34,9 +25,9 @@ import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { Menu } from "./solid/menu.tsx";
 import {
+  SessionGlyph,
   TeamSessionSlots,
   type TeamSessionSlotsProps,
-  sessionRunVisibility,
 } from "./solid/session-presentation.tsx";
 import "../styles/sidebar-agent-roster.css";
 
@@ -55,6 +46,7 @@ function cachedRosterCards(host: RosterHost) {
     avatar: card.avatar ?? null,
     textAvatar: card.textAvatar ?? null,
     activeNow: false,
+    sessionCount: 0,
     unreadCount: 0,
     lastActiveAt: 0,
     preview: undefined,
@@ -81,7 +73,6 @@ function useRoster(props: RosterProps) {
   const host = createParkedProjection(() => hostProjection().read(), presented);
   const context = createMemo(() => host().sessionDataContext ?? application);
   const store = createMemo(() => rosterActivityStore(context()));
-  const gateway = createMemo(() => projectGateway(context().gateway));
   const snapshot = createParkedProjection(() => {
     host();
     return store().snapshot;
@@ -103,14 +94,13 @@ function useRoster(props: RosterProps) {
       }),
     );
   }, presented);
-  return { host, context, store, snapshot, gateway, cards };
+  return { host, context, store, snapshot, cards };
 }
 
 export function SidebarAgentRoster(props: RosterProps) {
   const roster = useRoster(props);
   const presented = () => props.active;
   const parkedSections = createParkedProjection(() => props.sections, presented);
-  const gatewaySnapshot = createParkedProjection(() => roster.gateway().read(), presented);
   const navigation = createMemo(() =>
     projectOwner(roster.context().navigation, (owner) => owner.snapshot),
   );
@@ -120,16 +110,10 @@ export function SidebarAgentRoster(props: RosterProps) {
   );
   const pinnedCards = () => roster.cards().filter((card) => pinnedIds().has(card.id));
   const unpinnedCards = () => roster.cards().filter((card) => !pinnedIds().has(card.id));
-  const settingsScope = createMemo(() => gatewaySnapshot().connection.gatewayUrl);
-  // Restore saved choices only when the Gateway scope changes, retaining local toggles otherwise.
-  const [collapsed, setCollapsed] = createSignal<ReadonlySet<string>>(() => {
-    const gatewayUrl = settingsScope();
-    return new Set(
-      untrack(() => props.host.sidebarSnapshot?.collapsedAgentIds) ??
-        loadSettings(gatewayUrl).sidebarCollapsedAgentIds ??
-        [],
-    );
-  });
+  const hiddenAgentSections = createParkedProjection(
+    () => new Set(roster.cards().map((card) => card.id)),
+    presented,
+  );
   createEffect(
     () => [roster.store(), props.involvingMe] as const,
     ([store, involvingMe]) => {
@@ -139,7 +123,7 @@ export function SidebarAgentRoster(props: RosterProps) {
   createEffect(roster.store, (store) => () => store.setInvolvingMe(false));
   // Sidebar queries keep the last admitted selection while the roster is parked.
   const queryCollapsed = createMemo<ReadonlySet<string> | null>((previous) =>
-    presented() ? collapsed() : (previous ?? null),
+    presented() ? hiddenAgentSections() : (previous ?? null),
   );
   // Owner publications must not tear down the query accessor on the same host.
   const hostIdentity = createMemo(() => props.host);
@@ -162,23 +146,6 @@ export function SidebarAgentRoster(props: RosterProps) {
       }
     },
   );
-  const setCollapsedAgents = (next: ReadonlySet<string>) => {
-    patchSettings(
-      {
-        gatewayUrl: settingsScope(),
-        sidebarCollapsedAgentIds: [...next],
-      },
-      { selectGateway: false },
-    );
-    setCollapsed(next);
-  };
-  const toggleAgent = (id: string) => {
-    const next = new Set(collapsed());
-    if (!next.delete(id)) {
-      next.add(id);
-    }
-    setCollapsedAgents(next);
-  };
   const canDeleteAgent = (id: string) =>
     (roster.context().agents.state.agentsList?.agents.filter((agent) => agent.kind !== "system")
       .length ?? 0) > 1 &&
@@ -207,7 +174,7 @@ export function SidebarAgentRoster(props: RosterProps) {
       await context.agents.refreshList();
     }
   };
-  const agentMenu = (card: () => { id: string; name: string }) => (
+  const agentMenu = (card: () => { id: string; name: string; sessionCount: number }) => (
     <Menu
       id={`sidebar-agent-roster-${card().id}`}
       class="sidebar-customize-menu sidebar-agent-roster__menu"
@@ -234,9 +201,6 @@ export function SidebarAgentRoster(props: RosterProps) {
             });
             break;
           }
-          case "new-session":
-            roster.host().requestOpenNewSession(card().id);
-            break;
           case "sessions":
             roster.context().agentSelection.setScope(card().id);
             roster.host().onNavigate?.("sessions");
@@ -259,15 +223,8 @@ export function SidebarAgentRoster(props: RosterProps) {
           icon: <Icon name="pin" />,
         },
         {
-          id: "new-session",
-          label: t("agentsHome.createNewSession"),
-          class: "sidebar-customize-menu__item",
-          icon: <Icon name="plus" />,
-          disabled: !roster.host().readNewSessionAccess().allowed,
-        },
-        {
           id: "sessions",
-          label: t("agentsHome.viewSessions"),
+          label: t("agentsHome.viewSessions", { count: String(card().sessionCount) }),
           class: "sidebar-customize-menu__item",
           icon: <Icon name="listTree" />,
         },
@@ -326,56 +283,30 @@ export function SidebarAgentRoster(props: RosterProps) {
           </Show>
           <For each={unpinnedCards()} keyed={(card) => card.id}>
             {(card) => {
-              const runVisibility = sessionRunVisibility;
+              const mainKey = () => roster.host().selectedAgentMainSessionKey(card().id);
               const sections = () =>
                 parkedSections().filter((section) => section.id.startsWith(`agent:${card().id}:`));
-              const mainKey = () => roster.host().selectedAgentMainSessionKey(card().id);
-              const mainRow = () => roster.host().mainSessionRow(card().id);
-              const home = () => {
-                const row = mainRow();
-                return row ? roster.host().projectHomeSession(row, card().id) : null;
-              };
-              const homeLoadKeys = () =>
-                home()?.childLoadParentKeys?.length
-                  ? home()!.childLoadParentKeys!
-                  : [mainRow()?.key ?? mainKey()];
               const main = createParkedProjection(
                 () => roster.host().visibleHomeSession(card().id),
                 presented,
               );
-              const isCollapsed = () => collapsed().has(card().id);
-              const hasSessions = () =>
-                sections().some((section) => section.rows.length > 0) ||
-                home()?.loadingChildren ||
-                homeLoadKeys().some((key) =>
-                  roster.host().sessionData.childSessionErrorsByParent.has(key),
-                ) ||
-                home()?.childLoadParentKeys?.some(
-                  (key) => !roster.host().sessionData.loadedChildSessionKeys.has(key),
-                );
-              const active = () =>
-                isSessionRouteId(roster.host().activeRouteId) &&
-                areUiSessionKeysEquivalent(roster.host().getRouteSessionKey(), mainKey());
               const summaryRows = () => [
                 ...(main() ? [main()!] : []),
-                ...(isCollapsed() ? sections().flatMap((section) => section.rows) : []),
+                ...sections().flatMap((section) => section.rows),
               ];
               const headerSummary = (): TeamSessionSlotsProps => ({
                 rows: summaryRows(),
-                includeChildren: isCollapsed(),
-                childCount: isCollapsed()
-                  ? sections().reduce((count, section) => count + section.rows.length, 0)
-                  : 0,
+                includeChildren: true,
+                childCount: 0,
                 groupConflicts: summaryRows().reduce(
                   (count, row) => count + (row.workspaceConflictCount ?? 0),
                   0,
                 ),
-                runVisibility,
+                statusOnly: true,
               });
-              const collapseLabel = () =>
-                t(isCollapsed() ? "agentsHome.expandAgent" : "agentsHome.collapseAgent", {
-                  agent: card().name,
-                });
+              const active = () =>
+                isSessionRouteId(roster.host().activeRouteId) &&
+                areUiSessionKeysEquivalent(roster.host().getRouteSessionKey(), mainKey());
               return (
                 <section
                   class="sidebar-agent-roster__group"
@@ -388,33 +319,13 @@ export function SidebarAgentRoster(props: RosterProps) {
                       { "sidebar-agent-roster__header--current": active() },
                     ]}
                   >
-                    {/* The avatar doubles as the collapse toggle (it shows a chevron on
-                        hover/focus), so the header needs no separate disclosure column. */}
-                    <Show
-                      when={hasSessions()}
-                      fallback={
-                        <span class="sidebar-agent-roster__avatar" aria-hidden="true">
-                          <AgentIdentityAvatar agent={card()} />
-                        </span>
-                      }
-                    >
-                      <button
-                        type="button"
-                        class="sidebar-agent-roster__toggle"
-                        data-agent-collapse={card().id}
-                        aria-label={collapseLabel()}
-                        title={collapseLabel()}
-                        aria-expanded={isCollapsed() ? "false" : "true"}
-                        onClick={() => toggleAgent(card().id)}
-                      >
-                        <span class="sidebar-agent-roster__avatar" aria-hidden="true">
-                          <AgentIdentityAvatar agent={card()} />
-                        </span>
-                        <span class="sidebar-agent-roster__chevron" aria-hidden="true">
-                          <Icon name={isCollapsed() ? "chevronRight" : "chevronDown"} />
-                        </span>
-                      </button>
-                    </Show>
+                    <span class="sidebar-agent-roster__avatar" aria-hidden="true">
+                      <SessionGlyph
+                        circular
+                        content={<AgentIdentityAvatar agent={card()} />}
+                        running={card().activeNow}
+                      />
+                    </span>
                     <a
                       class="sidebar-agent-roster__row"
                       data-agent-id={card().id}
@@ -434,37 +345,16 @@ export function SidebarAgentRoster(props: RosterProps) {
                             {card().assistantPreview}
                           </span>
                         </Show>
+                        <Show when={card().activeNow}>
+                          <span class="sr-only">{t("agentsHome.working")}</span>
+                        </Show>
                       </span>
                     </a>
                     <span class="sidebar-agent-roster__signals">
-                      <Show when={main()} fallback={<TeamSessionSlots {...headerSummary()} />}>
-                        {(session) =>
-                          renderSidebarSessionIndicators(
-                            untrack(roster.host),
-                            session,
-                            undefined,
-                            undefined,
-                            headerSummary,
-                          ).content
-                        }
-                      </Show>
+                      <TeamSessionSlots {...headerSummary()} />
                     </span>
                     <span class="sidebar-agent-roster__actions">{agentMenu(card)}</span>
                   </div>
-                  <Show when={!isCollapsed()}>
-                    <For each={homeLoadKeys()}>
-                      {(key) => renderChildSessionLoadError(roster.host(), key)}
-                    </For>
-                    <For each={sections()} keyed={(section) => section.id}>
-                      {(section) => (
-                        <SessionSection
-                          host={roster.host()}
-                          section={section()}
-                          personHeaders={undefined}
-                        />
-                      )}
-                    </For>
-                  </Show>
                 </section>
               );
             }}

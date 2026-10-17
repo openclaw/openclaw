@@ -55,9 +55,7 @@ describe("AppSidebar agent roster", () => {
       await settleRoster(sidebar);
       const store = rosterActivityStore(context);
       onTestFinished(store.subscribe(() => {}));
-      const renderedRow = sidebar.querySelector<HTMLElement>(
-        '[data-session-key="agent:main:recent"]',
-      )!;
+      const renderedRow = sidebar.querySelector<HTMLElement>('[data-agent-group="main"]')!;
       const initial = renderedRow.textContent;
       if (surface === "navigation") {
         sidebar.navigationVisible = false;
@@ -74,7 +72,10 @@ describe("AppSidebar agent roster", () => {
       for (let index = 0; index < 3; index += 1) {
         result.sessions = result.sessions.map((heldRow) =>
           heldRow.key === "agent:main:recent"
-            ? { ...heldRow, label: `Latest work ${index}`, unread: true, hasActiveRun: true }
+            ? {
+                ...heldRow,
+                lastAssistantMessage: { text: `Latest work ${index}`, timestamp: index + 1 },
+              }
             : heldRow,
         );
         sessions.publish({
@@ -92,102 +93,26 @@ describe("AppSidebar agent roster", () => {
       }
       await settleRoster(sidebar);
       expect(
-        sidebar.querySelector('[data-session-key="agent:main:recent"]')?.textContent,
+        sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__preview')
+          ?.textContent,
       ).toContain("Latest work 2");
       expect(prepare).toHaveBeenCalledTimes(1);
     },
   );
-  it("remembers collapsed agents after remount and keeps chip mode scoped to one agent", async () => {
-    const { sidebar, provider, context, result, gatewayHarness } = await mountRoster();
+  it("retains agent-only mode after remount, then restores chip sessions", async () => {
+    const { sidebar, provider } = await mountRoster();
     expect(sidebar.querySelector(".sidebar-agent-roster")).toBeNull();
     expect(sessionKeys(sidebar)).toEqual(["agent:main:pinned", "agent:main:recent"]);
-    sidebar.sidebarEntries = ["session:agent:working:pinned"];
     await toggleRoster(sidebar);
     await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
     expect(loadSettings().sidebarAgentsMode).toBe("roster");
-    await vi.waitFor(() => expect(sessionKeys(sidebar)).toContain("agent:working:recent"));
-    sidebar.querySelector<HTMLButtonElement>('[data-agent-collapse="working"]')?.click();
-    await vi.waitFor(() => expect(sessionKeys(sidebar)).not.toContain("agent:working:recent"));
-    expect(
-      sidebar.querySelector('.sidebar-rail [data-sidebar-entry="session:agent:working:pinned"]'),
-    ).not.toBeNull();
-    expect(loadSettings().sidebarCollapsedAgentIds).toEqual(["working"]);
-    const summary = sidebar.querySelector(
-      '[data-agent-group="working"] .sidebar-agent-roster__signals',
-    )!;
-    expect(summary.querySelectorAll(".session-glyph__ring")).toHaveLength(1);
-    for (const [phase, seq] of [
-      ["finishing", 1],
-      ["start", 2],
-    ] as const) {
-      gatewayHarness.publishEvent("agent", {
-        sessionKey: "agent:working:pinned",
-        runId: "collapsed-roster-run",
-        seq,
-        stream: "lifecycle",
-        data: { phase },
-      });
-      await settleRoster(sidebar);
-      expect(result.sessions.find((row) => row.key === "agent:working:pinned")?.hasActiveRun).toBe(
-        true,
-      );
-      expect(
-        sidebar.querySelector('[data-agent-group="working"] .sidebar-agent-roster__signals'),
-      ).toBe(summary);
-      expect(summary.querySelectorAll(".session-glyph__ring")).toHaveLength(1);
-    }
-    result.sessions = result.sessions.map((row) =>
-      row.agentId === "working" && row.isMain === false && row.archived !== true
-        ? { ...row, hasActiveRun: false, activeRunIds: [], status: "done", unread: true }
-        : row,
-    );
-    await rosterActivityStore(context).refresh();
-    await settleRoster(sidebar);
-    expect(
-      sidebar.querySelector('[data-agent-group="working"] .sidebar-agent-roster__signals'),
-    ).toBe(summary);
-    expect(summary.querySelector(".session-glyph__ring")).toBeNull();
-    expect(summary.querySelector('[aria-label="Unread"]')?.textContent?.trim()).toBe("2");
-    result.sessions = result.sessions.map((row) =>
-      row.key === "agent:working:recent"
-        ? Object.assign({}, row, {
-            placement: {
-              state: "reclaimed" as const,
-              generation: 1,
-              createdAtMs: 1,
-              updatedAtMs: 1,
-              stateChangedAtMs: 1,
-              workspaceResultConflict: {
-                paths: ["ui/layout.css"],
-                totalCount: 3,
-                stagedResultRef: "refs/openclaw/worker-results/test",
-              },
-            },
-          })
-        : row,
-    );
-    await rosterActivityStore(context).refresh();
-    await settleRoster(sidebar);
-    expect(
-      summary.querySelector('[aria-label="Cloud worker children: 3 workspace conflicts"]'),
-    ).not.toBeNull();
+    expect(sessionKeys(sidebar)).toEqual([]);
+    expect(sidebar.querySelector("[data-agent-collapse]")).toBeNull();
     provider.remove();
     const remounted = await mountRoster();
-    remounted.sidebar.sidebarEntries = ["session:agent:working:pinned"];
     remounted.sidebar.sidebarAgentsMode = loadSettings().sidebarAgentsMode ?? "chip";
     await vi.waitFor(() => expect(agentIds(remounted.sidebar)).toHaveLength(3));
-    await vi.waitFor(() => expect(sessionKeys(remounted.sidebar)).toContain("agent:recent:recent"));
-    expect(
-      remounted.sidebar
-        .querySelector('[data-agent-collapse="working"]')
-        ?.getAttribute("aria-expanded"),
-    ).toBe("false");
-    expect(sessionKeys(remounted.sidebar)).not.toContain("agent:working:recent");
-    expect(
-      remounted.sidebar.querySelector(
-        '.sidebar-rail [data-sidebar-entry="session:agent:working:pinned"]',
-      ),
-    ).not.toBeNull();
+    expect(sessionKeys(remounted.sidebar)).toEqual([]);
     await toggleRoster(remounted.sidebar);
     await vi.waitFor(() =>
       expect(remounted.sidebar.querySelector(".sidebar-agent-roster")).toBeNull(),

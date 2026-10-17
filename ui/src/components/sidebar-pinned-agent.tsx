@@ -3,13 +3,14 @@ import type { agentRosterCards } from "../lib/agents/roster-activity.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
+import { SessionGlyph } from "./solid/session-presentation.tsx";
 import { Tooltip } from "./solid/tooltip.tsx";
 import "../styles/sidebar-pinned-agents.css";
 
 export function SidebarPinnedAgent(props: {
   agent: Pick<
     ReturnType<typeof agentRosterCards>[number],
-    "id" | "name" | "avatar" | "textAvatar" | "assistantPreview"
+    "id" | "name" | "avatar" | "textAvatar" | "assistantPreview" | "activeNow"
   >;
   href: string;
   active: boolean;
@@ -34,7 +35,11 @@ export function SidebarPinnedAgent(props: {
           }}
         >
           <span class="sidebar-pinned-agent__avatar" aria-hidden="true">
-            <AgentIdentityAvatar agent={props.agent} />
+            <SessionGlyph
+              circular
+              content={<AgentIdentityAvatar agent={props.agent} />}
+              running={props.agent.activeNow}
+            />
           </span>
           <span class="sidebar-pinned-agent__name">{props.agent.name}</span>
         </a>

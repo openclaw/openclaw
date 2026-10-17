@@ -44,6 +44,12 @@
   border-radius: 50%;
 }
 
+.sidebar-pinned-agent__avatar .session-glyph,
+.sidebar-pinned-agent__avatar .session-glyph__content {
+  width: 100%;
+  height: 100%;
+}
+
 .sidebar-pinned-agent__name {
   display: block;
   max-width: 100%;

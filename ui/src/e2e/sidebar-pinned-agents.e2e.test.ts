@@ -48,6 +48,15 @@ suite.define(() => {
                 lastMessagePreview: "A newer user question",
                 lastAssistantMessage: { text: assistantReply, timestamp: 20 },
               },
+              {
+                key: "agent:main:working-session",
+                agentId: "main",
+                isMain: false,
+                kind: "direct",
+                updatedAt: 25,
+                hasActiveRun: true,
+                status: "running",
+              },
             ],
             methodResponses: {
               "agents.list": agentsList,
@@ -80,6 +89,33 @@ suite.define(() => {
           await row.waitFor({ state: "visible" });
           expect(await row.getAttribute("title")).toBeNull();
           expect(await header.locator("a").count()).toBe(1);
+          expect(
+            await header.locator(".sidebar-agent-roster__avatar .session-glyph__ring").count(),
+          ).toBe(1);
+          expect(await sidebar.locator("[data-agent-collapse]").count()).toBe(0);
+          expect(
+            await sidebar
+              .locator(
+                ".sidebar-agent-roster__signals .sidebar-child-session-toggle__count, .sidebar-agent-roster__signals .session-glyph__ring",
+              )
+              .count(),
+          ).toBe(0);
+          expect(await sidebar.locator("[data-agent-group] .sidebar-recent-session").count()).toBe(
+            0,
+          );
+          const longNameRow = sidebar.locator(
+            '[data-agent-group="research"] .sidebar-agent-roster__row',
+          );
+          await page.mouse.move(-1, -1);
+          const restingPadding = await longNameRow.evaluate(
+            (element) => getComputedStyle(element).paddingInlineEnd,
+          );
+          await longNameRow.hover();
+          const hoverPadding = await longNameRow.evaluate(
+            (element) => getComputedStyle(element).paddingInlineEnd,
+          );
+          expect(restingPadding).toBe(width === 390 ? "32px" : "0px");
+          expect(hoverPadding).toBe("32px");
           for (const state of ["hover", "focus"] as const) {
             if (state === "hover") {
               await row.hover();
@@ -112,15 +148,16 @@ suite.define(() => {
             await captureSidebarUiProof(suite, page, `row-${width}-${state}.png`);
           }
           await menu.press("ArrowDown");
-          const newSession = sidebar.getByRole("menuitem", { name: "Create new session" });
-          const viewSessions = sidebar.getByRole("menuitem", { name: "View sessions" });
+          const viewSessions = sidebar.getByRole("menuitem", { name: "View sessions (2)" });
           const settings = sidebar.getByRole("menuitem", { name: "Settings", exact: true });
           const deleteAgent = sidebar.getByRole("menuitem", { name: "Delete", exact: true });
-          expect(await newSession.locator("svg").count()).toBe(1);
+          expect(await sidebar.getByRole("menuitem", { name: "Create new session" }).count()).toBe(
+            0,
+          );
           expect(await viewSessions.locator("svg").count()).toBe(1);
           expect(await settings.locator("svg").count()).toBe(1);
           expect(await deleteAgent.locator("svg").count()).toBe(1);
-          for (const item of [newSession, viewSessions, settings, deleteAgent]) {
+          for (const item of [viewSessions, settings, deleteAgent]) {
             expect(await item.locator("svg").evaluate((icon) => getComputedStyle(icon).width)).toBe(
               "16px",
             );
@@ -140,6 +177,9 @@ suite.define(() => {
           expect(await sidebar.locator('[data-agent-group="main"]').count()).toBe(0);
           expect(await sidebar.locator('[data-agent-group="research"]').isVisible()).toBe(true);
           expect(await pinned.locator(".sidebar-agent-roster__preview").count()).toBe(0);
+          expect(
+            await pinned.locator(".sidebar-pinned-agent__avatar .session-glyph__ring").count(),
+          ).toBe(1);
           const pinnedMenu = pinned.getByRole("button", { name: "Options for Harbor" });
           await pinnedMenu.hover();
           expect(
