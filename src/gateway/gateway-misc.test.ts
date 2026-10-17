@@ -1,5 +1,3 @@
-// Gateway miscellaneous tests cover shared utility edges around control UI,
-// proxy state, node command policy, and server helper behavior.
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs/promises";
 import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
@@ -18,6 +16,7 @@ import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
+import type { GatewayPluginEventScope } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunState, createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
@@ -29,8 +28,6 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 
 const wsMockState = vi.hoisted(() => ({
   last: null as {
-    url: unknown;
-    opts: unknown;
     noProxyDuringConstruction: unknown;
     httpProxyDuringConstruction: unknown;
     httpsProxyDuringConstruction: unknown;
@@ -44,10 +41,8 @@ vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
     close = vi.fn();
     send = vi.fn();
 
-    constructor(url: unknown, opts: unknown) {
+    constructor() {
       wsMockState.last = {
-        url,
-        opts,
         noProxyDuringConstruction: process.env["NO_PROXY"],
         httpProxyDuringConstruction: process.env["HTTP_PROXY"],
         httpsProxyDuringConstruction: process.env["HTTPS_PROXY"],
@@ -71,26 +66,6 @@ describe("GatewayClient", () => {
     delete process.env["HTTPS_PROXY"];
   });
 
-  function startGatewayClient(params: { url: string; tlsFingerprint?: string }) {
-    const client = new GatewayClient({ ...params, deviceIdentity: null });
-    client.start();
-    return wsMockState.last;
-  }
-
-  function setCorporateNoProxy() {
-    process.env["NO_PROXY"] = "corp.example.com";
-    process.env["no_proxy"] = "corp.example.com";
-  }
-
-  function setGatewayOnlyProxyEnv() {
-    process.env["HTTP_PROXY"] = "http://127.0.0.1:3128";
-    process.env["HTTPS_PROXY"] = "http://127.0.0.1:3128";
-  }
-
-  function registerGatewayOnlyProxy() {
-    return registerActiveManagedProxyUrl(new URL("http://127.0.0.1:3128"), "gateway-only");
-  }
-
   test("uses the admitted pairing identity for shared-auth connect failures", async () => {
     const source = await fs.readFile(
       new URL("./server/ws-connection/connect-session.ts", import.meta.url),
@@ -102,12 +77,16 @@ describe("GatewayClient", () => {
   });
 
   test("scopes IPv6 loopback bypass during Gateway-only proxy mode connection setup", () => {
-    setCorporateNoProxy();
-    setGatewayOnlyProxyEnv();
-    const registration = registerGatewayOnlyProxy();
+    process.env["NO_PROXY"] = process.env["no_proxy"] = "corp.example.com";
+    process.env["HTTP_PROXY"] = process.env["HTTPS_PROXY"] = "http://127.0.0.1:3128";
+    const registration = registerActiveManagedProxyUrl(
+      new URL("http://127.0.0.1:3128"),
+      "gateway-only",
+    );
 
     try {
-      expect(startGatewayClient({ url: "ws://[::1]:18789" })).toMatchObject({
+      new GatewayClient({ url: "ws://[::1]:18789", deviceIdentity: null }).start();
+      expect(wsMockState.last).toMatchObject({
         noProxyDuringConstruction: "corp.example.com",
         httpProxyDuringConstruction: "http://127.0.0.1:3128",
         httpsProxyDuringConstruction: "http://127.0.0.1:3128",
@@ -184,31 +163,27 @@ function makeOperatorWsClients(
 }
 
 function makeScopedBroadcastContext() {
-  const pairingSocket = makeRecordingSocket();
-  const nodeSocket = makeRecordingSocket();
-  const readSocket = makeRecordingSocket();
-  const talkSocket = makeRecordingSocket();
-  const writeSocket = makeRecordingSocket();
-  const adminSocket = makeRecordingSocket();
-  const clients = new GatewayClientRegistry([
-    makeOperatorWsClient("c-pairing", pairingSocket, ["operator.pairing"]),
-    makeGatewayWsClient("c-node", nodeSocket, {
-      role: "node",
-      scopes: ["operator.read"],
-    } as GatewayWsClient["connect"]),
-    makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
-    makeOperatorWsClient("c-talk", talkSocket, ["operator.talk"]),
-    makeOperatorWsClient("c-write", writeSocket, ["operator.write"]),
-    makeOperatorWsClient("c-admin", adminSocket, ["operator.admin"]),
-  ]);
-
+  const sockets = {
+    pairing: makeRecordingSocket(),
+    node: makeRecordingSocket(),
+    read: makeRecordingSocket(),
+    talk: makeRecordingSocket(),
+    write: makeRecordingSocket(),
+    admin: makeRecordingSocket(),
+    questions: makeRecordingSocket(),
+  };
+  const clients = new GatewayClientRegistry(
+    Object.entries(sockets).map(([scope, socket]) =>
+      scope === "node"
+        ? makeGatewayWsClient("c-node", socket, {
+            role: "node",
+            scopes: ["operator.read"],
+          } as GatewayWsClient["connect"])
+        : makeOperatorWsClient(`c-${scope}`, socket, [`operator.${scope}`]),
+    ),
+  );
   return {
-    pairingSocket,
-    nodeSocket,
-    readSocket,
-    talkSocket,
-    writeSocket,
-    adminSocket,
+    sockets,
     ...createGatewayBroadcaster({
       clients,
       preparePresenceProjection: (presence) => () => presence,
@@ -237,15 +212,6 @@ function chatPayload() {
 
 function chatSideResultPayload() {
   return { sessionKey: "agent:main:main", text: "tool output" };
-}
-
-function broadcastChatClassEvents(
-  broadcast: ReturnType<typeof createGatewayBroadcaster>["broadcast"],
-) {
-  broadcast("chat", chatPayload());
-  broadcast("agent", { type: "status", sessionKey: "agent:main:main" });
-  broadcast("chat.send_timing", { phase: "dispatch-started", runId: "run-1" });
-  broadcast("chat.side_result", chatSideResultPayload());
 }
 
 describe("gateway broadcaster", () => {
@@ -417,66 +383,56 @@ describe("gateway broadcaster", () => {
     expect(adminSocket.send).toHaveBeenCalledTimes(3);
   });
 
-  it("requires operator.read for chat-class broadcast events", () => {
-    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
-      makeScopedBroadcastContext();
-
-    broadcastChatClassEvents(broadcast);
-
-    expectSentEvents([], pairingSocket, nodeSocket);
-    expectSentEvents(
-      ["chat", "agent", "chat.send_timing", "chat.side_result"],
-      readSocket,
-      writeSocket,
-      adminSocket,
-    );
-  });
-
-  it("requires operator.questions for question broadcasts", () => {
-    const questionSocket = makeRecordingSocket();
-    const readSocket = makeRecordingSocket();
-    const clients = new GatewayClientRegistry([
-      makeOperatorWsClient("c-questions", questionSocket, ["operator.questions"]),
-      makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
-    ]);
-    const { broadcast } = createGatewayBroadcaster({ clients });
-
-    broadcast("question.requested", { id: "question-1" });
-    broadcast("question.resolved", { id: "question-1", status: "expired" });
-
-    expect(questionSocket.send).toHaveBeenCalledTimes(2);
-    expect(readSocket.send).not.toHaveBeenCalled();
-  });
-
-  it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
-    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
-      makeScopedBroadcastContext();
-
-    broadcast("plugin.myplugin.custom", { data: "test" });
-    broadcast("plugin.otherplugin.state", { state: "updated" });
-
-    expectSentEvents([], pairingSocket, nodeSocket, readSocket);
-    expectSentEvents(
-      ["plugin.myplugin.custom", "plugin.otherplugin.state"],
-      writeSocket,
-      adminSocket,
-    );
-  });
-
-  it("honors explicit read scope for plugin lifecycle events", () => {
-    const {
-      pairingSocket,
-      nodeSocket,
-      readSocket,
-      writeSocket,
-      adminSocket,
-      broadcastPluginEvent,
-    } = makeScopedBroadcastContext();
-
-    broadcastPluginEvent("plugin.workboard.changed", { revision: 1 }, "operator.read");
-
-    expectSentEvents([], pairingSocket, nodeSocket);
-    expectSentEvents(["plugin.workboard.changed"], readSocket, writeSocket, adminSocket);
+  it.each<{
+    name: string;
+    events: Record<string, unknown>;
+    allowed: string[];
+    scope?: GatewayPluginEventScope;
+  }>([
+    {
+      name: "requires operator.read for chat-class broadcast events",
+      events: {
+        chat: chatPayload(),
+        agent: { type: "status", sessionKey: "agent:main:main" },
+        "chat.send_timing": { phase: "dispatch-started", runId: "run-1" },
+        "chat.side_result": chatSideResultPayload(),
+      },
+      allowed: ["read", "write", "admin"],
+    },
+    {
+      name: "requires operator.questions for question broadcasts",
+      events: {
+        "question.requested": { id: "question-1" },
+        "question.resolved": { id: "question-1", status: "expired" },
+      },
+      allowed: ["questions", "admin"],
+    },
+    {
+      name: "allows plugin.* broadcast events for operator.write and operator.admin",
+      events: {
+        "plugin.myplugin.custom": { data: "test" },
+        "plugin.otherplugin.state": { state: "updated" },
+      },
+      allowed: ["write", "admin"],
+    },
+    {
+      name: "honors explicit read scope for plugin lifecycle events",
+      events: { "plugin.workboard.changed": { revision: 1 } },
+      allowed: ["read", "write", "admin"],
+      scope: "operator.read",
+    },
+  ])("$name", ({ events, allowed, scope }) => {
+    const { sockets, broadcast, broadcastPluginEvent } = makeScopedBroadcastContext();
+    for (const [event, payload] of Object.entries(events)) {
+      if (scope) {
+        broadcastPluginEvent(event, payload, scope);
+      } else {
+        broadcast(event, payload);
+      }
+    }
+    for (const [role, socket] of Object.entries(sockets)) {
+      expectSentEvents(allowed.includes(role) ? Object.keys(events) : [], socket);
+    }
   });
 
   it("rejects invalid or reserved plugin event broadcasts", () => {
@@ -499,15 +455,7 @@ describe("gateway broadcaster", () => {
   });
 
   it("defaults unknown events to deny and classifies remaining gateway broadcast events", () => {
-    const {
-      pairingSocket,
-      nodeSocket,
-      readSocket,
-      talkSocket,
-      writeSocket,
-      adminSocket,
-      broadcast,
-    } = makeScopedBroadcastContext();
+    const { sockets: s, broadcast } = makeScopedBroadcastContext();
 
     broadcast("cron", { jobId: "job-1" });
     broadcast("talk.mode", { enabled: true });
@@ -528,7 +476,7 @@ describe("gateway broadcaster", () => {
     broadcast("unknown.future.event", { hidden: true });
 
     const publicEvents = ["heartbeat", "health", "tick", "shutdown", "update.available"];
-    expectSentEvents(publicEvents, pairingSocket, nodeSocket);
+    expectSentEvents(publicEvents, s.pairing, s.node);
     expectSentEvents(
       [
         "cron",
@@ -538,9 +486,9 @@ describe("gateway broadcaster", () => {
         "presence",
         ...publicEvents.slice(1),
       ],
-      readSocket,
+      s.read,
     );
-    expectSentEvents(["talk.mode", ...publicEvents], talkSocket);
+    expectSentEvents(["talk.mode", ...publicEvents], s.talk);
     const writeVisibleEvents = [
       "cron",
       "talk.mode",
@@ -553,7 +501,7 @@ describe("gateway broadcaster", () => {
       "shutdown",
       "update.available",
     ];
-    expectSentEvents(writeVisibleEvents, writeSocket, adminSocket);
+    expectSentEvents(writeVisibleEvents, s.write, s.admin);
   });
 
   it("keeps event seq contiguous per receiving client when scoped events are filtered", () => {
