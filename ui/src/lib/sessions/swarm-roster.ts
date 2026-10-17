@@ -81,12 +81,12 @@ type SwarmHydrationParams = {
   parentKey: string;
   sourceEpoch: number;
   currentRows: () => readonly GatewaySessionRow[];
-  onRows: (rows: GatewaySessionRow[]) => void;
 };
 
 type SwarmRead = "parent" | "children";
 
 export class SwarmRosterHydrator {
+  private readonly listeners = new Set<() => void>();
   rows: GatewaySessionRow[] = [];
   /** True once the child query has filled `rows`; the seed can hold only some children. */
   hydrated = false;
@@ -124,6 +124,17 @@ export class SwarmRosterHydrator {
   /** Parent-named children the child query has already been asked to bring in. */
   private readonly requestedChildren = new Set<string>();
 
+  subscribe(notify: () => void): () => void {
+    this.listeners.add(notify);
+    return () => this.listeners.delete(notify);
+  }
+
+  private publish(): void {
+    for (const notify of this.listeners) {
+      notify();
+    }
+  }
+
   update(params: SwarmHydrationParams): void {
     const key = `${params.sourceEpoch}:${params.agentId ?? ""}:${params.parentKey}`;
     const changed =
@@ -141,7 +152,7 @@ export class SwarmRosterHydrator {
         .currentRows()
         .filter((row) => !areUiSessionKeysEquivalent(row.key, params.parentKey));
       this.rows = this.childRows;
-      params.onRows(this.rows);
+      this.publish();
     }
     if (this.children || this.timer !== null) {
       return;
@@ -261,7 +272,7 @@ export class SwarmRosterHydrator {
     this.parentSummary = summary;
     this.rows = this.parentRow ? mergeSwarmSessionRows(this.childRows, [this.parentRow]) : [];
     this.refreshNewChildren();
-    this.params?.onRows(this.rows);
+    this.publish();
     if (parent && changed && this.parent && !this.publishingParentRead) {
       void this.readParent();
     }
@@ -423,7 +434,7 @@ export class SwarmRosterHydrator {
         }
         // A child launched during this read is still missing from it.
         this.refreshNewChildren();
-        params.onRows(this.rows);
+        this.publish();
       })
       .catch(() => {
         if (isCurrent()) {

@@ -194,6 +194,9 @@ describe("chat Swarm progress", () => {
     const { gateway, emitEvent } = createGatewayHarness(client);
     const sessions = createTestSessionCapability(gateway);
     const { container, update } = mountProgress({ sessionKey: parentSessionKey, sessions: [] });
+    const stop = hydrator.subscribe(() =>
+      update({ sessionKey: parentSessionKey, sessions: withSummary(hydrator.rows) }),
+    );
     const params = {
       sessions,
       parentKey: parentSessionKey,
@@ -204,8 +207,6 @@ describe("chat Swarm progress", () => {
       }),
       sourceEpoch: 1,
       currentRows: () => [child],
-      onRows: (rows: GatewaySessionRow[]) =>
-        update({ sessionKey: parentSessionKey, sessions: withSummary(rows) }),
     };
     try {
       hydrator.update(params);
@@ -238,6 +239,7 @@ describe("chat Swarm progress", () => {
       ).toEqual(["Review CI", "Check types"]);
       expect(container.textContent).not.toContain(parentRunId);
     } finally {
+      stop();
       hydrator.dispose();
       sessions.dispose();
     }
