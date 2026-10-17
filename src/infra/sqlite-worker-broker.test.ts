@@ -48,6 +48,7 @@ const { databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-broker
 
 const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
+const queueRows = Array.from({ length: 128 }, (_, index) => String(index));
 
 async function openWithRetainedAccess(pathname: string) {
   const capture = stateOwner.captureStateDatabaseAccess;
@@ -380,9 +381,7 @@ poolIt("keeps an independent database responsive while another worker is at capa
   let now = 0;
   vi.spyOn(performance, "now").mockImplementation(() => now);
   const hold = holdReply((worker) => worker.threadId === busyThread);
-  const accepted = Promise.allSettled(
-    Array.from({ length: 128 }, (_, index) => append(busy, String(index))),
-  );
+  const accepted = Promise.allSettled(queueRows.map((value) => append(busy, value)));
   const canceled = new Error("Waiting command canceled");
   const revoked = new Error("Waiting command authority revoked");
   let waiting: Promise<PromiseSettledResult<unknown>[]> | undefined;
@@ -434,7 +433,7 @@ poolIt("keeps an independent database responsive while another worker is at capa
   ]);
   expect(await read(busy)).toEqual([
     "before saturation",
-    ...Array.from({ length: 128 }, (_, index) => String(index)),
+    ...queueRows,
     "oldest surviving waiter",
     "later arrival",
   ]);
@@ -504,14 +503,11 @@ it.each(["drain", "timeout"] as const)(
   async (action) => {
     const file = databasePath();
     const store = await open(file);
-    const accepted = Promise.allSettled(
-      Array.from({ length: 128 }, (_, index) => append(store, String(index))),
-    );
+    const accepted = Promise.allSettled(queueRows.map((value) => append(store, value)));
     const cancel = new AbortController();
-    const reason = new Error("waiting caller canceled");
     const logger = logging.getChildLogger();
     const warn = vi.spyOn(logger, "warn");
-    const logs = vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
+    vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     vi.setSystemTime(Date.now() + 60_000);
     const waiters = Promise.allSettled(
@@ -547,14 +543,12 @@ it.each(["drain", "timeout"] as const)(
       }
     } finally {
       vi.useRealTimers();
-      logs.mockRestore();
-      warn.mockRestore();
-      cancel.abort(reason);
+      cancel.abort();
       expect((await accepted).every((outcome) => outcome.status === "fulfilled")).toBe(true);
       await closing;
     }
     const reader = action === "drain" ? await open(file) : store;
-    expect(await read(reader)).toEqual(Array.from({ length: 128 }, (_, index) => String(index)));
+    expect(await read(reader)).toEqual(queueRows);
     expect(await append(reader, "capacity returned")).toMatchObject({
       writes: action === "drain" ? 1 : 129,
     });
@@ -598,11 +592,9 @@ it("charges admission waiters to the byte budget and releases canceled reservati
   expect(await read(store)).toEqual([]);
 });
 
-poolIt.each([
-  { cores: 1, workers: 2 },
-  { cores: 128, workers: 2 },
-])("uses $workers worker threads for $cores available CPUs", async ({ cores, workers }) => {
-  const parallelism = vi.spyOn(os, "availableParallelism").mockReturnValue(cores);
+poolIt.each([1, 128])("uses two worker threads for %i available CPUs", async (cores) => {
+  const workers = 2;
+  vi.spyOn(os, "availableParallelism").mockReturnValue(cores);
   const broker = new SqliteWorkerBroker();
   try {
     const threads = new Set<number>();
@@ -614,6 +606,5 @@ poolIt.each([
     expect(threads.size).toBe(workers);
   } finally {
     await broker.close();
-    parallelism.mockRestore();
   }
 });

@@ -35,13 +35,10 @@ const frameSizes = (bytes: Uint8Array) => [bytes.byteLength, bytes.buffer.byteLe
 function interceptPosts(transform: (request: SqliteWorkerRequest) => SqliteWorkerRequest) {
   // oxlint-disable-next-line typescript/unbound-method -- call preserves the sending worker.
   const original = Worker.prototype.postMessage;
-  return vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-    this: Worker,
-    request,
-    transfers,
-  ) {
-    return original.call(this, transform(request), transfers);
-  });
+  function post(this: Worker, ...args: Parameters<Worker["postMessage"]>) {
+    return original.call(this, transform(args[0]), args[1]);
+  }
+  return vi.spyOn(Worker.prototype, "postMessage").mockImplementation(post);
 }
 
 function interceptReplies(
@@ -49,14 +46,13 @@ function interceptReplies(
 ) {
   // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the emitting worker.
   const original = Worker.prototype.emit;
-  return vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
-    this: Worker,
-    event,
-    ...args
-  ) {
-    const publish = () => Reflect.apply(original, this, [event, ...args]);
-    return event === "message" && observe(args[0] as SqliteWorkerReply, publish) ? true : publish();
-  });
+  function emit(this: Worker, ...args: Parameters<Worker["emit"]>) {
+    const publish = () => Reflect.apply(original, this, args);
+    return args[0] === "message" && observe(args[1] as SqliteWorkerReply, publish)
+      ? true
+      : publish();
+  }
+  return vi.spyOn(Worker.prototype, "emit").mockImplementation(emit);
 }
 
 async function expectRows(store: SqliteWorkerStore<FixtureOperations>, expected: string[]) {

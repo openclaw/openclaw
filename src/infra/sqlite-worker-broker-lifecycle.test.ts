@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
-import { beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureSqliteWorkerOpen } from "./sqlite-worker-broker-admission.js";
@@ -17,35 +17,22 @@ import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.
 
 const createCpuTrackedWorker = vi.hoisted(() => vi.fn());
 vi.mock("./worker-cpu.js", () => ({ createCpuTrackedWorker }));
-vi.mock("./bun-sqlite-library.js", () => ({
-  ensureSqliteLibrarySelected: () => {},
-}));
-
-beforeEach(() => {
-  createCpuTrackedWorker.mockReset();
-});
+vi.mock("./bun-sqlite-library.js", () => ({ ensureSqliteLibrarySelected() {} }));
 
 function runtimeFixture(
-  autoExit = true,
   overrides: Partial<Parameters<typeof createSqliteWorkerLifecycle>[0]> = {},
 ) {
-  const workers: (EventEmitter & {
-    unref: ReturnType<typeof vi.fn>;
-    terminate: ReturnType<typeof vi.fn>;
-  })[] = [];
-  createCpuTrackedWorker.mockImplementation(() => {
+  createCpuTrackedWorker.mockReset();
+  const workers: ReturnType<typeof makeWorker>[] = [];
+  function makeWorker() {
     const worker = Object.assign(new EventEmitter(), {
       unref: vi.fn(),
-      terminate: vi.fn(() => {
-        if (autoExit) {
-          queueMicrotask(() => worker.emit("exit", 0));
-        }
-        return Promise.resolve(0);
-      }),
+      terminate: vi.fn(async () => 0),
     });
     workers.push(worker);
     return worker;
-  });
+  }
+  createCpuTrackedWorker.mockImplementation(makeWorker);
   const slots = new Set<Slot>();
   const lifecycle = createSqliteWorkerLifecycle({
     explicitSqliteCloseReleasesNativeResources: true,
@@ -69,18 +56,14 @@ function runtimeFixture(
   return { lifecycle, slots, workers, options, replyOwner, createSlot };
 }
 
-it("cancels a slot waiter while the retiring worker keeps ownership until exit", async ({
-  signal,
-}) => {
-  const { lifecycle, slots, workers, options, replyOwner, createSlot } = runtimeFixture(false);
+it("cancels slot waiters while retaining the worker until exit", async ({ signal }) => {
+  const { lifecycle, slots, workers, options, replyOwner, createSlot } = runtimeFixture();
   const slot = createSlot();
   const custody = slot.custody.createRequest();
   custody.activate();
   custody.accept();
-  let retired = false;
-  const retirement = lifecycle.retire(slot).then(() => {
-    retired = true;
-  });
+  const retired = vi.fn();
+  const retirement = lifecycle.retire(slot).then(retired);
   expect(readSqliteWorkerRequestCustody(custody.descriptor)).toBe(false);
   expect(custody.dispatched).toBe(true);
   const cancel = new AbortController();
@@ -94,7 +77,7 @@ it("cancels a slot waiter while the retiring worker keeps ownership until exit",
   cancel.abort(reason);
   try {
     await withinTest(rejected, signal);
-    expect(retired).toBe(false);
+    expect(retired).not.toHaveBeenCalled();
     expect(workers).toHaveLength(1);
     expect(workers[0]?.terminate).toHaveBeenCalledTimes(1);
   } finally {
@@ -102,7 +85,7 @@ it("cancels a slot waiter while the retiring worker keeps ownership until exit",
     await retirement;
     await Promise.allSettled([waiting]);
   }
-  expect(retired).toBe(true);
+  expect(retired).toHaveBeenCalledOnce();
   expect(workers).toHaveLength(1);
   expect(slots.size).toBe(0);
 });
@@ -212,7 +195,7 @@ it.each([
     const terminating = createDeferredCore();
     const actors = new Map<string, Actor>();
     const error = new Error("native close failed");
-    const { lifecycle, workers, createSlot } = runtimeFixture(false, {
+    const { lifecycle, workers, createSlot } = runtimeFixture({
       explicitSqliteCloseReleasesNativeResources: capable,
       actors,
       enqueueClose: closeFails
@@ -220,38 +203,24 @@ it.each([
         : vi.fn().mockResolvedValue(undefined),
       fail: () => terminating.resolve(),
     });
-    const slot = createSlot({
-      carrierUrl: new URL("file:///openclaw/dist/sqlite-store.worker.js"),
-    });
+    const slot = createSlot();
     const worker = workers[0]!;
     worker.terminate.mockImplementation(() => {
       terminating.resolve();
       return Promise.resolve(0);
     });
-    const nativeStopped = createDeferredCore();
-    const markNativeStopped = vi.fn(nativeStopped.resolve);
-    const custody = slot.custody.createRequest();
-    custody.activate();
-    custody.accept();
-    custody.post();
+    const markNativeStopped = vi.fn();
     const actor = Object.defineProperty(createSqliteWorkerClientActor(), "slot", { value: slot });
-    Object.assign(actor, {
-      references: 0,
-      openDispatch: { custody },
-      nativeStopped: nativeStopped.promise,
-      markNativeStopped,
-    });
+    Object.assign(actor, { references: 0, markNativeStopped });
     actors.set(actor.key, actor);
     slot.actors.add(actor);
     // A pending sibling open prevents the ordinary empty-slot retirement path.
-    let settled = false;
-    const closing = lifecycle.closeActor(actor).finally(() => {
-      settled = true;
-    });
+    const settled = vi.fn();
+    const closing = lifecycle.closeActor(actor).finally(settled);
     const outcome = Promise.allSettled([closing]);
     if (!capable || closeFails) {
       await terminating.promise;
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
       expect(markNativeStopped).not.toHaveBeenCalled();
       worker.emit("exit", 0);
     } else {

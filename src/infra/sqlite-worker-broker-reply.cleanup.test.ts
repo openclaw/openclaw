@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import type { MessagePort } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -9,7 +8,6 @@ import {
 } from "./sqlite-worker-broker-reply.js";
 import type { Job } from "./sqlite-worker-broker.types.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
-import type { SqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 
@@ -51,13 +49,8 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = [], dispatched =
     custody.accept();
   }
   const track = (event: string) => vi.fn((_value: unknown) => record(event));
-  const resolve = track("resolve"),
-    reject = track("reject");
-  const settleNative = vi.fn((_settlement: SqliteWorkerOperationSettlement) =>
-    record("settle-native"),
-  );
-  const admission: SqliteWorkerOperationAdmission = {
-    get port(): MessagePort {
+  const admission = {
+    get port() {
       return effects.forbidden();
     },
     failure: undefined,
@@ -71,7 +64,7 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = [], dispatched =
     bindDatabaseAuthority: effects.forbidden,
     finish: () => record("finish-admission"),
   };
-  const job: Job = {
+  const job = {
     custody,
     observation: { started() {}, completed() {} },
     request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
@@ -80,11 +73,11 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = [], dispatched =
       admission,
       releaseService: () => record("release-service"),
     },
-    settleNative,
-    resolve,
-    reject,
+    settleNative: vi.fn((_settlement: SqliteWorkerOperationSettlement) => record("settle-native")),
+    resolve: track("resolve"),
+    reject: track("reject"),
     detach: () => record("detach"),
-  };
+  } satisfies Job;
   const slot: Parameters<typeof failSqliteWorkerSlot>[0] = {
     custody: slotCustody,
     current: job,
@@ -94,9 +87,7 @@ function jobWithCleanup(admissionFailures: readonly unknown[] = [], dispatched =
   const retirement = createDeferredCore();
   return {
     job,
-    resolve,
-    reject,
-    settleNative,
+    ...job,
     slot,
     fail(reason: unknown, completed?: Parameters<typeof failSqliteWorkerSlot>[2]["completed"]) {
       failSqliteWorkerSlot(slot, reason, {
@@ -125,26 +116,33 @@ function expectCalls(
   }
 }
 
-function expectEvents(...events: string[]) {
-  expect(effects.events).toEqual(events);
+function expectEvents(outcome: "resolve" | "reject", warning = false) {
+  expect(effects.events).toEqual([
+    "settle-native",
+    "finish-admission",
+    "release-service",
+    ...(warning ? ["warning"] : []),
+    "detach",
+    outcome,
+  ]);
 }
 
-function aggregate(value: unknown): AggregateError {
+function aggregate(value: unknown, errors?: readonly unknown[]): AggregateError {
   assert(value instanceof AggregateError, "Expected the retained cleanup aggregate");
+  if (errors) {
+    expect(value.errors).toHaveLength(errors.length);
+    errors.forEach((error, index) => expect(value.errors[index]).toBe(error));
+  }
   return value;
 }
 
-function assertCleanupLineage(
-  failure: unknown,
-  original: Error,
-  admissionFailures: readonly Error[],
-) {
+function assertCleanupLineage(failure: unknown, original: Error) {
   const outer = aggregate(failure);
   expect(outer.cause).toBe(original);
   expect(outer.errors).toHaveLength(2);
   expect(outer.errors[0]).toBe(original);
   const admission = aggregate(outer.errors[1]);
-  expect(admission.errors).toEqual(admissionFailures);
+  expect(admission.errors).toEqual(cleanup);
   return outer;
 }
 
@@ -169,28 +167,25 @@ afterEach(() => {
 });
 
 describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () => {
-  it.each([true, false])(
-    "keeps a lost outcome unknown while reporting confirmed worker exit: %s",
-    async (retired) => {
-      const current = jobWithCleanup();
-      const error = new Error("Worker result was lost");
-      current.fail(error);
-      expect(current.settleNative).not.toHaveBeenCalled();
-      await current.retire(retired);
-      expect(current.settleNative).toHaveBeenCalledExactlyOnceWith({
-        kind: "unknown",
-        error,
-        ...(retired ? { nativeStopped: true } : {}),
-      });
-      expect(current.resolve).not.toHaveBeenCalled();
-      expect(current.reject).toHaveBeenCalledOnce();
-    },
-  );
+  it.each([true, false])("keeps a lost outcome unknown after retirement: %s", async (retired) => {
+    const current = jobWithCleanup();
+    const error = new Error("Worker result was lost");
+    current.fail(error);
+    expect(current.settleNative).not.toHaveBeenCalled();
+    await current.retire(retired);
+    expect(current.settleNative).toHaveBeenCalledExactlyOnceWith({
+      kind: "unknown",
+      error,
+      ...(retired ? { nativeStopped: true } : {}),
+    });
+    expect(current.resolve).not.toHaveBeenCalled();
+    expect(current.reject).toHaveBeenCalledOnce();
+  });
   it.each([
     { outcome: "value", retired: true },
     { outcome: "error", retired: false },
   ] as const)(
-    "preserves a completed $outcome after joining failed native cleanup (retired: $retired)",
+    "joins failed cleanup without losing $outcome (retired: $retired)",
     async ({ outcome, retired }) => {
       const current = jobWithCleanup();
       const queued = jobWithCleanup([], false);
@@ -225,20 +220,19 @@ describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () =
   );
 
   it("finishes settlement when an ordinary Error proxy refuses metadata descriptors", () => {
-    const probeError = new Error("Error metadata descriptor access refused");
     const original = new Proxy(new Error("Ordinary proxied failure"), {
       getOwnPropertyDescriptor() {
-        throw probeError;
+        throw new Error("Error metadata descriptor access refused");
       },
     });
     const current = jobWithCleanup(cleanup);
 
     settleSqliteWorkerJob(current.job, original);
 
-    const outer = assertCleanupLineage(current.reject.mock.calls[0]?.[0], original, cleanup);
+    const outer = assertCleanupLineage(current.reject.mock.calls[0]?.[0], original);
     expectCalls(current, { reject: [outer], settleNative: [{ kind: "completed" }] });
     expect("code" in outer).toBe(false);
-    expectEvents("settle-native", "finish-admission", "release-service", "detach", "reject");
+    expectEvents("reject");
     expect(effects.warnings.length).toBe(0);
   });
 
@@ -246,10 +240,7 @@ describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () =
     const original = new SqliteWorkerError("Original worker failure", "outcome-unknown");
     const earlierCleanup = new Error("Earlier owner cleanup failed");
     const failure = withSqliteWorkerCleanupFailure(original, earlierCleanup);
-    const getter = vi.fn((): never => {
-      throw new Error("Helper aggregate.code must not be queried");
-    });
-    Object.defineProperty(failure, "code", { get: getter, enumerable: true });
+    Object.defineProperty(failure, "code", { get: effects.forbidden, enumerable: true });
     vi.resetModules();
     const duplicate = await import("./sqlite-worker-broker-reply.js");
     const { SqliteWorkerError: DuplicateWorkerError } = await import("./sqlite-worker-contract.js");
@@ -261,14 +252,9 @@ describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () =
 
     expect(reject).toHaveBeenCalledOnce();
     expect(resolve).not.toHaveBeenCalled();
-    const outer = assertCleanupLineage(reject.mock.calls[0]?.[0], failure, cleanup);
+    const outer = assertCleanupLineage(reject.mock.calls[0]?.[0], failure);
     expect(Object.getOwnPropertyDescriptor(outer, "code")?.value).toBe("outcome-unknown");
-    const first = aggregate(failure);
-    expect(first.cause).toBe(original);
-    expect(first.errors).toHaveLength(2);
-    expect(first.errors[0]).toBe(original);
-    expect(first.errors[1]).toBe(earlierCleanup);
-    expect(getter).not.toHaveBeenCalled();
+    expect(aggregate(failure, [original, earlierCleanup]).cause).toBe(original);
   });
 
   it("keeps a completed write successful while diagnosing admission cleanup failures", () => {
@@ -280,17 +266,7 @@ describe("SQLite worker settlement cleanup lineage", { concurrent: false }, () =
     expectCalls(current, { resolve: [committed], settleNative: [{ kind: "completed" }] });
     expect(current.resolve.mock.calls[0]?.[0]).toBe(committed);
     expect(effects.warnings).toHaveLength(1);
-    const admissionWarning = aggregate(effects.warnings[0]);
-    expect(admissionWarning.errors).toHaveLength(2);
-    expect(admissionWarning.errors[0]).toBe(cleanup[0]);
-    expect(admissionWarning.errors[1]).toBe(cleanup[1]);
-    expectEvents(
-      "settle-native",
-      "finish-admission",
-      "release-service",
-      "warning",
-      "detach",
-      "resolve",
-    );
+    aggregate(effects.warnings[0], cleanup);
+    expectEvents("resolve", true);
   });
 });
