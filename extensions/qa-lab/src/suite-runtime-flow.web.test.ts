@@ -1,6 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { createQaChannelTransport } from "./qa-channel-transport.js";
 import type { runScenarioFlow as RunScenarioFlow } from "./scenario-flow-runner.js";
 import type { runQaSuiteScenarioDefinition as RunScenario } from "./suite-runtime-flow.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -41,26 +42,7 @@ function makeEnv() {
     lab: {},
     webSessionIds: new Set<string>(),
     gateway: {} as QaSuiteRuntimeEnv["gateway"],
-    transport: {
-      id: "qa-channel",
-      label: "QA Channel",
-      accountId: "qa-channel",
-      waitReady: vi.fn(),
-      createGatewayConfig: vi.fn(),
-      buildAgentDelivery: vi.fn(),
-      requiredPluginIds: [],
-      supportedActions: [],
-      handleAction: vi.fn(),
-      createReportNotes: vi.fn(),
-      reset: vi.fn(),
-      sendInbound: vi.fn(),
-      sendNativeCommand: vi.fn(),
-      waitForNoOutbound: vi.fn(),
-      waitForOutbound: vi.fn(),
-      waitForOutboundSequence: vi.fn(),
-      state: createQaBusState(),
-      waitForCondition: vi.fn(),
-    },
+    transport: createQaChannelTransport(createQaBusState()),
     outputDir: "/artifacts",
     repoRoot: "/repo",
     providerMode: "mock-openai",
@@ -238,8 +220,7 @@ describe("QA web acquisition across the real scenario DSL", () => {
           (await runAttempt({ ...scenario, id: "later-web", title: "Later web" })).status,
         ).toBe("pass");
         expect(captures.map(({ api }) => api.signal?.aborted)).toEqual([true, false, false]);
-        expect(captures[1]?.vars).toHaveProperty("laterAction", true);
-        expect(captures[2]?.vars).toHaveProperty("laterAction", true);
+        expect(captures.slice(1).map(({ vars }) => vars?.laterAction)).toEqual([true, true]);
         const finishTransport = vi.fn(async () => undefined);
         const stopGateway = vi.fn(async () => undefined);
         const failures = await runQaSuiteCleanupSteps([
@@ -247,8 +228,7 @@ describe("QA web acquisition across the real scenario DSL", () => {
           { phase: "transport", run: finishTransport },
           { phase: "gateway", run: stopGateway },
         ]);
-        expect(failures).toHaveLength(1);
-        expect(failures[0]?.phase).toBe("web sessions");
+        expect(failures).toMatchObject([{ phase: "web sessions" }]);
         const cleanupError = failures[0]?.error;
         expect(cleanupError).toBeInstanceOf(AggregateError);
         if (!(cleanupError instanceof AggregateError)) {

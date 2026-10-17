@@ -1,4 +1,3 @@
-// Qa Lab tests cover suite runtime agent tools plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,27 +9,23 @@ const closeMock = vi.hoisted(() => vi.fn(async () => undefined));
 const resolveQaNodeExecPathMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/node"));
 const stderrOnMock = vi.hoisted(() => vi.fn());
 const stdioTransportMock = vi.hoisted(() =>
-  vi.fn().mockImplementation(function StdioClientTransport(
-    this: { params?: unknown; stderr?: { on: typeof stderrOnMock } },
-    params: unknown,
-  ) {
-    this.params = params;
-    this.stderr = { on: stderrOnMock };
-  }),
+  vi.fn(
+    class StdioClientTransport {
+      stderr = { on: stderrOnMock };
+      constructor(public params: unknown) {}
+    },
+  ),
 );
 
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
-  Client: vi.fn().mockImplementation(function Client(this: {
-    connect?: typeof connectMock;
-    listTools?: typeof listToolsMock;
-    callTool?: typeof callToolMock;
-    close?: typeof closeMock;
-  }) {
-    this.connect = connectMock;
-    this.listTools = listToolsMock;
-    this.callTool = callToolMock;
-    this.close = closeMock;
-  }),
+  Client: vi.fn(
+    class Client {
+      connect = connectMock;
+      listTools = listToolsMock;
+      callTool = callToolMock;
+      close = closeMock;
+    },
+  ),
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
@@ -53,17 +48,40 @@ const { cleanup, makeTempDir } = createTempDirHarness();
 const repoRoot = "/repo/openclaw";
 const gatewayTempRoot = "/tmp/openclaw-qa-runtime";
 
+function callMcp(toolName = "plugin.echo", args = {}, root = repoRoot) {
+  return callPluginToolsMcp({
+    env: {
+      gateway: { tempRoot: gatewayTempRoot, runtimeEnv: { PATH: "/usr/bin" } },
+      repoRoot: root,
+    } as never,
+    toolName,
+    args,
+  });
+}
+
+function emitStderr(text: string) {
+  const listener = stderrOnMock.mock.calls[0]?.[1] as ((chunk: unknown) => void) | undefined;
+  listener?.(Buffer.from(text));
+}
+
+async function expectMcpFailure(messages: string[]) {
+  const error = await callMcp("plugin.echo", { text: "hello" }).catch((value: unknown) => value);
+  expect(error).toBeInstanceOf(Error);
+  const message = error instanceof Error ? error.message : String(error);
+  for (const text of ["MCP stderr tail:", ...messages]) {
+    expect(message).toContain(text);
+  }
+  expect(closeMock).toHaveBeenCalled();
+  return message;
+}
+
 afterEach(cleanup);
 
 describe("qa suite runtime agent tools helpers", () => {
   beforeEach(() => {
-    connectMock.mockClear();
+    vi.clearAllMocks();
     listToolsMock.mockReset();
     callToolMock.mockReset();
-    closeMock.mockClear();
-    resolveQaNodeExecPathMock.mockClear();
-    stderrOnMock.mockClear();
-    stdioTransportMock.mockClear();
   });
 
   it("finds a skill by exact name", () => {
@@ -126,17 +144,7 @@ describe("qa suite runtime agent tools helpers", () => {
       tools: [{ name: "plugin.echo" }] as never[],
     });
 
-    await callPluginToolsMcp({
-      env: {
-        gateway: {
-          tempRoot: gatewayTempRoot,
-          runtimeEnv: { PATH: "/usr/bin" },
-        },
-        repoRoot: builtRepoRoot,
-      } as never,
-      toolName: "plugin.echo",
-      args: {},
-    });
+    await callMcp("plugin.echo", {}, builtRepoRoot);
 
     expect(stdioTransportMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -157,21 +165,7 @@ describe("qa suite runtime agent tools helpers", () => {
       tools: [{ name: "plugin.beta" }, { name: "plugin.alpha" }] as never[],
     });
 
-    await expect(
-      callPluginToolsMcp({
-        env: {
-          gateway: {
-            tempRoot: gatewayTempRoot,
-            runtimeEnv: {
-              PATH: "/usr/bin",
-            },
-          },
-          repoRoot,
-        } as never,
-        toolName: "plugin.missing",
-        args: {},
-      }),
-    ).rejects.toThrow(
+    await expect(callMcp("plugin.missing")).rejects.toThrow(
       "MCP tool missing: plugin.missing; available tools: plugin.alpha, plugin.beta",
     );
 
@@ -184,67 +178,27 @@ describe("qa suite runtime agent tools helpers", () => {
       tools: [{ name: "plugin.echo" }] as never[],
     });
     callToolMock.mockImplementationOnce(async () => {
-      const stderrListener = stderrOnMock.mock.calls[0]?.[1] as
-        | ((chunk: unknown) => void)
-        | undefined;
-      stderrListener?.(Buffer.from(`old stderr${"x".repeat(12_000)}\nrecent MCP stderr tail`));
+      emitStderr(`old stderr${"x".repeat(12_000)}\nrecent MCP stderr tail`);
       throw new Error("tool call failed");
     });
 
-    const error = await callPluginToolsMcp({
-      env: {
-        gateway: {
-          tempRoot: gatewayTempRoot,
-          runtimeEnv: {
-            PATH: "/usr/bin",
-          },
-        },
-        repoRoot,
-      } as never,
-      toolName: "plugin.echo",
-      args: { text: "hello" },
-    }).catch((value: unknown) => value);
-
-    expect(error).toBeInstanceOf(Error);
-    const message = error instanceof Error ? error.message : String(error);
-    expect(message).toContain("tool call failed");
-    expect(message).toContain("MCP stderr tail:");
-    expect(message).toContain("MCP stderr truncated to last");
-    expect(message).toContain("recent MCP stderr tail");
+    const message = await expectMcpFailure([
+      "tool call failed",
+      "MCP stderr truncated to last",
+      "recent MCP stderr tail",
+    ]);
     expect(message).not.toContain("old stderr");
-    expect(closeMock).toHaveBeenCalled();
   });
 
   it("keeps plugin-tools MCP stderr on startup failures", async () => {
     connectMock.mockImplementationOnce(async () => {
-      const stderrListener = stderrOnMock.mock.calls[0]?.[1] as
-        | ((chunk: unknown) => void)
-        | undefined;
-      stderrListener?.(
-        Buffer.from("Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@openclaw/example'\n"),
-      );
+      emitStderr("Error [ERR_MODULE_NOT_FOUND]: Cannot find package '@openclaw/example'\n");
       throw new Error("MCP error -32000: Connection closed");
     });
 
-    const error = await callPluginToolsMcp({
-      env: {
-        gateway: {
-          tempRoot: gatewayTempRoot,
-          runtimeEnv: {
-            PATH: "/usr/bin",
-          },
-        },
-        repoRoot,
-      } as never,
-      toolName: "plugin.echo",
-      args: { text: "hello" },
-    }).catch((value: unknown) => value);
-
-    expect(error).toBeInstanceOf(Error);
-    const message = error instanceof Error ? error.message : String(error);
-    expect(message).toContain("MCP error -32000: Connection closed");
-    expect(message).toContain("MCP stderr tail:");
-    expect(message).toContain("Cannot find package '@openclaw/example'");
-    expect(closeMock).toHaveBeenCalled();
+    await expectMcpFailure([
+      "MCP error -32000: Connection closed",
+      "Cannot find package '@openclaw/example'",
+    ]);
   });
 });
