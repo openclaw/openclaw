@@ -34,6 +34,21 @@ const testLifetime = createFixtureLifetime();
 afterEach(() => testLifetime.cleanup());
 
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
+async function prepareView(runtime: SessionMcpRuntime, serverName: string, toolName: string) {
+  return expectDefined(
+    await fetchMcpAppView({
+      runtime,
+      agentId: "main",
+      serverName,
+      toolName,
+      uiResourceUri: `ui://${serverName}/app`,
+      toolInput: {},
+      toolResult: { content: [] },
+      allowedAppToolNames: new Set([toolName]),
+    }),
+    "prepared MCP App view",
+  );
+}
 
 describe("MCP App request shutdown", () => {
   let receipts: FixtureReceiptChannel;
@@ -135,19 +150,7 @@ describe("MCP App request shutdown", () => {
           workspaceDir: root,
           cfg,
         });
-        const view = expectDefined(
-          await fetchMcpAppView({
-            runtime,
-            agentId: "main",
-            serverName: "shutdown",
-            toolName: "blocked_tool",
-            uiResourceUri: "ui://shutdown/app",
-            toolInput: {},
-            toolResult: { content: [] },
-            allowedAppToolNames: new Set(["blocked_tool"]),
-          }),
-          "prepared MCP App view",
-        );
+        const view = await prepareView(runtime, "shutdown", "blocked_tool");
         const callTool = runtime.callTool.bind(runtime);
         const call = vi.spyOn(runtime, "callTool").mockImplementation(async (...args) => {
           callStarted = true;
@@ -249,20 +252,16 @@ async function connectPairedOperator(params: {
   return ws;
 }
 
-async function callStandaloneTool(params: {
-  port: number;
-  ticket: string;
-  label: string;
-}): Promise<Response> {
-  return await fetch(`http://127.0.0.1:${params.port}/__openclaw__/mcp-app/view`, {
+async function callStandaloneTool(port: number, ticket: string, label: string): Promise<Response> {
+  return await fetch(`http://127.0.0.1:${port}/__openclaw__/mcp-app/view`, {
     method: "POST",
     headers: {
-      Authorization: `MCP-App ${params.ticket}`,
+      Authorization: `MCP-App ${ticket}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
       method: "tools/call",
-      params: { name: "mutate", arguments: { label: params.label } },
+      params: { name: "mutate", arguments: { label } },
     }),
   });
 }
@@ -336,19 +335,7 @@ input.on("close", () => process.exit(0));
           },
         },
       });
-      const prepared = expectDefined(
-        await fetchMcpAppView({
-          runtime,
-          agentId: "main",
-          serverName: "authority",
-          toolName: "mutate",
-          uiResourceUri: "ui://authority/app",
-          toolInput: {},
-          toolResult: { content: [] },
-          allowedAppToolNames: new Set(["mutate"]),
-        }),
-        "prepared MCP App view",
-      );
+      const prepared = await prepareView(runtime, "authority", "mutate");
 
       writer = await connectPairedOperator({
         gateway,
@@ -386,19 +373,19 @@ input.on("close", () => process.exit(0));
       expect(directReaderCall.ok).toBe(false);
       expect(await fs.readFile(markerPath, "utf8").catch(() => "")).toBe("");
 
-      const readerStandaloneCall = await callStandaloneTool({
-        port: gateway.port,
-        ticket: readerTicket,
-        label: "standalone-reader",
-      });
+      const readerStandaloneCall = await callStandaloneTool(
+        gateway.port,
+        readerTicket,
+        "standalone-reader",
+      );
       expect(readerStandaloneCall.status).toBe(403);
       expect(await fs.readFile(markerPath, "utf8").catch(() => "")).toBe("");
 
-      const writerStandaloneCall = await callStandaloneTool({
-        port: gateway.port,
-        ticket: writerTicket,
-        label: "standalone-writer",
-      });
+      const writerStandaloneCall = await callStandaloneTool(
+        gateway.port,
+        writerTicket,
+        "standalone-writer",
+      );
       expect(writerStandaloneCall.status).toBe(200);
       expect(await writerStandaloneCall.json()).toMatchObject({ ok: true });
       expect(await fs.readFile(markerPath, "utf8")).toBe('{"label":"standalone-writer"}\n');
@@ -408,11 +395,7 @@ input.on("close", () => process.exit(0));
         "live MCP App view",
       );
       liveView.authorizeAppInteraction = async () => false;
-      const revokedCall = await callStandaloneTool({
-        port: gateway.port,
-        ticket: writerTicket,
-        label: "revoked-writer",
-      });
+      const revokedCall = await callStandaloneTool(gateway.port, writerTicket, "revoked-writer");
       expect(revokedCall.status).toBe(403);
       expect(await fs.readFile(markerPath, "utf8")).toBe('{"label":"standalone-writer"}\n');
     } finally {

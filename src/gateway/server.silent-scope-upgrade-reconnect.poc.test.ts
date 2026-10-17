@@ -1,6 +1,4 @@
-// Silent scope-upgrade reconnect tests document pairing-request notifications,
-// approval flow details, and operator reconnect behavior after scope expansion.
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   loadOrCreateDeviceIdentity,
@@ -151,9 +149,24 @@ async function expectRejectedScopeUpgradeAttempt({
 }
 
 describe("gateway silent scope-upgrade reconnect", () => {
+  let started: Awaited<ReturnType<typeof startServerWithClient>>;
+  beforeEach(async () => {
+    started = await startServerWithClient("secret");
+  });
+  afterEach(async () => {
+    await closeStartedGateway(started);
+  });
+  function callLocal(method: string, options: Partial<Parameters<typeof callGateway>[0]> = {}) {
+    return callGateway({
+      url: `ws://127.0.0.1:${started.port}`,
+      token: "secret",
+      method,
+      timeoutMs: 2_000,
+      ...options,
+    });
+  }
   test("keeps scope upgrades on manual approval when autoApproveLocal is disabled", async () => {
     const { replaceConfigFile } = await import("../config/config.js");
-    const started = await startServerWithClient("secret");
     const paired = await issueReadScopedOperatorToken({
       name: "silent-scope-upgrade-reconnect-poc",
       clientId: GATEWAY_CLIENT_NAMES.TEST,
@@ -167,10 +180,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
 
     try {
       ({ ws: watcherWs, requestedEvent } = await watchScopeUpgradeRequests(started.port));
-      // autoApproveLocal=false is the operator opt-out that keeps every local
-      // access grant — including scope upgrades — on the explicit prompt path.
-      // Flipped after the watcher connected so only the upgrade attempt is
-      // gated.
+      // Flip after the watcher connects so only the upgrade is gated.
       await replaceConfigFile({
         nextConfig: { gateway: { nodes: { pairing: { autoApproveLocal: false } } } },
         afterWrite: { mode: "auto" },
@@ -205,101 +215,64 @@ describe("gateway silent scope-upgrade reconnect", () => {
       watcherWs?.close();
       sharedAuthReconnectWs?.close();
       postAttemptDeviceTokenWs?.close();
-      await closeStartedGateway(started);
     }
   });
 
   test("keeps direct-local backend callGateway scoped calls off stale paired CLI baseline", async () => {
-    const started = await startServerWithClient("secret");
     const identity = await approveReadScopedDevice({
       clientId: GATEWAY_CLIENT_NAMES.CLI,
       clientMode: GATEWAY_CLIENT_MODES.CLI,
     });
 
-    try {
-      const health = await callGateway({
-        url: `ws://127.0.0.1:${started.port}`,
-        token: "secret",
-        method: "health",
-        scopes: ["operator.admin"],
-        timeoutMs: 2_000,
-      });
-      expect(health.ok).toBe(true);
-
-      await expectReadScopedPairing(identity.deviceId);
-    } finally {
-      await closeStartedGateway(started);
-    }
+    const health = await callLocal("health", { scopes: ["operator.admin"] });
+    expect(health.ok).toBe(true);
+    await expectReadScopedPairing(identity.deviceId);
   });
 
   test("keeps direct-local CLI shared-token calls off stale paired CLI baseline", async () => {
-    const started = await startServerWithClient("secret");
     const identity = await approveReadScopedDevice({
       clientId: GATEWAY_CLIENT_NAMES.CLI,
       clientMode: GATEWAY_CLIENT_MODES.CLI,
     });
 
-    try {
-      const health = await callGateway({
-        url: `ws://127.0.0.1:${started.port}`,
-        token: "secret",
-        method: "health",
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
-        timeoutMs: 2_000,
-      });
-      expect(health.ok).toBe(true);
-
-      const admin = await callGateway({
-        url: `ws://127.0.0.1:${started.port}`,
-        token: "secret",
-        method: "set-heartbeats",
-        params: { enabled: false },
-        scopes: ["operator.admin"],
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
-        timeoutMs: 2_000,
-      });
-      expect(admin.ok).toBe(true);
-
-      const pending = await devicePairingModule.listDevicePairing();
-      expect(pending.pending).toHaveLength(0);
-      await expectReadScopedPairing(identity.deviceId);
-    } finally {
-      await closeStartedGateway(started);
-    }
+    const cli = { clientName: GATEWAY_CLIENT_NAMES.CLI, mode: GATEWAY_CLIENT_MODES.CLI };
+    const health = await callLocal("health", cli);
+    expect(health.ok).toBe(true);
+    const admin = await callLocal("set-heartbeats", {
+      ...cli,
+      params: { enabled: false },
+      scopes: ["operator.admin"],
+    });
+    expect(admin.ok).toBe(true);
+    const pending = await devicePairingModule.listDevicePairing();
+    expect(pending.pending).toHaveLength(0);
+    await expectReadScopedPairing(identity.deviceId);
   });
 
   test("keeps local native approval clients off stale paired gateway-client baseline", async () => {
-    const started = await startServerWithClient("secret");
     const identity = await approveReadScopedDevice({
       clientId: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientMode: GATEWAY_CLIENT_MODES.BACKEND,
     });
 
-    try {
-      await expect(
-        withOperatorApprovalsGatewayClient(
-          {
-            config: {
-              gateway: { port: started.port, auth: { mode: "token", token: "secret" } },
-            } as never,
-            clientDisplayName: "test native approvals",
-          },
-          async () => undefined,
-        ),
-      ).resolves.toBeUndefined();
+    await expect(
+      withOperatorApprovalsGatewayClient(
+        {
+          config: {
+            gateway: { port: started.port, auth: { mode: "token", token: "secret" } },
+          } as never,
+          clientDisplayName: "test native approvals",
+        },
+        async () => undefined,
+      ),
+    ).resolves.toBeUndefined();
 
-      const pending = await devicePairingModule.listDevicePairing();
-      expect(pending.pending).toHaveLength(0);
-      await expectReadScopedPairing(identity.deviceId);
-    } finally {
-      await closeStartedGateway(started);
-    }
+    const pending = await devicePairingModule.listDevicePairing();
+    expect(pending.pending).toHaveLength(0);
+    await expectReadScopedPairing(identity.deviceId);
   });
 
   test("accepts local silent reconnect when pairing was concurrently approved", async () => {
-    const started = await startServerWithClient("secret");
     const loaded = loadDeviceIdentity("silent-reconnect-race");
     let ws: WebSocket | undefined;
 
@@ -341,12 +314,10 @@ describe("gateway silent scope-upgrade reconnect", () => {
     } finally {
       approveSpy.mockRestore();
       ws?.close();
-      await closeStartedGateway(started);
     }
   });
 
   test("does not rebroadcast a deleted silent pairing request after a concurrent rejection", async () => {
-    const started = await startServerWithClient("secret");
     const loaded = loadDeviceIdentity("silent-reconnect-reject-race");
     let ws: WebSocket | undefined;
 
@@ -387,12 +358,10 @@ describe("gateway silent scope-upgrade reconnect", () => {
     } finally {
       approveSpy.mockRestore();
       ws?.close();
-      await closeStartedGateway(started);
     }
   });
 
   test("returns the replacement pending request id when a silent request is superseded", async () => {
-    const started = await startServerWithClient("secret");
     const loaded = loadDeviceIdentity("silent-reconnect-supersede-race");
     let ws: WebSocket | undefined;
     let replacementRequestId = "";
@@ -429,7 +398,6 @@ describe("gateway silent scope-upgrade reconnect", () => {
     } finally {
       approveSpy.mockRestore();
       ws?.close();
-      await closeStartedGateway(started);
     }
   });
 });

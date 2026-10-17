@@ -8,6 +8,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import {
+  type ConnectParams,
   PROTOCOL_VERSION,
   type WorkerConnectParams,
   WORKER_RPC_SET_VERSION,
@@ -59,6 +60,24 @@ type RejectedWorker = {
   response: unknown;
   close: { code: number; reason: string };
 };
+function rejection(code: string, message: string, reason: string, closeCode: number) {
+  return {
+    response: {
+      type: "res",
+      id: "connect-1",
+      ok: false,
+      error: { code, message, details: { reason } },
+    },
+    close: { code: closeCode, reason },
+  };
+}
+async function expectInvalidRoute(url: string, params: WorkerConnectParams | ConnectParams) {
+  const ws = new WebSocket(url);
+  const closed = waitForClose(ws);
+  await waitForOpen(ws);
+  ws.send(JSON.stringify(connectFrame(params)));
+  await expect(closed).resolves.toEqual({ code: 1008, reason: "invalid-handshake" });
+}
 
 function workerConnect(credential: string): WorkerConnectParams {
   return {
@@ -83,7 +102,7 @@ function workerConnect(credential: string): WorkerConnectParams {
   };
 }
 
-function connectFrame(params: WorkerConnectParams) {
+function connectFrame(params: WorkerConnectParams | ConnectParams) {
   return { type: "req", id: "connect-1", method: "connect", params };
 }
 
@@ -340,19 +359,14 @@ describe("public worker ingress", () => {
 
       const rejected = await rejectWorker(harness.url(), workerConnect(harness.credential));
 
-      expect(rejected).toEqual({
-        response: {
-          type: "res",
-          id: "connect-1",
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            message: "unsupported Gateway WebSocket receiver",
-            details: { reason: "gateway-unavailable" },
-          },
-        },
-        close: { code: 1011, reason: "gateway-unavailable" },
-      });
+      expect(rejected).toEqual(
+        rejection(
+          "UNAVAILABLE",
+          "unsupported Gateway WebSocket receiver",
+          "gateway-unavailable",
+          1011,
+        ),
+      );
       expect(harness.logWsControl.warn).toHaveBeenCalledWith(
         "worker admission rejected reason=unsupported-websocket-receiver",
       );
@@ -362,27 +376,14 @@ describe("public worker ingress", () => {
 
   it("forces connection kind from the route in both directions", async () => {
     await withHarness({}, async (harness) => {
-      const operator = new WebSocket(harness.url());
-      const operatorClose = waitForClose(operator);
-      await waitForOpen(operator);
-      operator.send(
-        JSON.stringify(
-          connectFrame({
-            minProtocol: PROTOCOL_VERSION,
-            maxProtocol: PROTOCOL_VERSION,
-            client: { id: "test", version: "1", platform: "test", mode: "cli" },
-            role: "operator",
-            scopes: [],
-          } as never),
-        ),
-      );
-      await expect(operatorClose).resolves.toEqual({ code: 1008, reason: "invalid-handshake" });
-
-      const worker = new WebSocket(harness.url("/"));
-      const workerClose = waitForClose(worker);
-      await waitForOpen(worker);
-      worker.send(JSON.stringify(connectFrame(workerConnect(harness.credential))));
-      await expect(workerClose).resolves.toEqual({ code: 1008, reason: "invalid-handshake" });
+      await expectInvalidRoute(harness.url(), {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: { id: "test", version: "1", platform: "test", mode: "cli" },
+        role: "operator",
+        scopes: [],
+      });
+      await expectInvalidRoute(harness.url("/"), workerConnect(harness.credential));
     });
   });
 
@@ -402,19 +403,9 @@ describe("public worker ingress", () => {
       expect(harness.admitWorker).toHaveBeenCalledTimes(2);
       expect(new Set(attempts.map((attempt) => JSON.stringify(attempt)))).toEqual(
         new Set([
-          JSON.stringify({
-            response: {
-              type: "res",
-              id: "connect-1",
-              ok: false,
-              error: {
-                code: "INVALID_REQUEST",
-                message: "worker admission rejected",
-                details: { reason: "invalid-handshake" },
-              },
-            },
-            close: { code: 1008, reason: "invalid-handshake" },
-          }),
+          JSON.stringify(
+            rejection("INVALID_REQUEST", "worker admission rejected", "invalid-handshake", 1008),
+          ),
         ]),
       );
     });

@@ -29,6 +29,20 @@ import {
 const { createSessionStoreDir, openClient, getHarness, seedActiveMainSession } =
   setupGatewaySessionsTestHarness();
 type PermissionClient = NonNullable<Parameters<typeof connectWebchatClient>[0]["client"]>;
+async function rpcOk<T extends Record<string, unknown>>(
+  ws: Parameters<typeof rpcReq>[0],
+  method: string,
+  params: object,
+) {
+  const result = await rpcReq<T>(ws, method, params);
+  expect(result.ok, JSON.stringify(result.error)).toBe(true);
+  return result.payload;
+}
+async function seedSessions(entries: Parameters<typeof writeSessionStore>[0]["entries"]) {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({ entries });
+  return storePath;
+}
 
 async function openPermissionClient(
   client: Pick<PermissionClient, "id" | "mode"> & { scopes?: string[] },
@@ -47,14 +61,12 @@ async function openPermissionClient(
 
 async function createPermissionSessionStore() {
   const { storePath } = await createSessionStoreDir();
-  await upsertSessionEntryCore(
-    { sessionKey: "agent:main:main", storePath },
-    sessionStoreEntry("main-session"),
-  );
-  await upsertSessionEntryCore(
-    { sessionKey: "agent:main:discord:group:dev", storePath },
-    sessionStoreEntry("sess-group"),
-  );
+  for (const [sessionKey, sessionId] of [
+    ["agent:main:main", "main-session"],
+    ["agent:main:discord:group:dev", "sess-group"],
+  ]) {
+    await upsertSessionEntryCore({ sessionKey, storePath }, sessionStoreEntry(sessionId));
+  }
   return { storePath };
 }
 
@@ -121,12 +133,7 @@ test("webchat session mutations follow operator scope policy", async () => {
 });
 
 test("session:patch hook mutations cannot change the response path", async () => {
-  await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-cfg-isolation-test"),
-    },
-  });
+  await seedSessions({ main: sessionStoreEntry("sess-cfg-isolation-test") });
 
   sessionHookMocks.triggerInternalHook.mockImplementationOnce(async (event) => {
     assert(isInternalHookEvent(event));
@@ -140,9 +147,8 @@ test("session:patch hook mutations cannot change the response path", async () =>
   });
 
   const { ws } = await openClient();
-  const patched = await rpcReq<{
+  const patched = await rpcOk<{
     entry: { label?: string };
-    key: string;
     resolved: {
       modelProvider: string;
       model: string;
@@ -153,7 +159,6 @@ test("session:patch hook mutations cannot change the response path", async () =>
     label: "cfg-isolation",
   });
 
-  expect(patched.ok).toBe(true);
   expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledOnce();
   expect(sessionHookMocks.triggerInternalHook.mock.calls[0]?.[0]).toMatchObject({
     type: "session",
@@ -164,27 +169,24 @@ test("session:patch hook mutations cannot change the response path", async () =>
       patch: { label: "cfg-isolation" },
     },
   });
-  expect(patched.payload?.resolved).toEqual({
+  expect(patched?.resolved).toEqual({
     modelProvider: "anthropic",
     model: "claude-opus-4-6",
     agentRuntime: { id: "openclaw", source: "implicit" },
     runtimeSelectionLocked: false,
   });
-  expect(patched.payload?.entry.label).toBe("cfg-isolation");
+  expect(patched?.entry.label).toBe("cfg-isolation");
 
   ws.close();
 });
 
 test("sessions.patch stores and clears rootless modes while preserving recorded roots", async () => {
-  const { storePath } = await createSessionStoreDir();
   const pinnedSessionKey = "agent:main:dashboard:pinned-permission";
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-rootless-permission"),
-      [pinnedSessionKey]: sessionStoreEntry("sess-pinned-permission", {
-        sessionRoot: "/workspace/project",
-      }),
-    },
+  const storePath = await seedSessions({
+    main: sessionStoreEntry("sess-rootless-permission"),
+    [pinnedSessionKey]: sessionStoreEntry("sess-pinned-permission", {
+      sessionRoot: "/workspace/project",
+    }),
   });
 
   const { ws } = await openClient();
@@ -279,11 +281,8 @@ test("sessions.reset applies a rootless permission mode and interrupts admitted 
 });
 
 test("sessions.reset preserves a persisted rootless permission mode", async () => {
-  await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-legacy-rootless-permission", { permissionMode: "full" }),
-    },
+  await seedSessions({
+    main: sessionStoreEntry("sess-legacy-rootless-permission", { permissionMode: "full" }),
   });
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
 
@@ -321,58 +320,42 @@ test("session wire speed negotiation preserves canonical ultrafast across legacy
       [legacy.ws, true],
       [current.ws, "ultrafast"],
     ] as const) {
-      const list = await rpcReq<{ sessions: Array<SpeedFields & { key: string }> }>(
+      const speed = { fastMode: expected, effectiveFastMode: expected };
+      const list = await rpcOk<{ sessions: Array<SpeedFields & { key: string }> }>(
         ws,
         "sessions.list",
         {},
       );
-      expect(list.ok).toBe(true);
-      expect(list.payload?.sessions.find((row) => row.key === key)).toMatchObject({
-        fastMode: expected,
-        effectiveFastMode: expected,
+      expect(list?.sessions.find((row) => row.key === key)).toMatchObject(speed);
+      const described = await rpcOk<{ session: SpeedFields }>(ws, "sessions.describe", {
+        key,
       });
-      const described = await rpcReq<{ session: SpeedFields }>(ws, "sessions.describe", { key });
-      expect(described.ok).toBe(true);
-      expect(described.payload?.session).toMatchObject({
-        fastMode: expected,
-        effectiveFastMode: expected,
-      });
+      expect(described?.session).toMatchObject(speed);
       for (const method of ["models.list", "chat.metadata"] as const) {
-        const catalog = await rpcReq<{ models: SpeedFields[] }>(
+        const catalog = await rpcOk<{ models: SpeedFields[] }>(
           ws,
           method,
           method === "models.list" ? { preparedOnly: true } : { sessionKey: key },
         );
-        expect(catalog.ok, JSON.stringify(catalog.error)).toBe(true);
-        expect(catalog.payload?.models.length).toBeGreaterThan(0);
-        expect(catalog.payload?.models.every((model) => model.effectiveFastMode === expected)).toBe(
-          true,
-        );
+        expect(catalog?.models.length).toBeGreaterThan(0);
+        expect(catalog?.models.every((model) => model.effectiveFastMode === expected)).toBe(true);
       }
       for (const method of ["chat.history", "chat.startup"] as const) {
-        const history = await rpcReq<
-          SpeedFields & { sessionInfo: SpeedFields; metadata?: { models?: SpeedFields[] } }
-        >(ws, method, {
+        const history = await rpcOk<SpeedFields & { sessionInfo: SpeedFields }>(ws, method, {
           sessionKey: key,
         });
-        expect(history.ok, JSON.stringify(history.error)).toBe(true);
-        expect(history.payload?.fastMode).toBe(expected);
-        expect(history.payload?.sessionInfo).toMatchObject({
-          fastMode: expected,
-          effectiveFastMode: expected,
-        });
+        expect(history?.fastMode).toBe(expected);
+        expect(history?.sessionInfo).toMatchObject(speed);
       }
-      const unsaved = await rpcReq<{ sessionInfo: SpeedFields }>(ws, "chat.history", {
+      const unsaved = await rpcOk<{ sessionInfo: SpeedFields }>(ws, "chat.history", {
         sessionKey: "agent:main:unsaved-speed",
       });
-      expect(unsaved.ok, JSON.stringify(unsaved.error)).toBe(true);
-      expect(unsaved.payload?.sessionInfo.effectiveFastMode).toBe(expected);
-      const patch = await rpcReq<{ entry: SpeedFields }>(ws, "sessions.patch", {
+      expect(unsaved?.sessionInfo.effectiveFastMode).toBe(expected);
+      const patch = await rpcOk<{ entry: SpeedFields }>(ws, "sessions.patch", {
         key,
         label: "Speed compatibility",
       });
-      expect(patch.ok, JSON.stringify(patch.error)).toBe(true);
-      expect(patch.payload?.entry.fastMode).toBe(expected);
+      expect(patch?.entry.fastMode).toBe(expected);
       expect((await rpcReq(ws, "sessions.subscribe", {})).ok).toBe(true);
     }
     const changed = [legacy.ws, current.ws].map((ws) =>
@@ -404,21 +387,19 @@ test("session wire speed negotiation preserves canonical ultrafast across legacy
       [legacy.ws, true],
       [current.ws, "ultrafast"],
     ] as const) {
-      const created = await rpcReq<{ entry: SpeedFields }>(ws, "sessions.create", {
+      const created = await rpcOk<{ entry: SpeedFields }>(ws, "sessions.create", {
         agentId: "main",
         key: createdKey,
         fastMode: "ultrafast",
         idempotencyKey: "speed-create-once",
       });
-      expect(created.ok, JSON.stringify(created.error)).toBe(true);
-      expect(created.payload?.entry.fastMode).toBe(expected);
+      expect(created?.entry.fastMode).toBe(expected);
     }
     expect(loadSessionEntry({ agentId: "main", sessionKey: createdKey, storePath })?.fastMode).toBe(
       "ultrafast",
     );
-    const reset = await rpcReq<{ entry: SpeedFields }>(legacy.ws, "sessions.reset", { key });
-    expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
-    expect(reset.payload?.entry.fastMode).toBe(true);
+    const reset = await rpcOk<{ entry: SpeedFields }>(legacy.ws, "sessions.reset", { key });
+    expect(reset?.entry.fastMode).toBe(true);
     expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.fastMode).toBe(
       "ultrafast",
     );

@@ -40,6 +40,15 @@ const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const pendingArchiveCleanups = new Set<() => Promise<void>>();
 const sessionKey = "agent:main:archive-placement";
 const sessionId = "archive-placement-session";
+const archivedAt = (storePath: string, key = sessionKey) =>
+  loadSessionEntry({ storePath, sessionKey: key })?.archivedAt;
+function expectUnavailableArchive(
+  result: Awaited<ReturnType<typeof patchPlacement>>,
+  storePath: string,
+) {
+  expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE", retryable: true } });
+  expect(archivedAt(storePath)).toBeUndefined();
+}
 
 async function preparePlacement(
   state: Parameters<typeof workerPlacement>[0]["state"],
@@ -140,12 +149,7 @@ test("sessions.patch retries failed cleanup during unrelated dispatch and reject
     workerSessionPlacementService: placementReader(() => placement),
     workerPlacementDispatchService: coordinated,
   };
-  const archive = () =>
-    directSessionReq(
-      "sessions.patch",
-      { key: sessionKey, archived: true, expectedSessionId: sessionId },
-      { context },
-    );
+  const archive = () => patchPlacement(context);
   const first = archive();
   try {
     await Promise.race([
@@ -166,12 +170,12 @@ test("sessions.patch retries failed cleanup during unrelated dispatch and reject
       },
     });
     expect(reclaim).toHaveBeenCalledOnce();
-    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+    expect(archivedAt(storePath)).toBeUndefined();
     releaseReclaim.resolve();
     expect(await first).toMatchObject({ ok: false });
     expect(await archive()).toMatchObject({ ok: true });
     expect(reclaim).toHaveBeenCalledTimes(2);
-    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
+    expect(archivedAt(storePath)).toEqual(expect.any(Number));
     expect(reconcile).toHaveBeenCalledOnce();
   } finally {
     releaseReclaim.resolve();
@@ -259,17 +263,13 @@ test.each([false, true])(
           throw new Error("archive completed before worker destruction");
         }),
       ]);
-      expect(
-        loadSessionEntry({ storePath, sessionKey: REQUEST.sessionKey })?.archivedAt,
-      ).toBeUndefined();
+      expect(archivedAt(storePath, REQUEST.sessionKey)).toBeUndefined();
       release.resolve();
       if (destroyFails) {
         await expect(archive).resolves.toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
         expect(placements.get(REQUEST.sessionId)?.state).toBe("failed");
         expect(harness.environments.get(harness.ready.environmentId)?.state).not.toBe("destroyed");
-        expect(
-          loadSessionEntry({ storePath, sessionKey: REQUEST.sessionKey })?.archivedAt,
-        ).toBeUndefined();
+        expect(archivedAt(storePath, REQUEST.sessionKey)).toBeUndefined();
         return;
       }
       const outcome = await archive;
@@ -282,9 +282,7 @@ test.each([false, true])(
       ).toMatchObject({ ok: true });
       expect(placements.get(REQUEST.sessionId)?.state).toBe("local");
       expect(harness.environments.get(harness.ready.environmentId)?.state).toBe("destroyed");
-      expect(loadSessionEntry({ storePath, sessionKey: REQUEST.sessionKey })?.archivedAt).toEqual(
-        expect.any(Number),
-      );
+      expect(archivedAt(storePath, REQUEST.sessionKey)).toEqual(expect.any(Number));
     } finally {
       release.resolve();
       await archive;
@@ -314,11 +312,7 @@ test.each(["rejected", "unavailable"] as const)(
       workerPlacementDispatchService,
     });
 
-    expect(archived).toMatchObject({
-      ok: false,
-      error: { code: "UNAVAILABLE", retryable: true },
-    });
-    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+    expectUnavailableArchive(archived, storePath);
     expect(release).toHaveBeenCalledOnce();
     expect(reclaim).toHaveBeenCalledTimes(failure === "rejected" ? 1 : 0);
   },
@@ -339,11 +333,7 @@ test("sessions.patch rejects a mismatched reclaimed identity without archiving",
     workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
   });
 
-  expect(archived).toMatchObject({
-    ok: false,
-    error: { code: "UNAVAILABLE", retryable: true },
-  });
-  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+  expectUnavailableArchive(archived, storePath);
 });
 
 test("sessions.patch rejects a reclaimed return when its authoritative placement stayed active", async () => {
@@ -355,12 +345,8 @@ test("sessions.patch rejects a reclaimed return when its authoritative placement
     workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
   });
 
-  expect(archived).toMatchObject({
-    ok: false,
-    error: { code: "UNAVAILABLE", retryable: true },
-  });
+  expectUnavailableArchive(archived, storePath);
   expect(reclaim).toHaveBeenCalledOnce();
-  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 });
 
 test("sessions.patch rejects a failed placement identity changed during the runtime drain", async ({
@@ -408,13 +394,9 @@ test("sessions.patch rejects a failed placement identity changed during the runt
     });
     drainGate.resolve();
 
-    await expect(archive).resolves.toMatchObject({
-      ok: false,
-      error: { code: "UNAVAILABLE", retryable: true },
-    });
+    expectUnavailableArchive(await archive, storePath);
     expect(reclaim).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
-    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
   } finally {
     await cleanup();
     pendingArchiveCleanups.delete(cleanup);
@@ -429,11 +411,10 @@ test("sessions.patch keeps reconciliation pending before cancellation", async ()
     workerSessionPlacementService: placementReader(() => placement),
     workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
   });
-  expect(archived).toMatchObject({ ok: false, error: { code: "UNAVAILABLE", retryable: true } });
+  expectUnavailableArchive(archived, storePath);
   expect(reclaim).not.toHaveBeenCalled();
   expect(embeddedRunMock.abortCalls).toEqual([]);
   expectNoSessionQueueCleanup();
-  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 });
 
 test("sessions.patch keeps restore blocked for an active cloud placement", async () => {
@@ -445,5 +426,5 @@ test("sessions.patch keeps restore blocked for an active cloud placement", async
   );
 
   expect(restored).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBe(1);
+  expect(archivedAt(storePath)).toBe(1);
 });

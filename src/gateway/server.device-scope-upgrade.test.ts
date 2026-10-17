@@ -49,6 +49,7 @@ const BROWSER_CAPS = [
   GATEWAY_CLIENT_CAPS.RUN_TOOL_BINDINGS,
   GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS,
 ];
+type Upgrade = { status: string; requestId: string; deviceToken: string; scopes: string[] };
 
 describe("live device scope upgrade", () => {
   let started: Awaited<ReturnType<typeof startConnectedServerWithClient>>;
@@ -57,6 +58,13 @@ describe("live device scope upgrade", () => {
     const ws = await openTrackedWs(started.port, headers);
     sockets.add(ws);
     return ws;
+  }
+  const requestUpgrade = (ws: Parameters<typeof rpcReq>[0], scopes = FULL_SCOPES) =>
+    rpcReq<{ requestId: string }>(ws, "device.scopes.requestUpgrade", { scopes });
+  const waitUpgrade = (ws: Parameters<typeof rpcReq>[0], requestId: string | undefined) =>
+    rpcReq<Upgrade>(ws, "device.scopes.waitUpgrade", { requestId }, 10_000);
+  async function decideUpgrade(requestId: string | undefined, decision = "approve") {
+    expect((await rpcReq(started.ws, `device.pair.${decision}`, { requestId })).ok).toBe(true);
   }
   afterEach(() => {
     for (const ws of sockets) {
@@ -138,32 +146,19 @@ describe("live device scope upgrade", () => {
 
   test("lets a paired scope-less operator request access recovery", async () => {
     const limited = await openLimitedDevice("live-scope-upgrade-scope-less", false, []);
-    const registration = await rpcReq<{ requestId: string }>(
-      limited.ws,
-      "device.scopes.requestUpgrade",
-      { scopes: FULL_SCOPES },
-    );
+    const registration = await requestUpgrade(limited.ws);
     expect(registration.ok, JSON.stringify(registration.error)).toBe(true);
     expect(registration.payload?.requestId).toBeTypeOf("string");
   });
 
   test("returns the rotated token and reconnects the Control UI with admin scopes", async () => {
     const limited = await openLimitedDevice("live-scope-upgrade-approved-control-ui", true);
-    const registration = await rpcReq<{ requestId: string }>(
-      limited.ws,
-      "device.scopes.requestUpgrade",
-      { scopes: FULL_SCOPES },
-    );
+    const registration = await requestUpgrade(limited.ws);
     expect(registration.ok).toBe(true);
     const requestId = registration.payload?.requestId;
     expect(requestId).toBeTypeOf("string");
 
-    const wait = rpcReq<{
-      status: string;
-      requestId: string;
-      deviceToken: string;
-      scopes: string[];
-    }>(limited.ws, "device.scopes.waitUpgrade", { requestId }, 10_000);
+    const wait = waitUpgrade(limited.ws, requestId);
     const pairingList = await rpcReq<{
       pending: Array<{ requestId: string; deviceId: string; scopes?: string[] }>;
     }>(started.ws, "device.pair.list", {});
@@ -173,14 +168,15 @@ describe("live device scope upgrade", () => {
       scopes: FULL_SCOPES.toSorted(),
     });
 
-    const approval = await rpcReq(started.ws, "device.pair.approve", { requestId });
-    expect(approval.ok).toBe(true);
+    await decideUpgrade(requestId);
     const resolved = await wait;
-    expect(resolved.ok).toBe(true);
-    expect(resolved.payload).toMatchObject({
-      status: "approved",
-      requestId,
-      scopes: expect.arrayContaining(["operator.admin"]),
+    expect(resolved).toMatchObject({
+      ok: true,
+      payload: {
+        status: "approved",
+        requestId,
+        scopes: expect.arrayContaining(["operator.admin"]),
+      },
     });
     expect(resolved.payload?.deviceToken).not.toBe(limited.token);
 
@@ -201,18 +197,10 @@ describe("live device scope upgrade", () => {
 
   test("preserves a browser origin through approval and reconnects from the same origin", async () => {
     const limited = await openLimitedBrowserDevice("live-scope-upgrade-browser-origin");
-    const registration = await rpcReq<{ requestId: string }>(
-      limited.ws,
-      "device.scopes.requestUpgrade",
-      { scopes: FULL_SCOPES },
-    );
+    const registration = await requestUpgrade(limited.ws);
     const requestId = registration.payload?.requestId;
-    const wait = rpcReq<{
-      status: string;
-      deviceToken: string;
-      scopes: string[];
-    }>(limited.ws, "device.scopes.waitUpgrade", { requestId }, 10_000);
-    expect((await rpcReq(started.ws, "device.pair.approve", { requestId })).ok).toBe(true);
+    const wait = waitUpgrade(limited.ws, requestId);
+    await decideUpgrade(requestId);
     const resolved = await wait;
     expect(resolved).toMatchObject({
       ok: true,
@@ -249,13 +237,11 @@ describe("live device scope upgrade", () => {
       deviceIdentityPath: limited.identityPath,
       scopes: ["operator.read"],
     });
-    const registration = await rpcReq<{ requestId: string }>(ws, "device.scopes.requestUpgrade", {
-      scopes: FULL_SCOPES,
-    });
+    const registration = await requestUpgrade(ws);
     expect(registration.ok).toBe(true);
     const requestId = registration.payload?.requestId;
-    const wait = rpcReq(ws, "device.scopes.waitUpgrade", { requestId }, 10_000);
-    expect((await rpcReq(started.ws, "device.pair.approve", { requestId })).ok).toBe(true);
+    const wait = waitUpgrade(ws, requestId);
+    await decideUpgrade(requestId);
 
     const result = await wait;
     expect(result).toMatchObject({
@@ -286,38 +272,22 @@ describe("live device scope upgrade", () => {
     let requestId: string | undefined;
     let waits: Array<Promise<unknown>> = [];
     try {
-      const registration = await rpcReq<{ requestId: string }>(
-        limited.ws,
-        "device.scopes.requestUpgrade",
-        { scopes: FULL_SCOPES },
-      );
+      const registration = await requestUpgrade(limited.ws);
       requestId = registration.payload?.requestId;
-      const firstWait = rpcReq<{ status: string; requestId: string }>(
-        limited.ws,
-        "device.scopes.waitUpgrade",
-        { requestId },
-        10_000,
-      );
-      const secondWait = rpcReq<{ status: string; requestId: string }>(
-        limited.ws,
-        "device.scopes.waitUpgrade",
-        { requestId },
-        10_000,
-      );
+      const firstWait = waitUpgrade(limited.ws, requestId);
+      const secondWait = waitUpgrade(limited.ws, requestId);
       waits = [firstWait, secondWait];
 
       await vi.waitFor(() => expect(pendingSpy).toHaveBeenCalled());
       expect(pendingSpy).toHaveBeenCalledTimes(1);
       releaseRead();
-      expect((await rpcReq(started.ws, "device.pair.reject", { requestId })).ok).toBe(true);
-      await expect(firstWait).resolves.toMatchObject({
-        ok: true,
-        payload: { status: "rejected", requestId },
-      });
-      await expect(secondWait).resolves.toMatchObject({
-        ok: true,
-        payload: { status: "rejected", requestId },
-      });
+      await decideUpgrade(requestId, "reject");
+      for (const wait of [firstWait, secondWait]) {
+        await expect(wait).resolves.toMatchObject({
+          ok: true,
+          payload: { status: "rejected", requestId },
+        });
+      }
     } finally {
       releaseRead();
       if (requestId) {
@@ -342,9 +312,7 @@ describe("live device scope upgrade", () => {
         mode: GATEWAY_CLIENT_MODES.CLI,
       },
     });
-    const response = await rpcReq(ws, "device.scopes.requestUpgrade", {
-      scopes: FULL_SCOPES,
-    });
+    const response = await requestUpgrade(ws);
     expect(response).toMatchObject({
       ok: false,
       error: {
@@ -359,9 +327,7 @@ describe("live device scope upgrade", () => {
 
   test("rejects a requested scope set narrower than the live connection", async () => {
     const limited = await openLimitedDevice("live-scope-upgrade-narrower");
-    const response = await rpcReq(limited.ws, "device.scopes.requestUpgrade", {
-      scopes: ["operator.approvals"],
-    });
+    const response = await requestUpgrade(limited.ws, ["operator.approvals"]);
     expect(response).toMatchObject({
       ok: false,
       error: { code: "INVALID_REQUEST" },
@@ -374,28 +340,15 @@ describe("live device scope upgrade", () => {
     const now = Date.now();
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     try {
-      const first = await rpcReq<{ requestId: string }>(
-        limited.ws,
-        "device.scopes.requestUpgrade",
-        { scopes: FULL_SCOPES },
-      );
+      const first = await requestUpgrade(limited.ws);
       nowSpy.mockReturnValue(now + PAIRING_PENDING_TTL_MS - 1_000);
-      const retry = await rpcReq<{ requestId: string }>(
-        limited.ws,
-        "device.scopes.requestUpgrade",
-        { scopes: FULL_SCOPES },
-      );
+      const retry = await requestUpgrade(limited.ws);
       expect(retry.payload?.requestId).toBe(first.payload?.requestId);
 
       nowSpy.mockReturnValue(now + PAIRING_PENDING_TTL_MS + 1_000);
       const requestId = retry.payload?.requestId;
-      const wait = rpcReq<{ status: string; requestId: string }>(
-        limited.ws,
-        "device.scopes.waitUpgrade",
-        { requestId },
-        10_000,
-      );
-      expect((await rpcReq(started.ws, "device.pair.approve", { requestId })).ok).toBe(true);
+      const wait = waitUpgrade(limited.ws, requestId);
+      await decideUpgrade(requestId);
       expect(await wait).toMatchObject({
         ok: true,
         payload: { status: "approved", requestId },
@@ -409,17 +362,13 @@ describe("live device scope upgrade", () => {
   test("does not disclose upgrade results to another authenticated device", async () => {
     const owner = await openLimitedDevice("live-scope-upgrade-owner");
     const other = await openLimitedDevice("live-scope-upgrade-other");
-    const registration = await rpcReq<{ requestId: string }>(
-      owner.ws,
-      "device.scopes.requestUpgrade",
-      { scopes: FULL_SCOPES },
-    );
+    const registration = await requestUpgrade(owner.ws);
     const requestId = registration.payload?.requestId;
     const crossDeviceWait = await rpcReq(other.ws, "device.scopes.waitUpgrade", { requestId });
     expect(crossDeviceWait).toMatchObject({
       ok: false,
       error: { code: "INVALID_REQUEST", message: "scope upgrade expired or not found" },
     });
-    expect((await rpcReq(started.ws, "device.pair.reject", { requestId })).ok).toBe(true);
+    await decideUpgrade(requestId, "reject");
   });
 });

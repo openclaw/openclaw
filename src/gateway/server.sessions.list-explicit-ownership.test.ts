@@ -32,21 +32,38 @@ import {
 
 setupGatewaySessionsHandlerTestHarness();
 
-test("sessions.list preserves recorded sentinel owners for explicit multi-agent federation", async () => {
+async function withSessionState(name: string, run: (stateDir: string) => Promise<void>) {
   const rootStateDir = process.env.OPENCLAW_STATE_DIR;
   if (!rootStateDir) {
     throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
   }
-  const stateDir = path.join(rootStateDir, "explicit-ownership-list-regression");
-  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+  const stateDir = path.join(rootStateDir, name);
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () => run(stateDir));
+}
+
+function configureExplicitOwner(
+  store: string,
+  entries: NonNullable<typeof testState.agentsConfig>["entries"],
+) {
+  testState.sessionConfig = { store };
+  testState.agentsConfig = { ownership: "explicit", entries };
+  testState.agentConfig = { sessionStore: { agentId: "ops" } };
+}
+
+const previewOptions = { includeDerivedTitles: true, includeLastMessage: true };
+const preview = {
+  derivedTitle: "Physical database title",
+  lastMessagePreview: "Physical database preview",
+};
+type ListedSession = { key: string; agentId: string; sessionId: string };
+const identities = (sessions: ListedSession[] | undefined) =>
+  sessions?.map(({ key, agentId, sessionId }) => ({ key, agentId, sessionId }));
+
+test("sessions.list preserves recorded sentinel owners for explicit multi-agent federation", async () => {
+  await withSessionState("explicit-ownership-list-regression", async (stateDir) => {
     const agentsDir = path.join(stateDir, "agents");
     const storeTemplate = path.join(agentsDir, "{agentId}", "sessions", "sessions.json");
-    testState.sessionConfig = { store: storeTemplate };
-    testState.agentsConfig = {
-      ownership: "explicit",
-      entries: { ops: {}, research: {} },
-    };
-    testState.agentConfig = { sessionStore: { agentId: "ops" } };
+    configureExplicitOwner(storeTemplate, { ops: {}, research: {} });
     const linkedSessionKey = "subagent:workboard-default-owned";
     await writeSessionStore({
       storePath: storeTemplate.replace("{agentId}", "ops"),
@@ -67,7 +84,7 @@ test("sessions.list preserves recorded sentinel owners for explicit multi-agent 
     });
 
     const all = await directSessionReq<{
-      sessions: Array<{ key: string; agentId: string; sessionId: string }>;
+      sessions: ListedSession[];
       count: number;
       totalCount: number;
       hasMore: boolean;
@@ -78,9 +95,7 @@ test("sessions.list preserves recorded sentinel owners for explicit multi-agent 
     });
     expect(all.ok).toBe(true);
     expect(all.payload).toMatchObject({ count: 5, totalCount: 5, hasMore: false });
-    expect(
-      all.payload?.sessions.map(({ key, agentId, sessionId }) => ({ key, agentId, sessionId })),
-    ).toEqual([
+    expect(identities(all.payload?.sessions)).toEqual([
       { key: `agent:research:${linkedSessionKey}`, agentId: "research", sessionId: "sess-linked" },
       { key: "agent:research:main", agentId: "research", sessionId: "sess-research" },
       { key: "agent:ops:main", agentId: "ops", sessionId: "sess-ops" },
@@ -138,12 +153,7 @@ test("sessions.list preserves recorded sentinel owners for explicit multi-agent 
 });
 
 test("sessions.list preserves separate registered targets under a fixed store owner", async () => {
-  const rootStateDir = process.env.OPENCLAW_STATE_DIR;
-  if (!rootStateDir) {
-    throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
-  }
-  const stateDir = path.join(rootStateDir, "fixed-owner-registered-list");
-  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+  await withSessionState("fixed-owner-registered-list", async (stateDir) => {
     const storePath = path.join(stateDir, "shared.json");
     for (const agentId of ["main", "ops"]) {
       replaceSessionEntrySync(
@@ -155,9 +165,7 @@ test("sessions.list preserves separate registered targets under a fixed store ow
       { agentId: "main", sessionKey: "unknown", storePath: path.join(stateDir, "separate.sqlite") },
       { sessionId: "separate-main", updatedAt: 2 },
     );
-    testState.sessionConfig = { store: storePath };
-    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, ops: {} } };
-    testState.agentConfig = { sessionStore: { agentId: "ops" } };
+    configureExplicitOwner(storePath, { main: {}, ops: {} });
     const client: GatewayClient = {
       connect: {
         minProtocol: 1,
@@ -177,16 +185,14 @@ test("sessions.list preserves separate registered targets under a fixed store ow
       error: { code: "INVALID_REQUEST", message: expect.stringContaining("does not match") },
     });
     const listed = await directSessionReq<{
-      sessions: Array<{ key: string; agentId: string; sessionId: string }>;
+      sessions: ListedSession[];
     }>(
       "sessions.list",
       { configuredAgentsOnly: true, includeGlobal: true, includeUnknown: true },
       { client },
     );
     expect(listed.ok).toBe(true);
-    expect(
-      listed.payload?.sessions.map(({ key, agentId, sessionId }) => ({ key, agentId, sessionId })),
-    ).toEqual([
+    expect(identities(listed.payload?.sessions)).toEqual([
       { key: "unknown", agentId: "main", sessionId: "separate-main" },
       { key: "global", agentId: "main", sessionId: "global-main" },
     ]);
@@ -201,19 +207,12 @@ test.for(
 )(
   "sessions.list refreshes $change against the selected physical database (alias=$alias)",
   async ({ change, alias }) => {
-    const rootStateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!rootStateDir) {
-      throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
-    }
-    const stateDir = path.join(rootStateDir, `physical-sharing-${change}-${alias}`);
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    await withSessionState(`physical-sharing-${change}-${alias}`, async (stateDir) => {
       const storePath = path.join(stateDir, "shared.sqlite");
       const physicalPath = alias
         ? path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite")
         : storePath;
-      testState.sessionConfig = { store: storePath };
-      testState.agentsConfig = { ownership: "explicit", entries: { main: {}, ops: {} } };
-      testState.agentConfig = { sessionStore: { agentId: "ops" } };
+      configureExplicitOwner(storePath, { main: {}, ops: {} });
       openOpenClawAgentDatabase({ agentId: "main", path: physicalPath });
       if (alias) {
         await fs.symlink(physicalPath, storePath);
@@ -264,16 +263,10 @@ test.for(
         .spyOn(projection, "prepareSelection")
         .mockImplementationOnce(async (...args) => {
           await prepare(...args);
-          expect(
-            projection.snapshot(
-              { key, agentId: "ops" },
-              { includeDerivedTitles: true, includeLastMessage: true },
-            ).row,
-          ).toMatchObject({
+          expect(projection.snapshot({ key, agentId: "ops" }, previewOptions).row).toMatchObject({
             key,
             agentId: "ops",
-            derivedTitle: "Physical database title",
-            lastMessagePreview: "Physical database preview",
+            ...preview,
           });
           if (change === "delete") {
             await deleteSessionEntryLifecycle({
@@ -301,18 +294,12 @@ test.for(
         projection.describe({ key, agentId: "ops" });
         await previewPublished.promise;
         publication.mockRestore();
-        expect(
-          projection.snapshot(
-            { key, agentId: "ops" },
-            { includeDerivedTitles: true, includeLastMessage: true },
-          ).row,
-        ).toMatchObject({
-          derivedTitle: "Physical database title",
-          lastMessagePreview: "Physical database preview",
-        });
+        expect(projection.snapshot({ key, agentId: "ops" }, previewOptions).row).toMatchObject(
+          preview,
+        );
         const result = await directSessionReq<SessionsListResult>(
           "sessions.list",
-          { configuredAgentsOnly: true, includeDerivedTitles: true, includeLastMessage: true },
+          { configuredAgentsOnly: true, ...previewOptions },
           {
             client: sharingPolicyClient({ user: "viewer" }),
             context: bindSessionRowProjection({}, () => projection),
@@ -344,12 +331,7 @@ test.for(
 );
 
 test("captured sentinel rows never substitute a later same-owner session after deletion", async () => {
-  const rootStateDir = process.env.OPENCLAW_STATE_DIR;
-  if (!rootStateDir) {
-    throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
-  }
-  const stateDir = path.join(rootStateDir, "same-owner-sentinel");
-  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+  await withSessionState("same-owner-sentinel", async (stateDir) => {
     const first = {
       agentId: "main",
       storePath: path.join(stateDir, "a-first.sqlite"),
