@@ -17,13 +17,13 @@ import {
   readDeferredPluginMigrations,
   withDeferredPluginMigrationsCurrent,
 } from "../infra/deferred-plugin-migrations.js";
+import { rebuildDeferredPluginSessionSourceIndex } from "../infra/deferred-plugin-session-source-recovery.js";
 import {
   hasDeferredPluginSessionImport,
   prepareSessionSourceVerification,
   readDeferredPluginSessionImport,
   readDeferredPluginSessionImportReceipt,
   readStaleDeferredPluginSessionImport,
-  rebuildDeferredPluginSessionSourceIndex,
   resolveVerifiedSessionSource,
   type DeferredPluginSessionImport,
   type SessionImportSource,
@@ -194,6 +194,11 @@ export async function prepareRetainedSessionImport(
     }),
     allowMissingIndex: true,
     onEmptySource: (sourcePath: string, reason: string) => emptySources.set(sourcePath, reason),
+    onMissingSource: (sourcePath: string, reason: string) =>
+      issues.push({
+        code: "retained_missing_transcript_superseded",
+        message: `${sourcePath}: ${reason}`,
+      }),
     onSourceConflict: (sourcePath: string, artifactPath = sourcePath, error?: unknown) => {
       if (sourceConflicts.has(artifactPath)) {
         return;

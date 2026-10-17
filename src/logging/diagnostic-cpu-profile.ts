@@ -72,7 +72,11 @@ export function sanitizeDiagnosticCpuProfile(
   for (const id of profile.samples) {
     counts.set(id, (counts.get(id) ?? 0) + 1);
   }
-  type SummaryRow = { stack: Profiler.ProfileNode["callFrame"][]; sampleCount: number };
+  type SummaryRow = {
+    stack: Profiler.ProfileNode["callFrame"][];
+    elidedFrameCount: number;
+    sampleCount: number;
+  };
   const groups = new Map<string, SummaryRow>();
   for (const [id, sampleCount] of counts) {
     const stack: SummaryRow["stack"] = [];
@@ -81,12 +85,25 @@ export function sanitizeDiagnosticCpuProfile(
       stack.push(node.callFrame);
       node = byId.get(parents.get(node.id)!);
     }
-    const key = JSON.stringify(stack);
+    let elidedFrameCount = 0;
+    // Dependency-heavy stacks still need the application caller that owns the work.
+    if (!stack.some((frame) => frame.url.startsWith("openclaw:"))) {
+      let skipped = 0;
+      while (node && !node.callFrame.url.startsWith("openclaw:")) {
+        skipped++;
+        node = byId.get(parents.get(node.id)!);
+      }
+      if (node) {
+        stack.push(node.callFrame);
+        elidedFrameCount = skipped;
+      }
+    }
+    const key = JSON.stringify({ stack, elidedFrameCount });
     const group = groups.get(key);
     if (group) {
       group.sampleCount += sampleCount;
     } else {
-      groups.set(key, { stack, sampleCount });
+      groups.set(key, { stack, elidedFrameCount, sampleCount });
     }
   }
   const summaryRows: SummaryRow[] = [];

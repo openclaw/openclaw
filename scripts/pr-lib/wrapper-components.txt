@@ -292,7 +292,6 @@ src/agents/openai-routing.ts
 src/agents/owner-display.ts
 src/agents/plugin-model-catalog-repair.ts
 src/agents/plugin-model-catalog.kernel.ts
-src/agents/plugin-model-catalog.read-operation.ts
 src/agents/provider-auth-aliases.ts
 src/agents/provider-model-auth-source-plan.ts
 src/agents/provider-model-normalization.runtime.ts
@@ -742,6 +741,7 @@ src/config/sessions/targets-discovery.native.ts
 src/config/sessions/targets-path-validation.ts
 src/config/sessions/targets-read-availability.worker.ts
 src/config/sessions/targets.ts
+src/config/sessions/transcript-payload-read.ts
 src/config/sessions/transcript-payload.ts
 src/config/sessions/transcript-predicate-fields.ts
 src/config/sessions/transcript-target-binding.ts
@@ -910,11 +910,13 @@ src/infra/dedupe.ts
 src/infra/deep-merge.ts
 src/infra/deferred-plugin-migrations.contract.ts
 src/infra/deferred-plugin-migrations.ts
+src/infra/deferred-plugin-session-transcript-read.worker.ts
 src/infra/delivery-queue-cache.ts
 src/infra/delivery-queue-retention-columns.ts
 src/infra/delivery-queue-sqlite-bound.ts
 src/infra/delivery-queue-sqlite.types.ts
 src/infra/diagnostic-event-listener-presence.ts
+src/infra/diagnostic-event-queue-policy.ts
 src/infra/diagnostic-event-snapshot.ts
 src/infra/diagnostic-events.ts
 src/infra/diagnostic-flags-env.ts
@@ -1890,7 +1892,6 @@ src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
 src/state/openclaw-agent-pending-inputs-schema.ts
 src/state/openclaw-agent-progress-card-schema.ts
-src/state/openclaw-agent-schema-inspection-operations.worker.ts
 src/state/openclaw-agent-schema-inspection-response.ts
 src/state/openclaw-agent-schema-inspection-worker.ts
 src/state/openclaw-agent-schema.sql
@@ -1908,6 +1909,7 @@ src/state/openclaw-agent-transcript-fts-schema-source.ts
 src/state/openclaw-agent-transcript-fts-schema.ts
 src/state/openclaw-agent-transcript-payload-migration.ts
 src/state/openclaw-agent-write-layout-migration.ts
+src/state/openclaw-agent-index-retirement-migration.ts
 src/state/openclaw-agent-write-admission.ts
 src/state/openclaw-agent-write-admission-state.ts
 src/state/openclaw-database-preflight-agent-scheduler.ts
@@ -1965,6 +1967,7 @@ src/state/openclaw-state-db-schema-v21-columns.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
+src/state/openclaw-state-db-schema-v27-indexes.ts
 src/state/openclaw-state-db-schema-version.ts
 src/state/openclaw-state-db-session-watch-migration.ts
 src/state/openclaw-state-db-snapshot-owner.ts
@@ -2223,6 +2226,7 @@ src/config/sessions/activity-summary.ts
 src/config/sessions/session-actor.ts
 src/config/sessions/session-entry-cohort-scope.ts
 src/config/sessions/session-transcript-index-maintenance.ts
+src/config/sessions/session-transcript-index-readiness.ts
 src/config/sessions/session-transcript-projection-writer.ts
 src/config/sessions/session-transcript-reconcile-pool.ts
 src/config/sessions/session-transcript-reconcile-readiness.ts

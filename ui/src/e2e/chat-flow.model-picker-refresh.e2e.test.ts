@@ -1,3 +1,4 @@
+import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
@@ -35,6 +36,7 @@ suite.define(() => {
     const prepared = { ...modelInfo("prepared", "Prepared model", "fixture"), available: true };
     const added = { ...prepared, id: "added", name: "Added model" };
     const gateway = await installMockGateway(page, {
+      connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
       sessionKey,
       models: [],
       heldMethods: ["models.list"],
@@ -220,10 +222,10 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     const picker = pickerFor(page);
     const previous = picker.locator('[data-chat-model-option="anthropic/claude-haiku-4-5"]');
+    await picker.locator('[data-chat-model-select="true"]').click();
     await previous.waitFor({ state: "attached" });
     const discoveryCount = (await gateway.getRequests("models.list")).length;
     await gateway.deferNext("models.list", { view: "configured" });
-    await picker.locator('[data-chat-model-select="true"]').click();
     const search = picker.locator("[data-chat-model-search]");
     await search.fill("anthropic");
     await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(1);

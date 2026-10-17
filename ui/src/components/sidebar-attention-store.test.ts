@@ -30,7 +30,7 @@ import {
   startAuthenticatedStore,
   type CompactCronPage,
 } from "./sidebar-attention-store.test-support.ts";
-import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
+import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 import { inboxMention } from "./sidebar-inbox.test-support.ts";
 
 describe("sidebar attention source publication", () => {
@@ -63,7 +63,7 @@ describe("sidebar attention source publication", () => {
 
   function activate(harness: ReturnType<typeof createGatewayHarness>) {
     store = createStore(harness.gateway);
-    store.activate(SidebarAttentionStoreController);
+    store.activate(SidebarAttentionStoreOwner);
     return store;
   }
   function expectLabels(...labels: string[]) {
@@ -179,7 +179,7 @@ describe("sidebar attention source publication", () => {
       },
     } as unknown as ApplicationContext["agentSelection"];
     store = createStore(harness.gateway, undefined, selection);
-    store.activate(SidebarAttentionStoreController);
+    store.activate(SidebarAttentionStoreOwner);
     selection.state.selectedId = "writer";
     selectionListener();
     selectionListener();
@@ -416,7 +416,7 @@ describe("sidebar attention source publication", () => {
       bootstrap.setForegroundRoute("agent:main:current");
       bootstrap.synchronize({ client, connected: true });
       store = createStore(harness.gateway, bootstrap);
-      store.activate(SidebarAttentionStoreController);
+      store.activate(SidebarAttentionStoreOwner);
       expect(request.mock.calls.filter(([method]) => method.startsWith("cron."))).toEqual([]);
       if (boundary === "hidden") {
         setVisibility("hidden", false);
@@ -606,7 +606,7 @@ describe("sidebar attention source publication", () => {
     store = createStore(harness.gateway);
     const publishedCounts: number[] = [];
     store.subscribe(() => publishedCounts.push(store?.entries.length ?? 0));
-    store.activate(SidebarAttentionStoreController);
+    store.activate(SidebarAttentionStoreOwner);
     await waitForFast(() => expect(store?.entries).toHaveLength(1));
     expect(publishedCounts).toContain(1);
 
@@ -725,7 +725,7 @@ describe("sidebar attention source publication", () => {
       store = createStore(harness.gateway);
       const publish = vi.fn();
       store.subscribe(publish);
-      store.activate(SidebarAttentionStoreController);
+      store.activate(SidebarAttentionStoreOwner);
       harness.emitEvent("cron", {});
       document.dispatchEvent(new Event("visibilitychange"));
 
@@ -780,8 +780,8 @@ describe("sidebar attention source publication", () => {
     expect(request).not.toHaveBeenCalled();
     const publish = vi.fn();
     const stop = store.subscribe(publish);
-    const mentions = store.activate(SidebarAttentionStoreController);
-    expect(store.activate(SidebarAttentionStoreController)).toBe(mentions);
+    const mentions = store.activate(SidebarAttentionStoreOwner);
+    expect(store.activate(SidebarAttentionStoreOwner)).toBe(mentions);
     await waitForFast(() => expect(mentions.snapshot.items).toEqual([mention]));
     expect(request.mock.calls.filter(([method]) => method === "mentions.list")).toHaveLength(1);
 
@@ -795,7 +795,7 @@ describe("sidebar attention source publication", () => {
       ]),
     );
     expect(publish).not.toHaveBeenCalled();
-    expect(store.activate(SidebarAttentionStoreController)).toBe(mentions);
+    expect(store.activate(SidebarAttentionStoreOwner)).toBe(mentions);
 
     store.dispose();
     store = undefined;

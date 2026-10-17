@@ -225,6 +225,15 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+A confirmed unavailable child Node runtime follows this same graceful drain when
+the effective native service command's Node can still start. The lifecycle owner
+requests a fresh-process supervisor handoff once; it never uses the in-process
+restart fallback for a broken retained runtime. If the service runtime is also
+broken or the latest shutdown records runtime recovery within five minutes, the
+Gateway stays up with degraded readiness for operator repair. See
+[Runtime health](/gateway/health#http-probes) for the health fields and report-only
+cases. A handoff failure after shutdown begins requires a service-owner restart.
+
 On Linux, shutdown closes idle pooled database readers through IPC before closing
 their spawn broker; active readers retain the existing cancellation grace.
 

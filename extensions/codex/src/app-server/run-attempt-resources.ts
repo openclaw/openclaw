@@ -232,9 +232,14 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           })
         : undefined;
     let parentTransferred = false;
+    let bindingRead: Awaited<ReturnType<typeof bindingStore.prepareRead>> | undefined;
     try {
       await unregisterNativeSubagentMonitor();
+      bindingRead = await bindingStore.prepareRead(bindingIdentity);
       connection.assertCurrent();
+      if (!bindingRead) {
+        throw new Error("Codex native subagent binding reader is unavailable");
+      }
       const parentSession = parent?.entry;
       const historyOwner = createCodexNativeSubagentHistoryOwner({
         parentThreadId,
@@ -251,21 +256,25 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           ? {
               ...createNativeSubagentSubmissionStore({
                 bindingStore,
+                readBinding: bindingRead.read,
                 identity: bindingIdentity,
                 owner: historyOwner,
                 assertLifecycleCurrentAsync: assertParentSessionCurrent,
                 authority: parentWriteAuthority,
               }),
-              release: () => parent?.release(),
+              release: () => {
+                bindingRead?.release();
+                parent?.release();
+              },
             }
           : undefined;
       const assignmentStore =
         historyOwner && submissionStore
           ? createNativeSubagentAssignmentStore({
               bindingStore,
+              readBinding: bindingRead.read,
               identity: bindingIdentity,
               owner: historyOwner,
-              assertLifecycleCurrent: () => submissionStore.assertCurrent(),
               assertLifecycleCurrentAsync: () => assertParentSessionCurrent(),
               authority: parentWriteAuthority,
             })
@@ -325,7 +334,11 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
           assertRegistrationCurrent();
           if (!submissionStore) {
             const unregister = registration.unregister;
-            registration.unregister = () => unregister().finally(parent?.release);
+            registration.unregister = () =>
+              unregister().finally(() => {
+                bindingRead?.release();
+                parent?.release();
+              });
           }
           state.nativeSubagentMonitor = registration;
           parentTransferred = true;
@@ -339,6 +352,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       }
     } finally {
       if (!parentTransferred) {
+        bindingRead?.release();
         parent?.release();
       }
     }
@@ -378,6 +392,11 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       return false;
     }
     const retained = await bindingStore.withLease(bindingIdentity, async () => {
+      const prepared = await bindingStore.prepareRead(bindingIdentity);
+      if (!prepared) {
+        return false;
+      }
+      using bindingRead = { read: prepared.read, [Symbol.dispose]: prepared.release };
       if (state.nativeSettlementExpired) {
         return false;
       }
@@ -388,7 +407,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
         if (
           state.nativeSettlementExpired ||
           thread.clientId !== client.getInstanceId() ||
-          !isSameCodexAppServerThreadOwner(bindingStore.read(bindingIdentity), thread)
+          !isSameCodexAppServerThreadOwner(bindingRead.read(), thread)
         ) {
           return;
         }

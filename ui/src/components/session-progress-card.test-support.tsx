@@ -174,7 +174,7 @@ export function cardPart(root: ParentNode | null | undefined, name: string) {
   return root?.querySelector<HTMLElement>(`.session-progress-card__${name}`);
 }
 
-export function renderProgressCard(input: Input | null, container: HTMLElement) {
+function renderProgressCard(input: Input | null, container: HTMLElement) {
   let mounted = mounts.get(container);
   if (!input) {
     mounted?.view.dispose();

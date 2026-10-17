@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   assertAdmittedRunOperatorAuthority,
@@ -30,7 +29,10 @@ import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
 } from "./operator-role-policy.js";
-import { sourceRolePolicy } from "./operator-role-source-policy.js";
+import {
+  isOperatorRoleSourcePolicyCurrent,
+  sourceRolePolicy,
+} from "./operator-role-source-policy.js";
 import {
   normalizeGatewayOperatorRecoverySnapshot,
   type OperatorRunRecoverySnapshot,
@@ -490,7 +492,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
       );
       if (
         current.assignedRole !== capturedAssignedRole ||
-        !isDeepStrictEqual(capturedSourcePolicy, sourceRolePolicy(policy))
+        !isOperatorRoleSourcePolicyCurrent(capturedSourcePolicy, sourceRolePolicy(policy), scopes)
       ) {
         throw new Error("Your operator role changed; reconnect before continuing.");
       }

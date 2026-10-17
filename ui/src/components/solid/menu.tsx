@@ -101,7 +101,7 @@ export type MenuProps = {
   trigger?: JSX.Element;
   children?: JSX.Element;
   class?: JSX.HTMLAttributes<HTMLDivElement>["class"];
-  panelClass?: string;
+  panelClass?: JSX.ClassValue;
   triggerClass?: JSX.ClassValue;
   triggerAttributes?: Pick<
     JSX.ButtonHTMLAttributes<HTMLButtonElement>,

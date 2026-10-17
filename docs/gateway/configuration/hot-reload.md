@@ -344,6 +344,12 @@ auto-approval, and proxy-address changes fence connections but preserve accepted
 work when the owner's grant is unchanged. This includes a requested initial turn
 after `sessions.create` commits its new session. Editing another login's identity scopes
 or reordering the same scopes keeps the connection and its accepted runs active.
+Role scope edits recheck each connection and accepted run against its own granted
+scopes. Editing another role, reordering equivalent scopes, or widening a role
+keeps existing connections and runs active without granting them additional scopes.
+A narrowing disconnects and stops only affected sources; restoring the role does
+not revive revoked work. Session, agent, sandbox, and access-plugin restrictions
+continue to apply through the role authority.
 Changing the owner's identity-scope grant, removing that identity from the proxy
 allowlist, or disabling its authentication method revokes retained and delegated
 work, even if the grant is restored afterward. Shared-secret rotation also revokes

@@ -41,6 +41,59 @@ import * as threadOwnership from "./thread-ownership.js";
 setupRunAttemptTestHooks();
 
 describe("Codex attempt subscription recovery", () => {
+  it("reports an unavailable binding reader before admitting a native turn", async () => {
+    const prepare = runAttemptResources.prepareCodexAttemptResources;
+    vi.spyOn(runAttemptResources, "prepareCodexAttemptResources").mockImplementationOnce(
+      (prompt) => {
+        const resources = prepare(prompt);
+        vi.spyOn(
+          prompt.context.runtime.connection.bindingStore,
+          "prepareRead",
+        ).mockResolvedValueOnce(undefined);
+        return resources;
+      },
+    );
+    const register = vi.spyOn(codexNativeSubagentMonitorRuntime, "register");
+    const harness = createStartedThreadHarness();
+    const params = createParams(path.join(tempDir, "unavailable-reader.jsonl"), tempDir);
+
+    await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
+      "Codex native subagent binding reader is unavailable",
+    );
+    expect(register).not.toHaveBeenCalled();
+    expect(harness.requests.some(({ method }) => method === "turn/start")).toBe(false);
+  });
+
+  it("declines optional subscription retention when its binding reader is unavailable", async () => {
+    const captured =
+      createDeferred<ReturnType<typeof runAttemptResources.prepareCodexAttemptResources>>();
+    const prepare = runAttemptResources.prepareCodexAttemptResources;
+    vi.spyOn(runAttemptResources, "prepareCodexAttemptResources").mockImplementationOnce(
+      (prompt) => {
+        const resources = prepare(prompt);
+        captured.resolve(resources);
+        return resources;
+      },
+    );
+    const harness = createStartedThreadHarness();
+    const params = createParams(path.join(tempDir, "unavailable-retention.jsonl"), tempDir);
+    const run = runCodexAppServerAttempt(params);
+    await run.waitForTurnAccepted();
+    const resources = await captured.promise;
+    const prepareRead = vi
+      .spyOn(resources.prompt.context.runtime.connection.bindingStore, "prepareRead")
+      .mockResolvedValueOnce(undefined);
+    const publish = vi.spyOn(threadOwnership, "retainCodexAppServerBindingSubscription");
+    try {
+      await expect(resources.retainThreadSubscription()).resolves.toBe(false);
+      expect(publish).not.toHaveBeenCalled();
+    } finally {
+      prepareRead.mockRestore();
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+    }
+  });
+
   it("revokes native submission custody when an unstamped parent session is replaced", async () => {
     // Worker preparation must not race this authority check's execution deadline.
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });

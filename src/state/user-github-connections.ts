@@ -3,6 +3,7 @@ import {
   observeSqliteWorkerCommittedFacts,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "./openclaw-state-db-cache.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import {
   captureOpenClawStateReadWorkerContext,
@@ -78,12 +79,12 @@ export async function readUserGitHubConnectionAsync(
 }
 
 export async function readCanonicalUserGitHubConnectionAsync(profile: string) {
-  const context = captureOpenClawStateReadWorkerContext();
-  return await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "userGitHubConnections.readCanonical", input: { profile } }),
-    { existingOnly: true },
+  const result = await executeExistingOpenClawStateRead(
+    {},
+    { type: "userGitHubConnections.readCanonical", input: { profile } },
+    { current: true },
   );
+  return result?.canonical;
 }
 
 type PreparedUserGitHubConnection = {
@@ -142,11 +143,12 @@ export async function prepareUserGitHubConnection(
   connectionReads.set(key, entry);
   entry.prepared = (async () => {
     const authority = await captureUserProfileAuthorityRead(context.admission);
-    const connection = await runOpenClawStateWorkerOperation(
-      context,
-      (scope) => scope.execute({ type: "userGitHubConnections.read", input: { owner } }),
-      { existingOnly: true },
+    const result = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env: context.environment },
+      { type: "userGitHubConnections.read", input: { owner } },
+      { current: true, context },
     );
+    const connection = result?.connection;
     const profileIsCurrent = authority.bind(owner);
     const parsed = connection ? parseUserGitHubConnection(JSON.stringify(connection)) : undefined;
     const read = () => {
@@ -170,14 +172,12 @@ export async function prepareUserGitHubConnection(
 }
 
 export async function listUserGitHubConnectionsAsync(): Promise<UserGitHubConnectionEntry[]> {
-  const context = captureOpenClawStateReadWorkerContext();
-  const connections = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "userGitHubConnections.list", input: undefined }),
-    { existingOnly: true },
+  const result = await executeExistingOpenClawStateRead(
+    {},
+    { type: "userGitHubConnections.list", input: undefined },
+    { current: true },
   );
-  context.admission.assertCurrent();
-  return (connections ?? []).map(({ owner, connection }) => ({
+  return (result?.connections ?? []).map(({ owner, connection }) => ({
     owner,
     connection: parseUserGitHubConnection(JSON.stringify(connection)),
   }));

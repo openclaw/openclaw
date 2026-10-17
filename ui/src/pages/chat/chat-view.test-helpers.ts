@@ -30,15 +30,19 @@ type ChatModelControlsProps = Parameters<typeof ChatModelControls>[0];
 const modelControlsUpdates = new WeakMap<HTMLElement, (props: ChatModelControlsProps) => void>();
 
 export function renderChatModelControls(props: ChatModelControlsProps, container: HTMLDivElement) {
+  const renderProps: ChatModelControlsProps = {
+    ...props,
+    modelPickerOpen: props.modelPickerOpen ?? true,
+  };
   const update = modelControlsUpdates.get(container);
   if (update) {
-    update(props);
+    update(renderProps);
   } else {
     if (!container.isConnected) {
       document.body.append(container);
       onTestFinished(() => container.remove());
     }
-    const view = mountSolidComponent(ChatModelControls, props, container);
+    const view = mountSolidComponent(ChatModelControls, renderProps, container);
     modelControlsUpdates.set(container, (next) => view.update(next));
   }
   return container;

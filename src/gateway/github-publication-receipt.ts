@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   SessionGitHubPublicationFailedSchema,
   type SessionGitHubPublicationResult,
@@ -79,16 +79,14 @@ export function digestGitHubPublicationRequest(params: {
   title?: string;
   body?: string;
 }): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        sessionId: params.sessionId,
-        idempotencyKey: params.idempotencyKey,
-        title: params.title ?? null,
-        body: params.body ?? null,
-      }),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify({
+      sessionId: params.sessionId,
+      idempotencyKey: params.idempotencyKey,
+      title: params.title ?? null,
+      body: params.body ?? null,
+    }),
+  );
 }
 
 export function projectGitHubPublicationResult(

@@ -107,6 +107,7 @@ function recordDiagnosticEvent(
     case "secret.egress":
     case "tool.catalog":
     case "gateway.rpc":
+    case "sessions.list.baseline.retired":
     case "gateway.http.cancelled":
     case "diagnostic.gc":
     case "gateway.event_loop.sample":

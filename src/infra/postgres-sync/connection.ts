@@ -130,7 +130,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private loseConnection(): Error {
     if (!this.failure && this.outcomeUnknown) {
       // The write may have committed, so invalidate anchor caches before reconnecting.
-      beginSqliteDatabaseWrite(sqlPublicationAnchor(this));
+      beginSqliteDatabaseWrite(sqlPublicationAnchor(this), true);
       finishSqliteDatabaseWrite(sqlPublicationAnchor(this));
     }
     this.failure ??= this.outcomeUnknown
@@ -247,7 +247,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     if (result.command === "COMMIT" || autocommitWrite) {
       // All confirmed commits advance the anchor, including callers using raw SQL.
       withSqlitePostCommitPublications(sqlPublicationAnchor(this), () => {
-        beginSqliteDatabaseWrite(sqlPublicationAnchor(this));
+        beginSqliteDatabaseWrite(sqlPublicationAnchor(this), true);
         finishSqliteDatabaseWrite(sqlPublicationAnchor(this));
         if (autocommitWrite && currentSqliteWorkerOperationAdmission.getStore()?.active) {
           deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(this), {});

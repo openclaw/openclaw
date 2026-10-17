@@ -198,7 +198,7 @@ describe("AppSidebar session catalog pagination", () => {
 
       context.agentSelection.state.selectedId = "research";
       context.agentSelection.state.scopeId = "research";
-      sidebar.requestUpdate();
+      sidebar.invalidate();
       await sidebar.updateComplete;
       await vi.advanceTimersByTimeAsync(200);
       await sidebar.updateComplete;

@@ -60,7 +60,7 @@ function isPendingRecord(value: unknown): value is ManagedWorktreeRecord {
 }
 
 /** One statement observes publication as either pending or live, never neither or both. */
-export function readWorktreeSlotCountInDatabase(db: EngineConnection): number {
+function readWorktreeSlotCountInDatabase(db: EngineConnection): number {
   const k = query(db);
   const rows = executeSqliteQuerySync(
     db,
@@ -90,7 +90,7 @@ export function readWorktreeSlotCountInDatabase(db: EngineConnection): number {
   );
 }
 
-export function readPendingWorktreesInDatabase(db: EngineConnection): PendingWorktreeSlot[] {
+function readPendingWorktreesInDatabase(db: EngineConnection): PendingWorktreeSlot[] {
   return readSlots(db).map(({ record, state }) => ({ record, state }));
 }
 

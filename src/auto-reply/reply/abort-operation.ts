@@ -446,21 +446,23 @@ export async function executeFastAbortRequest(
             // either backend so native cleanup cannot delay signal-less ACP steer turns.
             const acpManager = getAcpSessionManager();
             for (const acpTargetKey of abortTargetKeys) {
-              const resolution = acpManager.resolveSession({
-                cfg,
-                sessionKey: acpTargetKey,
-                agentId: acpTargetKey === resolvedTargetKey ? agentId : undefined,
-              });
-              if (resolution.kind === "none") {
-                continue;
-              }
               acpCancellations.push(
                 acpManager
-                  .cancelSession({
+                  .resolveSessionAsync({
                     cfg,
-                    sessionKey: resolution.sessionKey,
-                    agentId: resolution.agentId,
-                    reason: "fast-abort",
+                    sessionKey: acpTargetKey,
+                    agentId: acpTargetKey === resolvedTargetKey ? agentId : undefined,
+                  })
+                  .then((resolution) => {
+                    if (resolution.kind === "none") {
+                      return undefined;
+                    }
+                    return acpManager.cancelSession({
+                      cfg,
+                      sessionKey: resolution.sessionKey,
+                      agentId: resolution.agentId,
+                      reason: "fast-abort",
+                    });
                   })
                   .catch((error: unknown) => {
                     logVerbose(

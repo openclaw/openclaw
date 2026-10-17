@@ -432,6 +432,8 @@ JSON result. Dry runs do not load harness plugins.
 
 Applied artifact cleanup counts only successful file removals. If a file cannot
 be deleted, it contributes no freed bytes and remains part of disk usage.
+Artifacts retained by a deferred plugin import receipt or migration manifest
+remain protected even after their canonical session entry is gone.
 Unreferenced artifact cleanup and legacy disk-budget enforcement continue with
 other eligible files. SQLite archive pruning stops after a deletion
 error to retain its database recovery copy. If usage stays above the target,

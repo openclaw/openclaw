@@ -422,6 +422,20 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/infra/database-engine/agent-port-descriptor.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "loadAgentPortDescriptor.inspectSqliteSource",
+          "loadAgentPortDescriptor.migrateSqliteSource",
+        ],
+        evidence:
+          "inspectSqliteSource is called only by port-command.worker.ts inspectSqliteImage; migrateSqliteSource is called only by port.worker.ts migrateDatabasePortSource on the CLI's private source copy. Other descriptor consumers use admission/export operations, not these SQL callbacks.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-history-interval.ts",
     [
       {

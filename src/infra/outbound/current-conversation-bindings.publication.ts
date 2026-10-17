@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { readTrackedStateDatabaseIdentity } from "../../state/openclaw-state-db-handle.js";
@@ -194,11 +194,7 @@ export function withCurrentConversationBindingWorkerReceipt<T>(
 }
 
 function readPublication(value: unknown): CurrentConversationBindingPublication {
-  if (
-    !isRecord(value) ||
-    !Array.isArray(value.sessionKeys) ||
-    !value.sessionKeys.every((key) => typeof key === "string")
-  ) {
+  if (!isRecord(value) || !isStringArray(value.sessionKeys)) {
     throw new Error("Conversation binding receipt is invalid");
   }
   return {

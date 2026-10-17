@@ -342,7 +342,11 @@ describe("queued embedded run context liveness", () => {
         lastActiveAt: admissionAt,
         sessionId: params.sessionId,
       });
-      expect(changed).toHaveBeenCalledExactlyOnceWith({ all: true, scope: "agent-runs" });
+      expect(changed).toHaveBeenCalledExactlyOnceWith({
+        all: true,
+        scope: "agent-runs",
+        runtimeSession: { sessionId: params.sessionId, agentId: undefined },
+      });
       expect(localTurn).toHaveBeenCalledOnce();
 
       clock.mockReturnValue(admissionAt + CONTEXT_TTL_MS);

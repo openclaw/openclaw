@@ -18,6 +18,12 @@
   "openclaw": {
     "build": {
       "bundledDist": true,
+      "staticAssets": [
+        {
+          "source": "./src/logbook-schema.postgres.sql",
+          "output": "./src/logbook-schema.postgres.sql"
+        }
+      ],
       "workerEntries": [
         "./src/store.worker.ts"
       ],

@@ -732,6 +732,64 @@ describe("ClickClack discussion service contracts", () => {
     expectAttachmentWarning(h, sessionKey);
   });
 
+  it("does not fetch history for a revoked discussion", async () => {
+    const harness = createHarness({ label: "Revoked history" });
+    const sessionKey = "agent:main:revoked-history";
+    await harness.service.open(sessionKey);
+    const binding = await getClickClackDiscussionBindingStore(harness.runtime).getAsync(sessionKey);
+    if (!binding) {
+      throw new Error("Expected the opened discussion binding");
+    }
+    await markClickClackDiscussionChannelRevoked(harness.runtime, sessionKey, binding);
+
+    expect(await harness.service.readLatestMessages(sessionKey, 30)).toEqual({
+      text: "No discussion is bound to this session.",
+    });
+    expect(harness.latestChannelMessages).not.toHaveBeenCalled();
+  });
+
+  it.each(["session reset", "channel revocation"])(
+    "withholds fetched history after %s while HTTP is in flight",
+    async (change) => {
+      const harness = createHarness({ label: "History authority" });
+      const sessionKey = "agent:main:history-authority";
+      await harness.service.open(sessionKey);
+      const binding = await getClickClackDiscussionBindingStore(harness.runtime).getAsync(
+        sessionKey,
+      );
+      if (!binding) {
+        throw new Error("Expected the opened discussion binding");
+      }
+      harness.latestChannelMessages.mockImplementationOnce(async () => {
+        if (change === "session reset") {
+          harness.setSessionEntry({ sessionId: "replacement", label: "History authority" });
+        } else {
+          await markClickClackDiscussionChannelRevoked(harness.runtime, sessionKey, binding);
+        }
+        return {
+          messages: [
+            {
+              id: "msg_private",
+              workspace_id: "wsp_team",
+              channel_id: "chn_discussion",
+              author_id: "usr_fixture",
+              thread_root_id: "msg_private",
+              body: "Synthetic discussion content must stay private",
+              body_format: "markdown",
+              created_at: "2026-07-19T12:30:00.000Z",
+            },
+          ],
+          truncated: false,
+        };
+      });
+
+      expect(await harness.service.readLatestMessages(sessionKey, 30)).toEqual({
+        text: "No discussion is bound to this session.",
+      });
+      expect(harness.latestChannelMessages).toHaveBeenCalledOnce();
+    },
+  );
+
   it("quotes untrusted message and author fields without forgeable transcript lines", async () => {
     const sessionKey = "agent:main:quoted-support";
     const h = await opened(sessionKey, { label: "Support" });

@@ -105,6 +105,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_models_list_requests_total`                     | counter   | `client_kind`, `source`, `view`, `scope`, `refresh`, `prepared_only`                      |
 | `openclaw_sessions_list_requests_total`                   | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`                            |
 | `openclaw_sessions_list_response_bytes_total`             | counter   | `client_kind`, `source`, `caller_source`, `row_mode`, `filter`, `rows_outcome`            |
+| `openclaw_sessions_list_baseline_retirements_total`       | counter   | `cause`                                                                                   |
+| `openclaw_sessions_list_base_misses_total`                | counter   | `reason`                                                                                  |
 | `openclaw_chat_history_requests_total`                    | counter   | `client_kind`, `source`, `shape`, `limit_bucket`, `outcome`                               |
 | `openclaw_chat_history_response_bytes_total`              | counter   | `client_kind`, `source`, `shape`, `limit_bucket`, `outcome`                               |
 | `openclaw_cron_list_requests_total`                       | counter   | `client_kind`, `source`, `scope`, `compact`, `page`                                       |
@@ -304,6 +306,30 @@ or `full-with-base` when it supplies a revision. `full-with-base` includes
 stale or evicted bases and the rare case where every row changed.
 Non-sidebar row modes use `not-sidebar`. Diagnostics derives these labels from
 the request and existing response fields without changing the protocol payload.
+
+`openclaw_sessions_list_baseline_retirements_total{cause}` counts retirement
+events, not rows or the number of views cleared. Causes are `projection-revision`,
+`config`, `identity`, `selection-reset`, `view-evicted` (the 32-view limit), and
+`history-evicted` (the 32-generation limit). Only clears or evictions retaining
+sidebar rows or history count, including empty sidebar row lists. Selection-only
+and non-sidebar views do not count. When a read observes multiple invalidations,
+`config` takes precedence
+over `identity`, then `projection-revision`; an earlier selection reset already
+clears the cache and is counted separately at that point.
+
+`openclaw_sessions_list_base_misses_total{reason}` counts successful full sidebar
+replies with a supplied `ifRowsRevision`. `unknown-base` means no eligible history
+base was found, including after restart, eviction, or a non-delta revision token.
+`all-rows-changed` means the base was found but the delta was not smaller than the
+full row list (also possible for an empty list). The existing `full-with-base`
+byte attribution stays unchanged. These reasons follow shared serialized replies
+out-of-band; no response fields, revision tokens, or identifiers are exported.
+Both counters use the bounded asynchronous diagnostics path and exporter cap.
+Compare unknown-base misses with retirement events and process identity changes
+to distinguish cache churn from first reads after restart; misses alone cannot
+prove a restart. OpenTelemetry exports the same observations as
+`openclaw.sessions.list.baseline_retirements` and `openclaw.sessions.list.base_misses`,
+with the same `cause` and `reason` labels.
 
 `openclaw_chat_history_requests_total` counts successful `chat.history` replies;
 `openclaw_chat_history_response_bytes_total` sums their encoded response bytes.

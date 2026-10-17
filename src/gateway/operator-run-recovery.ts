@@ -11,7 +11,12 @@ import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-iden
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
-import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
+import { profileCatalogPath } from "../state/user-profile-identity.read.js";
+import {
+  prepareUserProfileIdentity,
+  projectUserProfileDisplay,
+  readResidentUserProfileRevision,
+} from "../state/user-profile-list.js";
 import { isGatewayAuthGrantCurrent } from "./auth-policy.js";
 import {
   captureGatewayDeviceRevocation,
@@ -22,7 +27,10 @@ import {
   onOperatorRolePolicyChanged,
   resolveOperatorRolePolicyForAssignment,
 } from "./operator-role-policy.js";
-import { sourceRolePolicy } from "./operator-role-source-policy.js";
+import {
+  isOperatorRoleSourcePolicyCurrent,
+  sourceRolePolicy,
+} from "./operator-role-source-policy.js";
 import {
   captureChannelOperatorRunAuthority,
   intersectOperatorRunModelPolicy,
@@ -32,6 +40,7 @@ import {
   type OperatorRunRecoverySnapshot,
 } from "./operator-run-recovery-source.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import type { GatewayAuthenticatedUserProfile } from "./server/client-identity-types.js";
 
 export type OperatorRecoveryTarget = {
   agentId: string;
@@ -156,6 +165,7 @@ export async function restoreGatewayOperatorSource(params: {
   prepareCurrent?: () => Promise<void>;
 }): Promise<{
   authority: AdmittedRunOperatorAuthority;
+  authenticatedUserProfile: GatewayAuthenticatedUserProfile;
   controlUiAdmin: boolean;
   release: () => void;
 }> {
@@ -234,7 +244,11 @@ export async function restoreGatewayOperatorSource(params: {
       );
       if (
         !device.isCurrent() ||
-        !isDeepStrictEqual(sourceRolePolicy(role), snapshot.rolePolicy) ||
+        !isOperatorRoleSourcePolicyCurrent(
+          snapshot.rolePolicy,
+          sourceRolePolicy(role),
+          snapshot.scopes,
+        ) ||
         !isGatewayAuthGrantCurrent(snapshot.authPolicy, cfg) ||
         (snapshot.sharedGeneration !== undefined &&
           context.sharedGatewaySessionGenerationState !== generationOwner)
@@ -348,7 +362,17 @@ export async function restoreGatewayOperatorSource(params: {
       },
     });
     authority.assertCurrent();
-    return { authority, controlUiAdmin: snapshot.controlUiAdmin, release };
+    const profile = readResidentUserProfileRevision(snapshot.profileId, profileCatalogPath({}));
+    if (!profile) {
+      throw new Error("Restart recovery operator profile is unavailable.");
+    }
+    const { id, ...display } = projectUserProfileDisplay(profile);
+    return {
+      authority,
+      authenticatedUserProfile: { profileId: id, ...display, updatedAt: profile.updated_at },
+      controlUiAdmin: snapshot.controlUiAdmin,
+      release,
+    };
   } catch (error) {
     release();
     throw error;

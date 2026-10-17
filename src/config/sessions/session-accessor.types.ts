@@ -336,9 +336,9 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   eventId?: string;
   /** Existing parent id owned by a caller with its own session tree. */
   parentId?: string | null;
-  /** @deprecated Use preparation.prepareMessage. Final compatibility day: 2026-12-31. */
+  /** @deprecated Use preparation.prepareMessage. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
-  /** @deprecated Use preparation.source. Final compatibility day: 2026-12-31. */
+  /** @deprecated Use preparation.source. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   beforeFreshMessageCommit?: () => void;
   /** Allow append without parent-link migration for large legacy linear transcripts. */
   useRawWhenLinear?: boolean;
@@ -400,7 +400,7 @@ export type LockedTranscriptMessageAppendOptions<TMessage> = Omit<
   TranscriptMessageAppendOptions<TMessage>,
   "prepareMessageAfterIdempotencyCheck"
 > & {
-  /** @deprecated Use preparation.prepareMessage. Final compatibility day: 2026-12-31. */
+  /** @deprecated Use preparation.prepareMessage. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   /** Awaited after duplicate detection; undefined suppresses a fresh append. */
   prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;

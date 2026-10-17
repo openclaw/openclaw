@@ -587,7 +587,7 @@ export async function createSidebarElement(): Promise<SidebarLifecycleState> {
         return false;
       }
       const written = Reflect.set(owner, key, value);
-      owner.requestUpdate();
+      owner.invalidate();
       return written;
     },
   }) as SidebarLifecycleState;
