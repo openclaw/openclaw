@@ -79,6 +79,7 @@ export const databaseEngineAdapters: {
           store.anchor,
           store.storeId,
           {
+            reuse: store.reusePostgresConnection,
             lockTimeoutMs: POSTGRES_LOCK_TIMEOUT_MS,
             statementTimeoutMs: POSTGRES_STATEMENT_TIMEOUT_MS,
           },
