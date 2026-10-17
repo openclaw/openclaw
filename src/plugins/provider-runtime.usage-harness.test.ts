@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import {
   makeIsolatedEnv,
@@ -21,21 +21,17 @@ function makeCodexManifestEnv(): NodeJS.ProcessEnv {
   const bundledPluginsDir = path.join(makeTempDir(), "extensions");
   const pluginDir = path.join(bundledPluginsDir, "codex");
   fs.mkdirSync(pluginDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({
-      name: "@openclaw/codex-test",
-      openclaw: { extensions: ["./index.cjs"] },
-    }),
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
+  const files = {
+    "package.json": { name: "@openclaw/codex-test", openclaw: { extensions: ["./index.cjs"] } },
+    "openclaw.plugin.json": {
       id: "codex",
       activation: { onAgentHarnesses: ["codex"] },
       configSchema: { type: "object" },
-    }),
-  );
+    },
+  };
+  for (const [name, contents] of Object.entries(files)) {
+    fs.writeFileSync(path.join(pluginDir, name), JSON.stringify(contents));
+  }
   fs.writeFileSync(
     path.join(pluginDir, "index.cjs"),
     `module.exports = {
@@ -86,91 +82,76 @@ function usageParams(
   };
 }
 
-function registerUsageHarness(
-  id: string,
-  fetchUsageSnapshot: NonNullable<Parameters<typeof registerAgentHarness>[0]["fetchUsageSnapshot"]>,
-) {
+afterEach(() => {
+  clearAgentHarnesses();
+  resetPluginAutoEnableTestState();
+  vi.unstubAllEnvs();
+});
+
+it("does not reuse an unrelated Gateway registry for cold harness usage", async () => {
+  const workspaceDir = makeTempDir();
+  const env = makeCodexManifestEnv();
+
+  await expect(
+    withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
+      resolveProviderUsageSnapshotWithPlugin(usageParams("codex", {}, env, workspaceDir)),
+    ),
+  ).resolves.toEqual(usageSnapshot);
+});
+
+it.each([
+  {
+    config: { plugins: { enabled: false } } satisfies OpenClawConfig,
+    expectedReason: "plugins disabled",
+  },
+  {
+    config: { plugins: { allow: ["openai", "memory-core"] } } satisfies OpenClawConfig,
+    expectedReason: "not in allowlist",
+  },
+])("reports $expectedReason in cold usage diagnostics", async ({ config, expectedReason }) => {
+  const workspaceDir = makeTempDir();
+  const env = makeCodexManifestEnv();
+  for (const key of [
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_BUNDLED_PLUGINS_DIR",
+    "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
+  ]) {
+    vi.stubEnv(key, env[key] ?? "");
+  }
+
+  const error = await resolveProviderUsageSnapshotWithPlugin(
+    usageParams("codex", config, env, workspaceDir),
+  ).catch((cause: unknown) => cause);
+
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).message).toContain(expectedReason);
+  expect((error as Error).message).toContain("reason=owner-plugin-not-activatable");
+  expect((error as Error).message).not.toContain("absent from this prepared plugin generation");
+});
+
+it.each(["codex", "openai"])("routes usage for hook owner %s", async (provider) => {
+  const fetchUsageSnapshot =
+    vi.fn<NonNullable<Parameters<typeof registerAgentHarness>[0]["fetchUsageSnapshot"]>>();
+  if (provider === "codex") {
+    fetchUsageSnapshot.mockResolvedValue(structuredClone(usageSnapshot));
+  }
   registerAgentHarness({
-    id,
-    label: id === "codex" ? "Codex" : "OpenAI harness",
+    id: provider,
+    label: provider === "codex" ? "Codex" : "OpenAI harness",
     supports: () => ({ supported: true }),
     runAttempt: async () => {
       throw new Error("not used");
     },
     fetchUsageSnapshot,
   });
-}
-
-describe("provider runtime harness usage", () => {
-  afterEach(() => {
-    clearAgentHarnesses();
-    resetPluginAutoEnableTestState();
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-  });
-
-  it("does not reuse an unrelated Gateway registry for cold harness usage", async () => {
-    const workspaceDir = makeTempDir();
-    const env = makeCodexManifestEnv();
-
-    await expect(
-      withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
-        resolveProviderUsageSnapshotWithPlugin(usageParams("codex", {}, env, workspaceDir)),
-      ),
-    ).resolves.toEqual(usageSnapshot);
-  });
-
-  it.each([
-    {
-      name: "globally disabled plugins",
-      config: { plugins: { enabled: false } } satisfies OpenClawConfig,
-      expectedReason: "plugins disabled",
-    },
-    {
-      name: "a restrictive allowlist",
-      config: { plugins: { allow: ["openai", "memory-core"] } } satisfies OpenClawConfig,
-      expectedReason: "not in allowlist",
-    },
-  ])("preserves $name in cold usage diagnostics", async ({ config, expectedReason }) => {
-    const workspaceDir = makeTempDir();
-    const env = makeCodexManifestEnv();
-    for (const key of [
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_BUNDLED_PLUGINS_DIR",
-      "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
-    ]) {
-      vi.stubEnv(key, env[key] ?? "");
-    }
-
-    const error = await resolveProviderUsageSnapshotWithPlugin(
-      usageParams("codex", config, env, workspaceDir),
-    ).catch((cause: unknown) => cause);
-
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain(expectedReason);
-    expect((error as Error).message).toContain("reason=owner-plugin-not-activatable");
-    expect((error as Error).message).not.toContain("absent from this prepared plugin generation");
-  });
-
-  it("routes a synthetic hook id to the matching harness", async () => {
-    const fetchUsageSnapshot = vi.fn(async () => structuredClone(usageSnapshot));
-    registerUsageHarness("codex", fetchUsageSnapshot);
-
-    await expect(resolveProviderUsageSnapshotWithPlugin(usageParams())).resolves.toEqual(
-      usageSnapshot,
-    );
+  const snapshot = await resolveProviderUsageSnapshotWithPlugin(usageParams(provider));
+  if (provider === "codex") {
+    expect(snapshot).toEqual(usageSnapshot);
     expect(fetchUsageSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "openai", token: "test-token-placeholder" }),
     );
-  });
-
-  it("does not probe a harness for an ordinary provider usage miss", async () => {
-    const fetchUsageSnapshot = vi.fn();
-    registerUsageHarness("openai", fetchUsageSnapshot);
-
-    await expect(
-      resolveProviderUsageSnapshotWithPlugin(usageParams("openai")),
-    ).resolves.toBeUndefined();
+  } else {
+    expect(snapshot).toBeUndefined();
     expect(fetchUsageSnapshot).not.toHaveBeenCalled();
-  });
+  }
 });
