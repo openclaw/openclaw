@@ -63,76 +63,57 @@ const nativeBotMention: webhook.TextMessageContent["mention"] = {
   mentionees: [{ index: 0, length: 4, type: "user", userId: "bot", isSelf: true }],
 };
 
-const cases: MentionCase[] = [
-  {
-    name: "native bot mention in a group",
-    text: "@bot hello",
-    mention: nativeBotMention,
-    expected: mentionFacts(true, true),
-  },
-  {
-    name: "native bot mention in a room",
+const mentionCase = (
+  name: string,
+  expected: MentionCase["expected"],
+  input: Omit<MentionCase, "name" | "expected"> = {},
+): MentionCase => ({ name, expected, ...input });
+
+const nativeInput = { text: "@bot hello", mention: nativeBotMention };
+const cases = [
+  mentionCase("native bot mention in a group", mentionFacts(true, true), nativeInput),
+  mentionCase("native bot mention in a room", mentionFacts(true, true), {
+    ...nativeInput,
     source: { type: "room", roomId: "room", userId: "sender" },
-    text: "@bot hello",
-    mention: nativeBotMention,
-    expected: mentionFacts(true, true),
-  },
-  {
-    name: "native all-members mention",
+  }),
+  mentionCase("native all-members mention", mentionFacts(true, true), {
     text: "@all hello",
     mention: { mentionees: [{ index: 0, length: 4, type: "all" }] },
-    expected: mentionFacts(true, true),
-  },
-  {
-    name: "configured pattern without a native mention",
+  }),
+  mentionCase("configured pattern without a native mention", mentionFacts(true, false), {
     text: "hello helper",
     patterns: ["\\bhelper\\b"],
-    expected: mentionFacts(true, false),
-  },
-  {
-    name: "quote of a message the bot sent",
+  }),
+  mentionCase("quote of a message the bot sent", mentionFacts(true, false, true, ["quoted_bot"]), {
     quote: true,
-    expected: mentionFacts(true, false, true, ["quoted_bot"]),
-  },
-  {
-    name: "disabled quote policy in an always-on group",
-    quote: true,
-    quotedBot: false,
+  }),
+  mentionCase(
+    "disabled quote policy in an always-on group",
+    mentionFacts(false, false, false, ["quoted_bot"]),
+    {
+      quote: true,
+      quotedBot: false,
+      requireMention: false,
+    },
+  ),
+  mentionCase("ordinary message in an always-on group", mentionFacts(false, false, false), {
     requireMention: false,
-    expected: mentionFacts(false, false, false, ["quoted_bot"]),
-  },
-  {
-    name: "ordinary message in an always-on group",
-    requireMention: false,
-    expected: mentionFacts(false, false, false),
-  },
-  {
-    name: "mention of another member",
+  }),
+  mentionCase("mention of another member", mentionFacts(false, false, false), {
     text: "@pal hello",
-    mention: { mentionees: [{ index: 0, length: 4, type: "user", userId: "pal", isSelf: false }] },
     requireMention: false,
-    expected: mentionFacts(false, false, false),
-  },
-  {
-    name: "authorized command bypass",
-    text: "/status",
-    expected: mentionFacts(true, false),
-  },
-  {
-    name: "non-text message without native mention metadata",
+    mention: { mentionees: [{ index: 0, length: 4, type: "user", userId: "pal", isSelf: false }] },
+  }),
+  mentionCase("authorized command bypass", mentionFacts(true, false), { text: "/status" }),
+  mentionCase("non-text message without native mention metadata", mentionFacts(false, false), {
     eventKind: "location",
-    expected: mentionFacts(false, false),
-  },
-  {
-    name: "direct message without group mention facts",
+  }),
+  mentionCase("direct message without group mention facts", mentionFacts(undefined, undefined), {
     source: { type: "user", userId: "sender" },
-    expected: mentionFacts(undefined, undefined),
-  },
-  {
-    name: "postback without message mention facts",
+  }),
+  mentionCase("postback without message mention facts", mentionFacts(undefined, undefined), {
     eventKind: "postback",
-    expected: mentionFacts(undefined, undefined),
-  },
+  }),
 ];
 
 describe("LINE admission facts on the dispatched turn", () => {

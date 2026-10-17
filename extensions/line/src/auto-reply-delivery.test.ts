@@ -26,6 +26,16 @@ function deliver(
 ) {
   return deliverLineAutoReply({ ...baseDeliveryParams, payload, lineData, ...overrides });
 }
+function deliverMedia(url: string, lineData: DeliveryParams["lineData"] = {}, text?: string) {
+  return deliver(
+    { mediaUrls: [url], channelData: { line: lineData }, ...(text ? { text } : {}) },
+    lineData,
+  );
+}
+const createMediaDeps = (overrides: Partial<LineAutoReplyDeps> = {}) =>
+  createDeps({ processLineMessage: () => [], chunkMarkdownText: () => [], ...overrides });
+const createOrderedDeps = () =>
+  createDeps({ processLineMessage: processOrderedLineMessage, chunkMarkdownText });
 
 describe("deliverLineAutoReply", () => {
   // Empty carousels must not take down the accompanying text.
@@ -42,10 +52,7 @@ describe("deliverLineAutoReply", () => {
 
   it("keeps quick replies on final media when ordered cards overflow the reply token", async () => {
     const lineData = { quickReplies: ["Continue"] };
-    const { replyMessageLine, pushMessagesLine } = createDeps({
-      processLineMessage: processOrderedLineMessage,
-      chunkMarkdownText,
-    });
+    const { replyMessageLine, pushMessagesLine } = createOrderedDeps();
 
     await deliver(
       {
@@ -57,13 +64,9 @@ describe("deliverLineAutoReply", () => {
       lineData,
     );
 
-    expect(replyMessageLine.mock.calls[0]?.[1].map((message) => message.type)).toEqual([
-      "flex",
-      "flex",
-      "flex",
-      "flex",
-      "flex",
-    ]);
+    expect(replyMessageLine.mock.calls[0]?.[1].map((message) => message.type)).toEqual(
+      Array(5).fill("flex"),
+    );
     expect(pushMessagesLine.mock.calls[0]?.[1]).toMatchObject([
       { type: "flex", altText: "Code" },
       {
@@ -74,61 +77,46 @@ describe("deliverLineAutoReply", () => {
     ]);
   });
 
-  it.each([{ name: "with final quick replies", quickReplies: ["Continue"] }])(
-    "keeps oversized Markdown tables in source order $name",
-    async ({ quickReplies }) => {
-      const { replyMessageLine, pushMessagesLine } = createDeps({
-        processLineMessage: processOrderedLineMessage,
-        chunkMarkdownText,
-      });
-      const markdown = `First\n\n| Small | Value |\n|---|---|\n| Kept | card |\n\nBetween\n\n| Name | Value |\n|---|---|\n| Large | ${"x".repeat(30_000)} |\n\nAfter\n\n\`\`\`js\nconsole.log("still a card")\n\`\`\``;
+  it("keeps oversized Markdown tables in source order with final quick replies", async () => {
+    const quickReplies = ["Continue"];
+    const { replyMessageLine, pushMessagesLine } = createOrderedDeps();
+    const markdown = `First\n\n| Small | Value |\n|---|---|\n| Kept | card |\n\nBetween\n\n| Name | Value |\n|---|---|\n| Large | ${"x".repeat(30_000)} |\n\nAfter\n\n\`\`\`js\nconsole.log("still a card")\n\`\`\``;
 
-      await deliver({ text: markdown }, quickReplies.length > 0 ? { quickReplies } : {});
+    await deliver({ text: markdown }, { quickReplies });
 
-      const calls = [
-        ...replyMessageLine.mock.calls.map((args, index) => ({
-          position: expectDefined(
-            replyMessageLine.mock.invocationCallOrder[index],
-            "LINE reply delivery call order",
-          ),
+    const calls = [replyMessageLine, pushMessagesLine]
+      .flatMap((mock) =>
+        mock.mock.calls.map((args, index) => ({
+          position: expectDefined(mock.mock.invocationCallOrder[index], "LINE delivery call order"),
           messages: args[1],
         })),
-        ...pushMessagesLine.mock.calls.map((args, index) => ({
-          position: expectDefined(
-            pushMessagesLine.mock.invocationCallOrder[index],
-            "LINE push delivery call order",
-          ),
-          messages: args[1],
-        })),
-      ].toSorted((left, right) => left.position - right.position);
-      const sequence = calls
-        .flatMap((call) => call.messages)
-        .map((message) =>
-          message.type === "flex"
-            ? message.altText === "Code"
-              ? "code-card"
-              : "valid-table-card"
-            : message.type === "text" && message.text.includes("Large")
-              ? "oversized-table-text"
-              : undefined,
-        )
-        .filter(Boolean);
+      )
+      .toSorted((left, right) => left.position - right.position);
+    const sequence = calls
+      .flatMap((call) => call.messages)
+      .map((message) =>
+        message.type === "flex"
+          ? message.altText === "Code"
+            ? "code-card"
+            : "valid-table-card"
+          : message.type === "text" && message.text.includes("Large")
+            ? "oversized-table-text"
+            : undefined,
+      )
+      .filter(Boolean);
 
-      expect(sequence).toEqual(["valid-table-card", "oversized-table-text", "code-card"]);
-      expect(calls.every((call) => call.messages.length <= 5)).toBe(true);
-      expect(replyMessageLine).toHaveBeenCalledOnce();
-      expect(pushMessagesLine.mock.calls.length).toBeGreaterThan(0);
-      if (quickReplies.length > 0) {
-        const messages = calls.flatMap((call) => call.messages);
-        expect(messages.at(-1)).toMatchObject({
-          type: "flex",
-          altText: "Code",
-          quickReply: createQuickReply(...quickReplies),
-        });
-        expect(messages.slice(0, -1).every((message) => !("quickReply" in message))).toBe(true);
-      }
-    },
-  );
+    expect(sequence).toEqual(["valid-table-card", "oversized-table-text", "code-card"]);
+    expect(calls.every((call) => call.messages.length <= 5)).toBe(true);
+    expect(replyMessageLine).toHaveBeenCalledOnce();
+    expect(pushMessagesLine.mock.calls.length).toBeGreaterThan(0);
+    const messages = calls.flatMap((call) => call.messages);
+    expect(messages.at(-1)).toMatchObject({
+      type: "flex",
+      altText: "Code",
+      quickReply: createQuickReply(...quickReplies),
+    });
+    expect(messages.slice(0, -1).every((message) => !("quickReply" in message))).toBe(true);
+  });
 
   it("delivers the question with the options when only quick replies render", async () => {
     const prepared = await prepareLineReplyPayload({
@@ -160,10 +148,7 @@ describe("deliverLineAutoReply", () => {
     const lineData = {
       location: { title: "Meet here", address: " ", latitude: 35.6895, longitude: 139.6917 },
     };
-    const degraded = {
-      type: "text" as const,
-      text: "Meet here" + String.fromCharCode(10) + "35.6895, 139.6917",
-    };
+    const degraded = { type: "text" as const, text: "Meet here\n35.6895, 139.6917" };
     const createLocationMessage = vi.fn(createRealLocationMessage);
     const { replyMessageLine } = createDeps({ createLocationMessage });
 
@@ -213,17 +198,11 @@ describe("deliverLineAutoReply", () => {
       cfg: LINE_TEST_CFG,
       accountId: "acc",
     });
-    expect(result).toEqual({
-      status: "delivered",
-      replyTokenUsed: true,
-      visibleReplySent: true,
-    });
+    expect(result).toEqual({ status: "delivered", replyTokenUsed: true, visibleReplySent: true });
   });
 
   it("uses fallback text for quick-reply-only payloads", async () => {
-    const lineData = {
-      quickReplies: ["A", "B"],
-    };
+    const lineData = { quickReplies: ["A", "B"] };
     const { replyMessageLine, pushMessagesLine } = createDeps();
 
     const result = await deliver({ text: "", channelData: { line: lineData } }, lineData);
@@ -247,18 +226,9 @@ describe("deliverLineAutoReply", () => {
       mediaKind: "video" as const,
       previewImageUrl: "https://example.com/preview.jpg",
     };
-    const { replyMessageLine, buildMediaMessage } = createDeps({
-      processLineMessage: () => [],
-      chunkMarkdownText: () => [],
-    });
+    const { replyMessageLine, buildMediaMessage } = createMediaDeps();
 
-    const result = await deliver(
-      {
-        mediaUrls: ["https://example.com/clip.mp4"],
-        channelData: { line: lineData },
-      },
-      lineData,
-    );
+    const result = await deliverMedia("https://example.com/clip.mp4", lineData);
 
     expect(result.status).toBe("delivered");
     expect(buildMediaMessage).toHaveBeenCalledWith(
@@ -278,15 +248,9 @@ describe("deliverLineAutoReply", () => {
   });
 
   it("delivers a bare audio URL through the shared media builder", async () => {
-    const { buildMediaMessage, replyMessageLine, pushMessagesLine } = createDeps({
-      processLineMessage: () => [],
-      chunkMarkdownText: () => [],
-    });
+    const { buildMediaMessage, replyMessageLine, pushMessagesLine } = createMediaDeps();
 
-    const result = await deliver({
-      mediaUrls: ["https://example.com/voice.m4a"],
-      channelData: { line: {} },
-    });
+    const result = await deliverMedia("https://example.com/voice.m4a");
 
     expect(result.status).toBe("delivered");
     expect(buildMediaMessage).toHaveBeenCalledWith(
@@ -311,13 +275,10 @@ describe("deliverLineAutoReply", () => {
     const lineData = { mediaKind: "video" as const };
     const { replyMessageLine } = createDeps();
 
-    const result = await deliver(
-      {
-        text: "here is your clip",
-        mediaUrls: ["https://example.com/clip.mp4"],
-        channelData: { line: lineData },
-      },
+    const result = await deliverMedia(
+      "https://example.com/clip.mp4",
       lineData,
+      "here is your clip",
     );
 
     expect(result).toMatchObject({
@@ -330,25 +291,15 @@ describe("deliverLineAutoReply", () => {
   });
 
   it("does not expose credentials from media-only validation failures", async () => {
-    const lineData = {};
     const mediaUrl = new URL("http://example.com/image.jpg");
     mediaUrl.username = ["line", "user"].join("-");
     mediaUrl.password = ["line", "fixture"].join("-");
     mediaUrl.searchParams.set("auth", ["line", "query"].join("-"));
-    const { replyMessageLine, pushMessagesLine } = createDeps({
-      processLineMessage: () => [],
-      chunkMarkdownText: () => [],
-    });
+    const { replyMessageLine, pushMessagesLine } = createMediaDeps();
 
-    await expect(
-      deliver(
-        {
-          mediaUrls: [mediaUrl.href],
-          channelData: { line: lineData },
-        },
-        lineData,
-      ),
-    ).rejects.toThrow(new Error("LINE outbound media URL must use HTTPS"));
+    await expect(deliverMedia(mediaUrl.href)).rejects.toThrow(
+      new Error("LINE outbound media URL must use HTTPS"),
+    );
 
     expect(replyMessageLine).not.toHaveBeenCalled();
     expect(pushMessagesLine).not.toHaveBeenCalled();
@@ -357,24 +308,11 @@ describe("deliverLineAutoReply", () => {
   it("wraps a non-Error media-only build failure", async () => {
     const lineData = { mediaKind: "video" as const };
     const failure = { code: "invalid_media" };
-    createDeps({
-      processLineMessage: () => [],
-      chunkMarkdownText: () => [],
-      buildMediaMessage: vi.fn(async () => {
-        // oxlint-disable-next-line typescript/only-throw-error -- dependency callbacks may reject unknown values; this proves the delivery boundary normalizes them.
-        throw failure;
-      }) as LineAutoReplyDeps["buildMediaMessage"],
+    createMediaDeps({
+      buildMediaMessage: vi.fn<LineAutoReplyDeps["buildMediaMessage"]>().mockRejectedValue(failure),
     });
 
-    await expect(
-      deliver(
-        {
-          mediaUrls: ["https://example.com/clip.mp4"],
-          channelData: { line: lineData },
-        },
-        lineData,
-      ),
-    ).rejects.toMatchObject({
+    await expect(deliverMedia("https://example.com/clip.mp4", lineData)).rejects.toMatchObject({
       message: "LINE message send failed",
       cause: failure,
     });
