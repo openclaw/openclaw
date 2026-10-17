@@ -59,6 +59,11 @@ function receipt() {
   return sessionStore.getSessionEntry(session)?.pluginExtensions?.codex?.warningReceipts;
 }
 
+async function deliverTwice(notification: CodexServerNotification = warning, target = session) {
+  await deliver(notification, target);
+  await deliver(notification, target);
+}
+
 function configWarning(params: Record<string, unknown>): CodexServerNotification {
   return { method: "configWarning", params: { summary, ...params } };
 }
@@ -70,9 +75,7 @@ it("deduplicates separate receipts across native threads and reopened session st
   expect(project).toHaveBeenCalledTimes(1);
   const persisted = sessionStore.getSessionEntry(session);
   expect(persisted).toMatchObject({ updatedAt: before?.updatedAt, pluginExtensions: plugins });
-  expect(JSON.stringify(persisted?.pluginExtensions?.codex?.warningReceipts)).not.toContain(
-    summary,
-  );
+  expect(JSON.stringify(receipt())).not.toContain(summary);
   await closeOpenClawAgentDatabasesAsync(path.dirname(session.storePath));
   await deliver(
     { method: "warning", params: { threadId: "replacement-thread", message: summary } },
@@ -94,16 +97,13 @@ it("projects distinct warnings off-thread without deduplicating Guardian events"
     configWarning({ path: "/example/policy.toml" }),
   ];
   for (const notification of distinct) {
-    await deliver(notification);
-    await deliver(notification);
+    await deliverTwice(notification);
   }
   expect(project).toHaveBeenCalledTimes(distinct.length + 2);
-  const guardian = {
+  await deliverTwice({
     method: "guardianWarning",
     params: { threadId: "thread-1", message: summary },
-  };
-  await deliver(guardian);
-  await deliver(guardian);
+  });
   expect(project).toHaveBeenCalledTimes(distinct.length + 4);
   expect(sql.queries).toEqual([]);
 });
@@ -117,10 +117,7 @@ it.each(["success", "throw", "unacknowledged"] as const)(
       started.resolve();
       return await finish.promise;
     });
-    const settled = first.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const settled = first.catch((error: unknown) => error);
     await started.promise;
     const next = deliver(structuredClone(warning), { ...session }, "replacement-thread");
     expect(project).not.toHaveBeenCalled();
@@ -157,12 +154,10 @@ it("allows independent chats and same-id reset generations their own first warni
     update: () => ({ lifecycleRevision: "generation-2" }),
     skipMaintenance: true,
   });
-  // A stale attempt must not consume the successor's first notification.
   await deliver();
   expect(project).toHaveBeenCalledTimes(2);
   const successor = { ...session, expectedLifecycleRevision: "generation-2" };
-  await deliver(warning, successor);
-  await deliver(warning, successor);
+  await deliverTwice(warning, successor);
   expect(project).toHaveBeenCalledTimes(3);
 });
 
@@ -185,9 +180,7 @@ it("retains acknowledged receipts at capacity and fails open for new distinct wa
   });
   const full = receipt();
   await deliver();
-  const next = { method: "warning", params: { message: summary + " (changed policy)" } };
-  await deliver(next);
-  await deliver(next);
+  await deliverTwice({ method: "warning", params: { message: summary + " (changed policy)" } });
   expect(project).toHaveBeenCalledTimes(3);
   expect(receipt()).toEqual(full);
 });
@@ -200,7 +193,6 @@ it("projects without suppressing warnings when receipt storage is unavailable", 
   expect(patch).toHaveBeenCalledOnce();
   expect(project).toHaveBeenCalledOnce();
   patch.mockRestore();
-  await deliver();
-  await deliver();
+  await deliverTwice();
   expect(project).toHaveBeenCalledTimes(2);
 });
