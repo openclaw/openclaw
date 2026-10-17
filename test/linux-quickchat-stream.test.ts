@@ -1,8 +1,7 @@
-// Exercises the pure stream-assembly helpers extracted from the Linux Quick Chat webview script.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
-import { it as test } from "vitest";
+import { expect, it as test } from "vitest";
 
 const quickchatSource = readFileSync(
   new URL("../apps/linux/ui/quickchat.js", import.meta.url),
@@ -25,16 +24,6 @@ const browserBindingsStart = quickchatSource.indexOf("const tauri = window");
 assert.notEqual(browserBindingsStart, -1, "quickchat pure-helper boundary");
 
 type QuickChatHelpers = {
-  chatMessageWidgets: (message: unknown) => unknown[];
-  resolveInlineWidgetUrl: (surface: unknown, target: unknown) => string | null;
-};
-
-const context: { helpers?: QuickChatHelpers } & Record<string, unknown> = { URL, TextEncoder };
-vm.runInNewContext(
-  `${quickchatSource.slice(0, browserBindingsStart)}\nthis.helpers = { chatMessageWidgets, resolveInlineWidgetUrl };`,
-  context,
-);
-const { chatMessageWidgets, resolveInlineWidgetUrl } = context.helpers as {
   chatMessageWidgets: (message: unknown) => Array<{
     key: string;
     title: string;
@@ -44,6 +33,14 @@ const { chatMessageWidgets, resolveInlineWidgetUrl } = context.helpers as {
   }>;
   resolveInlineWidgetUrl: (surface: unknown, target: unknown) => string | null;
 };
+
+const context: { helpers?: QuickChatHelpers } & Record<string, unknown> = { URL, TextEncoder };
+vm.runInNewContext(
+  `${quickchatSource.slice(0, browserBindingsStart)}\nthis.helpers = { chatMessageWidgets, resolveInlineWidgetUrl };`,
+  context,
+);
+assert.ok(context.helpers);
+const { chatMessageWidgets, resolveInlineWidgetUrl } = context.helpers;
 
 function canvasBlock(url: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -65,6 +62,17 @@ function canvasMessage(role: string, url: string) {
 
 function chatTarget(runId: string) {
   return { sessionKey: "global", agentId: "work", runId };
+}
+
+function chatEvent(runId: string, state: string, details: Record<string, unknown> = {}) {
+  return { ...chatTarget(runId), state, ...details };
+}
+
+type Pending<T> = Pick<PromiseWithResolvers<T>, "resolve" | "reject">;
+function pendingAt<T>(items: T[], index: number, kind: string) {
+  const pending = items[index];
+  assert.ok(pending, `${kind} invocation exists`);
+  return pending;
 }
 
 function createFakeElement(tagName = "div") {
@@ -108,10 +116,6 @@ function createFakeElement(tagName = "div") {
     readOnly: false,
     scrollHeight: 0,
     scrollTop: 0,
-    src: "",
-    title: "",
-    referrerPolicy: "",
-    contentWindow: tagName === "iframe" ? {} : null,
     addEventListener(name: string, callback: (event: unknown) => void) {
       listeners.set(name, callback);
     },
@@ -153,10 +157,7 @@ function createQuickChatHarness(
   const browserBindingsEnd = quickchatSource.indexOf("elements.input.addEventListener");
   assert.notEqual(browserBindingsEnd, -1, "quickchat browser binding boundary");
   const elements = new Map();
-  const sends: Array<{
-    resolve: (value: unknown) => void;
-    reject: (error: Error) => void;
-  }> = [];
+  const sends: Pending<unknown>[] = [];
   const calls: Array<{ method: string; args: Record<string, any> }> = [];
   const nativeListeners = new Map<string, (event: unknown) => void>();
   const documentListeners = new Map<string, (event: unknown) => void>();
@@ -164,28 +165,20 @@ function createQuickChatHarness(
   const ready = Promise.withResolvers<boolean>();
   let nativeReady = !options.initialize;
   let nativeVisible = true;
-  const refreshes: Array<{
-    resolve: (value: unknown) => void;
-    reject: (error: Error) => void;
-  }> = [];
+  const refreshes: Pending<unknown>[] = [];
   let deferRefresh = false;
-  const widgetSyncs: Array<{
-    args: Record<string, any>;
-    resolve: () => void;
-    reject: (error: Error) => void;
-  }> = [];
+  const widgetSyncs: Array<Pending<void> & { args: Record<string, unknown> }> = [];
   let deferWidgetSync = false;
   let activeWidgetSyncs = 0;
   let maxActiveWidgetSyncs = 0;
   const windowListeners = new Map<string, () => void>();
   let syncedWidgets: unknown[] = [];
-  let syncedHasWidgets = false;
   let syncedExpanded = false;
-  let syncedGeneration = 0;
   let widgetSyncCount = 0;
   let widgetSurfaceRefreshCount = 0;
   let widgetSurfaceRefreshFails = false;
-  let widgetSurfaceRefreshResult = "https://gateway.example/__openclaw__/cap/refreshed-capability";
+  const widgetSurfaceRefreshResult =
+    "https://gateway.example/__openclaw__/cap/refreshed-capability";
   let fakeNow = 1_000_000;
   let timerId = 0;
   const timers = new Map<number, { at: number; callback: () => void }>();
@@ -215,11 +208,8 @@ function createQuickChatHarness(
           method: string,
           args?: {
             widgets?: unknown[];
-            hasWidgets?: boolean;
             expanded?: boolean;
-            sessionId?: string;
-            rendererEpoch?: number;
-            generation?: number;
+            gatewayGeneration?: number;
           },
         ) {
           calls.push({ method, args: args ?? {} });
@@ -250,15 +240,13 @@ function createQuickChatHarness(
             return widgetSurfaceRefreshFails
               ? Promise.reject(new Error("refresh failed"))
               : Promise.resolve({
-                  gatewayGeneration: (args as Record<string, unknown>)?.gatewayGeneration ?? 1,
+                  gatewayGeneration: args?.gatewayGeneration ?? 1,
                   canvasSurfaceUrl: widgetSurfaceRefreshResult,
                 });
           }
           if (method === "quickchat_sync_widgets") {
             syncedWidgets = args?.widgets ?? [];
-            syncedHasWidgets = args?.hasWidgets === true;
             syncedExpanded = args?.expanded === true;
-            syncedGeneration = args?.generation ?? 0;
             widgetSyncCount += 1;
             if (deferWidgetSync) {
               activeWidgetSyncs += 1;
@@ -381,7 +369,6 @@ this.harness = {
   error() { return elements.status.textContent; },
   reveal,
   expireCanvasSurface() { canvasSurfaceRefreshedAt = 0; canvasSurfaceRetryAt = 0; },
-  allowCanvasSurfaceRetry() { canvasSurfaceRetryAt = 0; },
   flushSurfaceRefresh() { return canvasSurfaceRefreshPromise ?? Promise.resolve(); },
   flushWidgets() { return widgetSyncPromise; },
 };
@@ -391,17 +378,24 @@ ${options.initialize ? `${quickchatSource.slice(browserBindingsEnd)}\n})()` : ""
   return {
     ...(browserContext.harness as Record<string, (...args: any[]) => any>),
     resolveSend: (value: Record<string, unknown>, index = sends.length - 1) => {
-      const pending = sends[index];
-      assert.ok(pending, "send invocation exists");
-      pending.resolve({ gatewayGeneration: 1, status: "started", ...value });
+      pendingAt(sends, index, "send").resolve({
+        gatewayGeneration: 1,
+        status: "started",
+        ...value,
+      });
     },
     rejectSend: (message: string, index = sends.length - 1) => {
-      const pending = sends[index];
-      assert.ok(pending, "send invocation exists");
-      pending.reject(new Error(message));
+      pendingAt(sends, index, "send").reject(new Error(message));
     },
+    event: (runId: string, state: string, details: Record<string, unknown> = {}) =>
+      browserContext.harness.handleChatEvent(chatEvent(runId, state, details)),
     sendCount: () => sends.length,
     calls,
+    callsFor: (method: string) => calls.filter((call) => call.method === method),
+    visibilityCalls: () =>
+      calls
+        .filter(({ method }) => ["quickchat_activate", "quickchat_hide"].includes(method))
+        .map(({ method, args }) => [method, args.generation]),
     drain,
     initialized: () => initialized,
     releaseRegistration: () => registration.resolve(),
@@ -443,19 +437,13 @@ ${options.initialize ? `${quickchatSource.slice(browserBindingsEnd)}\n})()` : ""
       deferRefresh = true;
     },
     resolveRefresh: (value: unknown, index = refreshes.length - 1) => {
-      const pending = refreshes[index];
-      assert.ok(pending, "refresh invocation exists");
-      pending.resolve(value);
+      pendingAt(refreshes, index, "refresh").resolve(value);
     },
     rejectRefresh: (index = refreshes.length - 1) => {
-      const pending = refreshes[index];
-      assert.ok(pending, "refresh invocation exists");
-      pending.reject(new Error("stale refresh failed"));
+      pendingAt(refreshes, index, "refresh").reject(new Error("stale refresh failed"));
     },
     syncedWidgets: () => syncedWidgets,
-    syncedHasWidgets: () => syncedHasWidgets,
     syncedExpanded: () => syncedExpanded,
-    syncedGeneration: () => syncedGeneration,
     widgetSyncCount: () => widgetSyncCount,
     deferWidgetSync: () => {
       deferWidgetSync = true;
@@ -464,12 +452,10 @@ ${options.initialize ? `${quickchatSource.slice(browserBindingsEnd)}\n})()` : ""
     activeWidgetSyncs: () => activeWidgetSyncs,
     maxActiveWidgetSyncs: () => maxActiveWidgetSyncs,
     resolveWidgetSync: (index: number) => {
-      assert.ok(widgetSyncs[index], "widget sync invocation exists");
-      widgetSyncs[index].resolve();
+      pendingAt(widgetSyncs, index, "widget sync").resolve();
     },
     rejectWidgetSync: (index: number) => {
-      assert.ok(widgetSyncs[index], "widget sync invocation exists");
-      widgetSyncs[index].reject(new Error("widget sync failed"));
+      pendingAt(widgetSyncs, index, "widget sync").reject(new Error("widget sync failed"));
     },
     resizeWidget: (x: number) => {
       const host = elements.get("#reply-widgets")?.querySelector(".inline-widget-host");
@@ -483,10 +469,15 @@ ${options.initialize ? `${quickchatSource.slice(browserBindingsEnd)}\n})()` : ""
     setWidgetSurfaceRefreshFails: (value: boolean) => {
       widgetSurfaceRefreshFails = value;
     },
-    setWidgetSurfaceRefreshResult: (value: string) => {
-      widgetSurfaceRefreshResult = value;
-    },
   };
+}
+
+function expectState(
+  harness: ReturnType<typeof createQuickChatHarness>,
+  expected: Record<string, unknown>,
+) {
+  const actual = Object.fromEntries(Object.keys(expected).map((key) => [key, harness[key]()]));
+  expect(actual).toMatchObject(expected);
 }
 
 function readyHarness(message: string) {
@@ -509,22 +500,12 @@ for (const fireBeforeReady of [false, true]) {
     }
     harness.releaseRegistration();
     await harness.drain();
-    assert.ok(harness.calls.some(({ method }: { method: string }) => method === "quickchat_ready"));
+    assert.ok(harness.callsFor("quickchat_ready").length > 0);
     harness.resolveReady();
     await harness.initialized();
     await harness.advanceTime(45);
     assert.equal(harness.nativeVisible(), false, `early timer=${fireBeforeReady}`);
-    assert.deepEqual(
-      harness.calls
-        .filter(({ method }: { method: string }) =>
-          ["quickchat_activate", "quickchat_hide"].includes(method),
-        )
-        .map(({ method, args }: { method: string; args: { generation: number } }) => [
-          method,
-          args.generation,
-        ]),
-      [["quickchat_hide", 1]],
-    );
+    assert.deepEqual(harness.visibilityCalls(), [["quickchat_hide", 1]]);
   });
 }
 
@@ -542,17 +523,9 @@ for (const showLast of [false, true]) {
     await harness.initialized();
     await harness.drain();
     assert.equal(harness.nativeVisible(), showLast);
-    assert.deepEqual(
-      harness.calls
-        .filter(({ method }: { method: string }) =>
-          ["quickchat_activate", "quickchat_hide"].includes(method),
-        )
-        .map(({ method, args }: { method: string; args: { generation: number } }) => [
-          method,
-          args.generation,
-        ]),
-      [[showLast ? "quickchat_activate" : "quickchat_hide", showLast ? 3 : 2]],
-    );
+    assert.deepEqual(harness.visibilityCalls(), [
+      [showLast ? "quickchat_activate" : "quickchat_hide", showLast ? 3 : 2],
+    ]);
   });
 }
 
@@ -574,17 +547,13 @@ for (const failedStage of ["registration", "admission"] as const) {
     }
     await harness.initialized();
     await harness.drain();
-    assert.equal(harness.nativeVisible(), true);
-    assert.equal(harness.error(), "Gateway unreachable — retrying");
-    assert.equal(
-      harness.calls.filter(({ method }: { method: string }) => method === "quickchat_hide").length,
-      0,
-    );
+    expectState(harness, { nativeVisible: true, error: "Gateway unreachable — retrying" });
+    assert.equal(harness.callsFor("quickchat_hide").length, 0);
 
     harness.pressEscape();
     await harness.advanceTime(45);
     assert.equal(
-      harness.calls.filter(({ method }: { method: string }) => method === "quickchat_hide").length,
+      harness.callsFor("quickchat_hide").length,
       1,
       "a later request reaches native admission instead of waiting on failed startup",
     );
@@ -653,30 +622,22 @@ test("canvas previews are accepted only for safe assistant widgets", () => {
       }),
     ),
   });
-  assert.equal(duplicateWidgets.length, 3);
-  assert.equal(duplicateWidgets[0]?.key, "duplicate");
-  assert.equal(duplicateWidgets[1]?.key, "duplicate-2");
-  assert.equal(duplicateWidgets[2]?.key, "duplicate-2-2");
-  assert.equal(
-    new Set(duplicateWidgets.map((candidate) => candidate.key)).size,
-    duplicateWidgets.length,
-  );
-  const emojiViewId = "🦞".repeat(65);
-  const [emojiWidget] = chatMessageWidgets({
-    role: "assistant",
-    content: [
-      canvasBlock("/__openclaw__/canvas/documents/emoji/index.html", { viewId: emojiViewId }),
-    ],
-  });
-  assert.notEqual(emojiWidget?.key, emojiViewId);
-  assert.ok(Buffer.byteLength(emojiWidget?.key ?? "", "utf8") <= 256);
-  const cjkViewId = "界".repeat(201);
-  const [cjkWidget] = chatMessageWidgets({
-    role: "assistant",
-    content: [canvasBlock("/__openclaw__/canvas/documents/cjk/index.html", { viewId: cjkViewId })],
-  });
-  assert.notEqual(cjkWidget?.key, cjkViewId);
-  assert.ok(Buffer.byteLength(cjkWidget?.key ?? "", "utf8") <= 256);
+  expect(duplicateWidgets.map(({ key }) => key)).toEqual([
+    "duplicate",
+    "duplicate-2",
+    "duplicate-2-2",
+  ]);
+  for (const [name, viewId] of [
+    ["emoji", "🦞".repeat(65)],
+    ["cjk", "界".repeat(201)],
+  ]) {
+    const [bounded] = chatMessageWidgets({
+      role: "assistant",
+      content: [canvasBlock(`/__openclaw__/canvas/documents/${name}/index.html`, { viewId })],
+    });
+    assert.notEqual(bounded?.key, viewId);
+    assert.ok(Buffer.byteLength(bounded?.key ?? "", "utf8") <= 256);
+  }
   assert.equal(
     chatMessageWidgets(canvasMessage("tool", "/__openclaw__/canvas/documents/tool/index.html"))
       .length,
@@ -745,12 +706,8 @@ test("a cached terminal retry presents the recovered reply and unlocks without a
   });
   await retry;
   await harness.advanceTime(450);
-  assert.equal(harness.replyText(), "The saved answer.");
-  assert.equal(harness.thinking(), false);
-  assert.equal(harness.readOnly(), false);
-  harness.handleChatEvent({
-    ...chatTarget("other-run"),
-    state: "final",
+  expectState(harness, { replyText: "The saved answer.", thinking: false, readOnly: false });
+  harness.event("other-run", "final", {
     message: { role: "assistant", content: "unrelated" },
   });
   assert.equal(harness.replyText(), "The saved answer.");
@@ -765,31 +722,19 @@ test("a cached terminal retry presents the recovered reply and unlocks without a
   assert.equal(harness.sendDisabled(), true);
   await harness.send(false);
   assert.equal(harness.sendCount(), 3, "ordinary started ACK still waits for its final");
-  harness.handleChatEvent({
-    ...chatTarget("other-run"),
-    state: "final",
-  });
+  harness.event("other-run", "final");
   assert.equal(harness.sendDisabled(), true);
-  harness.handleChatEvent({
-    ...chatTarget("next-key"),
-    state: "final",
-  });
-  assert.equal(harness.readOnly(), false);
-  assert.equal(harness.sendDisabled(), false);
-  assert.equal(harness.draft(), "A prepared follow-up");
+  harness.event("next-key", "final");
+  expectState(harness, { readOnly: false, sendDisabled: false, draft: "A prepared follow-up" });
 });
 
 test("a buffered matching final wins over terminal history recovery", async () => {
   const harness = readyHarness("answer");
   const sending = harness.send(false);
-  harness.handleChatEvent({
-    ...chatTarget("reply-key"),
-    state: "status",
+  harness.event("reply-key", "status", {
     status: { phase: "starting_model" },
   });
-  harness.handleChatEvent({
-    ...chatTarget("reply-key"),
-    state: "final",
+  harness.event("reply-key", "final", {
     message: { role: "assistant", content: "Live final" },
   });
   harness.resolveSend({
@@ -799,8 +744,7 @@ test("a buffered matching final wins over terminal history recovery", async () =
   });
   await sending;
   await harness.advanceTime(450);
-  assert.equal(harness.replyText(), "Live final");
-  assert.equal(harness.readOnly(), false);
+  expectState(harness, { replyText: "Live final", readOnly: false });
 });
 
 test("collapse preserves live replies, drafts, and widget instances and wins a delayed acknowledgement", async () => {
@@ -827,8 +771,7 @@ test("collapse preserves live replies, drafts, and widget instances and wins a d
   harness.setMessage("Keep this\nnext draft.");
   harness.toggleReply();
   await harness.drain();
-  assert.equal(harness.replyVisible(), false);
-  assert.equal(harness.syncedExpanded(), false);
+  expectState(harness, { replyVisible: false, syncedExpanded: false });
   assert.deepEqual({ ...harness.syncedWidgets()[0] }, { ...widget, visible: false });
   assert.equal(harness.draft(), "Keep this\nnext draft.");
   harness.handleChatEvent({ ...target, state: "delta", deltaText: " Still working." });
@@ -836,9 +779,11 @@ test("collapse preserves live replies, drafts, and widget instances and wins a d
   assert.equal(harness.replyVisible(), false);
   harness.toggleReply();
   await harness.drain();
-  assert.equal(harness.replyVisible(), true);
-  assert.equal(harness.replyText(), "Checking the project. Still working.");
-  assert.equal(harness.draft(), "Keep this\nnext draft.");
+  expectState(harness, {
+    replyVisible: true,
+    replyText: "Checking the project. Still working.",
+    draft: "Keep this\nnext draft.",
+  });
   assert.deepEqual({ ...harness.syncedWidgets()[0] }, widget);
   assert.equal(harness.sendCount(), 1);
 
@@ -948,9 +893,7 @@ test("widget sync retains a latest empty compact state", async () => {
   harness.resolveWidgetSync(0);
   await harness.drain();
   const latest = harness.widgetSyncs()[1];
-  assert.deepEqual(latest.widgets, []);
-  assert.equal(latest.hasWidgets, false);
-  assert.equal(latest.expanded, false);
+  expect(latest).toMatchObject({ widgets: [], hasWidgets: false, expanded: false });
   harness.resolveWidgetSync(1);
   await harness.drain();
   assert.equal(harness.widgetSyncs().length, 2);
@@ -984,9 +927,7 @@ for (const transition of ["hide", "reveal"] as const) {
     await harness.requestHide();
     if (transition === "hide") {
       await harness.advanceTime(45);
-      assert.ok(
-        harness.calls.some(({ method }: { method: string }) => method === "quickchat_hide"),
-      );
+      assert.ok(harness.callsFor("quickchat_hide").length > 0);
     } else {
       harness.reveal();
       await harness.drain();
@@ -1186,29 +1127,21 @@ test("prepared request keeps its pre-ack text and widgets across more than 64 fo
   harness.prepareSend(chatTarget("right-run"));
   const foreignRuns = () => {
     for (let index = 0; index < 65; index += 1) {
-      harness.handleChatEvent({
-        ...chatTarget(`foreign-${index}`),
-        state: "delta",
+      harness.event(`foreign-${index}`, "delta", {
         deltaText: "foreign",
         message: { role: "assistant", content: "foreign" },
       });
     }
   };
   foreignRuns();
-  harness.handleChatEvent({
-    ...chatTarget("right-run"),
-    state: "status",
+  harness.event("right-run", "status", {
     status: { phase: "starting_model" },
   });
-  harness.handleChatEvent({
-    ...chatTarget("wrong-run"),
-    state: "delta",
+  harness.event("wrong-run", "delta", {
     deltaText: "wrong",
     message: { role: "assistant", content: "wrong" },
   });
-  harness.handleChatEvent({
-    ...chatTarget("right-run"),
-    state: "delta",
+  harness.event("right-run", "delta", {
     deltaText: "right",
     message: {
       role: "assistant",
@@ -1220,9 +1153,7 @@ test("prepared request keeps its pre-ack text and widgets across more than 64 fo
   });
   foreignRuns();
   for (let index = 0; index < 64; index += 1) {
-    harness.handleChatEvent({
-      ...chatTarget("right-run"),
-      state: "delta",
+    harness.event("right-run", "delta", {
       deltaText: "x",
     });
   }
@@ -1232,14 +1163,14 @@ test("prepared request keeps its pre-ack text and widgets across more than 64 fo
   await sending;
   await harness.drain();
 
-  assert.equal(harness.pendingCount(), 0);
-  assert.equal(harness.activeRunId(), "right-run");
-  assert.equal(harness.replyText(), `right${"x".repeat(64)}`);
+  expectState(harness, {
+    pendingCount: 0,
+    activeRunId: "right-run",
+    replyText: `right${"x".repeat(64)}`,
+  });
   assert.equal(harness.syncedWidgets().length, 1);
 
-  harness.handleChatEvent({
-    ...chatTarget(" right-run "),
-    state: "delta",
+  harness.event(" right-run ", "delta", {
     deltaText: " whitespace-id",
   });
   harness.handleChatEvent({
@@ -1249,9 +1180,7 @@ test("prepared request keeps its pre-ack text and widgets across more than 64 fo
     state: "delta",
     deltaText: " wrong-agent",
   });
-  harness.handleChatEvent({
-    ...chatTarget("right-run"),
-    state: "delta",
+  harness.event("right-run", "delta", {
     deltaText: "!",
   });
   assert.equal(harness.replyText(), `right${"x".repeat(64)}!`);
@@ -1300,13 +1229,13 @@ for (const outcome of ["retained", "evicted", "repaired", "recovered"] as const)
     });
     await sending;
     await harness.advanceTime(450);
-    assert.equal(harness.replyText(), outcome === "evicted" ? "" : "prefix suffix more");
-    assert.equal(
-      harness.replyError(),
-      outcome === "evicted" ? "Reply text is incomplete. Open the dashboard to recover it." : "",
-    );
-    assert.equal(harness.readOnly(), false);
-    assert.equal(harness.pendingCount(), 0);
+    expectState(harness, {
+      replyText: outcome === "evicted" ? "" : "prefix suffix more",
+      replyError:
+        outcome === "evicted" ? "Reply text is incomplete. Open the dashboard to recover it." : "",
+      readOnly: false,
+      pendingCount: 0,
+    });
   });
 }
 
@@ -1320,9 +1249,7 @@ test("unchanged gateway state does not renew a failed Canvas capability", async 
   const sending = harness.send(false);
   harness.resolveSend(chatTarget("state-run"));
   await sending;
-  harness.handleChatEvent({
-    ...chatTarget("state-run"),
-    state: "delta",
+  harness.event("state-run", "delta", {
     message: canvasMessage("assistant", "/__openclaw__/canvas/documents/status/index.html"),
   });
   await harness.flushSurfaceRefresh();
@@ -1333,9 +1260,7 @@ test("unchanged gateway state does not renew a failed Canvas capability", async 
   assert.equal(harness.syncedWidgets().length, 0);
   harness.setWidgetSurfaceRefreshFails(false);
   await harness.advanceTime(1);
-  harness.handleChatEvent({
-    ...chatTarget("state-run"),
-    state: "delta",
+  harness.event("state-run", "delta", {
     message: canvasMessage("assistant", "/__openclaw__/canvas/documents/retry/index.html"),
   });
   await harness.flushSurfaceRefresh();
@@ -1350,42 +1275,32 @@ test("adding a widget preserves the existing native webview identity", async () 
   const widgetBlock = (id: string) =>
     canvasBlock(`/__openclaw__/canvas/documents/${id}/index.html`, { title: id, viewId: id });
 
-  harness.handleChatEvent({
-    ...chatTarget("widget-run"),
-    state: "delta",
+  harness.event("widget-run", "delta", {
     message: { role: "assistant", content: [widgetBlock("first")] },
   });
   await harness.flushWidgets();
   const firstLayout = { ...harness.syncedWidgets()[0] };
   const syncCountBeforeText = harness.widgetSyncCount();
-  harness.handleChatEvent({
-    ...chatTarget("widget-run"),
-    state: "delta",
+  harness.event("widget-run", "delta", {
     deltaText: "status update",
   });
   await harness.flushWidgets();
   assert.ok(harness.widgetSyncCount() > syncCountBeforeText);
 
-  harness.handleChatEvent({
-    ...chatTarget("widget-run"),
-    state: "delta",
+  harness.event("widget-run", "delta", {
     message: { role: "assistant", content: [widgetBlock("first"), widgetBlock("second")] },
   });
   await harness.flushWidgets();
   const layouts = harness.syncedWidgets().map((layout: object) => Object.assign({}, layout));
 
   assert.deepEqual(layouts[0], firstLayout);
-  assert.equal(layouts[0].visible, true);
-  assert.equal(layouts[1].key, "second");
-  assert.equal(layouts[1].visible, false);
+  expect(layouts).toMatchObject([{ visible: true }, { key: "second", visible: false }]);
 });
 
 test("hiding clears buffered pre-ack frames", async () => {
   const harness = readyHarness("hello");
   const sending = harness.send(false);
-  harness.handleChatEvent({
-    ...chatTarget("right-run"),
-    state: "delta",
+  harness.event("right-run", "delta", {
     deltaText: "buffered",
   });
   assert.equal(harness.pendingCount(), 1);

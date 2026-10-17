@@ -1,11 +1,6 @@
-/**
- * Production-path proof: loopback MCP ask_user reaches Telegram Bot API, then
- * completes after the shared question bridge answers.
- *
- * Lives under test/ so core gateway tests do not import the Telegram plugin.
- */
-import { createServer, type Server } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
+// Keep plugin transport proof outside core gateway tests.
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   createEmptyPluginRegistry,
@@ -13,7 +8,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -59,15 +54,11 @@ vi.mock("../src/tts/tts-settings.js", () => ({
 
 const sessionKey = "agent:main:telegram:direct:1";
 const captureKey = "loopback-ask-user-telegram";
-const questionArgs = {
-  questions: [
-    {
-      id: "choice",
-      header: "Choice",
-      question: "Which destination should be used?",
-      options: [{ label: "Staging" }, { label: "Production" }],
-    },
-  ],
+const question = {
+  id: "choice",
+  header: "Choice",
+  question: "Which destination should be used?",
+  options: [{ label: "Staging" }, { label: "Production" }],
 };
 const caller: ReplyToolAuthorityOverlay = {
   messageProvider: "telegram",
@@ -77,33 +68,18 @@ const caller: ReplyToolAuthorityOverlay = {
   traceAuthorized: false,
 };
 
-type McpResponse = {
-  result: {
-    content?: Array<{ type: string; text?: string }>;
-    isError?: boolean;
-  };
-};
+type McpResponse = { result: unknown };
+type TelegramRequest = { body: string; url: string };
 
-type TelegramRequest = { body: string; method: string | undefined; url: string };
-
-type TelegramAskUserLoopback = {
-  apiRoot: string;
-  requests: TelegramRequest[];
-  promptRequest: Promise<TelegramRequest>;
-  close: () => Promise<void>;
-};
-
-async function startTelegramAskUserLoopback(): Promise<TelegramAskUserLoopback> {
-  const requests: TelegramAskUserLoopback["requests"] = [];
+async function startTelegramAskUserLoopback() {
+  const requests: TelegramRequest[] = [];
   const promptRequest = createDeferredCore<TelegramRequest>();
-  const sockets = new Set<Socket>();
-  const server: Server = createServer((request, response) => {
+  const server = createServer((request, response) => {
     const chunks: Buffer[] = [];
     request.on("data", (chunk: Buffer) => chunks.push(chunk));
     request.on("end", () => {
       const entry = {
         body: Buffer.concat(chunks).toString("utf8"),
-        method: request.method,
         url: request.url ?? "",
       };
       requests.push(entry);
@@ -124,10 +100,6 @@ async function startTelegramAskUserLoopback(): Promise<TelegramAskUserLoopback> 
       }
     });
   });
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
-  });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
@@ -138,9 +110,7 @@ async function startTelegramAskUserLoopback(): Promise<TelegramAskUserLoopback> 
     requests,
     promptRequest: promptRequest.promise,
     close: async () => {
-      for (const socket of sockets) {
-        socket.destroy();
-      }
+      server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
@@ -180,193 +150,170 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("loopback ask_user Telegram channel transport", () => {
-  it("publishes the prompt through Bot API and completes after the answer", async () => {
-    const { telegramPlugin } = await import("../extensions/telegram/api.js");
-    const telegram = await startTelegramAskUserLoopback();
-    try {
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
-      );
-      const cli = createCliRunnerPrepareFixture(prepareCliRunContext);
-      const { dir } = cli.session;
-      await runQaGatewayFixture(
-        async () =>
-          await withQuestionGateway(async (gateway) => {
-            const config: OpenClawConfig = {
-              ...expectDefined(getRuntimeConfigSnapshot(), "isolated question gateway config"),
-              agents: { defaults: { workspace: dir }, entries: { main: {} } },
-              plugins: { enabled: false },
-              tools: { profile: "full" },
-              channels: {
-                telegram: {
-                  botToken: "123456:loopback-ask-user",
-                  apiRoot: telegram.apiRoot,
-                },
-              },
-            };
-            setRuntimeConfigSnapshot(config);
-            await ensureMcpLoopbackServer();
-            const { getActiveMcpLoopbackRuntime } =
-              await import("../src/gateway/mcp-http.loopback-runtime.js");
-            const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "loopback runtime");
-            const toolCalls = new Set<Promise<unknown>>();
-            const resolveTools = toolResolution.resolveGatewayScopedTools;
-            const resolutions = vi
-              .spyOn(toolResolution, "resolveGatewayScopedTools")
-              .mockImplementation(async (...args) => {
-                const scoped = await resolveTools(...args);
-                for (const tool of scoped.tools) {
-                  const execute = tool.execute;
-                  vi.spyOn(tool, "execute").mockImplementation(async (...executeArgs) => {
-                    const pending = execute(...executeArgs);
-                    toolCalls.add(pending);
-                    try {
-                      return await pending;
-                    } finally {
-                      toolCalls.delete(pending);
-                    }
-                  });
-                }
-                return scoped;
-              });
-            const requestController = new AbortController();
-            const contexts: PreparedCliRunContext[] = [];
-            const admissions: PreparedAgentRunAdmission[] = [];
-            const requests: Promise<McpResponse>[] = [];
-            const persist = vi.fn(async () => {});
-            const request = async (token: string, method: "tools/list" | "tools/call") => {
-              const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
-                method: "POST",
-                signal: requestController.signal,
-                headers: {
-                  authorization: `Bearer ${token}`,
-                  "content-type": "application/json",
-                  "x-openclaw-cli-capture-key": captureKey,
-                },
-                body: JSON.stringify({
-                  jsonrpc: "2.0",
-                  id: 1,
-                  method,
-                  ...(method === "tools/call"
-                    ? { params: { name: "ask_user", arguments: questionArgs } }
-                    : {}),
-                }),
-              });
-              expect(response.status).toBe(200);
-              return (await response.json()) as McpResponse;
-            };
-            await runQaGatewayFixture(
-              async () => {
-                const source = new AbortController();
-                const admission = prepareAgentRunAdmission({
-                  cfg: config,
-                  facts: {
-                    runId: "loopback-ask-user-telegram",
-                    agentId: "main",
-                    ingress: { kind: "system", boundary: "mcp-question-test", state: "present" },
-                  },
-                  operationalRunInstance: createOperationalRunInstanceRef(
-                    "loopback-ask-user-telegram",
-                  ),
-                });
-                admissions.push(admission);
-                const context = await cli.prepare({
-                  config,
-                  preparedRunAdmission: admission,
-                  sessionKey,
-                  runId: "loopback-ask-user-telegram",
-                  timeoutMs: 60_000,
-                  abortSignal: source.signal,
-                  messageProvider: "telegram",
-                  currentChannelId: "1",
-                  agentAccountId: "default",
-                  senderIsOwner: true,
-                  toolsAllow: ["ask_user"],
-                });
-                contexts.push(context);
-                const token = expectDefined(
-                  context.preparedBackend.env?.OPENCLAW_MCP_TOKEN,
-                  "prepared CLI grant",
-                );
-                context.preparedBackend.mcpClientGrantCapture?.activate(
-                  captureKey,
-                  createCliRunCurrentAssertion(context.params),
-                );
-                expect(
-                  resolveMcpLoopbackClientGrant({
-                    token,
-                    runtimeOwnerToken: runtime.ownerToken,
-                    captureKey,
-                  })?.isCurrent(),
-                ).toBe(true);
-                await request(token, "tools/list");
-                const registration = gateway.holdRegistration();
-                const response = request(token, "tools/call");
-                requests.push(response);
-                void response.catch(() => {});
-                try {
-                  await Promise.race([
-                    registration.entered,
-                    response.then(() => {
-                      throw new Error("ask_user completed before question registration");
-                    }),
-                  ]);
-                } finally {
-                  registration.release();
-                }
-                const prompt = await Promise.race([
-                  telegram.promptRequest,
-                  response.then(() => {
-                    throw new Error("ask_user completed before Telegram prompt delivery");
-                  }),
-                ]);
-                expect(prompt.body).toContain("Which destination should be used?");
-                expect(prompt.body).toContain("Staging");
-                await expect(
-                  claimPendingAgentQuestionAnswerFromCaller({
-                    sessionKey,
-                    text: "Staging",
-                    caller,
-                    persist,
-                    assertSourceCurrent: () => {},
-                  }),
-                ).resolves.toBe(true);
-                const completed = await response;
-                expect(
-                  telegram.requests.filter((entry) => entry.url.includes("sendMessage")),
-                ).toHaveLength(1);
-                expect(completed.result.isError).toBe(false);
-                expect(completed.result.content).toEqual([
-                  expect.objectContaining({
-                    type: "text",
-                    text: expect.stringContaining('"status": "answered"'),
-                  }),
-                ]);
-              },
-              () => {
-                requestController.abort();
-                for (const question of gateway.manager.list()) {
-                  gateway.manager.cancel(question.id, "test-cleanup");
-                }
-              },
-              () => Promise.allSettled(requests),
-              () => closeMcpLoopbackServer(),
-              () => Promise.allSettled(toolCalls),
-              () =>
-                runQaGatewayFixture(
-                  async () => {},
-                  ...contexts.map((context) => () => context.preparedBackend.cleanup?.()),
-                  ...admissions.map((admission) => () => admission.close()),
-                ),
-              () => resolutions.mockRestore(),
-            );
+it("publishes the prompt through Bot API and completes after the answer", async () => {
+  const { telegramPlugin } = await import("../extensions/telegram/api.js");
+  const telegram = await startTelegramAskUserLoopback();
+  try {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+    );
+    const cli = createCliRunnerPrepareFixture(prepareCliRunContext);
+    const exercise: Parameters<typeof withQuestionGateway>[0] = async (gateway) => {
+      const config: OpenClawConfig = {
+        ...expectDefined(getRuntimeConfigSnapshot(), "isolated question gateway config"),
+        agents: { defaults: { workspace: cli.session.dir }, entries: { main: {} } },
+        plugins: { enabled: false },
+        tools: { profile: "full" },
+        channels: {
+          telegram: {
+            botToken: "123456:loopback-ask-user",
+            apiRoot: telegram.apiRoot,
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(config);
+      await ensureMcpLoopbackServer();
+      const { getActiveMcpLoopbackRuntime } =
+        await import("../src/gateway/mcp-http.loopback-runtime.js");
+      const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "loopback runtime");
+      const toolCalls: Promise<unknown>[] = [];
+      const resolveTools = toolResolution.resolveGatewayScopedTools;
+      const resolutions = vi
+        .spyOn(toolResolution, "resolveGatewayScopedTools")
+        .mockImplementation(async (...args) => {
+          const scoped = await resolveTools(...args);
+          for (const tool of scoped.tools) {
+            const execute = tool.execute;
+            vi.spyOn(tool, "execute").mockImplementation((...executeArgs) => {
+              const pending = execute(...executeArgs);
+              toolCalls.push(pending);
+              return pending;
+            });
+          }
+          return scoped;
+        });
+      const requestController = new AbortController();
+      let context: PreparedCliRunContext | undefined;
+      let admission: PreparedAgentRunAdmission | undefined;
+      let pendingResponse: Promise<McpResponse> | undefined;
+      const request = async (token: string, method: "tools/list" | "tools/call") => {
+        const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
+          method: "POST",
+          signal: requestController.signal,
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+            "x-openclaw-cli-capture-key": captureKey,
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method,
+            ...(method === "tools/call"
+              ? { params: { name: "ask_user", arguments: { questions: [question] } } }
+              : {}),
           }),
-        () => closeOpenClawStateDatabaseForTest(),
-        () => cli.cleanup(),
+        });
+        expect(response.status).toBe(200);
+        return (await response.json()) as McpResponse;
+      };
+      await runQaGatewayFixture(
+        async () => {
+          admission = prepareAgentRunAdmission({
+            cfg: config,
+            facts: {
+              runId: captureKey,
+              agentId: "main",
+              ingress: { kind: "system", boundary: "mcp-question-test", state: "present" },
+            },
+            operationalRunInstance: createOperationalRunInstanceRef(captureKey),
+          });
+          context = await cli.prepare({
+            config,
+            preparedRunAdmission: admission,
+            sessionKey,
+            runId: captureKey,
+            timeoutMs: 60_000,
+            abortSignal: new AbortController().signal,
+            messageProvider: "telegram",
+            currentChannelId: "1",
+            agentAccountId: "default",
+            senderIsOwner: true,
+            toolsAllow: ["ask_user"],
+          });
+          const token = expectDefined(
+            context.preparedBackend.env?.OPENCLAW_MCP_TOKEN,
+            "prepared CLI grant",
+          );
+          context.preparedBackend.mcpClientGrantCapture?.activate(
+            captureKey,
+            createCliRunCurrentAssertion(context.params),
+          );
+          expect(
+            resolveMcpLoopbackClientGrant({
+              token,
+              runtimeOwnerToken: runtime.ownerToken,
+              captureKey,
+            })?.isCurrent(),
+          ).toBe(true);
+          await request(token, "tools/list");
+          const registration = gateway.holdRegistration();
+          const pending = request(token, "tools/call");
+          pendingResponse = pending;
+          void pending.catch(() => {});
+          const beforeCompletion = <T>(event: Promise<T>, phase: string) =>
+            Promise.race([
+              event,
+              pending.then(() => {
+                throw new Error(`ask_user completed before ${phase}`);
+              }),
+            ]);
+          try {
+            await beforeCompletion(registration.entered, "question registration");
+          } finally {
+            registration.release();
+          }
+          const prompt = await beforeCompletion(telegram.promptRequest, "Telegram prompt delivery");
+          expect(prompt.body).toContain("Which destination should be used?");
+          expect(prompt.body).toContain("Staging");
+          await expect(
+            claimPendingAgentQuestionAnswerFromCaller({
+              sessionKey,
+              text: "Staging",
+              caller,
+              persist: vi.fn(async () => {}),
+              assertSourceCurrent: () => {},
+            }),
+          ).resolves.toBe(true);
+          const completed = await pending;
+          expect(
+            telegram.requests.filter((entry) => entry.url.includes("sendMessage")),
+          ).toHaveLength(1);
+          expect(completed.result).toMatchObject({
+            isError: false,
+            content: [{ type: "text", text: expect.stringContaining('"status": "answered"') }],
+          });
+        },
+        () => {
+          requestController.abort();
+          for (const pendingQuestion of gateway.manager.list()) {
+            gateway.manager.cancel(pendingQuestion.id, "test-cleanup");
+          }
+        },
+        () => Promise.allSettled(pendingResponse ? [pendingResponse] : []),
+        () => closeMcpLoopbackServer(),
+        () => Promise.allSettled(toolCalls),
+        () => context?.preparedBackend.cleanup?.(),
+        () => admission?.close(),
+        () => resolutions.mockRestore(),
       );
-    } finally {
-      await telegram.close();
-    }
-  });
+    };
+    await runQaGatewayFixture(
+      () => withQuestionGateway(exercise),
+      () => closeOpenClawStateDatabaseForTest(),
+      () => cli.cleanup(),
+    );
+  } finally {
+    await telegram.close();
+  }
 });
