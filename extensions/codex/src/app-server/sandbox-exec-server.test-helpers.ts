@@ -2,6 +2,7 @@ import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { vi } from "vitest";
 import type { RawData, WebSocket } from "ws";
 import { websocket } from "./sandbox-exec-server.websocket.js";
+import { requireObject, requireString } from "./sandbox-exec-server/json-rpc.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 type RpcResponse = {
@@ -98,15 +99,11 @@ export function execServerUrlFromClient(
   client: ReturnType<typeof createClient>,
   callIndex = 0,
 ): string {
-  const params = client.request.mock.calls[callIndex]?.[1];
-  if (!params || typeof params !== "object" || !("execServerUrl" in params)) {
-    throw new Error(`missing execServerUrl for environment/add call ${callIndex}`);
-  }
-  const { execServerUrl } = params as { execServerUrl?: unknown };
-  if (typeof execServerUrl !== "string" || !execServerUrl) {
-    throw new Error(`invalid execServerUrl for environment/add call ${callIndex}`);
-  }
-  return execServerUrl;
+  const params = requireObject(
+    client.request.mock.calls[callIndex]?.[1],
+    `environment/add ${callIndex}`,
+  );
+  return requireString(params.execServerUrl, "execServerUrl");
 }
 
 export function codexFsSandboxContext(params: {
@@ -120,9 +117,6 @@ export function codexFsSandboxContext(params: {
       network: "restricted",
     },
     cwd: params.cwd ?? "file:///workspace",
-    windowsSandboxLevel: "disabled",
-    windowsSandboxPrivateDesktop: false,
-    useLegacyLandlock: false,
   };
 }
 
@@ -159,7 +153,6 @@ export function collectNotifications(
   return notifications;
 }
 
-/** Polls process/read until the managed sandbox process reports closed. */
 export async function readUntilClosed(socket: WebSocket, processId: string): Promise<ProcessRead> {
   let afterSeq = 0;
   const chunks: Array<{ stream: string; chunk: string }> = [];
@@ -184,24 +177,19 @@ export function waitForSocketClose(socket: WebSocket): Promise<{ code: number }>
   });
 }
 
-/** Waits until the requested number of streaming HTTP body-delta notifications arrive. */
 export async function waitForHttpBodyDeltas(
   notifications: Array<{ method: string; params?: unknown }>,
   count: number,
 ): Promise<unknown[]> {
-  // Preserve the 500 ms failure budget while checking completed streams sooner.
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const deltas = notifications
-      .filter((notification) => notification.method === "http/request/bodyDelta")
-      .map((notification) => notification.params);
-    if (deltas.length >= count) {
-      return deltas;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5);
-    });
-  }
-  throw new Error(`expected ${count} http body deltas`);
+  return vi.waitUntil(
+    () => {
+      const deltas = notifications
+        .filter((notification) => notification.method === "http/request/bodyDelta")
+        .map((notification) => notification.params);
+      return deltas.length >= count ? deltas : undefined;
+    },
+    { timeout: 500, interval: 5 },
+  );
 }
 
 export function rpc(socket: WebSocket, method: string, params: unknown): Promise<unknown> {

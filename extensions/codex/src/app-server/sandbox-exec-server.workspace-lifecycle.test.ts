@@ -33,24 +33,32 @@ import { httpRequest } from "./sandbox-exec-server/http.js";
 import { startProcess, terminateProcess, writeProcess } from "./sandbox-exec-server/processes.js";
 import type { ManagedProcess } from "./sandbox-exec-server/types.js";
 
-function createFakeChild(): ChildProcessWithoutNullStreams {
-  // SAFETY: Only the intercepted spawn path consumes this event/stream fixture; no OS child is created.
-  return Object.assign(new EventEmitter(), {
+function createFixture(overrides: Parameters<typeof createSandboxContext>[0] = {}) {
+  // Only the intercepted spawn consumes this event/stream fixture.
+  const child = Object.assign(new EventEmitter(), {
     stdin: new PassThrough(),
     stdout: new PassThrough(),
     stderr: new PassThrough(),
     pid: 42_424,
     kill: vi.fn(() => true),
   }) as unknown as ChildProcessWithoutNullStreams;
-}
-
-function preparedSpec(assertCurrent: () => void) {
-  return { argv: ["sandbox-child"], env: {}, stdinMode: "pipe-open" as const, assertCurrent };
-}
-function createFixture(overrides: Parameters<typeof createSandboxContext>[0] = {}) {
-  const child = createFakeChild();
+  let current = true;
+  const assertCurrent = () => {
+    if (!current) {
+      throw new Error("workspace revoked");
+    }
+  };
   spawnMock.mockReturnValue(child);
-  const sandbox = createSandboxContext(overrides);
+  const sandbox = createSandboxContext({
+    buildExecSpec: async () => ({
+      argv: ["sandbox-child"],
+      env: {},
+      stdinMode: "pipe-open",
+      finalizeToken: "retired",
+      assertCurrent,
+    }),
+    ...overrides,
+  });
   const server = createSessionExecServer(sandbox);
   const processes = new Map<string, ManagedProcess>();
   return {
@@ -58,15 +66,15 @@ function createFixture(overrides: Parameters<typeof createSandboxContext>[0] = {
     sandbox,
     server,
     processes,
+    assertCurrent,
+    revoke: () => {
+      current = false;
+    },
     start: (params: { tty?: boolean; pipeStdin?: boolean } = {}) =>
       startProcess(server, processes, vi.fn<ManagedProcess["emitNotification"]>(), {
         processId: "owned-child",
         argv: ["sh", "-lc", "true"],
         cwd: "file:///workspace",
-        env: {},
-        tty: false,
-        pipeStdin: false,
-        arg0: null,
         ...params,
       }),
     terminate: () => terminateProcess(processes, { processId: "owned-child" }),
@@ -80,19 +88,9 @@ afterEach(() => {
 describe("Codex managed workspace process authority", () => {
   it("revalidates a prepared exec spec immediately before spawning the transport", async () => {
     const finalizeExec = vi.fn(async () => undefined);
-    const { start } = createFixture({
-      buildExecSpec: async () => ({
-        argv: ["must-not-spawn"],
-        env: {},
-        stdinMode: "pipe-closed",
-        finalizeToken: "retired",
-        assertCurrent: () => {
-          throw new Error("prepared owner revoked");
-        },
-      }),
-      finalizeExec,
-    });
-    await expect(start()).rejects.toThrow("prepared owner revoked");
+    const { start, revoke } = createFixture({ finalizeExec });
+    revoke();
+    await expect(start()).rejects.toThrow("workspace revoked");
     expect(spawnMock).not.toHaveBeenCalled();
     expect(finalizeExec).toHaveBeenCalledWith({
       status: "failed",
@@ -110,9 +108,6 @@ describe("Codex managed workspace process authority", () => {
       ptyMock.mockResolvedValue({
         pid: 42_424,
         write: (data: string | Buffer) => writes.push(data.toString()),
-        resize: () => {},
-        pause: () => {},
-        resume: () => {},
         onData: () => {},
         onExit: (listener: typeof exitPty) => {
           exitPty = listener;
@@ -121,28 +116,13 @@ describe("Codex managed workspace process authority", () => {
           exitPty?.({ exitCode: 0, signal: 9 });
         },
       });
-      let current = true;
       const runShellCommand = vi.fn(async () => {
         throw new Error("revoked execution");
       });
-      const {
-        child,
-        sandbox,
-        server,
-        processes,
-        start,
-        terminate: terminateProcessOwner,
-      } = createFixture({
-        runShellCommand,
-        buildExecSpec: async () =>
-          preparedSpec(() => {
-            if (!current) {
-              throw new Error("workspace revoked");
-            }
-          }),
-      });
+      const { child, sandbox, server, processes, start, terminate, revoke, assertCurrent } =
+        createFixture({ runShellCommand });
       child.stdin.on("data", (chunk: Buffer) => writes.push(chunk.toString()));
-      const terminate = vi.fn(async () => {
+      const cleanup = vi.fn(async () => {
         if (tty) {
           exitPty?.({ exitCode: 0, signal: 9 });
         } else {
@@ -150,10 +130,8 @@ describe("Codex managed workspace process authority", () => {
         }
       });
       sandbox.backend!.prepareProcessCleanup = (env) => {
-        if (!current) {
-          throw new Error("revoked execution");
-        }
-        return { env, terminate, interrupt: async () => false };
+        assertCurrent();
+        return { env, terminate: cleanup, interrupt: async () => false };
       };
       await start({ tty, pipeStdin: true });
       const input = (text: string) => ({
@@ -162,14 +140,14 @@ describe("Codex managed workspace process authority", () => {
       });
       try {
         expect(writeProcess(processes, input("accepted"))).toEqual({ status: "accepted" });
-        current = false;
+        revoke();
         expect(() => writeProcess(processes, input("forbidden"))).toThrow("workspace revoked");
         expect(writes).toEqual(["accepted"]);
       } finally {
-        await terminateProcessOwner();
+        await terminate();
       }
       expect(processes.get("owned-child")?.exitCode).toBe(tty ? 1 : 143);
-      expect(terminate).toHaveBeenCalledOnce();
+      expect(cleanup).toHaveBeenCalledOnce();
       expect(runShellCommand).not.toHaveBeenCalled();
       expect(server.children.size).toBe(0);
     },
@@ -178,18 +156,8 @@ describe("Codex managed workspace process authority", () => {
   it.each(["process", "http"] as const)(
     "blocks %s input and settles cleanup when authority closes during readiness",
     async (kind) => {
-      let current = true;
-      const { child, sandbox, server, processes, start } = createFixture({
-        buildExecSpec: async () =>
-          preparedSpec(() => {
-            if (!current) {
-              throw new Error("readiness owner revoked");
-            }
-          }),
-      });
-      child.once("spawn", () => {
-        current = false;
-      });
+      const { child, sandbox, server, processes, start, revoke } = createFixture();
+      child.once("spawn", revoke);
       const end = vi.spyOn(child.stdin, "end");
       child.stdin.on("data", () => {
         child.stdout.push(JSON.stringify({ status: 200, headers: [], bodyBase64: "" }));
@@ -219,7 +187,7 @@ describe("Codex managed workspace process authority", () => {
               },
               operations,
             );
-      await expect(request).rejects.toThrow("readiness owner revoked");
+      await expect(request).rejects.toThrow("workspace revoked");
       await Promise.allSettled(operations);
       expect(end).not.toHaveBeenCalled();
       expect(terminate).toHaveBeenCalledOnce();

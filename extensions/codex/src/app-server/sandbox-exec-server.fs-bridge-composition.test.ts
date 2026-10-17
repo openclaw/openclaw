@@ -1,14 +1,14 @@
 // Exercise RPC authorization against real bridge scripts, symlinks, and filesystem effects.
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   createRemoteShellSandboxFsBridge,
   type SandboxBackendCommandParams,
   type SandboxBackendCommandResult,
 } from "openclaw/plugin-sdk/sandbox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import { ensureCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
@@ -20,8 +20,10 @@ import {
   rpc,
   specialPath,
 } from "./sandbox-exec-server.test-helpers.js";
+import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 const SANDBOX_MOUNT = "/workspace";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function expectFile(filePath: string, content: string) {
   return expect(fs.readFile(filePath, "utf8")).resolves.toBe(content);
@@ -60,183 +62,174 @@ function rewriteMountArgs(args: string[] | undefined, mountDir: string): string[
   );
 }
 
-function runLocalShellScript(
+async function runLocalShellScript(
   command: SandboxBackendCommandParams,
   mountDir: string,
 ): Promise<SandboxBackendCommandResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      "sh",
-      [
-        "-c",
-        rewritePortableStatScript(command.script),
-        "composition-shell",
-        ...rewriteMountArgs(command.args, mountDir),
-      ],
-      { stdio: ["pipe", "pipe", "pipe"] },
-    );
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    child.stdout?.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-    child.stderr?.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      resolve({
-        stdout: Buffer.concat(stdout),
-        stderr: Buffer.concat(stderr),
-        code: code ?? 0,
-      });
-    });
-    child.stdin?.end(command.stdin);
-  });
+  const child = spawn(
+    "sh",
+    [
+      "-c",
+      rewritePortableStatScript(command.script),
+      "composition-shell",
+      ...rewriteMountArgs(command.args, mountDir),
+    ],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  child.stdout?.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
+  child.stderr?.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+  const closed = once(child, "close");
+  child.stdin?.end(command.stdin);
+  const [code] = await closed;
+  return {
+    stdout: Buffer.concat(stdout),
+    stderr: Buffer.concat(stderr),
+    code: typeof code === "number" ? code : 0,
+  };
 }
 
 afterEach(async () => {
   await sandboxExecServerRegistry.closeAll();
 });
 
-describe("sandbox exec-server fs RPC through real bridges", () => {
-  it.runIf(process.platform !== "win32")(
-    "rejects protected canonical destinations before filesystem effects and lands allowed writes exactly",
-    async () => {
-      const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-fs-composition-"));
-      try {
-        const mountDir = path.join(await fs.realpath(stateDir), "workspace");
-        await fs.mkdir(mountDir, { recursive: true });
-        const gitDir = path.join(mountDir, ".git");
-        const realDir = path.join(mountDir, "real");
-        await fs.mkdir(gitDir);
-        await fs.mkdir(realDir);
-        await fs.symlink(gitDir, path.join(mountDir, "alias"));
-        await fs.symlink(realDir, path.join(mountDir, "alias-real"));
+it.runIf(process.platform !== "win32")(
+  "rejects protected canonical destinations before filesystem effects and lands allowed writes exactly",
+  async () => {
+    const stateDir = tempDirs.make("openclaw-codex-fs-composition-");
+    const mountDir = path.join(await fs.realpath(stateDir), "workspace");
+    await fs.mkdir(mountDir, { recursive: true });
+    const gitDir = path.join(mountDir, ".git");
+    const realDir = path.join(mountDir, "real");
+    await fs.mkdir(gitDir);
+    await fs.mkdir(realDir);
+    await fs.symlink(gitDir, path.join(mountDir, "alias"));
+    await fs.symlink(realDir, path.join(mountDir, "alias-real"));
 
-        const mutationCalls: SandboxBackendCommandParams[] = [];
-        const runtime = {
-          remoteWorkspaceDir: SANDBOX_MOUNT,
-          remoteAgentWorkspaceDir: SANDBOX_MOUNT,
-          runRemoteShellScript: async (command: SandboxBackendCommandParams) => {
-            if (command.script.includes("operation = sys.argv[1]")) {
-              mutationCalls.push(command);
-            }
-            return await runLocalShellScript(command, mountDir);
-          },
-        };
-        const realBridge = createRemoteShellSandboxFsBridge({
-          sandbox: {
-            workspaceDir: mountDir,
-            agentWorkspaceDir: mountDir,
-            workspaceAccess: "rw",
-          } as never,
-          runtime: runtime as never,
-        });
-        const sandbox = {
-          ...createSandboxContext({
-            runShellCommand: async (command) => await runLocalShellScript(command, mountDir),
-          }),
-          fsBridge: realBridge,
-        };
+    const mutationCalls: SandboxBackendCommandParams[] = [];
+    const runtime = {
+      remoteWorkspaceDir: SANDBOX_MOUNT,
+      remoteAgentWorkspaceDir: SANDBOX_MOUNT,
+      runRemoteShellScript: async (command: SandboxBackendCommandParams) => {
+        if (command.script.includes("operation = sys.argv[1]")) {
+          mutationCalls.push(command);
+        }
+        return await runLocalShellScript(command, mountDir);
+      },
+    };
+    const realBridge = createRemoteShellSandboxFsBridge({
+      sandbox: {
+        workspaceDir: mountDir,
+        agentWorkspaceDir: mountDir,
+        workspaceAccess: "rw",
+      } as never,
+      runtime: runtime as never,
+    });
+    const sandbox = {
+      ...createSandboxContext({
+        runShellCommand: async (command) => await runLocalShellScript(command, mountDir),
+      }),
+      fsBridge: realBridge,
+    };
 
-        const client = createClient();
-        await ensureCodexSandboxExecServerEnvironment({
-          client: client as never,
-          sandbox: sandbox as never,
-        });
-        const socket = await openSocket(execServerUrlFromClient(client));
-        await rpc(socket, "initialize", { clientName: "test" });
-        socket.send(JSON.stringify({ method: "initialized" }));
-        const workspacePolicy = codexFsSandboxContext({
-          entries: [
-            { path: specialPath("root"), access: "read" },
-            { path: specialPath("project_roots"), access: "write" },
-            { path: specialPath("project_roots", ".git"), access: "read" },
-          ],
-        });
-        const write = (filePath: string, data: string) =>
-          rpc(socket, "fs/writeFile", {
-            path: `file:///workspace/${filePath}`,
-            dataBase64: Buffer.from(data).toString("base64"),
-            sandbox: workspacePolicy,
-          });
-        const copy = (destination: string, source = "nested/src-dir") =>
-          rpc(socket, "fs/copy", {
-            sourcePath: `file:///workspace/${source}`,
-            destinationPath: destination ? `file:///workspace/${destination}` : "file:///workspace",
-            recursive: true,
-            sandbox: workspacePolicy,
-          });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox: sandbox as never,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+    const workspacePolicy = codexFsSandboxContext({
+      entries: [
+        { path: specialPath("root"), access: "read" },
+        { path: specialPath("project_roots"), access: "write" },
+        { path: specialPath("project_roots", ".git"), access: "read" },
+      ],
+    });
+    const write = (filePath: string, data: string) =>
+      rpc(socket, "fs/writeFile", {
+        path: `file:///workspace/${filePath}`,
+        dataBase64: Buffer.from(data).toString("base64"),
+        sandbox: workspacePolicy,
+      });
+    const copy = (destination: string, source = "nested/src-dir") =>
+      rpc(socket, "fs/copy", {
+        sourcePath: `file:///workspace/${source}`,
+        destinationPath: destination ? `file:///workspace/${destination}` : "file:///workspace",
+        recursive: true,
+        sandbox: workspacePolicy,
+      });
 
-        await expect(write("alias/config", "blocked")).rejects.toThrow(
-          "Codex fs sandbox denied write access",
-        );
-        await expect(fs.stat(path.join(gitDir, "config"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-        expect(mutationCalls).toHaveLength(0);
+    await expect(write("alias/config", "blocked")).rejects.toThrow(
+      "Codex fs sandbox denied write access",
+    );
+    await expect(fs.stat(path.join(gitDir, "config"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(mutationCalls).toHaveLength(0);
 
-        await write("real-note.txt", "allowed");
-        await expectFile(path.join(mountDir, "real-note.txt"), "allowed");
-        expect(mutationCalls.length).toBeGreaterThan(0);
+    await write("real-note.txt", "allowed");
+    await expectFile(path.join(mountDir, "real-note.txt"), "allowed");
+    expect(mutationCalls.length).toBeGreaterThan(0);
 
-        await write("alias-real/config", "aliased");
-        await expectFile(path.join(realDir, "config"), "aliased");
+    await write("alias-real/config", "aliased");
+    await expectFile(path.join(realDir, "config"), "aliased");
 
-        // Existing directory roots must resolve as directories, not file-backed parents.
-        await fs.mkdir(path.join(mountDir, "nested", "src-dir"), { recursive: true });
-        await fs.writeFile(path.join(mountDir, "nested", "src-dir", "child.txt"), "dir-copy");
-        await copy("");
-        await expectFile(path.join(mountDir, "child.txt"), "dir-copy");
+    // Existing directory roots must resolve as directories, not file-backed parents.
+    await fs.mkdir(path.join(mountDir, "nested", "src-dir"), { recursive: true });
+    await fs.writeFile(path.join(mountDir, "nested", "src-dir", "child.txt"), "dir-copy");
+    await copy("");
+    await expectFile(path.join(mountDir, "child.txt"), "dir-copy");
 
-        // An alias must not hide a copy into the source subtree.
-        const sourceSubdir = path.join(mountDir, "nested", "src-dir", "subdir");
-        await fs.mkdir(sourceSubdir);
-        await fs.symlink(sourceSubdir, path.join(mountDir, "source-subdir-alias"));
-        const mutationsBeforeRejectedCopy = mutationCalls.length;
-        await expect(copy("source-subdir-alias")).rejects.toThrow(
-          "Cannot recursively copy a directory into itself",
-        );
-        expect(mutationCalls).toHaveLength(mutationsBeforeRejectedCopy);
-        await expect(fs.stat(path.join(sourceSubdir, "child.txt"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
+    // An alias must not hide a copy into the source subtree.
+    const sourceSubdir = path.join(mountDir, "nested", "src-dir", "subdir");
+    await fs.mkdir(sourceSubdir);
+    await fs.symlink(sourceSubdir, path.join(mountDir, "source-subdir-alias"));
+    const mutationsBeforeRejectedCopy = mutationCalls.length;
+    await expect(copy("source-subdir-alias")).rejects.toThrow(
+      "Cannot recursively copy a directory into itself",
+    );
+    expect(mutationCalls).toHaveLength(mutationsBeforeRejectedCopy);
+    await expect(fs.stat(path.join(sourceSubdir, "child.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
 
-        // A directory alias must pin the target directory itself.
-        const dirTarget = path.join(mountDir, "dir-target");
-        await fs.mkdir(dirTarget, { recursive: true });
-        await fs.symlink(dirTarget, path.join(mountDir, "alias-dir"));
-        await copy("alias-dir");
-        await expectFile(path.join(dirTarget, "child.txt"), "dir-copy");
-        const namesSource = path.join(mountDir, "names-source");
-        const namesDestination = path.join(mountDir, "names-copy");
-        const fileName = "tab\tand\nnewline.txt";
-        const directoryName = "sub\tline\nfolder";
-        const nestedName = "nested\tline\nfile.txt";
-        await fs.mkdir(path.join(namesSource, directoryName), { recursive: true });
-        await fs.writeFile(path.join(namesSource, fileName), "top-level bytes");
-        await fs.writeFile(path.join(namesSource, directoryName, nestedName), "nested bytes");
+    // A directory alias must pin the target directory itself.
+    const dirTarget = path.join(mountDir, "dir-target");
+    await fs.mkdir(dirTarget, { recursive: true });
+    await fs.symlink(dirTarget, path.join(mountDir, "alias-dir"));
+    await copy("alias-dir");
+    await expectFile(path.join(dirTarget, "child.txt"), "dir-copy");
+    const namesSource = path.join(mountDir, "names-source");
+    const namesDestination = path.join(mountDir, "names-copy");
+    const fileName = "tab\tand\nnewline.txt";
+    const directoryName = "sub\tline\nfolder";
+    const nestedName = "nested\tline\nfile.txt";
+    await fs.mkdir(path.join(namesSource, directoryName), { recursive: true });
+    await fs.writeFile(path.join(namesSource, fileName), "top-level bytes");
+    await fs.writeFile(path.join(namesSource, directoryName, nestedName), "nested bytes");
 
-        const listing = (await rpc(socket, "fs/readDirectory", {
-          path: "file:///workspace/names-source",
-          sandbox: workspacePolicy,
-        })) as { entries: Array<{ fileName: string; isDirectory: boolean; isFile: boolean }> };
-        expect.soft(listing.entries).toHaveLength(2);
-        expect.soft(listing.entries).toEqual(
-          expect.arrayContaining([
-            { fileName, isDirectory: false, isFile: true },
-            { fileName: directoryName, isDirectory: true, isFile: false },
-          ]),
-        );
+    const listing = (await rpc(socket, "fs/readDirectory", {
+      path: "file:///workspace/names-source",
+      sandbox: workspacePolicy,
+    })) as { entries: Array<{ fileName: string; isDirectory: boolean; isFile: boolean }> };
+    expect.soft(listing.entries).toHaveLength(2);
+    expect.soft(listing.entries).toEqual(
+      expect.arrayContaining([
+        { fileName, isDirectory: false, isFile: true },
+        { fileName: directoryName, isDirectory: true, isFile: false },
+      ]),
+    );
 
-        await expect(copy("names-copy", "names-source")).resolves.toEqual({});
-        expect((await fs.readdir(namesDestination)).toSorted()).toEqual(
-          [directoryName, fileName].toSorted(),
-        );
-        await expectFile(path.join(namesDestination, fileName), "top-level bytes");
-        expect(await fs.readdir(path.join(namesDestination, directoryName))).toEqual([nestedName]);
-        await expectFile(path.join(namesDestination, directoryName, nestedName), "nested bytes");
-        socket.close();
-      } finally {
-        await fs.rm(stateDir, { recursive: true, force: true });
-      }
-    },
-  );
-});
+    await expect(copy("names-copy", "names-source")).resolves.toEqual({});
+    expect((await fs.readdir(namesDestination)).toSorted()).toEqual(
+      [directoryName, fileName].toSorted(),
+    );
+    await expectFile(path.join(namesDestination, fileName), "top-level bytes");
+    expect(await fs.readdir(path.join(namesDestination, directoryName))).toEqual([nestedName]);
+    await expectFile(path.join(namesDestination, directoryName, nestedName), "nested bytes");
+    socket.close();
+  },
+);

@@ -1,4 +1,3 @@
-// Codex tests cover sandbox exec-server child and backend lease lifecycle ordering.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
@@ -34,6 +33,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   };
 });
 
+import type { JsonValue } from "./protocol.js";
 import { createSessionExecServer } from "./sandbox-exec-server-session.test-support.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { httpRequest } from "./sandbox-exec-server/http.js";
@@ -47,10 +47,6 @@ import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-type FakeNotifications = CodexSandboxExecSessionNotifications & {
-  send: ReturnType<typeof vi.fn<CodexSandboxExecSessionNotifications["send"]>>;
-};
-
 function createFakeChild(): ChildProcessWithoutNullStreams {
   return Object.assign(new EventEmitter(), {
     stdin: new PassThrough(),
@@ -61,7 +57,7 @@ function createFakeChild(): ChildProcessWithoutNullStreams {
   }) as unknown as ChildProcessWithoutNullStreams;
 }
 
-function createFakeNotifications(): FakeNotifications {
+function createFakeNotifications() {
   return {
     send: vi.fn<CodexSandboxExecSessionNotifications["send"]>(),
     signal: new AbortController().signal,
@@ -69,24 +65,16 @@ function createFakeNotifications(): FakeNotifications {
 }
 
 function processStartParams(processId: string) {
-  return {
-    processId,
-    argv: ["sh", "-lc", "true"],
-    cwd: "file:///workspace",
-    env: {},
-    tty: false,
-    pipeStdin: false,
-    arg0: null,
-  };
+  return { processId, argv: ["sh", "-lc", "true"], cwd: "file:///workspace" };
+}
+
+function sessionCalls(session: CodexSandboxExecSession) {
+  return (method: string, params: JsonValue, id = 1) =>
+    session.handleRequest({ id, method, params });
 }
 
 function streamingHttpParams(requestId: string) {
-  return {
-    requestId,
-    method: "GET",
-    url: "https://example.test/sse",
-    streamResponse: true,
-  };
+  return { requestId, method: "GET", url: "https://example.test/sse", streamResponse: true };
 }
 
 function execSpec(finalizeToken = "token", argv = ["sandbox-child"]) {
@@ -126,6 +114,7 @@ function createFixture(overrides: Parameters<typeof createSandboxContext>[0] = {
     operations,
     send,
     session,
+    call: sessionCalls(session),
     start: (processId: string) =>
       startProcess(server, processes, notifications.send, processStartParams(processId)),
     terminate: (processId: string) => terminateProcess(processes, { processId }),
@@ -155,10 +144,9 @@ async function createPendingRemoteSignalFixture(holdFirstScan = false) {
   let firstScan = true;
   let receiver: ChildProcessWithoutNullStreams | undefined;
   let receiverClosed: Promise<void> | undefined;
-  let receivedSignal = false;
-  let transportClosed = false;
+  const state = { receivedSignal: false, transportClosed: false };
   transport.once("close", () => {
-    transportClosed = true;
+    state.transportClosed = true;
   });
   const sandbox = createSandboxContext({
     buildExecSpec: async ({ env }) => {
@@ -204,17 +192,13 @@ async function createPendingRemoteSignalFixture(holdFirstScan = false) {
   });
   return {
     session,
+    call: sessionCalls(session),
     send,
     finalizeExec,
     firstScanEntered: firstScanEntered.promise,
     firstScanCompleted: firstScanCompleted.promise,
     releaseFirstScan: releaseFirstScan.resolve,
-    get receivedSignal() {
-      return receivedSignal;
-    },
-    get transportClosed() {
-      return transportClosed;
-    },
+    state,
     async admitReceiver() {
       const ready = createDeferred<void>();
       let output = "";
@@ -231,7 +215,7 @@ async function createPendingRemoteSignalFixture(holdFirstScan = false) {
         if (output.includes("READY\n")) {
           ready.resolve();
         }
-        receivedSignal ||= output.includes("REMOTE_INT\n");
+        state.receivedSignal ||= output.includes("REMOTE_INT\n");
         transport.stdout.emit("data", chunk);
       });
       receiver.stderr.on("data", (chunk: Buffer) => transport.stderr.emit("data", chunk));
@@ -253,7 +237,7 @@ async function createPendingRemoteSignalFixture(holdFirstScan = false) {
       releaseFirstScan.resolve();
       receiver?.kill("SIGKILL");
       await receiverClosed;
-      if (!transportClosed) {
+      if (!state.transportClosed) {
         transport.emit("close", 143, "SIGTERM");
       }
       await session.close();
@@ -273,7 +257,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
   it("bounds interruption of a never-admitted remote process and settles cleanup", async () => {
     vi.useFakeTimers();
     let interrupting = true;
-    const { child, session, send, finalizeExec } = createFixture({
+    const { child, session, call, send, finalizeExec } = createFixture({
       runShellCommand: async () => ({
         code: interrupting ? 75 : 0,
         stdout: Buffer.alloc(0),
@@ -283,21 +267,15 @@ describe("Codex sandbox exec-server lifecycle", () => {
     signalProcessTreeMock.mockImplementation(() => child.emit("close", 143, "SIGTERM"));
     let interrupt: Promise<void> | undefined;
     try {
-      await session.handleRequest({
-        id: 1,
-        method: "process/start",
-        params: processStartParams("never-admitted"),
-      });
+      await call("process/start", processStartParams("never-admitted"));
       let completed = false;
-      interrupt = session
-        .handleRequest({
-          id: 2,
-          method: "process/signal",
-          params: { processId: "never-admitted", signal: "interrupt" },
-        })
-        .then(() => {
-          completed = true;
-        });
+      interrupt = call(
+        "process/signal",
+        { processId: "never-admitted", signal: "interrupt" },
+        2,
+      ).then(() => {
+        completed = true;
+      });
       await vi.advanceTimersByTimeAsync(4_499);
       expect(completed).toBe(false);
       expect(finalizeExec).not.toHaveBeenCalled();
@@ -320,78 +298,52 @@ describe("Codex sandbox exec-server lifecycle", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32")(
-    "waits for remote admission before acknowledging a process interrupt",
-    async () => {
-      const fixture = await createPendingRemoteSignalFixture();
-      let interrupt: Promise<void> | undefined;
-      try {
-        await fixture.session.handleRequest({
-          id: 1,
-          method: "process/start",
-          params: processStartParams("late-remote-process"),
-        });
-        interrupt = fixture.session.handleRequest({
-          id: 2,
-          method: "process/signal",
-          params: { processId: "late-remote-process", signal: "interrupt" },
-        });
-        await fixture.firstScanCompleted;
-        await nextImmediate();
-        expect(fixture.send.mock.calls.some(([message]) => message.id === 2)).toBe(false);
-        expect(fixture.receivedSignal).toBe(false);
-
-        await fixture.admitReceiver();
-        await interrupt;
-        await vi.waitFor(() => expect(fixture.receivedSignal).toBe(true), { timeout: 5_000 });
-        await vi.waitFor(() =>
-          expect(fixture.send).toHaveBeenCalledWith({
-            jsonrpc: "2.0",
-            method: "process/exited",
-            params: expect.objectContaining({ processId: "late-remote-process", exitCode: 42 }),
-          }),
-        );
-        expect(fixture.send).toHaveBeenCalledWith({ jsonrpc: "2.0", id: 2, result: {} });
-      } finally {
-        await fixture.cleanup();
-        await interrupt;
-      }
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "joins a pending remote interrupt before finalizing a closed session",
-    async () => {
-      const fixture = await createPendingRemoteSignalFixture(true);
+  it.skipIf(process.platform === "win32").each([false, true])(
+    "joins remote interrupt admission before acknowledgement or finalization (closing=%s)",
+    async (closing) => {
+      const fixture = await createPendingRemoteSignalFixture(closing);
       let interrupt: Promise<void> | undefined;
       let cleanup: Promise<void> | undefined;
       try {
-        await fixture.session.handleRequest({
-          id: 1,
-          method: "process/start",
-          params: processStartParams("closing-remote-process"),
-        });
-        interrupt = fixture.session.handleRequest({
-          id: 2,
-          method: "process/signal",
-          params: { processId: "closing-remote-process", signal: "interrupt" },
-        });
-        await fixture.firstScanEntered;
-        let closed = false;
-        cleanup = fixture.session.close().then(() => {
-          closed = true;
-        });
-        await vi.waitFor(() => expect(fixture.transportClosed).toBe(true), { timeout: 5_000 });
-        await nextImmediate();
-        expect(fixture.finalizeExec).not.toHaveBeenCalled();
-        expect(closed).toBe(false);
-
-        fixture.releaseFirstScan();
-        await Promise.all([interrupt, cleanup]);
-        expect(fixture.receivedSignal).toBe(false);
-        expect(fixture.finalizeExec).toHaveBeenCalledOnce();
+        const processId = closing ? "closing-remote-process" : "late-remote-process";
+        await fixture.call("process/start", processStartParams(processId));
+        interrupt = fixture.call("process/signal", { processId, signal: "interrupt" }, 2);
+        if (closing) {
+          await fixture.firstScanEntered;
+          let closed = false;
+          cleanup = fixture.session.close().then(() => {
+            closed = true;
+          });
+          await vi.waitFor(() => expect(fixture.state.transportClosed).toBe(true), {
+            timeout: 5_000,
+          });
+          await nextImmediate();
+          expect(fixture.finalizeExec).not.toHaveBeenCalled();
+          expect(closed).toBe(false);
+          fixture.releaseFirstScan();
+          await Promise.all([interrupt, cleanup]);
+          expect(fixture.state.receivedSignal).toBe(false);
+          expect(fixture.finalizeExec).toHaveBeenCalledOnce();
+        } else {
+          await fixture.firstScanCompleted;
+          await nextImmediate();
+          expect(fixture.send.mock.calls.some(([message]) => message.id === 2)).toBe(false);
+          expect(fixture.state.receivedSignal).toBe(false);
+          await fixture.admitReceiver();
+          await interrupt;
+          await vi.waitFor(() => expect(fixture.state.receivedSignal).toBe(true), {
+            timeout: 5_000,
+          });
+          await vi.waitFor(() =>
+            expect(fixture.send).toHaveBeenCalledWith({
+              jsonrpc: "2.0",
+              method: "process/exited",
+              params: expect.objectContaining({ processId, exitCode: 42 }),
+            }),
+          );
+          expect(fixture.send).toHaveBeenCalledWith({ jsonrpc: "2.0", id: 2, result: {} });
+        }
       } finally {
-        fixture.releaseFirstScan();
         await fixture.cleanup();
         await Promise.all([interrupt, cleanup]);
       }
@@ -406,7 +358,6 @@ describe("Codex sandbox exec-server lifecycle", () => {
     "refuses host metadata discovery outside the isolated home after $key changes ($via)",
     async ({ key, via }) => {
       const testHome = process.env.OPENCLAW_TEST_HOME!;
-      // The path cases only point outside the home; nothing is created there.
       let foreignRoot = path.join(testHome, "..", "foreign-state-path");
       let target = foreignRoot;
       const cleanup: string[] = [];
@@ -495,7 +446,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
   it("joins pending HTTP preparation without launching after close", async () => {
     let preparing = false;
     const releasePreparation = createDeferred<void>();
-    const { child, session, finalizeExec } = createFixture({
+    const { child, session, call, finalizeExec } = createFixture({
       buildExecSpec: async () => {
         preparing = true;
         await releasePreparation.promise;
@@ -506,11 +457,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
       setImmediate(() => child.emit("close", 0, null));
       return child;
     });
-    const request = session.handleRequest({
-      id: 1,
-      method: "http/request",
-      params: streamingHttpParams("preparing-http"),
-    });
+    const request = call("http/request", streamingHttpParams("preparing-http"));
     try {
       await vi.waitFor(() => expect(preparing).toBe(true));
       let closed = false;
@@ -534,17 +481,13 @@ describe("Codex sandbox exec-server lifecycle", () => {
   it("reaps a streaming HTTP child and joins finalization after returning headers", async () => {
     vi.useFakeTimers();
     const releaseFinalization = createDeferred<void>();
-    const { child, session, send, finalizeExec } = createFixture({
+    const { child, session, call, send, finalizeExec } = createFixture({
       finalizeExec: async () => await releaseFinalization.promise,
     });
     signalProcessTreeMock.mockImplementation(() => {
       setTimeout(() => child.emit("close", null, "SIGKILL"), 1_000);
     });
-    const request = session.handleRequest({
-      id: 1,
-      method: "http/request",
-      params: streamingHttpParams("finalizing-http"),
-    });
+    const request = call("http/request", streamingHttpParams("finalizing-http"));
     try {
       await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
       (child.stdout as PassThrough).write(
@@ -617,7 +560,6 @@ describe("Codex sandbox exec-server lifecycle", () => {
     await start("process-error");
     child.emit("error", new Error("child transport failed"));
 
-    expect(child.pid).toBe(42_424);
     expect(processes.get("process-error")).toMatchObject({
       closed: false,
       exited: false,
@@ -663,20 +605,15 @@ describe("Codex sandbox exec-server lifecycle", () => {
     });
     const request = http("http-error");
     let settled = false;
-    void request.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    const markSettled = () => {
+      settled = true;
+    };
+    void request.then(markSettled, markSettled);
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
 
     child.emit("error", new Error("HTTP child transport failed"));
     await Promise.resolve();
 
-    expect(child.pid).toBe(42_424);
     expect(settled).toBe(false);
     expect(finalizeExec).not.toHaveBeenCalled();
 

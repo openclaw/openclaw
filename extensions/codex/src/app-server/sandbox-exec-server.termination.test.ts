@@ -29,7 +29,9 @@ afterEach(() => {
   spawnMock.mockReset();
 });
 
-function createFixture() {
+function createFixture(code = 7, signal: NodeJS.Signals | null = null) {
+  vi.useFakeTimers();
+  const kill = vi.spyOn(process, "kill").mockReturnValue(true);
   const child = Object.assign(new ChildProcess(), {
     stdin: new PassThrough(),
     stdout: new PassThrough(),
@@ -50,7 +52,12 @@ function createFixture() {
   const server = createSessionExecServer(sandbox);
   const send = vi.fn();
   const session = new CodexSandboxExecSession(server, { send, isOpen: () => true });
+  const taskkill = new ChildProcess();
+  let cleanup: Promise<void> | undefined;
+  let completed = false;
   return {
+    kill,
+    taskkill,
     child,
     cleanupEntered,
     releaseCleanup,
@@ -59,6 +66,22 @@ function createFixture() {
     finalizeExec,
     send,
     session,
+    get completed() {
+      return completed;
+    },
+    wait: () => cleanup,
+    close: (pending = session.close()) => {
+      cleanup = pending.then(() => {
+        completed = true;
+      });
+    },
+    async [Symbol.asyncDispose]() {
+      releaseCleanup.resolve();
+      releaseFinalize.resolve();
+      child.emit("close", code, signal);
+      taskkill.emit("close", 0);
+      await Promise.allSettled([cleanup, session.close()]);
+    },
     start: () =>
       session.handleRequest({
         id: 1,
@@ -74,148 +97,115 @@ describe("Codex sandbox local termination authority", () => {
     .each(["before-request", "remote-cleanup", "term-grace"] as const)(
     "stops local signals after exit during %s",
     async (exitAt) => {
-      vi.useFakeTimers();
-      const fixture = createFixture();
+      await using fixture = createFixture();
       // Keep the real process-tree helper: its detached escalation used to outlive the owner.
-      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-      let cleanup: Promise<void> | undefined;
-      let completed = false;
+      const { kill } = fixture;
       const exit = () => {
         fixture.child.emit("exit", 7, null);
       };
-      try {
-        await fixture.start();
-        if (exitAt === "before-request") {
-          exit();
-          await Promise.resolve();
-        }
-        cleanup = fixture.session
-          .handleRequest({
-            id: 2,
-            method: "process/terminate",
-            params: { processId: "termination" },
-          })
-          .then(() => {
-            completed = true;
-          });
-        await fixture.cleanupEntered.promise;
-        if (exitAt === "remote-cleanup") {
-          exit();
-        }
-        fixture.releaseCleanup.resolve();
-        await vi.advanceTimersByTimeAsync(0);
-        if (exitAt === "term-grace") {
-          expect(kill).toHaveBeenCalledExactlyOnceWith(-fixture.child.pid, "SIGTERM");
-          exit();
-        }
-        await vi.advanceTimersByTimeAsync(1_001);
-        expect(kill.mock.calls).toEqual(
-          exitAt === "term-grace" ? [[-fixture.child.pid, "SIGTERM"]] : [],
-        );
-        expect(completed).toBe(false);
-        expect(fixture.finalizeExec).not.toHaveBeenCalled();
-        fixture.child.stdout.write("LATE_OUTPUT");
-        fixture.child.emit("close", 7, null);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(fixture.finalizeExec).toHaveBeenCalledOnce();
-        expect(completed).toBe(false);
-        fixture.releaseFinalize.resolve();
-        await cleanup;
-        expect(fixture.runShellCommand).toHaveBeenCalledOnce();
-        expect(fixture.send).toHaveBeenCalledWith({
-          jsonrpc: "2.0",
-          method: "process/output",
-          params: expect.objectContaining({ chunk: Buffer.from("LATE_OUTPUT").toString("base64") }),
-        });
-        expect(fixture.send).toHaveBeenCalledWith({
-          jsonrpc: "2.0",
-          id: 2,
-          result: { running: exitAt !== "before-request" },
-        });
-        await vi.advanceTimersByTimeAsync(1_001);
-        expect(kill.mock.calls).toEqual(
-          exitAt === "term-grace" ? [[-fixture.child.pid, "SIGTERM"]] : [],
-        );
-      } finally {
-        fixture.releaseCleanup.resolve();
-        fixture.releaseFinalize.resolve();
-        fixture.child.emit("close", 7, null);
-        await Promise.allSettled([cleanup, fixture.session.close()]);
+      await fixture.start();
+      if (exitAt === "before-request") {
+        exit();
+        await Promise.resolve();
       }
+      fixture.close(
+        fixture.session.handleRequest({
+          id: 2,
+          method: "process/terminate",
+          params: { processId: "termination" },
+        }),
+      );
+      await fixture.cleanupEntered.promise;
+      if (exitAt === "remote-cleanup") {
+        exit();
+      }
+      fixture.releaseCleanup.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      if (exitAt === "term-grace") {
+        expect(kill).toHaveBeenCalledExactlyOnceWith(-fixture.child.pid, "SIGTERM");
+        exit();
+      }
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(kill.mock.calls).toEqual(
+        exitAt === "term-grace" ? [[-fixture.child.pid, "SIGTERM"]] : [],
+      );
+      expect(fixture.completed).toBe(false);
+      expect(fixture.finalizeExec).not.toHaveBeenCalled();
+      fixture.child.stdout.write("LATE_OUTPUT");
+      fixture.child.emit("close", 7, null);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.finalizeExec).toHaveBeenCalledOnce();
+      expect(fixture.completed).toBe(false);
+      fixture.releaseFinalize.resolve();
+      await fixture.wait();
+      expect(fixture.runShellCommand).toHaveBeenCalledOnce();
+      expect(fixture.send).toHaveBeenCalledWith({
+        jsonrpc: "2.0",
+        method: "process/output",
+        params: expect.objectContaining({ chunk: Buffer.from("LATE_OUTPUT").toString("base64") }),
+      });
+      expect(fixture.send).toHaveBeenCalledWith({
+        jsonrpc: "2.0",
+        id: 2,
+        result: { running: exitAt !== "before-request" },
+      });
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(kill.mock.calls).toEqual(
+        exitAt === "term-grace" ? [[-fixture.child.pid, "SIGTERM"]] : [],
+      );
     },
   );
 
   it.skipIf(process.platform === "win32")(
     "force kills a still-running child and joins output and backend finalization",
     async () => {
-      vi.useFakeTimers();
-      const fixture = createFixture();
-      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-      let cleanup: Promise<void> | undefined;
-      try {
-        await fixture.start();
-        cleanup = fixture.session.close();
-        await fixture.cleanupEntered.promise;
-        fixture.releaseCleanup.resolve();
-        await vi.advanceTimersByTimeAsync(999);
-        expect(kill).toHaveBeenCalledExactlyOnceWith(-fixture.child.pid, "SIGTERM");
-        await vi.advanceTimersByTimeAsync(1);
-        expect(kill).toHaveBeenCalledWith(-fixture.child.pid, "SIGKILL");
-        expect(fixture.finalizeExec).not.toHaveBeenCalled();
-        fixture.child.emit("close", 1, "SIGKILL");
-        fixture.releaseFinalize.resolve();
-        await cleanup;
-        expect(fixture.finalizeExec).toHaveBeenCalledOnce();
-      } finally {
-        fixture.releaseCleanup.resolve();
-        fixture.releaseFinalize.resolve();
-        fixture.child.emit("close", 1, "SIGKILL");
-        await Promise.allSettled([cleanup, fixture.session.close()]);
-      }
+      await using fixture = createFixture(1, "SIGKILL");
+      const { kill } = fixture;
+      await fixture.start();
+      fixture.close();
+      await fixture.cleanupEntered.promise;
+      fixture.releaseCleanup.resolve();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(kill).toHaveBeenCalledExactlyOnceWith(-fixture.child.pid, "SIGTERM");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(kill).toHaveBeenCalledWith(-fixture.child.pid, "SIGKILL");
+      expect(fixture.finalizeExec).not.toHaveBeenCalled();
+      fixture.child.emit("close", 1, "SIGKILL");
+      fixture.releaseFinalize.resolve();
+      await fixture.wait();
+      expect(fixture.finalizeExec).toHaveBeenCalledOnce();
     },
   );
 
   it("joins an admitted Windows taskkill after child close before releasing the backend", async () => {
-    vi.useFakeTimers();
-    const fixture = createFixture();
-    const taskkill = new ChildProcess();
-    spawnMock.mockImplementation((command) => (command === "taskkill" ? taskkill : fixture.child));
-    vi.spyOn(process, "kill").mockReturnValue(true);
-    let cleanup: Promise<void> | undefined;
-    let completed = false;
     await withMockedWindowsPlatform(async () => {
-      try {
-        await fixture.start();
-        cleanup = fixture.session.close().then(() => {
-          completed = true;
-        });
-        await fixture.cleanupEntered.promise;
-        fixture.releaseCleanup.resolve();
-        await vi.advanceTimersByTimeAsync(0);
-        expect(spawnMock).toHaveBeenCalledWith(
-          "taskkill",
-          ["/T", "/PID", String(fixture.child.pid)],
-          expect.any(Object),
-        );
-        fixture.child.emit("close", 143, "SIGTERM");
-        await vi.advanceTimersByTimeAsync(0);
-        expect(fixture.finalizeExec).not.toHaveBeenCalled();
-        expect(completed).toBe(false);
-        await vi.advanceTimersByTimeAsync(1_001);
-        expect(spawnMock.mock.calls.filter(([command]) => command === "taskkill")).toHaveLength(1);
-        taskkill.emit("close", 0);
-        await vi.advanceTimersByTimeAsync(0);
-        expect(fixture.finalizeExec).toHaveBeenCalledOnce();
-        expect(completed).toBe(false);
-        fixture.releaseFinalize.resolve();
-        await cleanup;
-      } finally {
-        fixture.releaseCleanup.resolve();
-        fixture.releaseFinalize.resolve();
-        fixture.child.emit("close", 143, "SIGTERM");
-        taskkill.emit("close", 0);
-        await Promise.allSettled([cleanup, fixture.session.close()]);
-      }
+      await using fixture = createFixture(143, "SIGTERM");
+      const { taskkill } = fixture;
+      spawnMock.mockImplementation((command) =>
+        command === "taskkill" ? taskkill : fixture.child,
+      );
+      await fixture.start();
+      fixture.close();
+      await fixture.cleanupEntered.promise;
+      fixture.releaseCleanup.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(spawnMock).toHaveBeenCalledWith(
+        "taskkill",
+        ["/T", "/PID", String(fixture.child.pid)],
+        expect.any(Object),
+      );
+      fixture.child.emit("close", 143, "SIGTERM");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.finalizeExec).not.toHaveBeenCalled();
+      expect(fixture.completed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(spawnMock.mock.calls.filter(([command]) => command === "taskkill")).toHaveLength(1);
+      taskkill.emit("close", 0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.finalizeExec).toHaveBeenCalledOnce();
+      expect(fixture.completed).toBe(false);
+      fixture.releaseFinalize.resolve();
+      await fixture.wait();
     });
   });
 });
