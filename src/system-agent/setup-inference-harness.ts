@@ -15,7 +15,6 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import {
-  type ActivateSetupInferenceDeps,
   type StageContext,
   type StagedCandidate,
   parseInferenceRef,
@@ -140,13 +139,12 @@ export async function prepareSetupVerificationGeneration(
 
 export async function verifySetupHarness(params: {
   route: SystemAgentConfiguredRoute;
-  deps: ActivateSetupInferenceDeps;
   cache: PluginCache;
   generation?: SetupInferencePluginGeneration;
   signal?: AbortSignal;
   assertCurrent: () => void;
 }): Promise<SetupHarnessVerification | undefined> {
-  const { route, deps } = params;
+  const { route } = params;
   const runtime = route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined;
   if (route.authProfileId || !runtime || runtime === "openclaw" || runtime === "auto") {
     return undefined;

@@ -75,7 +75,7 @@ function embeddedRoute(
 }
 
 const runProbe = (route: SystemAgentConfiguredRoute) =>
-  runSetupInferenceTurn({ route, requireExecutionOwner: false, deps: {} });
+  runSetupInferenceTurn({ route, requireExecutionOwner: false });
 
 function probeReply(route: SystemAgentConfiguredRoute, text?: string) {
   return {

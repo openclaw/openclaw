@@ -78,13 +78,12 @@ import {
 export async function runSetupInferenceTurn(params: {
   route: SystemAgentConfiguredRoute;
   prompt?: string;
-  deps: ActivateSetupInferenceDeps;
   timeoutMs?: number;
   requireExecutionOwner: boolean;
   signal?: AbortSignal;
   runtime?: RuntimeEnv;
 }): Promise<SetupTurnSuccess | SetupTurnFailure> {
-  const { route, deps } = params;
+  const { route } = params;
   // Probe ids stay under OpenAI's 64-char session cap and match the command-lane log filters.
   const runId = `probe-setup-inference-${randomUUID()}`;
   const sessionKey = `agent:${route.agentId}:setup-inference:incognito-${runId}`;
@@ -606,7 +605,6 @@ export async function verifySetupInferenceConfig(
   }
   const turn = await runSetupInferenceTurn({
     route,
-    deps,
     timeoutMs: params.timeoutMs,
     requireExecutionOwner,
     runtime: params.runtime,
@@ -694,7 +692,6 @@ export async function completeSetupInferenceConfig(
     prompt: string;
   },
 ): Promise<CompleteSetupInferenceResult> {
-  const deps = params.deps ?? {};
   const route = await resolveSystemAgentConfiguredRouteFromConfig(
     params.config,
     params.agentId,
@@ -707,7 +704,6 @@ export async function completeSetupInferenceConfig(
   const turn = await runSetupInferenceTurn({
     route,
     prompt: params.prompt,
-    deps,
     timeoutMs: params.timeoutMs,
     requireExecutionOwner: false,
     runtime: params.runtime,

@@ -445,7 +445,6 @@ async function verifyAndActivateCandidate(
     try {
       const native = await verifySetupHarness({
         route,
-        deps,
         cache,
         generation,
         signal: params.signal,
@@ -456,7 +455,6 @@ async function verifyAndActivateCandidate(
       }
       return await runSetupInferenceTurn({
         route,
-        deps,
         requireExecutionOwner: true,
         signal: params.signal,
         runtime: params.runtime,
@@ -510,7 +508,6 @@ async function verifyAndActivateCandidate(
         current = await withGeneration(() =>
           verifySetupHarness({
             route: candidateRoute,
-            deps,
             cache,
             generation,
             signal: params.signal,
