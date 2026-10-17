@@ -5,7 +5,10 @@ import { afterEach, expect, it } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { loadPersistedSharedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
-import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
+import {
+  runAuthProfileWriteTransaction,
+  writePersistedAuthProfileStoreRaw,
+} from "../agents/auth-profiles/sqlite.js";
 import { makeModel } from "../agents/embedded-agent-runner/model.test-harness.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -341,15 +344,24 @@ it.each([
             profiles: { "claude-cli:work": apiKeyProfile("synthetic-work-key") },
           });
         }
-        writePersistedAuthProfileStoreRaw({
-          version: 1,
-          profiles: {
-            [interactive ? "anthropic:control" : "claude-cli:work"]: apiKeyProfile(
-              interactive ? "synthetic-control-key" : "synthetic-work-key",
+        runAuthProfileWriteTransaction(
+          undefined,
+          (database) =>
+            writePersistedAuthProfileStoreRaw(
+              {
+                version: 1,
+                profiles: {
+                  [interactive ? "anthropic:control" : "claude-cli:work"]: apiKeyProfile(
+                    interactive ? "synthetic-control-key" : "synthetic-work-key",
+                  ),
+                  ...(occupied ? { "anthropic:work": apiKeyProfile("synthetic-other-key") } : {}),
+                },
+              },
+              undefined,
+              database,
             ),
-            ...(occupied ? { "anthropic:work": apiKeyProfile("synthetic-other-key") } : {}),
-          },
-        });
+          { env: state.env },
+        );
         const person = ensureProfileForEmail("account-owner@example.test");
         setUserProfileAuthLink({
           profileId: person.id,
