@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../cron/runtime-authority.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
@@ -14,6 +16,22 @@ import type {
   CronAuthenticatedChannelRequester,
   CronCreatorAuthorityGrant,
 } from "./cron-creator-authority-grant.types.js";
+
+/** Captured model policy and the current Gateway policy can only narrow each other. */
+export function isCronModelManagementAllowed(config?: OpenClawConfig): boolean {
+  return (
+    config?.tools?.gatewayPolicy?.automations?.scope !== "caller" &&
+    getRuntimeConfigSnapshot()?.tools?.gatewayPolicy?.automations?.scope !== "caller"
+  );
+}
+
+function assertCronModelManagementAllowed(): void {
+  if (!isCronModelManagementAllowed()) {
+    throw new TypeError(
+      "Gateway tool policy restricts model automation calls to caller scope. Use direct Gateway administration to manage other automations.",
+    );
+  }
+}
 
 export const CRON_MANAGEMENT_METHODS = [
   "cron.list",
@@ -139,6 +157,9 @@ export function mintCronCreatorAuthorityGrant(
   capture: "runtime" | "requester" = "runtime",
   isCurrent?: () => boolean,
 ): CronCreatorAuthorityGrant {
+  if (management) {
+    assertCronModelManagementAllowed();
+  }
   if (
     !scope.active ||
     scope.signal.aborted ||
@@ -375,7 +396,9 @@ export function holdsCronManagementGrant(
   identity: CronManagementCaller,
   method: string,
 ): boolean {
-  return findCronManagementGrant(grant, identity, method) !== undefined;
+  return (
+    isCronModelManagementAllowed() && findCronManagementGrant(grant, identity, method) !== undefined
+  );
 }
 
 /** Redeem once, retaining the exact operational owner through every await and commit. */
@@ -392,6 +415,7 @@ export async function withCronManagementGrant<T>(
   const { entry, management } = found;
   revokeCronCreatorAuthorityGrant(grant.token);
   const assertActive = () => {
+    assertCronModelManagementAllowed();
     if (
       !entry.scope.active ||
       entry.scope.signal.aborted ||

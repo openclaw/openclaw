@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
   resetAgentRunRegistryForTest,
@@ -24,6 +28,7 @@ import {
 } from "./cron-creator-authority-grant.js";
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   resetAgentRunRegistryForTest();
 });
@@ -82,6 +87,29 @@ function createManagementFixture(controlUiAdmin = true) {
 }
 
 describe("cron creator authority grants", () => {
+  it("revokes bound, issued and redeemed model management authority when caller policy activates", async () => {
+    const fixture = createManagementFixture();
+    const issued = fixture.mint();
+    const redeemed = fixture.mint("cron.update");
+    await fixture.run(
+      redeemed,
+      async () => {
+        const retained = getCronManagementAuthority(fixture.identity)!;
+        setRuntimeConfigSnapshot({
+          tools: { gatewayPolicy: { allow: ["automations"], automations: { scope: "caller" } } },
+        });
+        expect(retained).toThrow("restricts model automation calls to caller scope");
+        expect(() => fixture.mint()).toThrow("restricts model automation calls to caller scope");
+        await expect(
+          fixture.run(issued, async () => {
+            throw new Error("unreachable management handler");
+          }),
+        ).rejects.toThrow("restricts model automation calls to caller scope");
+      },
+      "cron.update",
+    );
+  });
+
   it("preserves the Control UI admin SDK projection without granting creator authority", () => {
     const scope = createScope("sdk-compat", { kind: "unknown" }, { source: "control-ui-admin" });
     const legacy: Pick<EmbeddedRunAttemptParams, "cronCreatorAuthorityCapability"> = {

@@ -232,7 +232,42 @@ Every selected tool with an `action` field also needs an explicit `actions` entr
 
 Tool Search and Code Mode remain available as dispatchers over the permitted catalog. They do not grant access to omitted tools. The execution check runs after hooks and approval preparation, so a hook cannot rewrite an allowed request into a prohibited action. Retained Gateway executors and catalogs observe a tightened active runtime policy. Operations already executing must finish or be drained before a deployment owner declares a stricter policy fully active.
 
-This policy limits model-directed tools. Direct human Gateway administration keeps its existing authorization. It does not configure native Codex tools, restrict arbitrary Harness-local programs, or replace the separate controls required for scheduled command jobs and automation administration.
+This policy limits model-directed tools. Direct human Gateway administration keeps its existing authorization. It does not configure native Codex tools or restrict arbitrary Harness-local programs.
+
+### Automation scope and command jobs
+
+The tool/action allowlist alone cannot distinguish an ordinary Agent-turn schedule from a command job. Add automation restrictions when model turns should keep caller-scoped scheduling:
+
+```json5
+{
+  tools: {
+    gatewayPolicy: {
+      allow: ["automations"],
+      actions: {
+        automations: [
+          "status",
+          "list",
+          "get",
+          "add",
+          "update",
+          "remove",
+          "run",
+          "runs",
+          "next_check",
+          "wake",
+        ],
+      },
+      automations: { scope: "caller", allowCommandJobs: false },
+    },
+  },
+}
+```
+
+`scope: "caller"` withholds administrative automation grants from model turns, including conversations started by administrators or configured channel owners and restored continuations. Existing caller ownership and visibility checks still apply. Grants issued before the policy tightens fail when redeemed or checked before a mutation commits.
+
+`allowCommandJobs: false` rejects model creation, conversion, editing, enablement and manual execution of command jobs and on-exit command watchers. The Gateway checks the stored job as well as the requested change, so a patch that omits the payload kind cannot bypass the restriction. Ordinary Agent-turn schedules remain available. Use `cron.triggers.enabled: false` separately to disable streams, script payloads, condition triggers and event sources; that setting also applies to humans.
+
+These automation fields affect model-directed calls. Direct authorized human UI, CLI and RPC administration remains available. Omit the fields to retain existing conversational administrator management. Already-running operations must finish or be drained before declaring a tighter policy fully active.
 
 ## `tools.byProvider`
 

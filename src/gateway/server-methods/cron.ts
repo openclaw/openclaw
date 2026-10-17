@@ -4,7 +4,6 @@ import {
   validateCronAddParams,
   validateCronGetParams,
   validateCronRemoveParams,
-  validateCronRunParams,
   validateCronStatusParams,
   validateCronUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -21,7 +20,6 @@ import {
 } from "../../cron/delivery-preview.js";
 import { cronAddResultReadView, cronJobReadView } from "../../cron/job-read-view.js";
 import type { CronUpdateOptions } from "../../cron/service/state.js";
-import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
 import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type {
   CronDeliveryPreview,
@@ -32,15 +30,14 @@ import type {
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
-import { isRecord } from "../../utils.js";
 import {
   getCronManagementAuthority,
   withCronManagementGrant,
 } from "../cron-creator-authority-grant.js";
-import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   applyCronCreateCallerScopeDefault,
+  assertCronModelJobAllowed,
   cronCreateMatchesCallerScope,
   cronJobMatchesDeclarationScope,
   cronJobMatchesCallerScope,
@@ -57,14 +54,12 @@ import {
   assertValidCronUpdatePatch,
   captureCronCreatorSession,
   captureCronUpdatedInferenceBinding,
-  cronRunQueuesBehindCaller,
   requiresExplicitAgentRuntimeToolsAllow,
   normalizeCronAddRequest,
   normalizeCronUpdateRequest,
   assertCronDoesNotTargetAgentHarness,
 } from "./cron-input-validation.js";
 import {
-  assertCronReadCurrent,
   isLegacyCreatorPromptUpdate,
   resolveCronJobId,
   respondInvalidCronParams,
@@ -75,6 +70,7 @@ import {
 } from "./cron-job-access.js";
 import { cronListHandler } from "./cron-list.js";
 import { respondCronJobConfigRevisionConflict } from "./cron-revision-error.js";
+import { cronRunHandler } from "./cron-run.js";
 import { cronRunsHandler } from "./cron-runs.js";
 import { cronScratchHandlers } from "./cron-scratch.js";
 import { cronWakeHandler } from "./cron-wake.js";
@@ -126,6 +122,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
     let capture: ReturnType<typeof resolveCronCreatorAuthorityCapture>;
     try {
+      assertCronModelJobAllowed(client, context.getRuntimeConfig(), jobCreate);
       capture = resolveCronCreatorAuthorityCapture(callerScope);
     } catch (err) {
       respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
@@ -176,6 +173,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       assertMutationCurrent?.();
       capture?.assertCurrent();
       creatorOptions?.assertInferenceSelectionCurrent?.();
+      assertCronModelJobAllowed(client, cfg, jobCreate);
     };
     try {
       // Consume once, then retain the result and its current-authority guard through commit.
@@ -352,6 +350,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     const touchesToolRuntime = patch.payload !== undefined || Object.hasOwn(patch, "trigger");
     let deliveryPreview: CronDeliveryPreview | undefined;
     const validateUpdate = async (jobToUpdate: CronJob) => {
+      assertCronModelJobAllowed(client, cfg, jobToUpdate, patch);
       const nextJob = await assertValidCronUpdatePatch({
         cfg,
         defaultAgentId: context.cron.getDefaultAgentId(),
@@ -403,6 +402,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         inference?.assertInferenceSelectionCurrent();
       },
       hasCurrentClientAuthority,
+      modelJobPolicy: { config: cfg, jobId, patch },
     });
     const updateOptions: CronUpdateOptions = {
       ...(touchesToolRuntime
@@ -555,100 +555,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     },
     { allowCurrentJob: true },
   ),
-  "cron.run": scopedCronJobHandler(
-    "cron.run",
-    validateCronRunParams,
-    async (options, { jobId, callerScope, job }) => {
-      const {
-        params: p,
-        respond,
-        context,
-        client,
-        sessionMutationCommitGuard,
-        hasCurrentClientAuthority,
-      } = options;
-      if (
-        p.expectedProcessInstanceId &&
-        p.expectedProcessInstanceId !== getGatewayProcessInstanceId()
-      ) {
-        respondInvalidCronParams(respond, "cron.run", "Gateway process changed after preflight");
-        return;
-      }
-      let result: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
-      try {
-        const commitGuard = resolveCronMutationCommitGuard(
-          client,
-          context,
-          { callerScope, jobId },
-          { sessionMutationCommitGuard, hasCurrentClientAuthority },
-        );
-        result = commitGuard
-          ? await context.cron.enqueueRun(jobId, p.mode ?? "force", { commitGuard })
-          : await context.cron.enqueueRun(jobId, p.mode ?? "force");
-      } catch (error) {
-        if (error instanceof TypeError) {
-          respondInvalidCronParams(respond, "cron.run", formatErrorMessage(error));
-          return;
-        }
-        if (isInvalidCronSessionTargetIdError(error)) {
-          respond(true, { ok: true, ran: false, reason: "invalid-spec" }, undefined);
-          return;
-        }
-        if (isCronInvalidRequestError(error)) {
-          respondInvalidCronParams(respond, "cron.run", formatErrorMessage(error));
-          return;
-        }
-        throw error;
-      }
-      const ack = { ...result, processInstanceId: getGatewayProcessInstanceId() };
-      const callerSessionKey = client?.internal?.agentRuntimeIdentity?.sessionKey;
-      const runQueuesBehindCaller =
-        p.waitTimeoutMs !== undefined &&
-        "enqueued" in result &&
-        (await cronRunQueuesBehindCaller({
-          job,
-          cfg: context.getRuntimeConfig(),
-          callerSessionKey,
-          resolveDefaultAgentId: () => context.cron.getDefaultAgentId(),
-        }));
-      let run: unknown;
-      let finished = false;
-      // cron.run stays an enqueue (#40192); waiting is opt-in and bounded by the caller.
-      // The outcome is read through cron.runs so it honors the same history visibility.
-      if (p.waitTimeoutMs !== undefined && "enqueued" in result && !runQueuesBehindCaller) {
-        finished = await context.cron.waitForManualRun(
-          result.runId,
-          p.waitTimeoutMs,
-          options.signal,
-        );
-      }
-      if (finished && "enqueued" in result) {
-        try {
-          await cronRunsHandler({
-            ...options,
-            params: { id: jobId, runId: result.runId, limit: 1 },
-            respond: (ok, page) => {
-              run =
-                ok && isRecord(page) && Array.isArray(page.entries) ? page.entries[0] : undefined;
-            },
-          });
-          // The mutation response skips the read-response guard, so recheck read authority
-          // with no await between the check and releasing the outcome.
-          assertCronReadCurrent(options);
-          const identity = client?.internal?.agentRuntimeIdentity;
-          if (identity) {
-            getCronManagementAuthority(identity)?.();
-          }
-        } catch {
-          // Authority can lapse during a long wait (grant expiry, revocation). The run is
-          // already accepted, so return only its ack and release nothing about the outcome.
-          run = undefined;
-          finished = false;
-        }
-      }
-      respond(true, run ? { ...ack, run } : finished ? { ...ack, finished } : ack, undefined);
-    },
-  ),
+  "cron.run": cronRunHandler,
   "cron.history": cronHistoryHandler,
   "cron.runs": cronRunsHandler,
 };

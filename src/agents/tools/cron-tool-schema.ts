@@ -51,6 +51,7 @@ const CRON_RUN_MODES = ["due", "force"] as const;
 type CronToolSchemaOptions = {
   agentSessionKey?: string;
   management?: "only" | "also";
+  allowCommandJobs?: boolean;
   selfRemoveOnly?: boolean;
   /**
    * Whether cron.triggers.enabled is on for this deployment. When false, the
@@ -349,6 +350,7 @@ const cronToolSchemas = createCachedToolSchema({
     JSON.stringify([
       options?.triggersEnabled !== false,
       options?.management ?? null,
+      options?.allowCommandJobs !== false,
       options?.selfRemoveOnly === true,
       Boolean(options?.agentSessionKey?.trim()),
     ]),
@@ -387,7 +389,10 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
             { additionalProperties: false },
           ),
         ),
-        schedule: createCronScheduleSchema({ triggersEnabled, management }),
+        schedule: createCronScheduleSchema({
+          triggersEnabled,
+          management: management && options?.allowCommandJobs !== false,
+        }),
         pacing: createCronPacingSchema(),
         ...(triggersEnabled ? { trigger: createCronTriggerSchema() } : {}),
         sessionTarget: Type.Optional(
@@ -396,7 +401,10 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           }),
         ),
         wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "Wake timing" }),
-        payload: createCronPayloadSchema({ triggersEnabled, management }),
+        payload: createCronPayloadSchema({
+          triggersEnabled,
+          management: management && options?.allowCommandJobs !== false,
+        }),
         delivery: createCronDeliverySchema(),
         // Session-scoped updates reject retargeting; do not advertise it to the model.
         ...(management || !options?.agentSessionKey?.trim()
