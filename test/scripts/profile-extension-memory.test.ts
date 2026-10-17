@@ -1,4 +1,3 @@
-// Profile Extension Memory tests cover profile extension memory script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import {
@@ -74,6 +73,54 @@ function runProfileExtensionMemory(args: string[], cwd = process.cwd()) {
     // Fixture cwd controls artifacts; source imports still need the repository's aliases.
     env: { ...process.env, TSX_TSCONFIG_PATH: SOURCE_TSCONFIG_PATH },
   });
+}
+
+function fixtureCase(options: Partial<Parameters<typeof runCase>[0]> & { name: string }) {
+  return runCase({
+    completionKind: "imports",
+    body: "",
+    env: process.env,
+    hookPath: "unused-hook.mjs",
+    repoRoot: process.cwd(),
+    timeoutMs: 30_000,
+    ...options,
+  });
+}
+
+function fakeChild(
+  options: Partial<{
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
+    kill: () => boolean;
+  }> = {},
+) {
+  return Object.assign(new EventEmitter(), {
+    pid: 2_147_483_647,
+    exitCode: options.exitCode ?? null,
+    signalCode: options.signalCode ?? null,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: vi.fn(() => true),
+    ...options,
+  });
+}
+
+function writeExtension(root: string, id: string, body = "export {};\n") {
+  const dir = path.join(root, "dist", "extensions", id);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, "index.js"), body, "utf8");
+}
+
+function descendantSource(pidPath: string, ready: string, extra = "") {
+  return [
+    "import { renameSync, writeFileSync } from 'node:fs';",
+    extra,
+    "setInterval(() => {}, 1000);",
+    `const pidPath = ${JSON.stringify(pidPath)};`,
+    "writeFileSync(pidPath + '.tmp', String(process.pid));",
+    "renameSync(pidPath + '.tmp', pidPath);",
+    ready,
+  ].join("\n");
 }
 
 function extractReportPath(stdout: string) {
@@ -364,10 +411,8 @@ describe("scripts/profile-extension-memory", () => {
       });
     try {
       writeFileSync(hookPath, "", "utf8");
-      const result = await runCase({
-        completionKind: "imports",
+      const result = await fixtureCase({
         repoRoot: root,
-        env: process.env,
         hookPath,
         name: "utf8-output",
         body: `
@@ -378,7 +423,6 @@ describe("scripts/profile-extension-memory", () => {
           process.stderr.write(${JSON.stringify(RESOURCE_MARKER)} + JSON.stringify({ ...sample, pid: process.pid + 1, maxRssKb: 999999, userCpuUs: 999999 }) + "\\n");
           process.stderr.write("__OPENCLAW_MAX_RSS_KB__=999999\\n");
         `,
-        timeoutMs: 30_000,
         spawnImpl(command, args, options) {
           const child = spawn(command, args, options);
           leaderPid = child.pid;
@@ -413,10 +457,8 @@ describe("scripts/profile-extension-memory", () => {
   it("creates parent directories for nested JSON report paths", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
     try {
-      const extensionDir = path.join(root, "dist", "extensions", "simple");
       const reportPath = path.join(root, ".artifacts", "memory", "report.json");
-      mkdirSync(extensionDir, { recursive: true });
-      writeFileSync(path.join(extensionDir, "index.js"), `export default {};\n`, "utf8");
+      writeExtension(root, "simple", "export default {};\n");
 
       const result = runProfileExtensionMemory(
         ["--extension", "simple", "--skip-combined", "--concurrency", "1", "--json", reportPath],
@@ -435,9 +477,7 @@ describe("scripts/profile-extension-memory", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
     const reportPaths: string[] = [];
     try {
-      const extensionDir = path.join(root, "dist", "extensions", "simple");
-      mkdirSync(extensionDir, { recursive: true });
-      writeFileSync(path.join(extensionDir, "index.js"), `export default {};\n`, "utf8");
+      writeExtension(root, "simple", "export default {};\n");
 
       for (let index = 0; index < 2; index += 1) {
         const result = runProfileExtensionMemory(
@@ -477,10 +517,8 @@ describe("scripts/profile-extension-memory", () => {
     ({ body, code }) => {
       const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
       try {
-        const extensionDir = path.join(root, "dist", "extensions", "broken");
         const reportPath = path.join(root, "report.json");
-        mkdirSync(extensionDir, { recursive: true });
-        writeFileSync(path.join(extensionDir, "index.js"), body, "utf8");
+        writeExtension(root, "broken", body);
 
         const laterDir = path.join(root, "dist/extensions/later");
         const laterRuns = path.join(root, "later-runs.txt");
@@ -528,7 +566,7 @@ describe("scripts/profile-extension-memory", () => {
 
   it("resolves spawn errors without waiting for the timeout", async () => {
     const startedAt = Date.now();
-    const result = await runCase({
+    const result = await fixtureCase({
       completionKind: "imports",
       repoRoot: process.cwd(),
       env: process.env,
@@ -617,9 +655,7 @@ describe("scripts/profile-extension-memory", () => {
     let home: string | undefined;
     try {
       for (const id of ["a-held", "b-error", "c-unused"]) {
-        const dir = path.join(root, "dist", "extensions", id);
-        mkdirSync(dir, { recursive: true });
-        writeFileSync(path.join(dir, "index.js"), "export {};\n");
+        writeExtension(root, id);
       }
       writeFileSync(
         preloadPath,
@@ -892,14 +928,7 @@ describe("scripts/profile-extension-memory", () => {
       await runQaGatewayFixture(
         async () => {
           writeFileSync(hookPath, "", "utf8");
-          const descendantScript = [
-            "import { renameSync, writeFileSync } from 'node:fs';",
-            "setInterval(() => {}, 1000);",
-            `const pidPath = ${JSON.stringify(descendantPidPath)};`,
-            "writeFileSync(pidPath + '.tmp', String(process.pid));",
-            "renameSync(pidPath + '.tmp', pidPath);",
-            "process.send('ready');",
-          ].join("\n");
+          const descendantScript = descendantSource(descendantPidPath, "process.send('ready');");
           const body = [
             "import { spawn } from 'node:child_process';",
             `const child = spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(descendantScript)}],`,
@@ -908,10 +937,8 @@ describe("scripts/profile-extension-memory", () => {
             "child.disconnect(); child.unref();",
           ].join("\n");
           const result = await withinTest(
-            runCase({
-              completionKind: "imports",
+            fixtureCase({
               body,
-              env: process.env,
               hookPath,
               name: "ordinary-exit-descendant",
               repoRoot: root,
@@ -943,14 +970,7 @@ describe("scripts/profile-extension-memory", () => {
     it.each(["alive", "EPERM"] as const)(
       "rejects when the owned group is %s after SIGKILL",
       async (groupState) => {
-        const child = Object.assign(new EventEmitter(), {
-          pid: 2_147_483_647,
-          exitCode: null,
-          signalCode: null as NodeJS.Signals | null,
-          stdout: new PassThrough(),
-          stderr: new PassThrough(),
-          kill: vi.fn(() => true),
-        });
+        const child = fakeChild();
         const signal = vi.spyOn(process, "kill").mockImplementation((pid, requestedSignal) => {
           expect(pid).toBe(-child.pid);
           if (requestedSignal === 0) {
@@ -972,13 +992,8 @@ describe("scripts/profile-extension-memory", () => {
         });
         try {
           await expect(
-            runCase({
-              completionKind: "imports",
-              body: "",
-              env: process.env,
-              hookPath: "unused-hook.mjs",
+            fixtureCase({
               name: "unverified-cleanup",
-              repoRoot: process.cwd(),
               shutdownGraceMs: 0,
               timeoutMs: 5,
               spawnImpl: (() => child) as unknown as typeof spawn,
@@ -996,12 +1011,8 @@ describe("scripts/profile-extension-memory", () => {
     async (errorCode) => {
       const primary = new Error("case failed");
       const groupSignalError = Object.assign(new Error("group signal failed"), { code: errorCode });
-      const child = Object.assign(new EventEmitter(), {
-        pid: 2_147_483_647,
+      const child = fakeChild({
         exitCode: 1,
-        signalCode: null,
-        stdout: new PassThrough(),
-        stderr: new PassThrough(),
         kill: vi.fn(() => {
           throw new Error("leader fallback must not replace the group error");
         }),
@@ -1015,15 +1026,9 @@ describe("scripts/profile-extension-memory", () => {
         throw groupSignalError;
       });
       try {
-        const result = runCase({
-          completionKind: "imports",
-          body: "",
-          env: process.env,
-          hookPath: "unused-hook.mjs",
+        const result = fixtureCase({
           name: "failed-group-signal",
-          repoRoot: process.cwd(),
           shutdownGraceMs: 0,
-          timeoutMs: 30_000,
           spawnImpl: (() => {
             queueMicrotask(() => {
               child.emit("error", primary);
@@ -1052,29 +1057,16 @@ describe("scripts/profile-extension-memory", () => {
     .each([{ label: "signal exit", code: null, signal: "SIGTERM" as const }])(
     "cleanup preserves terminal evidence without an error event: $label",
     async (outcome) => {
-      const child = Object.assign(new EventEmitter(), {
-        pid: 2_147_483_647,
-        exitCode: outcome.code,
-        signalCode: outcome.signal,
-        stdout: new PassThrough(),
-        stderr: new PassThrough(),
-        kill: vi.fn(() => true),
-      });
+      const child = fakeChild({ exitCode: outcome.code, signalCode: outcome.signal });
       const signal = vi.spyOn(process, "kill").mockImplementation((pid, requestedSignal) => {
         expect(pid).toBe(-child.pid);
         expect([0, "SIGKILL"]).toContain(requestedSignal);
         return true;
       });
       try {
-        const failure: unknown = await runCase({
-          completionKind: "imports",
-          body: "",
-          env: process.env,
-          hookPath: "unused-hook.mjs",
+        const failure: unknown = await fixtureCase({
           name: "terminal-without-error-event",
-          repoRoot: process.cwd(),
           shutdownGraceMs: 0,
-          timeoutMs: 30_000,
           spawnImpl: (() => {
             queueMicrotask(() => {
               child.stderr.end(`${"x".repeat(160_000)}\nprimary import diagnostic\n`);
@@ -1118,15 +1110,11 @@ describe("scripts/profile-extension-memory", () => {
       await runQaGatewayFixture(
         async () => {
           writeFileSync(hookPath, "", "utf8");
-          const descendantScript = [
-            "import { renameSync, writeFileSync } from 'node:fs';",
-            "process.on('SIGTERM', () => {});",
-            "setInterval(() => {}, 1000);",
-            `const pidPath = ${JSON.stringify(descendantPidPath)};`,
-            "writeFileSync(pidPath + '.tmp', String(process.pid));",
-            "renameSync(pidPath + '.tmp', pidPath);",
+          const descendantScript = descendantSource(
+            descendantPidPath,
             "process.send(process.pid);",
-          ].join("");
+            "process.on('SIGTERM', () => {});",
+          );
           const body = [
             "const childProcess = await import('node:child_process');",
             "const descendant = childProcess.spawn(process.execPath, [",
@@ -1144,7 +1132,6 @@ describe("scripts/profile-extension-memory", () => {
             {
               cwd: root,
               detached: true,
-              env: process.env,
               stdio: ["ignore", "pipe", "pipe"],
             },
           );
@@ -1177,10 +1164,8 @@ describe("scripts/profile-extension-memory", () => {
           expect(isProcessAlive(descendantPid)).toBe(true);
 
           // Start the timeout only once a real descendant exists, independent of host startup load.
-          const resultPromise = runCase({
-            completionKind: "imports",
+          const resultPromise = fixtureCase({
             body,
-            env: process.env,
             hookPath,
             name: "timeout-descendant",
             repoRoot: root,
@@ -1218,16 +1203,11 @@ describe("scripts/profile-extension-memory", () => {
       await runQaGatewayFixture(
         async () => {
           writeFileSync(hookPath, "", "utf8");
-          const descendantScript = [
-            "import { renameSync, writeFileSync } from 'node:fs';",
-            fixtureReceiptClientSource(receipts.endpoint),
-            "process.on('SIGTERM', () => {});",
-            "setInterval(() => {}, 1000);",
-            `const pidPath = ${JSON.stringify(descendantPidPath)};`,
-            "writeFileSync(pidPath + '.tmp', String(process.pid));",
-            "renameSync(pidPath + '.tmp', pidPath);",
+          const descendantScript = descendantSource(
+            descendantPidPath,
             `sendReceipt(${JSON.stringify(descendantPidPath)}, 'ready');`,
-          ].join("\n");
+            fixtureReceiptClientSource(receipts.endpoint) + "\nprocess.on('SIGTERM', () => {});",
+          );
           const body = [
             "const childProcess = await import('node:child_process');",
             "const descendant = childProcess.spawn(process.execPath, [",

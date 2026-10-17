@@ -21,12 +21,20 @@ const workflowBash = () =>
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const collectorPath = path.join(repoRoot, "scripts/qa/qa-profile-run-status.mjs");
-const workflow = parse(
-  readFileSync(path.join(repoRoot, ".github/workflows/qa-profile-evidence.yml"), "utf8"),
-);
-const aggregateScript = workflow.jobs.aggregate_qa_profile.steps.find(
-  (step: { name: string }) => step.name === "Aggregate validated shard evidence",
-).run as string;
+function workflowStep(file: string, job: string, name: string): string {
+  const workflow = parse(readFileSync(path.join(repoRoot, ".github/workflows", file), "utf8"));
+  return workflow.jobs[job].steps.find((step: { name: string }) => step.name === name).run;
+}
+const aggregateStep = (name: string) =>
+  workflowStep("qa-profile-evidence.yml", "aggregate_qa_profile", name);
+const aggregateScript = aggregateStep("Aggregate validated shard evidence");
+function shell(script: string, cwd: string, env: NodeJS.ProcessEnv) {
+  return spawnSync(workflowBash(), ["-c", script], { cwd, env, encoding: "utf8" });
+}
+function expectRedacted(text: string, root: string, sentinel: string) {
+  expect(text).not.toContain(sentinel);
+  expect(text).not.toContain(root);
+}
 const targetSha = "a".repeat(40);
 const protocolSha = "b".repeat(40);
 const plan = {
@@ -166,8 +174,7 @@ describe("QA profile failure diagnostics", () => {
         source: "artifact-001",
         reason: "missing-or-malformed-status",
       });
-      expect(text).not.toContain("private-status-sentinel");
-      expect(text).not.toContain(f.root);
+      expectRedacted(text, f.root, "private-status-sentinel");
       expect(readFileSync(target, "utf8")).toBe(original);
     },
   );
@@ -178,18 +185,15 @@ describe("QA profile failure diagnostics", () => {
       const f = fixture();
       const first = f.writeShard();
       const original = readFileSync(first);
-      const aggregate = spawnSync(workflowBash(), ["-c", aggregateScript], {
-        cwd: f.selected,
-        env: f.env,
-        encoding: "utf8",
-      });
+      const aggregate = shell(aggregateScript, f.selected, f.env);
       expect(aggregate.status, aggregate.stderr).toBe(1);
       expect(aggregate.stderr).toContain("Expected 2 completed status and evidence files");
       const { result } = f.collect();
-      expect(result.exitCode).toBeNull();
-      expect(result.diagnostics.stages.AGGREGATE_OUTCOME).toBe("failure");
-      expect(result.diagnostics.missingStatuses).toEqual(["shard-02"]);
-      expect(result.timedOut).toBeNull();
+      expect(result).toMatchObject({
+        exitCode: null,
+        timedOut: null,
+        diagnostics: { stages: { AGGREGATE_OUTCOME: "failure" }, missingStatuses: ["shard-02"] },
+      });
       expect(readFileSync(first)).toEqual(original);
       expect(readdirSync(f.output)).toEqual(["qa-profile-run-status.json"]);
     },
@@ -217,19 +221,13 @@ describe("QA profile failure diagnostics", () => {
     "refuses to execute diagnostics from an unfrozen harness",
     () => {
       const f = fixture();
-      const script = workflow.jobs.aggregate_qa_profile.steps.find(
-        (step: { name: string }) => step.name === "Collect QA profile diagnostics",
-      ).run;
+      const script = aggregateStep("Collect QA profile diagnostics");
       const head = spawnSync("git", ["rev-parse", "HEAD"], {
         cwd: repoRoot,
         encoding: "utf8",
       }).stdout.trim();
       for (const expected of ["", "not-a-sha", "f".repeat(40), head]) {
-        const run = spawnSync(workflowBash(), ["-c", script], {
-          cwd: repoRoot,
-          env: { ...f.env, EXPECTED_WORKFLOW_SHA: expected },
-          encoding: "utf8",
-        });
+        const run = shell(script, repoRoot, { ...f.env, EXPECTED_WORKFLOW_SHA: expected });
         expect(run.status, run.stderr).toBe(expected === head ? 0 : 1);
         expect(existsSync(path.join(f.output, "qa-profile-run-status.json"))).toBe(
           expected === head,
@@ -252,8 +250,7 @@ describe("QA profile failure diagnostics", () => {
     );
     expect(readFileSync(source)).toEqual(original);
     expect(result.diagnostics.missingStatuses).toEqual(["shard-01", "shard-02"]);
-    expect(text).not.toContain("untrusted-status-sentinel");
-    expect(text).not.toContain(f.root);
+    expectRedacted(text, f.root, "untrusted-status-sentinel");
     expect(Buffer.byteLength(text)).toBeLessThan(2048);
   });
 
@@ -275,8 +272,7 @@ describe("QA profile failure diagnostics", () => {
       completedAt: privateText,
     });
     const { text, result } = f.collect();
-    expect(text).not.toContain(privateText);
-    expect(text).not.toContain(f.root);
+    expectRedacted(text, f.root, privateText);
     expect(result.target).toEqual({ sha: targetSha, protocolBaseSha: protocolSha });
     expect(result.diagnostics.duplicateStatuses).toEqual(["shard-01"]);
     expect(result.diagnostics.missingStatuses).toEqual(["shard-02"]);
@@ -322,17 +318,12 @@ describe("QA profile failure diagnostics", () => {
         path.join(f.output, "qa-profile-run-status.json"),
         path.join(consumerDirectory, "qa-profile-run-status.json"),
       );
-      const consumer = parse(
-        readFileSync(path.join(repoRoot, ".github/workflows/maturity-scorecard.yml"), "utf8"),
+      const script = workflowStep(
+        "maturity-scorecard.yml",
+        "publish",
+        "Require one QA evidence file",
       );
-      const script = consumer.jobs.publish.steps.find(
-        (step: { name: string }) => step.name === "Require one QA evidence file",
-      ).run;
-      const run = spawnSync(workflowBash(), ["-c", script], {
-        cwd: f.root,
-        env: f.env,
-        encoding: "utf8",
-      });
+      const run = shell(script, f.root, f.env);
       expect(run.status, run.stderr).toBe(1);
       expect(run.stderr).toContain("Expected exactly one aggregate QA evidence manifest, found 0");
     },
