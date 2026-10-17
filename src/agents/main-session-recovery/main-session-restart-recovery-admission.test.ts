@@ -44,7 +44,7 @@ import {
 } from "./main-session-restart-recovery-fixture.test-support.js";
 import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.js";
 import {
-  retryRestartAbortedMainSessionRecovery,
+  retryRestartAbortedMainSessionRecovery as retryRecovery,
   scheduleRestartAbortedMainSessionRecovery,
 } from "./main-session-restart-recovery.js";
 
@@ -64,6 +64,17 @@ describe("startup recovery admission", () => {
   let tmpDir: string;
   const { makeMainSessionFixture, writeCompletedToolTranscript } =
     createRestartRecoveryStoreFixture(() => tmpDir);
+
+  function finalAttempt(
+    cycleId: string,
+    overrides: Parameters<typeof makeMainSessionFixture>[0] = {},
+  ) {
+    return makeMainSessionFixture({
+      mainRestartRecovery: { cycleId, revision: 1, chargedAttempts: 2 },
+      pendingFinalDelivery: makePendingFinalDelivery(),
+      ...overrides,
+    });
+  }
 
   function schedule(
     options: Partial<Parameters<typeof scheduleRestartAbortedMainSessionRecovery>[0]> = {},
@@ -112,6 +123,8 @@ describe("startup recovery admission", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
     resetGatewayWorkAdmission();
     await cleanupSessionStateForTest({ stateDir: tmpDir });
     clearRuntimeConfigSnapshot();
@@ -162,11 +175,10 @@ describe("startup recovery admission", () => {
       const inspect = vi.spyOn(bootLifecycle, "inspectGatewayCrashLoopBreakerAsync");
       const recordRecovery = bootLifecycle.recordGatewayCrashLoopRecovery;
       // Workers retain real time; carry the lifecycle's fake clock through the writer input.
-      const record = vi
-        .spyOn(bootLifecycle, "recordGatewayCrashLoopRecovery")
-        .mockImplementation((bootId, recoveryEnv, _now, assertCurrent) =>
+      vi.spyOn(bootLifecycle, "recordGatewayCrashLoopRecovery").mockImplementation(
+        (bootId, recoveryEnv, _now, assertCurrent) =>
           recordRecovery(bootId, recoveryEnv, Date.now(), assertCurrent),
-        );
+      );
       const startupCheckedStorePaths = new Set<string>();
       const notice = vi.spyOn(runtime, "sendRecoveryNotice");
       if (action === "resume") {
@@ -185,7 +197,7 @@ describe("startup recovery admission", () => {
         expect(startupCheckedStorePaths.size).toBe(0);
       }
       const paused = createDeferred();
-      const warn = vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation((message) => {
+      vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation((message) => {
         paused.reject(new Error(message));
       });
       const completed = createDeferred();
@@ -206,10 +218,7 @@ describe("startup recovery admission", () => {
         dispatched.resolve();
         return { runId: "run-resumed" };
       });
-      const recovery = schedule({
-        startupCheckedStorePaths,
-        gatewayRuntime: runtime,
-      });
+      const recovery = schedule({ startupCheckedStorePaths, gatewayRuntime: runtime });
       try {
         if (action === "healthy") {
           await withinTest(completed.promise, signal);
@@ -226,7 +235,7 @@ describe("startup recovery admission", () => {
         expect(notice).not.toHaveBeenCalled();
         if (action === "resume") {
           await expect(
-            retryRestartAbortedMainSessionRecovery({
+            retryRecovery({
               ...target,
               expectedSessionId: "main-session",
               stateDir: tmpDir,
@@ -269,12 +278,6 @@ describe("startup recovery admission", () => {
         lifetime.abort();
         dispatchSettlement.resolve();
         await recovery.stop();
-        info.mockRestore();
-        notice.mockRestore();
-        warn.mockRestore();
-        inspect.mockRestore();
-        record.mockRestore();
-        vi.useRealTimers();
       }
     },
   );
@@ -296,7 +299,7 @@ describe("startup recovery admission", () => {
       const inspect = vi.spyOn(bootLifecycle, "inspectGatewayCrashLoopBreakerAsync");
       dispatchSettlement.resolve();
       try {
-        const recovery = retryRestartAbortedMainSessionRecovery({
+        const recovery = retryRecovery({
           ...target,
           expectedSessionId: "main-session",
           stateDir: tmpDir,
@@ -316,7 +319,6 @@ describe("startup recovery admission", () => {
         expect(inspect).not.toHaveBeenCalled();
       } finally {
         instance.close();
-        inspect.mockRestore();
       }
     },
   );
@@ -338,7 +340,7 @@ describe("startup recovery admission", () => {
       },
     });
     await mutationEntered.promise;
-    const recovery = retryRestartAbortedMainSessionRecovery({
+    const recovery = retryRecovery({
       expectedSessionId: "main-session",
       storePath,
       sessionKey,
@@ -423,7 +425,7 @@ describe("startup recovery admission", () => {
           }
         });
       const passFinished = createDeferred();
-      const admissionSpy = observeAdmission((origin) => {
+      observeAdmission((origin) => {
         if (origin === "main-session:startup-recovery") {
           passFinished.resolve();
         }
@@ -448,10 +450,10 @@ describe("startup recovery admission", () => {
         expect(callGateway).toHaveBeenCalledTimes(action === "stop" ? 0 : 2);
         expect(getActiveGatewayRootWorkCount()).toBe(0);
         for (const scope of [first, second]) {
-          expect(loadSessionEntry(scope)?.status).toBe(
-            action === "stop" ? "interrupted" : undefined,
-          );
-          expect(loadSessionEntry(scope)?.abortedLastRun).toBe(action === "stop");
+          expect(scope.readEntry()).toMatchObject({
+            status: action === "stop" ? "interrupted" : undefined,
+            abortedLastRun: action === "stop",
+          });
         }
         if (action === "continue") {
           expect(waitSpy).not.toHaveBeenCalled();
@@ -479,19 +481,15 @@ describe("startup recovery admission", () => {
           );
         }
         if (action === "stop") {
-          expect(loadSessionEntry(first)?.mainRestartRecovery).toMatchObject({
+          expect(first.readEntry()?.mainRestartRecovery).toMatchObject({
             chargedAttempts: 0,
+            reservation: undefined,
           });
-          expect(loadSessionEntry(first)?.mainRestartRecovery?.reservation).toBeUndefined();
         }
       } finally {
         releasePreparation.resolve();
         dispatchSettlement.resolve();
         await recovery.stop();
-        readSpy.mockRestore();
-        admissionSpy.mockRestore();
-        waitSpy.mockRestore();
-        info.mockRestore();
       }
     },
   );
@@ -523,9 +521,8 @@ describe("startup recovery admission", () => {
         sessionId?: string;
         initializationPending?: boolean;
       }> = [];
-      const targetSpy = vi
-        .spyOn(recoveryTargets, "loadExpectedRestartRecoveryTarget")
-        .mockImplementation(async (params) => {
+      vi.spyOn(recoveryTargets, "loadExpectedRestartRecoveryTarget").mockImplementation(
+        async (params) => {
           const entry = await loadTarget(params);
           exactReads.push({
             sessionId: entry?.sessionId,
@@ -538,7 +535,8 @@ describe("startup recovery admission", () => {
             await releaseReplay.promise;
           }
           return entry;
-        });
+        },
+      );
       let failedRead = false;
       const readSpy = vi.spyOn(transcriptReaders, "readSessionMessagesAsync");
       if (action === "retry") {
@@ -547,7 +545,7 @@ describe("startup recovery admission", () => {
           throw new Error("transcript temporarily unavailable");
         });
       }
-      const admissionSpy = observeAdmission((origin) => {
+      observeAdmission((origin) => {
         if (origin !== "main-session:preparation-recovery") {
           return;
         }
@@ -630,11 +628,6 @@ describe("startup recovery admission", () => {
         releaseReplay.resolve();
         dispatchSettlement.resolve();
         await recovery.stop();
-        info.mockRestore();
-        readSpy.mockRestore();
-        admissionSpy.mockRestore();
-        targetSpy.mockRestore();
-        vi.useRealTimers();
       }
     },
   );
@@ -667,18 +660,16 @@ describe("startup recovery admission", () => {
     const secondAttempt = createDeferred();
     const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
     let attempt = 0;
-    const admissionSpy = vi
-      .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
-      .mockImplementation(
-        async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal) => {
-          const settled = attempt++ === 0 ? firstAttempt : secondAttempt;
-          try {
-            return await admit(run, origin, signal);
-          } finally {
-            settled.resolve();
-          }
-        },
-      );
+    vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission").mockImplementation(
+      async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal) => {
+        const settled = attempt++ === 0 ? firstAttempt : secondAttempt;
+        try {
+          return await admit(run, origin, signal);
+        } finally {
+          settled.resolve();
+        }
+      },
+    );
     vi.useFakeTimers();
     const recovery = schedule({ maxRetries: 2 });
 
@@ -709,8 +700,6 @@ describe("startup recovery admission", () => {
     } finally {
       suspensionRef.current?.release();
       await recovery.stop();
-      admissionSpy.mockRestore();
-      vi.useRealTimers();
     }
   });
 
@@ -727,17 +716,14 @@ describe("startup recovery admission", () => {
       const sessionKey = `agent:${agentId}:main`;
       const targets: Array<{ agentId: string; sessionKey: string; storePath: string }> = [];
       for (const [index, directory] of dirs.entries()) {
-        const fixture = await makeMainSessionFixture({
-          agentId: directory,
-          sessionKey,
-          sessionId: multipleStores ? `ops-session-${index}` : "main-session",
-          mainRestartRecovery: {
-            cycleId: multipleStores ? `cycle-ops-${index}` : "cycle-final-startup-attempt",
-            revision: 1,
-            chargedAttempts: 2,
+        const fixture = await finalAttempt(
+          multipleStores ? `cycle-ops-${index}` : "cycle-final-startup-attempt",
+          {
+            agentId: directory,
+            sessionKey,
+            sessionId: multipleStores ? `ops-session-${index}` : "main-session",
           },
-          pendingFinalDelivery: makePendingFinalDelivery(),
-        });
+        );
         targets.push({ agentId, sessionKey, storePath: fixture.storePath });
       }
       const { storePath } = targets[0]!;
@@ -776,9 +762,11 @@ describe("startup recovery admission", () => {
           mainRestartRecovery: { tombstone: expect.any(Object) },
         });
         if (multipleStores) {
-          expect(entry?.mainRestartRecovery?.chargedAttempts).toBe(3);
-          expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
-          expect(entry).toMatchObject({ sessionId: `ops-session-${index}`, abortedLastRun: false });
+          expect(entry).toMatchObject({
+            sessionId: `ops-session-${index}`,
+            abortedLastRun: false,
+            mainRestartRecovery: { chargedAttempts: 3, reservation: undefined },
+          });
         }
       }
       if (multipleStores) {
@@ -791,9 +779,8 @@ describe("startup recovery admission", () => {
           sessionId: "fresh-session",
           status: "interrupted",
           abortedLastRun: true,
-          mainRestartRecovery: { chargedAttempts: 3 },
+          mainRestartRecovery: { chargedAttempts: 3, tombstone: undefined },
         });
-        expect(freshEntry?.mainRestartRecovery?.tombstone).toBeUndefined();
       }
     };
     await (dirs.length > 1 ? withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, run) : run());
@@ -803,15 +790,9 @@ describe("startup recovery admission", () => {
     const targets: Awaited<ReturnType<typeof makeMainSessionFixture>>[] = [];
     for (const name of ["first", "second"]) {
       targets.push(
-        await makeMainSessionFixture({
+        await finalAttempt(`cycle-exhaustion-${name}`, {
           sessionKey: `agent:main:${name}`,
           sessionId: `${name}-session`,
-          mainRestartRecovery: {
-            cycleId: `cycle-exhaustion-${name}`,
-            revision: 1,
-            chargedAttempts: 2,
-          },
-          pendingFinalDelivery: makePendingFinalDelivery(),
         }),
       );
     }
@@ -822,9 +803,8 @@ describe("startup recovery admission", () => {
     let preparing = 0;
     let peakPreparation = 0;
     const preparedKeys: string[] = [];
-    const prepareSpy = vi
-      .spyOn(recoveryTargets, "prepareExpectedRestartRecoveryCurrent")
-      .mockImplementation(async (params) => {
+    vi.spyOn(recoveryTargets, "prepareExpectedRestartRecoveryCurrent").mockImplementation(
+      async (params) => {
         preparedKeys.push(params.expected.sessionKey);
         preparing++;
         peakPreparation = Math.max(peakPreparation, preparing);
@@ -838,7 +818,8 @@ describe("startup recovery admission", () => {
         } finally {
           preparing--;
         }
-      });
+      },
+    );
     const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
     const recovery = schedule({ maxRetries: 1 });
     try {
@@ -861,20 +842,11 @@ describe("startup recovery admission", () => {
       release.resolve();
       dispatchSettlement.resolve();
       await recovery.stop();
-      prepareSpy.mockRestore();
-      warn.mockRestore();
     }
   });
 
   it("stops exhaustion reconciliation while its Gateway admission is suspended", async () => {
-    const { storePath } = await makeMainSessionFixture({
-      mainRestartRecovery: {
-        cycleId: "cycle-suspended-exhaustion",
-        revision: 1,
-        chargedAttempts: 2,
-      },
-      pendingFinalDelivery: makePendingFinalDelivery(),
-    });
+    const { storePath } = await finalAttempt("cycle-suspended-exhaustion");
     const suspension = { lease: null as ReturnType<typeof tryBeginGatewaySuspendAdmission> };
     vi.mocked(callGateway)
       .mockImplementationOnce(async () => {
@@ -885,15 +857,15 @@ describe("startup recovery admission", () => {
     const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
     const reconciliationEntered = createDeferred();
     const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
-    const admissionSpy = vi
-      .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
-      .mockImplementation(<T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal) => {
+    vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission").mockImplementation(
+      <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal) => {
         const admitted = admit(run, origin, signal);
         if (origin === "main-session:target-recovery") {
           reconciliationEntered.resolve();
         }
         return admitted;
-      });
+      },
+    );
     const recovery = schedule({ maxRetries: 1 });
     try {
       await reconciliationEntered.promise;
@@ -915,8 +887,6 @@ describe("startup recovery admission", () => {
     } finally {
       suspension.lease?.rollback();
       await recovery.stop();
-      admissionSpy.mockRestore();
-      warn.mockRestore();
     }
   });
 });

@@ -1,30 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
-import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
+import { projectMainSessionRecoveryLifecycle as projectLifecycle } from "./main-session-recovery-lifecycle.js";
+import { transitionMainSessionRecovery as transition } from "./main-session-recovery-state.js";
+import {
+  claimForeground,
+  recoveryEntry as entry,
+} from "./main-session-recovery-state.test-support.js";
 
 const sessionKey = "agent:main:main";
-function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
-    sessionId: "session-1",
-    updatedAt: 100,
-    abortedLastRun: false,
-    mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
-    ...overrides,
-  };
-}
-function claimForeground(session: SessionEntry, runId?: string) {
-  return transitionMainSessionRecovery(session, {
-    kind: "claim_foreground",
-    cycleId: "unused",
-    lifecycleGeneration: "generation-1",
-    sessionId: "session-1",
-    sessionKey,
-    claimId: "foreground-1",
-    runId,
-  });
-}
+const identity = { lifecycleGeneration: "generation-1", sessionId: "session-1" };
 
 const ownershipControls: Array<{
   label: string;
@@ -76,11 +60,11 @@ const ownershipControls: Array<{
 describe("empty main session recovery aggregate", () => {
   it("clears the last cancelled reservation after a foreground turn settles", () => {
     const session = entry({ abortedLastRun: true });
-    const reserved = transitionMainSessionRecovery(session, {
+    const reserved = transition(session, {
       kind: "prepare_attempt",
       attempt: 1,
       executionIdentity: { state: "disabled" },
-      lifecycleGeneration: "generation-1",
+      ...identity,
       now: 100,
       observation: { sessionId: session.sessionId, cycleId: "cycle-1", revision: 1 },
       runId: "recovery-1",
@@ -89,28 +73,24 @@ describe("empty main session recovery aggregate", () => {
     expect(claimForeground(session, "foreground-run").kind).toBe("foreground_claimed");
     // Foreground preparation admits the turn without consuming the recovery reservation.
     session.abortedLastRun = false;
-    const settled = projectMainSessionRecoveryLifecycle({
+    const settled = projectLifecycle({
       currentLifecycleGeneration: "generation-1",
       entry: session,
-      event: {
-        runId: "foreground-run",
-        lifecycleGeneration: "generation-1",
-        data: { phase: "end" },
-      },
+      event: { runId: "foreground-run", ...identity, data: { phase: "end" } },
       snapshotPatch: { status: "done", abortedLastRun: false },
     });
     assert(settled.action === "apply", "expected foreground settlement");
     Object.assign(session, settled.patch);
-    expect(session.mainRestartRecovery?.foregroundClaims).toBeUndefined();
-    expect(session.restartRecoveryRuns).toBeUndefined();
-    expect(session.mainRestartRecovery?.reservation?.runId).toBe("recovery-1");
+    expect(session).toMatchObject({
+      restartRecoveryRuns: undefined,
+      mainRestartRecovery: { foregroundClaims: undefined, reservation: { runId: "recovery-1" } },
+    });
 
-    expect(
-      transitionMainSessionRecovery(session, {
-        kind: "cancel_reservation",
-        reservation: reserved.reservation,
-      }),
-    ).toEqual({ kind: "applied" });
+    const cancelled = transition(session, {
+      kind: "cancel_reservation",
+      reservation: reserved.reservation,
+    });
+    expect(cancelled).toEqual({ kind: "applied" });
     expect(session.mainRestartRecovery).toBeUndefined();
     expect(session.restartRecoveryTerminalRunIds).toContain("foreground-run");
   });
@@ -135,7 +115,7 @@ describe("empty main session recovery aggregate", () => {
   it.each([false, true])("reconciles existing empty residue (interrupted=%s)", (interrupted) => {
     const session = entry({ abortedLastRun: interrupted });
     expect(
-      transitionMainSessionRecovery(session, {
+      transition(session, {
         kind: "observe",
         cycleId: "unused",
         lifecycleGeneration: "generation-1",

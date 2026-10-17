@@ -6,40 +6,32 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
-import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
+import { transitionMainSessionRecovery as transition } from "./main-session-recovery-state.js";
+import { claimForeground, recoveryEntry } from "./main-session-recovery-state.test-support.js";
+import { markStartupOrphanedMainSessionsForRecovery as markOrphans } from "./main-session-restart-recovery-marking.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
 
 // #118873: terminal-only custody must not block foreground admission forever.
 
 const sessionKey = "agent:main:main";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const unexpectedRuntimeCall = async (): Promise<never> => {
+  throw new Error("terminal residue must not dispatch, wait, or send a notice");
+};
 const unusedGatewayRuntime: GatewayRecoveryRuntime = {
   prepareRestartRecovery: () => undefined,
-  dispatchSessionMethod: async () => {
-    throw new Error("terminal residue must not dispatch session methods");
-  },
-  dispatchAgent: async () => {
-    throw new Error("terminal residue must not dispatch");
-  },
-  waitForAgent: async () => {
-    throw new Error("terminal residue must not wait");
-  },
-  sendRecoveryNotice: async () => {
-    throw new Error("terminal residue must not send a notice");
-  },
+  dispatchSessionMethod: unexpectedRuntimeCall,
+  dispatchAgent: unexpectedRuntimeCall,
+  waitForAgent: unexpectedRuntimeCall,
+  sendRecoveryNotice: unexpectedRuntimeCall,
 };
 
 function settledEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
-    sessionId: "session-1",
-    updatedAt: 100,
-    abortedLastRun: false,
-    mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+  return recoveryEntry({
     restartRecoveryRuns: [{ runId: "settled-run", lifecycleGeneration: "dead-generation" }],
     restartRecoveryTerminalRunIds: ["settled-run"],
     ...overrides,
-  };
+  });
 }
 
 async function withStore(run: (store: ReturnType<typeof createStore>) => Promise<void>) {
@@ -61,12 +53,8 @@ function createStore() {
       loadSessionEntry({ sessionKey: key, storePath, readConsistency: "latest" }),
     write: (entry: SessionEntry, key = sessionKey) =>
       replaceSessionEntry({ sessionKey: key, storePath }, entry),
-    mark: (options: Parameters<typeof markStartupOrphanedMainSessionsForRecovery>[0] = {}) =>
-      markStartupOrphanedMainSessionsForRecovery({
-        cfg: { session: { store: storePath } },
-        stateDir,
-        ...options,
-      }),
+    mark: (options: Parameters<typeof markOrphans>[0] = {}) =>
+      markOrphans({ cfg: { session: { store: storePath } }, stateDir, ...options }),
   };
 }
 
@@ -81,46 +69,32 @@ function unfinishedEntry(overrides: Partial<SessionEntry> = {}) {
   });
 }
 
-function claimForeground(entry: SessionEntry) {
-  return transitionMainSessionRecovery(entry, {
-    kind: "claim_foreground",
-    cycleId: "unused",
-    lifecycleGeneration: "generation-1",
-    sessionId: "session-1",
-    sessionKey,
-    claimId: "foreground-1",
-  });
-}
-
 describe("main session recovery terminal-only residue", () => {
-  it("retires a terminal-only aggregate before healthy foreground admission", () => {
-    const entry = settledEntry({
-      restartRecoveryRuns: [
-        { runId: "settled-run-1", lifecycleGeneration: "dead-generation-1" },
-        { runId: "settled-run-2", lifecycleGeneration: "dead-generation-2" },
-      ],
-      restartRecoveryTerminalRunIds: ["settled-run-1", "settled-run-2"],
-    });
-
-    expect(claimForeground(entry)).toEqual({ kind: "applied" });
-    expect(entry.abortedLastRun).toBe(false);
-    expect(entry.status).toBeUndefined();
-    expect(entry.restartRecoveryRuns).toBeUndefined();
-    expect(entry.mainRestartRecovery).toBeUndefined();
-  });
-
-  it("keeps the aggregate when any run still lacks a terminal fact", () => {
-    const entry = settledEntry({
-      restartRecoveryRuns: [
+  it.each([false, true])(
+    "retires foreground residue only if every fence is terminal (%s)",
+    (live) => {
+      const runs = [
         { runId: "settled-run", lifecycleGeneration: "dead-generation" },
-        { runId: "live-run", lifecycleGeneration: "generation-1" },
-      ],
-    });
-
-    expect(claimForeground(entry)).toEqual({ kind: "no_change" });
-    expect(entry.mainRestartRecovery).toBeDefined();
-    expect(entry.restartRecoveryRuns).toHaveLength(2);
-  });
+        { runId: "second-run", lifecycleGeneration: live ? "generation-1" : "dead-generation-2" },
+      ];
+      const entry = settledEntry({
+        restartRecoveryRuns: runs,
+        restartRecoveryTerminalRunIds: live ? ["settled-run"] : runs.map((run) => run.runId),
+      });
+      expect(claimForeground(entry)).toEqual({ kind: live ? "no_change" : "applied" });
+      if (live) {
+        expect(entry.mainRestartRecovery).toBeDefined();
+        expect(entry.restartRecoveryRuns).toHaveLength(2);
+      } else {
+        expect(entry).toMatchObject({
+          abortedLastRun: false,
+          status: undefined,
+          restartRecoveryRuns: undefined,
+          mainRestartRecovery: undefined,
+        });
+      }
+    },
+  );
 
   it.each([false, true])(
     "requires every recovery fence to be terminal before retiring a later failed outcome (terminal=%s)",
@@ -133,7 +107,7 @@ describe("main session recovery terminal-only residue", () => {
       });
       const before = structuredClone(entry);
 
-      transitionMainSessionRecovery(entry, {
+      transition(entry, {
         kind: "observe",
         cycleId: "unused-cycle",
         lifecycleGeneration: "generation-1",
@@ -282,32 +256,27 @@ describe("main session recovery terminal-only residue", () => {
     });
   });
 
-  it("does not block standalone inspect admission on terminal-only residue", () => {
-    const entry = settledEntry();
+  it.each([false, true])("standalone inspect blocks only live recovery fences (%s)", (live) => {
+    const entry = settledEntry(
+      live
+        ? {
+            restartRecoveryRuns: [
+              { runId: "settled-run", lifecycleGeneration: "dead-generation" },
+              { runId: "live-run", lifecycleGeneration: "generation-1" },
+            ],
+          }
+        : {},
+    );
 
-    const result = transitionMainSessionRecovery(entry, {
+    const result = transition(entry, {
       kind: "inspect",
       lifecycleGeneration: "standalone-generation",
       sessionKey,
     });
 
-    expect(result).toMatchObject({ kind: "observed", view: { status: "inactive" } });
-  });
-
-  it("keeps blocking standalone inspect admission on a live recovery fence", () => {
-    const entry = settledEntry({
-      restartRecoveryRuns: [
-        { runId: "settled-run", lifecycleGeneration: "dead-generation" },
-        { runId: "live-run", lifecycleGeneration: "generation-1" },
-      ],
+    expect(result).toMatchObject({
+      kind: "observed",
+      view: { status: live ? "blocked" : "inactive" },
     });
-
-    const result = transitionMainSessionRecovery(entry, {
-      kind: "inspect",
-      lifecycleGeneration: "standalone-generation",
-      sessionKey,
-    });
-
-    expect(result).toMatchObject({ kind: "observed", view: { status: "blocked" } });
   });
 });

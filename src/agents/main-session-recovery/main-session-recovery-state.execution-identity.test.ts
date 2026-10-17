@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
-import type {
-  InternalSessionEntry as SessionEntry,
-  MainRestartRecoveryState,
-} from "../../config/sessions.js";
-import { transitionMainSessionRecovery } from "./main-session-recovery-state.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import { transitionMainSessionRecovery as transition } from "./main-session-recovery-state.js";
+import {
+  claimForeground,
+  executionIdentity,
+  recoveryEntry,
+  recoveryState,
+} from "./main-session-recovery-state.test-support.js";
 import type { MainSessionRecoveryCommand } from "./main-session-recovery-types.js";
 
 const run = {
@@ -17,7 +20,7 @@ function prepare(
   entry: SessionEntry,
   overrides: Partial<Extract<MainSessionRecoveryCommand, { kind: "prepare_attempt" }>> = {},
 ) {
-  return transitionMainSessionRecovery(entry, {
+  return transition(entry, {
     ...run,
     kind: "prepare_attempt",
     attempt: 1,
@@ -28,18 +31,13 @@ function prepare(
   });
 }
 function admit(entry: SessionEntry, now: number) {
-  return transitionMainSessionRecovery(entry, { ...run, kind: "admit_recovery", now });
+  return transition(entry, { ...run, kind: "admit_recovery", now });
 }
 function interrupt(entry: SessionEntry, attempt: number, now: number) {
-  return transitionMainSessionRecovery(entry, {
-    ...run,
-    kind: "mark_admitted_recovery_interrupted",
-    attempt,
-    now,
-  });
+  return transition(entry, { ...run, kind: "mark_admitted_recovery_interrupted", attempt, now });
 }
 function bind(entry: SessionEntry) {
-  return transitionMainSessionRecovery(entry, {
+  return transition(entry, {
     ...run,
     kind: "bind_admitted_execution_identity",
     attempt: 1,
@@ -47,38 +45,12 @@ function bind(entry: SessionEntry) {
   });
 }
 
-const executionIdentity = (runId: string) => ({
-  tokenVersion: 1 as const,
-  contextId: `context-${runId}`,
-  executionId: `execution-${runId}`,
-  runId,
-  createdAt: 1,
-});
-
-function recoveryState(
-  overrides: Partial<MainRestartRecoveryState> = {},
-): MainRestartRecoveryState {
-  return {
-    cycleId: "cycle-1",
-    revision: 1,
-    chargedAttempts: 0,
-    ...overrides,
-  };
-}
-
 function interruptedEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
-    sessionId: "session-1",
-    updatedAt: 100,
-    status: "interrupted",
-    abortedLastRun: true,
-    mainRestartRecovery: recoveryState(),
-    ...overrides,
-  };
+  return recoveryEntry({ status: "interrupted", abortedLastRun: true, ...overrides });
 }
 
 function observe(entry: SessionEntry, lifecycleGeneration: string) {
-  const result = transitionMainSessionRecovery(entry, {
+  const result = transition(entry, {
     kind: "observe",
     cycleId: "unused-cycle",
     lifecycleGeneration,
@@ -86,17 +58,6 @@ function observe(entry: SessionEntry, lifecycleGeneration: string) {
   });
   assert(result.kind === "observed", "expected recovery observation");
   return result.view;
-}
-
-function claimForeground(entry: SessionEntry) {
-  return transitionMainSessionRecovery(entry, {
-    kind: "claim_foreground",
-    cycleId: "unused",
-    lifecycleGeneration: "generation-1",
-    sessionId: "session-1",
-    sessionKey: "agent:main:main",
-    claimId: "foreground-1",
-  });
 }
 
 describe("main session recovery execution identity state", () => {
@@ -107,39 +68,28 @@ describe("main session recovery execution identity state", () => {
       assert(view.status === "recoverable", "expected a recoverable session");
       expect(view.nextAttempt).toBe(attempt);
       expect(
-        prepare(entry, {
-          attempt,
-          now: 200 + attempt,
-          observation: view.observation,
-        }).kind,
+        prepare(entry, { attempt, now: 200 + attempt, observation: view.observation }).kind,
       ).toBe("reserved");
       expect(admit(entry, 300 + attempt).kind).toBe("admitted_recovery");
       if (attempt <= 4) {
-        const registration = {
-          kind: "register_recovery_turn" as const,
-          attempt,
-          ...run,
-        };
-        transitionMainSessionRecovery(entry, {
+        const registration = { kind: "register_recovery_turn" as const, attempt, ...run };
+        transition(entry, {
           ...registration,
           kind: "bind_admitted_execution_identity",
           token: executionIdentity("recovery-1"),
         });
-        expect(transitionMainSessionRecovery(entry, registration).kind).toBe("applied");
-        expect(transitionMainSessionRecovery(entry, registration).kind).toBe("no_change");
+        expect(transition(entry, registration).kind).toBe("applied");
+        expect(transition(entry, registration).kind).toBe("no_change");
       }
       interrupt(entry, attempt, 400 + attempt);
     }
     expect(observe(entry, "generation-1")).toMatchObject({ status: "exhausted" });
     expect(entry.mainRestartRecovery).toMatchObject({ chargedAttempts: 7, startedAttempt: 4 });
     expect(entry.mainRestartRecovery?.executionIdentity).toEqual(executionIdentity("recovery-1"));
-    expect(
-      transitionMainSessionRecovery(entry, {
-        kind: "register_recovery_turn",
-        attempt: 4,
-        ...run,
-      }),
-    ).toEqual({ kind: "rejected", reason: "stale_reservation" });
+    expect(transition(entry, { kind: "register_recovery_turn", attempt: 4, ...run })).toEqual({
+      kind: "rejected",
+      reason: "stale_reservation",
+    });
     expect(observe(entry, "generation-1")).toMatchObject({ status: "exhausted" });
   });
 
@@ -160,20 +110,14 @@ describe("main session recovery execution identity state", () => {
 
     expect(claimForeground(entry).kind).toBe("foreground_claimed");
     expect(
-      transitionMainSessionRecovery(entry, {
-        kind: "cancel_reservation",
-        reservation: prepared.reservation,
-      }),
+      transition(entry, { kind: "cancel_reservation", reservation: prepared.reservation }),
     ).toEqual({ kind: "applied" });
     expect(entry.mainRestartRecovery).toMatchObject({
       chargedAttempts: 0,
-      foregroundClaims: {
-        lifecycleGeneration: "generation-1",
-        tokens: ["foreground-1"],
-      },
+      foregroundClaims: { lifecycleGeneration: "generation-1", tokens: ["foreground-1"] },
+      reservation: undefined,
+      executionIdentity: undefined,
     });
-    expect(entry.mainRestartRecovery?.reservation).toBeUndefined();
-    expect(entry.mainRestartRecovery?.executionIdentity).toBeUndefined();
     expect(observe(entry, "generation-1")).toEqual({ status: "blocked" });
   });
 
