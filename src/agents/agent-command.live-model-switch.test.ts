@@ -1935,27 +1935,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     },
   );
 
-  it("persists structured transcript media for ACP turns", async () => {
-    setupAcpSession();
-
-    await agentCommand({
-      message: "[media attached: media://inbound/image-1]",
-      transcriptMessage: "",
-      transcriptMedia: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
-      sessionKey: "agent:main:main",
-    });
-
-    expect(state.persistAcpTurnTranscriptMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        transcriptBody: "",
-        userInput: {
-          text: "",
-          media: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
-        },
-      }),
-    );
-  });
-
   it("passes explicit timeout overrides into agent attempts", async () => {
     // Freeze preflight elapsed time to keep the forwarding assertions exact.
     const now = Date.now();
@@ -3934,49 +3913,38 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.acpRunTurnMock).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])(
-    "starts ACP only after accepted input reaches the transcript (blocked=%s)",
-    async (blocked) => {
-      setupAcpSession();
-      const recorder = blocked
-        ? createUserTurnTranscriptRecorder({
-            input: { text: "accepted ACP input", idempotencyKey: "acp-input:user" },
-            target: () => undefined,
-          })
-        : undefined;
-      const onExecutionStarted = vi.fn();
-      const submitPrompt = vi.fn();
-      state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
-        const callbacks = params as {
-          onBeforePrompt?: () => Promise<void> | void;
-          onLifecycle?: (event: { type: string; at: number }) => void;
-          onEvent?: (event: unknown) => void;
-        };
-        expect(onExecutionStarted).not.toHaveBeenCalled();
-        await callbacks.onBeforePrompt?.();
-        expect(onExecutionStarted).toHaveBeenCalledOnce();
-        submitPrompt();
-        callbacks.onLifecycle?.({ type: "prompt_submitted", at: Date.now() });
-        callbacks.onEvent?.({ type: "done", stopReason: "end_turn" });
-      });
+  it("does not submit ACP input when its supplied recorder cannot admit it", async () => {
+    setupAcpSession();
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "accepted ACP input", idempotencyKey: "acp-input:user" },
+      target: () => undefined,
+    });
+    const onExecutionStarted = vi.fn();
+    const submitPrompt = vi.fn();
+    state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
+      const callbacks = params as {
+        onBeforePrompt?: () => Promise<void> | void;
+        onLifecycle?: (event: { type: string; at: number }) => void;
+        onEvent?: (event: unknown) => void;
+      };
+      await callbacks.onBeforePrompt?.();
+      submitPrompt();
+      callbacks.onLifecycle?.({ type: "prompt_submitted", at: Date.now() });
+      callbacks.onEvent?.({ type: "done", stopReason: "end_turn" });
+    });
 
-      const pending = agentCommand({
-        message: blocked ? "accepted ACP input" : "ACP execution boundary",
+    await expect(
+      agentCommand({
+        message: "accepted ACP input",
         sessionKey: "agent:main:main",
         userTurnTranscriptRecorder: recorder,
         onExecutionStarted,
-      });
-      if (blocked) {
-        await expect(pending).rejects.toThrow("ACP input could not enter the session transcript");
-        expect(onExecutionStarted).not.toHaveBeenCalled();
-        expect(submitPrompt).not.toHaveBeenCalled();
-        expect(state.persistAcpTurnTranscriptMock).not.toHaveBeenCalled();
-      } else {
-        await pending;
-        expect(onExecutionStarted).toHaveBeenCalledTimes(1);
-      }
-    },
-  );
+      }),
+    ).rejects.toThrow("ACP input could not enter the session transcript");
+    expect(onExecutionStarted).not.toHaveBeenCalled();
+    expect(submitPrompt).not.toHaveBeenCalled();
+    expect(state.persistAcpTurnTranscriptMock).not.toHaveBeenCalled();
+  });
 
   it("keeps manual ACP elicitation owned by the child turn without channel delivery", async () => {
     setupAcpSession();

@@ -10,9 +10,11 @@ import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js
 import { persistAcpTurnTranscript } from "../agents/command/transcript-persistence.js";
 import { getTranscriptMessageRole } from "../agents/embedded-agent-runner/message-visibility.js";
 import * as embeddedModule from "../agents/embedded-agent.js";
+import * as hookHelpers from "../agents/harness/hook-helpers.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import * as configIoModule from "../config/io.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempHomeCore as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -120,6 +122,9 @@ vi.mock("../agents/command/attempt-execution.runtime.js", async () => {
 const loadConfigSpy = vi.spyOn(configIoModule, "loadConfig");
 const runEmbeddedAgentSpy = vi.spyOn(embeddedModule, "runEmbeddedAgent");
 const getAcpSessionManagerSpy = vi.spyOn(acpManagerModule, "getAcpSessionManager");
+type AcpTurnInput = Parameters<
+  ReturnType<typeof acpManagerModule.getAcpSessionManager>["runTurn"]
+>[0];
 
 const runtime = createThrowingTestRuntime();
 
@@ -231,20 +236,44 @@ function mockAcpManager(params: {
   } as unknown as ReturnType<typeof acpManagerModule.getAcpSessionManager>);
 }
 
-async function withAcpSessionEnv(fn: () => Promise<void>) {
+async function withAcpSessionEnv(fn: (storePath: string) => Promise<void>) {
   await withTempHome(async (home) => {
     const storePath = path.join(home, "sessions.json");
     writeAcpSessionStore(storePath);
     mockConfig(home, storePath);
-    await fn();
+    await fn(storePath);
   });
+}
+
+async function readAcpMessages(storePath: string) {
+  const target = {
+    agentId: "codex",
+    sessionKey: "agent:codex:acp:test",
+    storePath,
+  };
+  const entry = await readSessionEntryReadOnlyInWorker(target);
+  if (!entry) {
+    throw new Error("Expected the resolved ACP session");
+  }
+  const transcript = await loadTranscriptEvents({ ...target, sessionId: entry.sessionId });
+  return transcript.flatMap((event) =>
+    event &&
+    typeof event === "object" &&
+    "type" in event &&
+    event.type === "message" &&
+    "message" in event
+      ? [event.message]
+      : [],
+  );
 }
 
 function createRunTurnFromTextDeltas(chunks: string[]) {
   return vi.fn(async (paramsUnknown: unknown) => {
     const params = paramsUnknown as {
+      onBeforePrompt?: () => Promise<void> | void;
       onEvent?: (event: { type: string; text?: string; stopReason?: string }) => Promise<void>;
     };
+    await params.onBeforePrompt?.();
     for (const text of chunks) {
       await params.onEvent?.({ type: "text_delta", text });
     }
@@ -327,6 +356,172 @@ describe("agentCommand ACP runtime routing", () => {
         durationMs: 5,
       },
     } as never);
+  });
+
+  it("keeps an accepted direct ACP request in SQLite when the backend fails", async () => {
+    await withAcpSessionEnv(async (storePath) => {
+      const runTurn = vi.fn(async (input: unknown) => {
+        const params = input as AcpTurnInput;
+        await params.onBeforePrompt?.();
+        throw new AcpRuntimeError("ACP_TURN_FAILED", "synthetic backend failure");
+      });
+      mockAcpManager({ runTurn });
+
+      await expect(
+        agentCommand(
+          { message: "Keep this accepted request.", sessionKey: "agent:codex:acp:test" },
+          runtime,
+        ),
+      ).rejects.toThrow("synthetic backend failure");
+
+      expect(await readAcpMessages(storePath)).toEqual([
+        expect.objectContaining({ role: "user", content: "Keep this accepted request." }),
+      ]);
+      expect(deliverAgentCommandResult).not.toHaveBeenCalled();
+    });
+  });
+
+  it("mirrors a successful direct ACP turn without duplicating its admitted input", async () => {
+    await withAcpSessionEnv(async (storePath) => {
+      attemptExecutionMocks.persistAcpTurnTranscript.mockImplementationOnce(
+        persistAcpTurnTranscript,
+      );
+      const write = vi.spyOn(hookHelpers, "runAgentHarnessBeforeMessageWriteHook");
+      mockAcpManager({
+        runTurn: async (input) => {
+          const params = input as AcpTurnInput;
+          await params.onBeforePrompt?.();
+          await params.onBeforePrompt?.();
+          expect(await readAcpMessages(storePath)).toEqual([
+            expect.objectContaining({ role: "user", content: "Remember this input." }),
+          ]);
+          await params.onEvent?.({ type: "text_delta", text: "Remembered." });
+          await params.onEvent?.({ type: "done", status: "completed", stopReason: "stop" });
+        },
+      });
+      try {
+        await agentCommand(
+          { message: "Remember this input.", sessionKey: "agent:codex:acp:test" },
+          runtime,
+        );
+        const messages = await readAcpMessages(storePath);
+        expect(messages.map((message) => getTranscriptMessageRole(message))).toEqual([
+          "user",
+          "assistant",
+        ]);
+        expect(write.mock.calls.filter(([params]) => params.message.role === "user")).toHaveLength(
+          1,
+        );
+      } finally {
+        write.mockRestore();
+      }
+    });
+  });
+
+  it.each(["hook suppression", "cancellation", "source revocation"] as const)(
+    "does not submit or persist direct ACP input after %s during write preparation",
+    async (refusal) => {
+      await withAcpSessionEnv(async (storePath) => {
+        const controller = new AbortController();
+        let sourceCurrent = true;
+        const submitPrompt = vi.fn();
+        const write = vi.spyOn(hookHelpers, "runAgentHarnessBeforeMessageWriteHook");
+        write.mockImplementationOnce(({ message }) => {
+          if (refusal === "hook suppression") {
+            return null;
+          }
+          if (refusal === "source revocation") {
+            sourceCurrent = false;
+          } else {
+            controller.abort(new Error("input was cancelled"));
+          }
+          return message;
+        });
+        mockAcpManager({
+          runTurn: async (input) => {
+            const params = input as AcpTurnInput;
+            await params.onBeforePrompt?.();
+            submitPrompt();
+          },
+        });
+        try {
+          await expect(
+            agentCommand(
+              {
+                message: "Rejected input.",
+                sessionKey: "agent:codex:acp:test",
+                abortSignal: controller.signal,
+                assertSourceCurrent: () => {
+                  if (!sourceCurrent) {
+                    throw new Error("input source was revoked");
+                  }
+                },
+              },
+              runtime,
+            ),
+          ).rejects.toThrow(
+            refusal === "hook suppression"
+              ? "ACP input could not enter the session transcript"
+              : refusal === "source revocation"
+                ? "input source was revoked"
+                : "input was cancelled",
+          );
+          expect(submitPrompt).not.toHaveBeenCalled();
+          expect(await readAcpMessages(storePath)).toEqual([]);
+        } finally {
+          write.mockRestore();
+        }
+      });
+    },
+  );
+
+  it.each([{ suppressPromptPersistence: true }, { transcriptMessage: "" }])(
+    "keeps explicitly suppressed direct ACP input out of its successful mirror: %j",
+    async (suppression) => {
+      await withAcpSessionEnv(async (storePath) => {
+        attemptExecutionMocks.persistAcpTurnTranscript.mockImplementationOnce(
+          persistAcpTurnTranscript,
+        );
+        mockAcpManager({ runTurn: createRunTurnFromTextDeltas(["Visible answer."]) });
+        await agentCommand(
+          { message: "Runtime-only input.", sessionKey: "agent:codex:acp:test", ...suppression },
+          runtime,
+        );
+        expect((await readAcpMessages(storePath)).map(getTranscriptMessageRole)).toEqual([
+          "assistant",
+        ]);
+      });
+    },
+  );
+
+  it("retains a media-only ACP input once through admission and the successful mirror", async () => {
+    await withAcpSessionEnv(async (storePath) => {
+      attemptExecutionMocks.persistAcpTurnTranscript.mockImplementationOnce(
+        persistAcpTurnTranscript,
+      );
+      mockAcpManager({ runTurn: createRunTurnFromTextDeltas(["Received image."]) });
+
+      await agentCommand(
+        {
+          message: "[media attached: media://inbound/image-1]",
+          transcriptMessage: "",
+          transcriptMedia: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
+          sessionKey: "agent:codex:acp:test",
+        },
+        runtime,
+      );
+
+      expect(await readAcpMessages(storePath)).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "",
+          __openclaw: expect.objectContaining({
+            media: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
+          }),
+        }),
+        expect.objectContaining({ role: "assistant" }),
+      ]);
+    });
   });
 
   it.each([

@@ -2,6 +2,7 @@ import { createLazyAcpElicitationHandler } from "../../auto-reply/reply/acp-elic
 import { resolveInlineAgentImageAttachments } from "../../auto-reply/reply/agent-turn-attachments.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { CliDeps } from "../../cli/deps.types.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
@@ -15,6 +16,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   getAdmittedRunDelegatedAuthority,
   type PreparedAgentRunAdmission,
@@ -23,6 +25,7 @@ import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "../agent-run-terminal-outcome.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { resolveCommandReplyExpectation, resolveReplyCompletion } from "../reply-completion.js";
 import type { AgentRunSessionTarget } from "../run-session-target.types.js";
@@ -105,6 +108,42 @@ export async function runAcpAgentCommand(params: {
   let stopReason: string | undefined;
   let resultStatus: "completed" | "cancelled" | undefined;
   let terminalOutcome: "blocked" | undefined;
+  const { resolveAcpSessionCwd } = await loadAcpSessionIdentifiersRuntime();
+  const sessionCwd = resolveAcpSessionCwd(params.acpResolution.meta) ?? params.workspaceDir;
+  const hasTranscriptMedia = Boolean(params.opts.transcriptMedia?.length);
+  const suppressUserTurnPersistence =
+    params.opts.suppressPromptPersistence === true ||
+    (params.opts.transcriptMessage === "" && !hasTranscriptMedia);
+  const userTurnTranscriptRecorder =
+    params.opts.userTurnTranscriptRecorder ??
+    (params.suppressVisibleSessionEffects
+      ? undefined
+      : createUserTurnTranscriptRecorder({
+          ...(!suppressUserTurnPersistence
+            ? {
+                input: {
+                  text: params.transcriptBody || undefined,
+                  media: params.opts.transcriptMedia,
+                  senderIsOwner: params.opts.senderIsOwner,
+                  provenance: params.opts.inputProvenance,
+                },
+              }
+            : {}),
+          target: {
+            agentId: params.sessionAgentId,
+            sessionId: params.sessionId,
+            expectedSessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            sessionEntry: params.sessionEntry,
+            sessionStore: params.sessionStore,
+            storePath: params.storePath,
+            threadId: params.opts.threadId,
+            cwd: sessionCwd,
+            config: params.cfg,
+          },
+          beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+          errorContext: "ACP command user turn transcript",
+        }));
   try {
     const {
       resolveAcpAgentPolicyError,
@@ -131,6 +170,17 @@ export async function runAcpAgentCommand(params: {
     const acpImageAttachments = resolveInlineAgentImageAttachments(params.opts.images);
     assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
     const admittedRunContext = await params.preparedRunAdmission.admit("acp");
+    const assertInputCurrent = composeSessionSourceAssertion(
+      [params.preparedRunAdmission.assertSourceCurrent],
+      (assertSource) => {
+        assertSource();
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+        params.opts.abortSignal?.throwIfAborted();
+        if (!getAdmittedRunDelegatedAuthority(admittedRunContext)) {
+          throw new Error("ACP run authority is no longer active");
+        }
+      },
+    );
     const isElicitationActive = () => {
       if (
         params.opts.abortSignal?.aborted === true ||
@@ -180,16 +230,19 @@ export async function runAcpAgentCommand(params: {
       signal: params.opts.abortSignal,
       onElicitation,
       onBeforePrompt: async () => {
-        const recorder = params.opts.userTurnTranscriptRecorder;
-        if (recorder && !recorder.hasPersisted() && !(await recorder.persistApproved())) {
+        assertInputCurrent();
+        if (
+          userTurnTranscriptRecorder &&
+          !suppressUserTurnPersistence &&
+          !userTurnTranscriptRecorder.hasPersisted() &&
+          !(await userTurnTranscriptRecorder.persistApproved({
+            beforeFreshMessageCommit: assertInputCurrent,
+          }))
+        ) {
           throw new Error("ACP input could not enter the session transcript");
         }
         await params.opts.onExecutionStarted?.();
-        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
-        params.opts.abortSignal?.throwIfAborted();
-        if (!getAdmittedRunDelegatedAuthority(admittedRunContext)) {
-          throw new Error("ACP run authority is no longer active");
-        }
+        assertInputCurrent();
       },
       onLifecycle: (event) => {
         if (event.type === "prompt_submitted") {
@@ -259,7 +312,6 @@ export async function runAcpAgentCommand(params: {
   const terminalReply = visibleTextAccumulator.finalizeReplySnapshot();
   let sessionEntry = params.sessionEntry;
   try {
-    const { resolveAcpSessionCwd } = await loadAcpSessionIdentifiersRuntime();
     const internalSource = params.suppressVisibleSessionEffects
       ? resolveInternalSessionEffectsSource({
           agentId: params.sessionAgentId,
@@ -271,7 +323,7 @@ export async function runAcpAgentCommand(params: {
     const internalTarget = params.suppressVisibleSessionEffects
       ? await prepareInternalSessionEffectsSession({
           agentId: params.sessionAgentId,
-          cwd: resolveAcpSessionCwd(params.acpResolution.meta) ?? params.workspaceDir,
+          cwd: sessionCwd,
           runId: params.runId,
           source: internalSource,
           storePath: params.storePath,
@@ -283,8 +335,8 @@ export async function runAcpAgentCommand(params: {
       body: params.body,
       transcriptBody: params.transcriptBody,
       inputProvenance: params.opts.inputProvenance,
-      userTurnTranscriptRecorder: params.opts.userTurnTranscriptRecorder,
-      ...(!params.opts.userTurnTranscriptRecorder &&
+      userTurnTranscriptRecorder,
+      ...(!userTurnTranscriptRecorder &&
       params.opts.suppressPromptPersistence !== true &&
       params.opts.transcriptMedia?.length
         ? {
@@ -306,7 +358,7 @@ export async function runAcpAgentCommand(params: {
       storePath: internalTarget?.storePath ?? params.storePath,
       sessionAgentId: internalTarget?.agentId ?? params.sessionAgentId,
       threadId: params.opts.threadId,
-      sessionCwd: resolveAcpSessionCwd(params.acpResolution.meta) ?? params.workspaceDir,
+      sessionCwd,
       config: params.cfg,
       runId: params.runId,
     });
