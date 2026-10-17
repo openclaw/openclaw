@@ -8,7 +8,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   assertOpenClawAgentDatabaseIdentity,
   isOpenClawAgentDatabasePathCurrent,
@@ -611,7 +611,9 @@ export function readSessionRowDatabaseFacts(
                 hasBoard:
                   selected.row.session_key === sessionKey && selected.row.board_present === 1,
                 transcriptPreview: storedTranscript?.lastMessagePreview,
-                transcriptAssistantMessage: storedTranscript?.lastAssistantMessage,
+                transcriptAssistantMessage: storedTranscript
+                  ? storedTranscript.lastAssistantMessage
+                  : "unknown",
                 transcriptTerminalModel: storedTranscript?.terminalModel,
               };
               if (readSessionActivitySummary(entry)) {
@@ -625,7 +627,7 @@ export function readSessionRowDatabaseFacts(
           };
         };
         return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-          database.db.isTransaction ? read() : runSqliteDeferredTransactionSync(database.db, read),
+          database.db.isTransaction ? read() : runSqliteReadSnapshotSync(database.db, read),
         );
       }),
     { ...request.database, env: request.env },

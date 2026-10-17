@@ -25,6 +25,7 @@ import { recordChildProcessSpawn } from "./service-child-process.js";
 import { recordMemorySample } from "./service-memory.js";
 import { recordModelUsage } from "./service-model-usage.js";
 import { recordOperationTimingEvent } from "./service-operation-timing.js";
+import { recordSessionRetention } from "./service-retention.js";
 import {
   createGatewayWorkMetricsRecorder,
   recordSessionDiagnosticEvent,
@@ -114,25 +115,9 @@ function recordDiagnosticEvent(
       }
       return;
     case "sessions.list.retention":
+    case "sessions.event.retention":
       if (metadata.trusted) {
-        store.gauge(
-          "openclaw_sessions_list_retained_views",
-          "Retained session-list views across all publications.",
-          {},
-          evt.views,
-        );
-        store.gauge(
-          "openclaw_sessions_list_retained_refs",
-          "Row references and selection entries retained by session-list views.",
-          {},
-          evt.refs,
-        );
-        store.gauge(
-          "openclaw_sessions_list_retained_bytes",
-          "Estimated memory retained by session-list views.",
-          {},
-          evt.estimatedBytes,
-        );
+        recordSessionRetention(store, evt);
       }
       return;
     case "worker.request":

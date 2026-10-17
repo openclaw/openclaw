@@ -17,6 +17,7 @@ packages/agent-core/package.json
 packages/agent-core/src/harness/env/kill-tree.ts
 packages/agent-core/src/harness/messages.ts
 packages/agent-core/src/harness/session/tool-result-pairing.ts
+packages/agent-core/src/harness/session/transcript-model.ts
 packages/agent-core/src/operator-messages.ts
 packages/gateway-client/package.json
 packages/gateway-client/src/timeouts.ts
@@ -1887,6 +1888,7 @@ src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
+src/state/openclaw-agent-memory-revision-migration.ts
 src/state/openclaw-agent-message-tool-outcome-schema.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
@@ -2195,6 +2197,7 @@ src/config/sessions/session-accessor.sqlite-read.ts
 src/config/sessions/session-accessor.sqlite-sharing-acquisition.ts
 src/config/sessions/session-accessor.sqlite-transcript-parent.ts
 src/config/sessions/session-accessor.sqlite-transcript-state.ts
+src/config/sessions/session-accessor.sqlite-transcript-state.queries.ts
 src/config/sessions/session-accessor.sqlite-transcript-stats.ts
 src/config/sessions/session-accessor.sqlite-transcript-watermark.ts
 src/config/sessions/session-canonical-validation.ts

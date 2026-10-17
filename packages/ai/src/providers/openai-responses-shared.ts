@@ -170,8 +170,10 @@ export function applyCommonResponsesParams<TApi extends Api>(
     return;
   }
   params.reasoning = { effort: effort as NonNullable<typeof params.reasoning>["effort"] };
-  if (effort !== "none" && (options?.reasoningEffort || options?.reasoningSummary)) {
-    params.reasoning.summary = options?.reasoningSummary || "auto";
+  if (effort !== "none" && (options?.reasoningEffort || options?.reasoningSummary !== undefined)) {
+    // Explicit null disables summaries; only an omitted summary defaults to auto.
+    params.reasoning.summary =
+      options?.reasoningSummary === undefined ? "auto" : options.reasoningSummary;
     params.include = ["reasoning.encrypted_content"];
   }
 }

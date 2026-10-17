@@ -156,7 +156,6 @@ async function reconcileStoredChatOutboxHead(
   } catch (error) {
     if (isCurrent()) {
       surfaceChatDeliveryFailure(host, outbox.sessionKey, outbox.agentId, formatUiError(error));
-      host.requestUpdate?.();
     }
     return "blocked";
   }

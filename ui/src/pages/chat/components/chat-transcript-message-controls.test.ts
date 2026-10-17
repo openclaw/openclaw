@@ -259,7 +259,7 @@ describe("chat transcript message controls", () => {
       const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
         render(renderTranscriptSearch(paneId), searchContainer);
-        render(renderChatThread({ ...props, onRequestUpdate: rerender }, transcript), container);
+        render(renderChatThread(props, transcript), container);
         transcript.update();
       };
       try {
@@ -320,7 +320,7 @@ describe("chat transcript message controls", () => {
       const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
         render(renderTranscriptSearch(paneId), searchContainer);
-        render(renderChatThread({ ...props, onRequestUpdate: rerender }, transcript), container);
+        render(renderChatThread(props, transcript), container);
         transcript.update();
       };
       try {

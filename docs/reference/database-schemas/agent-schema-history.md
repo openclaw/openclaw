@@ -47,6 +47,7 @@ backup and its matching build, not just reinstalling the older package.
 | 28      | Smaller transcript/conversation indexes and primary-key storage for memory origins                                                                                                                                                                     | `Unreleased` |
 | 29      | Retire redundant reaction and unused last-interaction indexes without changing retained rows                                                                                                                                                           | `Unreleased` |
 | 30      | Brotli trajectory payloads with per-row codec markers and logical-byte retention                                                                                                                                                                       | `Unreleased` |
+| 31      | Memory publication advances the index revision once per committed batch instead of once per source or chunk row                                                                                                                                        | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -66,6 +67,21 @@ including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
 be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
+
+### Agent schema 31
+
+Schema 31 removes the six memory index revision triggers on
+`memory_index_sources` and `memory_index_chunks`. The memory writer advances
+`memory_index_state.revision` once inside the same transaction as each committed
+publication, deletion, purge, or reset batch. Readers therefore observe the new
+index rows and their revision together. A rolled-back batch publishes neither.
+
+The migration drops only trigger definitions and PostgreSQL's two corresponding
+trigger functions. It preserves indexed content, embeddings, revision values,
+and the search and vector projection triggers. Both engines advance their schema
+metadata in that transaction. A scoped SQLite backup retains the source and
+chunk tables with their historical triggers; rollback requires restoring the
+verified backup with its matching build, never lowering schema markers.
 
 ### Trajectory payload storage
 

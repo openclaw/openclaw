@@ -12,6 +12,8 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { resolveCronJobsStorePath, saveCronJobsStore } from "../../cron/store.js";
 import { readLoggingConfig } from "../../logging/config.js";
 import { applyLoggingConfig } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -251,6 +253,54 @@ it.each([false, true])("reads imported full messages (incognito=%s)", async (inc
     incognito,
   );
 });
+
+it.each([false, true])(
+  "reads cron-forwarded history and quoted failures (incognito=%s)",
+  async (incognito) => {
+    await withImportedHistory(
+      1,
+      "Native question",
+      async ({ read, append, timestamp, scope }) => {
+        await saveCronJobsStore(resolveCronJobsStorePath(), {
+          version: 1,
+          jobs: [makeCronJob({ id: "daily-report", name: "Daily report" })],
+        });
+        const partial = await append("assistant", "Partial answer", timestamp + 3, {
+          stopReason: "error",
+          errorMessage: "Request interrupted",
+          __openclaw: { runId: "interrupted-run" },
+        });
+        const forwarded = await append("user", "Report ready", timestamp + 4, {
+          provenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceSessionKey: "agent:main:cron:daily-report:run:completed-run",
+          },
+        });
+        const quote = await append("user", "Continue this answer", timestamp + 5, {
+          __openclaw: { replyToId: partial.messageId },
+        });
+        const page = await read({ limit: 10 });
+        expect(messageWithId(page, forwarded.messageId)).toMatchObject({
+          role: "assistant",
+          content: "Report ready",
+          senderSession: { label: "Daily report" },
+        });
+        expect(messageWithId(page, quote.messageId)).toHaveProperty(
+          "__openclaw.replyToMessage",
+          foundMessage("Partial answer"),
+        );
+        const getMessage = await messageReader(scope.sessionKey);
+        expect(await getMessage(partial.messageId)).toMatchObject(foundMessage("Partial answer"));
+        expect(await getMessage(forwarded.messageId)).toMatchObject({
+          ok: true,
+          message: { senderSession: { label: "Daily report" } },
+        });
+      },
+      incognito,
+    );
+  },
+);
 
 it("shares archive visibility across CLI previews and full messages", async () => {
   await withImportedHistory(1, "seed", async ({ read, sourcePath, sessionsDir, scope }) => {

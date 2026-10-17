@@ -920,6 +920,14 @@ counters use the existing bounded asynchronous diagnostics path. OpenTelemetry
 names are `openclaw.sessions.list.baseline_retirements` and
 `openclaw.sessions.list.base_misses`, with the same labels.
 
+`openclaw_session_event_rows_retained_entries` and
+`openclaw_session_event_rows_retained_bytes` report aggregate count and estimated
+memory for the field-hash vectors retained by session-event connections. Both
+gauges have no labels and return to zero when the last retained connection state
+is cleared. OpenTelemetry names are `openclaw.session_event_rows_retained_entries`
+and `openclaw.session_event_rows_retained_bytes`. Charges cover vectors and their
+identities; they do not retain or charge copies of the presented session rows.
+
 `openclaw_chat_history_requests_total` and
 `openclaw_chat_history_response_bytes_total` attribute successful `chat.history`
 responses by `client_kind`, `source`, `shape`, `limit_bucket`, and `outcome`.

@@ -54,6 +54,7 @@ function buildRestrictedFinalizationAttempt(
     sessionManager: attempt.sessionManager,
     sessionPersistence: attempt.sessionPersistence,
     prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
+    privateCompletion: attempt.privateCompletion,
     contextTokenBudget: attempt.contextTokenBudget,
     contextWindowInfo: attempt.contextWindowInfo,
     resolvedApiKey: attempt.resolvedApiKey,

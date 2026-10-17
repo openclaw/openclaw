@@ -16,6 +16,7 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
@@ -274,9 +275,9 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     // SAFETY: This fixture exercises the runtime's existing protected swarm boundary.
     const swarmPane = pane as unknown as {
       refreshSwarmRoster: () => void;
-      swarmHydrator?: { dispose: () => void; rows: GatewaySessionRow[] };
+      swarm: ChatPaneRuntime["swarm"];
     };
-    onTestFinished(() => swarmPane.swarmHydrator?.dispose());
+    onTestFinished(() => swarmPane.swarm.hydrator?.dispose());
     swarmPane.refreshSwarmRoster();
     expect(request).not.toHaveBeenCalled();
     await loadChatHistory(state, { deferBranches: true });
@@ -284,7 +285,7 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("sessions.describe", target.request),
     );
-    await vi.waitFor(() => expect(swarmPane.swarmHydrator?.rows).toContainEqual(session));
+    await vi.waitFor(() => expect(swarmPane.swarm.hydrator?.rows).toContainEqual(session));
     expect(state.sessionKey).toBe(target.raw);
   });
 

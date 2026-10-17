@@ -85,36 +85,31 @@ it("keeps private pane probes on the reported runtime while composing stream ins
   const streamProbe = vi.fn();
   scope.openclawRenderLifecycleTestHook = streamProbe;
   Reflect.set(runtime, "state", undefined);
-  notifyRenderLifecycleForTest(runtime, "invalidate");
+  notifyRenderLifecycleForTest(runtime, "commit");
   expect(Reflect.get(element, "state")).toBeUndefined();
   expect(firstProbe).toHaveBeenCalledTimes(1);
-  expect(streamProbe).toHaveBeenCalledWith(runtime, "invalidate");
+  expect(streamProbe).toHaveBeenCalledWith(runtime, "commit");
 
-  for (const key of ["requestUpdate", "render"] as const) {
-    const ownerMethod = vi.spyOn(runtime, key === "requestUpdate" ? "invalidate" : key);
-    const original: unknown = Reflect.get(element, key);
-    if (typeof original !== "function") {
-      throw new Error(`Expected the recorded pane's ${key} operation`);
-    }
-    let probeCalls = 0;
-    Reflect.set(element, key, (...args: unknown[]) => {
-      probeCalls += 1;
-      if (probeCalls > 1) {
-        throw new Error("The saved owner method recursed through its replacement");
-      }
-      return Reflect.apply(original, element, args);
-    });
-    const instrumented: unknown = Reflect.get(element, key);
-    if (typeof instrumented !== "function") {
-      throw new Error(`Expected the instrumented pane's ${key} operation`);
-    }
-    const args = key === "requestUpdate" ? ["sessionKey", "previous"] : [];
-    const result: unknown = Reflect.apply(instrumented, element, args);
-    if (key === "render") {
-      expect(result).toHaveProperty("layout");
-    }
-    expect(probeCalls).toBe(1);
-    expect(ownerMethod).toHaveBeenCalledWith(...args);
-    expect(ownerMethod.mock.instances[0]).toBe(runtime);
+  const ownerMethod = vi.spyOn(runtime, "render");
+  const original: unknown = Reflect.get(element, "render");
+  if (typeof original !== "function") {
+    throw new Error("Expected the recorded pane's render operation");
   }
+  let probeCalls = 0;
+  Reflect.set(element, "render", (...args: unknown[]) => {
+    probeCalls += 1;
+    if (probeCalls > 1) {
+      throw new Error("The saved owner method recursed through its replacement");
+    }
+    return Reflect.apply(original, element, args);
+  });
+  const instrumented: unknown = Reflect.get(element, "render");
+  if (typeof instrumented !== "function") {
+    throw new Error("Expected the instrumented pane's render operation");
+  }
+  const result: unknown = Reflect.apply(instrumented, element, []);
+  expect(result).toHaveProperty("layout");
+  expect(probeCalls).toBe(1);
+  expect(ownerMethod).toHaveBeenCalledWith();
+  expect(ownerMethod.mock.instances[0]).toBe(runtime);
 });

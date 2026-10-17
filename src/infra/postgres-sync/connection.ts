@@ -32,7 +32,7 @@ import {
   decodePostgresError,
   decodePostgresRows,
   isPostgresConnectionError,
-  rewritePostgresPlaceholders,
+  preparePostgresQuery,
   validatePostgresBindings,
   type BridgeReply,
   type BridgeCommand,
@@ -51,6 +51,9 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private failure: Error | undefined;
   private requestId = 0;
   private outcomeUnknown = true;
+  private readOnlyTransaction = false;
+  // Read handles can share an anchor, but only its writing handle may settle the receipt.
+  private pendingWrite = false;
   private readonly mainThread = threadId === 0;
   private readonly reuseKey?: string;
   private readonly onWorkerError = () => this.loseConnection();
@@ -130,9 +133,10 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private loseConnection(): Error {
     if (!this.failure && this.outcomeUnknown) {
       // The write may have committed, so invalidate anchor caches before reconnecting.
+      this.pendingWrite = true;
       beginSqliteDatabaseWrite(sqlPublicationAnchor(this), true);
-      finishSqliteDatabaseWrite(sqlPublicationAnchor(this));
     }
+    this.finishWrite();
     this.failure ??= this.outcomeUnknown
       ? new SqliteWorkerError("PostgreSQL connection lost; outcome unknown", "outcome-unknown")
       : new Error("PostgreSQL connection lost; transaction rolled back");
@@ -142,6 +146,13 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     this.port.close();
     void this.worker.terminate();
     return this.failure;
+  }
+
+  private finishWrite(): void {
+    if (this.pendingWrite) {
+      this.pendingWrite = false;
+      finishSqliteDatabaseWrite(sqlPublicationAnchor(this));
+    }
   }
 
   private assertOpen(): void {
@@ -203,6 +214,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       }
       if (request.operation === "query" && /^\s*COMMIT\b/i.test(request.sql)) {
         this.isTransaction = false;
+        this.finishWrite();
       }
       throw decodePostgresError(reply.error);
     }
@@ -214,11 +226,15 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
 
   query(sql: string, parameters: readonly SQLInputValue[] = [], readBigInts = false) {
     return observeDatabaseOperation("postgres", "statement", sql, () =>
-      this.execute(rewritePostgresPlaceholders(sql), parameters, readBigInts),
+      this.execute(preparePostgresQuery(sql), parameters, readBigInts),
     );
   }
 
-  private execute(sql: string, parameters: readonly SQLInputValue[], readBigInts: boolean) {
+  private execute(
+    { sql, mutation: hintedMutation }: ReturnType<typeof preparePostgresQuery>,
+    parameters: readonly SQLInputValue[],
+    readBigInts: boolean,
+  ) {
     validatePostgresBindings(parameters);
     const wasTransaction = this.isTransaction;
     // A later statement in a combined BEGIN request can fail after BEGIN succeeded.
@@ -229,26 +245,37 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       { operation: "query", sql, parameters },
       !wasTransaction || /^\s*COMMIT\b/i.test(sql),
     );
+    const readOnly = this.readOnlyTransaction;
+    this.isTransaction = result.inTransaction;
+    this.readOnlyTransaction =
+      this.isTransaction && (readOnly || /^\s*BEGIN\b[^;]*\bREAD\s+ONLY\b/i.test(sql));
     if (/^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)) {
-      this.isTransaction = false;
       if (/^\s*COMMIT\b/i.test(sql) && result.command !== "COMMIT") {
+        this.finishWrite();
         throw new Error("PostgreSQL transaction rolled back instead of committing");
       }
     }
-    const mutated =
-      /^(?:INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE)$/.test(
-        result.command ?? "",
-      );
+    const mutation =
+      result.mutation === "unscoped" || hintedMutation === "unscoped"
+        ? "unscoped"
+        : (result.mutation ?? hintedMutation);
+    const mutated = mutation !== undefined;
     if (mutated) {
+      if (readOnly || this.readOnlyTransaction) {
+        // A snapshot must never publish another handle's pending receipt on the shared anchor.
+        throw new Error("PostgreSQL read snapshot cannot execute a mutation");
+      }
       // Like SQLite's mutation witness, rollback does not rewind local cache invalidation.
       this.mutationRevision++;
+      // Typed DML borrows its owner's scopes; schema and raw writes fence every reader.
+      this.pendingWrite = true;
+      beginSqliteDatabaseWrite(sqlPublicationAnchor(this), mutation === "unscoped");
     }
     const autocommitWrite = !wasTransaction && mutated;
-    if (result.command === "COMMIT" || autocommitWrite) {
-      // All confirmed commits advance the anchor, including callers using raw SQL.
+    if (!this.isTransaction && (mutated || wasTransaction)) {
       withSqlitePostCommitPublications(sqlPublicationAnchor(this), () => {
-        beginSqliteDatabaseWrite(sqlPublicationAnchor(this), true);
-        finishSqliteDatabaseWrite(sqlPublicationAnchor(this));
+        // No pending mutation means no receipt, including empty writable transactions.
+        this.finishWrite();
         if (autocommitWrite && currentSqliteWorkerOperationAdmission.getStore()?.active) {
           deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(this), {});
         }
@@ -268,12 +295,12 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
 
   prepare(sql: string): SqlStatement {
     this.assertOpen();
-    const rewrittenSql = rewritePostgresPlaceholders(sql);
+    const prepared = preparePostgresQuery(sql);
     let readBigInts = false;
     let columns: { name: string }[] = [];
     const execute = (parameters: SQLInputValue[]) => {
       const result = observeDatabaseOperation("postgres", "statement", sql, () =>
-        this.execute(rewrittenSql, parameters, readBigInts),
+        this.execute(prepared, parameters, readBigInts),
       );
       columns = result.columns;
       return result;
@@ -319,6 +346,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
         throw this.loseConnection();
       }
     } finally {
+      this.finishWrite();
       this.isOpen = false;
       this.isTransaction = false;
       if (!retained) {

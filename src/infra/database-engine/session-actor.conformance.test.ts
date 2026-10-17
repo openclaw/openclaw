@@ -240,13 +240,9 @@ describe
         });
         const afterRefusal = await first.actor.read(authority);
         expect(afterRefusal.entry?.updatedAt).toBe(543);
-        // SQLite invalidates native write caches even after rollback; PG publishes only COMMIT.
-        if (agentEngine === "postgres") {
-          expect(afterRefusal).toMatchObject({
-            version: beforeRefusal.version,
-            writeToken: beforeRefusal.writeToken,
-          });
-        }
+        // Both engines invalidate attempted-write witnesses, even when the data rolls back.
+        expect(afterRefusal.writeToken).not.toBe(beforeRefusal.writeToken);
+        expect(afterRefusal.version).not.toEqual(beforeRefusal.version);
       } finally {
         await first.actor.release();
       }

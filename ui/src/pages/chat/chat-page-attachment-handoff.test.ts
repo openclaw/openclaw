@@ -13,6 +13,7 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
   nativeGatewaysCapability: () => null,
 }));
 
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -29,6 +30,7 @@ type RenderedPane = HTMLElement & {
 
 function configure(page: ChatPage) {
   const context = {
+    chatSubmissions: createChatSubmissions(),
     sessions: { ...createChatPageSessions(), patch: vi.fn() },
     placementStartup: { get: vi.fn(() => null), subscribe: () => () => undefined },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },

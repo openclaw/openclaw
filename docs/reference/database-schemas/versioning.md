@@ -121,6 +121,12 @@ The bundle preserves every table's columns, keys, and retained rows. Index DDL
 and version publication remain atomic on both engines; verified backups retain
 the predecessor index definitions for rollback.
 
+Agent [schema 31](/reference/database-schemas/agent-schema-history#agent-schema-31)
+moves memory index revision advancement from six row triggers into the batch
+writer's transaction. SQLite and PostgreSQL drop the triggers without changing
+retained rows or revision values. Older writers require the verified pre-upgrade
+backup because they rely on those triggers to invalidate readers.
+
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still
 readable by the inspector, preflight continues checking agent stores and reports

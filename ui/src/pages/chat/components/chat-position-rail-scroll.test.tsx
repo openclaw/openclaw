@@ -30,9 +30,11 @@ class RailScrollTestHost extends HTMLElement {
   updateComplete = Promise.resolve(true);
   private view?: ReturnType<typeof mountSolid>;
   private renderContent?: () => void;
+  private stopTranscript?: () => void;
 
   connectedCallback() {
     this.append(this.transcriptRoot);
+    this.stopTranscript = this.transcript?.subscribe(() => this.requestRender());
     this.transcript?.start();
     this.view = mountSolid(
       () => {
@@ -53,6 +55,8 @@ class RailScrollTestHost extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this.stopTranscript?.();
+    this.stopTranscript = undefined;
     this.transcript?.dispose();
     this.view?.unmount();
     this.renderContent = undefined;
@@ -92,13 +96,9 @@ describe("conversation position rail scroll rendering", () => {
     const container = host.transcriptRoot;
     const performUpdate = vi.spyOn(host, "performUpdate");
     const recordViewport = vi.spyOn(TranscriptEndAnchor.prototype, "recordViewport");
-    const transcript = (host.transcript = createChatTranscript(
-      () => host.requestRender(),
-      () => "rail-notification",
-      {
-        canFollowEnd: () => false,
-      },
-    ));
+    const transcript = (host.transcript = createChatTranscript(() => "rail-notification", {
+      canFollowEnd: () => false,
+    }));
     const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
       kind: "content",
       key: `row-${index}`,
