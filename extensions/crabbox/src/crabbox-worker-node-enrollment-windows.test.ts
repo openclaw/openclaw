@@ -20,6 +20,8 @@ const launcher = path.win32.join(
   "Start-CrabboxDetachedProcess.ps1",
 );
 const startTime = "2026-09-09T12:00:00.1234567Z";
+const session = { sessionId: 2, userSid: "S-1-5-21-1001" };
+const stateFile = (name: string) => path.win32.join(stateDir, name);
 const replayError =
   "Cloud worker node is running a different bootstrap artifact or invocation; release and reprovision the worker";
 
@@ -37,6 +39,7 @@ type ReplayOptions = {
 };
 
 async function replay(options: ReplayOptions = {}) {
+  const identity = { pid: 123, startTime, ...(options.desktop ? session : {}) };
   const setup = createCrabboxNodeEnrollmentSetup({
     leaseId,
     desktop: options.desktop,
@@ -70,7 +73,7 @@ async function replay(options: ReplayOptions = {}) {
     symlinkSync: vi.fn(),
     rmSync: vi.fn(),
     existsSync: (file: string) =>
-      (file === path.win32.join(stateDir, "node.pid") && !options.interrupted) ||
+      (file === stateFile("node.pid") && !options.interrupted) ||
       file === runtimeDir ||
       (file === launcher && !options.missingLauncher),
     lstatSync: (file: string) => {
@@ -78,13 +81,12 @@ async function replay(options: ReplayOptions = {}) {
         return { isDirectory: () => true };
       }
       if (
-        (file === path.win32.join(stateDir, "runtime") &&
+        (file === stateFile("runtime") &&
           options.interrupted &&
           options.interrupted !== "receipt-only") ||
-        (file === path.win32.join(stateDir, "node-launch.json") &&
-          options.interrupted === "receipt-only")
+        (file === stateFile("node-launch.json") && options.interrupted === "receipt-only")
       ) {
-        return { isSymbolicLink: () => file === path.win32.join(stateDir, "runtime") };
+        return { isSymbolicLink: () => file === stateFile("runtime") };
       }
       throw Object.assign(new Error("Missing runtime pointer"), { code: "ENOENT" });
     },
@@ -92,19 +94,17 @@ async function replay(options: ReplayOptions = {}) {
       if (file === path.win32.join(runtimeDir, "node_modules", "openclaw", "package.json")) {
         return JSON.stringify({ name: "openclaw", version: "2026.8.1" });
       }
-      if (file === path.win32.join(stateDir, "node.pid")) {
+      if (file === stateFile("node.pid")) {
         return "123\n";
       }
-      if (file === path.win32.join(stateDir, "node-launch.json")) {
+      if (file === stateFile("node-launch.json")) {
         return (
           options.recordOutput ??
           JSON.stringify({
-            pid: 123,
-            startTime,
+            ...identity,
             runtimeDir,
             stateDir,
             cli,
-            ...(options.desktop ? { sessionId: 2, userSid: "S-1-5-21-1001" } : {}),
             ...options.launchRecord,
           })
         );
@@ -133,9 +133,7 @@ async function replay(options: ReplayOptions = {}) {
       expect(processFixture.env).not.toHaveProperty("CRABBOX_WORKER_SETUP_CODE");
       return {
         status: 0,
-        stdout: JSON.stringify(
-          options.currentSession ?? { sessionId: 2, userSid: "S-1-5-21-1001" },
-        ),
+        stdout: JSON.stringify(options.currentSession ?? session),
       };
     }
     expect(binary).toBe("powershell.exe");
@@ -151,11 +149,9 @@ async function replay(options: ReplayOptions = {}) {
       stdout:
         options.processOutput ??
         JSON.stringify({
-          pid: 123,
-          startTime,
+          ...identity,
           executablePath: node,
           commandLine: `"${node}" "${cli}" connect --ephemeral`,
-          ...(options.desktop ? { sessionId: 2, userSid: "S-1-5-21-1001" } : {}),
           ...options.processEntry,
         }),
     };

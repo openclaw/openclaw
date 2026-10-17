@@ -35,6 +35,8 @@ import {
   type CommandCall,
 } from "./crabbox-worker-warm-image.test-support.js";
 
+const warmImage = async () => (await listCrabboxWarmImages(crabboxState))[0];
+
 type ProvisionOptions = NonNullable<Parameters<WorkerProvider["provision"]>[2]>;
 
 function notSubmittedReceipt(leaseId: string) {
@@ -80,7 +82,7 @@ describe("Crabbox project snapshot provisioning", () => {
       "enrollment-install",
     ]);
     expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
-    expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
+    expect(await warmImage()).toMatchObject({
       captureUnsupported: {
         atMs: now,
         provider: "hetzner",
@@ -88,12 +90,12 @@ describe("Crabbox project snapshot provisioning", () => {
       },
       allocations: { [source.leaseId]: { phase: "enrolled", choice: { kind: "cold" } } },
     });
-    expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toBeUndefined();
+    expect((await warmImage())?.capture).toBeUndefined();
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("Crabbox warm image capture unsupported:"),
     );
     await destroyAndWait(provider, { ...source, profile });
-    expect((await listCrabboxWarmImages(crabboxState))[0]?.captureUnsupported?.atMs).toBe(now);
+    expect((await warmImage())?.captureUnsupported?.atMs).toBe(now);
     await provider.dispose();
     const restarted = createWarmProvider(command, stateDir);
     clock.mockReturnValue(now + 60_000);
@@ -110,8 +112,8 @@ describe("Crabbox project snapshot provisioning", () => {
     await restarted.provider.provision(profile, "supported-next", current.options);
     expect(current.options.prepareNodeRuntime).toHaveBeenCalledOnce();
     expect(restarted.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
-    expect((await listCrabboxWarmImages(crabboxState))[0]?.checkpointId).toBe(CHECKPOINT_ID);
-    expect((await listCrabboxWarmImages(crabboxState))[0]?.captureUnsupported).toBeUndefined();
+    expect((await warmImage())?.checkpointId).toBe(CHECKPOINT_ID);
+    expect((await warmImage())?.captureUnsupported).toBeUndefined();
   });
 
   it.skipIf(process.platform === "win32").each(["none", "runtime", "scrub"] as const)(
@@ -276,7 +278,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
     const message = formatErrorMessage(failure);
     expect(message).toContain(diagnostic);
     expect(message).toContain("capture is unresolved");
-    const capture = (await listCrabboxWarmImages(crabboxState))[0]?.capture;
+    const capture = (await warmImage())?.capture;
     expect(capture).toMatchObject({ phase: "uncertain" });
     expect(message).toContain(`--recover ${capture!.selector}`);
     expect(message).toContain("source has unresolved checkpoint chk_quota");
@@ -296,14 +298,14 @@ exec "$CRABBOX_TEST_NODE" "$@"
     expect(warn).not.toHaveBeenCalledWith(
       expect.stringContaining("warm image capture failed for lease"),
     );
-    expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toEqual(capture);
+    expect((await warmImage())?.capture).toEqual(capture);
 
     // Operator recovery closes the persisted claim; the next eligible teardown can capture.
     blocked = false;
     await recoverCrabboxWarmImageCapture(crabboxState, capture!.selector, true);
     await destroyAndWait(provider, lease);
     expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(2);
-    expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toBeUndefined();
+    expect((await warmImage())?.capture).toBeUndefined();
   });
 
   it.each([
@@ -352,15 +354,13 @@ exec "$CRABBOX_TEST_NODE" "$@"
       expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
       expect(calls.find(({ argv }) => argv[1] === "stop")?.argv).toContain(leaseId);
       if (replaced) {
-        expect((await listCrabboxWarmImages(crabboxState))[0]?.captureUnsupported).toBeUndefined();
-        expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toMatchObject({
+        expect((await warmImage())?.captureUnsupported).toBeUndefined();
+        expect((await warmImage())?.capture).toMatchObject({
           selector: "replacement-capture",
           leaseId: "cbx_replacement",
           phase: "creating",
         });
-        expect(
-          (await listCrabboxWarmImages(crabboxState))[0]?.allocations[leaseId],
-        ).toBeUndefined();
+        expect((await warmImage())?.allocations[leaseId]).toBeUndefined();
       } else {
         expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
       }
@@ -395,7 +395,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
       const baseline = await initial.provider.provision(
         PROFILE,
         "replay-baseline",
-        projectOptions([], new AbortController(), preparation).options,
+        projectOptions([], undefined, preparation).options,
       );
       await destroyAndWait(initial.provider, { ...baseline, profile: PROFILE });
       await initial.provider.dispose();
@@ -451,10 +451,10 @@ exec "$CRABBOX_TEST_NODE" "$@"
         await expect(
           first.provider.provision(PROFILE, operation, optionsFor(true)),
         ).rejects.toThrow();
-        expect((await listCrabboxWarmImages(crabboxState))[0]?.allocations[leaseId]?.phase).toBe(
+        expect((await warmImage())?.allocations[leaseId]?.phase).toBe(
           crash === "pending" ? "pending" : "prepared",
         );
-        expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toBeUndefined();
+        expect((await warmImage())?.capture).toBeUndefined();
       }
       await first.provider.dispose();
       const before = captures;
@@ -529,14 +529,14 @@ exec "$CRABBOX_TEST_NODE" "$@"
       await provision;
       vi.useRealTimers();
     }
-    expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
+    expect(await warmImage()).toMatchObject({
       checkpointId: CHECKPOINT_ID,
       state: "available",
       allocations: { [operationLeaseId("retained-capture")]: { phase: "enrolled" } },
     });
     expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
     expect(options.beginNodeEnrollment).toHaveBeenCalledOnce();
-    expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toBeUndefined();
+    expect((await warmImage())?.capture).toBeUndefined();
   });
 
   it.each(["project transfer", "runtime grant", "runtime setup", "enrollment setup"] as const)(
@@ -654,7 +654,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
         "enrollment-begun",
         "enrollment-install",
       ]);
-      expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
+      expect(await warmImage()).toMatchObject({
         projectKey: PROJECT_KEY,
         checkpointId: CHECKPOINT_ID,
         allocations: {
@@ -712,9 +712,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
       );
       if (failure === "readiness") {
         expect(
-          (await listCrabboxWarmImages(crabboxState))[0]?.allocations[
-            operationLeaseId(`runtime-${failure}`)
-          ],
+          (await warmImage())?.allocations[operationLeaseId(`runtime-${failure}`)],
         ).toMatchObject({ phase: "prepared", choice: { kind: "cold" } });
       }
     },
@@ -757,7 +755,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
       expect(events).not.toContain("runtime-install");
       expect(calls.some(({ argv }) => argv[1] === "stop" || argv[2] === "create")).toBe(false);
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
-      expect((await listCrabboxWarmImages(crabboxState))[0]).toMatchObject({
+      expect(await warmImage()).toMatchObject({
         allocations: {
           [operationLeaseId(`stale-grant-${outcome}`)]: {
             phase: "prepared",
@@ -765,7 +763,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
           },
         },
       });
-      expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toBeUndefined();
+      expect((await warmImage())?.capture).toBeUndefined();
     },
   );
 
@@ -809,7 +807,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
       expect(events).toContain("capture");
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
       expect(events).not.toContain("enrollment-install");
-      expect((await listCrabboxWarmImages(crabboxState))[0]?.capture?.phase).toBe("uncertain");
+      expect((await warmImage())?.capture?.phase).toBe("uncertain");
       expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(failure !== "aborted");
     },
   );
@@ -874,7 +872,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
       provider.provision(PROFILE, "unsupported-different-lease", options),
     ).rejects.toThrow("capture is unresolved");
     expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
-    const image = (await listCrabboxWarmImages(crabboxState))[0];
+    const image = await warmImage();
     expect(image?.capture?.phase).toBe("uncertain");
     expect(image?.captureUnsupported).toBeUndefined();
   });
@@ -899,7 +897,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
       await expect(
         provider.provision(PROFILE, "cancelled-project-capture", options),
       ).rejects.toMatchObject({ name: "AbortError" });
-      const capture = (await listCrabboxWarmImages(crabboxState))[0]?.capture;
+      const capture = (await warmImage())?.capture;
       expect(capture).toMatchObject({ leaseId, phase: "uncertain" });
       expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
       expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
@@ -909,16 +907,14 @@ exec "$CRABBOX_TEST_NODE" "$@"
       const cleanup = destroyAndWait(provider, { leaseId, profile: PROFILE });
       if (stopFails) {
         await expect(cleanup).rejects.toThrow("source cleanup still pending");
-        expect((await listCrabboxWarmImages(crabboxState))[0]?.allocations[leaseId]).toBeDefined();
+        expect((await warmImage())?.allocations[leaseId]).toBeDefined();
       } else {
         await expect(cleanup).resolves.toBeUndefined();
-        expect(
-          (await listCrabboxWarmImages(crabboxState))[0]?.allocations[leaseId],
-        ).toBeUndefined();
+        expect((await warmImage())?.allocations[leaseId]).toBeUndefined();
         expect(warn).toHaveBeenCalledWith(expect.stringContaining(capture!.selector));
       }
       expect(calls.map(({ argv }) => argv[1])).toEqual(["stop"]);
-      expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toMatchObject({
+      expect((await warmImage())?.capture).toMatchObject({
         selector: capture!.selector,
         leaseId,
         phase: "uncertain",

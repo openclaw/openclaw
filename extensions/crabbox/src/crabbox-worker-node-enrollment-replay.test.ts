@@ -321,6 +321,13 @@ async function replay(
   return { code: processFixture.exitCode, output: output.join("\n") };
 }
 
+function expectRefusal(
+  result: Awaited<ReturnType<typeof replay>>,
+  message = "release and reprovision the worker",
+) {
+  expect(result).toMatchObject({ code: 1, output: expect.stringContaining(message) });
+}
+
 describe.each(["linux", "darwin"] as const)("%s node enrollment replay", (platform) => {
   it("refuses an interrupted launch with a published runtime but no PID", async () => {
     expect(
@@ -337,14 +344,12 @@ describe.each(["linux", "darwin"] as const)("%s node enrollment replay", (platfo
   it.each(["argv", "cwd", "state", "unavailable"])(
     "refuses %s mismatch or missing identity",
     async (failure) => {
-      expect(await replay(platform, failure)).toMatchObject({
-        code: 1,
-        output: expect.stringContaining(
-          platform === "linux" && failure === "unavailable"
-            ? "Unreadable process identity"
-            : "release and reprovision the worker",
-        ),
-      });
+      expectRefusal(
+        await replay(platform, failure),
+        platform === "linux" && failure === "unavailable"
+          ? "Unreadable process identity"
+          : undefined,
+      );
     },
   );
 });
@@ -359,10 +364,7 @@ it.each([
   "missing-start",
   "lsof",
 ])("fails closed when macOS cannot report %s", async (failure) => {
-  expect(await replay("darwin", failure)).toMatchObject({
-    code: 1,
-    output: expect.stringContaining("release and reprovision the worker"),
-  });
+  expectRefusal(await replay("darwin", failure));
 });
 it.each(["lsof-fallback", "loaded-host"])(
   "verifies macOS identity with %s probes",
@@ -438,9 +440,6 @@ describe("macOS desktop host enrollment replay", () => {
     "host-inspect-unavailable",
     "host-argv-invalid-json",
   ])("rejects %s even when the Node process still looks healthy", async (failure) => {
-    expect(await replay("darwin", failure, true)).toMatchObject({
-      code: 1,
-      output: expect.stringContaining("release and reprovision the worker"),
-    });
+    expectRefusal(await replay("darwin", failure, true));
   });
 });

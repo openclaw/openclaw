@@ -54,6 +54,20 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanupDirectories) => {
 });
 const leaseId = "cbx_bootstrap_test";
 const setupCode = "synthetic-enrollment-credential";
+const runtimeRoot = (home: string) => path.join(home, ".openclaw-worker", "node-runtimes");
+const runtimePackage = (home: string, digest: string) =>
+  path.join(runtimeRoot(home), digest, "node_modules", "openclaw");
+const readJson = (...parts: string[]): unknown =>
+  JSON.parse(fs.readFileSync(path.join(...parts), "utf8"));
+function expectAbsent(...files: string[]) {
+  for (const file of files) {
+    expect(fs.existsSync(file), file).toBe(false);
+  }
+}
+function expectPrivate(launch: object) {
+  expect(launch).not.toHaveProperty("token");
+  expect(launch).not.toHaveProperty("setupCode");
+}
 
 const packageFixture = (build: string, postinstall = "") =>
   createNodePackageFixture((prefix) => tempDirs.make(prefix), build, receipts, postinstall);
@@ -316,7 +330,6 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       homes.set(id, home);
       return home;
     };
-    const runtimeRoot = (home: string) => path.join(home, ".openclaw-worker", "node-runtimes");
     const context = (id: string, digest = oldArtifact.nodeBootstrap.sha256) => ({
       nodeRuntimeIdentity: { nodeBootstrapSha256: digest, executionMode: "worker-turn" as const },
       binary: "crabbox",
@@ -454,8 +467,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
         output: expect.stringContaining("runtime pointer is occupied"),
       });
       expect(fs.readFileSync(retained, "utf8")).toBe("retained fixture");
-      expect(fs.existsSync(path.join(stateDir, "activation.jsonl"))).toBe(false);
-      expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
+      expectAbsent(path.join(stateDir, "activation.jsonl"), path.join(stateDir, "node.pid"));
     },
   );
 
@@ -469,9 +481,8 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
         /could not enable plugins demo: exit code 1, signal none: plugin dependency missing/u,
       ),
     });
-    expect(fs.existsSync(path.join(stateDir, "runtime"))).toBe(false);
-    expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
-    expect(JSON.parse(fs.readFileSync(path.join(stateDir, "activation.jsonl"), "utf8"))).toEqual({
+    expectAbsent(path.join(stateDir, "runtime"), path.join(stateDir, "node.pid"));
+    expect(readJson(stateDir, "activation.jsonl")).toEqual({
       runtimePublished: false,
     });
   });
@@ -499,12 +510,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     };
     await expectSetupPhases(enroll(home, nodeBootstrap, undefined, true, workerBundle));
     const archivePath = path.join(
-      home,
-      ".openclaw-worker",
-      "node-runtimes",
-      nodeBootstrap.sha256,
-      "node_modules",
-      "openclaw",
+      runtimePackage(home, nodeBootstrap.sha256),
       workerBundle.packageRelativePath,
     );
     fs.unlinkSync(archivePath);
@@ -548,10 +554,10 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     });
     try {
       await installed.requested;
-      expect(
-        fs.existsSync(path.join(home, ".openclaw-worker", "node-runtimes", nodeBootstrap.sha256)),
-      ).toBe(false);
-      expect(fs.existsSync(path.join(home, ".openclaw"))).toBe(false);
+      expectAbsent(
+        path.join(runtimeRoot(home), nodeBootstrap.sha256),
+        path.join(home, ".openclaw"),
+      );
     } finally {
       workerResponse.resolve();
       await preparation;
@@ -568,21 +574,10 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
         "openclaw-bootstrap-complete",
       ]),
     );
-    expect(fs.existsSync(path.join(home, ".openclaw"))).toBe(false);
-    expect(fs.readdirSync(path.join(home, ".openclaw-worker", "node-runtimes"))).toEqual([
-      nodeBootstrap.sha256,
-    ]);
-    const preparedPackage = path.join(
-      home,
-      ".openclaw-worker",
-      "node-runtimes",
-      nodeBootstrap.sha256,
-      "node_modules",
-      "openclaw",
-    );
-    expect(
-      JSON.parse(fs.readFileSync(path.join(preparedPackage, "installed.json"), "utf8")),
-    ).toEqual({ scriptsRan: true });
+    expectAbsent(path.join(home, ".openclaw"));
+    expect(fs.readdirSync(runtimeRoot(home))).toEqual([nodeBootstrap.sha256]);
+    const preparedPackage = runtimePackage(home, nodeBootstrap.sha256);
+    expect(readJson(preparedPackage, "installed.json")).toEqual({ scriptsRan: true });
     expect(authorizations).toEqual([`Bearer ${nodeBootstrap.token}`]);
     expect(fs.readFileSync(path.join(preparedPackage, workerBundle.packageRelativePath))).toEqual(
       workerBytes,
@@ -598,8 +593,7 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       cwd: home,
       env: { HOME: home, PATH: process.env.PATH, TMPDIR: scrubTmp },
     });
-    expect(fs.existsSync(stateDir)).toBe(false);
-    expect(fs.existsSync(path.join(home, ".crabbox", "env"))).toBe(false);
+    expectAbsent(stateDir, path.join(home, ".crabbox", "env"));
     expect(fs.readdirSync(path.join(preparedPackage, "worker-artifacts"))).toEqual([
       `${workerBundle.sha256}.tgz`,
     ]);
@@ -639,14 +633,11 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     if (process.platform !== "win32") {
       expect(launch.tool).toBe("verified-tool");
     }
-    expect(launch).not.toHaveProperty("token");
-    expect(launch).not.toHaveProperty("setupCode");
+    expectPrivate(launch);
     expect(launch.cli).toContain(`/node-runtimes/${nodeBootstrap.sha256}/`);
-    expect(
-      JSON.parse(fs.readFileSync(path.join(path.dirname(launch.cli), "installed.json"), "utf8")),
-    ).toEqual({ scriptsRan: true });
+    expect(readJson(path.dirname(launch.cli), "installed.json")).toEqual({ scriptsRan: true });
     expect(fs.readFileSync(path.join(stateDir, "enabled"), "utf8")).toBe("demo\n");
-    expect(JSON.parse(fs.readFileSync(path.join(stateDir, "activation.jsonl"), "utf8"))).toEqual({
+    expect(readJson(stateDir, "activation.jsonl")).toEqual({
       runtimePublished: false,
     });
     expect(fs.realpathSync(path.join(stateDir, "runtime"))).toBe(
@@ -693,7 +684,6 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
         ...(failure === "worker download" ? { bytes: worker.nodeBootstrap.bytes + 1 } : {}),
         packageRelativePath: `worker-artifacts/${worker.nodeBootstrap.sha256}.tgz`,
       };
-      const runtimeRoot = path.join(home, ".openclaw-worker", "node-runtimes");
       const preparation = enroll(home, nodeBootstrap, undefined, true, workerBundle);
       cleanups.push(async () => {
         workerResponse.resolve();
@@ -724,7 +714,7 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
         ),
       });
       expect(fs.existsSync(finished)).toBe(failure === "npm installation");
-      expect(fs.readdirSync(runtimeRoot)).toEqual([]);
+      expect(fs.readdirSync(runtimeRoot(home))).toEqual([]);
     },
     30_000,
   );
@@ -866,9 +856,9 @@ require("node:http").get(${JSON.stringify(postinstall.nodeBootstrap.url)}, (resp
         expect(retryOnlyOutput).not.toMatch(terminalNoProgressFailure);
         expect(result.output).toMatch(terminalNoProgressFailure);
       }
-      expect(fs.existsSync(path.join(stateDir, "node.pid"))).toBe(false);
+      expectAbsent(path.join(stateDir, "node.pid"));
       expect(fs.readdirSync(stateDir)).toEqual([]);
-      expect(fs.readdirSync(path.join(home, ".openclaw-worker", "node-runtimes"))).toEqual([]);
+      expect(fs.readdirSync(runtimeRoot(home))).toEqual([]);
     },
   );
 
@@ -990,8 +980,7 @@ echo "$pid" >> "$OPENCLAW_STATE_DIR/desktop-pids"
               XDG_RUNTIME_DIR: "/run/wrong",
             },
       );
-      expect(launch).not.toHaveProperty("token");
-      expect(launch).not.toHaveProperty("setupCode");
+      expectPrivate(launch);
     },
   );
 
