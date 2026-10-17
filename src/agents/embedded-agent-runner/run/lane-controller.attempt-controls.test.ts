@@ -66,14 +66,17 @@ async function createRunController(overrides: Partial<RunEmbeddedAgentParams> = 
   return { controller, admission, createAttemptControls, runId };
 }
 
-async function holdLane(controller: LaneController) {
+async function holdLane(controller: LaneController, nested = false) {
   const entered = createDeferred();
   const finished = createDeferred();
-  const active = controller.enqueueGlobal(async () => {
+  const task = async () => {
     entered.resolve();
     await finished.promise;
     return { meta: { durationMs: 1 } };
-  });
+  };
+  const active = nested
+    ? controller.enqueueSession(() => controller.enqueueGlobal(task))
+    : controller.enqueueGlobal(task);
   const observed = active.catch((error: unknown) => error);
   cleanups.push(async () => {
     finished.resolve();
@@ -107,21 +110,7 @@ describe("runtime-owned lane deadline handoff", () => {
     { name: "unlimited", kind: "unlimited" },
   ] as const)("publishes $name deadlines to nested session and global leases", async ({ kind }) => {
     const { controller, createAttemptControls } = await createRunController();
-    const entered = createDeferred();
-    const finished = createDeferred();
-    const run = controller.enqueueSession(() =>
-      controller.enqueueGlobal(async () => {
-        entered.resolve();
-        await finished.promise;
-        return { meta: { durationMs: 1 } };
-      }),
-    );
-    const observed = run.catch((error: unknown) => error);
-    cleanups.push(async () => {
-      finished.resolve();
-      await observed;
-    });
-    await entered.promise;
+    const { observed, finish } = await holdLane(controller, true);
 
     const controls = createAttemptControls();
     controls.onAttemptDeadlineChanged(
@@ -131,7 +120,7 @@ describe("runtime-owned lane deadline handoff", () => {
 
     expect(controller.abortSignal.aborted).toBe(false);
     expect(getCommandLaneSnapshot(GLOBAL_LANE).activeCount).toBe(1);
-    finished.resolve();
+    finish();
     await expect(observed).resolves.toMatchObject({ meta: { durationMs: 1 } });
   });
 
