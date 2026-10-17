@@ -76,6 +76,7 @@ async function fixture(
   const append = async (
     input: number,
     cost = { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 },
+    timestamp = "2026-10-01T12:00:00.000Z",
   ) => {
     const id = `assistant-${++next}`;
     expect(
@@ -96,7 +97,7 @@ async function fixture(
                 type: "message",
                 id,
                 parentId: null,
-                timestamp: "2026-10-01T12:00:00.000Z",
+                timestamp,
               },
               message: {
                 messageJson: JSON.stringify({
@@ -410,6 +411,48 @@ describe("actor memory usage", () => {
         () => undefined,
       ),
     ).toMatchObject({ kind: "sessions", summaries: [{ input: 5, output: 2 }] });
+  });
+
+  it("filters production actor inventory by actual event time, including normalized timestamps", async () => {
+    const { binding, append, sessionFile } = await fixture();
+    const future = "2999-01-01T00:00:00.000Z";
+    await append(5, undefined, future);
+    const prepared = prepareUsageCostWorker({ agentId: "main", storePath: binding.path, env });
+    expect(prepared.databases).toEqual([]);
+    const inventory = (startMs: number, endMs = startMs) =>
+      runUsageCostWorker(prepared, {
+        kind: "inventory",
+        eventTimeRange: { startMs, endMs },
+        sessionFiles: [sessionFile],
+      });
+    const snapshots = await binding.actor.storage!.read(
+      { type: "session.usage.snapshot", input: { includeEvents: true } },
+      binding.authority,
+    );
+    const snapshot = snapshots.find((value) => value.sessionId === sessionId)!;
+    expect(snapshot).toBeDefined();
+    expect(await inventory(snapshot.updatedAtMs)).toEqual({ kind: "inventory", files: [] });
+    expect(await inventory(Date.parse(future))).toMatchObject({
+      kind: "inventory",
+      files: [{ sessionId }],
+    });
+    await append(0, undefined, "not-a-date");
+    const current = await binding.actor.storage!.read(
+      { type: "session.usage.snapshot", input: { includeEvents: true } },
+      binding.authority,
+    );
+    const events = current.find((value) => value.sessionId === sessionId)!.events!;
+    const normalized = JSON.parse(events.at(-1)!.eventJson) as { id: string; timestamp: string };
+    expect(normalized.id).toBe("assistant-2");
+    expect(typeof normalized.timestamp).toBe("string");
+    const normalizedMs = Date.parse(normalized.timestamp);
+    expect(Number.isFinite(normalizedMs)).toBe(true);
+    expect(normalizedMs).toBeGreaterThan(0);
+    expect(await inventory(0)).toEqual({ kind: "inventory", files: [] });
+    expect(await inventory(normalizedMs)).toMatchObject({
+      kind: "inventory",
+      files: [{ sessionId }],
+    });
   });
 
   it("uses production memory acquisition and refreshes a stale report after an in-process append", async () => {

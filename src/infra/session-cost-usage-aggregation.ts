@@ -19,6 +19,7 @@ export async function refreshCostUsageCacheForAgent(params: {
   storePath?: string;
   sessionFiles?: string[];
   startMs?: number;
+  endMs?: number;
   rebuildRows?: SessionCostUsageRollupRow[];
   sessionActor?: SessionActorStorageBinding;
 }): Promise<"refreshed" | "busy"> {
@@ -31,6 +32,7 @@ export async function refreshCostUsageCacheForAgent(params: {
       sessionsDir: params.sessionsDir,
       sessionFiles: params.sessionFiles,
       startMs: params.startMs,
+      endMs: params.endMs,
       rebuildRows: params.rebuildRows,
     });
     if (result.kind === "busy") {

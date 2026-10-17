@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionTranscriptEventTimeRange } from "../config/sessions/transcript-event-time.js";
 import { sha256Hex } from "./crypto-digest.js";
 import type { SessionUsageRollupData } from "./session-cost-usage-rollup.js";
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
@@ -202,6 +203,81 @@ export function decodeUsageCostRollup(
   } catch {
     return undefined;
   }
+}
+
+export function boundedInventoryStartMs(startMs: number | undefined): number | undefined {
+  // An all-history request has no lower inventory bound and can safely prune missing sources.
+  return startMs !== undefined && startMs > 0 ? startMs : undefined;
+}
+
+export function boundedInventoryEventTimeRange(
+  startMs: number | undefined,
+  endMs: number | undefined,
+): SessionTranscriptEventTimeRange | undefined {
+  const start = boundedInventoryStartMs(startMs);
+  return start === undefined
+    ? undefined
+    : { startMs: start, ...(endMs !== undefined ? { endMs } : {}) };
+}
+
+export function cachedRollupMayOverlapEventTimeRange(
+  entry: UsageCostRollupEntry | undefined,
+  range: SessionTranscriptEventTimeRange,
+  projection?: UsageCostRollupEnvelope["projection"],
+): boolean | undefined {
+  if (projection) {
+    // Durable rollup bodies omit timed buckets. The partition owner records the
+    // complete UTC month set; only its coarse out-of-month exclusion is safe here.
+    // Overlapping months still need the normal event-time content preflight.
+    const start = range.startMs === undefined ? undefined : new Date(range.startMs);
+    const end = range.endMs === undefined ? undefined : new Date(range.endMs);
+    if (
+      (start && !Number.isFinite(start.valueOf())) ||
+      (end && !Number.isFinite(end.valueOf())) ||
+      (start && end && start.valueOf() > end.valueOf())
+    ) {
+      return undefined;
+    }
+    const firstMonth = start ? `${start.toISOString().slice(0, 7)}-01` : "";
+    const lastMonth = end ? `${end.toISOString().slice(0, 7)}-01` : "\uffff";
+    let overlappingMonth = false;
+    for (const month of projection.dates) {
+      const date = new Date(`${month}T00:00:00.000Z`);
+      if (
+        !/^\d{4}-\d{2}-01$/.test(month) ||
+        !Number.isFinite(date.valueOf()) ||
+        date.toISOString().slice(0, 10) !== month
+      ) {
+        return undefined;
+      }
+      overlappingMonth ||= month >= firstMonth && month <= lastMonth;
+    }
+    return overlappingMonth ? undefined : false;
+  }
+  if (!entry) {
+    return undefined;
+  }
+  for (const [key, candidate] of Object.entries(entry.rollup.buckets)) {
+    if (!isRecord(candidate)) {
+      return undefined;
+    }
+    const bucketEventTimeMs = candidate.timestampMs;
+    if (
+      typeof bucketEventTimeMs !== "number" ||
+      !Number.isSafeInteger(bucketEventTimeMs) ||
+      String(bucketEventTimeMs) !== key ||
+      Number.isNaN(new Date(bucketEventTimeMs).valueOf())
+    ) {
+      return undefined;
+    }
+    if (
+      (range.startMs === undefined || bucketEventTimeMs >= range.startMs) &&
+      (range.endMs === undefined || bucketEventTimeMs <= range.endMs)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function isUsageCostRollupFresh(params: {

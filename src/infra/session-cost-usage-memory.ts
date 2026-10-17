@@ -8,6 +8,7 @@ import type {
   SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
+import { transcriptEventJsonMayOverlapRange } from "../config/sessions/transcript-event-time.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type {
   SessionCostUsageDeferredMetadata,
@@ -143,12 +144,14 @@ async function runCapturedSessionActorUsage(
     if (operation.kind === "refresh") {
       operation.rebuildRows?.forEach((row) => requestedSessionId(row.key));
     }
+    const inventoryEventTimeRange =
+      operation.kind === "inventory" ? operation.eventTimeRange : undefined;
     const instances = binding.actor
       ? await binding.actor.storage!.read(
           {
             type: "session.usage.snapshot",
             input: {
-              includeEvents: refresh,
+              includeEvents: refresh || inventoryEventTimeRange !== undefined,
               includeRollupBodies: operation.kind === "summary" || operation.kind === "sessions",
               ...(reportBudget ? { reportBudget } : {}),
               ...(ids ? { sessionIds: ids } : {}),
@@ -165,6 +168,7 @@ async function runCapturedSessionActorUsage(
     );
     const selectedFiles = requested?.map((file) => files.get(file)?.file);
     if (operation.kind === "inventory") {
+      binding.authority.assertCurrent();
       return {
         kind: "inventory",
         files: (selectedFiles ?? [...files.values()].map(({ file }) => file))
@@ -173,6 +177,22 @@ async function runCapturedSessionActorUsage(
               file !== undefined &&
               (operation.minMtimeMs === undefined || file.mtimeMs >= operation.minMtimeMs),
           )
+          .filter((file) => {
+            if (!inventoryEventTimeRange) {
+              return true;
+            }
+            const instance = files.get(file.filePath)!.instance;
+            if (file.eventCount === 0) {
+              return false;
+            }
+            if (!instance.events || instance.events.length !== file.eventCount) {
+              // Incomplete captured bytes cannot prove an out-of-range exclusion.
+              return true;
+            }
+            return instance.events.some(({ eventJson }) =>
+              transcriptEventJsonMayOverlapRange(eventJson, inventoryEventTimeRange),
+            );
+          })
           .map(({ kind, sourcePath, sessionId, mtimeMs }) => ({
             kind,
             sourcePath,
