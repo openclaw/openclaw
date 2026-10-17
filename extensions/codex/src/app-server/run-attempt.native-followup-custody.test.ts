@@ -11,12 +11,12 @@ import {
   createAdmittedHostCapabilityTestFixture,
   createMockPluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
-import { CodexNativeSubagentCompletionDelivery } from "./native-subagent-completion-delivery.js";
 import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
+import { collabItem, observeCompletionAttempts } from "./native-subagent-monitor.test-support.js";
 import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import {
   createTestParams,
@@ -34,6 +34,20 @@ import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 vi.mock("openclaw/plugin-sdk/node-selection-runtime", { spy: true });
+beforeEach(() => {
+  vi.mocked(loadNodeExecAvailability).mockResolvedValue({
+    cacheKey: "[]",
+    isAvailable: () => false,
+  });
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "before_tool_call", handler: async () => undefined }]),
+  );
+});
+const attemptOptions = { nativeHookRelay: { enabled: true, events: ["pre_tool_use"] } } as const;
+const observeDelivery = () =>
+  vi
+    .spyOn(defaultNativeSubagentMonitorRuntime, "deliverAgentHarnessCompletion")
+    .mockResolvedValue({ delivered: true, path: "direct" });
 
 function childNotifications(
   harness: ReturnType<typeof createStartedThreadHarness>,
@@ -43,15 +57,19 @@ function childNotifications(
     harness.notify({ method, params } as CodexServerNotification);
   const parentItem = (item: JsonObject, method = "item/completed") =>
     notify(method, { threadId: "thread-1", turnId: parentTurn(), item });
-  const collab = (id: string, tool: string, threadId: string, extra: JsonObject = {}) =>
-    parentItem({
-      id,
-      type: "collabAgentToolCall",
-      tool,
-      status: "completed",
-      senderThreadId: "thread-1",
-      receiverThreadIds: [threadId],
-      ...extra,
+  const collab = (
+    id: string,
+    tool: string,
+    threadId: string,
+    extra: JsonObject = {},
+    sender = "thread-1",
+    turnId = parentTurn(),
+    method = "item/completed",
+  ) =>
+    notify(method, {
+      threadId: sender,
+      turnId,
+      item: collabItem(tool, [threadId], { id, senderThreadId: sender, ...extra }),
     });
   const spawn = async (threadId: string) => {
     await notify("thread/started", {
@@ -76,7 +94,20 @@ function childNotifications(
             : [{ type: "agentMessage", id: itemId, phase: "final_answer", text: result }],
       },
     });
-  return { notify, parentItem, collab, spawn, turn };
+  const yieldTurn = (callId = `yield-${parentTurn()}`) =>
+    harness.handleServerRequest({
+      id: callId,
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: parentTurn(),
+        callId,
+        namespace: null,
+        tool: "sessions_yield",
+        arguments: { message: "Waiting for children" },
+      },
+    });
+  return { parentItem, collab, spawn, turn, yieldTurn };
 }
 
 async function admitHost(params: ReturnType<typeof createTestParams>, sessionId: string) {
@@ -95,11 +126,6 @@ async function admitHost(params: ReturnType<typeof createTestParams>, sessionId:
 it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-receipt"] as const)(
   "preserves accepted follow-up through sessions_yield (%s)",
   async (scenario) => {
-    // Keep discovery off ambient Gateway I/O while using the real admitted host and monitor.
-    vi.mocked(loadNodeExecAvailability).mockResolvedValue({
-      cacheKey: "[]",
-      isAvailable: () => false,
-    });
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const childThreadId = `custody-${scenario}`;
     const waiterThreadId = `${childThreadId}-waiter`;
@@ -118,42 +144,11 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
     const lifetime = new AbortController();
     const params = createTestParams();
     params.abortSignal = lifetime.signal;
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: async () => undefined }]),
-    );
     const host = await admitHost(params, "custody-session");
-    const delivery = vi
-      .spyOn(defaultNativeSubagentMonitorRuntime, "deliverAgentHarnessCompletion")
-      .mockResolvedValue({ delivered: true, path: "direct" });
-    const attempts = new Set<Promise<void>>();
-    // Invoked with .call(this, ...) to preserve the observed instance as receiver.
-    // oxlint-disable-next-line typescript/unbound-method
-    const originalDelivery = CodexNativeSubagentCompletionDelivery.prototype.deliverPending;
-    const observeAttempt = vi.spyOn(
-      CodexNativeSubagentCompletionDelivery.prototype,
-      "deliverPending",
-    );
-    observeAttempt.mockImplementation(function (
-      this: CodexNativeSubagentCompletionDelivery,
-      state,
-      child,
-    ) {
-      const attempt = originalDelivery.call(this, state, child);
-      attempts.add(attempt);
-      return attempt;
-    });
-    const settleCompletionAttempts = async () => {
-      // Receipts settle independently of notification dispatch; join their owner before assertions.
-      while (attempts.size > 0) {
-        const pending = [...attempts];
-        attempts.clear();
-        await Promise.all(pending);
-      }
-    };
-    const { notify, parentItem, collab, spawn, turn } = childNotifications(harness);
-    const run = runCodexAppServerAttempt(params, {
-      nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
-    });
+    const delivery = observeDelivery();
+    const completion = observeCompletionAttempts();
+    const { parentItem, collab, spawn, turn, yieldTurn } = childNotifications(harness);
+    const run = runCodexAppServerAttempt(params, attemptOptions);
     try {
       await run.waitForTurnAccepted();
       const relayId = extractRelayIdFromThreadRequest(
@@ -165,24 +160,21 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
       await collab("wait-a", "wait", childThreadId, {
         agentsStates: { [childThreadId]: { status: "completed", message: "A result" } },
       });
-      await settleCompletionAttempts();
+      await completion.settle();
       // A is complete and B is not admitted yet; a running sibling authorizes sessions_yield.
       await spawn(waiterThreadId);
       await turn(waiterThreadId, "waiter-turn");
       if (scenario === "wait-before-admission") {
         await turn(childThreadId, turnB);
-        await notify("item/started", {
-          threadId: waiterThreadId,
-          turnId: "waiter-turn",
-          item: {
-            id: "wait-b",
-            type: "collabAgentToolCall",
-            tool: "wait",
-            status: "inProgress",
-            senderThreadId: waiterThreadId,
-            receiverThreadIds: [childThreadId],
-          },
-        });
+        await collab(
+          "wait-b",
+          "wait",
+          childThreadId,
+          { status: "inProgress" },
+          waiterThreadId,
+          "waiter-turn",
+          "item/started",
+        );
       }
       await collab("submit-b", "sendInput", childThreadId);
       await parentItem(
@@ -196,22 +188,9 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
       if (scenario === "wait-before-admission") {
         waitAfterAdmission = structuredClone(executionEvents.at(-1)?.data);
       }
-      const yieldResponse = await harness.handleServerRequest({
-        id: "yield-parent",
-        method: "item/tool/call",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "yield-parent",
-          namespace: null,
-          tool: "sessions_yield",
-          arguments: { message: "Waiting for follow-up B" },
-        },
-      });
-      expect(yieldResponse).toMatchObject({ success: true });
+      expect(await yieldTurn("yield-parent")).toMatchObject({ success: true });
       if (scenario === "yield-receipt") {
         // The native receipt queues input without starting another parent turn.
-        // Keep teardown open after the real yield has been accepted.
         await turn(childThreadId, turnB);
         claimedAfterStart = isCodexAppServerLiveThreadClaimed(harness.client, childThreadId);
         await parentItem(
@@ -263,7 +242,7 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
       }
       await turn(waiterThreadId, "waiter-turn", "Waiter result");
       await nativeHookRelayUnregisterQueue.flush();
-      await settleCompletionAttempts();
+      await completion.settle();
       const followupDeliveries = delivery.mock.calls.filter(
         ([call]) => call.childSessionKey === runB,
       );
@@ -292,10 +271,10 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
         harness.close();
         // Join cleanup before flushing relay retirement or releasing the admitted host.
         await Promise.allSettled([run]);
-        await settleCompletionAttempts();
+        await completion.settle();
         await nativeHookRelayUnregisterQueue.flush();
       } finally {
-        observeAttempt.mockRestore();
+        completion.restore();
         try {
           host.closeHost();
         } finally {
@@ -307,16 +286,7 @@ it.each(["delayed-success", "opaque-steer", "wait-before-admission", "yield-rece
 );
 
 it("reports an earlier turn's unsettled native child to a later turn's sessions_yield", async () => {
-  vi.mocked(loadNodeExecAvailability).mockResolvedValue({
-    cacheKey: "[]",
-    isAvailable: () => false,
-  });
-  initializeGlobalHookRunner(
-    createMockPluginRegistry([{ hookName: "before_tool_call", handler: async () => undefined }]),
-  );
-  const delivery = vi
-    .spyOn(defaultNativeSubagentMonitorRuntime, "deliverAgentHarnessCompletion")
-    .mockResolvedValue({ delivered: true, path: "direct" });
+  const delivery = observeDelivery();
   const turns: string[] = [];
   const harness = createStartedThreadHarness(async (method) => {
     if (method === "thread/resume") {
@@ -341,9 +311,7 @@ it("reports an earlier turn's unsettled native child to a later turn's sessions_
     params.runId = runId;
     const host = await admitHost(params, "yield-session");
     hosts.push(host);
-    const run = runCodexAppServerAttempt(params, {
-      nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
-    });
+    const run = runCodexAppServerAttempt(params, attemptOptions);
     await run.waitForTurnAccepted();
     // Wrapped so awaiting the accepted turn does not also await the attempt.
     return { run };
@@ -354,31 +322,17 @@ it("reports an earlier turn's unsettled native child to a later turn's sessions_
     await nativeHookRelayUnregisterQueue.flush();
   };
   const yieldTurn = async () => {
-    const callId = `yield-${turns.at(-1)}`;
-    const response = (await harness.handleServerRequest({
-      id: callId,
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: turns.at(-1)!,
-        callId,
-        namespace: null,
-        tool: "sessions_yield",
-        arguments: { message: "Waiting for children" },
-      },
-    })) as { contentItems: Array<{ text: string }> };
+    const response = (await child.yieldTurn()) as { contentItems: Array<{ text: string }> };
     return JSON.parse(response.contentItems[0]!.text) as Record<string, unknown>;
   };
 
   try {
-    // The first turn spawns two native children, one finishes, and the turn yields.
     const first = await startTurn("run-1");
     await spawn("child-settled");
     await childTurn("child-settled", "Settled result");
     await spawn("child-running");
     expect(await yieldTurn()).toMatchObject({ status: "yielded" });
     await completeTurn(first);
-    // The finished child's detached delivery settles it once its parent turn ends.
     await vi.waitFor(() =>
       expect(delivery).toHaveBeenCalledWith(
         expect.objectContaining({ childSessionKey: "codex-thread:child-settled" }),

@@ -50,16 +50,29 @@ function callTool(
   });
 }
 
-async function prepareTool(
+async function startTool(
   tool: ReturnType<typeof createRuntimeDynamicTool>,
-  overrides: Partial<ReturnType<typeof createTestParams>> = {},
+  {
+    harness = createStartedThreadHarness(),
+    clock = false,
+    ...overrides
+  }: Partial<ReturnType<typeof createTestParams>> & {
+    harness?: ReturnType<typeof createStartedThreadHarness>;
+    clock?: boolean;
+  } = {},
 ) {
-  const params = createTestParams();
-  params.runtimePlan = createCodexRuntimePlanFixture();
+  const params = Object.assign(
+    createTestParams(),
+    { runtimePlan: createCodexRuntimePlanFixture() },
+    overrides,
+  );
   setCodexTestToolFactory(params, () => [tool]);
   setCodexTestModelSupportsTools(params, true);
-  Object.assign(params, overrides);
-  return { params, closeHost: await bindProductionHarnessHostCapabilitiesForTest(params) };
+  await bindProductionHarnessHostCapabilitiesForTest(params);
+  if (clock) {
+    fakeClock();
+  }
+  return { harness, run: runCodexAppServerAttempt(params) };
 }
 
 async function completeRun(
@@ -70,57 +83,55 @@ async function completeRun(
   expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
 }
 
+function expectToolResult(result: unknown, text: string) {
+  expect(result).toMatchObject({
+    success: true,
+    contentItems: [{ type: "inputText", text: expect.stringContaining(text) }],
+  });
+}
+
+function pendingTool(name: string, text: string, details: Record<string, string> = {}) {
+  const started = createDeferred<void>(),
+    finish = createDeferred<void>();
+  let signal: AbortSignal | undefined;
+  const tool = createRuntimeDynamicTool(name);
+  tool.execute = vi.fn(async (_id, _args, value) => {
+    signal = value;
+    started.resolve();
+    await finish.promise;
+    return { content: [{ type: "text" as const, text }], details };
+  });
+  return { tool, started: started.promise, finish: finish.resolve, signal: () => signal };
+}
+
+function fakeClock() {
+  vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+}
+
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
-  it.each<{
-    scenario: string;
-    parentMs: number;
-    args: CodexDynamicToolCallParams["arguments"];
-    ageMs: number;
-    end: "complete" | "timeout" | "stop";
-  }>([
-    { scenario: "default review", parentMs: 1_800_000, args: {}, ageMs: 0, end: "complete" },
-    {
-      scenario: "explicit multipass review",
-      parentMs: 1_800_000,
-      args: { timeoutSeconds: 900, passes: 2 },
-      ageMs: 0,
-      end: "complete",
-    },
-    {
-      scenario: "original parent deadline",
-      parentMs: 1_200_000,
-      args: {},
-      ageMs: 500_000,
-      end: "timeout",
-    },
-    {
-      scenario: "Stop with unlimited parent",
-      parentMs: MAX_TIMER_TIMEOUT_MS,
-      args: {},
-      ageMs: 0,
-      end: "stop",
-    },
-  ])("keeps AutoReview and its replay within $scenario", async ({ parentMs, args, ageMs, end }) => {
-    const started = createDeferred<void>();
-    const finish = createDeferred<void>();
+  it.each<
+    [
+      string,
+      number,
+      CodexDynamicToolCallParams["arguments"],
+      number,
+      "complete" | "timeout" | "stop",
+    ]
+  >([
+    ["default review", 1_800_000, {}, 0, "complete"],
+    ["explicit multipass review", 1_800_000, { timeoutSeconds: 900, passes: 2 }, 0, "complete"],
+    ["original parent deadline", 1_200_000, {}, 500_000, "timeout"],
+    ["Stop with unlimited parent", MAX_TIMER_TIMEOUT_MS, {}, 0, "stop"],
+  ])("keeps AutoReview and its replay within %s", async (_scenario, parentMs, args, ageMs, end) => {
+    const pending = pendingTool("autoreview", "Complete canonical review report");
     const upstream = new AbortController();
-    const tool = createRuntimeDynamicTool("autoreview");
+    const { tool } = pending;
     tool.parameters = {
       type: "object",
       properties: { timeoutSeconds: { type: "number" }, passes: { type: "integer" } },
     };
-    let toolSignal: AbortSignal | undefined;
-    tool.execute = vi.fn(async (_id, _args, signal) => {
-      toolSignal = signal;
-      started.resolve();
-      await finish.promise;
-      return {
-        content: [{ type: "text" as const, text: "Complete canonical review report" }],
-        details: {},
-      };
-    });
     const harness = createStartedThreadHarness(
       async (method) => {
         if (method === "turn/interrupt") {
@@ -131,39 +142,33 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       },
       { persistedThreads: [] },
     );
-    const { params, closeHost } = await prepareTool(tool, {
+    const { run } = await startTool(tool, {
       timeoutMs: parentMs,
       abortSignal: upstream.signal,
+      harness,
+      clock: true,
     });
-    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-    const run = runCodexAppServerAttempt(params);
     try {
       await run.waitForTurnAccepted();
       await vi.advanceTimersByTimeAsync(ageMs);
-      const results: unknown[] = [];
-      const original = callTool(harness, "autoreview", "review", args).then((value) => {
-        results.push(value);
-        return value;
-      });
-      await started.promise;
-      const replay = callTool(harness, "autoreview", "review", args, "review-replay").then(
-        (value) => {
-          results.push(value);
-          return value;
-        },
-      );
+      let settled = 0;
+      const original = callTool(harness, "autoreview", "review", args);
+      void original.then(() => settled++);
+      await pending.started;
+      const replay = callTool(harness, "autoreview", "review", args, "review-replay");
+      void replay.then(() => settled++);
       await vi.advanceTimersByTimeAsync(690_000);
-      expect(results).toEqual([]);
-      expect(toolSignal?.aborted).toBe(false);
+      expect(settled).toBe(0);
+      expect(pending.signal()?.aborted).toBe(false);
       expect(tool.execute).toHaveBeenCalledOnce();
       if (end === "timeout") {
         await vi.advanceTimersByTimeAsync(10_000);
-        expect(toolSignal?.aborted).toBe(true);
+        expect(pending.signal()?.aborted).toBe(true);
       } else if (end !== "complete") {
         upstream.abort(new Error("Stopped by user"));
-        expect(toolSignal?.aborted).toBe(true);
+        expect(pending.signal()?.aborted).toBe(true);
       }
-      finish.resolve();
+      pending.finish();
       const [result, repeated] = await Promise.all([original, replay]);
       expect(repeated).toEqual(result);
       expect(result).toMatchObject({ success: end === "complete" });
@@ -178,21 +183,20 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         aborted: end !== "complete",
       });
     } finally {
-      finish.resolve();
+      pending.finish();
       harness.close();
       await run;
       vi.useRealTimers();
-      closeHost();
     }
   });
 
   it("retains a required command as one native pending call until terminal collection", async () => {
     const command = createRequiredExecRuntimeContract();
-    const harness = createStartedThreadHarness();
-    const { params, closeHost } = await prepareTool({ ...command.tool, name: "sandbox_exec" });
     // Keep fixture I/O from spending the attempt clock before the command starts.
-    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-    const run = runCodexAppServerAttempt(params);
+    const { harness, run } = await startTool(
+      { ...command.tool, name: "sandbox_exec" },
+      { clock: true },
+    );
     let response: ReturnType<typeof callTool> | undefined;
     try {
       await harness.waitForMethod("turn/start");
@@ -211,18 +215,12 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       expect(command.spawn).toHaveBeenCalledOnce();
       expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
       command.finish();
-      await expect(response).resolves.toMatchObject({
-        success: true,
-        contentItems: [
-          { type: "inputText", text: expect.stringContaining("REQUIRED_NATIVE_RESULT") },
-        ],
-      });
+      expectToolResult(await response, "REQUIRED_NATIVE_RESULT");
       await completeRun(harness, run);
     } finally {
       vi.useRealTimers();
       command.finish();
       await response;
-      closeHost();
       command.close();
     }
   });
@@ -235,13 +233,14 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         turnStarted.resolve();
       }
     });
-    const { params, closeHost: closeHostCapabilities } = await prepareTool({
-      ...process.tool,
-      name: "sandbox_process",
-    });
+    const { run } = await startTool(
+      {
+        ...process.tool,
+        name: "sandbox_process",
+      },
+      { harness, clock: true },
+    );
     // Protocol acceptance owns this test; host I/O must not spend the execution watchdog.
-    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-    const run = runCodexAppServerAttempt(params);
     try {
       await Promise.race([
         turnStarted.promise,
@@ -255,10 +254,7 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         "process-poll",
         process.pollArguments,
       );
-      expect(response).toMatchObject({
-        success: true,
-        contentItems: [{ type: "inputText", text: expect.stringContaining("completed output") }],
-      });
+      expectToolResult(response, "completed output");
       expect(process.pendingNotifications()).toEqual(["unrelated event", "exec completed"]);
       const completed = (turnId: string, result: unknown) => ({
         method: "item/completed",
@@ -288,7 +284,6 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         await completeRun(harness, run);
       } finally {
         vi.useRealTimers();
-        closeHostCapabilities();
         process.close();
       }
     }
@@ -296,7 +291,10 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
 
   it("returns a credential result after the maximum human wait without harness cancellation", async () => {
     const waitMs = 3_600_000;
-    const tool = createRuntimeDynamicTool("secrets");
+    const pending = pendingTool("secrets", "Credential request expired; no_answer.", {
+      status: "no_answer",
+    });
+    const { tool } = pending;
     tool.parameters = {
       type: "object",
       properties: {
@@ -305,24 +303,9 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         timeoutSeconds: { type: "integer" },
       },
     };
-    let toolSignal: AbortSignal | undefined;
-    let finish: (() => void) | undefined;
-    tool.execute = vi.fn(async (_id, _args, signal) => {
-      toolSignal = signal;
-      await new Promise<void>((resolve) => {
-        finish = resolve;
-      });
-      return {
-        content: [{ type: "text" as const, text: "Credential request expired; no_answer." }],
-        details: { status: "no_answer" },
-      };
-    });
-
-    const harness = createStartedThreadHarness();
-    const { params, closeHost: closeHostCapabilities } = await prepareTool(tool, {
+    const { harness, run } = await startTool(tool, {
       timeoutMs: waitMs + 120_000,
     });
-    const run = runCodexAppServerAttempt(params);
     try {
       await harness.waitForMethod("turn/start");
       // Start I/O on real time; control only the active tool's deadline.
@@ -336,37 +319,27 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         settled = true;
         return result;
       });
-      await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+      await pending.started;
       await vi.advanceTimersByTimeAsync(waitMs);
       expect(settled).toBe(false);
-      expect(toolSignal?.aborted).toBe(false);
-      finish?.();
-      await expect(response).resolves.toMatchObject({
-        success: true,
-        contentItems: [{ type: "inputText", text: expect.stringContaining("no_answer") }],
-      });
+      expect(pending.signal()?.aborted).toBe(false);
+      pending.finish();
+      expectToolResult(await response, "no_answer");
       await completeRun(harness, run);
     } finally {
-      finish?.();
+      pending.finish();
       vi.useRealTimers();
-      closeHostCapabilities();
     }
   });
 
   it("emits one eager audit lifecycle when runtime normalization clones a wrapped tool", async () => {
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    let startPresentAtImplementation = false;
+    const events: DiagnosticEventPayload[] = [];
+    const isStart = (event: DiagnosticEventPayload) =>
+      event.type === "tool.execution.started" && event.toolCallId === "call-echo-audit";
+    let hasStarted = false;
     const tool = createRuntimeDynamicTool("echo");
     const execute = vi.fn(async () => {
-      startPresentAtImplementation =
-        diagnosticEvents.some(
-          (event) =>
-            event.type === "tool.execution.started" && event.toolCallId === "call-echo-audit",
-        ) ||
-        hasPendingInternalDiagnosticEvent(
-          (event) =>
-            event.type === "tool.execution.started" && event.toolCallId === "call-echo-audit",
-        );
+      hasStarted = events.some(isStart) || hasPendingInternalDiagnosticEvent(isStart);
       return {
         content: [{ type: "text" as const, text: "echo done" }],
         details: {},
@@ -374,40 +347,35 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
     });
     tool.execute = execute;
 
-    const harness = createStartedThreadHarness();
-    let closeHostCapabilities: (() => void) | undefined;
     const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) => {
       if ("toolCallId" in event && event.toolCallId === "call-echo-audit") {
-        diagnosticEvents.push(event);
+        events.push(event);
       }
     });
     try {
-      const prepared = await prepareTool(tool);
-      const { params } = prepared;
-      closeHostCapabilities = prepared.closeHost;
       const runtimePlan = createCodexRuntimePlanFixture();
-      params.runtimePlan = {
-        ...runtimePlan,
-        tools: {
-          ...runtimePlan.tools,
-          normalize: (tools) => tools.map((entry) => ({ ...entry })),
+      const attempt = await startTool(tool, {
+        runtimePlan: {
+          ...runtimePlan,
+          tools: {
+            ...runtimePlan.tools,
+            normalize: (tools) => tools.map((entry) => ({ ...entry })),
+          },
         },
-      };
-
-      const run = runCodexAppServerAttempt(params);
+      });
+      const { harness, run } = attempt;
       await harness.waitForMethod("turn/start");
       expect(await callTool(harness, "echo", "call-echo-audit")).toMatchObject({ success: true });
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
       await waitForDiagnosticEventsDrained();
     } finally {
-      closeHostCapabilities?.();
       unsubscribeDiagnostics();
     }
 
     expect(execute).toHaveBeenCalledOnce();
-    expect(startPresentAtImplementation).toBe(true);
-    expect(diagnosticEvents.map((event) => event.type)).toEqual([
+    expect(hasStarted).toBe(true);
+    expect(events.map((event) => event.type)).toEqual([
       "tool.execution.started",
       "tool.execution.completed",
     ]);
@@ -415,26 +383,23 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
 
   it("emits normalized tool progress around app-server dynamic tool requests", async () => {
     const harness = createStartedThreadHarness();
-    const onRunAgentEvent =
-      vi.fn<NonNullable<ReturnType<typeof createTestParams>["onAgentEvent"]>>();
-    const onExecutionPhase = vi.fn();
-    const globalAgentEvents: AgentEventPayload[] = [];
-    const diagnosticEvents: DiagnosticEventPayload[] = [];
-    onAgentEvent((event) => globalAgentEvents.push(event));
-    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) =>
-      diagnosticEvents.push(event),
-    );
+    const onEvent = vi.fn<NonNullable<ReturnType<typeof createTestParams>["onAgentEvent"]>>();
+    const onPhase = vi.fn();
+    const globals: AgentEventPayload[] = [],
+      diagnostics: DiagnosticEventPayload[] = [];
+    onAgentEvent((event) => globals.push(event));
+    const stop = onInternalDiagnosticEvent((event) => diagnostics.push(event));
+    const identity = { name: "lookup", toolCallId: "call-1", commandBearing: true };
+    const errorText = "Unknown OpenClaw tool: lookup";
     try {
       const params = createTestParams();
-      params.onAgentEvent = onRunAgentEvent;
-      params.onExecutionPhase = onExecutionPhase;
+      params.onAgentEvent = onEvent;
+      params.onExecutionPhase = onPhase;
 
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("thread/start");
       await vi.waitFor(() =>
-        expect(onExecutionPhase).toHaveBeenCalledWith(
-          expect.objectContaining({ phase: "turn_accepted" }),
-        ),
+        expect(onPhase).toHaveBeenCalledWith(expect.objectContaining({ phase: "turn_accepted" })),
       );
 
       expect(
@@ -446,64 +411,54 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
         }),
       ).toMatchObject({
         success: false,
-        contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: lookup" }],
+        contentItems: [{ type: "inputText", text: errorText }],
       });
 
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
       await waitForDiagnosticEventsDrained();
     } finally {
-      unsubscribeDiagnostics();
+      stop();
     }
 
-    const agentEvents = onRunAgentEvent.mock.calls.map(([event]) => event);
-    const startEvent = agentEvents.find(
-      (event) => event.stream === "tool" && event.data.phase === "start",
-    );
-    expect(startEvent?.data).toMatchObject({
-      name: "lookup",
-      toolCallId: "call-1",
-      commandBearing: true,
+    const events = onEvent.mock.calls.map(([event]) => event);
+    const toolEvent = (phase: string) =>
+      events.find((event) => event.stream === "tool" && event.data.phase === phase);
+    expect(toolEvent("start")?.data).toMatchObject({
+      ...identity,
       args: { action: "search", token: "plain-secret-value-12345", text: "hello" },
     });
-    const resultEvent = agentEvents.find(
+    const resultEvent = events.find(
       (event) =>
         event.stream === "tool" && event.data.phase === "result" && event.data.result !== undefined,
     );
     expect(resultEvent?.data).toMatchObject({
-      name: "lookup",
-      commandBearing: true,
-      toolCallId: "call-1",
+      ...identity,
       isError: true,
-      result: { content: [{ type: "text", text: "Unknown OpenClaw tool: lookup" }] },
+      result: { content: [{ type: "text", text: errorText }] },
     });
     expect(resultEvent?.data.result).not.toHaveProperty("success");
     expect(resultEvent?.data.result).not.toHaveProperty("contentItems");
-    expect(JSON.stringify(agentEvents)).toContain("plain-secret-value-12345");
+    expect(JSON.stringify(events)).toContain("plain-secret-value-12345");
     expect(
-      globalAgentEvents.find((event) => event.stream === "tool" && event.data.phase === "start"),
+      globals.find((event) => event.stream === "tool" && event.data.phase === "start"),
     ).toMatchObject({
       runId: "run-1",
       sessionKey: "agent:main:session-1",
       data: { name: "lookup" },
     });
-    expect(onExecutionPhase).toHaveBeenCalledWith({
+    const model = { provider: "codex", model: "gpt-5.4-codex", backend: "codex-app-server" };
+    expect(onPhase).toHaveBeenCalledWith({
       phase: "turn_accepted",
-      provider: "codex",
-      model: "gpt-5.4-codex",
-      backend: "codex-app-server",
+      ...model,
     });
-    expect(onExecutionPhase).toHaveBeenCalledWith({
+    expect(onPhase).toHaveBeenCalledWith({
       phase: "tool_execution_started",
-      provider: "codex",
-      model: "gpt-5.4-codex",
-      backend: "codex-app-server",
+      ...model,
       tool: "lookup",
       toolCallId: "call-1",
     });
-    expect(
-      diagnosticEvents.filter((event) => event.type.startsWith("tool.execution.")),
-    ).toMatchObject([
+    expect(diagnostics.filter((event) => event.type.startsWith("tool.execution."))).toMatchObject([
       { type: "tool.execution.started", runId: "run-1", toolName: "lookup", toolCallId: "call-1" },
       { type: "tool.execution.error", runId: "run-1", toolName: "lookup", toolCallId: "call-1" },
     ]);
@@ -515,27 +470,18 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
     );
 
-    const { params, closeHost: closeHostCapabilities } = await prepareTool(
-      createRuntimeDynamicTool("echo"),
-      {
-        messageChannel: "telegram",
-        messageProvider: "telegram",
-        currentChannelId: "telegram:-100123",
-        sandboxSessionKey: "agent:main:policy",
-      },
-    );
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(params);
-    try {
-      await harness.waitForMethod("turn/start");
-      await expect(callTool(harness, "echo", "call-echo-1")).resolves.toMatchObject({
-        success: true,
-      });
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      expect(readAttemptTerminal(await run).promptError).toBeNull();
-    } finally {
-      closeHostCapabilities();
-    }
+    const { harness, run } = await startTool(createRuntimeDynamicTool("echo"), {
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+      currentChannelId: "telegram:-100123",
+      sandboxSessionKey: "agent:main:policy",
+    });
+    await harness.waitForMethod("turn/start");
+    await expect(callTool(harness, "echo", "call-echo-1")).resolves.toMatchObject({
+      success: true,
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    expect(readAttemptTerminal(await run).promptError).toBeNull();
 
     await vi.waitFor(() => {
       expect(afterToolCall).toHaveBeenCalledTimes(1);
