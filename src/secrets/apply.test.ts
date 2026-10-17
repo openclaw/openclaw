@@ -347,6 +347,104 @@ describe("secrets apply", () => {
     expect(nextEnv).toContain("GITHUB_TOKEN=unmigrated-github-token");
   });
 
+  it("refuses to rewrite a malformed UTF-8 env file during scrub", async () => {
+    // The undecodable byte sits on a line the scrub never touches; a lossy
+    // decode followed by a whole-file rewrite would persist U+FFFD over it.
+    const envBefore = Buffer.concat([
+      Buffer.from("OPENAI_API_KEY=sk-openai-plaintext\nNOTE=a", "utf8"), // pragma: allowlist secret
+      Buffer.from([0xff]),
+      Buffer.from("b\nUNRELATED=value\n", "utf8"),
+    ]);
+    await fs.writeFile(fixture.envPath, envBefore);
+    const configBefore = await fs.readFile(fixture.configPath);
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget()],
+      options: SCRUB_OPTIONS,
+    });
+
+    await expect(runSecretsApply({ plan, env: fixture.env, write: true })).rejects.toThrow(
+      `File ${fixture.envPath} is not valid UTF-8 and cannot be edited safely.`,
+    );
+
+    expect(await fs.readFile(fixture.envPath)).toEqual(envBefore);
+    expect(await fs.readFile(fixture.configPath)).toEqual(configBefore);
+  });
+
+  it("still applies when a malformed UTF-8 env file has nothing to scrub", async () => {
+    // The undecodable byte shares a file the plan never needs to rewrite, so
+    // the migration must proceed and leave the file byte-for-byte intact.
+    const envBefore = Buffer.concat([
+      Buffer.from("NOTE=a", "utf8"),
+      Buffer.from([0xff]),
+      Buffer.from("b\nUNRELATED=value\n", "utf8"),
+    ]);
+    await fs.writeFile(fixture.envPath, envBefore);
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget()],
+      options: SCRUB_OPTIONS,
+    });
+
+    const applied = await runSecretsApply({ plan, env: fixture.env, write: true });
+    expect(applied.changed).toBe(true);
+
+    expect(await fs.readFile(fixture.envPath)).toEqual(envBefore);
+    const nextConfig = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+      models: { providers: { openai: { apiKey: unknown } } };
+    };
+    expect(nextConfig.models.providers.openai.apiKey).toEqual(OPENAI_API_KEY_ENV_REF);
+  });
+
+  it("refuses to snapshot a malformed UTF-8 config for rollback", async () => {
+    // The config parses because the undecodable byte lands inside a string
+    // value, but a rollback write of the lossy snapshot would corrupt it.
+    const configBefore = Buffer.concat([
+      Buffer.from(
+        '{"models":{"providers":{"openai":{"baseUrl":"https://api.openai.com/v1","api":"openai-completions","apiKey":"sk-openai-plain', // pragma: allowlist secret
+        "utf8",
+      ),
+      Buffer.from([0xff]),
+      Buffer.from('text","models":[{"id":"gpt-5","name":"gpt-5"}]}}}}\n', "utf8"),
+    ]);
+    await fs.writeFile(fixture.configPath, configBefore);
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget()],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+
+    await expect(runSecretsApply({ plan, env: fixture.env, write: true })).rejects.toThrow(
+      `File ${fixture.configPath} is not valid UTF-8 and cannot be edited safely.`,
+    );
+
+    expect(await fs.readFile(fixture.configPath)).toEqual(configBefore);
+  });
+
+  it("still scrubs a valid UTF-8 env file with non-ASCII content", async () => {
+    // Valid multi-byte sequences and even a literal U+FFFD round-trip safely;
+    // strict admission must not reject them.
+    const note = "NOTE=合法 😀 �";
+    await fs.writeFile(
+      fixture.envPath,
+      `OPENAI_API_KEY=sk-openai-plaintext\n${note}\nUNRELATED=value\n`, // pragma: allowlist secret
+      "utf8",
+    );
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget()],
+      options: SCRUB_OPTIONS,
+    });
+
+    const applied = await runSecretsApply({ plan, env: fixture.env, write: true });
+    expect(applied.changed).toBe(true);
+
+    const nextEnv = await fs.readFile(fixture.envPath, "utf8");
+    expect(nextEnv).not.toContain("sk-openai-plaintext");
+    expect(nextEnv).toContain(note);
+    expect(nextEnv).toContain("UNRELATED=value");
+  });
+
   it("preserves auth-profile tokenRef during provider scrub", async () => {
     await writeProfiles({
       "openai:bot": {
