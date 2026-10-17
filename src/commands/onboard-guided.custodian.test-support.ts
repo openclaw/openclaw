@@ -1,7 +1,6 @@
-import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
 import { resetLogger } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -39,11 +38,11 @@ vi.mock("./onboard-interactive-runner.js", async (importActual) => {
 
 const readConfigFileSnapshot = vi.hoisted(() =>
   vi.fn(async () => ({
-    exists: false,
+    exists: localOnboarding.persisted.config !== undefined,
     valid: true,
     path: "/tmp/openclaw.json",
     issues: [] as Array<{ path?: string; message: string }>,
-    config: {},
+    config: localOnboarding.persisted.config ?? {},
   })),
 );
 const localOnboarding = vi.hoisted(() => {
@@ -64,28 +63,14 @@ const localOnboarding = vi.hoisted(() => {
       if (existing && (!params.replace || existing.runId !== params.expectedRunId)) {
         return existing;
       }
-      const pending: LocalOnboardingState = {
-        version: 1,
-        status: "pending",
-        runId: params.runId,
-        configPath: params.configPath,
-        workspace: params.workspace,
-        ...(params.teamCoordinatorId ? { teamCoordinatorId: params.teamCoordinatorId } : {}),
-        securityAcknowledgedAt: params.securityAcknowledgedAt,
-        startedAtMs: 1,
+      const pending = pendingLocalSetup(params);
+      const config = { ...persisted.config };
+      config.agents = {
+        ...config.agents,
+        defaults: { ...config.agents?.defaults, workspace: pending.workspace },
       };
-      states.set(params.configPath, pending);
-      persisted.config = {
-        ...persisted.config,
-        agents: {
-          ...persisted.config?.agents,
-          defaults: { ...persisted.config?.agents?.defaults, workspace: pending.workspace },
-        },
-        wizard: {
-          ...persisted.config?.wizard,
-          securityAcknowledgedAt: pending.securityAcknowledgedAt,
-        },
-      };
+      config.wizard = { ...config.wizard, securityAcknowledgedAt: pending.securityAcknowledgedAt };
+      persisted.config = config;
       return pending;
     }),
     complete: vi.fn((params: { configPath: string; runId: string }) => {
@@ -104,8 +89,6 @@ const withConfigMutationExclusive = vi.hoisted(() =>
       await effect(localOnboarding.persisted.config ?? {}),
   ),
 );
-
-const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-log-");
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot, withConfigMutationExclusive }));
 vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
@@ -210,14 +193,17 @@ function pendingLocalSetup(params: {
   runId: string;
   workspace: string;
   securityAcknowledgedAt?: string;
+  configPath?: string;
+  teamCoordinatorId?: string;
 }): LocalOnboardingState {
   const pending: LocalOnboardingState = {
     version: 1,
     status: "pending",
-    configPath: "/tmp/openclaw.json",
+    configPath: params.configPath ?? "/tmp/openclaw.json",
     runId: params.runId,
     workspace: params.workspace,
     securityAcknowledgedAt: params.securityAcknowledgedAt ?? "2026-01-01T00:00:00.000Z",
+    ...(params.teamCoordinatorId ? { teamCoordinatorId: params.teamCoordinatorId } : {}),
     startedAtMs: 1,
   };
   localOnboarding.states.set(pending.configPath, pending);
@@ -277,8 +263,6 @@ function setupDeps(params: Omit<Deps, "createPrompter"> & { prompter?: WizardPro
 }
 
 export function setupGuidedCustodianTestSuite() {
-  beforeAll(() => logPathTracker.setup());
-
   beforeEach(() => {
     localOnboarding.states.clear();
     localOnboarding.persisted.config = undefined;
@@ -286,9 +270,7 @@ export function setupGuidedCustodianTestSuite() {
     localOnboarding.readForConfig.mockClear();
     localOnboarding.begin.mockClear();
     localOnboarding.complete.mockClear();
-    withConfigMutationExclusive
-      .mockReset()
-      .mockImplementation(async (effect) => await effect(localOnboarding.persisted.config ?? {}));
+    withConfigMutationExclusive.mockReset();
     restoreTerminalState.mockClear();
     promptAuthChoiceGrouped
       .mockReset()
@@ -297,21 +279,13 @@ export function setupGuidedCustodianTestSuite() {
       );
     ensureAuthProfileStore.mockClear();
     detectAvailableSetupProviderIds.mockReset().mockResolvedValue(new Set());
-    readConfigFileSnapshot.mockReset().mockImplementation(async () => ({
-      exists: localOnboarding.persisted.config !== undefined,
-      valid: true,
-      path: "/tmp/openclaw.json",
-      issues: [],
-      config: localOnboarding.persisted.config ?? {},
-    }));
+    readConfigFileSnapshot.mockReset();
   });
 
   afterEach(() => {
     loggingState.rawConsole = null;
     resetLogger();
   });
-
-  afterAll(() => logPathTracker.cleanup());
 
   return {
     expectCallOrder,
