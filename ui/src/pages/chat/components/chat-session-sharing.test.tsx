@@ -105,18 +105,22 @@ async function mount(props: ChatSessionSharingProps, open = true) {
 describe("chat session sharing menu", () => {
   it("reads people only on opening and retains the latest member rows across reopening", async () => {
     const onOpen = vi.fn();
-    const sharing = (count: number) =>
+    const readAvatar = vi.fn(() => undefined);
+    const sharing = (count: number, selected = false) =>
       renderSharing({
         onOpen,
         state: {
           loading: false,
           result: {
             sessionKey: "agent:main:main",
-            members: [],
+            members: selected ? [{ identityId: "person-100", addedBy: "owner", addedAt: 1 }] : [],
             identities: Array.from({ length: count }, (_, index) => ({
               type: "human" as const,
               id: `person-${index}`,
-              label: `Person ${index}`,
+              label: `Person ${index} (${count})`,
+              get avatarUrl() {
+                return readAvatar();
+              },
             })),
             role: "owner",
             allowedVisibilities: ["shared", "read-only"],
@@ -126,18 +130,38 @@ describe("chat session sharing menu", () => {
     const root = await mount(sharing(100), false);
     expect(root.querySelector(".chat-pane__sharing-trigger")).not.toBeNull();
     expect(onOpen).not.toHaveBeenCalled();
+    expect(readAvatar).not.toHaveBeenCalled();
     render(sharing(101), root);
     expect(onOpen).not.toHaveBeenCalled();
     const panel = (await openMenu(root))!;
     expect(panel.matches(":popover-open")).toBe(true);
     expect(onOpen).toHaveBeenCalledOnce();
+    expect(readAvatar).toHaveBeenCalled();
     expect(root.querySelectorAll(".chat-pane__sharing-member")).toHaveLength(101);
     const member = root.querySelector('[data-value="member:person-100"]');
+    const avatar = member?.querySelector("openclaw-session-owner-chip");
+    expect(avatar).not.toBeNull();
+    render({ ...sharing(102, true), memberRemoveDisabledReason: "Requires write" }, root);
+    expect(root.querySelector('[data-value="member:person-100"]')).toBe(member);
+    expect(member?.querySelector("openclaw-session-owner-chip")).toBe(avatar);
+    expect(member?.getAttribute("title")).toBe("Requires write");
+    expect(member?.querySelector(".chat-pane__sharing-member-label")?.textContent).toBe(
+      "Person 100 (102)",
+    );
+    expect(member?.querySelector('[aria-label="Member"]')).not.toBeNull();
     panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     flush();
     expect(panel.matches(":popover-open")).toBe(false);
     await openMenu(root);
     expect(root.querySelector('[data-value="member:person-100"]')).toBe(member);
+    const search = root.querySelector<HTMLInputElement>("input[data-search]")!;
+    search.focus();
+    search.value = "Person 101";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(root.querySelector("input[data-search]")).toBe(search);
+    expect(document.activeElement).toBe(search);
+    expect(root.querySelectorAll(".chat-pane__sharing-member")).toHaveLength(1);
   });
 
   it.each(["draft"] as const)(

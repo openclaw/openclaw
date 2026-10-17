@@ -30,7 +30,7 @@ type DesktopPanelElement = HTMLElement &
     DesktopPanelController,
     | keyof DesktopPanelInputs
     | "handleToggleRequest"
-    | "requestUpdate"
+    | "invalidate"
     | "renderRoot"
     | "hasUpdated"
     | "updateComplete"
@@ -43,7 +43,7 @@ export function defineDesktopPanelElement(
   return definePanelBridge<
     DesktopPanelInputs,
     DesktopPanelController,
-    "handleToggleRequest" | "requestUpdate"
+    "handleToggleRequest" | "invalidate"
   >(
     tag,
     createController,
@@ -73,7 +73,7 @@ export function defineDesktopPanelElement(
         onFocusTargetChange: { default: null, attribute: false },
         desktopClientFactory: { default: () => new DesktopClient(), attribute: false },
       },
-      methods: ["handleToggleRequest", "requestUpdate"],
+      methods: ["handleToggleRequest", "invalidate"],
       getters: ["renderRoot", "hasUpdated"],
     },
   );

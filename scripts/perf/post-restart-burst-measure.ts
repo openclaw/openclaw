@@ -41,6 +41,7 @@ const { values } = parseArgs({
     "poll-ms": { type: "string", default: "5000" },
     "writer-reads": { type: "boolean", default: false },
     "cheap-handlers": { type: "boolean", default: false },
+    "transcript-reads": { type: "boolean", default: false },
   },
 });
 if (!values["state-dir"]) {
@@ -78,12 +79,15 @@ cfg.plugins = {
   enabled: true,
   entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
 };
-if (values["writer-reads"] || values["cheap-handlers"]) {
+if (values["writer-reads"] || values["cheap-handlers"] || values["transcript-reads"]) {
   cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
   cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
 }
 if (values["cheap-handlers"]) {
   cfg.plugins.entries.github = { enabled: true };
+  cfg.plugins.entries.workboard = { enabled: true };
+}
+if (values["transcript-reads"]) {
   cfg.plugins.entries.workboard = { enabled: true };
 }
 const previewUrl = "https://github.com/openclaw-fixture/restart/issues/1";
@@ -135,7 +139,7 @@ const preloadPath = path.join(output, "elu-preload.mjs");
 writeFileSync(
   preloadPath,
   `import { performance, monitorEventLoopDelay } from 'node:perf_hooks';
-import { isMainThread } from 'node:worker_threads';
+import { isMainThread, MessagePort } from 'node:worker_threads';
 if (isMainThread) {
   if (!process.send) throw new Error('Benchmark requires private IPC');
   ${
@@ -169,6 +173,28 @@ if (isMainThread) {
   };`
       : ""
   }
+  const taskCounts = new Map();
+  const captureUntil = Number(process.env.OPENCLAW_BENCH_CAPTURE_DEADLINE_MS);
+  const nativePost = MessagePort.prototype.postMessage;
+  MessagePort.prototype.postMessage = function(message, ...args) {
+    const body = message?.type === 'post' ? message.value : message;
+    if (Date.now() < captureUntil && typeof body?.taskId === 'number' && body.responseId === undefined && body.input) {
+      const kind = body.input.kind;
+      const request = body.input.request?.kind;
+      if (typeof kind === 'string' && /^[a-z-]{1,80}$/.test(kind) && (taskCounts.has(kind) || taskCounts.size < 128)) {
+        const label = kind === 'history-page' && typeof request === 'string' && /^[a-z-]{1,80}$/.test(request)
+          ? kind + ':' + request : kind;
+        taskCounts.set(label, (taskCounts.get(label) ?? 0) + 1);
+      }
+    }
+    return nativePost.call(this, message, ...args);
+  };
+  process.on('message', (message) => {
+    if (message?.channel === 'post-restart-burst-snapshot') {
+      process.send?.({ channel: 'post-restart-burst-tasks', pid: process.pid,
+        taskCounts: Object.fromEntries(taskCounts) });
+    }
+  });
   let before = performance.eventLoopUtilization();
   let at = performance.now();
   let cpu = process.threadCpuUsage();
@@ -224,6 +250,7 @@ type EluSample = {
   mainThreadCpuMs: number;
 };
 const eluSamples: EluSample[] = [];
+const transcriptSnapshot = Promise.withResolvers<Record<string, number>>();
 let githubFixtureRequests = 0;
 let vapidPublicKey: string | undefined;
 let timeToSteadyMs: number | null = null;
@@ -359,7 +386,10 @@ function launch(name: string) {
   }
   args[authIndex + 1] = "token";
   const child = spawn(process.execPath, args, {
-    env,
+    env: {
+      ...env,
+      OPENCLAW_BENCH_CAPTURE_DEADLINE_MS: String(Date.now() + Math.min(durationMs, 120_000)),
+    },
     detached: true,
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
@@ -384,6 +414,23 @@ function launch(name: string) {
     }
   });
   child.on("message", (sample: unknown) => {
+    if (
+      recovering &&
+      isRecord(sample) &&
+      sample.channel === "post-restart-burst-tasks" &&
+      sample.pid === child.pid &&
+      isRecord(sample.taskCounts)
+    ) {
+      const counts: Record<string, number> = {};
+      for (const [kind, count] of Object.entries(sample.taskCounts)) {
+        if (typeof count !== "number") {
+          throw new Error("Invalid transcript task count");
+        }
+        counts[kind] = count;
+      }
+      transcriptSnapshot.resolve(counts);
+      return;
+    }
     if (
       recovering &&
       isRecord(sample) &&
@@ -458,7 +505,7 @@ async function rpc(
   if (!reply.ok) {
     throw new Error(`${method}: ${JSON.stringify(reply.error)}`);
   }
-  if (values["cheap-handlers"]) {
+  if (values["cheap-handlers"] || values["transcript-reads"]) {
     const payload = reply.payload;
     if (method === "push.web.vapidPublicKey") {
       if (
@@ -476,6 +523,15 @@ async function rpc(
       (!isRecord(payload) || !Array.isArray(payload.cards) || payload.cards.length < clientCount)
     ) {
       throw new Error("Bundled workboard did not return the seeded cards");
+    }
+    if (
+      method === "chat.history" &&
+      (!isRecord(payload) || !Array.isArray(payload.messages) || !payload.messages.length)
+    ) {
+      throw new Error("Chat history did not return the interrupted synthetic user turn");
+    }
+    if (method === "tools.invoke" && (!isRecord(payload) || payload.ok !== true)) {
+      throw new Error("Synthetic memory search did not activate successfully");
     }
     if (
       method === "github.preview" &&
@@ -600,7 +656,7 @@ async function connect(index: number) {
       throw new Error("Benchmark device authentication did not retain requested operator scopes");
     }
     // Reconnecting cheap handlers start immediately after auth, without warming a profile read.
-    if (!recovering || !values["cheap-handlers"]) {
+    if (!recovering || (!values["cheap-handlers"] && !values["transcript-reads"])) {
       const self = await rpc(client, "users.self", {});
       if (
         !isRecord(self) ||
@@ -676,7 +732,11 @@ async function observeClient(index: number) {
     const activeClient = client;
     await Promise.all(
       shapes
-        .filter(({ method }) => method !== "sessions.subscribe" || firstBatch)
+        .filter(({ method }) =>
+          method === "tools.invoke"
+            ? firstBatch && index === 0
+            : method !== "sessions.subscribe" || firstBatch,
+        )
         .map(async ({ method, params }) => {
           const startedMs = performance.now() - restartAt;
           try {
@@ -838,6 +898,26 @@ try {
     await rpc(sender, "workboard.cards.list", {});
     await rpc(sender, "github.preview", { url: previewUrl });
   }
+  if (values["transcript-reads"]) {
+    if (!values["cheap-handlers"]) {
+      shapes.unshift({ method: "sessions.subscribe", params: {} });
+      for (let index = 0; index < clientCount; index++) {
+        await rpc(sender, "workboard.cards.create", { title: `Synthetic restart card ${index}` });
+      }
+      shapes.push({ method: "workboard.cards.list", params: {} });
+    }
+    shapes.push(
+      { method: "chat.history", params: { sessionKey: keys[0], limit: 50 } },
+      {
+        method: "tools.invoke",
+        params: {
+          sessionKey: keys[0],
+          name: "memory_search",
+          args: { query: "synthetic fixture", maxResults: 1 },
+        },
+      },
+    );
+  }
   const runIds = keys.map(() => randomUUID());
   await Promise.all(
     keys.map((sessionKey, index) =>
@@ -907,6 +987,16 @@ try {
   }
   // Initial held-response close callbacks have drained before allowing quick recovery answers.
   recovering = true;
+  if (values["transcript-reads"]) {
+    // Keep the corpus unindexed during setup so the measured restart owns cold catch-up.
+    cfg.memory.search = {
+      enabled: true,
+      provider: "none",
+      sources: ["sessions"],
+      experimental: { sessionMemory: true },
+    };
+    writeFileSync(configPath, JSON.stringify(cfg));
+  }
   await assertPortAvailable(port);
   restartAt = performance.now();
   const restarted = launch("gateway-after-restart");
@@ -914,8 +1004,22 @@ try {
   const readyMs = performance.now() - restartAt;
   console.log(`PHASE restarted-ready ${readyMs.toFixed(1)}ms`);
   loadStartedAt = performance.now();
+  const transcriptMetrics = delay(
+    Math.max(0, Math.min(durationMs, 120_000) - (performance.now() - restartAt)),
+  ).then(async () => {
+    restarted.send({ channel: "post-restart-burst-snapshot" });
+    return await Promise.race([
+      transcriptSnapshot.promise,
+      delay(10_000, undefined, { ref: false }).then(() => {
+        throw new Error("Transcript task snapshot timed out");
+      }),
+    ]);
+  });
+  void transcriptMetrics.catch((error: unknown) => {
+    failure ??= error instanceof Error ? error : new Error(String(error));
+  });
   const diagnosticMetrics =
-    values["writer-reads"] || values["cheap-handlers"]
+    values["writer-reads"] || values["cheap-handlers"] || values["transcript-reads"]
       ? delay(
           Math.max(0, Math.min(durationMs, 300_000) - (performance.now() - restartAt)),
           undefined,
@@ -951,11 +1055,13 @@ try {
       completed: successful.length,
       errors: rows.length - successful.length,
       p50Ms: percentile(0.5),
+      p95Ms: percentile(0.95),
       p99Ms: percentile(0.99),
       maxMs: successful.at(-1) ?? null,
     };
   };
   const metrics = await diagnosticMetrics;
+  const transcriptTaskCounts = await transcriptMetrics;
   const result = {
     output,
     fixture,
@@ -963,6 +1069,21 @@ try {
     runCount,
     durationMs,
     pollMs,
+    nativeTaskInputs: {
+      windowMs: Math.min(durationMs, 120_000),
+      counts: transcriptTaskCounts,
+      total: Object.values(transcriptTaskCounts).reduce((sum, count) => sum + count, 0),
+      boundary:
+        "main-isolate native task submissions across all workers; bounded input kind and history request kind only",
+      memory: values["transcript-reads"]
+        ? "cold sessions-only FTS index enabled at measured restart"
+        : "disabled",
+    },
+    transcriptQueueMetrics: metrics?.filter(
+      (line) =>
+        /^openclaw_worker_queue_wait_seconds_(sum|count)\{/.test(line) &&
+        line.includes('kind="sessionTranscript"'),
+    ),
     writerQueueMetrics: metrics?.filter(
       (line) =>
         /^openclaw_worker_queue_wait_seconds_(sum|count)\{/.test(line) &&
@@ -1005,6 +1126,20 @@ try {
         },
       ]),
     ),
+    firstTwoMinutesMainElu: (() => {
+      const samples = eluSamples.filter(
+        (sample) => sample.elapsedMs <= Math.min(durationMs, 120_000),
+      );
+      const observedMs = samples.reduce((sum, sample) => sum + sample.intervalMs, 0);
+      return {
+        samples: samples.length,
+        observedMs,
+        weightedMean: observedMs
+          ? samples.reduce((sum, sample) => sum + sample.elu * sample.intervalMs, 0) / observedMs
+          : null,
+        max: samples.length ? Math.max(...samples.map((sample) => sample.elu)) : null,
+      };
+    })(),
     firstTwoMinutes: Object.fromEntries(
       shapes.map(({ method, params }) => [
         method,

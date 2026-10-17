@@ -2,6 +2,7 @@ import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createLazyCustomElementRequests } from "../../app/lazy-custom-element.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
+import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
@@ -30,7 +31,7 @@ import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import type { createNewSessionTitle } from "./draft-title.ts";
 import { forgetInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { closeAgentPicker, closeSessionMenus } from "./new-session-runtime.ts";
+import { closeAgentPicker } from "./new-session-runtime.ts";
 
 const attachmentPanelElement = {
   tagName: "openclaw-chat-detail-panel",
@@ -146,7 +147,7 @@ export class NewSessionPageOwner {
         closeTransientUi: () => {
           this.closeAttachmentPanel();
           this.draft.browser.close();
-          closeSessionMenus(this.host);
+          closeMenusWithin(this.host);
         },
         takePreparedTitle: () => this.titlePreparation?.takePreparedTitle(),
         updateComplete: () => this.host.updateComplete,

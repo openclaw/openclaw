@@ -39,8 +39,10 @@ type HeaderRepairContext = {
 
 function createCanonicalHeaderlessEventParser(sessionId: string) {
   const eventIds = new Set<string>([sessionId]);
+  const events: TranscriptEvent[] = [];
   let indexedEntries = 0;
   return {
+    events,
     hasIndexedEntries: () => indexedEntries > 0,
     parse(row: SqliteTranscriptStorageRow): Record<string, unknown> | undefined {
       let event: TranscriptEvent;
@@ -69,25 +71,10 @@ function createCanonicalHeaderlessEventParser(sessionId: string) {
         }
         eventIds.add(eventId);
       }
+      events.push(event);
       return event;
     },
   };
-}
-
-function parseCanonicalHeaderlessEvents(
-  rows: readonly SqliteTranscriptStorageRow[],
-  sessionId: string,
-): TranscriptEvent[] | undefined {
-  const parser = createCanonicalHeaderlessEventParser(sessionId);
-  const events: TranscriptEvent[] = [];
-  for (const row of rows) {
-    const event = parser.parse(row);
-    if (!event) {
-      return undefined;
-    }
-    events.push(event);
-  }
-  return parser.hasIndexedEntries() ? events : undefined;
 }
 
 function readHeaderRepairContext(
@@ -131,33 +118,6 @@ function readHeaderRepairContext(
     }
   }
   return { sessionKey: window.session_key, ...(spawnedCwd ? { spawnedCwd } : {}) };
-}
-
-function assertRepairPreservedEvents(params: {
-  before: readonly SqliteTranscriptStorageRow[];
-  database: OpenClawAgentDatabase;
-  sessionId: string;
-}): void {
-  const after = readTranscriptStorageRows(params.database, params.sessionId);
-  if (after.length !== params.before.length + 1) {
-    throw new Error(`header repair changed the event count for ${params.sessionId}`);
-  }
-  for (const [index, beforeRow] of params.before.entries()) {
-    const afterRow = after[index + 1];
-    if (!afterRow || afterRow.createdAt !== beforeRow.createdAt) {
-      throw new Error(`header repair changed row timestamps for ${params.sessionId}`);
-    }
-    const beforeEvent = JSON.parse(beforeRow.eventJson) as Record<string, unknown>;
-    const afterEvent = JSON.parse(afterRow.eventJson) as Record<string, unknown>;
-    if (
-      beforeEvent.id !== afterEvent.id ||
-      beforeEvent.parentId !== afterEvent.parentId ||
-      beforeEvent.targetId !== afterEvent.targetId ||
-      beforeEvent.appendParentId !== afterEvent.appendParentId
-    ) {
-      throw new Error(`header repair changed event identity for ${params.sessionId}`);
-    }
-  }
 }
 
 export async function noteSessionTranscriptHeaderHealth(params: {
@@ -213,10 +173,6 @@ export async function noteSessionTranscriptHeaderHealth(params: {
             if (!transcriptSnapshotsMatch(snapshot.rows, currentRows, true)) {
               throw new Error(`transcript changed while preparing header repair for ${sessionId}`);
             }
-            const events = parseCanonicalHeaderlessEvents(currentRows, sessionId);
-            if (!events) {
-              throw new Error(`transcript is no longer a stored headerless session: ${sessionId}`);
-            }
             const context = readHeaderRepairContext(database, sessionId);
             if (!context || context.sessionKey !== snapshot.sessionKey) {
               throw new Error(
@@ -244,7 +200,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
                 sessionId,
                 sessionKey: context.sessionKey,
               },
-              [header, ...events],
+              [header, ...parser.events],
               {
                 createdAtByIndex: [
                   currentRows[0]?.createdAt ?? Date.parse(headerTimestamp),
@@ -253,7 +209,6 @@ export async function noteSessionTranscriptHeaderHealth(params: {
                 preserveSessionWindowRecency: true,
               },
             );
-            assertRepairPreservedEvents({ before: currentRows, database, sessionId });
           },
           databaseOptions,
           { operationLabel: "doctor.session-transcript-headers" },

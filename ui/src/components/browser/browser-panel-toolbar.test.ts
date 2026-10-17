@@ -29,7 +29,7 @@ describe("Browser toolbar", () => {
       client: GatewayBrowserClient;
       browserPanelController: BrowserPanel;
       renderRoot: HTMLElement;
-      requestUpdate: () => void;
+      invalidate: () => void;
       updateComplete: Promise<unknown>;
     };
     panel.available = true;
@@ -44,7 +44,7 @@ describe("Browser toolbar", () => {
     const controller = panel.browserPanelController;
     controller.activeTargetId = "asset";
     controller.view = createView("asset", "https://assets.example.test/preview.png");
-    panel.requestUpdate();
+    panel.invalidate();
     await panel.updateComplete;
     return panel;
   }

@@ -253,10 +253,7 @@ export function createEmbeddedRunAuthController(params: {
       await runtimeAuthState.refreshInFlight;
       return;
     }
-    // Generation/profile/source checks below discard refreshes that complete
-    // after another profile or credential has already become active.
-    const refreshGeneration = runtimeAuthState.generation;
-    const refreshProfileId = runtimeAuthState.profileId;
+    // Publish only while the captured credential state is still active.
     const refreshPromise: Promise<void> = (async () => {
       const sourceApiKey = runtimeAuthState.sourceApiKey.trim();
       if (!sourceApiKey) {
@@ -274,13 +271,7 @@ export function createEmbeddedRunAuthController(params: {
           `Provider "${runtimeModel.provider}" does not support runtime auth refresh.`,
         );
       }
-      const activeRuntimeAuthState = state.runtimeAuthState;
-      if (
-        !activeRuntimeAuthState ||
-        activeRuntimeAuthState.generation !== refreshGeneration ||
-        activeRuntimeAuthState.profileId !== refreshProfileId ||
-        activeRuntimeAuthState.sourceApiKey.trim() !== sourceApiKey
-      ) {
+      if (state.runtimeAuthState !== runtimeAuthState) {
         params.log.debug(
           `Ignoring stale runtime auth refresh for ${runtimeModel.provider}; auth state advanced before ${reason} refresh completed.`,
         );
@@ -289,7 +280,7 @@ export function createEmbeddedRunAuthController(params: {
       params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
       applyPreparedRuntimeRequestOverrides(runtimeModel, preparedAuth);
       state.runtimeAuthState = {
-        ...activeRuntimeAuthState,
+        ...runtimeAuthState,
         apiKey: preparedAuth.apiKey,
         expiresAt: preparedAuth.expiresAt,
       };
@@ -303,11 +294,7 @@ export function createEmbeddedRunAuthController(params: {
       })
       .finally(() => {
         const activeState = state.runtimeAuthState;
-        if (
-          activeState &&
-          activeState.generation === refreshGeneration &&
-          activeState.refreshInFlight === refreshPromise
-        ) {
+        if (activeState?.refreshInFlight === refreshPromise) {
           activeState.refreshInFlight = undefined;
         }
       });
@@ -549,7 +536,6 @@ export function createEmbeddedRunAuthController(params: {
         clearRuntimeAuthRefreshTimer();
         params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
         state.runtimeAuthState = {
-          generation: (state.runtimeAuthState?.generation ?? 0) + 1,
           apiKey: preparedAuth.apiKey,
           sourceApiKey,
           authMode: apiKeyInfo.mode,

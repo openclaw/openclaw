@@ -99,6 +99,7 @@ export interface SessionListHost {
   readonly sidebarMenus: Pick<
     SidebarMenusController,
     | "catalogMenu"
+    | "catalogMenuView"
     | "catalogViewMenuPosition"
     | "openCatalogViewMenu"
     | "openSessionGroupMenu"

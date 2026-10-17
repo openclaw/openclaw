@@ -202,7 +202,10 @@ New session content becomes searchable after that delay. The current turn alread
 has its own content in context; `memory_search` does not force a transcript flush.
 Graceful shutdown does not flush queued indexing. On the next startup, incremental
 catch-up resumes from each source's indexed sequence, including rewrites and
-compaction. A failed full rebuild retains
+compaction. Startup compares source metadata; missing transcripts are parsed and
+checked for indexing eligibility once the background pass can run. Explicit source
+diagnostics still inspect content to exclude system-only transcripts from eligible
+counts. A failed full rebuild retains
 its full-retry state; ordinary dirty content does not itself force a rebuild.
 An index built before any content exists remains valid as content arrives;
 restarting does not require a full rebuild just because the index started empty.
