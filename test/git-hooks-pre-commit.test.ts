@@ -36,6 +36,16 @@ function patchManifest(dir: string, patch: Record<string, unknown>) {
   writeJson(dir, { ...JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")), ...patch });
 }
 
+function packageFixture(root: string, name: string, manifest: Record<string, unknown>) {
+  const dir = path.join(root, "node_modules", name);
+  mkdirSync(dir, { recursive: true });
+  writeJson(dir, { name, version: "0.68.0", ...manifest });
+  if (typeof manifest.main === "string") {
+    writeFileSync(path.join(dir, manifest.main), "module.exports = {};\n");
+  }
+  return dir;
+}
+
 function installRunNodeToolFixture(dir: string): void {
   mkdirSync(path.join(dir, "scripts", "pre-commit"), { recursive: true });
   symlinkSync(
@@ -454,30 +464,18 @@ describe("scripts/pre-commit/run-node-tool.sh", () => {
       writeJson(root, { devDependencies: { oxfmt: "0.68.0" } });
     }
     rmSync(path.join(dir, "node_modules"), { recursive: true });
-    const pkg = path.join(owner, "node_modules/oxfmt");
     const bindingName = `@oxfmt/binding-${process.platform}-${process.arch}`;
-    const binding = path.join(owner, "node_modules", bindingName);
-    const dependency = path.join(owner, "node_modules/tinypool");
-    for (const packageDir of [pkg, binding, dependency]) {
-      mkdirSync(packageDir, { recursive: true });
-    }
-    writeJson(dependency, { name: "tinypool", version: "2.1.2", main: "index.cjs" });
-    writeFileSync(path.join(dependency, "index.cjs"), "module.exports = {};\n");
-    writeJson(pkg, {
-      name: "oxfmt",
-      version: "0.68.0",
+    const dependency = packageFixture(owner, "tinypool", { version: "2.1.2", main: "index.cjs" });
+    const pkg = packageFixture(owner, "oxfmt", {
       bin: { oxfmt: "cli.cjs" },
       dependencies: { tinypool: "2.1.2" },
       optionalDependencies: { [bindingName]: "0.68.0" },
     });
-    writeJson(binding, {
-      name: bindingName,
-      version: "0.68.0",
+    const binding = packageFixture(owner, bindingName, {
       os: [process.platform],
       cpu: [process.arch],
       main: "binding.cjs",
     });
-    writeFileSync(path.join(binding, "binding.cjs"), "module.exports = {};\n");
     const cli = path.join(pkg, "cli.cjs");
     const formatter = `const fs = require("node:fs");
 if (process.argv[2] === "--version") { console.log("Version: 0.68.0"); process.exit(0); }
@@ -531,32 +529,30 @@ if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdou
     },
   );
 
-  it.each<{ kind: string; override?: [string, string] }>([
-    ...[
-      "wrong pin",
-      "wrong package",
-      "unrelated",
-      "sparse",
-      "subdirectory",
-      "escaped package",
-      "wrong platform",
-      "wrong binding pin",
-      "broken binding",
-      "wrong dependency pin",
-      "escaped dependency",
-      "drift",
-    ].map((kind) => ({ kind })),
-    { kind: "native path override", override: ["NAPI_RS_NATIVE_LIBRARY_PATH", "override"] },
-    { kind: "forced WASI", override: ["NAPI_RS_FORCE_WASI", "true"] },
-    { kind: "WASI error fallback", override: ["NAPI_RS_FORCE_WASI", "error"] },
-    { kind: "WASI flavor override", override: ["NAPI_RS_WASI_FLAVOR", "wasm32-wasi"] },
-  ])("rejects $kind before formatting", ({ kind, override }) => {
-    const { dir, owner, pkg, binding, dependency, cli, formatter, env } = toolingFixture();
-    if (kind === "wrong pin" || kind === "wrong package") {
-      patchManifest(
-        pkg,
-        kind === "wrong pin" ? { version: "0.60.0" } : { name: "another-formatter" },
-      );
+  it.each<
+    [string, ("pkg" | "binding" | "dependency")?, Record<string, unknown>?, [string, string]?]
+  >([
+    ["wrong pin", "pkg", { version: "0.60.0" }],
+    ["wrong package", "pkg", { name: "another-formatter" }],
+    ["unrelated"],
+    ["sparse"],
+    ["subdirectory"],
+    ["escaped package"],
+    ["wrong platform", "binding", { cpu: ["unsupported"] }],
+    ["wrong binding pin", "binding", { version: "0.60.0" }],
+    ["broken binding"],
+    ["wrong dependency pin", "dependency", { version: "1.0.0" }],
+    ["escaped dependency"],
+    ["drift"],
+    ["native path override", undefined, undefined, ["NAPI_RS_NATIVE_LIBRARY_PATH", "override"]],
+    ["forced WASI", undefined, undefined, ["NAPI_RS_FORCE_WASI", "true"]],
+    ["WASI error fallback", undefined, undefined, ["NAPI_RS_FORCE_WASI", "error"]],
+    ["WASI flavor override", undefined, undefined, ["NAPI_RS_WASI_FLAVOR", "wasm32-wasi"]],
+  ])("rejects %s before formatting", (kind, target, patch, override) => {
+    const fixture = toolingFixture();
+    const { dir, owner, pkg, binding, dependency, cli, formatter, env } = fixture;
+    if (target && patch) {
+      patchManifest(fixture[target], patch);
     } else if (kind === "unrelated") {
       run(owner, "git", [
         "remote",
@@ -572,18 +568,11 @@ if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdou
       const outside = makeTempRepoRoot(tempDirs, "openclaw-outside-formatter-");
       rmSync(pkg, { recursive: true });
       symlinkSync(outside, pkg);
-    } else if (kind === "wrong platform" || kind === "wrong binding pin") {
-      patchManifest(
-        binding,
-        kind === "wrong platform" ? { cpu: ["unsupported"] } : { version: "0.60.0" },
-      );
     } else if (kind === "broken binding") {
       writeFileSync(
         path.join(binding, "binding.cjs"),
         'throw new Error("unusable native binding");',
       );
-    } else if (kind === "wrong dependency pin") {
-      patchManifest(dependency, { version: "1.0.0" });
     } else if (kind === "escaped dependency") {
       const outside = makeTempRepoRoot(tempDirs, "openclaw-outside-dependency-");
       rmSync(dependency, { recursive: true });

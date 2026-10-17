@@ -174,215 +174,199 @@ it.skipIf(process.platform === "win32")(
         const persisted = () => readRestartSession(instance.state.agentDir(), SESSION_KEY);
         await runQaGatewayFixture(
           async () => {
-            try {
-              const config: OpenClawConfig = {
-                logging: { file: instance.state.path("gateway.log") },
-                update: { checkOnStart: false },
-                browser: { enabled: false },
-                discovery: { mdns: { mode: "off" } },
-                ...restartModelConfig(model, instance.state.workspaceDir),
-                plugins: { enabled: false },
-                tools: {
-                  allow: ["exec", "process", "dashboard", "show_widget", "message"],
-                  exec: { mode: "full", host: "gateway" },
-                  codeMode: { enabled: false },
-                },
-                gateway: {
-                  mode: "local",
-                  bind: "loopback",
-                  port: instance.port,
-                  auth: { mode: "token", token: instance.gatewayToken },
-                  controlUi: { enabled: true },
-                },
-              };
-              await instance.state.writeConfig(config);
-              await instance.startGateway();
-              const { buildId } = asRecord(
-                JSON.parse(await readFile("dist/build-info.json", "utf8")),
-              );
-              expect(typeof buildId).toBe("string");
-              const deviceIdentity = loadOrCreateDeviceIdentity({
-                path: instance.state.path("proof-device.sqlite"),
-              });
-              // A TEST observer must not replace the original Control UI token's issuer binding.
-              const observerDeviceIdentity = loadOrCreateDeviceIdentity({
-                path: instance.state.path("proof-observer-device.sqlite"),
-              });
-              const connect = (controlUi: boolean) =>
-                acquireGatewayTestClient(
-                  {
-                    url: instance.url,
-                    token: instance.gatewayToken,
-                    deviceIdentity: controlUi ? deviceIdentity : observerDeviceIdentity,
-                    origin: controlUi ? `http://127.0.0.1:${instance.port}` : undefined,
-                    clientName: controlUi ? GATEWAY_CLIENT_IDS.CONTROL_UI : GATEWAY_CLIENT_IDS.TEST,
-                    clientBuildId: controlUi && typeof buildId === "string" ? buildId : undefined,
-                    mode: controlUi ? "webchat" : "test",
-                    scopes: ["operator.admin", "operator.read", "operator.write"],
-                    caps: controlUi
-                      ? [GATEWAY_CLIENT_CAPS.INLINE_WIDGETS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS]
-                      : [],
-                    onEvent: ({ event, payload }) => {
-                      if (
-                        event === "sessions.changed" &&
-                        isRecord(payload) &&
-                        payload.sessionKey === SESSION_KEY &&
-                        (payload.phase === "end" || payload.phase === "error")
-                      ) {
-                        terminalPublished.resolve(payload);
-                      }
-                    },
+            const config: OpenClawConfig = {
+              logging: { file: instance.state.path("gateway.log") },
+              update: { checkOnStart: false },
+              browser: { enabled: false },
+              discovery: { mdns: { mode: "off" } },
+              ...restartModelConfig(model, instance.state.workspaceDir),
+              plugins: { enabled: false },
+              tools: {
+                allow: ["exec", "process", "dashboard", "show_widget", "message"],
+                exec: { mode: "full", host: "gateway" },
+                codeMode: { enabled: false },
+              },
+              gateway: {
+                mode: "local",
+                bind: "loopback",
+                port: instance.port,
+                auth: { mode: "token", token: instance.gatewayToken },
+                controlUi: { enabled: true },
+              },
+            };
+            await instance.state.writeConfig(config);
+            await instance.startGateway();
+            const { buildId } = asRecord(
+              JSON.parse(await readFile("dist/build-info.json", "utf8")),
+            );
+            expect(typeof buildId).toBe("string");
+            const deviceIdentity = loadOrCreateDeviceIdentity({
+              path: instance.state.path("proof-device.sqlite"),
+            });
+            // A TEST observer must not replace the original Control UI token's issuer binding.
+            const observerDeviceIdentity = loadOrCreateDeviceIdentity({
+              path: instance.state.path("proof-observer-device.sqlite"),
+            });
+            const connect = (controlUi: boolean) =>
+              acquireGatewayTestClient(
+                {
+                  url: instance.url,
+                  token: instance.gatewayToken,
+                  deviceIdentity: controlUi ? deviceIdentity : observerDeviceIdentity,
+                  origin: controlUi ? `http://127.0.0.1:${instance.port}` : undefined,
+                  clientName: controlUi ? GATEWAY_CLIENT_IDS.CONTROL_UI : GATEWAY_CLIENT_IDS.TEST,
+                  clientBuildId: controlUi && typeof buildId === "string" ? buildId : undefined,
+                  mode: controlUi ? "webchat" : "test",
+                  scopes: ["operator.admin", "operator.read", "operator.write"],
+                  caps: controlUi
+                    ? [GATEWAY_CLIENT_CAPS.INLINE_WIDGETS, GATEWAY_CLIENT_CAPS.TOOL_EVENTS]
+                    : [],
+                  onEvent: ({ event, payload }) => {
+                    if (
+                      event === "sessions.changed" &&
+                      isRecord(payload) &&
+                      payload.sessionKey === SESSION_KEY &&
+                      (payload.phase === "end" || payload.phase === "error")
+                    ) {
+                      terminalPublished.resolve(payload);
+                    }
                   },
+                },
+                {
+                  timeoutMs: 30_000,
+                  timeoutMessage: "widget recovery connect timeout",
+                  closeMessage: "widget recovery connect closed",
+                  signal,
+                },
+              );
+            client = await connect(true);
+            await client.request("sessions.create", {
+              key: SESSION_KEY,
+              agentId: "main",
+              label: "Widget recovery regression",
+              model: model.modelRef,
+              permissionMode: "full",
+              cwd: instance.state.workspaceDir,
+            });
+            await client.request("chat.send", {
+              sessionKey: SESSION_KEY,
+              message:
+                "Create the pinned restart chart, wait at the exec checkpoint, then update the chart and finish after Gateway recovery.",
+              idempotencyKey: "widget-restart-original-turn",
+            });
+            await withinTest(
+              Promise.race([
+                vi.waitFor(
+                  () => access(path.join(instance.state.workspaceDir, "checkpoint-ready")),
                   {
-                    timeoutMs: 30_000,
-                    timeoutMessage: "widget recovery connect timeout",
-                    closeMessage: "widget recovery connect closed",
-                    signal,
+                    timeout: 60_000,
+                    interval: 25,
                   },
-                );
-              client = await connect(true);
-              await client.request("sessions.create", {
-                key: SESSION_KEY,
-                agentId: "main",
-                label: "Widget recovery regression",
-                model: model.modelRef,
-                permissionMode: "full",
-                cwd: instance.state.workspaceDir,
-              });
-              await client.request("chat.send", {
-                sessionKey: SESSION_KEY,
-                message:
-                  "Create the pinned restart chart, wait at the exec checkpoint, then update the chart and finish after Gateway recovery.",
-                idempotencyKey: "widget-restart-original-turn",
-              });
-              await withinTest(
-                Promise.race([
-                  vi.waitFor(
-                    () => access(path.join(instance.state.workspaceDir, "checkpoint-ready")),
-                    {
-                      timeout: 60_000,
-                      interval: 25,
-                    },
-                  ),
-                  provider.failed,
-                ]),
-                signal,
-              );
-              const initialBoard = await client.request<BoardSnapshot>("board.get", {
-                sessionKey: SESSION_KEY,
-              });
-              expect(initialBoard.widgets).toEqual([
-                expect.objectContaining({ name: WIDGET_NAME, contentKind: "html" }),
-              ]);
-              const initial = await client.request<SessionsListResult>("sessions.list", {
-                agentId: "main",
-              });
-              expect(initial.sessions.find((row) => row.key === SESSION_KEY)).toMatchObject({
-                status: "running",
-                hasActiveRun: true,
-              });
-              const original = instance.child;
-              if (!original?.pid) {
-                throw new Error("Owned Gateway process unavailable");
-              }
-              await client.stopAndWait();
-              client = undefined;
-              const closed = once(original, "close");
-              original.kill("SIGKILL");
-              await withinTest(closed, signal);
-              await writeFile(
-                path.join(instance.state.workspaceDir, "checkpoint-resume"),
-                "resume\n",
-              );
-              provider.beginRecovery();
-              await instance.startGateway();
-              expect(instance.child?.pid).not.toBe(original.pid);
-              client = await connect(false);
-              await wait(
-                provider.recovered,
-                AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
-              );
-              await wait(provider.progressPersisted);
-              const progressHistory = await client.request("chat.history", {
-                sessionKey: SESSION_KEY,
-              });
-              expect(JSON.stringify(progressHistory)).toContain(PROGRESS_MARKER);
-              const recoveringProcess = instance.child;
-              if (!recoveringProcess?.pid) {
-                throw new Error("Owned recovery Gateway process unavailable");
-              }
-              await client.stopAndWait();
-              client = undefined;
-              const recoveryClosed = once(recoveringProcess, "close");
-              expect(recoveringProcess.kill("SIGKILL")).toBe(true);
-              await withinTest(recoveryClosed, signal);
-              await instance.startGateway();
-              expect(instance.child?.pid).not.toBe(recoveringProcess.pid);
-              client = await connect(false);
-              await client.request("sessions.subscribe", { agentId: "main" });
-              // Socket readiness precedes admission of the new recovery lifecycle.
-              await wait(provider.progressResumed);
-              const recoveryRunId = persisted()?.lifecycleRunId;
-              expect(typeof recoveryRunId).toBe("string");
-              const settled = client.request("agent.wait", {
-                runId: recoveryRunId,
-                timeoutMs: 60_000,
-              });
-              void settled.catch(() => {});
-              provider.release();
-              expect(await wait(settled)).toMatchObject({
-                status: "ok",
-                endedAt: expect.any(Number),
-              });
-              // The terminal publication follows the owning SQLite write, unlike model EOF.
-              const published = await wait(terminalPublished.promise);
-              const durable = persisted();
-              const rows = await client.request<SessionsListResult>("sessions.list", {
-                agentId: "main",
-              });
-              expect({
-                durable,
-                published,
-                projected: rows.sessions.find((row) => row.key === SESSION_KEY),
-              }).toMatchObject({
-                durable: { status: "done", abortedLastRun: false, endedAt: expect.any(Number) },
-                published: { phase: "end", runId: recoveryRunId },
-                projected: { status: "done", hasActiveRun: false },
-              });
-              expect(durable?.mainRestartRecovery).toBeUndefined();
-              const board = await client.request<BoardSnapshot>("board.get", {
-                sessionKey: SESSION_KEY,
-              });
-              expect(board.widgets).toEqual([
-                expect.objectContaining({ name: WIDGET_NAME, contentKind: "html" }),
-              ]);
-              expect(board.widgets[0]!.revision).toBeGreaterThan(initialBoard.widgets[0]!.revision);
-              const history = await client.request<{
-                messages: Array<{ role: string; content?: unknown }>;
-              }>("chat.history", { sessionKey: SESSION_KEY });
-              for (const marker of [FINAL_MARKER, PROGRESS_MARKER]) {
-                expect(
-                  history.messages.filter(
-                    (message) =>
-                      message.role === "assistant" &&
-                      extractAssistantPhaseText(message)?.trim() === marker,
-                  ),
-                ).toHaveLength(1);
-              }
-              expect(instance.logs()).not.toContain("Session transcript keyed user is outside");
-              expect(instance.logs()).toContain("startup-orphaned main session(s)");
-            } catch (cause) {
-              const diagnostics = JSON.stringify({
-                calls: provider.calls.map(({ recovering, tools }) => ({ recovering, tools })),
-                logs: instance.logs(),
-              });
-              throw new Error(
-                diagnostics
-                  .replaceAll(instance.gatewayToken, "[fixture token]")
-                  .replaceAll(instance.hookToken, "[fixture token]"),
-                { cause },
-              );
+                ),
+                provider.failed,
+              ]),
+              signal,
+            );
+            const initialBoard = await client.request<BoardSnapshot>("board.get", {
+              sessionKey: SESSION_KEY,
+            });
+            expect(initialBoard.widgets).toEqual([
+              expect.objectContaining({ name: WIDGET_NAME, contentKind: "html" }),
+            ]);
+            const initial = await client.request<SessionsListResult>("sessions.list", {
+              agentId: "main",
+            });
+            expect(initial.sessions.find((row) => row.key === SESSION_KEY)).toMatchObject({
+              status: "running",
+              hasActiveRun: true,
+            });
+            const original = instance.child;
+            if (!original?.pid) {
+              throw new Error("Owned Gateway process unavailable");
             }
+            await client.stopAndWait();
+            client = undefined;
+            const closed = once(original, "close");
+            original.kill("SIGKILL");
+            await withinTest(closed, signal);
+            await writeFile(
+              path.join(instance.state.workspaceDir, "checkpoint-resume"),
+              "resume\n",
+            );
+            provider.beginRecovery();
+            await instance.startGateway();
+            expect(instance.child?.pid).not.toBe(original.pid);
+            client = await connect(false);
+            await wait(provider.recovered, AbortSignal.any([signal, AbortSignal.timeout(30_000)]));
+            await wait(provider.progressPersisted);
+            const progressHistory = await client.request("chat.history", {
+              sessionKey: SESSION_KEY,
+            });
+            expect(JSON.stringify(progressHistory)).toContain(PROGRESS_MARKER);
+            const recoveringProcess = instance.child;
+            if (!recoveringProcess?.pid) {
+              throw new Error("Owned recovery Gateway process unavailable");
+            }
+            await client.stopAndWait();
+            client = undefined;
+            const recoveryClosed = once(recoveringProcess, "close");
+            expect(recoveringProcess.kill("SIGKILL")).toBe(true);
+            await withinTest(recoveryClosed, signal);
+            await instance.startGateway();
+            expect(instance.child?.pid).not.toBe(recoveringProcess.pid);
+            client = await connect(false);
+            await client.request("sessions.subscribe", { agentId: "main" });
+            // Socket readiness precedes admission of the new recovery lifecycle.
+            await wait(provider.progressResumed);
+            const recoveryRunId = persisted()?.lifecycleRunId;
+            expect(typeof recoveryRunId).toBe("string");
+            const settled = client.request("agent.wait", {
+              runId: recoveryRunId,
+              timeoutMs: 60_000,
+            });
+            void settled.catch(() => {});
+            provider.release();
+            expect(await wait(settled)).toMatchObject({
+              status: "ok",
+              endedAt: expect.any(Number),
+            });
+            // The terminal publication follows the owning SQLite write, unlike model EOF.
+            const published = await wait(terminalPublished.promise);
+            const durable = persisted();
+            const rows = await client.request<SessionsListResult>("sessions.list", {
+              agentId: "main",
+            });
+            expect({
+              durable,
+              published,
+              projected: rows.sessions.find((row) => row.key === SESSION_KEY),
+            }).toMatchObject({
+              durable: { status: "done", abortedLastRun: false, endedAt: expect.any(Number) },
+              published: { phase: "end", runId: recoveryRunId },
+              projected: { status: "done", hasActiveRun: false },
+            });
+            expect(durable?.mainRestartRecovery).toBeUndefined();
+            const board = await client.request<BoardSnapshot>("board.get", {
+              sessionKey: SESSION_KEY,
+            });
+            expect(board.widgets).toEqual([
+              expect.objectContaining({ name: WIDGET_NAME, contentKind: "html" }),
+            ]);
+            expect(board.widgets[0]!.revision).toBeGreaterThan(initialBoard.widgets[0]!.revision);
+            const history = await client.request<{
+              messages: Array<{ role: string; content?: unknown }>;
+            }>("chat.history", { sessionKey: SESSION_KEY });
+            for (const marker of [FINAL_MARKER, PROGRESS_MARKER]) {
+              expect(
+                history.messages.filter(
+                  (message) =>
+                    message.role === "assistant" &&
+                    extractAssistantPhaseText(message)?.trim() === marker,
+                ),
+              ).toHaveLength(1);
+            }
+            expect(instance.logs()).not.toContain("Session transcript keyed user is outside");
+            expect(instance.logs()).toContain("startup-orphaned main session(s)");
           },
           async () => {
             provider.release();

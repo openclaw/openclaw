@@ -1,7 +1,7 @@
 // Managed process replacement proves recovery of a child whose requester already finished.
+import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
-import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -34,33 +34,13 @@ const PARENT_REQUEST = "Start the quiet restart regression child, then finish im
 const PARENT_FINAL = "QUIET_CHILD_STARTED";
 const CHILD_TASK = "QUIET_CHILD_RESTART_CHECKPOINT: finish the retained assignment.";
 const RECOVERY_FINAL = "QUIET_CHILD_RECOVERY_RECONCILED";
-
-function writeSpawn(response: ServerResponse, name: string, ordinal: number) {
-  const args = {
-    taskName: "quiet_restart_child",
-    task: CHILD_TASK,
-    context: "isolated",
-    cleanup: "delete",
-    expectsCompletionMessage: false,
-  };
-  writeRestartToolCall(
-    response,
-    "spawn",
-    name,
-    name === "dispatch_action" ? { id: "sessions_spawn", args } : args,
-    ordinal,
-  );
-}
+const poll = <T>(check: () => T | Promise<T>) => vi.waitFor(check, { timeout: 30_000 });
 
 async function startProvider(signal: AbortSignal) {
   const childPending = createDeferred();
   const recovery = createDeferred<string>();
-  const checkpoint = createDeferred<{
-    runId: string;
-    prompt: string;
-    sessionKey: string;
-    sessionId: string;
-  }>();
+  const checkpoint =
+    createDeferred<Record<"runId" | "prompt" | "sessionKey" | "sessionId", string>>();
   const releaseCheckpoint = createDeferred();
   const releaseRecovery = createDeferred();
   const failed = createDeferred<never>();
@@ -129,7 +109,20 @@ async function startProvider(signal: AbortSignal) {
         if (parentCalls === 1) {
           const tool = tools.includes("sessions_spawn") ? "sessions_spawn" : "dispatch_action";
           expect(tools).toContain(tool);
-          writeSpawn(response, tool, calls.length);
+          const args = {
+            taskName: "quiet_restart_child",
+            task: CHILD_TASK,
+            context: "isolated",
+            cleanup: "delete",
+            expectsCompletionMessage: false,
+          };
+          writeRestartToolCall(
+            response,
+            "spawn",
+            tool,
+            tool === "dispatch_action" ? { id: "sessions_spawn", args } : args,
+            calls.length,
+          );
         } else {
           expect(parentCalls).toBe(2);
           expect(input).toContain("accepted");
@@ -199,13 +192,13 @@ it.skipIf(process.platform === "win32").for([
     const persisted = (sessionKey: string) =>
       readRestartSession(instance.state.agentDir(), sessionKey);
     const persistedChild = (
-      identity: { runId: string } | { sessionKey: string },
+      key: string,
+      column: "run_id" | "child_session_key" = "run_id",
     ): (Record<string, unknown> & { runId: string }) | undefined => {
-      const byRun = "runId" in identity;
       const row = readRestartRow(
         instance.state.statePath("state", "openclaw.sqlite"),
-        `SELECT run_id, payload_json FROM subagent_runs WHERE ${byRun ? "run_id" : "child_session_key"}=?`,
-        byRun ? identity.runId : identity.sessionKey,
+        `SELECT run_id, payload_json FROM subagent_runs WHERE ${column}=?`,
+        key,
       );
       if (typeof row?.payload_json !== "string" || typeof row.run_id !== "string") {
         return undefined;
@@ -247,9 +240,7 @@ it.skipIf(process.platform === "win32").for([
       );
     const restart = async (replaceChildAfterDrain = false) => {
       const child = instance.child;
-      if (!child?.pid) {
-        throw new Error("Owned Gateway process unavailable");
-      }
+      assert(child?.pid, "Owned Gateway process unavailable");
       await client?.stopAndWait();
       client = undefined;
       const closed = once(child, "close");
@@ -298,22 +289,21 @@ it.skipIf(process.platform === "win32").for([
     };
     await runQaGatewayFixture(
       async () => {
-        try {
-          const pluginId = "quiet-restart-checkpoint";
-          const pluginDir = instance.state.path("checkpoint-plugin");
-          await mkdir(pluginDir, { recursive: true });
-          await writeFile(
-            path.join(pluginDir, "openclaw.plugin.json"),
-            JSON.stringify({
-              id: pluginId,
-              activation: { onStartup: true },
-              configSchema: { type: "object", additionalProperties: false, properties: {} },
-            }),
-          );
-          // The public prompt hook pauses real preparation before any model request.
-          await writeFile(
-            path.join(pluginDir, "index.mjs"),
-            `export default {
+        const pluginId = "quiet-restart-checkpoint";
+        const pluginDir = instance.state.path("checkpoint-plugin");
+        await mkdir(pluginDir, { recursive: true });
+        await writeFile(
+          path.join(pluginDir, "openclaw.plugin.json"),
+          JSON.stringify({
+            id: pluginId,
+            activation: { onStartup: true },
+            configSchema: { type: "object", additionalProperties: false, properties: {} },
+          }),
+        );
+        // The public prompt hook pauses real preparation before any model request.
+        await writeFile(
+          path.join(pluginDir, "index.mjs"),
+          `export default {
               id: ${JSON.stringify(pluginId)},
               register(api) {
                 api.on("before_prompt_build", async (event, ctx) => {
@@ -331,223 +321,193 @@ it.skipIf(process.platform === "win32").for([
                 }, { timeoutMs: 60000 });
               },
             };`,
-          );
-          await instance.state.writeConfig({
-            update: { checkOnStart: false },
-            browser: { enabled: false },
-            discovery: { mdns: { mode: "off" } },
-            plugins: {
-              enabled: true,
-              allow: [pluginId],
-              load: { paths: [pluginDir] },
-              entries: { [pluginId]: { enabled: true, hooks: { allowConversationAccess: true } } },
-              slots: { memory: "none" },
-            },
-            ...restartModelConfig(model, instance.state.workspaceDir, { runTimeoutSeconds: 120 }),
-            tools: {
-              allow: ["sessions_spawn", "sessions_send", "sessions_history", "subagents"],
-              codeMode: { enabled: false },
-            },
-            gateway: {
-              mode: "local",
-              controlUi: { enabled: false },
-              bind: "loopback",
-              port: instance.port,
-              auth: { mode: "token", token: instance.gatewayToken },
+        );
+        await instance.state.writeConfig({
+          update: { checkOnStart: false },
+          browser: { enabled: false },
+          discovery: { mdns: { mode: "off" } },
+          plugins: {
+            enabled: true,
+            allow: [pluginId],
+            load: { paths: [pluginDir] },
+            entries: { [pluginId]: { enabled: true, hooks: { allowConversationAccess: true } } },
+            slots: { memory: "none" },
+          },
+          ...restartModelConfig(model, instance.state.workspaceDir, { runTimeoutSeconds: 120 }),
+          tools: {
+            allow: ["sessions_spawn", "sessions_send", "sessions_history", "subagents"],
+            codeMode: { enabled: false },
+          },
+          gateway: {
+            mode: "local",
+            controlUi: { enabled: false },
+            bind: "loopback",
+            port: instance.port,
+            auth: { mode: "token", token: instance.gatewayToken },
+          },
+        });
+        await instance.startGateway();
+        client = await connect();
+        await client.request("sessions.create", { key: PARENT_KEY, agentId: "main" });
+        const accepted = await client.request<{ runId: string }>(
+          "chat.send",
+          {
+            sessionKey: PARENT_KEY,
+            message: PARENT_REQUEST,
+            idempotencyKey: "quiet-child-original",
+          },
+          { expectFinal: false },
+        );
+        originalRunId = accepted.runId;
+        await wait(provider.childPending);
+        expect(
+          await client.request("agent.wait", { runId: originalRunId, timeoutMs: 60_000 }),
+        ).toMatchObject({ status: "ok" });
+        const initial = await client.request<SessionsListResult>("sessions.list", {
+          agentId: "main",
+        });
+        const child = initial.sessions.find((row) => row.key.includes(":subagent:"));
+        expect(child).toMatchObject({ status: "running", hasActiveRun: true });
+        assert(child, "sessions_spawn did not create its child session");
+        const { runId: childRunId } = await poll(() => {
+          expect(persisted(PARENT_KEY)).toMatchObject({
+            status: "done",
+            lastRunId: originalRunId,
+          });
+          const entry = persistedChild(child.key, "child_session_key");
+          expect(entry).toMatchObject({ execution: { status: "running" } });
+          assert(entry, "Child registry row is missing");
+          return entry;
+        });
+        const receipt = () => persistedChild(childRunId);
+        childSessionKey = child.key;
+        expect(
+          JSON.stringify(await client.request("chat.history", { sessionKey: PARENT_KEY })),
+        ).toContain(PARENT_FINAL);
+        observeRecovery = true;
+        const parentSessionId = persisted(PARENT_KEY)?.sessionId;
+        await restart(replaceChild);
+        await client!.request("sessions.subscribe", { agentId: "main" });
+        const checkpoint = await wait(
+          provider.checkpoint,
+          AbortSignal.any([signal, AbortSignal.timeout(60_000)]),
+        );
+        expect(checkpoint).toMatchObject({ sessionKey: PARENT_KEY, sessionId: parentSessionId });
+        expect(checkpoint.prompt).toContain(child.key);
+        expect(checkpoint.prompt).toContain(childRunId);
+        expect(checkpoint.prompt).toContain("Reconcile every listed unfinished");
+        expect(checkpoint.prompt).toContain("uncertain tool effects");
+        expect(checkpoint.prompt).toContain("Process this result privately.");
+        expect(receipt()?.requesterSettleWake).toMatchObject({
+          status: "dispatching",
+        });
+        expect(dispatchCount("recovery")).toBe(0);
+        if (replaceChild) {
+          expect(checkpoint.prompt).toContain("original session incarnation changed");
+          expect(persisted(child.key)).toEqual(replacementChild);
+          expect(receipt()?.execution).toMatchObject({
+            status: "terminal",
+            suppressSessionEffects: true,
+            outcome: {
+              status: "error",
+              error: expect.stringContaining("original session incarnation changed"),
             },
           });
-          await instance.startGateway();
-          client = await connect();
-          await client.request("sessions.create", { key: PARENT_KEY, agentId: "main" });
-          const accepted = await client.request<{ runId: string }>(
-            "chat.send",
-            {
-              sessionKey: PARENT_KEY,
-              message: PARENT_REQUEST,
-              idempotencyKey: "quiet-child-original",
-            },
-            { expectFinal: false },
-          );
-          originalRunId = accepted.runId;
-          await wait(provider.childPending);
-          expect(
-            await client.request("agent.wait", { runId: originalRunId, timeoutMs: 60_000 }),
-          ).toMatchObject({ status: "ok" });
-          const initial = await client.request<SessionsListResult>("sessions.list", {
-            agentId: "main",
-          });
-          const child = initial.sessions.find((row) => row.key.includes(":subagent:"));
-          expect(child).toMatchObject({ status: "running", hasActiveRun: true });
-          if (!child) {
-            throw new Error("sessions_spawn did not create its child session");
-          }
-          const { runId: childRunId } = await vi.waitFor(
-            () => {
-              expect(persisted(PARENT_KEY)).toMatchObject({
-                status: "done",
-                lastRunId: originalRunId,
+        }
+        let dispatchesAtRevocation: number | undefined;
+        let requestsAtRevocation: number | undefined;
+        if (outcome === "complete") {
+          provider.releaseCheckpoint();
+          await wait(provider.recovery);
+          provider.release();
+          await wait(recoveryEnded.promise);
+          await poll(() => {
+            expect(persisted(PARENT_KEY)).toMatchObject({ status: "done" });
+            const settled = receipt();
+            if (!replaceChild) {
+              expect(settled).toMatchObject({
+                expectsCompletionMessage: false,
+                cleanup: "keep",
               });
-              const entry = persistedChild({ sessionKey: child.key });
-              expect(entry).toMatchObject({ execution: { status: "running" } });
-              if (!entry) {
-                throw new Error("Child registry row is missing");
-              }
-              return entry;
-            },
-            { timeout: 30_000 },
-          );
-          const receipt = () => persistedChild({ runId: childRunId });
-          childSessionKey = child.key;
-          expect(
-            JSON.stringify(await client.request("chat.history", { sessionKey: PARENT_KEY })),
-          ).toContain(PARENT_FINAL);
-          observeRecovery = true;
-          const parentSessionId = persisted(PARENT_KEY)?.sessionId;
-          await restart(replaceChild);
-          await client!.request("sessions.subscribe", { agentId: "main" });
-          const checkpoint = await wait(
-            provider.checkpoint,
-            AbortSignal.any([signal, AbortSignal.timeout(60_000)]),
-          );
-          expect(checkpoint).toMatchObject({ sessionKey: PARENT_KEY, sessionId: parentSessionId });
-          expect(checkpoint.prompt).toContain(child.key);
-          expect(checkpoint.prompt).toContain(childRunId);
-          expect(checkpoint.prompt).toContain("Reconcile every listed unfinished");
-          expect(checkpoint.prompt).toContain("uncertain tool effects");
-          expect(checkpoint.prompt).toContain("Process this result privately.");
-          expect(receipt()?.requesterSettleWake).toMatchObject({
-            status: "dispatching",
+            }
+            expect(settled?.requesterSettleWake).toBeUndefined();
           });
-          expect(dispatchCount("recovery")).toBe(0);
-          if (replaceChild) {
-            expect(checkpoint.prompt).toContain("original session incarnation changed");
-            expect(persisted(child.key)).toEqual(replacementChild);
-            expect(receipt()?.execution).toMatchObject({
-              status: "terminal",
-              suppressSessionEffects: true,
-              outcome: {
-                status: "error",
-                error: expect.stringContaining("original session incarnation changed"),
-              },
-            });
-          }
-          let dispatchesAtRevocation: number | undefined;
-          let requestsAtRevocation: number | undefined;
-          if (outcome === "complete") {
+        } else {
+          if (outcome === "reset") {
+            // Reset an executing continuation with its authorized model request pending.
             provider.releaseCheckpoint();
             await wait(provider.recovery);
-            provider.release();
-            await wait(recoveryEnded.promise);
-            await vi.waitFor(
-              () => {
-                expect(persisted(PARENT_KEY)).toMatchObject({ status: "done" });
-                const settled = receipt();
-                if (!replaceChild) {
-                  expect(settled).toMatchObject({
-                    expectsCompletionMessage: false,
-                    cleanup: "keep",
-                  });
-                }
-                expect(settled?.requesterSettleWake).toBeUndefined();
-              },
-              { timeout: 30_000 },
-            );
+          }
+          dispatchesAtRevocation = dispatchCount("recovery");
+          requestsAtRevocation = provider.requests.length;
+          if (outcome === "reset") {
+            await client!.request("sessions.reset", { key: PARENT_KEY, reason: "reset" });
           } else {
-            if (outcome === "reset") {
-              // Reset an executing continuation with its authorized model request pending.
-              provider.releaseCheckpoint();
-              await wait(provider.recovery);
-            }
-            dispatchesAtRevocation = dispatchCount("recovery");
-            requestsAtRevocation = provider.requests.length;
-            if (outcome === "reset") {
-              await client!.request("sessions.reset", { key: PARENT_KEY, reason: "reset" });
-            } else {
-              // Parent cancellation succeeds but cannot cancel a replacement child.
-              await expect(
-                client!.request("chat.abort", {
-                  sessionKey: PARENT_KEY,
-                  runId: checkpoint.runId,
-                }),
-              ).rejects.toThrow(
-                /Parent run stopped, but descendant cancellation was incomplete: .*original session incarnation is unresolved or changed/,
-              );
-            }
-            provider.releaseCheckpoint();
-            provider.release();
-            await vi.waitFor(
-              () => {
-                expect(persisted(PARENT_KEY)?.status).not.toBe("running");
-                expect(receipt()?.requesterSettleWake).toBeUndefined();
-              },
-              { timeout: 30_000 },
+            // Parent cancellation succeeds but cannot cancel a replacement child.
+            await expect(
+              client!.request("chat.abort", {
+                sessionKey: PARENT_KEY,
+                runId: checkpoint.runId,
+              }),
+            ).rejects.toThrow(
+              /Parent run stopped, but descendant cancellation was incomplete: .*original session incarnation is unresolved or changed/,
             );
           }
-          if (outcome === "complete" && !replaceChild) {
-            const history = await client!.request<{ messages: unknown[] }>("chat.history", {
-              sessionKey: child.key,
-            });
-            expect(JSON.stringify(history.messages)).toContain(CHILD_TASK);
-            expect(persisted(child.key)).toMatchObject({
-              sessionId: child.sessionId,
-              status: "interrupted",
-            });
-          }
-          // Restart only after the durable handoff settles; it must stay consumed on the next boot.
-          const recoveryPasses = () =>
-            (instance.logs().match(/startup trace: sidecars.subagent-recovery /g) ?? []).length;
-          const priorRecoveryPasses = recoveryPasses();
-          await restart();
-          await withinTest(
-            Promise.race([
-              vi.waitFor(
-                async () => {
-                  expect(recoveryPasses()).toBeGreaterThan(priorRecoveryPasses);
-                  const sessions = await client!.request<SessionsListResult>("sessions.list", {
-                    agentId: "main",
-                  });
-                  for (const row of sessions.sessions) {
-                    if (row.key === PARENT_KEY || row.key === child.key) {
-                      expect(row.hasActiveRun).toBe(false);
-                    }
-                  }
-                },
-                { timeout: 30_000 },
-              ),
-              provider.failed,
-            ]),
-            signal,
-          );
-          expect(receipt()?.requesterSettleWake).toBeUndefined();
-          if (replaceChild) {
-            expect(persisted(child.key)).toEqual(replacementChild);
-          }
-          if (outcome === "complete") {
-            expect(persisted(PARENT_KEY)).toMatchObject({ status: "done" });
-          }
-          expect(dispatchCount("child")).toBe(1);
-          expect(dispatchCount("parent")).toBe(2);
-          const recoveryDispatches = dispatchCount("recovery");
-          expect(recoveryDispatches).toBe(outcome === "complete" || outcome === "reset" ? 1 : 0);
-          if (dispatchesAtRevocation !== undefined) {
-            expect(recoveryDispatches - dispatchesAtRevocation).toBe(0);
-          }
-          if (requestsAtRevocation !== undefined) {
-            expect(provider.requests.length - requestsAtRevocation).toBe(0);
-          }
-        } catch (cause) {
-          throw new Error(
-            JSON.stringify({
-              calls: provider.calls.map(({ kind }) => kind),
-              logs: instance
-                .logs()
-                .split("\n")
-                .filter((line) => !/startup trace:|startup phase:/.test(line))
-                .slice(-90)
-                .join("\n"),
-            }).replaceAll(instance.gatewayToken, "[fixture token]"),
-            { cause },
-          );
+          provider.releaseCheckpoint();
+          provider.release();
+          await poll(() => {
+            expect(persisted(PARENT_KEY)?.status).not.toBe("running");
+            expect(receipt()?.requesterSettleWake).toBeUndefined();
+          });
+        }
+        if (outcome === "complete" && !replaceChild) {
+          const history = await client!.request<{ messages: unknown[] }>("chat.history", {
+            sessionKey: child.key,
+          });
+          expect(JSON.stringify(history.messages)).toContain(CHILD_TASK);
+          expect(persisted(child.key)).toMatchObject({
+            sessionId: child.sessionId,
+            status: "interrupted",
+          });
+        }
+        // Restart only after the durable handoff settles; it must stay consumed on the next boot.
+        const recoveryPasses = () =>
+          (instance.logs().match(/startup trace: sidecars.subagent-recovery /g) ?? []).length;
+        const priorRecoveryPasses = recoveryPasses();
+        await restart();
+        await withinTest(
+          Promise.race([
+            poll(async () => {
+              expect(recoveryPasses()).toBeGreaterThan(priorRecoveryPasses);
+              const sessions = await client!.request<SessionsListResult>("sessions.list", {
+                agentId: "main",
+              });
+              for (const row of sessions.sessions) {
+                if (row.key === PARENT_KEY || row.key === child.key) {
+                  expect(row.hasActiveRun).toBe(false);
+                }
+              }
+            }),
+            provider.failed,
+          ]),
+          signal,
+        );
+        expect(receipt()?.requesterSettleWake).toBeUndefined();
+        if (replaceChild) {
+          expect(persisted(child.key)).toEqual(replacementChild);
+        }
+        if (outcome === "complete") {
+          expect(persisted(PARENT_KEY)).toMatchObject({ status: "done" });
+        }
+        expect(dispatchCount("child")).toBe(1);
+        expect(dispatchCount("parent")).toBe(2);
+        const recoveryDispatches = dispatchCount("recovery");
+        expect(recoveryDispatches).toBe(outcome === "complete" || outcome === "reset" ? 1 : 0);
+        if (dispatchesAtRevocation !== undefined) {
+          expect(recoveryDispatches - dispatchesAtRevocation).toBe(0);
+        }
+        if (requestsAtRevocation !== undefined) {
+          expect(provider.requests.length - requestsAtRevocation).toBe(0);
         }
       },
       async () => {

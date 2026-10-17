@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../packages/gateway-protocol/src/client-info.js";
 import type { ChatPendingInputsPage } from "../packages/gateway-protocol/src/index.js";
@@ -397,9 +398,7 @@ function createConfig(params: {
         skills: [],
         skipBootstrap: true,
       },
-      entries: {
-        main: { model: { primary: provider.modelRef }, skills: [] },
-      },
+      entries: { main: { model: { primary: provider.modelRef }, skills: [] } },
     },
     tools: steeringTools
       ? {
@@ -415,9 +414,6 @@ function createConfig(params: {
       providers: {
         [provider.providerId]: {
           ...provider.config,
-          models: provider.config.models.map((model) =>
-            Object.assign({}, model, { input: Array.from(model.input) }),
-          ),
           request: { allowPrivateNetwork: true },
         },
       },
@@ -551,16 +547,27 @@ async function createGatewayFixture(
   };
 }
 
-async function sendChat(params: {
-  fixture: GatewayFixture;
-  message: string;
-  runId: string;
-}): Promise<{ runId: string; status?: string }> {
-  return await params.fixture.client.sendChat({
-    sessionKey: params.fixture.sessionKey,
-    message: params.message,
+async function sendChat(fixture: GatewayFixture, message: string, runId: string) {
+  return await fixture.client.sendChat({
+    sessionKey: fixture.sessionKey,
+    message,
     deliver: false,
-    runId: params.runId,
+    runId,
+  });
+}
+
+function directChat(
+  fixture: GatewayFixture,
+  message: string,
+  idempotencyKey: string,
+  queueMode?: "steer" | "followup",
+) {
+  return fixture.diagnosticsClient.request<{ runId: string; status?: string }>("chat.send", {
+    sessionKey: fixture.sessionKey,
+    message,
+    deliver: false,
+    idempotencyKey,
+    ...(queueMode ? { queueMode } : {}),
   });
 }
 
@@ -577,13 +584,8 @@ async function sendHeldTurn(fixture: GatewayFixture, directSteer = false) {
   // Direct chat.send steering retains this connection's admitted authority.
   // The TUI path below exercises follow-up queue admission instead.
   const first = directSteer
-    ? await fixture.diagnosticsClient.request<{ runId: string; status?: string }>("chat.send", {
-        sessionKey: fixture.sessionKey,
-        message: "INITIAL_HELD_TURN",
-        deliver: false,
-        idempotencyKey: "initial-held-turn",
-      })
-    : await sendChat({ fixture, message: "INITIAL_HELD_TURN", runId: "initial-held-turn" });
+    ? await directChat(fixture, "INITIAL_HELD_TURN", "initial-held-turn")
+    : await sendChat(fixture, "INITIAL_HELD_TURN", "initial-held-turn");
   expect(first.status).toBe("started");
   try {
     await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(1), WAIT_OPTS);
@@ -606,11 +608,7 @@ async function queueSteer(fixture: GatewayFixture, marker = "QUEUED_STEER_A") {
       limit: 1,
     },
   );
-  const result = await sendChat({
-    fixture,
-    message: marker,
-    runId: `run-${marker.toLowerCase()}`,
-  });
+  const result = await sendChat(fixture, marker, `run-${marker.toLowerCase()}`);
   expect(result.status).toBe("started");
   await vi.waitFor(async () => {
     const snapshot = await fixture.diagnosticsClient.request<{
@@ -642,16 +640,7 @@ async function queueOrdinaryFollowup(
   marker = "ORDINARY_MESSAGE_B",
 ): Promise<void> {
   const runId = `run-${marker.toLowerCase()}`;
-  const result = await fixture.diagnosticsClient.request<{ runId?: string; status?: string }>(
-    "chat.send",
-    {
-      sessionKey: fixture.sessionKey,
-      message: marker,
-      deliver: false,
-      queueMode: "followup",
-      idempotencyKey: runId,
-    },
-  );
+  const result = await directChat(fixture, marker, runId, "followup");
   expect(result).toMatchObject({ runId, status: "started" });
   await vi.waitFor(async () => {
     const history = await fixture.diagnosticsClient.request<{
@@ -706,28 +695,16 @@ function contentText(content: unknown): string {
   if (typeof content === "string") {
     return content;
   }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .flatMap((part) => {
-      if (!part || typeof part !== "object") {
-        return [];
-      }
-      const text = (part as { text?: unknown }).text;
-      return typeof text === "string" ? [text] : [];
-    })
-    .join("\n");
+  return Array.isArray(content)
+    ? content
+        .flatMap((part) => (isRecord(part) && typeof part.text === "string" ? [part.text] : []))
+        .join("\n")
+    : "";
 }
 
 function responseInputItems(request: ModelRequest | undefined): Array<Record<string, unknown>> {
   const input = request?.body.input;
-  return Array.isArray(input)
-    ? input.filter(
-        (item): item is Record<string, unknown> =>
-          item !== null && typeof item === "object" && !Array.isArray(item),
-      )
-    : [];
+  return Array.isArray(input) ? input.filter(isRecord) : [];
 }
 
 function userInputs(request: ModelRequest | undefined): string[] {
@@ -735,14 +712,9 @@ function userInputs(request: ModelRequest | undefined): string[] {
   if (typeof input === "string") {
     return [input];
   }
-  if (!Array.isArray(input)) {
-    return [];
-  }
-  return input.flatMap((item) =>
-    item && typeof item === "object" && (item as { role?: unknown }).role === "user"
-      ? [contentText((item as { content?: unknown }).content)]
-      : [],
-  );
+  return responseInputItems(request)
+    .filter((item) => item.role === "user")
+    .map((item) => contentText(item.content));
 }
 
 function currentUserInput(request: ModelRequest | undefined): string {
@@ -771,34 +743,6 @@ function assertSteeringOrder(request: ModelRequest | undefined, marker: string) 
 }
 
 describe("Gateway steer FIFO", () => {
-  it(
-    "dispatches terminal A before a later ordinary B queued during the same turn",
-    async () => {
-      const fixture = await createGatewayFixture("steer-terminal-overtake");
-      const first = await sendHeldTurn(fixture);
-      await queueSteer(fixture);
-      await queueOrdinaryFollowup(fixture);
-      const idleBaseline = await fixture.diagnosticsClient.request<{ lastSeq?: number }>(
-        "diagnostics.stability",
-        { type: "session.state", limit: 1 },
-      );
-
-      fixture.modelServer.releaseFirst("final");
-
-      await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(3), WAIT_OPTS);
-      await waitForRunTerminal(fixture, first.runId);
-      await waitForSessionIdle(fixture, idleBaseline.lastSeq ?? 0);
-
-      const currentA = currentUserInput(fixture.modelServer.requests[1]);
-      const currentB = currentUserInput(fixture.modelServer.requests[2]);
-      expect(currentA).toContain("QUEUED_STEER_A");
-      expect(currentA).not.toContain("ORDINARY_MESSAGE_B");
-      expect(currentB).toContain("ORDINARY_MESSAGE_B");
-      expect(currentB).not.toContain("QUEUED_STEER_A");
-    },
-    TEST_TIMEOUT_MS,
-  );
-
   it.each(["preflight", "execute"] as const)(
     "finishes the first tool and skips its sequential tail when steered during %s",
     async (mode) => {
@@ -831,16 +775,7 @@ describe("Gateway steer FIFO", () => {
           await queueSteer(fixture, steerMarker);
         } else {
           const steerRunId = `run-${steerMarker.toLowerCase()}`;
-          const steerResult = await fixture.diagnosticsClient.request<{
-            runId?: string;
-            status?: string;
-          }>("chat.send", {
-            sessionKey: fixture.sessionKey,
-            message: steerMarker,
-            deliver: false,
-            queueMode: "steer",
-            idempotencyKey: steerRunId,
-          });
+          const steerResult = await directChat(fixture, steerMarker, steerRunId, "steer");
           expect(steerResult).toMatchObject({ runId: steerRunId, status: "started" });
           expect(fixture.modelServer.requests).toHaveLength(1);
           await new Promise<void>((resolve) => {
@@ -879,29 +814,44 @@ describe("Gateway steer FIFO", () => {
     TEST_TIMEOUT_MS,
   );
 
-  it(
-    "consumes a steer at a tool control point without a fallback turn",
-    async () => {
-      const fixture = await createGatewayFixture("steer-tool-control-point", {
-        observeSteering: "QUEUED_STEER_A",
-      });
+  it.each(["final", "tool"] as const)(
+    "preserves queued steer FIFO across a %s response",
+    async (responseKind) => {
+      const tool = responseKind === "tool";
+      const fixture = await createGatewayFixture(
+        tool ? "steer-tool-control-point" : "steer-terminal-overtake",
+        tool ? { observeSteering: "QUEUED_STEER_A" } : {},
+      );
       const first = await sendHeldTurn(fixture);
       await queueSteer(fixture);
+      if (!tool) {
+        await queueOrdinaryFollowup(fixture);
+      }
       const idleBaseline = await fixture.diagnosticsClient.request<{ lastSeq?: number }>(
         "diagnostics.stability",
         { type: "session.state", limit: 1 },
       );
-
-      fixture.modelServer.releaseFirst("tool");
-
-      await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(2), WAIT_OPTS);
-      expect(currentUserInput(fixture.modelServer.requests[1])).toContain("QUEUED_STEER_A");
-      expect(JSON.stringify(fixture.modelServer.requests[1]?.body)).toContain(
-        "function_call_output",
-      );
+      fixture.modelServer.releaseFirst(responseKind);
+      const count = tool ? 2 : 3;
+      await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(count), WAIT_OPTS);
+      const currentA = currentUserInput(fixture.modelServer.requests[1]);
+      if (tool) {
+        expect(currentA).toContain("QUEUED_STEER_A");
+        expect(JSON.stringify(fixture.modelServer.requests[1]?.body)).toContain(
+          "function_call_output",
+        );
+      }
       await waitForRunTerminal(fixture, first.runId);
       await waitForSessionIdle(fixture, idleBaseline.lastSeq ?? 0);
-      expect(fixture.modelServer.requests).toHaveLength(2);
+      if (tool) {
+        expect(fixture.modelServer.requests).toHaveLength(2);
+      } else {
+        const currentB = currentUserInput(fixture.modelServer.requests[2]);
+        expect(currentA).toContain("QUEUED_STEER_A");
+        expect(currentA).not.toContain("ORDINARY_MESSAGE_B");
+        expect(currentB).toContain("ORDINARY_MESSAGE_B");
+        expect(currentB).not.toContain("QUEUED_STEER_A");
+      }
     },
     TEST_TIMEOUT_MS,
   );
@@ -939,14 +889,10 @@ describe("Gateway steer FIFO", () => {
       };
 
       try {
-        expect(
-          await client.request("chat.send", {
-            sessionKey,
-            message: "INITIAL_HELD_TURN",
-            deliver: false,
-            idempotencyKey: firstRunId,
-          }),
-        ).toMatchObject({ runId: firstRunId, status: "started" });
+        expect(await directChat(fixture, "INITIAL_HELD_TURN", firstRunId)).toMatchObject({
+          runId: firstRunId,
+          status: "started",
+        });
         await vi.waitFor(() => expect(modelServer.requests).toHaveLength(1), WAIT_OPTS);
         expect(await client.request("chat.send", steerParams)).toMatchObject({
           runId: steerRunId,
