@@ -38,7 +38,7 @@ const remoteResult = (stdout = "", code = 0) => ({
   ...spawnResult(stdout, code),
   workspaceDir: REMOTE_WORKSPACE,
 });
-const isManifestCapture = (argv: string[]) => argv[0] === "node" && !argv.includes("--");
+const isManifestCapture = (argv: readonly string[]) => argv[0] === "node" && !argv.includes("--");
 const originStdout = async ({
   argv,
   seed,
@@ -202,7 +202,7 @@ describe("node worker workspace origin fallback", () => {
           [4, ["checkout", "--detach", "--force", COMMIT]],
         ] as const) {
           expect(commands[index]).toMatchObject({
-            argv: expect.arrayContaining(argv),
+            argv: expect.arrayContaining([...argv]),
             timeoutMs: 60_000,
             transportRetry: "never",
           });

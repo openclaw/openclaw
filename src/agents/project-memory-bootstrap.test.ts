@@ -112,10 +112,13 @@ function setProvider(
   return provider;
 }
 
-async function prepareNative(candidates: MemorySearchHit[]): Promise<string[]> {
+async function prepareNative(
+  candidates: MemorySearchHit[],
+  activeProjectKeys: string[] = projectKeys,
+): Promise<string[]> {
   runtimeMocks.listCurated.mockResolvedValue({ hits: candidates });
   setProvider();
-  return bootstrap();
+  return bootstrap({ activeProjectKeys });
 }
 
 function resetRuntime(native: boolean) {
@@ -158,7 +161,7 @@ describe("project memory bootstrap", () => {
 
   it("includes entries from every project retained in the session active set", async () => {
     const rendered = (
-      await prepareEntries(entries, ["github.com/example/other", "github.com/OpenClaw/OpenClaw"])
+      await prepareLegacy(entries, ["github.com/example/other", "github.com/OpenClaw/OpenClaw"])
     ).join("\n");
     expect(rendered).toContain("Use the release helper.");
     expect(rendered).toContain("Foreign fact.");
@@ -189,11 +192,11 @@ describe("project memory bootstrap", () => {
       startLine: index + 1,
       snippet: "a".repeat(550),
     }));
-    const prefix = await prepareEntries(first);
+    const prefix = await prepareLegacy(first);
     const sourceSuffix = " (Source: MEMORY.md#L5)";
     const remaining = 2_000 - prefix.join("\n").length;
     const lastSnippet = "z".repeat(remaining - "- ".length - sourceSuffix.length - 1);
-    const lines = await prepareEntries([
+    const lines = await prepareLegacy([
       ...first,
       { ...entries[0]!, startLine: 4, snippet: "b".repeat(600) },
       { ...entries[0]!, startLine: 5, snippet: lastSnippet },
@@ -269,7 +272,7 @@ describe("project memory bootstrap", () => {
   });
 
   it("cites legacy chunks by start line from the already-loaded runtime", async () => {
-    const lines = await prepareEntries([
+    const lines = await prepareLegacy([
       { ...entries[0]!, startLine: 5, endLine: 6, source: undefined as never },
     ]);
 
@@ -296,7 +299,10 @@ describe("native project memory bootstrap", () => {
 
   it("includes entries from every project retained in the session active set", async () => {
     const rendered = (
-      await prepareEntries(entries, ["github.com/example/other", "github.com/OpenClaw/OpenClaw"])
+      await prepareNative(nativeEntries, [
+        "github.com/example/other",
+        "github.com/OpenClaw/OpenClaw",
+      ])
     ).join("\n");
     expect(rendered).toContain("Use the release helper.");
     expect(rendered).toContain("Foreign fact.");

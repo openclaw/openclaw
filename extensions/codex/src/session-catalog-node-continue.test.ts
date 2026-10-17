@@ -37,7 +37,6 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 const nodeSourceHomeId = "a".repeat(64);
-const contains = expect.objectContaining;
 const payload = (value: unknown) => ({ payloadJSON: JSON.stringify(value) });
 const nodePage = (sessions: unknown[]) => ({
   payloadJSON: JSON.stringify({ sourceHomeId: nodeSourceHomeId, canContinueCodex: true, sessions }),
@@ -176,15 +175,15 @@ it("adopts a paired-node session with bounded history and an executable binding"
   expect(createSessionEntry).toHaveBeenCalledOnce();
   expect(createSessionEntry.mock.calls[0]?.[0]).not.toHaveProperty("label");
   expect(createSessionEntry).toHaveBeenCalledWith(
-    contains({
+    expect.objectContaining({
       displayName: "Remote task",
       spawnedCwd: "/remote/repo",
-      initialEntry: contains({
+      initialEntry: expect.objectContaining({
         agentHarnessId: "codex",
         modelSelectionLocked: true,
         pluginExtensions: {
           codex: {
-            sessionCatalog: contains({
+            sessionCatalog: expect.objectContaining({
               sourceHostId: "node:devbox",
               sourceThreadId: remoteThreadId,
               nodeId: "devbox",
@@ -197,10 +196,10 @@ it("adopts a paired-node session with bounded history and an executable binding"
   );
   expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledOnce();
   expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledWith(
-    contains({
-      thread: contains({
+    expect.objectContaining({
+      thread: expect.objectContaining({
         id: remoteThreadId,
-        turns: [contains({ id: "turn-1" })],
+        turns: [expect.objectContaining({ id: "turn-1" })],
       }),
       throughTurnId: "turn-1",
       cwd: "/remote/repo",
@@ -421,7 +420,10 @@ it("builds local and paired-node terminal plans from verified catalog records", 
     });
   register();
   const terminalHost = (hostId: string, canOpenTerminal: boolean) =>
-    contains({ hostId, sessions: [contains({ threadId, canOpenTerminal })] });
+    expect.objectContaining({
+      hostId,
+      sessions: [expect.objectContaining({ threadId, canOpenTerminal })],
+    });
   const expectTerminalAvailability = (local: boolean) =>
     expect(getProvider()?.list({})).resolves.toEqual(
       expect.arrayContaining([
@@ -529,7 +531,7 @@ it("builds local and paired-node terminal plans from verified catalog records", 
   });
   await vi.waitFor(() =>
     expect(localProgress).toHaveBeenCalledWith(
-      contains({
+      expect.objectContaining({
         hostId: CODEX_LOCAL_SESSION_HOST_ID,
         connected: false,
         canStartTerminal: true,
@@ -539,8 +541,8 @@ it("builds local and paired-node terminal plans from verified catalog records", 
   rejectNodes(new Error("node registry down"));
   expect(await pending).toEqual(
     expect.arrayContaining([
-      contains({ hostId: CODEX_LOCAL_SESSION_HOST_ID, canStartTerminal: true }),
-      contains({ hostId: "node:registry", canStartTerminal: false }),
+      expect.objectContaining({ hostId: CODEX_LOCAL_SESSION_HOST_ID, canStartTerminal: true }),
+      expect.objectContaining({ hostId: "node:registry", canStartTerminal: false }),
     ]),
   );
   localList.mockRestore();
@@ -553,12 +555,12 @@ it("builds local and paired-node terminal plans from verified catalog records", 
   });
   const terminalHosts = catalogHosts?.filter((host) => host.canStartTerminal);
   expect(terminalHosts?.filter((host) => host.hostId.startsWith("node:"))).toEqual([
-    contains({ hostId: "node:ready", label: "ready", sessions: [] }),
+    expect.objectContaining({ hostId: "node:ready", label: "ready", sessions: [] }),
   ]);
   expect(onHost.mock.calls.map(([host]) => host)).toEqual(expect.arrayContaining(catalogHosts!));
   expect(invoke).not.toHaveBeenCalled();
   expect(terminalHosts?.filter((host) => host.kind === "gateway")).toEqual([
-    contains({ hostId: CODEX_LOCAL_SESSION_HOST_ID }),
+    expect.objectContaining({ hostId: CODEX_LOCAL_SESSION_HOST_ID }),
   ]);
   const userSource = catalogHosts?.find((host) => host.label === "Local Codex · user");
   expect(userSource).toMatchObject({ canStartTerminal: false });

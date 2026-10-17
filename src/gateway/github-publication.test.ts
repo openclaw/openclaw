@@ -269,6 +269,7 @@ describe("Gateway GitHub publication", () => {
       if (pullLookup(command)) {
         return pullResponse({ url: "https://github.com/openclaw/openclaw/pull/125201" });
       }
+      return undefined;
     });
     const result = await publish("fork-existing-pr");
     expect(result).toMatchObject({
@@ -307,6 +308,7 @@ describe("Gateway GitHub publication", () => {
           createdBody = String(JSON.parse(input ?? "{}").body ?? "");
           return commandResult("", 1);
         }
+        return undefined;
       });
       const result = await publish("lost-post-response");
       expect(result).toMatchObject(
@@ -337,6 +339,7 @@ describe("Gateway GitHub publication", () => {
           '{"html_url":"https://github.com/openclaw/openclaw/pull/right-base"}\n',
         );
       }
+      return undefined;
     });
     const result = await publish("wrong-base-pr");
     expect(result).toMatchObject({
@@ -358,6 +361,7 @@ describe("Gateway GitHub publication", () => {
       if (argv.includes("cat-file") && argv.includes("blob")) {
         return commandResult("*.bin filter=lfs\n");
       }
+      return undefined;
     });
     await expect(publish("active-clean-filter")).rejects.toThrow("unsupported Git clean filter");
     expect(commands.some((argv) => argv.includes("commit-tree"))).toBe(false);
@@ -395,6 +399,7 @@ describe("Gateway GitHub publication", () => {
           `${"f".repeat(40)}\n${WORKSPACE_TREE}\n${OLD_HEAD}\nA later local commit\n`,
         );
       }
+      return undefined;
     });
 
     await coordinator.resumeSessionRequests();
@@ -603,6 +608,7 @@ describe("Gateway GitHub publication", () => {
         if (pullLookup(command)) {
           return commandResult(pullRequestExists ? JSON.stringify([publicationPull()]) : "[]\n");
         }
+        return undefined;
       }, true);
       const reopened = openDatabase();
       const resumed = coordinatorFor(reopened);

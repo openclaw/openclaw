@@ -238,10 +238,11 @@ export async function withPersonalToolTurn<T>(
       const backend = { ...handle, kind: params.backendKind ?? "embedded", cancel() {} };
       operation.attachBackend(backend);
       if (backend.kind === "embedded") {
-        registeredHandle = backend;
+        const embeddedBackend = { ...backend, kind: "embedded" as const };
+        registeredHandle = embeddedBackend;
         setActiveEmbeddedRun(
           queued.sessionId,
-          backend,
+          embeddedBackend,
           queued.sessionKey,
           queued.sessionFile,
           "main",

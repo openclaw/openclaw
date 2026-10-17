@@ -188,7 +188,8 @@ describe("node worker tunnel lifetime", () => {
   it.each([8_000, 30_000])(
     "shares the %i ms shutdown budget across remote stop and drain without renewing it",
     async (budgetMs) => {
-      enableTransferCleanup();
+      const closeAll = vi.fn(async () => {});
+      transfer.closeAll = closeAll;
       vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
       const stopEntered = createDeferred();
       const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
@@ -225,7 +226,7 @@ describe("node worker tunnel lifetime", () => {
         ]);
         await vi.advanceTimersByTimeAsync(boundedMs - 6_000);
         expect(await stopping).toBeInstanceOf(WorkerTunnelOwnerDisconnectedError);
-        expect(transfer.closeAll).toHaveBeenCalledOnce();
+        expect(closeAll).toHaveBeenCalledOnce();
         await expect(stopWithin(30_000)).rejects.toBeInstanceOf(WorkerTunnelOwnerDisconnectedError);
         expect(invoke).toHaveBeenCalledTimes(2);
         invoke.mockImplementation(withWorkspaceDrain(async () => nullReply));
@@ -639,7 +640,7 @@ describe("attached app process lifetime", () => {
     });
     record.sharedHost = false;
     record.attachedSessionIds = [];
-    record.profileSnapshot.executionMode = "worker-turn";
+    record.profileSnapshot = { ...record.profileSnapshot, executionMode: "worker-turn" };
     const binding = {
       environmentId: record.environmentId,
       ownerEpoch: record.ownerEpoch,

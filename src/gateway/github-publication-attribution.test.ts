@@ -154,8 +154,8 @@ describe("Gateway GitHub publication attribution", () => {
           Parameters<typeof publicationExecutor.executeGitHubPublication>[0]["recordEffect"]
         >;
         const revokeAfter =
-          (record: RecordEffect): RecordEffect =>
-          async (effect, observed) => {
+          (record: RecordEffect) =>
+          async (effect: Parameters<RecordEffect>[0], observed?: Parameters<RecordEffect>[1]) => {
             await record(effect, observed);
             if (effect === boundary && observed === undefined) {
               revokeCredit();

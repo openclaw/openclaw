@@ -29,7 +29,6 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
-const contains = expect.objectContaining;
 const nodePayload = (value: unknown) => ({ payloadJSON: JSON.stringify(value) });
 const node = (nodeId: string, overrides: Partial<CatalogNode> = {}): CatalogNode => ({
   nodeId,
@@ -45,7 +44,8 @@ const session = (threadId: string, fields: Record<string, unknown> = {}) => ({
 });
 const nodePage = (sessions: unknown[], nextCursor?: string) =>
   nodePayload({ sessions, nextCursor });
-const host = (hostId: string, fields: Record<string, unknown>) => contains({ hostId, ...fields });
+const host = (hostId: string, fields: Record<string, unknown>) =>
+  expect.objectContaining({ hostId, ...fields });
 const failedHost = (name: string, code: string, message: unknown, connected = true) =>
   host(`node:${name}`, { connected, sessions: [], error: { code, message } });
 const duplexIO = () => ({
@@ -215,7 +215,7 @@ it("keeps paired-node catalogs non-archived and metadata-only", async () => {
   ]);
   expect(control.listPage).not.toHaveBeenCalled();
   expect(invoke).toHaveBeenCalledWith(
-    contains({
+    expect.objectContaining({
       nodeId: "devbox",
       command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
       timeoutMs: 65_000,
@@ -314,7 +314,7 @@ it("isolates federated host failures while preserving selected healthy hosts", a
   expect(invoke).toHaveBeenCalledTimes(2);
   for (const nodeId of ["healthy", "broken"]) {
     expect(invoke).toHaveBeenCalledWith(
-      contains({
+      expect.objectContaining({
         nodeId,
         params: { agentId: "main", cursor: `${nodeId}-page-2`, limit: 7, searchTerm: "match" },
         scopes: ["operator.write"],
@@ -325,12 +325,12 @@ it("isolates federated host failures while preserving selected healthy hosts", a
     host(CODEX_LOCAL_SESSION_HOST_ID, {
       connected: true,
       nextCursor: "local-page-3",
-      sessions: [contains({ threadId: "local-match" })],
+      sessions: [expect.objectContaining({ threadId: "local-match" })],
     }),
     host("node:healthy", {
       connected: true,
       nextCursor: "healthy-page-3",
-      sessions: [contains({ threadId: "remote-match" })],
+      sessions: [expect.objectContaining({ threadId: "remote-match" })],
     }),
     failedHost("broken", "NODE_INVOKE_FAILED", expect.any(String)),
     failedHost("offline", "NODE_OFFLINE", "Paired node is offline", false),
@@ -406,7 +406,7 @@ it.each(["completes", "is cancelled"] as const)(
             ? { sessions: [], error: { code: "NODE_INVOKE_FAILED", message: expect.any(String) } }
             : {
                 sessions: [
-                  contains({
+                  expect.objectContaining({
                     threadId: "late-thread",
                     canContinue: false,
                     canArchive: false,
@@ -603,7 +603,7 @@ it.each([
 
     expect(command.dangerous).toBe(false);
     expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
-      contains({
+      expect.objectContaining({
         file: executable,
         cwd: "/node/catalog/cwd",
         env: {

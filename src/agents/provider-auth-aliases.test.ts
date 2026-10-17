@@ -7,6 +7,7 @@ const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(() => createPluginMetadataSnapshot({ plugins: [] })),
 }));
 
+// mock-isolation: Alias fixtures supply their manifest inventory without reading installed plugins.
 vi.mock("../plugins/manifest-registry-installed.js", async (importOriginal) => {
   const { selectInstalledPluginManifestRecords } =
     await importOriginal<typeof import("../plugins/manifest-registry-installed.js")>();
@@ -17,6 +18,7 @@ vi.mock("../plugins/manifest-registry-installed.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Alias resolution must not activate the process plugin registry.
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: pluginRegistryMocks.emptyRegistry,
   loadPluginRegistrySnapshotWithMetadata: () => ({ snapshot: { plugins: [] } }),

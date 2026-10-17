@@ -127,7 +127,7 @@ it("retires a prepared registry after its borrowing request scope has closed", a
   });
   await caller.drain();
   const retired = vi.fn();
-  const closing = borrower.run(borrower.release).then(retired);
+  const closing = Promise.resolve(borrower.run(borrower.release)).then(retired);
   void closing.catch(() => {});
   try {
     await Promise.race([entered.promise, closing]);

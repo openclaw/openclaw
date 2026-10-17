@@ -74,13 +74,14 @@ it.each([false, true])(
                 details: { status: "error", error: "middleware failed" },
               };
             }
+            return undefined;
           },
         ]);
         handlers.set("message_end", [
           async (event) => {
             const { message } = event as MessageEndEvent;
             if (message.role !== "toolResult" || message.toolName !== "successful_tool") {
-              return;
+              return undefined;
             }
             const content = message.content.map((block) =>
               block.type === "text"

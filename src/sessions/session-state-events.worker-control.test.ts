@@ -60,6 +60,7 @@ vi.mock("node:child_process", () =>
 vi.mock("../infra/sqlite-worker-operation-admission.js", () => ({
   createSqliteWorkerOperationAdmission: edge.admission,
 }));
+// mock-isolation: Host-control proof rejects native SQLite access rather than opening a database.
 vi.mock("../infra/node-sqlite.js", () =>
   edge.forbid("requireNodeSqlite", "openNodeSqliteDatabase"),
 );
@@ -75,7 +76,9 @@ vi.mock("../infra/kysely-sync.js", async (importOriginal) => ({
 // Keep config loading from publishing metadata readers that capture this fixture's native mocks.
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../config/sessions/session-accessor.js", () => ({ loadSessionEntryReadOnly: vi.fn() }));
+// mock-isolation: Host-control warnings are captured without installing process log transports.
 vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => ({ warn: edge.warn }) }));
+// mock-isolation: Host-control proof forbids state database access on the calling thread.
 vi.mock("../state/openclaw-state-db.js", () => ({
   ...edge.forbid("openOpenClawStateDatabase", "runOpenClawStateWriteTransaction"),
 }));

@@ -104,7 +104,7 @@ export async function expectPersonalPublicationReplay(
     coordinator,
     action,
   }: Pick<PersonalFixture, "coordinator"> & {
-    generation: string;
+    generation: PersonalFixture["generation"];
     action: PersonalGitHubSessionActionV2;
   },
   capture: (requestId: string) => unknown,

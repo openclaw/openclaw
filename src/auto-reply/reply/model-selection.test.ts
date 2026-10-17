@@ -39,6 +39,7 @@ const catalogMocks = vi.hoisted(() => ({
   })),
 }));
 
+// mock-isolation: Model selection consumes this fixture's prepared catalog without provider discovery.
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   readPreparedModelCatalog: catalogMocks.loadModelCatalog,
@@ -59,6 +60,7 @@ vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOrigin
   getCurrentPluginMetadataSnapshot: () => createPluginMetadataSnapshotFixture(),
 }));
 
+// mock-isolation: Selection assertions observe persistence requests without writing operator state.
 vi.mock("./session-entry-persistence.js", () => ({
   persistReplySessionEntry: persist,
 }));

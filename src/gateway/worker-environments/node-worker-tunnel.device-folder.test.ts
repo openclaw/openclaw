@@ -65,7 +65,7 @@ async function fixture(launchNodeWorker: LaunchNodeWorker = vi.fn()) {
     return { ok: true, payloadJSON: JSON.stringify(await runtime.exec(input, request.signal)) };
   });
   const record = environment();
-  record.profileSnapshot.executionMode = "remote-exec";
+  record.profileSnapshot = { ...record.profileSnapshot, executionMode: "remote-exec" };
   const managers: ReturnType<typeof createNodeWorkerTunnelManager>[] = [];
   const manager = (binding?: NodeWorkerWorkspaceBinding) => {
     const value = createManager(record, {

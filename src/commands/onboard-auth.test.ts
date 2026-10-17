@@ -27,6 +27,7 @@ vi.mock("../config/paths.js", async (importOriginal) => ({
   resolveStateDir: () => process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state",
 }));
 
+// mock-isolation: Auth onboarding uses fixture provider IDs without loading plugin alias metadata.
 vi.mock("../agents/provider-auth-aliases.js", () => ({
   resolveProviderIdForAuth: vi.fn((provider: string) => provider.trim().toLowerCase()),
 }));

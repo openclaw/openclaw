@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, assert, beforeAll, expect, it } from "vitest";
+import { afterAll, assert, beforeAll, expect, it, vi } from "vitest";
 import {
   loadTranscriptEvents,
   readTranscriptMutationAtSync,
@@ -16,14 +16,12 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { createBasicAskUserArgs } from "../embedded-agent-subscribe.handlers.tools.ask-user.test-support.js";
 import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { createAskUserTool } from "../tools/ask-user-tool.js";
 import { persistAgentSessionMessage } from "./agent-session-transcript.js";
-import { sessionScope } from "./session-manager-fixtures.test-support.js";
+import * as metadataRuntime from "./session-manager-metadata-runtime.js";
 import { SessionManager } from "./session-manager.js";
-import { interceptSessionMetadataWorker } from "./session-metadata-worker.test-support.js";
 
 let state: OpenClawTestState;
 beforeAll(async () => {
@@ -38,10 +36,12 @@ for (const outcome of ["timeout", "answer"] as const) {
     `${outcome} settlement after %s rewrite`,
     async (mutation) => {
       const sessionId = `${outcome}-${mutation}`;
-      const target = sessionScope(
-        path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      const target = {
+        agentId: "main",
         sessionId,
-      );
+        sessionKey: `agent:main:${sessionId}`,
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
       await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
       const manager = await SessionManager.openAsync(target, state.workspaceDir);
       installSessionToolResultGuard(manager);
@@ -49,8 +49,16 @@ for (const outcome of ["timeout", "answer"] as const) {
         persistAgentSessionMessage(manager, message, { invalidateSerializedPrefixCache: false });
       const userId = await persist({ role: "user", content: "Which target?", timestamp: 1 });
       assert(userId);
-      const args = createBasicAskUserArgs();
-      args.questions[0]!.question = "Which target?";
+      const args = {
+        questions: [
+          {
+            id: "target",
+            header: "Target",
+            question: "Which target?",
+            options: [{ label: "Staging" }, { label: "Production" }],
+          },
+        ],
+      };
       const call = makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "ask", name: "ask_user", arguments: args }],
         stopReason: "toolUse",
@@ -64,36 +72,56 @@ for (const outcome of ["timeout", "answer"] as const) {
       const questions = new QuestionManager(scheduler);
       const waiting = createDeferredCore();
       let questionId = "";
-      const pending = createAskUserTool({
-        sessionKey: target.sessionKey,
-        gatewayCall: async (method, _options, params) => {
-          if (method === "question.request") {
-            const request = params as Parameters<QuestionManager["request"]>[0];
-            expect(request.timeoutMs).toBe(900_000);
-            questionId = questions.request(request).id;
-            return { id: questionId };
-          }
-          if (method === "question.waitAnswer") {
-            const answer = questions.waitAnswer(questionId);
-            waiting.resolve();
-            return answer;
-          }
-          throw new Error(`Unexpected question method: ${method}`);
-        },
-      }).execute("ask", args);
+      type GatewayCall = Extract<
+        NonNullable<Parameters<typeof createAskUserTool>[0]["gatewayCall"]>,
+        (...args: never[]) => unknown
+      >;
+      const gatewayCall = (async (
+        method: string,
+        _options: unknown,
+        params: Record<string, unknown>,
+      ) => {
+        if (method === "question.request") {
+          expect(params.timeoutMs).toBe(900_000);
+          questionId = questions.request(params as Parameters<QuestionManager["request"]>[0]).id;
+          return { id: questionId };
+        }
+        if (method === "question.waitAnswer") {
+          const answer = questions.waitAnswer(questionId);
+          waiting.resolve();
+          return answer;
+        }
+        throw new Error(`Unexpected question method: ${method}`);
+      }) as GatewayCall;
+      const pending = createAskUserTool({ sessionKey: target.sessionKey, gatewayCall }).execute(
+        "ask",
+        args,
+      );
       const rewriteReady = createDeferredCore();
       const releaseRewrite = createDeferredCore();
+      const withWorker = metadataRuntime.withSessionMetadataWorker;
       const blocker =
         mutation === "own-in-flight"
-          ? interceptSessionMetadataWorker((worker) => ({
-              execute: async (command, commandOptions) => {
-                if (command.type === "session.transcript.rewrite") {
-                  rewriteReady.resolve();
-                  await releaseRewrite.promise;
-                }
-                return worker.execute(command, commandOptions);
-              },
-            }))
+          ? vi
+              .spyOn(metadataRuntime, "withSessionMetadataWorker")
+              .mockImplementation((options, database, assertCurrent, operation, controls) =>
+                withWorker(
+                  options,
+                  database,
+                  assertCurrent,
+                  (worker) =>
+                    operation({
+                      execute: async (command, commandOptions) => {
+                        if (command.type === "session.transcript.rewrite") {
+                          rewriteReady.resolve();
+                          await releaseRewrite.promise;
+                        }
+                        return worker.execute(command, commandOptions);
+                      },
+                    }),
+                  controls,
+                ),
+              )
           : undefined;
       let commit: Promise<unknown> | undefined;
       let settlement: Promise<unknown> | undefined;

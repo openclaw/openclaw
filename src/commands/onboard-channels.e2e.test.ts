@@ -152,6 +152,7 @@ vi.mock("../plugins/manifest-registry.js", async () => {
   };
 });
 
+// mock-isolation: Channel setup exercises the synthetic plugin catalog, not bundled plugin loading.
 vi.mock("../channels/plugins/bundled.js", () => ({
   getBundledChannelSetupPlugin: () => undefined,
 }));
