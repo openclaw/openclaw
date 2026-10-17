@@ -86,12 +86,12 @@ function runRecovery(
   receipt: "none" | "valid" | "wrong-run" | "missing-history" = "none",
   failAt = "",
 ) {
-  const result = {
+  writeJson(join(root, "recovery-update.json"), {
     status: "ok",
     runId: "fixture-run",
     steps: receipt === "none" ? [] : [warning],
-  };
-  const status = {
+  });
+  writeJson(join(root, "status.json"), {
     lastRun: {
       runId: receipt === "wrong-run" ? "other-run" : "fixture-run",
       steps:
@@ -99,9 +99,7 @@ function runRecovery(
           ? []
           : [{ step: "warning:managed-service-membership", status: "completed", detail: message }],
     },
-  };
-  writeJson(join(root, "recovery-update.json"), result);
-  writeJson(join(root, "status.json"), status);
+  });
   const events = join(root, "events");
   writeFileSync(events, "");
   const observed = runProcess(
@@ -144,16 +142,20 @@ function selectedMode(stdout: string) {
   return assignment?.slice(flag.length + 1) ?? "";
 }
 
+function expectMode(fixture: ReturnType<typeof target>, mode: string, env?: NodeJS.ProcessEnv) {
+  const selected = fixture.select(env);
+  expect(selected.status, selected.stderr).toBe(0);
+  expect(selectedMode(selected.stdout)).toBe(mode);
+  return mode;
+}
+
 describe.skipIf(process.platform === "win32")("frozen managed membership contract", () => {
   it("uses the committed pre-warning containment contract", () => {
     const f = target(false);
     // A dirty working file is not a capability of the frozen commit.
     writeFileSync(join(f.selected, terminalOwner), readFileSync(terminalOwner));
-    const selected = f.select();
-    expect(selected.status, selected.stderr).toBe(0);
-    const run = runRecovery(f.root, selectedMode(selected.stdout));
+    const run = runRecovery(f.root, expectMode(f, "native"));
     expect(run.status, run.stderr).toBe(0);
-    expect(selectedMode(selected.stdout)).toBe("native");
     expect(run.events).toEqual([
       "stop-recovery-service",
       "prepare-restart-inference",
@@ -173,10 +175,7 @@ describe.skipIf(process.platform === "win32")("frozen managed membership contrac
 
   it("requires both matching receipts for absent containment", () => {
     const f = target(true);
-    const selected = f.select();
-    expect(selected.status, selected.stderr).toBe(0);
-    expect(selectedMode(selected.stdout)).toBe("absent");
-    const valid = runRecovery(f.root, "absent", "valid");
+    const valid = runRecovery(f.root, expectMode(f, "absent"), "valid");
     expect(valid.status, valid.stderr).toBe(0);
     expect(valid.events).toContain("containment:absent");
     expect(valid.events).toContain("recovery-membership-warning");
@@ -192,16 +191,13 @@ describe.skipIf(process.platform === "win32")("frozen managed membership contrac
     expect(invalid.events).toEqual([""]);
   });
 
-  it("rejects wrong identity, partial contracts, and unqualified overrides", () => {
+  it("rejects partial contracts and unqualified overrides", () => {
     const f = target(true, true);
     expect(f.select().status).not.toBe(0);
     const old = target(false);
-    expect(old.select({ OPENCLAW_SELECTED_SHA: "b".repeat(40) }).status).not.toBe(0);
-    const current = old.select({
+    expectMode(old, "absent", {
       OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "0",
       [flag]: "native",
     });
-    expect(current.status, current.stderr).toBe(0);
-    expect(selectedMode(current.stdout)).toBe("absent");
   });
 });

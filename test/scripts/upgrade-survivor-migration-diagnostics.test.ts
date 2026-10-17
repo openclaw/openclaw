@@ -8,7 +8,12 @@ import { publishDiagnostics } from "../../scripts/e2e/lib/upgrade-survivor/diagn
 import { redactSensitiveText } from "../../src/logging/redact.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { readJson, runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
+import {
+  readJson,
+  runProcess,
+  successSummary,
+  writeJson,
+} from "./upgrade-survivor-shard.test-support.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -25,26 +30,21 @@ const baselineGatewayLogs = [
   "missing-load-path/baseline-gateway.log",
   "missing-load-path/baseline-gateway-convergence-refusal.log",
 ];
-const cronCliLogs = [
-  "legacy-operator-add-survivor-default-owner.out",
-  "legacy-operator-add-survivor-default-owner.err",
-  "legacy-operator-add-survivor-ops-owner.out",
-  "legacy-operator-add-survivor-ops-owner.err",
-  ...["default", "ops"].flatMap((owner) =>
-    ["out", "err"].map((extension) => `legacy-operator-run-survivor-${owner}-owner.${extension}`),
+const stdioLogs = (stems: string[]) =>
+  stems.flatMap((stem) => ["out", "err"].map((extension) => `${stem}.${extension}`));
+const cronCliLogs = stdioLogs([
+  ...["add", "run"].flatMap((command) =>
+    ["default", "ops"].map((owner) => `legacy-operator-${command}-survivor-${owner}-owner`),
   ),
-  "legacy-operator-post-update-transcript-0.out",
-  "legacy-operator-post-update-transcript-0.err",
-  "legacy-operator-candidate-transcript-1-earlier.out",
-  "legacy-operator-candidate-transcript-1-earlier.err",
-];
-const nativeRecoveryLogs = [
-  "native-recover.out",
-  "native-recover.err",
-  "native-recover-wait.out",
-  "native-recover-wait.err",
-];
+  "legacy-operator-post-update-transcript-0",
+  "legacy-operator-candidate-transcript-1-earlier",
+]);
+const nativeRecoveryLogs = stdioLogs(["native-recover", "native-recover-wait"]);
 const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+const jsonLines = (values: unknown[]) =>
+  values.map((value) => JSON.stringify(value)).join("\n") + "\n";
+const migrationSchema =
+  "CREATE TABLE migration_runs(id TEXT, status TEXT, report_json TEXT); CREATE TABLE migration_sources(migration_kind TEXT, source_path TEXT, source_sha256 TEXT, status TEXT, removed_source INTEGER, report_json TEXT);";
 
 function fixture() {
   const root = fs.realpathSync(dirs.make("survivor-migration-capture-"));
@@ -53,10 +53,17 @@ function fixture() {
   fs.mkdirSync(artifacts);
   fs.mkdirSync(path.join(root, "openclaw-upgrade-survivor"));
   fs.mkdirSync(path.join(state, "state"), { recursive: true });
+  const publish = (outcome: "failed" | "passed" = "failed", redact = redactSensitiveText) => {
+    const output = path.join(root, "public");
+    const coordinates = publishDiagnostics(artifacts, output, redact, outcome);
+    const file = path.join(output, outcome === "passed" ? "summary.json" : "failure.json");
+    return { coordinates, file, report: () => readJson(file) };
+  };
   return {
     root,
     artifacts,
     state,
+    publish,
     writeArtifact: (name: string, value: unknown) => write(path.join(artifacts, name), value),
     writeLog: (name: string, value: string) => fs.writeFileSync(path.join(artifacts, name), value),
     env: {
@@ -82,26 +89,37 @@ function runNode(f: ReturnType<typeof fixture>, args: string[], env: NodeJS.Proc
   return runProcess(node, args, { ...f.env, ...env }, 10_000);
 }
 
+function runRuntime(
+  f: ReturnType<typeof fixture>,
+  version: string,
+  command: string,
+  program: string,
+  env: NodeJS.ProcessEnv = {},
+) {
+  write(path.join(f.root, "package.json"), { name: "openclaw", version, type: "module" });
+  const entry = path.join(f.root, "openclaw.mjs");
+  fs.writeFileSync(entry, program);
+  const child = runNode(f, ["--import", observer, entry, command], env);
+  expectStatus(child, 1);
+  return child;
+}
+
 function capture(f: ReturnType<typeof fixture>, outcome: "failed" | "passed" = "failed") {
-  const result = runNode(f, [
-    observer,
-    "capture",
-    f.artifacts,
-    "update-candidate",
-    "1",
-    "",
-    f.artifacts,
-  ]);
-  expect(result.status, result.stderr).toBe(0);
-  const output = path.join(f.root, "public");
-  publishDiagnostics(f.artifacts, output, redactSensitiveText, outcome);
-  const text = fs.readFileSync(
-    path.join(output, outcome === "passed" ? "summary.json" : "failure.json"),
-    "utf8",
+  expectStatus(
+    runNode(f, [observer, "capture", f.artifacts, "update-candidate", "1", "", f.artifacts]),
   );
+  const text = fs.readFileSync(f.publish(outcome).file, "utf8");
+  expectPrivate(text);
+  return JSON.parse(text);
+}
+
+function expectStatus(result: ReturnType<typeof runProcess>, status = 0) {
+  expect(result.status, result.stderr).toBe(status);
+}
+
+function expectPrivate(text: string) {
   expect(text).not.toContain(secret);
   expect(text).not.toContain(privateBody);
-  return JSON.parse(text);
 }
 
 function expectOmitted(
@@ -114,15 +132,17 @@ function expectOmitted(
   }
 }
 
+function expectLogs(logs: Record<string, string>, entries: Record<string, unknown>) {
+  for (const [name, value] of Object.entries(entries)) {
+    expect(JSON.parse(logs[name]), name).toMatchObject(value);
+  }
+}
+
 it.each([
-  { name: "update.json", prefix: "", failure: { exitCode: 1 } },
-  { name: "recovery-update.json", prefix: "", failure: { exitCode: null, termination: "timeout" } },
-  {
-    name: "update.json",
-    prefix: "Update warning before JSON\n",
-    failure: { exitCode: 0, outputLimitExceeded: true },
-  },
-])("prioritizes failed update steps in $name ($failure)", ({ name, prefix, failure }) => {
+  ["update.json", "", { exitCode: 1 }],
+  ["recovery-update.json", "", { exitCode: null, termination: "timeout" }],
+  ["update.json", "Update warning before JSON\n", { exitCode: 0, outputLimitExceeded: true }],
+] as const)("prioritizes failed update steps in %s", (name, prefix, failure) => {
   const f = fixture();
   const update = {
     status: "error",
@@ -158,9 +178,7 @@ it.each([
     signal: null,
     logs: { [name]: `${prefix}${JSON.stringify(update, null, 2)}` },
   });
-  const output = path.join(f.root, "public");
-  publishDiagnostics(f.artifacts, output, redactSensitiveText);
-  const report = readJson(path.join(output, "failure.json"));
+  const report = f.publish().report();
   const log = report.logs[name];
   expect(log).toContain("Reported failing update step 3 of 4");
   expect(log).toContain("Candidate import failed");
@@ -187,19 +205,18 @@ it("returns only redacted failure coordinates", () => {
     environment: { TOKEN: secret },
   };
   f.writeArtifact("diagnostics/raw.json", raw);
-  const output = path.join(f.root, "public");
   const redact = (text: string) =>
     text === raw.phase ? "safe%phase\r\n::error::not-another-command" : redactSensitiveText(text);
-  const failure = publishDiagnostics(f.artifacts, output, redact);
+  const publication = f.publish("failed", redact);
+  const failure = publication.coordinates;
   expect(failure).toEqual({
     phase: "safe%phase\r\n::error::not-another-command",
     exitStatus: 143,
     signal: "SIGTERM",
   });
-  expect(JSON.stringify(failure)).not.toContain(secret);
-  expect(JSON.stringify(failure)).not.toContain(privateBody);
+  expectPrivate(JSON.stringify(failure));
   expect(stderr.mock.calls.some(([text]) => String(text).startsWith("::error"))).toBe(false);
-  expect(readJson(path.join(output, "failure.json"))).toMatchObject({
+  expect(publication.report()).toMatchObject({
     phase: raw.phase,
     exitStatus: 143,
     signal: "SIGTERM",
@@ -247,16 +264,13 @@ it("publishes CLI failure metadata without changing exit status", () => {
     ],
     { GITHUB_ACTIONS: "true" },
   );
-  expect(result.status, result.stderr).toBe(0);
+  expectStatus(result);
   expect(result.stderr.split("\n").filter((line) => line.startsWith("::error"))).toEqual([
     "::error title=Upgrade survivor failure::phase=recovery-update-restart; exitStatus=1; signal=none",
   ]);
-  expect(result.stderr).not.toContain(secret);
-  expect(result.stderr).not.toContain(privateBody);
-  const control = path.join(f.root, "unannotated-publication");
-  publishDiagnostics(f.artifacts, control, redactSensitiveText);
+  expectPrivate(result.stderr);
   expect(fs.readFileSync(path.join(destination, "failure.json"), "utf8")).toBe(
-    fs.readFileSync(path.join(control, "failure.json"), "utf8"),
+    fs.readFileSync(f.publish().file, "utf8"),
   );
 });
 
@@ -278,18 +292,7 @@ function pluginPolicyReceipt() {
 }
 
 function policySuccessSummary(pluginPolicy: unknown) {
-  return {
-    status: "passed",
-    baseline: { spec: "openclaw@2026.9.2", version: "2026.9.2" },
-    candidate: { kind: "tarball", version: "2026.9.6" },
-    scenario: "legacy-operator-state",
-    installedVersion: "2026.9.6",
-    candidateInstallMode: "updater",
-    updateRestartMode: "manual",
-    updateOutcome: "success",
-    phases: [],
-    pluginPolicy,
-  };
+  return successSummary("2026.9.2", "2026.9.6", { pluginPolicy });
 }
 
 it.each([false, true])("requires policy evidence after a completed probe: %s", (completed) => {
@@ -304,9 +307,9 @@ it.each([false, true])("requires policy evidence after a completed probe: %s", (
   });
   f.writeArtifact("webhooks-only-policy/result.json", { privateBody });
   if (completed) {
-    expect(() =>
-      publishDiagnostics(f.artifacts, path.join(f.root, "public"), redactSensitiveText, "passed"),
-    ).toThrow("Missing sole-plugin policy evidence after completed probe");
+    expect(() => f.publish("passed")).toThrow(
+      "Missing sole-plugin policy evidence after completed probe",
+    );
   } else {
     const report = capture(f, "passed");
     expect(report).not.toHaveProperty("pluginPolicy");
@@ -335,13 +338,16 @@ it.each([false, true])("publishes sole-policy proof with unsafe logs: %s", (unsa
       warning: `token=${secret}`,
     });
   }
-  f.writeArtifact("webhooks-only-policy/candidate-runtime.out", {
-    plugins: [{ id: "telegram", enabled: true, runtime: { state: "unloaded" } }],
-    warning: `token=${secret}`,
-  });
-  f.writeArtifact("webhooks-only-policy/baseline-runtime.out", {
-    plugins: [{ id: "telegram", installed: true, enabled: true, state: "enabled" }],
-  });
+  const runtimes = {
+    candidate: {
+      plugins: [{ id: "telegram", enabled: true, runtime: { state: "unloaded" } }],
+      warning: `token=${secret}`,
+    },
+    baseline: { plugins: [{ id: "telegram", installed: true, enabled: true, state: "enabled" }] },
+  };
+  for (const [stage, runtime] of Object.entries(runtimes)) {
+    f.writeArtifact(`webhooks-only-policy/${stage}-runtime.out`, runtime);
+  }
   f.writeArtifact("webhooks-only-policy/openclaw.json", { privateBody, secret });
   const report = capture(f, "passed");
   expect(report.pluginPolicy).toEqual(policy);
@@ -357,12 +363,11 @@ it.each([false, true])("publishes sole-policy proof with unsafe logs: %s", (unsa
       after: { version: "2026.9.6" },
     });
   }
-  expect(JSON.parse(report.logs["webhooks-only-policy/candidate-runtime.out"]).plugins).toEqual([
-    { id: "telegram", enabled: true, runtime: { state: "unloaded" } },
-  ]);
-  expect(JSON.parse(report.logs["webhooks-only-policy/baseline-runtime.out"]).plugins).toEqual([
-    { id: "telegram", installed: true, enabled: true, state: "enabled" },
-  ]);
+  for (const [stage, runtime] of Object.entries(runtimes)) {
+    expect(JSON.parse(report.logs[`webhooks-only-policy/${stage}-runtime.out`]).plugins).toEqual(
+      runtime.plugins,
+    );
+  }
   expect(report.logs).not.toHaveProperty("webhooks-only-policy/openclaw.json");
 });
 
@@ -377,26 +382,20 @@ it.each([
 ])("rejects inconsistent sole-policy success receipts: %j", (patch) => {
   const f = fixture();
   f.writeArtifact("summary.json", policySuccessSummary({ ...pluginPolicyReceipt(), ...patch }));
-  expect(() =>
-    publishDiagnostics(f.artifacts, path.join(f.root, "public"), redactSensitiveText, "passed"),
-  ).toThrow("Invalid sole-plugin policy evidence");
+  expect(() => f.publish("passed")).toThrow("Invalid sole-plugin policy evidence");
 });
 
 it.each(["failed", "passed"] as const)(
   "retains redacted sibling refusal evidence after a %s attempt",
   (outcome) => {
     const f = fixture();
-    f.writeArtifact("summary.json", {
-      status: "passed",
-      baseline: { spec: "openclaw@2026.9.6", version: "2026.9.6" },
-      candidate: { kind: "tarball", version: "2026.9.5" },
-      scenario: "custom-plugin-siblings",
-      installedVersion: "2026.9.5",
-      candidateInstallMode: "npm",
-      updateRestartMode: "manual",
-      updateOutcome: "success",
-      phases: [],
-    });
+    f.writeArtifact(
+      "summary.json",
+      successSummary("2026.9.6", "2026.9.5", {
+        scenario: "custom-plugin-siblings",
+        candidateInstallMode: "npm",
+      }),
+    );
     f.writeArtifact("update.json", { status: "ok", runId: "healthy-retry" });
     f.writeArtifact("sibling-refusal-update.json", {
       status: "error",
@@ -409,7 +408,7 @@ it.each(["failed", "passed"] as const)(
     f.writeArtifact("sibling-refusal-worker.json", { worker: { pid: 123 } });
     f.writeArtifact("sibling-refusal-cleanup.json", { survivors: [] });
     const report = capture(f, outcome);
-    for (const [name, value] of Object.entries({
+    expectLogs(report.logs, {
       "update.json": { runId: "healthy-retry" },
       "sibling-refusal-update.json": {
         status: "error",
@@ -418,9 +417,7 @@ it.each(["failed", "passed"] as const)(
       },
       "sibling-refusal-status.json": { lastRun: { runId: "refused-run" } },
       "sibling-refusal-worker.json": { worker: { pid: 123 } },
-    })) {
-      expect(JSON.parse(report.logs[name])).toMatchObject(value);
-    }
+    });
     expect(JSON.parse(report.logs["sibling-refusal-cleanup.json"]).survivors).toEqual([]);
   },
 );
@@ -466,14 +463,10 @@ function integrityFixture(
 
 it("binds integrity evidence to the failing baseline updater", () => {
   const f = fixture();
-  write(path.join(f.root, "package.json"), {
-    name: "openclaw",
-    version: "2026.9.4",
-    type: "module",
-  });
-  const entry = path.join(f.root, "openclaw.mjs");
-  fs.writeFileSync(
-    entry,
+  const child = runRuntime(
+    f,
+    "2026.9.4",
+    "update",
     `import fs from "node:fs";
 const facts = {readerId: process.pid + ":1", timeOriginUnixMs: performance.timeOrigin,
   phase: "retained", budgetMs: 30000, secret: ${JSON.stringify(secret)},
@@ -492,8 +485,6 @@ fs.writeFileSync(${JSON.stringify(path.join(f.root, "openclaw-upgrade-survivor",
   records.map(record => JSON.stringify(record)).join("\\n") + "\\n");
 process.exit(1);`,
   );
-  const child = runNode(f, ["--import", observer, entry, "update"]);
-  expect(child.status, child.stderr).toBe(1);
   const report = capture(f);
   const expected = [
     { readerId: `${child.pid}:1`, event: "reader-started", phase: "retained", budgetMs: 30000 },
@@ -518,8 +509,7 @@ process.exit(1);`,
   const reprojected = path.join(f.root, "reprojected");
   publishDiagnostics(f.artifacts, reprojected, redactSensitiveText);
   const text = fs.readFileSync(path.join(reprojected, "failure.json"), "utf8");
-  expect(text).not.toContain(privateBody);
-  expect(text).not.toContain(secret);
+  expectPrivate(text);
   expect(JSON.parse(text).packageIntegrity.observations).toEqual(expected);
   raw.packageIntegrity.observations[0].budgetMs = "30000";
   write(rawPath, raw);
@@ -533,19 +523,17 @@ process.exit(1);`,
 });
 
 const invalidIntegrityCases: {
-  name: string;
   identity?: Record<string, unknown>;
   telemetry?: Record<string, unknown>;
   boundary?: "input" | "output" | "entries" | "symlink" | "directory-symlink" | "malformed";
 }[] = [
-  { name: "different PID", identity: { pid: 43 } },
-  { name: "Doctor", identity: { role: "doctor" } },
-  { name: "different package", identity: { packageVersion: "2026.9.5" } },
-  { name: "missing settled outcome", telemetry: { outcome: undefined } },
-  { name: "negative pending I/O", telemetry: { pendingIo: -1 } },
+  { identity: { pid: 43 } },
+  { identity: { role: "doctor" } },
+  { identity: { packageVersion: "2026.9.5" } },
+  { telemetry: { outcome: undefined } },
+  { telemetry: { pendingIo: -1 } },
   ...(["input", "output", "entries", "symlink", "directory-symlink", "malformed"] as const).map(
     (boundary) => ({
-      name: `${boundary} boundary`,
       telemetry: { phase: "transaction", pendingIo: 1 },
       boundary,
     }),
@@ -553,7 +541,7 @@ const invalidIntegrityCases: {
 ];
 
 it.each(invalidIntegrityCases)(
-  "omits integrity evidence from $name",
+  "omits integrity evidence from %j",
   ({ identity, telemetry, boundary }) => {
     const f = integrityFixture(identity, telemetry);
     if (boundary) {
@@ -622,20 +610,19 @@ it("bounds and redacts Gateway, Cron, recovery, and update logs", () => {
   }
   f.writeLog(
     "native-assignment-messages.jsonl",
-    JSON.stringify({ phase: "seed-history", marker: "EARLY_NATIVE_SEED" }) +
-      "\n" +
-      (JSON.stringify({ phase: "seed-history", direction: "response" }) + "\n").repeat(1000) +
-      JSON.stringify({ phase: "recover", error: `Native RPC rejected: token=${secret}` }) +
-      "\n",
+    jsonLines([
+      { phase: "seed-history", marker: "EARLY_NATIVE_SEED" },
+      ...Array.from({ length: 1000 }, () => ({ phase: "seed-history", direction: "response" })),
+      { phase: "recover", error: `Native RPC rejected: token=${secret}` },
+    ]),
   );
   const report = capture(f);
-  for (const name of nativeRecoveryLogs) {
-    expect(report.logs[name]).toContain("native-recovery-probe");
-    expect(JSON.parse(report.logs[name])).toMatchObject({
-      runId: "native-recovery-probe",
-      status: "error",
-    });
-  }
+  expectLogs(
+    report.logs,
+    Object.fromEntries(
+      nativeRecoveryLogs.map((name) => [name, { runId: "native-recovery-probe", status: "error" }]),
+    ),
+  );
   expect(report.logs["native-assignment-messages.jsonl"]).toContain('"phase":"recover"');
   expect(report.logs["native-assignment-messages.jsonl"]).not.toContain("EARLY_NATIVE_SEED");
   expect(
@@ -685,10 +672,8 @@ it("publishes failed rollback proof without claiming omitted files", () => {
   f.writeLog("backup-rollback-restore.json.err", `token=${secret}\n`);
   const report = capture(f);
   expect(report.outcome).toBe("failed");
-  expect(JSON.parse(report.logs["backup-rollback-create.json"])).toMatchObject({
-    verified: true,
-    skippedVolatileCount: 3,
-    skipped: [],
+  expectLogs(report.logs, {
+    "backup-rollback-create.json": { verified: true, skippedVolatileCount: 3, skipped: [] },
   });
   expect(JSON.parse(report.logs["backup-rollback-restore.json"])).toEqual({ ok: true });
   expect(JSON.parse(report.logs["backup-rollback.json"])).toEqual(proof);
@@ -705,12 +690,6 @@ it.each([
   },
 ])("retains Doctor and plugin assertion failures with $name", ({ opaqueCopies, omission }) => {
   const f = fixture();
-  write(path.join(f.root, "package.json"), {
-    name: "openclaw",
-    version: "2026.9.5",
-    type: "module",
-  });
-  const entry = path.join(f.root, "openclaw.mjs");
   const uid = process.getuid?.();
   const doctorRoot = path.join(f.root, uid === undefined ? "openclaw" : `openclaw-${uid}`);
   fs.mkdirSync(doctorRoot, { mode: 0o700 });
@@ -725,14 +704,13 @@ it.each([
     configChanges: [{ privateBody }],
     privateBody,
   };
-  fs.writeFileSync(
-    entry,
+  runRuntime(
+    f,
+    "2026.9.5",
+    "doctor",
     `import fs from "node:fs"; fs.writeFileSync(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH, ${JSON.stringify(JSON.stringify(result))}); process.exit(1);`,
+    { OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: resultPath },
   );
-  const child = runNode(f, ["--import", observer, entry, "doctor"], {
-    OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: resultPath,
-  });
-  expect(child.status, child.stderr).toBe(1);
   fs.unlinkSync(resultPath);
   const updateFile = path.join(f.artifacts, "update.json");
   fs.writeFileSync(
@@ -841,9 +819,7 @@ it("observes retained imports and archives without modifying state", () => {
   fs.writeFileSync(transcript, privateBody);
   const dbPath = path.join(f.state, "state/openclaw.sqlite");
   const db = new DatabaseSync(dbPath);
-  db.exec(
-    "PRAGMA user_version=20; CREATE TABLE migration_runs(id TEXT, status TEXT, report_json TEXT); CREATE TABLE migration_sources(migration_kind TEXT, source_path TEXT, source_sha256 TEXT, status TEXT, removed_source INTEGER, report_json TEXT);",
-  );
+  db.exec(`PRAGMA user_version=20; ${migrationSchema}`);
   db.prepare("INSERT INTO migration_runs VALUES (?, ?, ?)").run(
     "deferred-plugin-migration:discord",
     "pending",
@@ -917,7 +893,7 @@ it("observes retained imports and archives without modifying state", () => {
 it("records Doctor module and callback identities without argv", () => {
   const f = fixture();
   const seeded = runNode(f, [sibling, "seed"]);
-  expect(seeded.status, seeded.stderr).toBe(0);
+  expectStatus(seeded);
   const doctor = path.join(f.root, "custom-plugins/memory/doctor-contract-api.mjs");
   const invoked = runNode(f, [
     "--input-type=module",
@@ -925,7 +901,7 @@ it("records Doctor module and callback identities without argv", () => {
     `const m = await import(${JSON.stringify(pathToFileURL(doctor).href)}); m.normalizeCompatibilityConfig({cfg:{}});`,
     privateBody,
   ]);
-  expect(invoked.status, invoked.stderr).toBe(0);
+  expectStatus(invoked);
   const report = capture(f);
   expect(report.migration.sibling).toMatchObject({
     availability: "captured",
@@ -992,25 +968,19 @@ it("clears stale proof before seeding without following symlinks", () => {
     ...turnLogs,
     ...cronCliLogs,
     ...nativeRecoveryLogs,
-    "native-assignment-inventory-after-first-hop.json",
-    "native-assignment-inventory-before-recovery.json",
-    "native-assignment-inventory-after-recovery.json",
-    "native-assignment-inventory-live-final.json",
+    ...["after-first-hop", "before-recovery", "after-recovery", "live-final"].map(
+      (stage) => `native-assignment-inventory-${stage}.json`,
+    ),
     ...baselineGatewayLogs,
-    "sibling-refusal-update.json",
-    "sibling-refusal-status.json",
-    "sibling-refusal-worker.json",
-    "sibling-refusal-child.json",
-    "sibling-refusal-cleanup.json",
+    ...["update", "status", "worker", "child", "cleanup"].map(
+      (step) => `sibling-refusal-${step}.json`,
+    ),
     "legacy-operator-restored-index.json",
-    "restored-index-post-update.json",
-    "restored-index-candidate-import.json",
-    "restored-index-rollback.json",
+    ...["post-update", "candidate-import", "rollback"].map((step) => `restored-index-${step}.json`),
     "backup-rollback.json",
-    "backup-rollback-create.json",
-    "backup-rollback-create.json.err",
-    "backup-rollback-restore.json",
-    "backup-rollback-restore.json.err",
+    ...["create", "restore"].flatMap((step) =>
+      ["json", "json.err"].map((extension) => `backup-rollback-${step}.${extension}`),
+    ),
   ];
   for (const name of logs) {
     fs.mkdirSync(path.dirname(path.join(f.artifacts, name)), { recursive: true });
@@ -1055,7 +1025,7 @@ it("clears stale proof before seeding without following symlinks", () => {
     { ...f.env, ARTIFACT_DIR: f.artifacts },
     10_000,
   );
-  expect(prepared.status, prepared.stderr).toBe(0);
+  expectStatus(prepared);
   for (const name of baselineGatewayLogs) {
     expect(fs.readFileSync(path.join(outsideLogs, path.basename(name)), "utf8")).toBe(
       "outside capture ownership",
@@ -1077,9 +1047,7 @@ it.each([false, true])(
     const dbPath = path.join(f.state, "state/openclaw.sqlite");
     const database = new DatabaseSync(dbPath);
     try {
-      database.exec(
-        "PRAGMA journal_mode=WAL; CREATE TABLE migration_runs(id TEXT, status TEXT, report_json TEXT); CREATE TABLE migration_sources(migration_kind TEXT, source_path TEXT, source_sha256 TEXT, status TEXT, removed_source INTEGER, report_json TEXT);",
-      );
+      database.exec(`PRAGMA journal_mode=WAL; ${migrationSchema}`);
       if (sidecars) {
         database.exec("PRAGMA wal_checkpoint(FULL);");
       } else {

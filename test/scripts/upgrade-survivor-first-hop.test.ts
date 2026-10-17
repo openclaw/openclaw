@@ -11,35 +11,83 @@ import {
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { readJson, runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
+import {
+  readJson,
+  runProcess,
+  successSummary,
+  writeJson,
+} from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const observer = resolve("scripts/e2e/lib/upgrade-survivor/diagnostics.mjs");
 const prettyJson = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
+const hash = "a".repeat(64);
+const versions = { state: 16, agent: 19 };
+const historyTables = [
+  { table: "session_nodes", rows: 1, sha256: hash },
+  { table: "transcript_events", rows: 2, sha256: hash },
+];
+const preflight = { status: "exact", foundVersion: 19, targetVersion: 19 };
+const omission = {
+  relative: "agents/main/sessions/upgrade-restored-index-history.jsonl",
+  kind: "transcript",
+  sha256: "b".repeat(64),
+  archiveMember: "backup/payload/state/agents/main/sessions/upgrade-restored-index-history.jsonl",
+  canonicalEventCount: 2,
+  reason: "published-2026.9.4-volatile-transcript",
+};
+
+function failureFacts(message: string) {
+  return [
+    {
+      check: "plugin-doctor-post-session-state",
+      code: "blocked-by-session-repair-failure",
+      message,
+    },
+  ];
+}
+
+function processFixture(version = "2026.7.1-2", source = "") {
+  const root = realpathSync(tempDirs.make("survivor-first-hop-"));
+  const tmp = join(root, "tmp");
+  const ipcRoot = join(tmp, `openclaw${process.getuid ? `-${process.getuid()}` : ""}`);
+  mkdirSync(ipcRoot, { recursive: true, mode: 0o700 });
+  const ipc = join(ipcRoot, "openclaw-update-doctor-123-00000000-0000-4000-8000-000000000000.json");
+  const manifest = join(root, "package.json");
+  const entrypoint = join(root, "openclaw.mjs");
+  writeJson(manifest, { name: "openclaw", version });
+  writeFileSync(entrypoint, source);
+  const env = { TMPDIR: tmp, TEMP: tmp, TMP: tmp, OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: root };
+  return {
+    root,
+    ipc,
+    ipcRoot,
+    manifest,
+    entrypoint,
+    env,
+    run: (command: string, extraEnv: NodeJS.ProcessEnv = {}, args: string[] = []) =>
+      runNode(["--import", observer, entrypoint, command, ...args], { ...env, ...extraEnv }),
+    reports: () =>
+      readdirSync(join(root, "diagnostics")).map((name) =>
+        readJson(join(root, "diagnostics", name)),
+      ),
+  };
+}
 
 function runNode(args: string[], env: NodeJS.ProcessEnv) {
   return runProcess(process.execPath, args, { ...process.env, ...env }, 10_000);
 }
 
 function rollbackSuccessSummary() {
-  const hash = "a".repeat(64);
   return {
-    status: "passed",
-    baseline: { spec: "openclaw@2026.9.4", version: "2026.9.4" },
-    candidate: { kind: "tarball", version: "2026.9.5" },
-    scenario: "legacy-operator-state",
-    installedVersion: "2026.9.5",
-    candidateInstallMode: "updater",
-    updateRestartMode: "manual",
-    updateOutcome: "success",
-    phases: [],
+    ...successSummary("2026.9.4", "2026.9.5"),
     backupRollback: {
       status: "passed",
       baselineVersion: "2026.9.4",
       candidateVersion: "2026.9.5",
       runtime: {
         version: "2026.9.4",
-        schemaVersions: { state: 16, agent: 19 },
+        schemaVersions: versions,
         packageRoot: "/private/host/runtime",
         entry: "/private/host/index.mjs",
         manifestSha256: hash,
@@ -69,8 +117,8 @@ function rollbackSuccessSummary() {
             metadata: { secret: "PRIVATE_VALUE" },
             sessions: [{ key: "PRIVATE_SESSION_KEY", sessionId: "PRIVATE_SESSION_ID" }],
             tables: [
-              { table: "session_nodes", rows: 1, sha256: hash, columns: ["PRIVATE_COLUMN"] },
-              { table: "transcript_events", rows: 2, sha256: hash, raw: "PRIVATE_TRANSCRIPT" },
+              { ...historyTables[0]!, columns: ["PRIVATE_COLUMN"] },
+              { ...historyTables[1]!, raw: "PRIVATE_TRANSCRIPT" },
             ],
           },
           { kind: "agent", agentId: "ops", present: false, relative: "/private/host/ops" },
@@ -87,9 +135,7 @@ function rollbackSuccessSummary() {
       preflights: [
         {
           agentId: "main",
-          status: "exact",
-          foundVersion: 19,
-          targetVersion: 19,
+          ...preflight,
           output: "/private/host/preflight.json",
         },
       ],
@@ -105,7 +151,11 @@ function rollbackSuccessSummary() {
   };
 }
 
-async function publishSuccess(summary: unknown, logs: Record<string, unknown> = {}) {
+async function publishSuccess(
+  summary: unknown,
+  logs: Record<string, unknown> = {},
+  sanitize = (text: string) => text,
+) {
   const root = tempDirs.make("survivor-rollback-publication-");
   const artifacts = join(root, "private");
   const published = join(root, "published");
@@ -118,29 +168,19 @@ async function publishSuccess(summary: unknown, logs: Record<string, unknown> = 
   return {
     artifacts,
     published,
-    publish: () => publishDiagnostics(artifacts, published, (text: string) => text, "passed"),
+    publish: () => publishDiagnostics(artifacts, published, sanitize, "passed"),
   };
 }
 
 describe("upgrade survivor rollback publication", () => {
   it("publishes rollback proof without claiming omitted transcripts", async () => {
     const summary = rollbackSuccessSummary();
-    const omission = {
-      relative: "agents/main/sessions/upgrade-restored-index-history.jsonl",
-      kind: "transcript",
-      sha256: "b".repeat(64),
-      archiveMember:
-        "backup/payload/state/agents/main/sessions/upgrade-restored-index-history.jsonl",
-      sessionId: "PRIVATE_SESSION_ID",
-      canonicalEventCount: 2,
-      reason: "published-2026.9.4-volatile-transcript",
-    };
     const created = { verified: true, skippedVolatileCount: 3, skipped: [] };
     const restored = { ok: true, archiveRoot: "backup" };
     Object.assign(summary.backupRollback, {
       backupCreate: created,
       rawTranscriptRestoration: "unsupported-by-published-backup",
-      omittedRawTranscripts: [omission],
+      omittedRawTranscripts: [{ ...omission, sessionId: "PRIVATE_SESSION_ID" }],
     });
     summary.backupRollback.before.files.push({
       kind: omission.kind,
@@ -169,16 +209,7 @@ describe("upgrade survivor rollback publication", () => {
     expect(receipt.backupRollback).toMatchObject({
       skippedVolatileCount: 3,
       rawTranscriptRestoration: "unsupported-by-published-backup",
-      omittedRawTranscripts: [
-        {
-          relative: omission.relative,
-          kind: "transcript",
-          sha256: omission.sha256,
-          archiveMember: omission.archiveMember,
-          canonicalEventCount: 2,
-          reason: omission.reason,
-        },
-      ],
+      omittedRawTranscripts: [omission],
     });
     expect(JSON.parse(receipt.logs["backup-rollback-create.json"])).toEqual(created);
     expect(JSON.parse(receipt.logs["backup-rollback-restore.json"])).toEqual(restored);
@@ -187,10 +218,10 @@ describe("upgrade survivor rollback publication", () => {
       status: "passed",
       baselineVersion: "2026.9.4",
       candidateVersion: "2026.9.5",
-      baselineSchemaVersions: { state: 16, agent: 19 },
+      baselineSchemaVersions: versions,
       candidateSchemaVersions: { state: 17, agent: 21 },
-      archiveSha256: "a".repeat(64),
-      baselineRuntime: { manifestSha256: "a".repeat(64), entrySha256: "a".repeat(64) },
+      archiveSha256: hash,
+      baselineRuntime: { manifestSha256: hash, entrySha256: hash },
       databases: [
         {
           kind: "state",
@@ -207,17 +238,14 @@ describe("upgrade survivor rollback publication", () => {
           userVersion: 19,
           contentVersion: 19,
           sessionCount: 1,
-          tables: [
-            { table: "session_nodes", rows: 1, sha256: "a".repeat(64) },
-            { table: "transcript_events", rows: 2, sha256: "a".repeat(64) },
-          ],
-          preflight: { status: "exact", foundVersion: 19, targetVersion: 19 },
+          tables: historyTables,
+          preflight,
           sessionRead: { count: 1 },
         },
         { kind: "agent", agentId: "ops", present: false },
       ],
       files: [
-        { kind: "legacy-store", sha256: "a".repeat(64) },
+        { kind: "legacy-store", sha256: hash },
         { kind: "transcript", sha256: omission.sha256 },
       ],
     });
@@ -284,12 +312,9 @@ describe("upgrade survivor rollback publication", () => {
           rawTranscriptRestoration: "unsupported-by-published-backup",
           omittedRawTranscripts: [
             {
-              kind: "transcript",
+              ...omission,
               relative: "agents/main/sessions/unrecorded.jsonl",
               archiveMember: "backup/payload/unrecorded.jsonl",
-              sha256: "b".repeat(64),
-              canonicalEventCount: 2,
-              reason: "published-2026.9.4-volatile-transcript",
             },
           ],
         }),
@@ -353,20 +378,10 @@ function seedSessionMigration(root: string, issueCount = 1) {
 
 describe("upgrade survivor first-hop process evidence", () => {
   it.each([0, 1])("retains first-hop identities and Doctor IPC on exit %i", async (code) => {
-    const root = realpathSync(tempDirs.make("survivor-first-hop-"));
+    const { root, ipc, manifest, entrypoint, run } = processFixture();
     const artifacts = join(root, "artifacts");
     mkdirSync(artifacts);
     const migration = code === 1 ? seedSessionMigration(root, 4791) : null;
-    const tmp = join(root, "tmp");
-    const ipcRoot = join(tmp, `openclaw${process.getuid ? `-${process.getuid()}` : ""}`);
-    mkdirSync(ipcRoot, { recursive: true, mode: 0o700 });
-    const ipc = join(
-      ipcRoot,
-      "openclaw-update-doctor-123-00000000-0000-4000-8000-000000000000.json",
-    );
-    const manifest = join(root, "package.json");
-    writeJson(manifest, { name: "openclaw", version: "2026.7.1-2" });
-    const entrypoint = join(root, "openclaw.mjs");
     // Files change under the running parent. Reading package.json at exit would
     // falsely attribute that parent's result to the newly installed updater.
     writeFileSync(
@@ -391,19 +406,16 @@ if (process.argv[2] === 'update') {
 }
 `,
     );
-    const result = runNode(
-      ["--import", observer, entrypoint, "update", "--tag", "private-argument-value"],
+    const result = run(
+      "update",
       {
         OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
         OPENCLAW_GATEWAY_TOKEN: "private-environment-value",
-        TMPDIR: tmp,
-        TEMP: tmp,
-        TMP: tmp,
       },
+      ["--tag", "private-argument-value"],
     );
     expect(result.status, result.stderr).toBe(code);
-    expect(result.stdout).toBe("doctor fixture finished\n");
-    expect(result.stderr).toBe("");
+    expect(result).toMatchObject({ stdout: "doctor fixture finished\n", stderr: "" });
     const files = readdirSync(join(artifacts, "diagnostics"));
     const reports = files.map((name) => readJson(join(artifacts, "diagnostics", name)));
     const started = reports.filter((report) => report.event === "started");
@@ -424,13 +436,7 @@ if (process.argv[2] === 'update') {
     );
     expect(doctorExit.doctorResult).toEqual({
       status: code === 0 ? "ok" : "error",
-      failureFacts: [
-        {
-          check: "plugin-doctor-post-session-state",
-          code: "blocked-by-session-repair-failure",
-          message: "private-doctor-value",
-        },
-      ],
+      failureFacts: failureFacts("private-doctor-value"),
     });
     const capture = runNode(
       [observer, "capture", artifacts, "update-candidate", String(code), "", artifacts],
@@ -466,13 +472,7 @@ if (process.argv[2] === 'update') {
           packageVersion: "2026.8.1",
           exitCode: code,
           status: code === 0 ? "ok" : "error",
-          failureFacts: [
-            {
-              check: "plugin-doctor-post-session-state",
-              code: "blocked-by-session-repair-failure",
-              message: "[REDACTED]",
-            },
-          ],
+          failureFacts: failureFacts("[REDACTED]"),
         },
       ],
     });
@@ -570,88 +570,62 @@ if (process.argv[2] === 'update') {
     expect(report.omissions["session migration failure report"]).toBe(reason);
   });
 
-  it.each([
-    { name: "available companion", availability: "available", missingLoadPath: null },
-    { name: "unavailable companion", availability: "unavailable", missingLoadPath: null },
-    { name: "invalid companion", availability: "invalid", missingLoadPath: null },
-    {
-      name: "supported missing path",
-      availability: "absent",
-      missingLoadPath: { applicability: "supported", reason: null },
-    },
-    {
-      name: "unsupported missing path",
-      availability: "absent",
-      missingLoadPath: {
-        applicability: "unsupported-driver",
-        reason: "published-cli-rejects-invalid-config-before-staging",
-      },
-    },
-    {
-      name: "invalid missing-path applicability",
-      availability: "absent",
-      missingLoadPath: { applicability: "private-invalid-value", reason: null },
-      invalid: true,
-    },
-    {
-      name: "invalid missing-path reason",
-      availability: "absent",
-      missingLoadPath: { applicability: "unsupported-driver", reason: "private-invalid-value" },
-      invalid: true,
-    },
-  ])("publishes $name in success receipts", async ({ availability, missingLoadPath, invalid }) => {
-    const root = realpathSync(tempDirs.make("survivor-companion-receipt-"));
-    const baselineCompanion =
-      availability === "absent"
-        ? null
-        : {
-            package: "@openclaw/discord",
-            version: "2026.8.1-beta.1",
-            availability,
-            reason:
-              availability === "available"
-                ? null
-                : "Exact companion version is not published on npm (E404).",
-          };
-    writeJson(join(root, "summary.json"), {
-      status: "passed",
-      baseline: { spec: "2026.8.1-beta.1", version: "2026.8.1-beta.1" },
-      candidate: { kind: "package", version: "2026.9.4" },
-      scenario: "legacy-operator-state",
-      installedVersion: "2026.9.4",
-      candidateInstallMode: "published",
-      updateRestartMode: "manual",
-      updateOutcome: "success",
-      phases: [],
-      baselineCompanion,
-      missingLoadPath,
-    });
-    const { publishDiagnostics } = await import(observer);
-    const published = join(root, "published");
-    const publish = () =>
-      publishDiagnostics(
-        root,
-        published,
-        (text: string) => text.replaceAll("E404", "redacted"),
-        "passed",
+  it.each<[string, string | null, string | null]>([
+    ["available", null, null],
+    ["unavailable", null, null],
+    ["invalid", null, null],
+    ["absent", "supported", null],
+    ["absent", "unsupported-driver", "published-cli-rejects-invalid-config-before-staging"],
+    ["absent", "private-invalid-value", null],
+    ["absent", "unsupported-driver", "private-invalid-value"],
+  ])(
+    "publishes companion %s and missing path %s / %s",
+    async (availability, applicability, reason) => {
+      const missingLoadPath = applicability === null ? null : { applicability, reason };
+      const invalid =
+        applicability === "private-invalid-value" || reason === "private-invalid-value";
+      const baselineCompanion =
+        availability === "absent"
+          ? null
+          : {
+              package: "@openclaw/discord",
+              version: "2026.8.1-beta.1",
+              availability,
+              reason:
+                availability === "available"
+                  ? null
+                  : "Exact companion version is not published on npm (E404).",
+            };
+      const { publish, published } = await publishSuccess(
+        {
+          ...successSummary("2026.8.1-beta.1", "2026.9.4"),
+          baseline: { spec: "2026.8.1-beta.1", version: "2026.8.1-beta.1" },
+          candidate: { kind: "package", version: "2026.9.4" },
+          candidateInstallMode: "published",
+          baselineCompanion,
+          missingLoadPath,
+        },
+        {},
+        (text) => text.replaceAll("E404", "redacted"),
       );
-    if (availability === "invalid" || invalid) {
-      expect(publish).toThrow();
-      expect(existsSync(join(published, "summary.json"))).toBe(false);
-      return;
-    }
-    publish();
-    const receipt = readJson(join(published, "summary.json"));
-    expect(receipt.missingLoadPath).toEqual(missingLoadPath);
-    expect(receipt.baselineCompanion).toEqual(
-      baselineCompanion
-        ? {
-            ...baselineCompanion,
-            reason: baselineCompanion.reason?.replaceAll("E404", "redacted") ?? null,
-          }
-        : null,
-    );
-  });
+      if (availability === "invalid" || invalid) {
+        expect(publish).toThrow();
+        expect(existsSync(join(published, "summary.json"))).toBe(false);
+        return;
+      }
+      publish();
+      const receipt = readJson(join(published, "summary.json"));
+      expect(receipt.missingLoadPath).toEqual(missingLoadPath);
+      expect(receipt.baselineCompanion).toEqual(
+        baselineCompanion
+          ? {
+              ...baselineCompanion,
+              reason: baselineCompanion.reason?.replaceAll("E404", "redacted") ?? null,
+            }
+          : null,
+      );
+    },
+  );
 
   it.each([
     "outside",
@@ -660,13 +634,8 @@ if (process.argv[2] === 'update') {
     "oversized",
     ...(process.platform === "win32" ? [] : ["symlink"]),
   ])("preserves Doctor exit when its IPC is %s", (kind) => {
-    const root = realpathSync(tempDirs.make("survivor-unavailable-doctor-"));
-    const tmp = join(root, "tmp");
-    const ipcRoot = join(tmp, `openclaw${process.getuid ? `-${process.getuid()}` : ""}`);
-    mkdirSync(ipcRoot, { recursive: true, mode: 0o700 });
-    writeJson(join(root, "package.json"), { name: "openclaw", version: "2026.9.4" });
-    const entrypoint = join(root, "openclaw.mjs");
-    writeFileSync(entrypoint, "process.exitCode = 7;");
+    const fixture = processFixture("2026.9.4", "process.exitCode = 7;");
+    const { root, ipcRoot } = fixture;
     const ipcFilename = "openclaw-update-doctor-123-00000000-0000-4000-8000-000000000000.json";
     const ipc =
       kind === "outside"
@@ -688,19 +657,13 @@ if (process.argv[2] === 'update') {
     if (kind === "symlink") {
       symlinkSync(target, ipc);
     }
-    const result = runNode(["--import", observer, entrypoint, "doctor"], {
-      TMPDIR: tmp,
-      TEMP: tmp,
-      TMP: tmp,
-      OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: root,
+    const result = fixture.run("doctor", {
       OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: ipc,
     });
     expect(result.status, result.stderr).toBe(7);
     expect(result.stdout + result.stderr).toBe("");
     expect(readFileSync(target, "utf8")).toBe(payload);
-    const reports = readdirSync(join(root, "diagnostics")).map((name) =>
-      readJson(join(root, "diagnostics", name)),
-    );
+    const reports = fixture.reports();
     expect(reports).toHaveLength(2);
     expect(reports.find((report) => report.event === "exited")).toEqual({
       ...reports.find((report) => report.event === "started"),
@@ -711,20 +674,11 @@ if (process.argv[2] === 'update') {
   });
 
   it.skipIf(process.platform === "win32")("does not turn a signal into a successful exit", () => {
-    const root = realpathSync(tempDirs.make("survivor-interrupted-hop-"));
-    writeJson(join(root, "package.json"), { name: "openclaw", version: "2026.7.1-2" });
-    const entrypoint = join(root, "openclaw.mjs");
-    writeFileSync(entrypoint, 'process.kill(process.pid, "SIGTERM");');
-    const result = runNode(["--import", observer, entrypoint, "update"], {
-      OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: root,
-    });
-    expect(result.status).toBeNull();
-    expect(result.signal).toBe("SIGTERM");
+    const fixture = processFixture("2026.7.1-2", 'process.kill(process.pid, "SIGTERM");');
+    const result = fixture.run("update");
+    expect(result).toMatchObject({ status: null, signal: "SIGTERM" });
     expect(result.stdout + result.stderr).toBe("");
-    const reports = readdirSync(join(root, "diagnostics")).map((name) =>
-      readJson(join(root, "diagnostics", name)),
-    );
-    expect(reports).toEqual([
+    expect(fixture.reports()).toEqual([
       expect.objectContaining({ role: "update", event: "started", packageVersion: "2026.7.1-2" }),
     ]);
   });

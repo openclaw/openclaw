@@ -12,6 +12,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
 import {
   readJson,
+  readJsonLines,
   runProcess,
   writeExecutable,
   writeJson,
@@ -19,76 +20,64 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const assertionsPath = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
+const publishedRegistry = "https://published.example.invalid";
+const candidateRegistry = "https://candidate.example.invalid";
 
-function planMissingLoadPath(
-  baselines: string,
-  scenarios = "missing-load-path",
-  selectedLaneNames = ["published-upgrade-survivor"],
-) {
-  return resolveDockerE2ePlan({
-    includeOpenWebUI: false,
-    liveMode: "all",
-    orderLanes: (lanes) => lanes,
-    planReleaseAll: false,
-    profile: "all",
-    releaseChunk: "core",
-    selectedLaneNames,
-    timingStore: undefined,
-    upgradeSurvivorBaselines: baselines,
-    upgradeSurvivorScenarios: scenarios,
-  }).plan;
-}
-
-it.each<{
-  baselines: string;
-  scenarios?: string;
-  selected?: string[];
-  rows: string[] | null;
-}>([
-  { baselines: "2026.9.3", rows: ["2026.9.3-missing-load-path"] },
-  ...["2026.7.1", "2026.7.1-2", "2026.7.2-beta.4"].map((baselines) => ({ baselines, rows: null })),
-  ...["2026.7.2-beta.5", "latest"].map((baselines) => ({
-    baselines,
-    rows: [`${baselines}-missing-load-path`],
-  })),
-  {
-    baselines: "2026.7.1 2026.9.3",
-    scenarios: "base missing-load-path",
-    rows: ["2026.7.1", "2026.9.3", "2026.9.3-missing-load-path"],
-  },
-  { baselines: "2026.7.1", scenarios: "base missing-load-path", rows: null },
-  { baselines: "2026.7.1", selected: ["onboard"], rows: ["onboard"] },
-  ...["2026.7.1", "2026.7.1 2026.9.3"].map((baselines) => ({
-    baselines,
-    scenarios: "base missing-load-path",
-    selected: ["published-upgrade-survivor-2026.7.1"],
-    rows: ["2026.7.1"],
-  })),
-])(
-  "plans missing-path admission for $baselines ($scenarios, $selected)",
-  ({ baselines, scenarios, selected, rows }) => {
-    const plan = () => planMissingLoadPath(baselines, scenarios, selected);
-    if (rows === null) {
-      expect(plan).toThrow("missing-load-path has no compatible published baseline");
-      return;
-    }
-    const result = plan();
-    expect(result.lanes.map((lane) => lane.name)).toEqual(
-      rows.map((row) => (row === "onboard" ? row : `published-upgrade-survivor-${row}`)),
+it.each<[string, string[] | null, string?, string[]?]>([
+  ["2026.9.3", ["2026.9.3-missing-load-path"]],
+  ["2026.7.1", null],
+  ["2026.7.1-2", null],
+  ["2026.7.2-beta.4", null],
+  ["2026.7.2-beta.5", ["2026.7.2-beta.5-missing-load-path"]],
+  ["latest", ["latest-missing-load-path"]],
+  [
+    "2026.7.1 2026.9.3",
+    ["2026.7.1", "2026.9.3", "2026.9.3-missing-load-path"],
+    "base missing-load-path",
+  ],
+  ["2026.7.1", null, "base missing-load-path"],
+  ["2026.7.1", ["onboard"], undefined, ["onboard"]],
+  ["2026.7.1", ["2026.7.1"], "base missing-load-path", ["published-upgrade-survivor-2026.7.1"]],
+  [
+    "2026.7.1 2026.9.3",
+    ["2026.7.1"],
+    "base missing-load-path",
+    ["published-upgrade-survivor-2026.7.1"],
+  ],
+])("plans missing-path admission for %s (%s, %s, %s)", (baselines, rows, scenarios, selected) => {
+  const plan = () =>
+    resolveDockerE2ePlan({
+      includeOpenWebUI: false,
+      liveMode: "all",
+      orderLanes: (lanes) => lanes,
+      planReleaseAll: false,
+      profile: "all",
+      releaseChunk: "core",
+      selectedLaneNames: selected ?? ["published-upgrade-survivor"],
+      timingStore: undefined,
+      upgradeSurvivorBaselines: baselines,
+      upgradeSurvivorScenarios: scenarios ?? "missing-load-path",
+    }).plan;
+  if (rows === null) {
+    expect(plan).toThrow("missing-load-path has no compatible published baseline");
+    return;
+  }
+  const result = plan();
+  expect(result.lanes.map((lane) => lane.name)).toEqual(
+    rows.map((row) => (row === "onboard" ? row : `published-upgrade-survivor-${row}`)),
+  );
+  if (selected?.[0]?.startsWith("published-upgrade-survivor-")) {
+    expect(result.omittedUnsupportedLanes).toEqual([]);
+  }
+  if (baselines === "2026.9.3") {
+    expect(result.lanes[0]?.command).toContain(
+      "OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='missing-load-path'",
     );
-    if (selected?.[0]?.startsWith("published-upgrade-survivor-")) {
-      expect(result.omittedUnsupportedLanes).toEqual([]);
+    for (const aggregate of ["reported-issues", "far-reaching"]) {
+      expect(parseUpgradeSurvivorScenarios(aggregate)).not.toContain("missing-load-path");
     }
-    if (baselines === "2026.9.3") {
-      expect(result.lanes[0]?.command).toContain(
-        "OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='missing-load-path'",
-      );
-      for (const aggregate of ["reported-issues", "far-reaching"]) {
-        expect(parseUpgradeSurvivorScenarios(aggregate)).not.toContain("missing-load-path");
-      }
-    }
-  },
-);
+  }
+});
 
 it.skipIf(process.platform === "win32").each([
   { baseline: "2026.7.1", scenario: "base", supported: false },
@@ -339,11 +328,11 @@ setInterval(() => {}, 1000);
     runnerSource.indexOf("start_gateway() {"),
     runnerSource.indexOf("\nensure_gateway_started() {"),
   );
-  const script = path.join(root, "baseline.sh");
-  writeFileSync(
-    script,
-    `#!/usr/bin/env bash
-set -Eeuo pipefail
+  const result = runProcess(
+    "bash",
+    [
+      "-c",
+      `set -Eeuo pipefail
 source scripts/lib/openclaw-e2e-instance.sh
 source scripts/e2e/lib/prepublish-plugin-registry.sh
 source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
@@ -374,19 +363,17 @@ run_missing_load_path_fixture baseline
 test "$NPM_CONFIG_REGISTRY" = https://candidate.example.invalid
 printf 'baseline-complete\\n'
 `,
-  );
-  const result = runProcess(
-    "bash",
-    [script],
+      "missing-path-baseline",
+    ],
     {
       PATH: `${bin}${path.delimiter}${path.dirname(resolveTestNodeExecPath())}:/usr/bin:/bin`,
       HOME: root,
       ARTIFACT_ROOT: artifactRoot,
       OPENCLAW_STATE_DIR: state,
       OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL: "https://candidate.example.invalid",
-      OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://published.example.invalid",
-      NPM_CONFIG_REGISTRY: "https://candidate.example.invalid",
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL: candidateRegistry,
+      OPENCLAW_NPM_REGISTRY_UPSTREAM: publishedRegistry,
+      NPM_CONFIG_REGISTRY: candidateRegistry,
       OPENCLAW_GATEWAY_TOKEN: "fixture-inherited-token",
       OPENCLAW_GATEWAY_PASSWORD: "fixture-inherited-password",
       FIXTURE_MODE: mode,
@@ -398,20 +385,13 @@ printf 'baseline-complete\\n'
     10_000,
   );
   expect(result.status, result.stdout + result.stderr).toBe(code);
-  const observed = readFileSync(launchFile, "utf8")
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map(
-      (line) =>
-        JSON.parse(line) as {
-          pid: number;
-          config: string;
-          state: string;
-          token?: string;
-          password?: string;
-        },
-    );
+  const observed = readJsonLines<{
+    pid: number;
+    config: string;
+    state: string;
+    token?: string;
+    password?: string;
+  }>(launchFile);
   expect(observed).toHaveLength(launches);
   expect(new Set(observed.map((entry) => entry.pid)).size).toBe(launches);
   for (const entry of observed) {
@@ -430,9 +410,11 @@ printf 'baseline-complete\\n'
     expect(readFileSync(refusedLog, "utf8")).toBe(`${convergenceRestartMessage}\n`);
     expect(result.stdout).toContain("restarting once with the same config, state, and port");
   }
-  expect(result.stdout.includes("baseline-complete")).toBe(code === 0);
-  expect(result.stdout.includes("baseline-probes")).toBe(code === 0);
-  expect(result.stdout.includes("baseline-stopped")).toBe(code === 0);
+  expect(
+    ["baseline-complete", "baseline-probes", "baseline-stopped"].map((event) =>
+      result.stdout.includes(event),
+    ),
+  ).toEqual([code === 0, code === 0, code === 0]);
   const gatewayLog = path.join(artifactRoot, "missing-load-path", "baseline-gateway.log");
   const observationLog = path.join(artifactRoot, "missing-load-path", "startup-readiness.log");
   const diagnosticLog = [gatewayLog, observationLog]

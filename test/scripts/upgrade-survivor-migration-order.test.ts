@@ -115,22 +115,20 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
 }
 
 describe.skipIf(process.platform === "win32")("survivor first-hop observation", () => {
-  it("rejects missing first-hop migration before manual repair", () => {
-    const { result, events, migrated, summary } = runFirstHop("base", false);
-    expect(result.status, result.stderr).toBe(42);
-    expect(events).toEqual(["update", "observe"]);
-    expect(migrated).toBe(false);
-    expect(summary).toMatchObject({
-      status: "failed",
-      failure: { phase: "assert-automatic-migration" },
-    });
-  });
-
-  it("observes first-hop migration before Doctor and consent", () => {
-    const { result, events, summary } = runFirstHop("base", true);
-    expect(result.status, result.stderr).toBe(0);
-    expect(events).toEqual(["update", "observe", "doctor", "observe", "consent"]);
-    expect(summary.status).toBe("passed");
+  it.each([false, true])("observes migration before manual repair: %s", (automatic) => {
+    const { result, events, migrated, summary } = runFirstHop("base", automatic);
+    expect(result.status, result.stderr).toBe(automatic ? 0 : 42);
+    expect(events).toEqual([
+      "update",
+      "observe",
+      ...(automatic ? ["doctor", "observe", "consent"] : []),
+    ]);
+    expect(migrated).toBe(automatic);
+    expect(summary).toMatchObject(
+      automatic
+        ? { status: "passed" }
+        : { status: "failed", failure: { phase: "assert-automatic-migration" } },
+    );
   });
 
   it.each([false, true])(
@@ -162,12 +160,12 @@ describe.skipIf(process.platform === "win32")("survivor first-hop observation", 
               "verify",
             ]),
       ]);
-      expect(summary.status).toBe(unexpectedSuccess ? "failed" : "passed");
-      expect(summary.updateRecovery).toBeNull();
-      expect(summary.firstHopPostCore.availability).toBe("unavailable");
-      if (unexpectedSuccess) {
-        expect(summary.failure.phase).toBe("assert-workshop-published-refusal");
-      }
+      expect(summary).toMatchObject({
+        status: unexpectedSuccess ? "failed" : "passed",
+        updateRecovery: null,
+        firstHopPostCore: { availability: "unavailable" },
+        ...(unexpectedSuccess ? { failure: { phase: "assert-workshop-published-refusal" } } : {}),
+      });
     },
   );
 });
@@ -175,33 +173,24 @@ describe.skipIf(process.platform === "win32")("survivor first-hop observation", 
 const workshopIndex = "idx_skill_workshop_collection_reviews_workspace_time";
 
 // Published 2026.9.4 proposal storage that the candidate Doctor retires.
-const publishedWorkshopSchema = `
-  CREATE TABLE skill_workshop_collection_reviews (
+const publishedWorkshopTables = {
+  collection_reviews: `
     review_id TEXT PRIMARY KEY, owner_agent_id TEXT, backup_id TEXT, create_time INTEGER,
-    kept_names_json TEXT, written_names_json TEXT, dropped_json TEXT
-  );
-  CREATE TABLE skill_workshop_proposals (
+    kept_names_json TEXT, written_names_json TEXT, dropped_json TEXT`,
+  proposals: `
     proposal_id TEXT PRIMARY KEY, record_json TEXT, owner_agent_id TEXT, kind TEXT, status TEXT,
     created_at TEXT, updated_at TEXT, draft_hash TEXT, origin_agent_id TEXT, origin_session_key TEXT,
     origin_run_id TEXT, origin_message_id TEXT, applied_at TEXT, rejected_at TEXT,
-    quarantined_at TEXT, stale_at TEXT, status_reason TEXT
-  );
-  CREATE TABLE skill_workshop_proposal_rollbacks (
+    quarantined_at TEXT, stale_at TEXT, status_reason TEXT`,
+  proposal_rollbacks: `
     proposal_id TEXT PRIMARY KEY, written_at TEXT, target_skill_file TEXT, action TEXT,
-    previous_content_hash TEXT, previous_content TEXT, support_files_json TEXT
-  );
-  CREATE TABLE skill_workshop_proposal_events (
+    previous_content_hash TEXT, previous_content TEXT, support_files_json TEXT`,
+  proposal_events: `
     sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT, proposal_id TEXT,
     proposed_version TEXT, revision_hash TEXT, event_type TEXT, occurred_at TEXT,
-    actor_json TEXT, correlation_id TEXT, payload_json TEXT
-  );
-`;
-const retiredTables = [
-  "skill_workshop_proposal_events",
-  "skill_workshop_proposal_rollbacks",
-  "skill_workshop_collection_reviews",
-  "skill_workshop_proposals",
-];
+    actor_json TEXT, correlation_id TEXT, payload_json TEXT`,
+};
+const retiredTables = Object.keys(publishedWorkshopTables).map((name) => `skill_workshop_${name}`);
 
 type WorkshopIdentity = { version: string; buildInfoSha256: string };
 type WorkshopFixture = ReturnType<typeof workshopFixture>;
@@ -232,8 +221,14 @@ function workshopFixture() {
   const candidate: WorkshopIdentity = captureWorkshopCandidate(tarball, artifacts, "2026.9.4");
   const filename = join(state, "state", "openclaw.sqlite");
   const initial = new DatabaseSync(filename);
-  initial.exec(`${publishedWorkshopSchema}
-    CREATE TABLE unrelated_records (value TEXT); INSERT INTO unrelated_records VALUES ('preserved');`);
+  initial.exec(
+    Object.entries(publishedWorkshopTables)
+      .map(([name, columns]) => `CREATE TABLE skill_workshop_${name} (${columns});`)
+      .join("\n"),
+  );
+  initial.exec(
+    "CREATE TABLE unrelated_records (value TEXT); INSERT INTO unrelated_records VALUES ('preserved');",
+  );
   initial.close();
   const seeded = seedWorkshopIndex(state, artifacts, "baseline");
   writeJson(join(artifacts, "update.json"), {
@@ -246,17 +241,8 @@ function workshopFixture() {
   return { state, artifacts, packageRoot, candidateRoot, baseline, candidate, filename };
 }
 
-type WorkshopState = {
-  files: Record<string, string | null>;
-  exports: string[] | null;
-  proposalsDir: boolean;
-  tables: Record<string, number>;
-};
-type LegacySeed = {
-  paths: string[];
-  before: WorkshopState;
-  after: WorkshopState & { exports: string[] };
-};
+type WorkshopState = ReturnType<typeof captureWorkshopLegacyState>;
+type LegacySeed = ReturnType<typeof seedWorkshopLegacyProposals>;
 function recordProcess(
   observations: string,
   pid: number,
@@ -288,7 +274,6 @@ function recordProcess(
     parentPid: 100,
     ...(legacyAtStart ? { legacyAtStart } : {}),
   };
-  writeJson(join(observations, `workshop-process-${pid}.json`), witness);
   const legacyAtExit = duringProcess?.();
   writeJson(join(observations, `workshop-process-${pid}.json`), {
     ...witness,

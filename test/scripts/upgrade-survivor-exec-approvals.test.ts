@@ -47,7 +47,7 @@ function canonicalPolicy() {
   };
 }
 
-function policyHarness(scenario: string) {
+function fixture(legacy = false) {
   const home = tempDirs.make("survivor-exec-policy-");
   const state = join(home, "state");
   const artifactRoot = join(home, "artifacts");
@@ -60,7 +60,7 @@ function policyHarness(scenario: string) {
     OPENCLAW_STATE_DIR: state,
     OPENCLAW_CONFIG_PATH: join(state, "openclaw.json"),
     OPENCLAW_TEST_WORKSPACE_DIR: join(home, "workspace"),
-    OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+    OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: legacy ? "legacy-operator-state" : "base",
     OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifactRoot,
   };
   const run = (command: string, stage = "survival") =>
@@ -70,6 +70,25 @@ function policyHarness(scenario: string) {
       { ...env, OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage },
       10_000,
     );
+  const policy = {
+    version: 1,
+    defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+    agents: {
+      main: { allowlist: [{ id: "main-command", pattern: "/usr/bin/uname" }] },
+      ops: { allowlist: [{ id: "ops-command", pattern: "/usr/bin/date" }] },
+    },
+  };
+  if (legacy) {
+    mkdirSync(artifactRoot);
+    mkdirSync(state);
+    writeJson(join(artifactRoot, "legacy-operator-baseline.json"), {
+      approvals: policy,
+      approvalsJsonEra: true,
+    });
+  } else {
+    const seeded = run("seed");
+    expect(seeded.status, seeded.stderr).toBe(0);
+  }
   function writeCanonical(raw: string | null) {
     mkdirSync(join(state, "state"), { recursive: true });
     const db = new DatabaseSync(dbPath);
@@ -86,8 +105,12 @@ function policyHarness(scenario: string) {
   }
   function observe(stage = "survival") {
     const before = existsSync(dbPath) ? readFileSync(dbPath) : null;
+    const legacyBefore = existsSync(legacyPath) ? readFileSync(legacyPath) : null;
+    const entries = readdirSync(state, { recursive: true });
     const result = run("assert-exec-approvals", stage);
     expect(existsSync(dbPath) ? readFileSync(dbPath) : null).toEqual(before);
+    expect(existsSync(legacyPath) ? readFileSync(legacyPath) : null).toEqual(legacyBefore);
+    expect(readdirSync(state, { recursive: true })).toEqual(entries);
     for (const privateValue of [
       "synthetic-socket-value-must-not-be-logged",
       "/opt/upgrade-survivor/bin",
@@ -97,30 +120,15 @@ function policyHarness(scenario: string) {
     }
     return result;
   }
-  return { run, state, artifactRoot, legacyPath, writeCanonical, observe };
-}
-
-function fixture() {
-  const harness = policyHarness("base");
-  const seeded = harness.run("seed");
-  expect(seeded.status, seeded.stderr).toBe(0);
-  const legacyBytes = readFileSync(harness.legacyPath);
-  const observe = () => {
-    const entries = readdirSync(harness.state, { recursive: true });
-    const result = harness.observe();
-    expect(readFileSync(harness.legacyPath)).toEqual(legacyBytes);
-    expect(readdirSync(harness.state, { recursive: true })).toEqual(entries);
-    return result;
-  };
-  return { ...harness, legacyBytes, observe };
+  return { run, policy, legacyPath, writeCanonical, observe };
 }
 
 it("seeds the populated tagged policy with historical null usage", () => {
-  const { run, legacyBytes } = fixture();
+  const { run, legacyPath } = fixture();
   const expected = canonicalPolicy();
   const { socket: _socket, ...legacy } = expected;
   Object.assign(legacy.agents.main.allowlist[0]!, { lastUsedAt: null, lastUsedCommand: null });
-  expect(JSON.parse(legacyBytes.toString())).toEqual(legacy);
+  expect(readJson(legacyPath)).toEqual(legacy);
   const result = run("assert-exec-approvals", "baseline");
   expect(result.status, result.stderr).toBe(0);
 });
@@ -150,51 +158,27 @@ it.each([
   expect(result).toMatchObject({ status: 1, stderr: expect.stringMatching(error) });
 });
 
-function approvalFixture() {
-  const harness = policyHarness("legacy-operator-state");
-  const policy = {
-    version: 1,
-    defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
-    agents: {
-      main: { allowlist: [{ id: "main-command", pattern: "/usr/bin/uname" }] },
-      ops: { allowlist: [{ id: "ops-command", pattern: "/usr/bin/date" }] },
-    },
-  };
-  mkdirSync(harness.artifactRoot);
-  mkdirSync(harness.state);
-  writeJson(join(harness.artifactRoot, "legacy-operator-baseline.json"), {
-    approvals: policy,
-    approvalsJsonEra: true,
-  });
-  return {
-    policy,
-    legacyPath: harness.legacyPath,
-    writeCanonical: (value: unknown) => harness.writeCanonical(JSON.stringify(value)),
-    run: harness.observe,
-  };
-}
-
 it("accepts baseline JSON but rejects the retained file after SQLite import", () => {
-  const { policy, legacyPath, writeCanonical, run } = approvalFixture();
+  const { policy, legacyPath, writeCanonical, observe } = fixture(true);
   writeJson(legacyPath, policy);
-  const baseline = run("baseline");
+  const baseline = observe("baseline");
   expect(baseline.status, baseline.stderr).toBe(0);
   // The real importer owns retirement. This independent fixture supplies its output.
-  writeCanonical({ ...policy, socket: { token: "private-runtime-socket-token" } });
-  const retainedLegacy = run();
+  writeCanonical(JSON.stringify({ ...policy, socket: { token: "private-runtime-socket-token" } }));
+  const retainedLegacy = observe();
   expect(retainedLegacy.status).toBe(1);
   expect(retainedLegacy.stderr).toContain("legacy exec approvals file was not retired");
 });
 
 it.each(["altered mode", "missing storage"])("rejects legacy %s without repair", (failure) => {
-  const { policy, legacyPath, writeCanonical, run } = approvalFixture();
+  const { policy, legacyPath, writeCanonical, observe } = fixture(true);
   if (failure === "altered mode") {
     policy.defaults.security = "full";
-    writeCanonical(policy);
+    writeCanonical(JSON.stringify(policy));
   } else {
     writeJson(legacyPath, policy);
   }
-  const result = run();
+  const result = observe();
   expect(result.status).toBe(1);
   expect(result.stderr).toContain(
     failure === "altered mode"
