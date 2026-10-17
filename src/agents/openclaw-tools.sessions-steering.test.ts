@@ -197,6 +197,8 @@ it.each([
       pending.push(send);
       await Promise.race([queued.promise, send, prompt]);
       expect(session.pendingMessageCount).toBe(1);
+      // Acceptance must return while the recipient response remains held.
+      expect((await send).details).toMatchObject({ status: "accepted" });
       if (mode === "steer") {
         // The active response is still held: an admission-only send must not
         // withdraw guidance when the unrelated reply-wait deadline expires.
@@ -220,9 +222,7 @@ it.each([
         delivery: { status: "skipped" },
       });
       expect(queueMessage).toHaveBeenCalledOnce();
-      expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(
-        mode === "steer" ? false : supportsTranscriptCommitWait ? true : undefined,
-      );
+      expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(false);
       expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBeUndefined();
       const entries = SessionManager.open(scope, dir).getEntries();
       expect(
