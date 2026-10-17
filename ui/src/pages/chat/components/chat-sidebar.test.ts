@@ -515,7 +515,11 @@ describe("markdown sidebar", () => {
         const signal = init!.signal!;
         requests.push(signal);
         return new Promise<Response>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
         });
       }),
     );
