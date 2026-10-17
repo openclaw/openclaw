@@ -1,16 +1,9 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  isSessionEntryDataSql,
-  observeHostDataSql,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import * as sql from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  loadSessionEntry,
-  patchSessionEntryCore,
-  replaceSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import * as sessions from "../../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { persistReplySessionEntry } from "./session-entry-persistence.js";
@@ -24,43 +17,51 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 const sessionKey = "agent:main:main";
 const baseEntry: SessionEntry = { sessionId: "session-1", updatedAt: 100 };
 
-function fixture() {
+function fixture(initialEntry: SessionEntry = baseEntry) {
   const scope = {
     sessionKey,
     storePath: path.join(tempDirs.make("openclaw-reply-session-store-"), "sessions.json"),
   };
   return {
     ...scope,
-    read: () => loadSessionEntry({ ...scope, readConsistency: "latest" }),
-    persist: (params: Omit<Parameters<typeof persistReplySessionEntry>[0], keyof typeof scope>) =>
-      persistReplySessionEntry({ ...scope, ...params }),
-    replace: (entry: SessionEntry) => replaceSessionEntry(scope, entry),
+    read: () => sessions.loadSessionEntry({ ...scope, readConsistency: "latest" }),
+    persist: (
+      changes: Partial<SessionEntry> = {},
+      options: Omit<
+        Parameters<typeof persistReplySessionEntry>[0],
+        keyof typeof scope | "entry" | "initialEntry"
+      > = {},
+    ) =>
+      persistReplySessionEntry({
+        ...scope,
+        initialEntry,
+        entry: { ...initialEntry, updatedAt: 250, ...changes },
+        ...options,
+      }),
+    replace: (entry: SessionEntry) => sessions.replaceSessionEntry(scope, entry),
   };
 }
 
 describe("persistReplySessionEntry", () => {
   it("rejects account selection authority revoked while waiting for the session writer", async () => {
-    const { storePath, read, persist, replace } = fixture();
     const initialEntry: SessionEntry = { ...baseEntry, delivery: { kind: "none" } };
+    const { storePath, read, persist, replace } = fixture(initialEntry);
     await replace(initialEntry);
     const entered = createDeferred();
     const release = createDeferred();
-    const writer = patchSessionEntryCore({ sessionKey, storePath }, async () => {
+    const writer = sessions.patchSessionEntryCore({ sessionKey, storePath }, async () => {
       entered.resolve();
       await release.promise;
       return null;
     });
     await entered.promise;
     let authorized = true;
-    const pending = persist({
-      initialEntry,
-      entry: {
-        ...initialEntry,
-        authProfileOverride: "openai:work",
-        authProfileOverrideSource: "user",
+    const pending = persist(
+      { authProfileOverride: "openai:work", authProfileOverrideSource: "user", updatedAt: 100 },
+      {
+        validateCommit: () => (authorized ? undefined : "Select an account you own."),
       },
-      validateCommit: () => (authorized ? undefined : "Select an account you own."),
-    });
+    );
     authorized = false;
     release.resolve();
     await writer;
@@ -74,7 +75,6 @@ describe("persistReplySessionEntry", () => {
   });
 
   it("does not restore policy fields revoked during reply processing", async () => {
-    const { read, persist, replace } = fixture();
     const initialEntry: SessionEntry = {
       ...baseEntry,
       thinkingLevel: "low",
@@ -82,6 +82,7 @@ describe("persistReplySessionEntry", () => {
       inheritedToolAllow: ["exec"],
       sendPolicy: "allow",
     };
+    const { read, persist, replace } = fixture(initialEntry);
     const currentEntry: SessionEntry = {
       sessionId: "session-1",
       updatedAt: 400,
@@ -90,23 +91,20 @@ describe("persistReplySessionEntry", () => {
     };
     await replace(currentEntry);
 
-    const hostSql = observeHostDataSql();
+    const hostSql = sql.observeHostDataSql();
     let result: Awaited<ReturnType<typeof persistReplySessionEntry>>;
     try {
-      result = await persist({
-        initialEntry,
-        entry: {
-          ...initialEntry,
-          thinkingLevel: "high",
-          updatedAt: 250,
+      result = await persist(
+        { thinkingLevel: "high" },
+        {
+          skipMaintenance: true,
+          validateCommit: () => undefined,
         },
-        skipMaintenance: true,
-        validateCommit: () => undefined,
-      });
+      );
     } finally {
       hostSql.restore();
     }
-    expect(hostSql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+    expect(hostSql.queries.filter(sql.isSessionEntryDataSql)).toEqual([]);
 
     expect(result).toMatchObject({
       status: "current",
@@ -156,15 +154,11 @@ describe("persistReplySessionEntry", () => {
     touchedFields?: Array<keyof SessionEntry>;
     error: string;
   }>)("rejects persistence when the session is $name", async (row) => {
-    const { read, persist, replace } = fixture();
+    const { read, persist, replace } = fixture(row.initialEntry);
     if (row.currentEntry) {
       await replace(row.currentEntry);
     }
-    const result = await persist({
-      initialEntry: row.initialEntry,
-      entry: { ...row.initialEntry, ...row.changes, updatedAt: 250 },
-      touchedFields: row.touchedFields,
-    });
+    const result = await persist(row.changes, { touchedFields: row.touchedFields });
     expect(result).toEqual({
       status: "lifecycle-invalidated",
       error: `Session "${sessionKey}" ${row.error}`,

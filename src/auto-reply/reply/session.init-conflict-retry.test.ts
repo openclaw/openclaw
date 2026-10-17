@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { AgentHarnessSessionCleanupError } from "../../agents/harness/errors.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import {
@@ -16,12 +16,6 @@ import {
   runWithSessionInitConflictRetry,
 } from "./session-init-conflict-retry.js";
 import { initSessionState as initSessionStateRaw } from "./session.js";
-
-const initSessionState = (
-  params: Omit<Parameters<typeof initSessionStateRaw>[0], "ctx"> & {
-    ctx: Record<string, unknown>;
-  },
-) => initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
 
 const commitConflictControl = vi.hoisted(() => ({
   abortController: undefined as AbortController | undefined,
@@ -55,20 +49,14 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
       }
       const [params] = args;
       const beforeEntryMutation = commitConflictControl.beforeEntryMutation;
-      return await actual.commitReplySessionInitialization({
-        ...params,
-        ...(beforeEntryMutation
-          ? {
-              beforeEntryMutation: async (context) => {
-                await params.beforeEntryMutation?.(context);
-                await beforeEntryMutation({
-                  sessionKey: params.sessionKey,
-                  storePath: params.storePath,
-                });
-              },
-            }
-          : {}),
-      });
+      const options = { ...params };
+      if (beforeEntryMutation) {
+        options.beforeEntryMutation = async (context) => {
+          await params.beforeEntryMutation?.(context);
+          await beforeEntryMutation(params);
+        };
+      }
+      return await actual.commitReplySessionInitialization(options);
     },
   };
 });
@@ -76,89 +64,84 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
 const SESSION_KEY = "agent:main:dashboard:test";
 
 function conflictingAttempt(failures: number) {
-  const state = { calls: 0 };
-  const attempt = async () => {
-    state.calls += 1;
-    if (state.calls <= failures) {
+  let calls = 0;
+  return vi.fn(async () => {
+    if (++calls <= failures) {
       throw new ReplySessionInitConflictError(SESSION_KEY);
     }
     return "ok" as const;
-  };
-  return { attempt, state };
+  });
 }
 
 const instantSleep = async (_ms: number) => {};
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  Object.assign(commitConflictControl, {
+    abortController: undefined,
+    beforeEntryMutation: undefined,
+    commitCalls: 0,
+    remainingFailures: 0,
+  });
+});
+
 describe("runWithSessionInitConflictRetry", () => {
-  it("retries conflict messages rejected as strings", async () => {
+  it.each([
+    [
+      "retries string conflicts",
+      `reply session initialization conflicted for ${SESSION_KEY}`,
+      false,
+      2,
+    ],
+    ["does not retry other errors", new Error("reply session initialization aborted"), false, 1],
+    ["stops on abort", new ReplySessionInitConflictError(SESSION_KEY), true, 1],
+  ] as const)("%s", async (_name, error, abort, calls) => {
+    const controller = new AbortController();
     const attempt = vi
       .fn<() => Promise<string>>()
-      .mockRejectedValueOnce(`reply session initialization conflicted for ${SESSION_KEY}`)
+      .mockImplementationOnce(async () => {
+        if (abort) {
+          controller.abort();
+        }
+        throw error;
+      })
       .mockResolvedValue("ok");
-
-    await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).resolves.toBe(
-      "ok",
-    );
-    expect(attempt).toHaveBeenCalledTimes(2);
-  });
-
-  it("executes an attempt after every caller-provided retry delay", async () => {
-    const { attempt, state } = conflictingAttempt(3);
-    const delays: number[] = [];
-    await expect(
-      runWithSessionInitConflictRetry(attempt, {
-        retryDelaysMs: [1, 2, 3],
-        sleep: async (ms) => {
-          delays.push(ms);
-        },
-      }),
-    ).resolves.toBe("ok");
-    expect(state.calls).toBe(4);
-    expect(delays).toEqual([1, 2, 3]);
-  });
-
-  it("does not retry non-conflict errors", async () => {
-    const attempt = vi
-      .fn<() => Promise<never>>()
-      .mockRejectedValue(new Error("reply session initialization aborted"));
-    await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).rejects.toThrow(
-      "reply session initialization aborted",
-    );
-    expect(attempt).toHaveBeenCalledOnce();
-  });
-
-  it("stops retrying when the abort signal fires", async () => {
-    const controller = new AbortController();
-    const attempt = vi.fn(async () => {
-      controller.abort();
-      throw new ReplySessionInitConflictError(SESSION_KEY);
-    });
-    await expect(
+    const result = expect(
       runWithSessionInitConflictRetry(attempt, {
         signal: controller.signal,
         sleep: instantSleep,
       }),
-    ).rejects.toBeInstanceOf(ReplySessionInitConflictError);
-    expect(attempt).toHaveBeenCalledOnce();
+    );
+    if (calls === 2) {
+      await result.resolves.toBe("ok");
+    } else {
+      await result.rejects.toBe(error);
+    }
+    expect(attempt).toHaveBeenCalledTimes(calls);
   });
 
-  it("applies capped exponential backoff between attempts", async () => {
+  it.each([
+    ["caller delays", 3, [1, 2, 3], [1, 2, 3]],
+    ["capped exponential backoff", Infinity, undefined, [250, 500, 1_000, 2_000]],
+  ] as const)("applies %s between attempts", async (_name, failures, retryDelaysMs, expected) => {
+    const attempt = conflictingAttempt(failures);
     const delays: number[] = [];
-    const { attempt, state } = conflictingAttempt(Number.POSITIVE_INFINITY);
-    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
-    try {
-      await expect(
-        runWithSessionInitConflictRetry(attempt, {
-          sleep: async (ms) => {
-            delays.push(ms);
-          },
-        }),
-      ).rejects.toBeInstanceOf(ReplySessionInitConflictError);
-      expect(state.calls).toBe(5);
-      expect(delays).toEqual([250, 500, 1_000, 2_000]);
-    } finally {
-      randomSpy.mockRestore();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const result = expect(
+      runWithSessionInitConflictRetry(attempt, {
+        retryDelaysMs,
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+      }),
+    );
+    if (retryDelaysMs) {
+      await result.resolves.toBe("ok");
+    } else {
+      await result.rejects.toBeInstanceOf(ReplySessionInitConflictError);
     }
+    expect(attempt).toHaveBeenCalledTimes(expected.length + 1);
+    expect(delays).toEqual(expected);
   });
 });
 
@@ -172,28 +155,32 @@ describe("initSessionState conflict retry wiring", () => {
     return {
       ...scope,
       read: () => loadSessionEntry({ ...scope, readConsistency: "latest" }),
-      initialize: (params: Partial<Parameters<typeof initSessionState>[0]> = {}) =>
-        initSessionState({
+      seed: (entry: Parameters<typeof upsertSessionEntryCore>[1]) =>
+        upsertSessionEntryCore(scope, entry),
+      initialize: ({
+        ctx = {},
+        ...params
+      }: Partial<Omit<Parameters<typeof initSessionStateRaw>[0], "ctx">> & {
+        ctx?: Record<string, unknown>;
+      } = {}) =>
+        initSessionStateRaw({
           cfg: { session: { store: scope.storePath } },
           commandAuthorized: true,
-          ctx: { Body: "hello", SessionKey: SESSION_KEY },
+          ctx: finalizeInboundContext({ Body: "hello", SessionKey: SESSION_KEY, ...ctx }),
           ...params,
         }),
     };
   }
   it("preserves the session generation when registered mandatory cleanup fails, then retries", async () => {
-    const { storePath, read: readSession, initialize } = fixture();
+    const { storePath, read: readSession, initialize, seed } = fixture();
     const registry = createEmptyPluginRegistry();
     const failure = new AgentHarnessSessionCleanupError("native session still running");
     let cleanupAvailable = false;
-    await upsertSessionEntryCore(
-      { sessionKey: SESSION_KEY, storePath },
-      {
-        sessionId: "cleanup-blocked-session",
-        lifecycleRevision: "cleanup-original-revision",
-        updatedAt: Date.now() - 86_400_000,
-      },
-    );
+    await seed({
+      sessionId: "cleanup-blocked-session",
+      lifecycleRevision: "cleanup-original-revision",
+      updatedAt: Date.now() - 86_400_000,
+    });
     const original = readSession();
     await withPluginRuntimeRegistryScope(registry, async () => {
       registerAgentHarness({
@@ -212,7 +199,7 @@ describe("initSessionState conflict retry wiring", () => {
       const reset = () =>
         initialize({
           cfg: { session: { store: storePath, reset: { mode: "idle", idleMinutes: 30 } } },
-          ctx: { Body: "/new", SessionKey: SESSION_KEY },
+          ctx: { Body: "/new" },
         });
       await expect(reset()).rejects.toBe(failure);
       expect(readSession()).toEqual(original);
@@ -228,84 +215,50 @@ describe("initSessionState conflict retry wiring", () => {
   });
 
   it("retries a late same-session lifecycle conflict without losing either update", async () => {
-    const { storePath, read, initialize } = fixture();
+    const { read, initialize, seed } = fixture();
     let lateWrites = 0;
-    commitConflictControl.commitCalls = 0;
-    commitConflictControl.beforeEntryMutation = ({ sessionKey, storePath: targetStorePath }) => {
+    commitConflictControl.beforeEntryMutation = (scope) => {
       if (lateWrites >= 2) {
         return;
       }
-      const currentEntry = loadSessionEntry({
-        readConsistency: "latest",
-        sessionKey,
-        storePath: targetStorePath,
-      });
+      const currentEntry = loadSessionEntry({ ...scope, readConsistency: "latest" });
       if (!currentEntry) {
         throw new Error("expected the projected reply session row");
       }
       lateWrites += 1;
-      replaceSessionEntrySync(
-        { sessionKey, storePath: targetStorePath },
-        {
-          ...currentEntry,
-          lastHeartbeatSentAt: 100 + lateWrites,
-          lastHeartbeatText: `concurrent metadata ${lateWrites}`,
-        },
-      );
+      replaceSessionEntrySync(scope, {
+        ...currentEntry,
+        lastHeartbeatSentAt: 100 + lateWrites,
+        lastHeartbeatText: `concurrent metadata ${lateWrites}`,
+      });
       if (lateWrites === 2) {
         commitConflictControl.beforeEntryMutation = undefined;
       }
     };
 
-    try {
-      await upsertSessionEntryCore(
-        { sessionKey: SESSION_KEY, storePath },
-        // No display name seeded: the derived thread label may only initialize an
-        // unnamed session, and this test tracks the init write surviving retries.
-        {
-          sessionId: "existing-session",
-          updatedAt: Date.now(),
-        },
-      );
+    await seed({ sessionId: "existing-session", updatedAt: Date.now() });
 
-      const result = await initialize({
-        ctx: {
-          Body: "hello",
-          SessionKey: SESSION_KEY,
-          ThreadLabel: "reply initialization update",
-        },
-      });
+    const result = await initialize({ ctx: { ThreadLabel: "reply initialization update" } });
 
-      expect(commitConflictControl.commitCalls).toBe(3);
-      expect(lateWrites).toBe(2);
-      const expected = {
-        displayName: "reply initialization update",
-        lastHeartbeatSentAt: 102,
-        lastHeartbeatText: "concurrent metadata 2",
-        sessionId: "existing-session",
-      };
-      expect(result.sessionEntry).toMatchObject(expected);
-      expect(read()).toMatchObject(expected);
-    } finally {
-      commitConflictControl.beforeEntryMutation = undefined;
-    }
+    expect(commitConflictControl.commitCalls).toBe(3);
+    expect(lateWrites).toBe(2);
+    const expected = {
+      displayName: "reply initialization update",
+      lastHeartbeatSentAt: 102,
+      lastHeartbeatText: "concurrent metadata 2",
+      sessionId: "existing-session",
+    };
+    expect(result.sessionEntry).toMatchObject(expected);
+    expect(read()).toMatchObject(expected);
   });
 
   it("cancels the production backoff through the initializer signal", async () => {
     const { initialize } = fixture();
     const controller = new AbortController();
     commitConflictControl.abortController = controller;
-    commitConflictControl.commitCalls = 0;
     commitConflictControl.remainingFailures = 2;
 
-    try {
-      const initializing = initialize({ signal: controller.signal });
-
-      await expect(initializing).rejects.toThrow("aborted");
-      expect(commitConflictControl.commitCalls).toBe(2);
-    } finally {
-      commitConflictControl.abortController = undefined;
-      commitConflictControl.remainingFailures = 0;
-    }
+    await expect(initialize({ signal: controller.signal })).rejects.toThrow("aborted");
+    expect(commitConflictControl.commitCalls).toBe(2);
   });
 });
