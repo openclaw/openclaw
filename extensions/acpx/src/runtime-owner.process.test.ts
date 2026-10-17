@@ -1,11 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import {
-  createAgentRegistry,
-  createFileSessionStore,
-  decodeAcpxRuntimeHandleState,
-} from "acpx/runtime";
+import { createFileSessionStore, decodeAcpxRuntimeHandleState } from "acpx/runtime";
 import {
   getAcpSessionManager,
   registerAcpRuntimeBackend,
@@ -17,13 +12,53 @@ import {
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeAll, expect, it, type TestContext } from "vitest";
+import { ownerRuntimeOptions, type RuntimeHandle } from "./runtime-process.test-support.js";
 import { AcpxRuntime } from "./runtime.js";
 
 const harness = "owner-fixture";
-const script = fileURLToPath(
-  new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
-);
 const fixtureRuns = new WeakMap<TestContext, Promise<void>>();
+type Manager = ReturnType<typeof getAcpSessionManager>;
+type Target = Pick<Parameters<Manager["runTurn"]>[0], "cfg" | "sessionKey" | "agentId">;
+
+async function prompt(
+  manager: Manager,
+  target: Target,
+  workspaceDir: string,
+  text: string,
+  sessionId: string,
+  requestId = text,
+  admissionSessionKey = target.sessionKey,
+) {
+  const admission = await createAdmittedHostCapabilityTestFixture({
+    config: target.cfg,
+    runId: requestId,
+    agentId: target.agentId,
+    sessionId,
+    sessionKey: admissionSessionKey,
+    workspaceDir,
+    abortSignal: new AbortController().signal,
+  });
+  const chunks: string[] = [];
+  try {
+    await manager.runTurn({
+      ...target,
+      admittedRunContext: admission.admittedRunContext,
+      provenance: "human",
+      text,
+      mode: "prompt",
+      requestId,
+      onEvent(event) {
+        if (event.type === "text_delta") {
+          chunks.push(event.text);
+        }
+      },
+    });
+  } finally {
+    admission.closeHost();
+    admission.closeAdmission();
+  }
+  return JSON.parse(chunks.join(""));
+}
 
 it.for([true, false])(
   "runs the first cold oneshot turn (load support: %s)",
@@ -38,22 +73,13 @@ it.for([true, false])(
       await fs.mkdir(peerDirectory);
       const store = createFileSessionStore({ stateDir: state.root });
       const createRuntime = () =>
-        new AcpxRuntime({
-          cwd: state.root,
-          sessionStore: store,
-          agentRegistry: createAgentRegistry({
-            overrides: {
-              [harness]: [
-                process.execPath,
-                script,
-                peerDirectory,
-                ...(!loadSession ? ["--no-session-load"] : []),
-              ],
-            },
+        new AcpxRuntime(
+          ownerRuntimeOptions(state.root, {
+            sessionStore: store,
+            agent: harness,
+            args: !loadSession ? ["--no-session-load"] : [],
           }),
-          permissionMode: "deny-all",
-          timeoutMs: 5_000,
-        });
+        );
       let runtime = createRuntime();
       registerAcpRuntimeBackend({ id: "acpx", runtime });
       testing.resetAcpSessionManagerForTests();
@@ -94,35 +120,13 @@ it.for([true, false])(
         });
         expect((await store.load(handle.acpxRecordId!))?.lastPromptAt).toBeUndefined();
         const text = "cold-oneshot-first-prompt";
-        const admission = await createAdmittedHostCapabilityTestFixture({
-          config: cfg,
-          runId: text,
-          agentId: target.agentId,
-          sessionId: "cold-oneshot-core-session",
-          sessionKey: target.sessionKey,
-          workspaceDir: state.workspaceDir,
-          abortSignal: new AbortController().signal,
-        });
-        const chunks: string[] = [];
-        try {
-          await manager.runTurn({
-            ...target,
-            admittedRunContext: admission.admittedRunContext,
-            provenance: "human",
-            text,
-            mode: "prompt",
-            requestId: text,
-            onEvent(event) {
-              if (event.type === "text_delta") {
-                chunks.push(event.text);
-              }
-            },
-          });
-        } finally {
-          admission.closeHost();
-          admission.closeAdmission();
-        }
-        const reply = JSON.parse(chunks.join(""));
+        const reply = await prompt(
+          manager,
+          target,
+          state.workspaceDir,
+          text,
+          "cold-oneshot-core-session",
+        );
         expect(reply).toMatchObject({ history: [text] });
         if (loadSession) {
           expect(reply.sessionId).toBe(handle.backendSessionId);
@@ -187,68 +191,41 @@ it.for(["global", "shared-project"])(
       await fs.mkdir(path.join(directory, "sessions"));
       const store = createFileSessionStore({ stateDir: directory });
       const createRuntime = async () =>
-        new AcpxRuntime({
-          cwd: directory,
-          sessionStore: store,
-          openclawLegacyBareSessionKeys: new Set(
-            (await fs.readdir(path.join(directory, "sessions")))
-              .filter((name) => name.endsWith(".json"))
-              .map((name) => decodeURIComponent(name.slice(0, -5))),
-          ),
-          agentRegistry: createAgentRegistry({
-            overrides: { [harness]: [process.execPath, script, peerDirectory] },
+        new AcpxRuntime(
+          ownerRuntimeOptions(directory, {
+            agent: harness,
+            sessionStore: store,
+            openclawLegacyBareSessionKeys: new Set(
+              (await fs.readdir(path.join(directory, "sessions")))
+                .filter((name) => name.endsWith(".json"))
+                .map((name) => decodeURIComponent(name.slice(0, -5))),
+            ),
+            pluginToolsMcpBridgeEnabled: true,
+            openclawToolsMcpBridgeEnabled: true,
+            mcpServers: ["openclaw-plugin-tools", "openclaw-tools", "user-server"].map((name) => ({
+              name,
+              command: process.execPath,
+              args: ["server.mjs"],
+              env: [],
+            })),
           }),
-          pluginToolsMcpBridgeEnabled: true,
-          openclawToolsMcpBridgeEnabled: true,
-          mcpServers: ["openclaw-plugin-tools", "openclaw-tools", "user-server"].map((name) => ({
-            name,
-            command: process.execPath,
-            args: ["server.mjs"],
-            env: [],
-          })),
-          permissionMode: "deny-all",
-          timeoutMs: 5_000,
-        });
+        );
       let runtime = await createRuntime();
       registerAcpRuntimeBackend({ id: "acpx", runtime });
       testing.resetAcpSessionManagerForTests();
       let manager = getAcpSessionManager();
-      const handles: Awaited<ReturnType<AcpxRuntime["ensureSession"]>>[] = [];
+      const handles: RuntimeHandle[] = [];
       const target = (agentId?: string) => ({ cfg, sessionKey, agentId });
-      const turn = async (
-        handle: Awaited<ReturnType<AcpxRuntime["ensureSession"]>>,
-        text: string,
-      ) => {
-        const chunks: string[] = [];
-        const admission = await createAdmittedHostCapabilityTestFixture({
-          config: cfg,
-          runId: text,
-          agentId: handle.agentId,
-          sessionId: `${handle.agentId}-session`,
-          sessionKey: handle.sessionKey,
-          workspaceDir: state.workspaceDir,
-          abortSignal: new AbortController().signal,
-        });
-        try {
-          await manager.runTurn({
-            ...target(handle.agentId),
-            admittedRunContext: admission.admittedRunContext,
-            provenance: "human",
-            text,
-            mode: "prompt",
-            requestId: text,
-            onEvent(event) {
-              if (event.type === "text_delta") {
-                chunks.push(event.text);
-              }
-            },
-          });
-        } finally {
-          admission.closeHost();
-          admission.closeAdmission();
-        }
-        return JSON.parse(chunks.join(""));
-      };
+      const turn = (handle: RuntimeHandle, text: string) =>
+        prompt(
+          manager,
+          target(handle.agentId),
+          state.workspaceDir,
+          text,
+          `${handle.agentId}-session`,
+          text,
+          handle.sessionKey,
+        );
       try {
         for (const agentId of ["main", "work"]) {
           const { handle } = await manager.initializeSession({
@@ -367,15 +344,12 @@ it("closes a completed oneshot without mixing its replacement record identity", 
     const peerDirectory = path.join(state.root, "peer");
     await fs.mkdir(peerDirectory);
     const store = createFileSessionStore({ stateDir: state.root });
-    const runtime = new AcpxRuntime({
-      cwd: state.root,
-      sessionStore: store,
-      agentRegistry: createAgentRegistry({
-        overrides: { [harness]: [process.execPath, script, peerDirectory] },
+    const runtime = new AcpxRuntime(
+      ownerRuntimeOptions(state.root, {
+        agent: harness,
+        sessionStore: store,
       }),
-      permissionMode: "deny-all",
-      timeoutMs: 5_000,
-    });
+    );
     registerAcpRuntimeBackend({ id: "acpx", runtime });
     testing.resetAcpSessionManagerForTests();
     const manager = getAcpSessionManager();
@@ -386,35 +360,16 @@ it("closes a completed oneshot without mixing its replacement record identity", 
         agent: harness,
         mode: "oneshot",
       });
-      const admission = await createAdmittedHostCapabilityTestFixture({
-        config: cfg,
-        runId: "oneshot-record",
-        agentId: target.agentId,
-        sessionId: "oneshot-core-session",
-        sessionKey: target.sessionKey,
-        workspaceDir: state.workspaceDir,
-        abortSignal: new AbortController().signal,
-      });
-      const chunks: string[] = [];
-      try {
-        await manager.runTurn({
-          ...target,
-          admittedRunContext: admission.admittedRunContext,
-          provenance: "human",
-          text: "oneshot-owned-history",
-          mode: "prompt",
-          requestId: "oneshot-record",
-          onEvent(event) {
-            if (event.type === "text_delta") {
-              chunks.push(event.text);
-            }
-          },
-        });
-      } finally {
-        admission.closeHost();
-        admission.closeAdmission();
-      }
-      expect(JSON.parse(chunks.join(""))).toMatchObject({ history: ["oneshot-owned-history"] });
+      expect(
+        await prompt(
+          manager,
+          target,
+          state.workspaceDir,
+          "oneshot-owned-history",
+          "oneshot-core-session",
+          "oneshot-record",
+        ),
+      ).toMatchObject({ history: ["oneshot-owned-history"] });
       expect(readAcpSessionEntry(target)?.acp?.identity).toMatchObject({
         state: "resolved",
         acpxRecordId: handle.acpxRecordId,

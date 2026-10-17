@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   AcpxRuntime as BaseAcpxRuntime,
   createAgentRegistry,
@@ -10,9 +9,12 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
+import {
+  ownerAgentScript as peer,
+  ownerRuntimeOptions,
+  promptJson,
+} from "./runtime-process.test-support.js";
 import { AcpxRuntime } from "./runtime.js";
-
-const peer = fileURLToPath(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url));
 
 async function withRuntime(
   label: string,
@@ -30,16 +32,13 @@ async function withRuntime(
     const directory = path.join(state.root, "peer");
     await fs.mkdir(directory);
     const store = createFileSessionStore({ stateDir: state.root });
-    const runtime = new AcpxRuntime({
-      cwd: state.root,
-      sessionStore: store,
-      agentRegistry: createAgentRegistry({
-        overrides: { fixture: [process.execPath, peer, directory, ...(options.args ?? [])] },
+    const runtime = new AcpxRuntime(
+      ownerRuntimeOptions(state.root, {
+        sessionStore: store,
+        args: options.args,
+        processLifecycle: options.processLifecycle,
       }),
-      permissionMode: "deny-all",
-      timeoutMs: 5000,
-      processLifecycle: options.processLifecycle,
-    });
+    );
     try {
       await run(runtime, store, directory);
     } finally {
@@ -117,16 +116,15 @@ it.each([process.platform === "win32" ? "bridge" : "env-bridge", "catalog", "ope
       }));
       const store = createFileSessionStore({ stateDir: state.root });
       const createRuntime = (configuredCommand = command) =>
-        new AcpxRuntime({
-          cwd: state.root,
-          sessionStore: store,
-          agentRegistry: createAgentRegistry({ overrides: { [agent]: configuredCommand } }),
-          pluginToolsMcpBridgeEnabled: true,
-          openclawToolsMcpBridgeEnabled: true,
-          mcpServers: servers,
-          permissionMode: "deny-all",
-          timeoutMs: 5000,
-        });
+        new AcpxRuntime(
+          ownerRuntimeOptions(state.root, {
+            sessionStore: store,
+            agentRegistry: createAgentRegistry({ overrides: { [agent]: configuredCommand } }),
+            pluginToolsMcpBridgeEnabled: true,
+            openclawToolsMcpBridgeEnabled: true,
+            mcpServers: servers,
+          }),
+        );
       let runtime = createRuntime();
       const handles: Awaited<ReturnType<AcpxRuntime["ensureSession"]>>[] = [];
       try {
@@ -140,24 +138,10 @@ it.each([process.platform === "win32" ? "bridge" : "env-bridge", "catalog", "ope
           });
           handles.push(handle);
         }
-        const prompt = async (handle: (typeof handles)[number]) => {
-          const turn = runtime.startTurn({
-            handle,
-            text: "show context",
-            mode: "prompt",
-            requestId: handle.agentId!,
-          });
-          let text = "";
-          for await (const event of turn.events) {
-            if (event.type === "text_delta") {
-              text += event.text;
-            }
-          }
-          expect(await turn.result).toMatchObject({ status: "completed" });
-          return JSON.parse(text);
-        };
         const verify = async (reconnected = false) => {
-          const results = await Promise.all(handles.map(prompt));
+          const results = await Promise.all(
+            handles.map((handle) => promptJson(runtime, handle, "show context", handle.agentId!)),
+          );
           for (const [index, result] of results.entries()) {
             expect(reconnected ? result.loadedMcpServers : result.mcpServers).toEqual(
               bridge || catalog

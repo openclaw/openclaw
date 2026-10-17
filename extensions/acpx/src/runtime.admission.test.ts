@@ -1,12 +1,10 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import {
   AcpxRuntime as BaseAcpxRuntime,
   RequestedModelUnsupportedError,
-  createAgentRegistry,
   createFileSessionStore,
   type AcpSessionStore,
 } from "acpx/runtime";
@@ -17,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/process-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ownerRuntimeOptions } from "./runtime-process.test-support.js";
 import { acpxOperationScope } from "./runtime-session-store.js";
 import { admissionRetentionEntrypoint } from "./runtime.admission-retention-entrypoint.test-support.js";
 import { AcpxRuntime } from "./runtime.js";
@@ -24,7 +23,6 @@ import { type TestSessionStore, makeRuntime, makeManagedRuntime } from "./runtim
 
 type RuntimeOptions = ConstructorParameters<typeof AcpxRuntime>[0];
 type RuntimeHandle = Awaited<ReturnType<AcpxRuntime["ensureSession"]>>;
-const peer = fileURLToPath(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url));
 const admissionTarget = { sessionKey: "admission-project", agentId: "main" };
 const admissionInput = { ...admissionTarget, agent: "fixture", mode: "persistent" as const };
 
@@ -38,17 +36,11 @@ async function withFixture(
     await fs.mkdir(directory);
     const store = createFileSessionStore({ stateDir: state.root });
     await run(
-      {
-        cwd: state.root,
+      ownerRuntimeOptions(state.root, {
         sessionStore: store,
-        agentRegistry: createAgentRegistry({
-          overrides: { fixture: [process.execPath, peer, directory] },
-        }),
         openclawToolsMcpBridgeEnabled: true,
         mcpServers: [{ name: "openclaw-tools", command: process.execPath, args: [], env: [] }],
-        permissionMode: "deny-all",
-        timeoutMs: 5000,
-      },
+      }),
       store,
     );
   });

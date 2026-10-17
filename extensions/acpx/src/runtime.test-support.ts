@@ -20,6 +20,12 @@ export type TestSessionStore = {
   save(record: Record<string, unknown>): Promise<void>;
 };
 export const CODEX_ACP_WRAPPER_COMMAND = 'node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"';
+type RuntimeDelegate = {
+  shutdown(): Promise<void>;
+} & Pick<AcpRuntime, "cancel" | "close" | "ensureSession"> &
+  Pick<UpstreamRuntime, "getCapabilities"> & {
+    [K in "startTurn" | "getStatus" | "setMode" | "setConfigOption"]-?: NonNullable<AcpRuntime[K]>;
+  };
 
 export function makeRuntime(
   baseStore: TestSessionStore,
@@ -27,26 +33,7 @@ export function makeRuntime(
   testOptions?: ConstructorParameters<typeof AcpxRuntime>[1] & {
     openclawProcessCleanup?: AcpxProcessSystemFixture;
   },
-): {
-  runtime: AcpxRuntime;
-  probe: ReturnType<
-    typeof vi.fn<(options: AcpRuntimeOptions) => Promise<{ ok: boolean; message: string }>>
-  >;
-  wrappedStore: TestSessionStore & {
-    markFresh: (sessionKey: string) => void;
-  };
-  delegate: {
-    shutdown(): Promise<void>;
-    cancel: AcpRuntime["cancel"];
-    close: AcpRuntime["close"];
-    ensureSession: AcpRuntime["ensureSession"];
-    startTurn: NonNullable<AcpRuntime["startTurn"]>;
-    getCapabilities: UpstreamRuntime["getCapabilities"];
-    getStatus: NonNullable<AcpRuntime["getStatus"]>;
-    setMode: NonNullable<AcpRuntime["setMode"]>;
-    setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
-  };
-} {
+) {
   const { openclawProcessCleanup, ...delegateTestOptions } = testOptions ?? {};
   mockAcpxProcessSystem(openclawProcessCleanup);
   const probe = vi.fn(async (_options: AcpRuntimeOptions) => ({ ok: true, message: "ready" }));
@@ -64,32 +51,11 @@ export function makeRuntime(
     { probeRunner: probe, ...delegateTestOptions },
   );
 
-  return {
-    runtime,
-    probe,
-    wrappedStore: (
-      runtime as unknown as {
-        sessionStore: TestSessionStore & {
-          markFresh: (sessionKey: string) => void;
-        };
-      }
-    ).sessionStore,
-    delegate: (
-      runtime as unknown as {
-        delegate: {
-          shutdown(): Promise<void>;
-          cancel: AcpRuntime["cancel"];
-          close: AcpRuntime["close"];
-          ensureSession: AcpRuntime["ensureSession"];
-          startTurn: NonNullable<AcpRuntime["startTurn"]>;
-          getCapabilities: UpstreamRuntime["getCapabilities"];
-          getStatus: NonNullable<AcpRuntime["getStatus"]>;
-          setMode: NonNullable<AcpRuntime["setMode"]>;
-          setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
-        };
-      }
-    ).delegate,
+  const { sessionStore: wrappedStore, delegate } = runtime as unknown as {
+    sessionStore: TestSessionStore & { markFresh: (sessionKey: string) => void };
+    delegate: RuntimeDelegate;
   };
+  return { runtime, probe, wrappedStore, delegate };
 }
 
 export function makeManagedRuntime() {

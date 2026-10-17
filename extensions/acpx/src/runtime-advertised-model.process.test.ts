@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAgentRegistry, createFileSessionStore, type AcpProcessStarted } from "acpx/runtime";
@@ -6,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it } from "vitest";
+import { copyNodeExecutable, promptJson as prompt } from "./runtime-process.test-support.js";
 import { AcpxRuntime } from "./runtime.js";
 
 const script = fileURLToPath(new URL("../test/fixtures/model-catalog-agent.mjs", import.meta.url));
@@ -44,12 +44,7 @@ async function withRuntime(
         state.root,
         process.platform === "win32" ? "cursor-agent.exe" : "cursor-agent",
       );
-      if (process.platform === "win32") {
-        await fs.copyFile(process.execPath, executable);
-      } else {
-        // Preserve Node's executable-relative libraries while exercising ACPX's Cursor contract.
-        await fs.symlink(process.execPath, executable);
-      }
+      await copyNodeExecutable(executable);
     }
     const spawned: Array<AcpProcessStarted & { exited: Promise<void> }> = [];
     const exits = new Map<string, () => void>();
@@ -84,22 +79,6 @@ async function withRuntime(
       }
     }
   });
-}
-
-async function prompt(
-  runtime: AcpxRuntime,
-  handle: Awaited<ReturnType<AcpxRuntime["ensureSession"]>>,
-  text: string,
-) {
-  const turn = runtime.startTurn({ handle, text, mode: "prompt", requestId: text });
-  const chunks: string[] = [];
-  for await (const event of turn.events) {
-    if (event.type === "text_delta") {
-      chunks.push(event.text);
-    }
-  }
-  expect(await turn.result).toMatchObject({ status: "completed" });
-  return JSON.parse(chunks.join(""));
 }
 
 it("selects the unique advertised id for an explicit model ref", async () => {

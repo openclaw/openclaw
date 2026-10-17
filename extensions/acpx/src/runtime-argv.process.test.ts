@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   AcpxRuntime as BaseAcpxRuntime,
   createAgentRegistry,
@@ -21,11 +20,13 @@ import {
   openAcpxProcessLeaseStateStore,
   readAcpxProcessLeaseIdentity,
 } from "./process-lease.js";
+import {
+  copyNodeExecutable,
+  ownerAgentScript as script,
+  ownerRuntimeOptions,
+  promptJson as prompt,
+} from "./runtime-process.test-support.js";
 import { AcpxRuntime } from "./runtime.js";
-
-const script = fileURLToPath(
-  new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url),
-);
 const sessionKey = "agent:main:acp:argv";
 const samples = ["", "space value", `owner's "choice"`, String.raw`C:\tools\adapter`];
 
@@ -42,35 +43,18 @@ it("does not reinterpret a legacy command when a workspace file has the same nam
 
 afterEach(() => vi.unstubAllEnvs());
 
-async function prompt(
-  runtime: AcpxRuntime,
-  handle: Awaited<ReturnType<AcpxRuntime["ensureSession"]>>,
-  text: string,
-) {
-  const turn = runtime.startTurn({ handle, text, mode: "prompt", requestId: text });
-  const chunks: string[] = [];
-  for await (const event of turn.events) {
-    if (event.type === "text_delta") {
-      chunks.push(event.text);
-    }
-  }
-  expect(await turn.result).toMatchObject({ status: "completed" });
-  return JSON.parse(chunks.join(""));
-}
-
 it("passes child-only environment through the ACPX process factory", async () => {
   await withOpenClawTestState({ label: "acpx-agent-env" }, async (state) => {
     const peerDirectory = path.join(state.root, "peer");
     await fs.mkdir(peerDirectory);
-    const runtime = new AcpxRuntime({
-      cwd: state.root,
-      agentProcessEnv: { TOKIO_WORKER_THREADS: "7" },
-      permissionMode: "deny-all",
-      sessionStore: createFileSessionStore({ stateDir: path.join(state.root, "state") }),
-      agentRegistry: createAgentRegistry({
-        overrides: { fixture: [process.execPath, script, peerDirectory, "--capture-worker-env"] },
+    const runtime = new AcpxRuntime(
+      ownerRuntimeOptions(state.root, {
+        agentProcessEnv: { TOKIO_WORKER_THREADS: "7" },
+        sessionStore: createFileSessionStore({ stateDir: path.join(state.root, "state") }),
+        args: ["--capture-worker-env"],
+        timeoutMs: undefined,
       }),
-    });
+    );
     let handle: Awaited<ReturnType<AcpxRuntime["ensureSession"]>> | undefined;
     try {
       handle = await runtime.ensureSession({ sessionKey, agent: "fixture", mode: "persistent" });
@@ -98,12 +82,7 @@ it.each([
         state.root,
         process.platform === "win32" ? "node program.exe" : "node program",
       );
-      if (process.platform === "win32") {
-        await fs.copyFile(process.execPath, executable);
-      } else {
-        // Homebrew Node resolves libnode beside its real executable.
-        await fs.symlink(process.execPath, executable);
-      }
+      await copyNodeExecutable(executable);
       const args = [script, peerDirectory, ...samples];
       const agent = wrapped ? "codex" : "fixture";
       const spawnExecutable =
@@ -143,20 +122,20 @@ it.each([
         ),
       });
       const createRuntime = () =>
-        new AcpxRuntime({
-          cwd: state.root,
-          sessionStore: store,
-          agentRegistry: createAgentRegistry({ overrides: config.agents }),
-          permissionMode: "deny-all",
-          timeoutMs: 15_000,
-          ...(wrapped
-            ? {
-                openclawWrapperRoot: path.join(state.root, "acpx"),
-                openclawGatewayInstanceId: "argv-test",
-                openclawProcessLeaseStore: leases,
-              }
-            : {}),
-        });
+        new AcpxRuntime(
+          ownerRuntimeOptions(state.root, {
+            sessionStore: store,
+            agentRegistry: createAgentRegistry({ overrides: config.agents }),
+            timeoutMs: 15_000,
+            ...(wrapped
+              ? {
+                  openclawWrapperRoot: path.join(state.root, "acpx"),
+                  openclawGatewayInstanceId: "argv-test",
+                  openclawProcessLeaseStore: leases,
+                }
+              : {}),
+          }),
+        );
       let runtime = createRuntime();
       let handle: Awaited<ReturnType<AcpxRuntime["ensureSession"]>> | undefined;
       try {
@@ -217,26 +196,24 @@ it.skipIf(process.platform === "win32")(
       const argv = [process.execPath, script, peerDirectory];
       const scalar = argv.map((arg) => JSON.stringify(arg)).join(" ");
       const store = createFileSessionStore({ stateDir: state.root });
-      const previous = new BaseAcpxRuntime({
-        cwd: state.root,
-        sessionStore: store,
-        agentRegistry: createAgentRegistry({ overrides: { fixture: scalar } }),
-        permissionMode: "deny-all",
-        timeoutMs: 5_000,
-      });
+      const previous = new BaseAcpxRuntime(
+        ownerRuntimeOptions(state.root, {
+          sessionStore: store,
+          agentRegistry: createAgentRegistry({ overrides: { fixture: scalar } }),
+        }),
+      );
       const original = await previous.ensureSession({
         sessionKey,
         agent: "fixture",
         mode: "persistent",
       });
       await previous.close({ handle: original, reason: "upgrade" });
-      const runtime = new AcpxRuntime({
-        cwd: state.root,
-        sessionStore: store,
-        agentRegistry: createAgentRegistry({ overrides: { fixture: argv } }),
-        permissionMode: "deny-all",
-        timeoutMs: 5_000,
-      });
+      const runtime = new AcpxRuntime(
+        ownerRuntimeOptions(state.root, {
+          sessionStore: store,
+          agentRegistry: createAgentRegistry({ overrides: { fixture: argv } }),
+        }),
+      );
       const handle = await runtime.ensureSession({
         sessionKey,
         agent: "fixture",
