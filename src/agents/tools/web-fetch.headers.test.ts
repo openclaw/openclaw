@@ -1,14 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LookupFn } from "../../infra/net/ssrf.js";
 import * as logger from "../../logger.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import "./web-fetch.test-mocks.js";
 import { createWebFetchTool } from "./web-fetch.js";
-import { createBaseWebFetchToolConfig } from "./web-fetch.test-harness.js";
 import * as webGuardedFetch from "./web-guarded-fetch.js";
 
 const lookupMock = vi.fn();
-const baseToolConfig = createBaseWebFetchToolConfig({ lookupFn: lookupMock });
 
 function setResponse(body: string, contentType = "text/markdown; charset=utf-8") {
   const fetchSpy = vi
@@ -19,18 +16,18 @@ function setResponse(body: string, contentType = "text/markdown; charset=utf-8")
 }
 
 function createToolWithHeaders(
-  headers: Record<string, string>,
-  opts?: { cacheTtlMinutes?: number },
+  headers: Record<string, string> = {},
+  cacheTtlMinutes = 0,
 ): ReturnType<typeof createWebFetchTool> {
   return createWebFetchTool({
-    lookupFn: lookupMock as unknown as LookupFn,
-    config: {
-      tools: {
-        web: {
-          fetch: { cacheTtlMinutes: opts?.cacheTtlMinutes ?? 0, headers },
-        },
-      },
-    },
+    lookupFn: lookupMock,
+    config: { tools: { web: { fetch: { cacheTtlMinutes, headers } } } },
+  });
+}
+
+function fetchHeaders(headers: Record<string, string>, path: string, cacheTtlMinutes = 0) {
+  return createToolWithHeaders(headers, cacheTtlMinutes)?.execute?.("call", {
+    url: `https://example.com/${path}`,
   });
 }
 
@@ -65,25 +62,17 @@ describe("web_fetch headers and response extraction", () => {
       .spyOn(webGuardedFetch, "fetchWithWebToolsNetworkGuard")
       .mockImplementation((params) => fetchWithRealGuard(params));
 
-    const tool = createToolWithHeaders({
+    const headers = {
       "ATL-SG-SERVICE-INJECTION-URL": "http://host.docker.internal:9999",
       Authorization: "Bearer deployment-token",
       Cookie: "session=deployment-session",
       "X-Api-Key": "deployment-api-key",
       "X-Tokenizer-Version": "v2",
       "X-Trace-Token": "trace-context",
-    });
+    };
+    await fetchHeaders(headers, "routed");
 
-    await tool?.execute?.("call", { url: "https://example.com/routed" });
-
-    expect(getRequestHeaders(fetchSpy)).toMatchObject({
-      "ATL-SG-SERVICE-INJECTION-URL": "http://host.docker.internal:9999",
-      Authorization: "Bearer deployment-token",
-      Cookie: "session=deployment-session",
-      "X-Api-Key": "deployment-api-key",
-      "X-Tokenizer-Version": "v2",
-      "X-Trace-Token": "trace-context",
-    });
+    expect(getRequestHeaders(fetchSpy)).toMatchObject(headers);
     const captureMeta = guardedFetchSpy.mock.calls[0]?.[0].capture;
     expect(captureMeta === false ? undefined : captureMeta?.sensitiveRequestHeaderNames).toEqual([
       "ATL-SG-SERVICE-INJECTION-URL",
@@ -96,26 +85,24 @@ describe("web_fetch headers and response extraction", () => {
   });
 
   it("refuses fetch-owned and framing headers", async () => {
-    // Upgrade/Expect/Keep-Alive/Transfer-Encoding make fetch throw, so letting one
-    // through would break every web_fetch call.
     const fetchSpy = setResponse("# Connection");
-
-    const tool = createToolWithHeaders({
-      accept: "text/plain",
-      "user-agent": "operator-agent/1.0",
-      "Accept-Language": "de-DE",
-      "Sec-Fetch-Mode": "same-origin",
-      Upgrade: "h2c",
-      Expect: "100-continue",
-      "Keep-Alive": "timeout=5",
-      "Transfer-Encoding": "chunked",
-      Host: "elsewhere.example",
-      Connection: "close",
-      "Content-Length": "0",
-      "X-Routing-Target": "staging",
-    });
-
-    const result = await tool?.execute?.("call", { url: "https://example.com/connection" });
+    const result = await fetchHeaders(
+      {
+        accept: "text/plain",
+        "user-agent": "operator-agent/1.0",
+        "Accept-Language": "de-DE",
+        "Sec-Fetch-Mode": "same-origin",
+        Upgrade: "h2c",
+        Expect: "100-continue",
+        "Keep-Alive": "timeout=5",
+        "Transfer-Encoding": "chunked",
+        Host: "elsewhere.example",
+        Connection: "close",
+        "Content-Length": "0",
+        "X-Routing-Target": "staging",
+      },
+      "connection",
+    );
 
     expect((result?.details as { status?: number } | undefined)?.status).toBe(200);
     expect(Object.keys(getRequestHeaders(fetchSpy))).toEqual([
@@ -129,13 +116,14 @@ describe("web_fetch headers and response extraction", () => {
   it("normalizes empty values without retaining a stale case-colliding value", async () => {
     const fetchSpy = setResponse("# Normalized");
 
-    const tool = createToolWithHeaders({
-      "X-Presence-Flag": " \t ",
-      "X-Routing-Target": "staging",
-      "x-routing-target": "東京",
-    });
-
-    await tool?.execute?.("call", { url: "https://example.com/normalized" });
+    await fetchHeaders(
+      {
+        "X-Presence-Flag": " \t ",
+        "X-Routing-Target": "staging",
+        "x-routing-target": "東京",
+      },
+      "normalized",
+    );
 
     const headers = getRequestHeaders(fetchSpy);
     expect(headers["X-Presence-Flag"]).toBe("");
@@ -144,17 +132,17 @@ describe("web_fetch headers and response extraction", () => {
   });
 
   it("still fetches when every configured header is unusable, naming it in a warning", async () => {
-    // The whole request must not fail because one config value is unsendable.
     const fetchSpy = setResponse("# Survives");
     const warnSpy = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
 
     const invalidName = "X-Bad\n[forged]\u001b[31m";
-    const tool = createToolWithHeaders({
-      "X-Survives-Unicode": "東京",
-      [invalidName]: "ignored",
-    });
-
-    const result = await tool?.execute?.("call", { url: "https://example.com/survives" });
+    const result = await fetchHeaders(
+      {
+        "X-Survives-Unicode": "東京",
+        [invalidName]: "ignored",
+      },
+      "survives",
+    );
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect((result?.details as { status?: number } | undefined)?.status).toBe(200);
@@ -162,7 +150,6 @@ describe("web_fetch headers and response extraction", () => {
       .map(([message]) => message)
       .filter((message) => message.includes("X-Survives-Unicode"));
     expect(warned).toHaveLength(1);
-    // Names are safe to log; values are not.
     expect(warned[0]).not.toContain("東京");
     const invalidNameWarning = warnSpy.mock.calls
       .map(([message]) => message)
@@ -174,21 +161,15 @@ describe("web_fetch headers and response extraction", () => {
 
   it("partitions the fetch cache by configured headers", async () => {
     const fetchSpy = setResponse("# Cached");
-    const url = "https://example.com/cache-partition";
-
-    await createToolWithHeaders(
-      { "ATL-SG-SERVICE-INJECTION-URL": "http://host.docker.internal:9999" },
-      { cacheTtlMinutes: 15 },
-    )?.execute?.("call", { url });
-    await createToolWithHeaders(
-      { "ATL-SG-SERVICE-INJECTION-URL": "http://host.docker.internal:8888" },
-      { cacheTtlMinutes: 15 },
-    )?.execute?.("call", { url });
-    // Same header set must still hit the cache written by the first call.
-    await createToolWithHeaders(
-      { "ATL-SG-SERVICE-INJECTION-URL": "http://host.docker.internal:9999" },
-      { cacheTtlMinutes: 15 },
-    )?.execute?.("call", { url });
+    const fetchPort = (port: number) =>
+      fetchHeaders(
+        { "ATL-SG-SERVICE-INJECTION-URL": `http://host.docker.internal:${port}` },
+        "cache-partition",
+        15,
+      );
+    await fetchPort(9999);
+    await fetchPort(8888);
+    await fetchPort(9999);
 
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(getRequestHeaders(fetchSpy, 1)["ATL-SG-SERVICE-INJECTION-URL"]).toBe(
@@ -198,23 +179,11 @@ describe("web_fetch headers and response extraction", () => {
 
   it("does not partition the cache for headers the request never carries", async () => {
     const fetchSpy = setResponse("# Unpartitioned");
-    const url = "https://example.com/cache-unpartitioned";
-
-    const plain = createWebFetchTool({
-      lookupFn: lookupMock as unknown as LookupFn,
-      config: { tools: { web: { fetch: { cacheTtlMinutes: 15 } } } },
-    });
-    await plain?.execute?.("call", { url });
-    // A refused or dropped header sends a byte-identical request, so both must
-    // share the entry: rejection happens before the cache key is computed.
-    await createToolWithHeaders({ accept: "text/plain" }, { cacheTtlMinutes: 15 })?.execute?.(
-      "call",
-      { url },
-    );
-    await createToolWithHeaders(
-      { "X Invalid Name": "dropped", "Transfer-Encoding": "chunked" },
-      { cacheTtlMinutes: 15 },
-    )?.execute?.("call", { url });
+    const fetchCached = (headers: Record<string, string>) =>
+      fetchHeaders(headers, "cache-unpartitioned", 15);
+    await fetchCached({});
+    await fetchCached({ accept: "text/plain" });
+    await fetchCached({ "X Invalid Name": "dropped", "Transfer-Encoding": "chunked" });
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
@@ -222,39 +191,29 @@ describe("web_fetch headers and response extraction", () => {
   it("handles structured +json subtypes as JSON", async () => {
     setResponse('{"patch":true}', "Application/JSON-Patch+JSON");
 
-    const tool = createWebFetchTool(baseToolConfig);
-
-    const result = await tool?.execute?.("call", { url: "https://example.com/json-patch" });
+    const result = await fetchHeaders({}, "json-patch");
     const details = result?.details as
       | { extractor?: string; contentType?: string; text?: string }
       | undefined;
-    expect(details?.extractor).toBe("json");
-    expect(details?.contentType).toBe("application/json-patch+json");
+    expect(details).toMatchObject({
+      extractor: "json",
+      contentType: "application/json-patch+json",
+    });
     expect(details?.text).toContain('"patch": true');
   });
 
   it("bypasses Firecrawl when runtime metadata marks Firecrawl inactive", async () => {
-    // Runtime metadata is authoritative for the current credential snapshot; a
-    // stale configured provider should not force provider fallback.
     const fetchSpy = setResponse(
       "<html><body><article><h1>Runtime Off</h1><p>Use direct fetch.</p></article></body></html>",
       "text/html; charset=utf-8",
     );
-
+    const webFetch = {
+      apiKey: { source: "env" as const, provider: "default", id: "MISSING_FIRECRAWL_KEY_REF" },
+    };
     const tool = createWebFetchTool({
-      lookupFn: lookupMock as unknown as LookupFn,
+      lookupFn: lookupMock,
       config: {
-        plugins: {
-          entries: {
-            firecrawl: {
-              config: {
-                webFetch: {
-                  apiKey: { source: "env", provider: "default", id: "MISSING_FIRECRAWL_KEY_REF" },
-                },
-              },
-            },
-          },
-        },
+        plugins: { entries: { firecrawl: { config: { webFetch } } } },
         tools: { web: { fetch: { provider: "firecrawl" } } },
       },
       sandboxed: false,
@@ -272,21 +231,15 @@ describe("web_fetch headers and response extraction", () => {
   });
 
   it("converts markdown to text when extractMode is text", async () => {
-    const md = "# Heading\n\n**Bold text** and [a link](https://example.com).";
-    setResponse(md);
-
-    const tool = createWebFetchTool(baseToolConfig);
-
-    const result = await tool?.execute?.("call", {
+    setResponse("# Heading\n\n**Bold text** and [a link](https://example.com).");
+    const result = await createToolWithHeaders()?.execute?.("call", {
       url: "https://example.com/text-mode",
       extractMode: "text",
     });
     const details = result?.details as
       | { extractor?: string; extractMode?: string; text?: string }
       | undefined;
-    expect(details?.extractor).toBe("cf-markdown");
-    expect(details?.extractMode).toBe("text");
-    // Text mode strips header markers (#) and link syntax
+    expect(details).toMatchObject({ extractor: "cf-markdown", extractMode: "text" });
     expect(details?.text).not.toContain("# Heading");
     expect(details?.text).toContain("Heading");
     expect(details?.text).not.toContain("[a link](https://example.com)");
