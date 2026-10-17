@@ -1,4 +1,3 @@
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContextOptions } from "playwright";
 import { expect, it } from "vitest";
@@ -34,6 +33,82 @@ function withMarkdown(
   );
 }
 
+function readMarkdownGeometry(root: Element) {
+  const textRect = (selector: string) => {
+    const element = root.querySelector(selector);
+    if (!element) {
+      throw new Error(`Missing element for ${selector}`);
+    }
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let text = walker.nextNode();
+    while (text && !text.textContent?.trim()) {
+      text = walker.nextNode();
+    }
+    if (!text) {
+      throw new Error(`Missing text for ${selector}`);
+    }
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    return range.getBoundingClientRect();
+  };
+  const rtl = root.getAttribute("dir") === "rtl";
+  const checkbox = root.querySelector(".task-list-item-checkbox");
+  const details = root.querySelector("details[open]");
+  const summary = root.querySelector("details[open] > summary");
+  if (!checkbox || !details || !summary) {
+    throw new Error("Missing task-list or disclosure markup");
+  }
+  const detailsStyle = getComputedStyle(details);
+  const summaryStyle = getComputedStyle(summary);
+  const checkboxRect = checkbox.getBoundingClientRect();
+  const taskTextRect = textRect(".task-list-item");
+  const collapsed = root.querySelector("details:not([open]) > summary");
+  const collapsedSummary = collapsed ?? summary;
+  if (!rtl && !collapsed) {
+    throw new Error("Missing authored disclosure markup");
+  }
+  const closedChevronStyle = getComputedStyle(collapsedSummary, "::before");
+  const collapsedSummaryTextRect = textRect(
+    rtl ? "details > summary" : "details:not([open]) > summary",
+  );
+  return {
+    textStarts: ["ul:not(.contains-task-list) > li", "ol > li", ".task-list-item"].map(
+      (selector) => textRect(selector).right,
+    ),
+    unorderedPaddingInlineStart: getComputedStyle(
+      root.querySelector("ul:not(.contains-task-list)")!,
+    ).paddingInlineStart,
+    orderedPaddingInlineStart: getComputedStyle(root.querySelector("ol")!).paddingInlineStart,
+    summaryPaddingInlineStart: summaryStyle.paddingInlineStart,
+    summaryTextRight: textRect("details > summary").right,
+    bodyTextX: textRect("details > p").x,
+    summaryTextX: textRect("details[open] > summary").x,
+    collapsedHeight: collapsedSummary.getBoundingClientRect().height,
+    collapsedLineHeight: getComputedStyle(collapsedSummary).lineHeight,
+    detailsPadding: detailsStyle.paddingBlockStart,
+    borderInlineStartWidth: detailsStyle.borderInlineStartWidth,
+    bulletTextX: textRect("ul:not(.contains-task-list) > li").x,
+    checkboxGap: rtl ? checkboxRect.left - taskTextRect.right : taskTextRect.x - checkboxRect.right,
+    checkboxLineCenterDelta:
+      checkboxRect.y + checkboxRect.height / 2 - (taskTextRect.y + taskTextRect.height / 2),
+    checkboxSize: checkboxRect.width,
+    chevronClosedTransform: closedChevronStyle.transform,
+    chevronInlineStart: closedChevronStyle.insetInlineStart,
+    chevronTransitionDuration: closedChevronStyle.transitionDuration,
+    chevronTransitionProperty: closedChevronStyle.transitionProperty,
+    chevronWidth: closedChevronStyle.width,
+    collapsedSummaryPaddingInlineStart: getComputedStyle(collapsedSummary).paddingInlineStart,
+    collapsedSummaryTextX: collapsedSummaryTextRect.x,
+    detailsRight: details.getBoundingClientRect().right,
+    detailsX: details.getBoundingClientRect().x,
+    numberedTextX: textRect("ol > li").x,
+    rootRight: root.getBoundingClientRect().right,
+    rootX: root.getBoundingClientRect().x,
+    summaryMarginBottom: summaryStyle.marginBottom,
+    taskTextX: taskTextRect.x,
+  };
+}
+
 suite.define(() => {
   it.each([
     {
@@ -67,71 +142,7 @@ suite.define(() => {
           expect(await markdown.locator("br").count()).toBe(1);
           expect(await markdown.textContent()).toContain('unsafe<br class="wide">markup');
 
-          const geometry = await markdown.evaluate((root) => {
-            const textRect = (selector: string) => {
-              const element = root.querySelector(selector);
-              if (!element) {
-                throw new Error(`Missing element for ${selector}`);
-              }
-              const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-              let text = walker.nextNode();
-              while (text && !text.textContent?.trim()) {
-                text = walker.nextNode();
-              }
-              if (!text) {
-                throw new Error(`Missing text for ${selector}`);
-              }
-              const range = document.createRange();
-              range.selectNodeContents(text);
-              return range.getBoundingClientRect();
-            };
-            const checkbox = root.querySelector(".task-list-item-checkbox");
-            const details = root.querySelector("details[open]");
-            const summary = root.querySelector("details[open] > summary");
-            if (!checkbox || !details || !summary) {
-              throw new Error("Missing task-list or disclosure markup");
-            }
-            const detailsStyle = getComputedStyle(details);
-            const summaryStyle = getComputedStyle(summary);
-            const checkboxRect = checkbox.getBoundingClientRect();
-            const taskTextRect = textRect(".task-list-item");
-            const collapsedSummary = root.querySelector("details:not([open]) > summary");
-            if (!collapsedSummary) {
-              throw new Error("Missing authored disclosure markup");
-            }
-            const closedChevronStyle = getComputedStyle(collapsedSummary, "::before");
-            const collapsedSummaryTextRect = textRect("details:not([open]) > summary");
-            return {
-              bodyTextX: textRect("details > p").x,
-              summaryTextX: textRect("details[open] > summary").x,
-              collapsedHeight: collapsedSummary.getBoundingClientRect().height,
-              collapsedLineHeight: getComputedStyle(collapsedSummary).lineHeight,
-              detailsPadding: detailsStyle.paddingBlockStart,
-              borderInlineStartWidth: detailsStyle.borderInlineStartWidth,
-              bulletTextX: textRect("ul:not(.contains-task-list) > li").x,
-              checkboxGap: taskTextRect.x - checkboxRect.right,
-              checkboxLineCenterDelta:
-                checkboxRect.y +
-                checkboxRect.height / 2 -
-                (taskTextRect.y + taskTextRect.height / 2),
-              checkboxSize: checkboxRect.width,
-              chevronClosedTransform: closedChevronStyle.transform,
-              chevronInlineStart: closedChevronStyle.insetInlineStart,
-              chevronTransitionDuration: closedChevronStyle.transitionDuration,
-              chevronTransitionProperty: closedChevronStyle.transitionProperty,
-              chevronWidth: closedChevronStyle.width,
-              collapsedSummaryPaddingInlineStart:
-                getComputedStyle(collapsedSummary).paddingInlineStart,
-              collapsedSummaryTextX: collapsedSummaryTextRect.x,
-              detailsRight: details.getBoundingClientRect().right,
-              detailsX: details.getBoundingClientRect().x,
-              numberedTextX: textRect("ol > li").x,
-              rootRight: root.getBoundingClientRect().right,
-              rootX: root.getBoundingClientRect().x,
-              summaryMarginBottom: summaryStyle.marginBottom,
-              taskTextX: taskTextRect.x,
-            };
-          });
+          const geometry = await markdown.evaluate(readMarkdownGeometry);
 
           if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
             await page.screenshot({
@@ -145,23 +156,33 @@ suite.define(() => {
           expect(geometry.checkboxGap).toBeGreaterThanOrEqual(7);
           expect(geometry.checkboxGap).toBeLessThanOrEqual(9);
           expect(Math.abs(geometry.checkboxLineCenterDelta)).toBeLessThanOrEqual(1);
-          expect(geometry.checkboxSize).toBe(16);
+
           expect(geometry.bodyTextX).toBeGreaterThan(geometry.detailsX);
           expect(Math.abs(geometry.detailsX - geometry.rootX)).toBeLessThanOrEqual(1);
           expect(Math.abs(geometry.detailsRight - geometry.rootRight)).toBeLessThanOrEqual(1);
-          expect(Number.parseFloat(geometry.borderInlineStartWidth)).toBe(0);
-          expect(Number.parseFloat(geometry.detailsPadding)).toBe(0);
+          expect({
+            checkboxSize: geometry.checkboxSize,
+            border: Number.parseFloat(geometry.borderInlineStartWidth),
+            padding: Number.parseFloat(geometry.detailsPadding),
+            chevronWidth: Number.parseFloat(geometry.chevronWidth),
+            chevronInset: Number.parseFloat(geometry.chevronInlineStart),
+            summaryInset: geometry.collapsedSummaryTextX - geometry.detailsX,
+          }).toEqual({
+            checkboxSize: 16,
+            border: 0,
+            padding: 0,
+            chevronWidth: 16,
+            chevronInset: 0,
+            summaryInset: 24,
+          });
           expect(Math.abs(geometry.bodyTextX - geometry.summaryTextX)).toBeLessThanOrEqual(1);
           expect(geometry.collapsedHeight).toBe(
             Number.parseFloat(geometry.collapsedLineHeight) + 12,
           );
           expect(Number.parseFloat(geometry.summaryMarginBottom)).toBeGreaterThan(0);
-          expect(Number.parseFloat(geometry.chevronWidth)).toBe(16);
-          expect(Number.parseFloat(geometry.chevronInlineStart)).toBe(0);
           expect(
             Number.parseFloat(geometry.collapsedSummaryPaddingInlineStart),
           ).toBeGreaterThanOrEqual(24);
-          expect(geometry.collapsedSummaryTextX - geometry.detailsX).toBe(24);
           if (reducedMotion === "reduce") {
             expect(geometry.chevronTransitionProperty).toBe("none");
           } else {
@@ -216,18 +237,6 @@ suite.define(() => {
             fullPage: true,
             path: path.join(suite.artifactDir, "markdown-parser-fidelity.png"),
           });
-          await writeFile(
-            path.join(suite.artifactDir, "markdown-parser-fidelity.json"),
-            JSON.stringify(
-              await page.evaluate(() => ({
-                url: location.href,
-                scripts: Array.from(document.scripts, (script) => script.src).filter(Boolean),
-                resources: performance.getEntriesByType("resource").map((entry) => entry.name),
-              })),
-              null,
-              2,
-            ),
-          );
         }
 
         expect(
@@ -282,54 +291,7 @@ suite.define(() => {
         });
         await markdown.waitFor();
 
-        const geometry = await markdown.evaluate((root) => {
-          const textRight = (selector: string) => {
-            const element = root.querySelector(selector);
-            if (!element) {
-              throw new Error(`Missing element for ${selector}`);
-            }
-            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-            let text = walker.nextNode();
-            while (text && !text.textContent?.trim()) {
-              text = walker.nextNode();
-            }
-            if (!text) {
-              throw new Error(`Missing text for ${selector}`);
-            }
-            const range = document.createRange();
-            range.selectNodeContents(text);
-            return range.getBoundingClientRect().right;
-          };
-          const checkbox = root.querySelector(".task-list-item-checkbox");
-          const task = root.querySelector(".task-list-item");
-          const unorderedList = root.querySelector("ul:not(.contains-task-list)");
-          const orderedList = root.querySelector("ol");
-          const summary = root.querySelector("details > summary");
-          const details = root.querySelector("details");
-          if (!checkbox || !task || !unorderedList || !orderedList || !summary || !details) {
-            throw new Error("Missing RTL Markdown geometry");
-          }
-          const checkboxRect = checkbox.getBoundingClientRect();
-          const detailsRect = details.getBoundingClientRect();
-          const rootRect = root.getBoundingClientRect();
-          return {
-            checkboxGap: checkboxRect.left - textRight(".task-list-item"),
-            chevronInlineStart: getComputedStyle(summary, "::before").insetInlineStart,
-            detailsRight: detailsRect.right,
-            detailsX: detailsRect.x,
-            orderedPaddingInlineStart: getComputedStyle(orderedList).paddingInlineStart,
-            rootRight: rootRect.right,
-            rootX: rootRect.x,
-            summaryPaddingInlineStart: getComputedStyle(summary).paddingInlineStart,
-            summaryTextRight: textRight("details > summary"),
-            textStarts: [
-              textRight("ul:not(.contains-task-list) > li"),
-              textRight("ol > li"),
-              textRight(".task-list-item"),
-            ],
-            unorderedPaddingInlineStart: getComputedStyle(unorderedList).paddingInlineStart,
-          };
-        });
+        const geometry = await markdown.evaluate(readMarkdownGeometry);
 
         expect(
           Math.max(...geometry.textStarts) - Math.min(...geometry.textStarts),

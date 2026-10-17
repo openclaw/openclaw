@@ -24,18 +24,19 @@ const file = mediaAttachment(
   "https://example.com/checklist.txt",
   { sizeBytes: 1024 },
 );
-const video = mediaAttachment(
-  "video",
-  "preview.mp4",
-  "video/mp4",
-  "https://media.example/preview.mp4",
-);
-const audio = mediaAttachment(
-  "audio",
-  "preview.mp3",
-  "audio/mpeg",
-  "https://media.example/preview.mp3",
-);
+const preview = (kind: string, ext: string, mimeType: string) =>
+  mediaAttachment(kind, `preview.${ext}`, mimeType, `https://media.example/preview.${ext}`);
+const video = preview("video", "mp4", "video/mp4");
+const audio = preview("audio", "mp3", "audio/mpeg");
+const plugin = {
+  type: "clawhub",
+  kind: "plugin",
+  id: "ch_sample",
+  name: "Sample checklist plugin",
+  description: "Review and share sample release checklists with your team.",
+  official: true,
+  installed: false,
+};
 const users = ["Riley", "Colin"].map((name, index) => ({
   id: name,
   name,
@@ -132,22 +133,7 @@ export const marginCases = [
     file,
     { type: "text", text: "The sample checklist is ready." },
   ]),
-  caseFor(
-    "clawhub",
-    "assistant",
-    [
-      {
-        type: "clawhub",
-        kind: "plugin",
-        id: "ch_sample",
-        official: true,
-        name: "Sample checklist plugin",
-        description: "Review and share sample release checklists with your team.",
-        installed: false,
-      },
-    ],
-    ".chat-clawhub-card",
-  ),
+  caseFor("clawhub", "assistant", [plugin], ".chat-clawhub-card"),
   {
     ...caseFor(
       "assistant-plain",
@@ -173,11 +159,8 @@ export function marginScenario(testCase: MarginCase): ControlUiMockGatewayScenar
     methodResponses: {
       "plugins.catalog.get": {
         plugin: {
-          id: "ch_sample",
-          catalog: {
-            name: "Sample checklist plugin",
-            summary: "Review and share sample release checklists with your team.",
-          },
+          id: plugin.id,
+          catalog: { name: plugin.name, summary: plugin.description },
           local: { installed: false, action: "install" },
         },
       },
@@ -193,13 +176,7 @@ export async function createMarginImage(
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
-    const context = canvas.getContext("2d")!;
-    context.fillStyle = "teal";
-    context.fillRect(0, 0, width, height);
-    context.fillStyle = "gold";
-    context.beginPath();
-    context.arc(width / 2, height / 2, height * (160 / 540), 0, 2 * Math.PI);
-    context.fill();
+    canvas.getContext("2d")!.fillRect(0, 0, width, height);
     return canvas.toDataURL("image/png").split(",")[1]!;
   }, size);
   return Buffer.from(encoded, "base64");
@@ -241,7 +218,6 @@ export async function measureMargin(page: Page, testCase: MarginCase) {
     const group = element.closest(".chat-group") ?? element.closest(".chat-thread-inner")!;
     const column = group.getBoundingClientRect();
     const box = element.getBoundingClientRect();
-    const style = getComputedStyle(element);
     const media = [...element.querySelectorAll(".chat-image-frame, img.chat-message-image, video")]
       .map((item) => item.getBoundingClientRect())
       .filter((rect) => rect.width > 0);
@@ -256,9 +232,6 @@ export async function measureMargin(page: Page, testCase: MarginCase) {
       open: side === "right" ? left - column.left : column.right - right,
       closed: side === "right" ? column.right - right : left - column.left,
       overflow: Math.max(0, element.scrollWidth - element.clientWidth),
-      padding: style.padding,
-      radius: style.borderRadius,
-      background: style.backgroundColor,
       media: [...element.querySelectorAll("img, video")].map((mediaElement) => {
         const rect = mediaElement.getBoundingClientRect();
         return {

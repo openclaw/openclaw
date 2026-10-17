@@ -3,7 +3,7 @@
 import { copyFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { crc32 } from "node:zlib";
-import type { BrowserContext, Page } from "playwright";
+import type { BrowserContext, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -96,24 +96,27 @@ suite.define(() => {
     const dataUrl = `data:image/png;base64,${imageBase64}`;
     const prompt = "proof: large Control UI clipboard image";
     const recorded = await newRecordedPage(artifactDir, "large-paste");
+    const page = recorded.page;
+    const previousReply = "The existing assistant reply is taller than the virtualizer estimate.";
+    const finalReply = "Large screenshot paste proof received.";
     const screenshots: string[] = [];
+    const capture = async (name: string, target: Locator) => {
+      const destination = path.join(artifactDir, name);
+      await writeFile(
+        destination,
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [target]),
+      );
+      screenshots.push(destination);
+    };
     let videos: string[];
 
     try {
-      const gateway = await installMockGateway(recorded.page, {
+      const gateway = await installMockGateway(page, {
         historyMessages: [
           {
             content: [
               {
-                text: [
-                  "The existing assistant reply is taller than the virtualizer estimate.",
-                  "",
-                  "- First line of the existing answer.",
-                  "- Second line of the existing answer.",
-                  "- Third line of the existing answer.",
-                  "- Fourth line of the existing answer.",
-                  "- Fifth line of the existing answer.",
-                ].join("\n"),
+                text: `${previousReply}\n\n${["First", "Second", "Third", "Fourth", "Fifth"].map((ordinal) => `- ${ordinal} line of the existing answer.`).join("\n")}`,
                 type: "text",
               },
             ],
@@ -137,14 +140,7 @@ suite.define(() => {
 
       await recorded.page.locator(".chat-attachment-thumb").waitFor({ state: "visible" });
       await composer.fill(prompt);
-      const pasteScreenshot = path.join(artifactDir, "01-pasted-large-image.png");
-      await writeFile(
-        pasteScreenshot,
-        await takeControlUiViewportScreenshot(recorded.page, recorded.page.locator(".shell"), [
-          recorded.page.locator(".chat-attachment-thumb"),
-        ]),
-      );
-      screenshots.push(pasteScreenshot);
+      await capture("01-pasted-large-image.png", page.locator(".chat-attachment-thumb"));
 
       await recorded.page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
@@ -181,21 +177,10 @@ suite.define(() => {
         .toBeGreaterThanOrEqual(0);
 
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
-      await gateway.emitChatFinal({ runId, text: "Large screenshot paste proof received." });
-      await recorded.page
-        .locator(".chat-thread-inner")
-        .getByText("Large screenshot paste proof received.")
-        .waitFor({ timeout: 10_000 });
-      const sentScreenshot = path.join(artifactDir, "02-sent-large-image.png");
-      await writeFile(
-        sentScreenshot,
-        await takeControlUiViewportScreenshot(recorded.page, recorded.page.locator(".shell"), [
-          recorded.page
-            .locator(".chat-thread-inner")
-            .getByText("Large screenshot paste proof received."),
-        ]),
-      );
-      screenshots.push(sentScreenshot);
+      await gateway.emitChatFinal({ runId, text: finalReply });
+      const finalRow = page.locator(".chat-thread-inner").getByText(finalReply);
+      await finalRow.waitFor({ timeout: 10_000 });
+      await capture("02-sent-large-image.png", finalRow);
     } finally {
       videos = await closeRecordedPage(recorded, artifactDir, "large-paste");
     }
