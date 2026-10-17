@@ -21,6 +21,7 @@ import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import {
   controlUiPluginAssetGrantError,
   controlUiPluginDeliveryIdentity,
@@ -137,7 +138,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       this.settingsLifetimes.delete(abort);
     };
     this.settingsLifetimes.add(abort);
-    lifetime.addEventListener("abort", dispose, { once: true });
+    disposers.add(listen(lifetime, "abort", dispose, { once: true }));
     const styles: HTMLLinkElement[] = [];
     try {
       const { loadControlUiPluginAssets } = await import("./control-ui-loader.ts");

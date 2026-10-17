@@ -2,8 +2,8 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { NewSessionDraft } from "./draft-controller.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
+import { NewSessionDraft } from "./draft.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -42,9 +42,7 @@ it.each(["last-used", "configured"] as const)(
         changed: vi.fn(),
         updateComplete: () => Promise.resolve(),
         closeTransientUi: vi.fn(),
-        querySelector: () => null,
         activeElement: () => null,
-        body: () => null,
         onInvalidate: vi.fn(),
         onRecoveryReady: vi.fn(),
       },
@@ -89,9 +87,7 @@ it("wakes background discovery only while the draft is connected", async () => {
     changed: vi.fn(),
     updateComplete: () => Promise.resolve(),
     closeTransientUi: vi.fn(),
-    querySelector: () => null,
     activeElement: () => null,
-    body: () => null,
     onInvalidate: vi.fn(),
     onRecoveryReady: vi.fn(),
   });

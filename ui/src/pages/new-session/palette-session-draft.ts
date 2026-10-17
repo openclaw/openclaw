@@ -16,7 +16,7 @@ import {
   handleChatAttachmentPaste,
 } from "../chat/components/chat-attachments.ts";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
-import { NewSessionDraft } from "./draft-controller.ts";
+import { NewSessionDraft } from "./draft.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
@@ -49,7 +49,7 @@ export class PaletteSessionDraft {
   constructor(
     private readonly element: Pick<
       HTMLElement,
-      "isConnected" | "ownerDocument" | "querySelector" | "querySelectorAll"
+      "isConnected" | "ownerDocument" | "querySelectorAll"
     >,
     private readonly read: () => { context: ApplicationContext | undefined; open: boolean },
     private readonly callbacks: {
@@ -217,10 +217,7 @@ export class PaletteSessionDraft {
           changed: this.callbacks.changed,
           updateComplete: this.callbacks.updateComplete,
           onMessageChange: (message) => this.callbacks.onMessageChange?.(message),
-          querySelector: (selector) => this.element.querySelector(selector),
           activeElement: () => this.element.ownerDocument.activeElement,
-          body: () => this.element.ownerDocument.body,
-          pickerIdPrefix: this.idPrefix,
           preferenceScope: "palette",
           readPalettePreference: () => this.preferences.selection,
           closeTransientUi: () => {
