@@ -2,6 +2,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
 import {
   closeOpenAICodexWebSocketSessions,
@@ -50,6 +51,7 @@ describe("ChatGPT Responses rejected continuation", () => {
     closeOpenAICodexWebSocketSessions();
     vi.unstubAllGlobals();
     resetOpenAICodexWebSocketStateForTest();
+    configureAiTransportHost({});
   });
   it.each(["recover", "reject-full", "already-started", "unrelated"] as const)(
     "preserves completed tool results when cached continuation is rejected: %s",
@@ -71,6 +73,8 @@ describe("ChatGPT Responses rejected continuation", () => {
         summary: [],
       };
       const requests: RecordedRequest[] = [];
+      const logWarn = vi.fn();
+      configureAiTransportHost({ logWarn });
       vi.stubGlobal("WebSocket", WebSocket);
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
       server.on("connection", (socket) => {
@@ -182,6 +186,58 @@ describe("ChatGPT Responses rejected continuation", () => {
               output: "completed read result",
             }),
           ]);
+        }
+        const rejections = logWarn.mock.calls
+          .filter(([, message]) => message === "ChatGPT Responses request rejected")
+          .map((entry) => entry[2]);
+        expect(rejections).toEqual([
+          {
+            requestDispatched: true,
+            actualTransport: "websocket",
+            payloadVariant: "initial",
+            hasPreviousResponseId: true,
+            inputItems: 1,
+            reasoningItems: 0,
+            compactionItems: 0,
+            toolCallItems: 0,
+            toolResultItems: 1,
+            eventsEmitted: scenario === "already-started",
+            recoveryAction:
+              scenario === "recover" || scenario === "reject-full"
+                ? "full-input-reconnect"
+                : "propagate",
+          },
+          ...(scenario === "reject-full"
+            ? [
+                {
+                  requestDispatched: true,
+                  actualTransport: "websocket",
+                  payloadVariant: "initial",
+                  hasPreviousResponseId: false,
+                  inputItems: 4,
+                  reasoningItems: 1,
+                  compactionItems: 0,
+                  toolCallItems: 1,
+                  toolResultItems: 1,
+                  eventsEmitted: false,
+                  recoveryAction: "propagate",
+                },
+              ]
+            : []),
+        ]);
+        const transportLogs = JSON.stringify(
+          logWarn.mock.calls.filter(([category]) => category === "openai-transport"),
+        );
+        for (const privateValue of [
+          "resp_tool",
+          "call_replay",
+          "fixture.txt",
+          "opaque-reasoning",
+          "completed read result",
+          "synthetic-account",
+          rejection,
+        ]) {
+          expect(transportLogs).not.toContain(privateValue);
         }
         if (scenario === "reject-full" || scenario === "already-started") {
           expect(result.errorMessage).toContain(rejection);
