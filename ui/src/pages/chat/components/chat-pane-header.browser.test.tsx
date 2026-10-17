@@ -154,11 +154,14 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         const surface = menu.querySelector<HTMLElement>(":scope > .oc-menu")!;
         const bounds = surface.getBoundingClientRect();
         expect(bounds.width).toBeCloseTo(264, 0);
-        expect(direction === "ltr" ? bounds.left : window.innerWidth - bounds.right).toBeCloseTo(
-          8,
+        // The phone menu opens from its header trigger, not a viewport corner.
+        const anchor = trigger.getBoundingClientRect();
+        expect(direction === "ltr" ? bounds.right : bounds.left).toBeCloseTo(
+          direction === "ltr" ? anchor.right : anchor.left,
           0,
         );
-        expect(window.innerHeight - bounds.bottom).toBeCloseTo(8, 0);
+        expect(bounds.top).toBeGreaterThanOrEqual(anchor.bottom);
+        expect(bounds.top - anchor.bottom).toBeLessThanOrEqual(12);
         expect(bounds.height).toBeCloseTo(360, 0);
         expect(surface.scrollHeight).toBeGreaterThan(surface.clientHeight);
         const terminalDetails = surface.querySelector<HTMLElement>(
