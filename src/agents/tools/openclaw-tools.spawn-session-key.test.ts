@@ -1,5 +1,5 @@
 // #137690: durable spawn lineage differs from the account-scoped policy key.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -119,43 +119,39 @@ const createTools = (runSessionKey?: string) =>
 const expectKey = (captured: typeof mocks.spawnToolOptions, agentSessionKey: string) =>
   expect(captured).toHaveBeenCalledWith(expect.objectContaining({ agentSessionKey }));
 
-describe("createOpenClawTools sessions_spawn session-key selection", () => {
-  beforeEach(() => {
-    setRuntimeConfigSnapshot({});
-    mocks.spawnToolOptions.mockClear();
-    mocks.sendToolOptions.mockClear();
-    mocks.subagentsToolOptions.mockClear();
-    mocks.imageGenerateToolOptions.mockClear();
-    mocks.videoGenerateToolOptions.mockClear();
-    mocks.musicGenerateToolOptions.mockClear();
-  });
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+  mocks.spawnToolOptions.mockClear();
+  mocks.sendToolOptions.mockClear();
+  mocks.subagentsToolOptions.mockClear();
+  mocks.imageGenerateToolOptions.mockClear();
+  mocks.videoGenerateToolOptions.mockClear();
+  mocks.musicGenerateToolOptions.mockClear();
+});
 
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-  });
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
-  it("uses durable lineage keys while preserving policy-owned media tasks", () => {
-    createTools(durableKey);
+it("uses durable lineage keys while preserving policy-owned media tasks", () => {
+  createTools(durableKey);
+  expect(mocks.spawnToolOptions).toHaveBeenCalledWith(
+    expect.objectContaining({ agentSessionKey: durableKey, completionOwnerKey: durableKey }),
+  );
+  expectKey(mocks.sendToolOptions, durableKey);
+  expectKey(mocks.subagentsToolOptions, durableKey);
+  for (const captured of [
+    mocks.imageGenerateToolOptions,
+    mocks.videoGenerateToolOptions,
+    mocks.musicGenerateToolOptions,
+  ]) {
+    expectKey(captured, policyKey);
+  }
+});
 
-    expect(mocks.spawnToolOptions).toHaveBeenCalledWith(
-      expect.objectContaining({ agentSessionKey: durableKey, completionOwnerKey: durableKey }),
-    );
-    expectKey(mocks.sendToolOptions, durableKey);
-    expectKey(mocks.subagentsToolOptions, durableKey);
-
-    for (const captured of [
-      mocks.imageGenerateToolOptions,
-      mocks.videoGenerateToolOptions,
-      mocks.musicGenerateToolOptions,
-    ]) {
-      expectKey(captured, policyKey);
-    }
-  });
-
-  it("falls back to agentSessionKey when runSessionKey is absent", () => {
-    createTools();
-    expectKey(mocks.spawnToolOptions, policyKey);
-    expectKey(mocks.subagentsToolOptions, policyKey);
-    expectKey(mocks.imageGenerateToolOptions, policyKey);
-  });
+it("falls back to agentSessionKey when runSessionKey is absent", () => {
+  createTools();
+  expectKey(mocks.spawnToolOptions, policyKey);
+  expectKey(mocks.subagentsToolOptions, policyKey);
+  expectKey(mocks.imageGenerateToolOptions, policyKey);
 });
