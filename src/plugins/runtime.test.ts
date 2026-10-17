@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { withTestTimeout } from "../../test/helpers/promise.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import { runGatewayCloseSteps } from "../gateway/server-shutdown.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -26,24 +27,26 @@ import {
 } from "./runtime.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
-async function waitForCleanupSignal(signal: Promise<void>, label: string): Promise<void> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    await Promise.race([
-      signal,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 500);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
+function heldWork(afterRelease = () => {}) {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const finished = createDeferredCore();
+  const run = async () => {
+    entered.resolve();
+    try {
+      await release.promise;
+      afterRelease();
+    } finally {
+      finished.resolve();
     }
-  }
+  };
+  return { entered, release, finished, run };
 }
 
 function createCleanupDatabase() {
   const db = new DatabaseSync(":memory:");
+  const reads: unknown[] = [];
+  const failures: unknown[] = [];
   const nativeState = resolveGlobalSingleton(
     Symbol.for("openclaw.test.actualPluginCleanupDatabase"),
     (): { database?: DatabaseSync; resets: number } => ({ resets: 0 }),
@@ -63,7 +66,14 @@ function createCleanupDatabase() {
     }
     nativeState.database = undefined;
   };
-  return { db, nativeState, close };
+  const read = () => {
+    try {
+      reads.push(db.prepare("SELECT 1 AS value").get());
+    } catch (error) {
+      failures.push(error);
+    }
+  };
+  return { db, nativeState, close, read, reads, failures };
 }
 
 async function createDatabaseLifecycle(id: string) {
@@ -91,11 +101,12 @@ function attachLifecycle(
   registry: ReturnType<typeof createEmptyPluginRegistry>,
   id: string,
   cleanup: () => void | Promise<void>,
+  lifecycleId = id,
 ) {
   registry.runtimeLifecycles.push({
     pluginId: id,
     source: `/virtual/${id}/index.ts`,
-    lifecycle: { id, cleanup },
+    lifecycle: { id: lifecycleId, cleanup },
   });
 }
 
@@ -144,44 +155,29 @@ describe("setActivePluginRegistry", () => {
   it.each([true, false])(
     "continues cleanup when refreshing the same registry: %s",
     async (same) => {
-      const firstCleanupStarted = createDeferredCore();
-      const firstCleanupReleased = createDeferredCore();
+      const first = heldWork();
       const secondCleanupCalled = createDeferredCore();
-      onTestFinished(() => firstCleanupReleased.resolve());
+      onTestFinished(() => first.release.resolve());
       const previous = createEmptyPluginRegistry();
       previous.plugins.push(createPluginRecord({ id: "cleanup-refresh-race" }));
-      previous.runtimeLifecycles = [
-        {
-          id: "first-cleanup",
-          async cleanup() {
-            firstCleanupStarted.resolve();
-            await firstCleanupReleased.promise;
-          },
-        },
-        {
-          id: "second-cleanup",
-          cleanup() {
-            secondCleanupCalled.resolve();
-          },
-        },
-      ].map((lifecycle) => ({
-        pluginId: "cleanup-refresh-race",
-        pluginName: "Cleanup Refresh Race",
-        lifecycle,
-        source: "/virtual/cleanup-refresh-race/index.ts",
-        rootDir: "/virtual/cleanup-refresh-race",
-      }));
+      attachLifecycle(previous, "cleanup-refresh-race", first.run, "first-cleanup");
+      attachLifecycle(
+        previous,
+        "cleanup-refresh-race",
+        () => secondCleanupCalled.resolve(),
+        "second-cleanup",
+      );
       const next = createEmptyPluginRegistry();
 
       setActivePluginRegistry(previous);
       setActivePluginRegistry(next);
       // The race starts inside cleanup; cold lazy imports are not a cleanup deadline.
-      await firstCleanupStarted.promise;
+      await first.entered.promise;
 
       setActivePluginRegistry(same ? next : createEmptyPluginRegistry());
-      firstCleanupReleased.resolve();
+      first.release.resolve();
 
-      await waitForCleanupSignal(secondCleanupCalled.promise, "second cleanup");
+      await withTestTimeout(secondCleanupCalled.promise, 500, "second cleanup");
     },
   );
 
@@ -194,24 +190,13 @@ describe("setActivePluginRegistry", () => {
       registry.plugins.push(record);
       const instance = new PluginInstance(record.id, { record, registry });
       const initialize = createDeferredCore();
-      const cleanupStarted = createDeferredCore();
-      const finishCleanup = createDeferredCore();
       const cleaned = vi.fn();
-      const cleanup = () =>
-        trackAsyncWork(async () => {
-          cleanupStarted.resolve();
-          await finishCleanup.promise;
-          cleaned();
-        });
+      const held = heldWork(cleaned);
+      const cleanup = () => trackAsyncWork(held.run);
       if (kind === "instance") {
         instance.lifecycle.onDispose(cleanup);
       } else {
-        registry.runtimeLifecycles.push({
-          pluginId: record.id,
-          source: record.source,
-          rootDir: record.rootDir,
-          lifecycle: { id: "tracked-store-close", cleanup },
-        });
+        attachLifecycle(registry, record.id, cleanup, "tracked-store-close");
       }
       let retirement: ReturnType<typeof disposePluginRegistryInstances> | undefined;
       const request = owner.track(() => {
@@ -220,7 +205,7 @@ describe("setActivePluginRegistry", () => {
         });
         void retirement.catch(() => {});
       });
-      let closed = false;
+      const disposeTerminalSessions = vi.fn();
       const onError = vi.fn();
       const drain = runGatewayCloseSteps({
         owner: {
@@ -231,9 +216,7 @@ describe("setActivePluginRegistry", () => {
           runClosePrelude() {},
           sealAndJoinRegisteredSidecarStops() {},
         },
-        disposeTerminalSessions: () => {
-          closed = true;
-        },
+        disposeTerminalSessions,
         close: async () => {
           await retirement;
         },
@@ -242,21 +225,21 @@ describe("setActivePluginRegistry", () => {
       try {
         await request;
         await nextTurn();
-        expect(closed).toBe(false);
+        expect(disposeTerminalSessions).not.toHaveBeenCalled();
         initialize.resolve();
-        await cleanupStarted.promise;
+        await held.entered.promise;
         await nextTurn();
-        expect(closed).toBe(false);
-        finishCleanup.resolve();
+        expect(disposeTerminalSessions).not.toHaveBeenCalled();
+        held.release.resolve();
         await expect(retirement).resolves.toMatchObject({ failures: [] });
         await drain;
         expect(cleaned).toHaveBeenCalledOnce();
-        expect(closed).toBe(true);
+        expect(disposeTerminalSessions).toHaveBeenCalledOnce();
         expect(onError).not.toHaveBeenCalled();
         await expect(owner.track(() => undefined)).rejects.toThrow("Async work scope is closed");
       } finally {
         initialize.resolve();
-        finishCleanup.resolve();
+        held.release.resolve();
         await Promise.allSettled([retirement, drain]);
       }
     },
@@ -264,15 +247,11 @@ describe("setActivePluginRegistry", () => {
 
   it("joins a displaced cleanup scope created before package replacement", async () => {
     const registry = createEmptyPluginRegistry();
-    const entered = createDeferredCore();
-    const finish = createDeferredCore();
-    attachLifecycle(registry, "released-scope", async () => {
-      entered.resolve();
-      await finish.promise;
-    });
+    const held = heldWork();
+    attachLifecycle(registry, "released-scope", held.run);
     setActivePluginRegistry(registry);
     setActivePluginRegistry(createEmptyPluginRegistry());
-    await entered.promise;
+    await held.entered.promise;
     const pending = [...(getPluginRegistryState()?.retiredRegistryCleanups ?? [])].find(
       ([, cleanup]) => cleanup.registry === registry,
     );
@@ -283,11 +262,11 @@ describe("setActivePluginRegistry", () => {
     const closing = clearActivePluginRegistry();
     void closing.catch(() => {});
     try {
-      finish.resolve();
+      held.release.resolve();
       await expect(closing).resolves.toBeUndefined();
       expect(getActivePluginRegistry()).toBeNull();
     } finally {
-      finish.resolve();
+      held.release.resolve();
       await settled;
       await closing.catch(() => {});
       await clearActivePluginRegistry();
@@ -327,7 +306,7 @@ describe("setActivePluginRegistry", () => {
 
       try {
         await started.promise;
-        await waitForCleanupSignal(finished.promise, "reentrant retired cleanup");
+        await withTestTimeout(finished.promise, 500, "reentrant retired cleanup");
         expect(cleanup).toHaveBeenCalledOnce();
         expect(getActivePluginRegistry()).toBeNull();
       } finally {
@@ -364,8 +343,6 @@ describe("setActivePluginRegistry", () => {
       const escape = createDeferredCore();
       const commandRead = createDeferredCore();
       const releaseCommand = createDeferredCore();
-      const reads: unknown[] = [];
-      const failures: unknown[] = [];
       const command = fixture.withPluginCommandExecution(registry, async () => {
         if (retirement === "clear") {
           outerClear = clearActivePluginRegistry();
@@ -378,20 +355,14 @@ describe("setActivePluginRegistry", () => {
           throw new Error("Expected synchronous retirement notification");
         }
         await Promise.race([innerClear, escape.promise]);
-        try {
-          reads.push(db.prepare("SELECT 1 AS value").get());
-        } catch (error) {
-          failures.push(error);
-        }
+        fixture.read();
         commandRead.resolve();
         await releaseCommand.promise;
       });
       try {
-        await waitForCleanupSignal(commandRead.promise, "command after retirement abort clear");
-        expect(failures).toEqual([]);
-        expect(reads).toEqual([{ value: 1 }]);
-        expect(db.isOpen).toBe(true);
-        expect(nativeState.resets).toBe(0);
+        await withTestTimeout(commandRead.promise, 500, "command after retirement abort clear");
+        expect([fixture.failures, fixture.reads]).toEqual([[], [{ value: 1 }]]);
+        expect([db.isOpen, nativeState.resets]).toEqual([true, 0]);
         expect(cleanup).not.toHaveBeenCalled();
         expect(captureActivePluginRegistrySnapshot()).toEqual({
           activeRegistry: null,
@@ -422,27 +393,12 @@ describe("setActivePluginRegistry", () => {
     async ({ lifetime, owner }) => {
       const fixture = await createDatabaseLifecycle("cleanup-sqlite");
       const { registry, lifecycle, db, nativeState, close } = fixture;
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const finished = createDeferredCore();
-      const reads: unknown[] = [];
-      const failures: unknown[] = [];
-      const readAfterRelease = async () => {
-        entered.resolve();
-        try {
-          await release.promise;
-          reads.push(db.prepare("SELECT 1 AS value").get());
-        } catch (error) {
-          failures.push(error);
-        } finally {
-          finished.resolve();
-        }
-      };
+      const held = heldWork(fixture.read);
       const cleanup = vi.fn(() => {
         if (owner === "callback") {
-          return readAfterRelease();
+          return held.run();
         }
-        void trackAsyncWork(readAfterRelease);
+        void trackAsyncWork(held.run);
         return undefined;
       });
       lifecycle.registerRuntimeLifecycle({ id: "held-cleanup", cleanup });
@@ -464,41 +420,37 @@ describe("setActivePluginRegistry", () => {
           admitted: false,
         });
         if (lifetime === "replaced") {
-          await entered.promise;
+          await held.entered.promise;
         }
       }
-      let closed = false;
-      const closing = clearActivePluginRegistry().then(() => {
-        closed = true;
-      });
+      const closed = vi.fn();
+      const closing = clearActivePluginRegistry().then(closed);
       try {
         if (lifetime === "command-held") {
           await vi.advanceTimersByTimeAsync(5000);
           expect(cleanup).not.toHaveBeenCalled();
           expect(db.isOpen).toBe(true);
-          expect(closed).toBe(false);
+          expect(closed).not.toHaveBeenCalled();
           commandGate.resolve();
           expect(await command).toEqual({ admitted: true, value: undefined });
         }
-        await entered.promise;
+        await held.entered.promise;
         await vi.advanceTimersByTimeAsync(5000);
         expect(getActivePluginRegistry()).toBeNull();
-        expect(db.isOpen).toBe(true);
-        expect(nativeState.resets).toBe(0);
-        expect(closed).toBe(false);
+        expect([db.isOpen, nativeState.resets]).toEqual([true, 0]);
+        expect(closed).not.toHaveBeenCalled();
       } finally {
         commandGate.resolve();
-        release.resolve();
+        held.release.resolve();
         await command;
-        await finished.promise;
+        await held.finished.promise;
         await Promise.allSettled(cleanup.mock.results.map((result) => result.value));
         await closing;
         vi.useRealTimers();
         close();
       }
       expect(cleanup).toHaveBeenCalledOnce();
-      expect(failures).toEqual([]);
-      expect(reads).toEqual([{ value: 1 }]);
+      expect([fixture.failures, fixture.reads]).toEqual([[], [{ value: 1 }]]);
       expect(nativeState.resets).toBe(1);
     },
   );

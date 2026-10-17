@@ -8,28 +8,19 @@ import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
-  capturePluginLifecycleAuthority,
-  capturePluginRegistryLifecycleEpoch,
-  capturePluginRegistryLifecycleSignal,
-  isPluginRecordActive,
+  capturePluginLifecycleAuthority as captureAuthority,
+  capturePluginRegistryLifecycleEpoch as captureEpoch,
+  capturePluginRegistryLifecycleSignal as captureSignal,
+  isPluginRecordActive as isRecordActive,
   isPluginRegistryPreparing,
-  isPluginRegistryLifecycleEpochActive,
-  markPluginRegistryActive,
-  markPluginRegistryRetired,
+  isPluginRegistryLifecycleEpochActive as isEpochActive,
+  markPluginRegistryActive as markActive,
+  markPluginRegistryRetired as markRetired,
   revokePluginRecord,
   withPluginRegistryPreparationScope,
 } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  clearActivePluginRegistry,
-  disposePluginRegistryInstances,
-  commitStagedPluginRegistry,
-  resetPluginRuntimeStateForTest,
-  rollbackStagedPluginRegistry,
-  setActivePluginRegistry,
-  stageActivePluginRegistry,
-} from "./runtime.js";
+import * as runtime from "./runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
@@ -37,27 +28,26 @@ import {
 import { createPluginRecord } from "./status.test-helpers.js";
 
 function captureActivation(registry: PluginRegistry) {
-  const epoch = capturePluginRegistryLifecycleEpoch(registry)!;
+  const epoch = captureEpoch(registry)!;
   expect(epoch).toBeDefined();
-  const signal = capturePluginRegistryLifecycleSignal(registry, epoch)!;
+  const signal = captureSignal(registry, epoch)!;
   expect(signal).toBeDefined();
   return { epoch, signal };
 }
 
-function registryWithRecord(id: string) {
-  const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({ id });
+function registryWithRecord(registry = createEmptyPluginRegistry()) {
+  const record = createPluginRecord({ id: "owner" });
   registry.plugins.push(record);
   return { registry, record };
 }
 
 function callableRegistry(value: string) {
-  const { registry, record } = registryWithRecord("same-id");
+  const { registry, record } = registryWithRecord();
   const instance = new PluginInstance(record.id, { record, registry });
   return { registry, record, call: instance.wrap(() => value) };
 }
 
-afterEach(() => resetPluginRuntimeStateForTest());
+afterEach(() => runtime.resetPluginRuntimeStateForTest());
 afterEach(resetPluginLoaderTestStateForTest);
 
 it.each(["return", "throw", "resolve", "reject"] as const)(
@@ -68,15 +58,13 @@ it.each(["return", "throw", "resolve", "reject"] as const)(
       start() {}
     }
     const failure = new Error("preparation fixture failure");
+    const asynchronous = outcome === "resolve" || outcome === "reject";
+    const rejects = outcome === "throw" || outcome === "reject";
     async function prepare() {
       const registry = createEmptyPluginRegistry();
-      registry.services.push({
-        id: "preparation-retention",
-        pluginId: "preparation-retention",
-        source: "preparation-retention",
-        origin: "config",
-        service: new RetainedService(),
-      });
+      const service = new RetainedService();
+      const { id } = service;
+      registry.services.push({ id, pluginId: id, source: id, origin: "config", service });
       let resource: AsyncResource | undefined;
       const { promise: pending, resolve: release } = createDeferredCore();
       let rejected = false;
@@ -84,22 +72,17 @@ it.each(["return", "throw", "resolve", "reject"] as const)(
         const result = withPluginRegistryPreparationScope(registry, () => {
           expect(isPluginRegistryPreparing(registry)).toBe(true);
           resource = new AsyncResource("plugin-preparation-retention");
-          if (outcome === "throw") {
-            throw failure;
-          }
-          if (outcome === "return") {
-            return "prepared";
-          }
-          return pending.then(() => {
+          const finish = () => {
             expect(isPluginRegistryPreparing(registry)).toBe(true);
-            if (outcome === "reject") {
+            if (rejects) {
               throw failure;
             }
             return "prepared";
-          });
+          };
+          return asynchronous ? pending.then(finish) : finish();
         });
         expect(isPluginRegistryPreparing(registry)).toBe(false);
-        if (outcome === "resolve" || outcome === "reject") {
+        if (asynchronous) {
           expect(resource!.runInAsyncScope(() => isPluginRegistryPreparing(registry))).toBe(true);
         }
         release();
@@ -110,7 +93,7 @@ it.each(["return", "throw", "resolve", "reject"] as const)(
       } finally {
         release();
       }
-      expect(rejected).toBe(outcome === "throw" || outcome === "reject");
+      expect(rejected).toBe(rejects);
       expect(resource!.runInAsyncScope(() => isPluginRegistryPreparing(registry))).toBe(false);
       return resource!;
     }
@@ -124,151 +107,124 @@ it.each(["return", "throw", "resolve", "reject"] as const)(
   },
 );
 
-it.each(["retire", "activate"] as const)(
-  "notifies a scoped loader handle on %s without inventing an activation epoch",
-  (action) => {
-    const registry = loadPluginRegistryHandle({ onlyPluginIds: [] });
-    const record = createPluginRecord({ id: "scoped-owner" });
-    registry.plugins.push(record);
-    expect(capturePluginRegistryLifecycleSignal(registry, undefined)).toBeUndefined();
-    const { signal, authority } = withPluginRuntimeRegistryScope(registry, () => {
-      const scopedRuntime = getPluginRuntimeGatewayRequestScope()?.pluginRegistry === registry;
-      const epoch = capturePluginRegistryLifecycleEpoch(registry);
-      const options = { scopedRuntime };
-      return {
-        signal: capturePluginRegistryLifecycleSignal(registry, epoch, options)!,
-        authority: capturePluginLifecycleAuthority(registry, undefined, options)!,
-      };
-    });
-    expect([signal?.aborted, authority()]).toEqual([false, true]);
-    expect(capturePluginRegistryLifecycleEpoch(registry)).toBeUndefined();
-    expect(isPluginRecordActive(registry, record)).toBe(false);
-    expect(capturePluginRegistryLifecycleSignal(registry, undefined)).toBeUndefined();
-    expect(capturePluginRegistryLifecycleSignal(registry, undefined, { scopedRuntime: true })).toBe(
-      signal,
-    );
-    const observations: boolean[] = [];
-    signal.addEventListener("abort", () => observations.push(authority()));
+it.each([
+  [true, "retire"],
+  [true, "activate"],
+  [false, "retire"],
+  [false, "activate"],
+] as const)("revokes authority before listeners (scoped=%s, transition=%s)", (scoped, action) => {
+  const { registry, record } = registryWithRecord(
+    scoped ? loadPluginRegistryHandle({ onlyPluginIds: [] }) : undefined,
+  );
+  if (scoped) {
+    expect(captureSignal(registry, undefined)).toBeUndefined();
+  } else {
+    markActive(registry);
+  }
+  const epoch = captureEpoch(registry);
+  const { signal, authority } = withPluginRuntimeRegistryScope(registry, () => {
+    const scopedRuntime = getPluginRuntimeGatewayRequestScope()?.pluginRegistry === registry;
+    const options = { scopedRuntime };
+    return {
+      signal: captureSignal(registry, epoch, options)!,
+      authority: captureAuthority(registry, undefined, scoped ? options : undefined)!,
+    };
+  });
+  expect([signal?.aborted, authority()]).toEqual([false, true]);
+  expect(isRecordActive(registry, record)).toBe(!scoped);
+  if (scoped) {
+    expect(captureEpoch(registry)).toBeUndefined();
+    expect(captureSignal(registry, epoch)).toBeUndefined();
+  }
+  expect(captureSignal(registry, epoch, { scopedRuntime: true })).toBe(signal);
+  const observations: unknown[] = [];
+  signal.addEventListener("abort", () => {
+    const nextEpoch = captureEpoch(registry);
+    // Capture event-time registry, record, authority, old signal, and successor state.
+    observations.push([
+      epoch ? isEpochActive(registry, epoch) : false,
+      isRecordActive(registry, record),
+      authority(),
+      captureSignal(registry, epoch),
+      nextEpoch ? isEpochActive(registry, nextEpoch) : false,
+      nextEpoch ? captureSignal(registry, nextEpoch)?.aborted : undefined,
+    ]);
+  });
 
-    (action === "retire" ? markPluginRegistryRetired : markPluginRegistryActive)(registry);
+  (action === "retire" ? markRetired : markActive)(registry);
 
-    expect(observations).toEqual([false]);
-    expect(signal.aborted).toBe(true);
-    expect(
-      capturePluginRegistryLifecycleSignal(registry, undefined, { scopedRuntime: true }),
-    ).toBeUndefined();
-    markPluginRegistryActive(registry);
-    expect(captureActivation(registry).signal.aborted).toBe(false);
-    expect([signal.aborted, authority(), observations]).toEqual([true, false, [false]]);
-  },
-);
+  expect(signal.aborted).toBe(true);
+  const active = action === "activate";
+  expect(observations).toEqual([
+    [false, active, false, undefined, active, active ? false : undefined],
+  ]);
+  expect(captureSignal(registry, epoch, { scopedRuntime: true })).toBeUndefined();
+  markActive(registry);
+  const next = captureActivation(registry);
+  expect(next.epoch).not.toBe(epoch);
+  expect([next.signal.aborted, signal.aborted, authority()]).toEqual([false, true, false]);
+  expect(observations).toHaveLength(1);
+});
 
 it("keeps epoch identity opaque and rejects missing or mismatched activation signals", () => {
   const registry = createEmptyPluginRegistry();
   const other = createEmptyPluginRegistry();
-  expect(capturePluginRegistryLifecycleSignal(registry, {})).toBeUndefined();
-  expect(capturePluginLifecycleAuthority(registry)).toBeUndefined();
-  const scopedAuthority = capturePluginLifecycleAuthority(registry, undefined, {
-    scopedRuntime: true,
-  });
+  expect(captureSignal(registry, {})).toBeUndefined();
+  expect(captureAuthority(registry)).toBeUndefined();
+  const scopedAuthority = captureAuthority(registry, undefined, { scopedRuntime: true });
   expect(scopedAuthority?.()).toBe(true);
-
-  markPluginRegistryActive(registry);
+  markActive(registry);
   const { epoch, signal } = captureActivation(registry);
   expect(Object.isFrozen(epoch)).toBe(true);
   for (const property of ["abort", "controller", "signal"]) {
     expect(epoch).not.toHaveProperty(property);
   }
-  expect(capturePluginRegistryLifecycleEpoch(registry)).toBe(epoch);
-  expect(capturePluginRegistryLifecycleSignal(registry, epoch)).toBe(signal);
-  expect(capturePluginRegistryLifecycleSignal(other, epoch)).toBeUndefined();
-  expect(capturePluginRegistryLifecycleSignal(registry, { ...epoch })).toBeUndefined();
+  expect(captureEpoch(registry)).toBe(epoch);
+  expect(captureSignal(registry, epoch)).toBe(signal);
+  expect(captureSignal(other, epoch)).toBeUndefined();
+  expect(captureSignal(registry, { ...epoch })).toBeUndefined();
   expect(scopedAuthority?.()).toBe(false);
 });
-
-it.each(["retire", "reactivate"] as const)(
-  "revokes registry authority before %s listeners run while records follow their owner",
-  (action) => {
-    const { registry, record } = registryWithRecord("lifecycle-owner");
-    markPluginRegistryActive(registry);
-    const { epoch, signal } = captureActivation(registry);
-    const authority = capturePluginLifecycleAuthority(registry)!;
-    expect([isPluginRecordActive(registry, record), authority()]).toEqual([true, true]);
-    const observations: unknown[] = [];
-    signal.addEventListener("abort", () => {
-      const nextEpoch = capturePluginRegistryLifecycleEpoch(registry);
-      observations.push({
-        registryActive: isPluginRegistryLifecycleEpochActive(registry, epoch),
-        recordActive: isPluginRecordActive(registry, record),
-        authorityActive: authority(),
-        oldSignal: capturePluginRegistryLifecycleSignal(registry, epoch),
-        nextActive: nextEpoch ? isPluginRegistryLifecycleEpochActive(registry, nextEpoch) : false,
-        nextSignalAborted: nextEpoch
-          ? capturePluginRegistryLifecycleSignal(registry, nextEpoch)?.aborted
-          : undefined,
-      });
-    });
-
-    (action === "retire" ? markPluginRegistryRetired : markPluginRegistryActive)(registry);
-
-    expect(signal.aborted).toBe(true);
-    expect(observations).toEqual([
-      {
-        registryActive: false,
-        recordActive: action === "reactivate",
-        authorityActive: false,
-        oldSignal: undefined,
-        nextActive: action === "reactivate",
-        nextSignalAborted: action === "reactivate" ? false : undefined,
-      },
-    ]);
-    markPluginRegistryActive(registry);
-    const next = captureActivation(registry);
-    expect(next.epoch).not.toBe(epoch);
-    expect([next.signal.aborted, signal.aborted, authority()]).toEqual([false, true, false]);
-    expect(observations).toHaveLength(1);
-  },
-);
 
 it("keeps exact-instance callbacks live across activation but never revives a retired replacement", async () => {
   const { registry: original, record: oldRecord, call: oldCall } = callableRegistry("old instance");
   const { registry: replacement, call: newCall } = callableRegistry("new instance");
   try {
-    setActivePluginRegistry(original);
-    const registryAuthority = capturePluginLifecycleAuthority(original)!;
-    const recordAuthority = capturePluginLifecycleAuthority(original, oldRecord)!;
-    setActivePluginRegistry(original);
+    runtime.setActivePluginRegistry(original);
+    const registryAuthority = captureAuthority(original)!;
+    const recordAuthority = captureAuthority(original, oldRecord)!;
+    runtime.setActivePluginRegistry(original);
     expect(registryAuthority()).toBe(false);
     expect(recordAuthority()).toBe(true);
     expect(oldCall()).toBe("old instance");
-    setActivePluginRegistry(replacement);
+    runtime.setActivePluginRegistry(replacement);
     expect(recordAuthority()).toBe(false);
     expect(() => oldCall()).toThrow(/reloaded|disabled/);
     expect(newCall()).toBe("new instance");
-    setActivePluginRegistry(original);
+    runtime.setActivePluginRegistry(original);
     expect(recordAuthority()).toBe(false);
     expect(() => oldCall()).toThrow(/reloaded|disabled/);
     expect(() => newCall()).toThrow(/reloaded|disabled/);
   } finally {
-    await clearActivePluginRegistry();
+    await runtime.clearActivePluginRegistry();
     await Promise.all(
-      [original, replacement].map((registry) => disposePluginRegistryInstances(registry)),
+      [original, replacement].map((registry) => runtime.disposePluginRegistryInstances(registry)),
     );
   }
 });
 
 it("does not retire a registry or sibling record when one record is revoked", () => {
-  const { registry, record: first } = registryWithRecord("first-owner");
+  const { registry, record: first } = registryWithRecord();
   const sibling = createPluginRecord({ id: "sibling-owner" });
   registry.plugins.push(sibling);
-  markPluginRegistryActive(registry);
+  markActive(registry);
   const { epoch, signal } = captureActivation(registry);
 
   revokePluginRecord(registry, first);
 
-  expect(isPluginRecordActive(registry, first)).toBe(false);
-  expect(isPluginRecordActive(registry, sibling)).toBe(true);
-  expect(isPluginRegistryLifecycleEpochActive(registry, epoch)).toBe(true);
+  expect(isRecordActive(registry, first)).toBe(false);
+  expect(isRecordActive(registry, sibling)).toBe(true);
+  expect(isEpochActive(registry, epoch)).toBe(true);
   expect(signal.aborted).toBe(false);
 });
 
@@ -277,18 +233,18 @@ it.each(["commit", "rollback"] as const)(
   (action) => {
     const original = createEmptyPluginRegistry();
     const candidate = createEmptyPluginRegistry();
-    setActivePluginRegistry(original);
+    runtime.setActivePluginRegistry(original);
     const first = captureActivation(original);
-    const snapshot = captureActivePluginRegistrySnapshot();
+    const snapshot = runtime.captureActivePluginRegistrySnapshot();
 
-    stageActivePluginRegistry(candidate, "candidate", "default");
+    runtime.stageActivePluginRegistry(candidate, "candidate", "default");
     const second = captureActivation(candidate);
     expect(first.signal.aborted).toBe(false);
 
     if (action === "commit") {
-      commitStagedPluginRegistry(original, candidate);
+      runtime.commitStagedPluginRegistry(original, candidate);
     } else {
-      rollbackStagedPluginRegistry(snapshot);
+      runtime.rollbackStagedPluginRegistry(snapshot);
     }
 
     expect(first.signal.aborted).toBe(action === "commit");
