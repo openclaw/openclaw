@@ -121,9 +121,11 @@ describe("agent run session target", () => {
     const ownerlessStorePath = path.join(tempDir, "ownerless", "sessions.json");
     const sessionId = "research-session";
     const sessionKey = "agent:research:work";
-    await seedSessionEntry(
-      { agentId: "research", sessionKey, storePath: ownerlessStorePath },
-      { sessionId, updatedAt: 1 },
+    await withSessionHistoryBudgetSweepsForTest(() =>
+      upsertSessionEntryCore(
+        { agentId: "research", sessionKey, storePath: ownerlessStorePath },
+        { sessionId, updatedAt: 1 },
+      ),
     );
 
     await expect(

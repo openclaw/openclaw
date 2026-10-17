@@ -46,7 +46,7 @@ function afterFsOperation(
   after: () => void,
 ) {
   const original = fs[method];
-  vi.spyOn(fs, method).mockImplementation(async (...args) => {
+  vi.spyOn(fs, method).mockImplementation(async (...args: Parameters<typeof original>) => {
     let succeeded = false;
     try {
       const result = await Reflect.apply(original, fs, args);

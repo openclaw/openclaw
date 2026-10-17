@@ -55,6 +55,7 @@ vi.mock("../../plugins/registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutationMock,
 }));
 
+// mock-isolation: Keep configuration reads and writes inside the command fixture.
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
@@ -95,6 +96,7 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", async (importOriginal) => (
   loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
 }));
 
+// mock-isolation: Supply fixed reports without loading the real plugin runtime.
 vi.mock("../../plugins/status.js", () => ({
   buildAllPluginInspectReports: buildAllPluginInspectReportsMock,
   withPluginDiagnosticsReportForInspection: withPluginDiagnosticsReportForInspectionMock,

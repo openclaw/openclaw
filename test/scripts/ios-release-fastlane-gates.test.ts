@@ -1171,11 +1171,9 @@ end
 
   it("captures all screenshot families once without changing runner authorization", () => {
     const workflow = readFileSync(ciWorkflowPath, "utf8");
-    const [iosJob, captureJob, reducerJob] = [
-      "ios-build",
-      "ios-screenshot-capture",
-      "ios-screenshot-evidence",
-    ].map((name) => sourceSection(workflow, `\n  ${name}:\n`, /\n {2}\S/u));
+    const iosJob = sourceSection(workflow, "\n  ios-build:\n", /\n {2}\S/u);
+    const captureJob = sourceSection(workflow, "\n  ios-screenshot-capture:\n", /\n {2}\S/u);
+    const reducerJob = sourceSection(workflow, "\n  ios-screenshot-evidence:\n", /\n {2}\S/u);
 
     expect(workflow).toContain('IOS_SCREENSHOT_NODE_VERSION: "24.16.0"');
     expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"');

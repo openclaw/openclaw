@@ -388,6 +388,7 @@ describe("preserved update activation with real version guards", () => {
       });
       mocks.command.mockResolvedValue({
         ...(await mocks.command(process.env)),
+        programArguments: gatewayArgs(),
         environment: { HOME: root, MANAGED_VALUE: "revalidated" },
       });
       mocks.capability.mockResolvedValue({ kind: "writable" });

@@ -309,11 +309,15 @@ it.each(["resumed", "all-eligible", "new-admission"] as const)(
     ageRuns();
     const expected = [...captured];
     if (scenario === "resumed") {
-      expected[1] = recordUpdateRunStep(
+      const updated = recordUpdateRunStep(
         captured[1]!.runId,
         { step: "build", status: "in_progress", startedAtMs: Date.now() },
         options,
       );
+      if (!updated) {
+        throw new Error("Expected the resumed update run");
+      }
+      expected[1] = updated;
     } else if (scenario === "new-admission") {
       expected.push(create());
     }

@@ -124,7 +124,7 @@ it("rejects ambiguous benchmark CLI values before spawning Node", () => {
     ["--case", "--case requires a value"],
     ["--case skipChannels --case skipChannels", 'Duplicate --case "skipChannels"'],
     ["--restarts --runs 1", "--restarts requires a value"],
-  ]) {
+  ] as const) {
     expect(() => testing.parseOptions(args.split(" "))).toThrow(message);
   }
   expect(() => testing.parseOptions(["--entry", " --inspect"])).toThrow(/must be a file path/u);

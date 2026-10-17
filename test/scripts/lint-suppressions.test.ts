@@ -81,9 +81,12 @@ function listProductionCodeFiles(): string[] {
 }
 
 function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
-  return [...Map.groupBy(entries, ({ file, rule }) => `${file}|${rule}`)]
-    .map(([key, rows]) => `${key}|${rows.length}`)
-    .toSorted();
+  const counts = new Map<string, number>();
+  for (const { file, rule } of entries) {
+    const key = `${file}|${rule}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts].map(([key, count]) => `${key}|${count}`).toSorted();
 }
 
 const productionLintSuppressions = listSuppressionFiles().flatMap((file) =>

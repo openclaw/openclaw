@@ -59,12 +59,12 @@ async function activeResponse(
     agent,
     requests,
     firstResponse,
-    finish(message = assistant("original answer")) {
+    finish: (message = assistant("original answer")) => {
       disconnect?.();
       firstResponse.push({ type: "done", reason: "stop", message });
       firstResponse.end();
     },
-    fail() {
+    fail: () => {
       disconnect?.();
       firstResponse.push({
         type: "error",

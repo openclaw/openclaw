@@ -655,7 +655,11 @@ it.each([
       expect(claimYield).toHaveBeenCalledTimes(1);
       expect(onYield).toHaveBeenCalledTimes(1);
       expect(inputs).toHaveLength(2);
-      expect(resultFor(inputs[1], "lookup")).toMatchObject({
+      const nextInput = inputs[1];
+      if (!nextInput) {
+        throw new Error("Expected a second model request");
+      }
+      expect(resultFor(nextInput, "lookup")).toMatchObject({
         isError: false,
         content: [{ type: "text", text: "already completed" }],
       });
