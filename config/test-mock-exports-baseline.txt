@@ -7405,7 +7405,6 @@
 ["src/gateway/user-profiles-http.test.ts","../infra/host-account-avatar.js","1467105e5f13f75131e1396773dc4f6cd0e27bf4f26cc9016ba02fa2dd3d03b8",1]
 ["src/gateway/user-profiles-http.test.ts","../state/user-profiles-avatar.js","1ae03afa70253d304b5cb53f56e07eb4ad8d65b18187412f7ba59bdbdc1898b2",1]
 ["src/gateway/worker-environments/cloud-transcript-write-admission.test.ts","../../agents/sessions/session-manager-write-admission.js","b511618e4d80ee71e853cceaa47fe6fdf97b72414f64f4dd9766edde22ea5726",1]
-["src/gateway/worker-environments/node-bootstrap-artifact.test.ts","./node-bootstrap-artifact-worker.js","a628be921f4eb3d1b5e93cedf6476236c8782bda0ba636cb4e6170ea3d637d05",1]
 ["src/gateway/worker-environments/node-enrollment.test.ts","../../infra/device-bootstrap.js","4baee8751ee76dd830f4e38e27a8de20017c0e488a3119f696ffb006e81caba1",1]
 ["src/gateway/worker-environments/provider-project-retention.test.ts","./repository-project-admission.js","be008742b618bdbfeb80d87bc9c72f93886d7cc520577c42365a2c83555ff3c8",1]
 ["src/gateway/worker-environments/repository-project-access.test.ts","./repository-project-admission.js","e2746ebcd475943df5e401a13c52cd1eabffff30bd239a1b7b15c36f7b2e5194",1]

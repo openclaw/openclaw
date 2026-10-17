@@ -18,9 +18,9 @@ import * as bundleStaging from "./bundle-staging.js";
 import {
   createWorkerBundleProducer,
   resolveWorkerNpmInstallationArtifact,
-  type WorkerBundleBuildOptions,
   type WorkerInstallationArtifact,
 } from "./bundle.js";
+import type { WorkerBundleBuildOptions } from "./node-bootstrap-artifact-contract.js";
 import { createWorkerPreparationIdentity } from "./preparation-identity.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import { listRetainedWorkerBundleHashes } from "./worker-bundle-retention.js";
@@ -28,7 +28,7 @@ import { workerWorkspaceRsyncReceiverEntryPath } from "./workspace-sync-helpers.
 
 type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bundle" }>;
 
-// Keep staging fault injection beside the builder; the artifact worker suite covers isolation.
+// mock-isolation: keep staging fault injection beside the builder; the worker suite covers isolation.
 vi.mock("./node-bootstrap-artifact-worker.js", () => ({
   prepareNodeArtifactInWorker: async (_kind: "bundle", options: WorkerBundleBuildOptions) => {
     const { prepareWorkerBundle } = await import("./bundle.js");

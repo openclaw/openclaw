@@ -1,4 +1,18 @@
-import type { WorkerBundleArtifact, WorkerBundleBuildOptions } from "./bundle.js";
+import type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js";
+
+export type WorkerBundleArtifact = ExpectedWorkerBuild & {
+  install: "bundle";
+  tarballBytes: number;
+  tarballSha256: string;
+  tarballPath: string;
+};
+
+export type WorkerBundleBuildOptions = {
+  packageRoot: string;
+  cacheDir: string;
+  openclawVersion: string;
+  protocolFeatures: string[];
+};
 
 export type NodeBootstrapArtifact = Readonly<{
   tarballPath: string;

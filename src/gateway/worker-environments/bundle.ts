@@ -27,6 +27,10 @@ import {
 import { VERSION } from "../../version.js";
 import type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js";
 import { collectWorkerBundleManifest } from "./bundle-staging.js";
+import type {
+  WorkerBundleArtifact,
+  WorkerBundleBuildOptions,
+} from "./node-bootstrap-artifact-contract.js";
 import { prepareNodeArtifactInWorker } from "./node-bootstrap-artifact-worker.js";
 
 const OPENCLAW_NPM_REGISTRY = "https://registry.npmjs.org/";
@@ -37,13 +41,6 @@ const BUNDLE_STAGING_NAME_PATTERN = /^\.staging-[A-Za-z0-9_-]+$/u;
 const BUNDLE_TEMP_NAME_PATTERN = /^[a-f0-9]{64}\.tgz\.[0-9]+\.[0-9a-f-]{36}\.tmp$/u;
 const PACKAGED_BUNDLE_NAME_PATTERN = /^([a-f0-9]{64})\.tar\.gz$/u;
 const PACKAGED_BUNDLE_DIRECTORY = "dist/worker-artifacts";
-export type WorkerBundleArtifact = ExpectedWorkerBuild & {
-  install: "bundle";
-  tarballBytes: number;
-  tarballSha256: string;
-  tarballPath: string;
-};
-
 export type WorkerNpmArtifact = ExpectedWorkerBuild & {
   install: "npm";
   packageIntegrity: string;
@@ -66,13 +63,6 @@ type WorkerBundleProducerOptions = {
   protocolFeatures?: readonly string[];
   cacheOwnership?: "exclusive";
   onCacheCleanupError?: (error: unknown) => void;
-};
-
-export type WorkerBundleBuildOptions = {
-  packageRoot: string;
-  cacheDir: string;
-  openclawVersion: string;
-  protocolFeatures: string[];
 };
 
 type WorkerNpmPackageInstallCheck = (packageRoot: string) => Promise<boolean>;
