@@ -53,10 +53,69 @@ const tunnel: Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand"> = {
   },
 };
 
+function trackAllocation<T extends typeof tunnel & { workspace: string }>(carrier: T) {
+  let allocated: string | undefined;
+  return {
+    ...carrier,
+    get allocated() {
+      return allocated;
+    },
+    runWorkspaceCommand: async (
+      command: Parameters<WorkerWorkspaceTunnelHandle["runWorkspaceCommand"]>[0],
+    ) => {
+      const result = await carrier.runWorkspaceCommand(command);
+      if (command.input) {
+        const operation = JSON.parse(command.input);
+        if (operation.op === "init") {
+          allocated = path.join(carrier.workspace, operation.directory);
+        }
+      }
+      return result;
+    },
+  };
+}
+
 async function createCarrier(kind = "ssh") {
-  return kind === "node"
-    ? await createNodeCarrier(temps.make("skill-resource-node-"))
-    : { ...tunnel, workspace: await fs.realpath(temps.make("skill-resource-ssh-")) };
+  return trackAllocation(
+    kind === "node"
+      ? await createNodeCarrier(temps.make("skill-resource-node-"))
+      : { ...tunnel, workspace: await fs.realpath(temps.make("skill-resource-ssh-")) },
+  );
+}
+
+type TransferOptions = Parameters<typeof transferSkillResources>[0];
+type Carrier = Awaited<ReturnType<typeof createCarrier>>;
+function transfer(
+  carrier: Carrier,
+  snapshot?: TransferOptions["snapshot"],
+  options: Partial<TransferOptions> = {},
+) {
+  return transferSkillResources({
+    snapshot,
+    tunnel: carrier,
+    remoteWorkspaceDir: carrier.workspace,
+    assertCurrent: () => {},
+    ...options,
+  });
+}
+
+const remove = (directory: string) => fs.rm(directory, { recursive: true, force: true });
+const expectMissing = (file: string) =>
+  expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+const readText = (directory: string, file: string) =>
+  fs.readFile(path.join(directory, file), "utf8");
+const readBinary = (directory: string) => fs.readFile(path.join(directory, "data.bin"));
+
+async function withResources(
+  resources: Awaited<ReturnType<typeof transferSkillResources>>,
+  check: (resources: NonNullable<typeof resources>, remote: string) => Promise<void>,
+) {
+  expect(resources).toBeDefined();
+  try {
+    await check(resources!, resources!.mounts[0]!.containerPath);
+  } finally {
+    await resources?.cleanup();
+  }
 }
 
 async function createSource(binarySize = 150000) {
@@ -83,6 +142,47 @@ async function createSource(binarySize = 150000) {
   };
 }
 
+async function createStaleSource(sameNamedNode = false) {
+  const source = await createSource();
+  const staleBaseDir = path.join(source.workspace, "skills", "stale");
+  await fs.mkdir(staleBaseDir, { recursive: true });
+  await fs.writeFile(
+    path.join(staleBaseDir, "SKILL.md"),
+    "---\ndescription: Stale resource\n---\n# Stale\n",
+  );
+  const snapshot = sameNamedNode
+    ? await buildSkillSnapshot(source.workspace, {
+        entries: loadWorkspaceSkills(source.workspace, { workspaceOnly: true }),
+      })
+    : source.snapshot;
+  const sourceSkill = snapshot.resolvedSkills?.[0];
+  expect(sourceSkill).toBeDefined();
+  snapshot.resolvedSkills!.push({
+    ...(sameNamedNode ? structuredClone(sourceSkill!) : sourceSkill!),
+    name: "stale",
+    filePath: path.join(staleBaseDir, "SKILL.md"),
+    baseDir: staleBaseDir,
+  });
+  snapshot.skills.push({
+    name: "stale",
+    skillKey: "stale",
+    ...(!sameNamedNode && { primaryEnv: "STALE_SKILL_API_KEY" }),
+  });
+  if (sameNamedNode) {
+    snapshot.resolvedSkills!.push({
+      ...structuredClone(sourceSkill!),
+      name: "stale",
+      filePath: "node://worker/skills/stale/SKILL.md",
+      baseDir: "node://worker/skills/stale",
+    });
+  } else {
+    snapshot.prompt += "\nstale";
+  }
+  await fs.rm(staleBaseDir, { recursive: true });
+  await fs.symlink(path.join(source.workspace, "missing-stale-target"), staleBaseDir, "dir");
+  return snapshot;
+}
+
 async function expectRejectedResourceRequest(
   carrier: string,
   mutate: (input: string) => string,
@@ -91,38 +191,24 @@ async function expectRejectedResourceRequest(
   // Keep malformed field tests below the independent transport-size boundary.
   const { snapshot } = await createSource(16);
   const transport = await createCarrier(carrier);
-  let initializedRoot: string | undefined;
   let injected = false;
-  try {
-    await expect(
-      transferSkillResources({
-        snapshot,
-        remoteWorkspaceDir: transport.workspace,
-        assertCurrent: () => {},
-        tunnel: {
-          runWorkspaceCommand: async (command) => {
-            const operation = JSON.parse(command.input!);
-            let dispatched = command;
-            if (operation.op === "write" && !injected) {
-              dispatched = { ...command, input: mutate(command.input!) };
-              injected = true;
-            }
-            const result = await transport.runWorkspaceCommand(dispatched);
-            if (operation.op === "init") {
-              initializedRoot = path.join(transport.workspace, operation.directory);
-            }
-            return result;
-          },
+  await expect(
+    transfer(transport, snapshot, {
+      tunnel: {
+        runWorkspaceCommand: async (command) => {
+          const operation = JSON.parse(command.input!);
+          let dispatched = command;
+          if (operation.op === "write" && !injected) {
+            dispatched = { ...command, input: mutate(command.input!) };
+            injected = true;
+          }
+          return transport.runWorkspaceCommand(dispatched);
         },
-      }),
-    ).rejects.toThrow(message);
-    expect(injected).toBe(true);
-    await expect(fs.stat(initializedRoot!)).rejects.toMatchObject({ code: "ENOENT" });
-  } finally {
-    if (initializedRoot) {
-      await fs.rm(initializedRoot, { recursive: true, force: true });
-    }
-  }
+      },
+    }),
+  ).rejects.toThrow(message);
+  expect(injected).toBe(true);
+  await expectMissing(transport.allocated!);
 }
 
 describe("remote-exec skill resources", () => {
@@ -169,23 +255,14 @@ describe("remote-exec skill resources", () => {
         },
       });
       const carrier = await createCarrier(kind);
-      let resources: Awaited<ReturnType<typeof transferSkillResources>>;
       try {
-        resources = await transferSkillResources({
-          snapshot: source.snapshot,
-          workspaceDir: source.workspace,
-          remoteWorkspaceDir: carrier.workspace,
-          assertCurrent: () => {},
-          tunnel: carrier,
-        });
-        expect(
-          await fs.readFile(
-            path.join(resources!.mounts[0]!.containerPath, "scripts/check.sh"),
-            "utf8",
-          ),
-        ).toBe(script);
+        await withResources(
+          await transfer(carrier, source.snapshot, { workspaceDir: source.workspace }),
+          async (_resources, remote) => {
+            expect(await readText(remote, "scripts/check.sh")).toBe(script);
+          },
+        );
       } finally {
-        await resources?.cleanup();
         release();
       }
     },
@@ -204,10 +281,7 @@ describe("remote-exec skill resources", () => {
     }
     const carrier = await createCarrier(kind);
     let writes = 0;
-    const resources = await transferSkillResources({
-      snapshot,
-      remoteWorkspaceDir: carrier.workspace,
-      assertCurrent: () => {},
+    const resources = await transfer(carrier, snapshot, {
       tunnel: {
         runWorkspaceCommand: (command) => {
           expect(Buffer.byteLength(command.input!)).toBeLessThanOrEqual(
@@ -218,29 +292,60 @@ describe("remote-exec skill resources", () => {
         },
       },
     });
-    try {
-      const remote = resources!.mounts[0]!.containerPath;
-      expect(await fs.readFile(path.join(remote, "data.bin"))).toEqual(binary);
+    await withResources(resources, async (_resources, remote) => {
+      expect(await readBinary(remote)).toEqual(binary);
       for (const [name, content] of files) {
-        expect(await fs.readFile(path.join(remote, name), "utf8")).toBe(content);
+        expect(await readText(remote, name)).toBe(content);
       }
       expect(writes).toBeLessThanOrEqual(3);
-    } finally {
-      await resources?.cleanup();
-    }
+    });
   });
 
   it("rejects a valid-shaped init reply advertising a different allocation", async () => {
     const { snapshot } = await createSource();
-    const carrier = await createNodeCarrier(temps.make("skill-resource-node-"));
+    const carrier = trackAllocation(await createNodeCarrier(temps.make("skill-resource-node-")));
     const outside = await fs.realpath(temps.make("skill-resource-wrong-mount-"));
-    let allocated: string | undefined;
     let writes = 0;
-    try {
-      const request = {
-        snapshot,
-        remoteWorkspaceDir: carrier.workspace,
-        assertCurrent: () => {},
+    const request: Partial<TransferOptions> = {
+      tunnel: {
+        runWorkspaceCommand: async (
+          command: Parameters<WorkerWorkspaceTunnelHandle["runWorkspaceCommand"]>[0],
+        ) => {
+          const operation = JSON.parse(command.input!);
+          writes += Number(operation.op === "write");
+          const result = await carrier.runWorkspaceCommand(command);
+          if (operation.op === "init") {
+            return {
+              ...result,
+              stdout: JSON.stringify({
+                id: randomUUID().replaceAll("-", ""),
+                identity: result.stdout,
+                root: outside,
+              }),
+            };
+          }
+          return result;
+        },
+      },
+    };
+    await expect(transfer(carrier, snapshot, request)).rejects.toThrow("Invalid skill resource");
+    expect(writes).toBe(0);
+    expect(await fs.readdir(outside)).toEqual([]);
+  });
+
+  it.each(["malformed", "retired"])(
+    "reclaims uncertain init on the next turn or generation retirement (%s)",
+    async (failure) => {
+      const { snapshot } = await createSource();
+      const carrier = trackAllocation(await createNodeCarrier(temps.make("skill-resource-node-")));
+      let writes = 0;
+      let current = true;
+      const request: Partial<TransferOptions> = {
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("placement retired");
+          }
+        },
         tunnel: {
           runWorkspaceCommand: async (
             command: Parameters<WorkerWorkspaceTunnelHandle["runWorkspaceCommand"]>[0],
@@ -249,104 +354,42 @@ describe("remote-exec skill resources", () => {
             writes += Number(operation.op === "write");
             const result = await carrier.runWorkspaceCommand(command);
             if (operation.op === "init") {
-              allocated = path.join(carrier.workspace, operation.directory);
-              return {
-                ...result,
-                stdout: JSON.stringify({
-                  id: randomUUID().replaceAll("-", ""),
-                  identity: result.stdout,
-                  root: outside,
-                }),
-              };
+              if (failure === "retired") {
+                current = false;
+              }
+              if (failure === "malformed") {
+                return { ...result, stdout: "invalid" };
+              }
             }
             return result;
           },
         },
       };
-      await expect(transferSkillResources(request)).rejects.toThrow("Invalid skill resource");
+      await expect(transfer(carrier, snapshot, request)).rejects.toThrow();
       expect(writes).toBe(0);
-      expect(await fs.readdir(outside)).toEqual([]);
-    } finally {
-      if (allocated) {
-        await fs.rm(allocated, { recursive: true, force: true });
-      }
-    }
-  });
-
-  it.each(["malformed", "retired"])(
-    "reclaims uncertain init on the next turn or generation retirement (%s)",
-    async (failure) => {
-      const { snapshot } = await createSource();
-      const carrier = await createNodeCarrier(temps.make("skill-resource-node-"));
-      let allocated: string | undefined;
-      let writes = 0;
-      let current = true;
-      try {
-        const request = {
-          snapshot,
-          remoteWorkspaceDir: carrier.workspace,
-          assertCurrent: () => {
-            if (!current) {
-              throw new Error("placement retired");
-            }
-          },
-          tunnel: {
-            runWorkspaceCommand: async (
-              command: Parameters<WorkerWorkspaceTunnelHandle["runWorkspaceCommand"]>[0],
-            ) => {
-              const operation = JSON.parse(command.input!);
-              writes += Number(operation.op === "write");
-              const result = await carrier.runWorkspaceCommand(command);
-              if (operation.op === "init") {
-                allocated = path.join(carrier.workspace, operation.directory);
-                if (failure === "retired") {
-                  current = false;
-                }
-                if (failure === "malformed") {
-                  return { ...result, stdout: "invalid" };
-                }
-              }
-              return result;
-            },
-          },
-        };
-        await expect(transferSkillResources(request)).rejects.toThrow();
-        expect(writes).toBe(0);
-        expect(allocated).toBeDefined();
-        const restarted = new NodeWorkerWorkspaceRuntime({ root: carrier.home });
-        const retention = {
-          version: 1 as const,
-          gatewayNamespace: carrier.binding.gatewayNamespace,
-          controllerId: "restarted-gateway",
-          sequence: 1,
-          retain: [{ ...carrier.binding, manifestRefs: null }],
-        };
-        await restarted.applyRetainSnapshot(retention, async () => []);
-        expect((await fs.stat(allocated!)).isDirectory()).toBe(true);
-        if (failure === "retired") {
-          await restarted.applyRetainSnapshot(
-            { ...retention, sequence: 2, retain: [] },
-            async () => [],
-          );
-          await expect(fs.stat(allocated!)).rejects.toMatchObject({ code: "ENOENT" });
-        } else {
-          const next = await transferSkillResources({
-            snapshot: failure === "malformed" ? snapshot : undefined,
-            remoteWorkspaceDir: carrier.workspace,
-            assertCurrent: () => {},
-            tunnel: carrier,
-          });
-          try {
-            await expect(fs.stat(allocated!)).rejects.toMatchObject({ code: "ENOENT" });
-            expect((await fs.stat(carrier.workspace)).isDirectory()).toBe(true);
-          } finally {
-            await next?.cleanup();
-          }
-        }
-      } finally {
-        if (allocated) {
-          await fs.rm(allocated, { recursive: true, force: true });
-        }
+      expect(carrier.allocated).toBeDefined();
+      const restarted = new NodeWorkerWorkspaceRuntime({ root: carrier.home });
+      const retention = {
+        version: 1 as const,
+        gatewayNamespace: carrier.binding.gatewayNamespace,
+        controllerId: "restarted-gateway",
+        sequence: 1,
+        retain: [{ ...carrier.binding, manifestRefs: null }],
+      };
+      await restarted.applyRetainSnapshot(retention, async () => []);
+      expect((await fs.stat(carrier.allocated!)).isDirectory()).toBe(true);
+      if (failure === "retired") {
+        await restarted.applyRetainSnapshot(
+          { ...retention, sequence: 2, retain: [] },
+          async () => [],
+        );
+        await expectMissing(carrier.allocated!);
+      } else {
+        const previousAllocation = carrier.allocated!;
+        await withResources(await transfer(carrier, snapshot), async () => {
+          await expectMissing(previousAllocation);
+          expect((await fs.stat(carrier.workspace)).isDirectory()).toBe(true);
+        });
       }
     },
   );
@@ -355,10 +398,7 @@ describe("remote-exec skill resources", () => {
     const { snapshot, binary } = await createSource();
     const carrier = await createCarrier();
     let disconnected = false;
-    const resources = await transferSkillResources({
-      snapshot,
-      remoteWorkspaceDir: carrier.workspace,
-      assertCurrent: () => {},
+    const resources = await transfer(carrier, snapshot, {
       tunnel: {
         runWorkspaceCommand: (command) => {
           if (disconnected) {
@@ -405,24 +445,18 @@ describe("remote-exec skill resources", () => {
       }
       preserved.push(directory);
     }
-    const nextTurn = {
-      remoteWorkspaceDir: carrier.workspace,
-      tunnel: carrier,
-      assertCurrent: () => {},
-    };
     await expect(
-      transferSkillResources({
-        ...nextTurn,
+      transfer(carrier, undefined, {
         assertCurrent: () => {
           throw new Error("placement retired");
         },
       }),
     ).rejects.toThrow("placement retired");
-    expect(await fs.readFile(path.join(remote, "data.bin"))).toEqual(binary);
-    await transferSkillResources(nextTurn);
-    await expect(fs.stat(path.dirname(remote))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readBinary(remote)).toEqual(binary);
+    await transfer(carrier);
+    await expectMissing(path.dirname(remote));
     for (const directory of preserved) {
-      expect(await fs.readFile(path.join(directory, "keep.txt"), "utf8")).toBe("keep");
+      expect(await readText(directory, "keep.txt")).toBe("keep");
     }
     expect((await fs.lstat(linkedRoot)).isSymbolicLink()).toBe(true);
     expect(await fs.readFile(externalMarker, "utf8")).toBe("*\n");
@@ -435,8 +469,7 @@ describe("remote-exec skill resources", () => {
     const executeReceiver = createDeferred();
     let current = true;
     let firstCommand = true;
-    const oldAttempt = transferSkillResources({
-      remoteWorkspaceDir: carrier.workspace,
+    const oldAttempt = transfer(carrier, undefined, {
       assertCurrent: () => {
         if (!current) {
           throw new Error("placement retired");
@@ -460,17 +493,12 @@ describe("remote-exec skill resources", () => {
     try {
       await dispatched.promise;
       current = false;
-      const replacement = await transferSkillResources({
-        snapshot,
-        remoteWorkspaceDir: carrier.workspace,
-        assertCurrent: () => {},
-        tunnel: carrier,
-      });
+      const replacement = await transfer(carrier, snapshot);
       const remote = replacement!.mounts[0]!.containerPath;
-      expect(await fs.readFile(path.join(remote, "data.bin"))).toEqual(binary);
+      expect(await readBinary(remote)).toEqual(binary);
       executeReceiver.resolve();
       await expect(oldAttempt).rejects.toThrow("placement retired");
-      expect(await fs.readFile(path.join(remote, "data.bin"))).toEqual(binary);
+      expect(await readBinary(remote)).toEqual(binary);
       await replacement!.cleanup();
     } finally {
       executeReceiver.resolve();
@@ -480,7 +508,7 @@ describe("remote-exec skill resources", () => {
 
   it("keeps node resources private across a project path collision and partial cleanup", async () => {
     const { snapshot, binary } = await createSource();
-    const carrier = await createNodeCarrier(temps.make("skill-resource-node-"));
+    const carrier = trackAllocation(await createNodeCarrier(temps.make("skill-resource-node-")));
     const outside = await fs.realpath(temps.make("skill-resource-project-link-"));
     await fs.writeFile(path.join(outside, "SKILL.md"), "project marker");
     await fs.symlink(
@@ -505,22 +533,17 @@ describe("remote-exec skill resources", () => {
       expect(added.code).toBe(0);
       expect.soft(tracked).toMatchObject({ code: 0, stdout: trackedBefore.stdout });
     };
-    let initializedRoot: string | undefined;
     let failCleanup = true;
     const requestSizes: number[] = [];
-    try {
-      const resources = await transferSkillResources({
-        snapshot,
-        remoteWorkspaceDir: carrier.workspace,
-        assertCurrent: () => {},
-        tunnel: {
-          runWorkspaceCommand: async (command) => {
-            requestSizes.push(Buffer.byteLength(command.input!));
-            let dispatched = command;
-            if (JSON.parse(command.input!).op === "cleanup" && failCleanup) {
-              failCleanup = false;
-              // Fail after deleting one payload, as when another resource is still open.
-              const partialCleanup = `{
+    const resources = await transfer(carrier, snapshot, {
+      tunnel: {
+        runWorkspaceCommand: async (command) => {
+          requestSizes.push(Buffer.byteLength(command.input!));
+          let dispatched = command;
+          if (JSON.parse(command.input!).op === "cleanup" && failCleanup) {
+            failCleanup = false;
+            // Fail after deleting one payload, as when another resource is still open.
+            const partialCleanup = `{
                 const fs = require('node:fs'), remove = fs.rmSync;
                 fs.rmSync = (entry, options) => {
                   if (entry === '0') {
@@ -530,69 +553,50 @@ describe("remote-exec skill resources", () => {
                   return remove(entry, options);
                 };
               }`;
-              dispatched = {
-                ...command,
-                argv: [
-                  ...command.argv.slice(0, 2),
-                  partialCleanup + command.argv[2],
-                  ...command.argv.slice(3),
-                ],
-              };
-            }
-            const result = await carrier.runWorkspaceCommand(dispatched);
-            const operation = JSON.parse(command.input!);
-            if (operation.op === "init") {
-              initializedRoot = path.join(carrier.workspace, operation.directory);
-            }
-            return result;
-          },
+            dispatched = {
+              ...command,
+              argv: [
+                ...command.argv.slice(0, 2),
+                partialCleanup + command.argv[2],
+                ...command.argv.slice(3),
+              ],
+            };
+          }
+          return carrier.runWorkspaceCommand(dispatched);
         },
-      });
-      const remote = resources!.mounts[0]!.containerPath;
-      expect(remote.startsWith(carrier.workspace)).toBe(true);
-      expect(await fs.readFile(path.join(remote, "data.bin"))).toEqual(binary);
-      expect(await fs.readFile(path.join(outside, "SKILL.md"), "utf8")).toBe("project marker");
-      const manifest = await captureWorkspaceManifest({
-        root: carrier.workspace,
-        baseCommit: null,
-      });
-      expect(manifest.manifest.entries.map((entry) => entry.path)).toEqual(["project.txt"]);
-      await expectProjectUnchanged();
-      const largestRequest = Math.max(...requestSizes);
-      expect(largestRequest).toBeLessThanOrEqual(NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES);
-      expect(NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES - largestRequest).toBeLessThan(4);
-      await expect(resources!.cleanup()).rejects.toThrow("Skill resource cleanup failed");
-      await expect(fs.stat(path.join(remote, "data.bin"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      expect(await fs.readFile(path.join(remote, "scripts/check.sh"), "utf8")).toBe(
-        "#!/bin/sh\nprintf ready\n",
-      );
-      await expectProjectUnchanged();
-      await resources!.cleanup();
-      await expect(fs.stat(initializedRoot!)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      if (initializedRoot) {
-        await fs.rm(initializedRoot, { recursive: true, force: true });
-      }
-    }
+      },
+    });
+    const remote = resources!.mounts[0]!.containerPath;
+    expect(remote.startsWith(carrier.workspace)).toBe(true);
+    expect(await readBinary(remote)).toEqual(binary);
+    expect(await readText(outside, "SKILL.md")).toBe("project marker");
+    const manifest = await captureWorkspaceManifest({
+      root: carrier.workspace,
+      baseCommit: null,
+    });
+    expect(manifest.manifest.entries.map((entry) => entry.path)).toEqual(["project.txt"]);
+    await expectProjectUnchanged();
+    const largestRequest = Math.max(...requestSizes);
+    expect(largestRequest).toBeLessThanOrEqual(NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES);
+    expect(NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES - largestRequest).toBeLessThan(4);
+    await expect(resources!.cleanup()).rejects.toThrow("Skill resource cleanup failed");
+    await expectMissing(path.join(remote, "data.bin"));
+    expect(await readText(remote, "scripts/check.sh")).toBe("#!/bin/sh\nprintf ready\n");
+    await expectProjectUnchanged();
+    await resources!.cleanup();
+    await expectMissing(carrier.allocated!);
   });
 
   it("rejects remote directory identities that collide when rounded to numbers", async () => {
     const { snapshot } = await createSource();
     const carrier = await createCarrier();
-    let initializedRoot: string | undefined;
-    try {
-      await expect(
-        transferSkillResources({
-          snapshot,
-          remoteWorkspaceDir: carrier.workspace,
-          assertCurrent: () => {},
-          tunnel: {
-            runWorkspaceCommand: async (command) => {
-              const initializing = JSON.parse(command.input!).op === "init";
-              // Model adjacent Windows file indexes while retaining the real filesystem flow.
-              const identityShim = `{
+    await expect(
+      transfer(carrier, snapshot, {
+        tunnel: {
+          runWorkspaceCommand: async (command) => {
+            const initializing = JSON.parse(command.input!).op === "init";
+            // Model adjacent Windows file indexes while retaining the real filesystem flow.
+            const identityShim = `{
                 const fs = require('node:fs');
                 for (const method of ['lstatSync', 'statSync']) {
                   const original = fs[method];
@@ -604,32 +608,20 @@ describe("remote-exec skill resources", () => {
                   };
                 }
               }`;
-              const result = await carrier.runWorkspaceCommand({
-                ...command,
-                argv: [
-                  ...command.argv.slice(0, 2),
-                  identityShim + command.argv[2],
-                  ...command.argv.slice(3),
-                ],
-              });
-              if (initializing) {
-                initializedRoot = path.join(
-                  carrier.workspace,
-                  JSON.parse(command.input!).directory,
-                );
-              }
-              return result;
-            },
+            return carrier.runWorkspaceCommand({
+              ...command,
+              argv: [
+                ...command.argv.slice(0, 2),
+                identityShim + command.argv[2],
+                ...command.argv.slice(3),
+              ],
+            });
           },
-        }),
-      ).rejects.toThrow("Skill resource transfer failed");
-      expect(initializedRoot).toBeDefined();
-      await expect(fs.readdir(initializedRoot!)).resolves.toEqual([".gitignore"]);
-    } finally {
-      if (initializedRoot) {
-        await fs.rm(initializedRoot, { recursive: true, force: true });
-      }
-    }
+        },
+      }),
+    ).rejects.toThrow("Skill resource transfer failed");
+    expect(carrier.allocated).toBeDefined();
+    await expect(fs.readdir(carrier.allocated!)).resolves.toEqual([".gitignore"]);
   });
 
   it.each(
@@ -643,16 +635,13 @@ describe("remote-exec skill resources", () => {
       const controller = new AbortController();
       const transport = await createCarrier(carrier);
       let current = true;
-      const resources = await transferSkillResources({
-        tunnel: transport,
-        remoteWorkspaceDir: transport.workspace,
+      const resources = await transfer(transport, snapshot, {
         signal: controller.signal,
         assertCurrent: () => {
           if (!current) {
             throw new Error("placement retired");
           }
         },
-        snapshot,
       });
       expect(resources).toBeDefined();
       const remote = resources!.mounts[0]!.containerPath;
@@ -662,7 +651,7 @@ describe("remote-exec skill resources", () => {
           await fs.readFile(filePath),
         );
         expect(resources!.snapshot.resolvedSkills![0]!.name).toBe("source");
-        expect(await fs.readFile(path.join(remote, "data.bin"))).toEqual(binary);
+        expect(await readBinary(remote)).toEqual(binary);
         const executableMode = (await fs.stat(path.join(remote, "scripts/check.sh"))).mode;
         const dataMode = (await fs.stat(path.join(remote, "data.bin"))).mode;
         if (process.platform === "win32") {
@@ -674,8 +663,10 @@ describe("remote-exec skill resources", () => {
         }
         const selected = resources!.snapshot.resolvedSkills![0]!;
         const instructions = await fs.readFile(filePath, "utf8");
-        expect(selected.filePath).toBe(`${remote}/SKILL.md`);
-        expect(selected.baseDir).toBe(remote);
+        expect(selected).toMatchObject({
+          filePath: `${remote}/SKILL.md`,
+          baseDir: remote,
+        });
         expect(selected.sourceInfo).toEqual(snapshot.resolvedSkills![0]!.sourceInfo);
         expect(snapshot.resolvedSkills![0]!.filePath).toBe(filePath);
         for (const prompt of [
@@ -702,13 +693,13 @@ describe("remote-exec skill resources", () => {
         }
         if (outcome === "retired") {
           await expect(resources!.cleanup()).rejects.toThrow("placement retired");
-          expect(await fs.readFile(path.join(remote, "data.bin"))).toEqual(binary);
+          expect(await readBinary(remote)).toEqual(binary);
         } else {
           await expect(resources!.cleanup()).resolves.toBeUndefined();
-          await expect(fs.stat(remote)).rejects.toMatchObject({ code: "ENOENT" });
+          await expectMissing(remote);
         }
       } finally {
-        await fs.rm(path.dirname(remote), { recursive: true, force: true });
+        await remove(path.dirname(remote));
       }
     },
   );
@@ -768,45 +759,15 @@ describe("remote-exec skill resources", () => {
   it.runIf(process.platform !== "win32")(
     "omits a stale discovered skill from the transferred snapshot and prompt",
     async () => {
-      const { workspace, snapshot } = await createSource();
-      const staleBaseDir = path.join(workspace, "skills", "stale");
-      await fs.mkdir(staleBaseDir, { recursive: true });
-      await fs.writeFile(
-        path.join(staleBaseDir, "SKILL.md"),
-        "---\ndescription: Stale resource\n---\n# Stale\n",
-      );
-      const sourceSkill = snapshot.resolvedSkills?.[0];
-      expect(sourceSkill).toBeDefined();
-      snapshot.resolvedSkills!.push({
-        ...sourceSkill!,
-        name: "stale",
-        filePath: path.join(staleBaseDir, "SKILL.md"),
-        baseDir: staleBaseDir,
-      });
-      snapshot.skills.push({
-        name: "stale",
-        skillKey: "stale",
-        primaryEnv: "STALE_SKILL_API_KEY",
-      });
-      snapshot.prompt += "\nstale";
-      await fs.rm(staleBaseDir, { recursive: true });
-      await fs.symlink(path.join(workspace, "missing-stale-target"), staleBaseDir, "dir");
-
+      const snapshot = await createStaleSource();
       const carrier = await createCarrier();
-      const resources = await transferSkillResources({
-        tunnel: carrier,
-        remoteWorkspaceDir: carrier.workspace,
-        assertCurrent: () => {},
-        snapshot,
-      });
-      const remoteRoot = path.dirname(resources!.mounts[0]!.containerPath);
-      try {
-        expect(resources!.mounts).toHaveLength(1);
-        expect(resources!.snapshot.skills.map((skill) => skill.name)).toEqual(["source"]);
-        expect(resources!.snapshot.resolvedSkills?.map((skill) => skill.name)).toEqual(["source"]);
-        expect(resources!.snapshot.prompt).not.toContain("stale");
+      await withResources(await transfer(carrier, snapshot), async (resources) => {
+        expect(resources.mounts).toHaveLength(1);
+        expect(resources.snapshot.skills.map((skill) => skill.name)).toEqual(["source"]);
+        expect(resources.snapshot.resolvedSkills?.map((skill) => skill.name)).toEqual(["source"]);
+        expect(resources.snapshot.prompt).not.toContain("stale");
         const restoreEnv = applySkillEnvOverridesFromSnapshot({
-          snapshot: resources!.snapshot,
+          snapshot: resources.snapshot,
           config: {
             skills: {
               entries: { stale: { apiKey: "must-not-apply" } }, // pragma: allowlist secret
@@ -818,62 +779,22 @@ describe("remote-exec skill resources", () => {
         } finally {
           restoreEnv();
         }
-      } finally {
-        await fs.rm(remoteRoot, { recursive: true, force: true });
-      }
+      });
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "retains a skill identity when a same-named node skill remains active",
     async () => {
-      const { workspace } = await createSource();
-      const staleBaseDir = path.join(workspace, "skills", "stale");
-      await fs.mkdir(staleBaseDir, { recursive: true });
-      await fs.writeFile(
-        path.join(staleBaseDir, "SKILL.md"),
-        "---\ndescription: Stale resource\n---\n# Stale\n",
-      );
-      const snapshot = await buildSkillSnapshot(workspace, {
-        entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
-      });
-      const sourceSkill = snapshot.resolvedSkills?.[0];
-      expect(sourceSkill).toBeDefined();
-      snapshot.skills.push({ name: "stale", skillKey: "stale" });
-      snapshot.resolvedSkills?.push(
-        {
-          ...structuredClone(sourceSkill!),
-          name: "stale",
-          filePath: path.join(staleBaseDir, "SKILL.md"),
-          baseDir: staleBaseDir,
-        },
-        {
-          ...structuredClone(sourceSkill!),
-          name: "stale",
-          filePath: "node://worker/skills/stale/SKILL.md",
-          baseDir: "node://worker/skills/stale",
-        },
-      );
-      await fs.rm(staleBaseDir, { recursive: true });
-      await fs.symlink(path.join(workspace, "missing-stale-target"), staleBaseDir, "dir");
-
+      const snapshot = await createStaleSource(true);
       const carrier = await createCarrier();
-      const resources = await transferSkillResources({
-        tunnel: carrier,
-        remoteWorkspaceDir: carrier.workspace,
-        assertCurrent: () => {},
-        snapshot,
-      });
-      const remoteRoot = path.dirname(resources!.mounts[0]!.containerPath);
-      try {
-        expect(resources!.snapshot.skills.map((skill) => skill.name)).toEqual(["source", "stale"]);
-        expect(resources!.snapshot.resolvedSkills?.map((skill) => skill.name)).toEqual([
+      await withResources(await transfer(carrier, snapshot), async (resources) => {
+        expect(resources.snapshot.skills.map((skill) => skill.name)).toEqual(["source", "stale"]);
+        expect(resources.snapshot.resolvedSkills?.map((skill) => skill.name)).toEqual([
           "source",
           "stale",
         ]);
-      } finally {
-        await fs.rm(remoteRoot, { recursive: true, force: true });
-      }
+      });
     },
   );
 
@@ -890,47 +811,31 @@ describe("remote-exec skill resources", () => {
       const transport = await createCarrier(carrier);
       const controller = new AbortController();
       let runCurrent = true;
-      let initializedRoot: string | undefined;
-      try {
-        await expect(
-          transferSkillResources({
-            snapshot,
-            remoteWorkspaceDir: transport.workspace,
-            signal: controller.signal,
-            assertCurrent: () => {},
-            assertRunCurrent: () => {
-              if (!runCurrent) {
-                throw new DOMException("run authority closed", "AbortError");
+      await expect(
+        transfer(transport, snapshot, {
+          signal: controller.signal,
+          assertRunCurrent: () => {
+            if (!runCurrent) {
+              throw new DOMException("run authority closed", "AbortError");
+            }
+          },
+          tunnel: {
+            runWorkspaceCommand: async (command) => {
+              const result = await transport.runWorkspaceCommand(command);
+              if (JSON.parse(command.input!).op === phase) {
+                if (revocation === "abort") {
+                  controller.abort();
+                } else {
+                  runCurrent = false;
+                }
               }
+              return result;
             },
-            tunnel: {
-              runWorkspaceCommand: async (command) => {
-                const result = await transport.runWorkspaceCommand(command);
-                if (JSON.parse(command.input!).op === "init") {
-                  initializedRoot = path.join(
-                    transport.workspace,
-                    JSON.parse(command.input!).directory,
-                  );
-                }
-                if (JSON.parse(command.input!).op === phase) {
-                  if (revocation === "abort") {
-                    controller.abort();
-                  } else {
-                    runCurrent = false;
-                  }
-                }
-                return result;
-              },
-            },
-          }),
-        ).rejects.toMatchObject({ name: "AbortError" });
-        expect(initializedRoot).toBeDefined();
-        await expect(fs.stat(initializedRoot!)).rejects.toMatchObject({ code: "ENOENT" });
-      } finally {
-        if (initializedRoot) {
-          await fs.rm(initializedRoot, { recursive: true, force: true });
-        }
-      }
+          },
+        }),
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(transport.allocated).toBeDefined();
+      await expectMissing(transport.allocated!);
     },
   );
 });

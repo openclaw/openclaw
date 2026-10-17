@@ -1,16 +1,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import {
   identifiedClient,
   listSessions,
@@ -19,7 +17,10 @@ import {
 } from "../server-methods/sessions-read-cache.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import {
+  advancePlacementFixtureToActive,
+  createEnvironmentStoreFixture,
+} from "./placement-test-fixtures.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
 const SESSION = {
@@ -42,30 +43,19 @@ it.each([
       const database = openOpenClawStateDatabase();
       const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
       const environmentId = "worker-unchanged";
-      await store.createIntent({
-        environmentId,
-        providerId: "fake-provider",
-        profileId: "test-profile",
-        profileSnapshot: { settings: {}, lifetime: { idleMinutes: 10 } },
-        provisionOperationId: `provision:${environmentId}`,
+      const { seedBootstrapping } = createEnvironmentStoreFixture({
+        getStore: () => store,
+        getDatabase: () => database,
+        now: () => 1_000,
       });
-      await store.transition({ environmentId, from: "requested", to: "provisioning" });
-      await store.transition({
+      await seedBootstrapping(environmentId, "lease-unchanged");
+      const host = {
         environmentId,
-        from: "provisioning",
-        to: "bootstrapping",
-        patch: {
-          leaseId: "lease-unchanged",
-          sharedHost: false,
-          sshEndpoint: {
-            host: "worker.example.test",
-            port: 22,
-            user: "openclaw",
-            hostKey: "ssh-ed25519 AAAA",
-            keyRef: { source: "file", provider: "worker-keys", id: "/test-key" },
-          },
-        },
-      });
+        state: "bootstrapping" as const,
+        leaseId: "lease-unchanged",
+        sharedHost: false,
+      };
+      await store.reconcileSharedHost(host);
       const context = requestContext(await seedSessions());
       const client = identifiedClient("owner@example.com");
       const request = { limit: 1, archived: "all" as const };
@@ -77,12 +67,7 @@ it.each([
       if (operation === "reopening the store") {
         await createWorkerEnvironmentStore({ database, now: () => 1_000 });
       } else if (operation === "reconciling an unchanged host") {
-        await store.reconcileSharedHost({
-          environmentId,
-          state: "bootstrapping",
-          leaseId: "lease-unchanged",
-          sharedHost: false,
-        });
+        await store.reconcileSharedHost(host);
       } else {
         await store.revokeEnvironmentCredential(environmentId);
       }
@@ -98,13 +83,7 @@ it.each([
 
 describe("worker store session change publications", () => {
   let database: OpenClawStateDatabase;
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async () => {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      cleanup();
-    }),
-  );
+  const tempDirs = useStateDatabaseTempDirs();
 
   beforeEach(() => {
     const root = tempDirs.make("openclaw-worker-store-changes-");
@@ -115,86 +94,66 @@ describe("worker store session change publications", () => {
     const store = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
     const transactions: boolean[] = [];
     const committedStates: unknown[] = [];
-    const unsubscribe = sessionChanges.subscribe((change) => {
-      if ("all" in change && change.scope === "worker-environments") {
-        transactions.push(database.db.isTransaction);
-        committedStates.push(
-          database.db
-            .prepare("SELECT state FROM worker_environments WHERE environment_id = ?")
-            .get("worker-1"),
-        );
-      }
-    });
-    try {
-      await store.createSessionAttachmentIntent(
-        {
-          ...SESSION,
-          environmentId: "worker-1",
-          providerId: "fake-provider",
-          profileId: "test-profile",
-          profileSnapshot: { settings: { region: "test" }, lifetime: { idleMinutes: 10 } },
-          provisionOperationId: "provision:worker-1",
-        },
-        () => {},
-      );
-      expect(transactions).toEqual([false]);
-      database.db.exec(`CREATE TRIGGER reject_environment_error
+    onTestFinished(
+      sessionChanges.subscribe((change) => {
+        if ("all" in change && change.scope === "worker-environments") {
+          transactions.push(database.db.isTransaction);
+          committedStates.push(
+            database.db
+              .prepare("SELECT state FROM worker_environments WHERE environment_id = ?")
+              .get("worker-1"),
+          );
+        }
+      }),
+    );
+    await store.createSessionAttachmentIntent(
+      {
+        ...SESSION,
+        environmentId: "worker-1",
+        providerId: "fake-provider",
+        profileId: "test-profile",
+        profileSnapshot: { settings: { region: "test" }, lifetime: { idleMinutes: 10 } },
+        provisionOperationId: "provision:worker-1",
+      },
+      () => {},
+    );
+    expect(transactions).toEqual([false]);
+    database.db.exec(`CREATE TRIGGER reject_environment_error
         AFTER UPDATE OF last_error ON worker_environments
         BEGIN SELECT RAISE(ABORT, 'rollback environment'); END`);
-      await expect(
-        store.recordError({ environmentId: "worker-1", state: "requested", error: "rollback" }),
-      ).rejects.toThrow("rollback environment");
-      database.db.exec("DROP TRIGGER reject_environment_error");
-      expect(transactions).toEqual([false]);
-      expect(store.get("worker-1")?.lastError).toBeNull();
-      await store.closeSessionAttachment(SESSION.sessionId);
-      expect(transactions).toEqual([false, false]);
-      await store.closeSessionAttachment(SESSION.sessionId);
-      expect(transactions).toEqual([false, false]);
-      await store.transition({ environmentId: "worker-1", from: "requested", to: "failed" });
-      expect(await store.pruneTerminalEnvironments({ nowMs: 8 * DAY_MS })).toBe(1);
-      expect(transactions).toEqual([false, false, false, false]);
-      expect(committedStates).toEqual([
-        { state: "requested" },
-        { state: "requested" },
-        { state: "failed" },
-        undefined,
-      ]);
-    } finally {
-      unsubscribe();
-    }
+    await expect(
+      store.recordError({ environmentId: "worker-1", state: "requested", error: "rollback" }),
+    ).rejects.toThrow("rollback environment");
+    database.db.exec("DROP TRIGGER reject_environment_error");
+    expect(transactions).toEqual([false]);
+    expect(store.get("worker-1")?.lastError).toBeNull();
+    await store.closeSessionAttachment(SESSION.sessionId);
+    expect(transactions).toEqual([false, false]);
+    await store.closeSessionAttachment(SESSION.sessionId);
+    expect(transactions).toEqual([false, false]);
+    await store.transition({ environmentId: "worker-1", from: "requested", to: "failed" });
+    expect(await store.pruneTerminalEnvironments({ nowMs: 8 * DAY_MS })).toBe(1);
+    expect(transactions).toEqual([false, false, false, false]);
+    expect(committedStates).toEqual([
+      { state: "requested" },
+      { state: "requested" },
+      { state: "failed" },
+      undefined,
+    ]);
   });
 
   it("publishes pending-only and conflict changes after their owner commits", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-    seedAttachedPlacementEnvironment(database, {
-      environmentId: `environment-${SESSION.sessionId}`,
-      sessionId: SESSION.sessionId,
-      ownerEpoch: 7,
-    });
-    let active = await store.startDispatch({ ...SESSION, executionMode: "remote-exec" });
-    for (const step of [
-      { to: "provisioning", patch: { environmentId: `environment-${SESSION.sessionId}` } },
-      { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
+    const active = await advancePlacementFixtureToActive(
+      store,
+      database,
+      { ...SESSION, executionMode: "remote-exec" },
       {
-        to: "starting",
-        patch: {
-          workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-          remoteWorkspaceDir: `/workspace/${SESSION.sessionId}`,
-        },
+        environmentId: `environment-${SESSION.sessionId}`,
+        remoteWorkspaceDir: `/workspace/${SESSION.sessionId}`,
+        seedEnvironment: "before-dispatch",
       },
-      { to: "active", patch: { activeOwnerEpoch: 7 } },
-    ] as const) {
-      active = await store.transition({
-        sessionId: SESSION.sessionId,
-        from: active.state,
-        expectedGeneration: active.generation,
-        ...step,
-      });
-    }
-    if (active.state !== "active") {
-      throw new Error("expected active worker placement");
-    }
+    );
     const claim = await store.claimWorkspaceMutationResult({
       ...SESSION,
       owner: {
@@ -235,13 +194,13 @@ describe("worker store session change publications", () => {
         throw new Error("rollback pending row");
       }
     };
+    const isClaimCommit = (request: operationAdmission.SqliteWorkerAdmissionRequest) =>
+      request.stage === "commit" &&
+      isRecord(request.facts) &&
+      isRecord(request.facts.placement) &&
+      request.facts.placement.sessionId === claim.sessionId;
     const admission = probe.admission(operationAdmission, (request, grant, admit) => {
-      if (
-        request.stage === "commit" &&
-        isRecord(request.facts) &&
-        isRecord(request.facts.placement) &&
-        request.facts.placement.sessionId === claim.sessionId
-      ) {
+      if (isClaimCommit(request)) {
         refused++;
         expect(observed).toEqual([]);
         current = false;
@@ -265,12 +224,7 @@ describe("worker store session change publications", () => {
     let commitGrants = 0;
     const successfulAdmission = probe.admission(operationAdmission, (request, grant, admit) => {
       admit(request, () => {
-        if (
-          request.stage === "commit" &&
-          isRecord(request.facts) &&
-          isRecord(request.facts.placement) &&
-          request.facts.placement.sessionId === claim.sessionId
-        ) {
+        if (isClaimCommit(request)) {
           commitGrants++;
           expect(authority.isCurrent()).toBe(true);
           expect(() => observation.assertCurrent()).toThrow("placement authority changed");
