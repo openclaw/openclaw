@@ -227,9 +227,6 @@ export async function prepareGatewayClose(
   const { measureCloseStep, shutdownStep } = createCloseSteps(reason, warnings);
   // Fence async session-state writes before the first awaited shutdown step.
   fenceSessionSuspensionWritesForGatewayShutdown();
-  // Debug-level: the signal handler already announced the stop/restart at
-  // info, and the completion line below reports duration and outcome.
-  shutdownLog.debug(`shutdown started: ${reason}`);
 
   const triggerLifecycleHook = (action: "shutdown" | "pre-restart", timeoutMs: number) => {
     const hookName = `gateway:${action}` as const;

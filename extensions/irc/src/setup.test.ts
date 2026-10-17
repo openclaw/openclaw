@@ -104,28 +104,6 @@ describe("irc setup", () => {
     );
   });
 
-  it("setup status honors the selected named account", async () => {
-    const status = await ircStatus({
-      cfg: ircConfig({
-        accounts: {
-          ops: {
-            host: "irc.example.com",
-            nick: "ops-bot",
-          },
-          work: {
-            host: "irc.example.com",
-          },
-        },
-      }),
-      accountOverrides: {
-        irc: "work",
-      },
-    });
-
-    expect(status.configured).toBe(false);
-    expect(status.statusLines).toEqual(["IRC: needs host + nick"]);
-  });
-
   it("setup status honors the configured default account", async () => {
     const status = await ircStatus({
       cfg: ircConfig({

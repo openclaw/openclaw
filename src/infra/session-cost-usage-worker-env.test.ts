@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it as test, vi } from "vitest";
 import * as configEnv from "../config/config-env-vars.js";
+import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { resolveSqliteTranscriptScope } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction as append } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -80,6 +81,81 @@ it("refreshes retained colon session IDs", async ({ usage: { scope } }) => {
   write((owner) => append(owner, transcript, events, options), { ...scope, path: database.path });
   await refreshed({ ...scope, config: {} });
   await expectSummary(`sqlite:main:legacy:session:${database.path}`);
+});
+
+it("inventories retained usage by transcript recency and logical agent after writes", async ({
+  usage: { state, scope },
+}) => {
+  const storePath = state.path("shared.sqlite");
+  const database = open(scope, storePath);
+  const appendUsage = (
+    agentId: string,
+    sessionId: string,
+    sessionKey: string,
+    updatedAt: number,
+  ) => {
+    const transcript = resolveSqliteTranscriptScope({
+      ...scope,
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(updatedAt);
+    try {
+      write(
+        (owner) =>
+          append(
+            owner,
+            transcript,
+            [{ type: "message", id: `${sessionId}-${updatedAt}`, message: { role: "user" } }],
+            { scheduleProjectionReconcile: false },
+          ),
+        { ...scope, path: database.path },
+      );
+    } finally {
+      clock.mockRestore();
+    }
+  };
+  appendUsage("main", "old", "agent:main:old", 1000);
+  appendUsage("main", "second", "agent:main:second", 2000);
+  appendUsage("main", "first", "agent:main:first", 2000);
+  appendUsage("main", "hidden", "agent:main:internal-session-effects:hidden", 3000);
+  appendUsage("other", "other", "agent:other:other", 3000);
+  write(
+    (owner) => {
+      writeSessionEntry(owner, "agent:main:metadata-only", {
+        sessionId: "metadata-only",
+        updatedAt: 9000,
+      });
+    },
+    { ...scope, path: database.path },
+  );
+  const prepared = prepare({ ...scope, storePath });
+  await expect(run(prepared, { kind: "inventory" })).resolves.toMatchObject({
+    kind: "inventory",
+    files: [
+      { sessionId: "first", mtimeMs: 2000 },
+      { sessionId: "second", mtimeMs: 2000 },
+      { sessionId: "old", mtimeMs: 1000 },
+    ],
+  });
+  await expect(run(prepared, { kind: "inventory", minMtimeMs: 2000 })).resolves.toMatchObject({
+    kind: "inventory",
+    files: [
+      { sessionId: "first", mtimeMs: 2000 },
+      { sessionId: "second", mtimeMs: 2000 },
+    ],
+  });
+  appendUsage("main", "old", "agent:main:old", 4000);
+  await expect(run(prepared, { kind: "inventory", minMtimeMs: 2000 })).resolves.toMatchObject({
+    kind: "inventory",
+    files: [
+      { sessionId: "old", mtimeMs: 4000 },
+      { sessionId: "first", mtimeMs: 2000 },
+      { sessionId: "second", mtimeMs: 2000 },
+    ],
+  });
 });
 
 it("keeps SQLite selectors distinct", async ({ usage: { state, scope } }) => {

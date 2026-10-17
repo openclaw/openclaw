@@ -235,6 +235,8 @@ test("retains ACP batch bounds while clean lists and canonical metadata updates 
       });
       projection = await createSessionRowProjection({ cfg });
       await projection.ensureMaterialized();
+      await listProjectedSessions({ projection, opts: { agentId: "default", limit: 3 } });
+      await listProjectedSessions({ projection, opts: { agentId: "runtime", limit: 1 } });
       acpSelects.counts.metadata = 0;
       const rows = vi.spyOn(rowProjection, "readSessionRowInputs");
       const metadataReads = vi.spyOn(acpSessionMeta, "readAcpSessionMetaForEntryAsync");

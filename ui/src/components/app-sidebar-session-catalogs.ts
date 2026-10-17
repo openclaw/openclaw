@@ -197,10 +197,14 @@ export function projectSidebarSessionCatalogs(
   });
 }
 
+export type CatalogRowControls = Partial<
+  Record<"link" | "children" | "pin" | "archive" | "menu" | "catalogMenu", HTMLElement>
+>;
+
 export type CatalogBackingSessionDisplay = {
   catalogIdentityKey: string;
   catalogMenu: CatalogSessionMenuRequest;
-  rowRef?: (element: Element | undefined) => void;
+  rowRef?: (element: Element | undefined, controls: CatalogRowControls) => void;
   pullRequest?: SessionCatalogSession["pullRequest"];
 };
 

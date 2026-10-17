@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
+import { readdirSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 const usage =
-  "Usage: node scripts/test-database-conformance.mjs --engine postgres --connection <dsn> [--shard infra|integrations] [-- <targets and test options>]";
+  "Usage: node scripts/test-database-conformance.mjs --engine postgres [--connection <dsn> | --list] [--shard infra|integrations] [-- <targets and test options>]";
 const separator = process.argv.indexOf("--", 2);
 const forwarded = separator < 0 ? [] : process.argv.slice(separator + 1);
 const explicitTargets = forwarded.length > 0 && !forwarded[0].startsWith("-");
@@ -17,12 +18,16 @@ try {
       engine: { type: "string" },
       connection: { type: "string" },
       shard: { type: "string" },
+      list: { type: "boolean", default: false },
     },
   }));
-  if (values.engine !== "postgres" || !values.connection) {
+  if (values.engine !== "postgres" || (!values.connection && !values.list)) {
     throw new Error();
   }
-  if (!["postgres:", "postgresql:"].includes(new URL(values.connection).protocol)) {
+  if (
+    values.connection &&
+    !["postgres:", "postgresql:"].includes(new URL(values.connection).protocol)
+  ) {
     throw new Error();
   }
   if (
@@ -34,6 +39,48 @@ try {
 } catch {
   console.error(usage);
   process.exit(2);
+}
+
+let targets = explicitTargets
+  ? []
+  : [
+      "extensions/workboard",
+      "extensions/logbook/src/postgres-store.test.ts",
+      "extensions/matrix/src/matrix/account-state.postgres.test.ts",
+      "extensions/team-reports/src/postgres-store.test.ts",
+      "src/infra/postgres-sync",
+      ...readdirSync(new URL("../src/infra/database-engine/", import.meta.url), { recursive: true })
+        .filter((file) => file.endsWith(".test.ts"))
+        .map((file) => `src/infra/database-engine/${file.replaceAll("\\", "/")}`)
+        .toSorted(),
+      "src/commands/doctor-database-diagnostics.postgres.test.ts",
+      "src/infra/update-candidate-state.postgres.test.ts",
+      "src/state/openclaw-state-db.postgres.test.ts",
+      "src/state/openclaw-agent-db.postgres.test.ts",
+      "src/state/openclaw-agent-db-engine.postgres.test.ts",
+      "extensions/memory-core/src/memory/manager-embedding-cache.postgres.test.ts",
+      "extensions/memory-core/src/memory/manager-source-index-kernel.postgres.test.ts",
+      "extensions/memory-core/src/memory/manager-publication.postgres.test.ts",
+      "extensions/memory-core/src/memory/manager-search.postgres.test.ts",
+      "extensions/memory-core/src/tools.postgres.test.ts",
+      "extensions/memory-core/src/standing-intents.postgres.test.ts",
+      "extensions/memory-core/src/memory-forget.postgres.test.ts",
+      "src/gateway/server-database-engine.postgres.test.ts",
+      "src/transcripts/meeting-chronology.postgres.test.ts",
+    ];
+if (values.shard) {
+  targets = targets.filter((target) => {
+    // Real command integrations share the integration shard; newly added suites inherit it.
+    const commandIntegration =
+      target.startsWith("src/infra/database-engine/") && target.endsWith(".integration.test.ts");
+    const infra =
+      !commandIntegration && (target.startsWith("src/infra/") || target.startsWith("src/state/"));
+    return values.shard === "infra" ? infra : !infra;
+  });
+}
+if (values.list) {
+  console.log(JSON.stringify(explicitTargets ? forwarded : [...targets, ...forwarded], null, 2));
+  process.exit(0);
 }
 
 const preload = new URL("./test-database-conformance-preload.mjs", import.meta.url);
@@ -56,36 +103,6 @@ for (const output of [catalog.stdout, catalog.stderr]) {
 }
 if (catalog.status !== 0) {
   process.exit(catalog.status ?? 1);
-}
-let targets = explicitTargets
-  ? []
-  : [
-      "extensions/workboard",
-      "extensions/logbook/src/postgres-store.test.ts",
-      "extensions/matrix/src/matrix/account-state.postgres.test.ts",
-      "extensions/team-reports/src/postgres-store.test.ts",
-      "src/infra/postgres-sync",
-      "src/infra/database-engine",
-      "src/commands/doctor-database-diagnostics.postgres.test.ts",
-      "src/infra/update-candidate-state.postgres.test.ts",
-      "src/state/openclaw-state-db.postgres.test.ts",
-      "src/state/openclaw-agent-db.postgres.test.ts",
-      "src/state/openclaw-agent-db-engine.postgres.test.ts",
-      "extensions/memory-core/src/memory/manager-embedding-cache.postgres.test.ts",
-      "extensions/memory-core/src/memory/manager-source-index-kernel.postgres.test.ts",
-      "extensions/memory-core/src/memory/manager-publication.postgres.test.ts",
-      "extensions/memory-core/src/memory/manager-search.postgres.test.ts",
-      "extensions/memory-core/src/tools.postgres.test.ts",
-      "extensions/memory-core/src/standing-intents.postgres.test.ts",
-      "extensions/memory-core/src/memory-forget.postgres.test.ts",
-      "src/gateway/server-database-engine.postgres.test.ts",
-      "src/transcripts/meeting-chronology.postgres.test.ts",
-    ];
-if (values.shard) {
-  targets = targets.filter((target) => {
-    const infra = target.startsWith("src/infra/") || target.startsWith("src/state/");
-    return values.shard === "infra" ? infra : !infra;
-  });
 }
 const child = spawn(
   process.execPath,

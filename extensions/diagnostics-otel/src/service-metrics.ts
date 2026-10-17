@@ -54,6 +54,15 @@ export function createDiagnosticsMetrics(
       "gateway.rpc.requests",
       "Authenticated Gateway WebSocket requests received",
     ),
+    gatewayWsSessionEventFramesCounter: createCounter(
+      "gateway.ws.session_event_frames",
+      "Outbound session event frames by reason and exact message subscription per socket",
+    ),
+    gatewayWsSessionEventBytesCounter: createCounter(
+      "gateway.ws.session_event_bytes",
+      "Encoded outbound session event bytes by reason and exact message subscription per socket",
+      "By",
+    ),
     gatewayWsEventsCounter: createCounter(
       "gateway.ws.events",
       "Outbound Gateway WebSocket event frames accepted by the sender per socket",
@@ -66,6 +75,21 @@ export function createDiagnosticsMetrics(
     gatewayWsOperatorConnectionsGauge: meter.createGauge(
       `${metricNamePrefix}gateway.ws.operator_connections`,
       { unit: "1", description: "Connected authenticated Gateway operator WebSockets" },
+    ),
+    sessionsListRetainedViewsGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_views`,
+      { unit: "1", description: "Retained session-list views across all publications" },
+    ),
+    sessionsListRetainedRefsGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_refs`,
+      {
+        unit: "1",
+        description: "Row references and selection entries retained by session-list views",
+      },
+    ),
+    sessionsListRetainedBytesGauge: meter.createGauge(
+      `${metricNamePrefix}sessions.list.retained_bytes`,
+      { unit: "By", description: "Estimated memory retained by session-list views" },
     ),
     gatewayRpcOutcomesCounter: createCounter(
       "gateway.rpc.outcomes",
