@@ -8,14 +8,41 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
 
+async function writeEntity(
+  rootDir: string,
+  name: string,
+  metadata: Record<string, unknown> = {},
+  body = `# ${name}\n`,
+) {
+  const targetPath = path.join(rootDir, "entities", `${name.toLowerCase()}.md`);
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(
+    targetPath,
+    renderWikiMarkdown({
+      frontmatter: {
+        pageType: "entity",
+        id: `entity.${name.toLowerCase()}`,
+        title: name,
+        ...metadata,
+      },
+      body,
+    }),
+    "utf8",
+  );
+  return targetPath;
+}
+const synthesisInput = {
+  title: "Alpha Synthesis",
+  body: "Alpha summary body.",
+  sourceIds: ["source.alpha"],
+};
+
 describe("applyMemoryWikiMutation", () => {
   it("normalizes string confidence in wiki mutations", () => {
     expect(
       normalizeMemoryWikiMutationInput({
         op: "create_synthesis",
-        title: "Alpha Synthesis",
-        body: "Alpha summary body.",
-        sourceIds: ["source.alpha"],
+        ...synthesisInput,
         confidence: "0.7",
       }),
     ).toMatchObject({ confidence: 0.7 });
@@ -33,9 +60,7 @@ describe("applyMemoryWikiMutation", () => {
     expect(
       normalizeMemoryWikiMutationInput({
         op: "synthesis",
-        title: "Alpha Synthesis",
-        body: "Alpha summary body.",
-        sourceIds: ["source.alpha"],
+        ...synthesisInput,
       }),
     ).toMatchObject({
       op: "create_synthesis",
@@ -57,31 +82,28 @@ describe("applyMemoryWikiMutation", () => {
   it("creates synthesis pages with managed summary blocks and refreshed indexes", async () => {
     const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-" });
 
+    const metadata = {
+      sourceIds: ["source.alpha", "source.beta"],
+      claims: [
+        {
+          id: "claim.alpha.postgres",
+          text: "Alpha uses PostgreSQL for production writes.",
+          status: "supported",
+          confidence: 0.86,
+          evidence: [{ sourceId: "source.alpha", lines: "12-18", weight: 0.9 }],
+        },
+      ],
+      contradictions: ["Needs a better primary source"],
+      questions: ["What changed after launch?"],
+      confidence: 0.7,
+    };
     const result = await applyMemoryWikiMutation({
       config,
       mutation: {
         op: "create_synthesis",
         title: "Alpha Synthesis",
         body: "Alpha summary body.",
-        sourceIds: ["source.alpha", "source.beta"],
-        claims: [
-          {
-            id: "claim.alpha.postgres",
-            text: "Alpha uses PostgreSQL for production writes.",
-            status: "supported",
-            confidence: 0.86,
-            evidence: [
-              {
-                sourceId: "source.alpha",
-                lines: "12-18",
-                weight: 0.9,
-              },
-            ],
-          },
-        ],
-        contradictions: ["Needs a better primary source"],
-        questions: ["What changed after launch?"],
-        confidence: 0.7,
+        ...structuredClone(metadata),
       },
     });
 
@@ -93,36 +115,14 @@ describe("applyMemoryWikiMutation", () => {
     const page = await fs.readFile(path.join(rootDir, result.pagePath), "utf8");
     const parsed = parseWikiMarkdown(page);
 
-    expect(parsed.frontmatter.pageType).toBe("synthesis");
-    expect(parsed.frontmatter.id).toBe("synthesis.alpha-synthesis");
-    expect(parsed.frontmatter.title).toBe("Alpha Synthesis");
-    expect(parsed.frontmatter.sourceIds).toEqual(["source.alpha", "source.beta"]);
-    expect(parsed.frontmatter.claims).toHaveLength(1);
-    const claims = parsed.frontmatter.claims as
-      | Array<{
-          confidence?: number;
-          evidence?: Array<Record<string, unknown>>;
-          id?: string;
-          status?: string;
-          text?: string;
-        }>
-      | undefined;
-    const claim = claims?.[0];
-    expect(claim?.id).toBe("claim.alpha.postgres");
-    expect(claim?.text).toBe("Alpha uses PostgreSQL for production writes.");
-    expect(claim?.status).toBe("supported");
-    expect(claim?.confidence).toBe(0.86);
-    expect(claim?.evidence).toEqual([
-      {
-        sourceId: "source.alpha",
-        lines: "12-18",
-        weight: 0.9,
-      },
-    ]);
-    expect(parsed.frontmatter.contradictions).toEqual(["Needs a better primary source"]);
-    expect(parsed.frontmatter.questions).toEqual(["What changed after launch?"]);
-    expect(parsed.frontmatter.confidence).toBe(0.7);
-    expect(parsed.frontmatter.status).toBe("active");
+    expect(parsed.frontmatter).toMatchObject({
+      pageType: "synthesis",
+      id: "synthesis.alpha-synthesis",
+      title: "Alpha Synthesis",
+      ...metadata,
+      claims: metadata.claims.map((claim) => expect.objectContaining(claim)),
+      status: "active",
+    });
     expect(parsed.body).toContain("## Summary");
     expect(parsed.body).toContain("<!-- openclaw:wiki:generated:start -->");
     expect(parsed.body).toContain("Alpha summary body.");
@@ -157,15 +157,7 @@ describe("applyMemoryWikiMutation", () => {
       });
       await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });
       const targetPath = path.join(rootDir, "syntheses", "conflicted.md");
-      const original = [
-        "---",
-        ...frontmatterLines,
-        "---",
-        "",
-        "# Conflicted",
-        "",
-        "Keep this body.",
-      ].join("\n");
+      const original = `---\n${frontmatterLines.join("\n")}\n---\n\n# Conflicted\n\nKeep this body.`;
       await fs.writeFile(targetPath, original, "utf8");
 
       await expect(
@@ -188,45 +180,35 @@ describe("applyMemoryWikiMutation", () => {
       prefix: "memory-wiki-apply-",
     });
 
-    const targetPath = path.join(rootDir, "entities", "alpha.md");
-    await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    await fs.writeFile(
-      targetPath,
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "entity",
-          id: "entity.alpha",
-          title: "Alpha",
-          sourceIds: ["source.old"],
-          confidence: 0.3,
-        },
-        body: `# Alpha
-
-## Notes
-<!-- openclaw:human:start -->
-keep this note
-<!-- openclaw:human:end -->
-`,
-      }),
-      "utf8",
+    const targetPath = await writeEntity(
+      rootDir,
+      "Alpha",
+      {
+        sourceIds: ["source.old"],
+        confidence: 0.3,
+      },
+      "# Alpha\n\n## Notes\n<!-- openclaw:human:start -->\nkeep this note\n<!-- openclaw:human:end -->\n",
     );
 
+    const metadata = {
+      sourceIds: ["source.new"],
+      claims: [
+        {
+          id: "claim.alpha.status",
+          text: "Alpha is still active for existing tenants.",
+          status: "contested",
+          evidence: [{ sourceId: "source.new", lines: "4-9" }],
+        },
+      ],
+      contradictions: ["Conflicts with source.beta"],
+      questions: ["Is Alpha still active?"],
+    };
     const result = await applyMemoryWikiMutation({
       config,
       mutation: {
         op: "update_metadata",
         lookup: "entity.alpha",
-        sourceIds: ["source.new"],
-        claims: [
-          {
-            id: "claim.alpha.status",
-            text: "Alpha is still active for existing tenants.",
-            status: "contested",
-            evidence: [{ sourceId: "source.new", lines: "4-9" }],
-          },
-        ],
-        contradictions: ["Conflicts with source.beta"],
-        questions: ["Is Alpha still active?"],
+        ...structuredClone(metadata),
         confidence: null,
         status: "review",
       },
@@ -239,27 +221,14 @@ keep this note
     const updated = await fs.readFile(targetPath, "utf8");
     const parsed = parseWikiMarkdown(updated);
 
-    expect(parsed.frontmatter.pageType).toBe("entity");
-    expect(parsed.frontmatter.id).toBe("entity.alpha");
-    expect(parsed.frontmatter.title).toBe("Alpha");
-    expect(parsed.frontmatter.sourceIds).toEqual(["source.new"]);
-    expect(parsed.frontmatter.claims).toHaveLength(1);
-    const claims = parsed.frontmatter.claims as
-      | Array<{
-          evidence?: Array<Record<string, unknown>>;
-          id?: string;
-          status?: string;
-          text?: string;
-        }>
-      | undefined;
-    const claim = claims?.[0];
-    expect(claim?.id).toBe("claim.alpha.status");
-    expect(claim?.text).toBe("Alpha is still active for existing tenants.");
-    expect(claim?.status).toBe("contested");
-    expect(claim?.evidence).toEqual([{ sourceId: "source.new", lines: "4-9" }]);
-    expect(parsed.frontmatter.contradictions).toEqual(["Conflicts with source.beta"]);
-    expect(parsed.frontmatter.questions).toEqual(["Is Alpha still active?"]);
-    expect(parsed.frontmatter.status).toBe("review");
+    expect(parsed.frontmatter).toMatchObject({
+      pageType: "entity",
+      id: "entity.alpha",
+      title: "Alpha",
+      ...metadata,
+      claims: metadata.claims.map((claim) => expect.objectContaining(claim)),
+      status: "review",
+    });
     expect(parsed.frontmatter).not.toHaveProperty("confidence");
     expect(parsed.body).toContain("keep this note");
     expect(parsed.body).toContain("<!-- openclaw:human:start -->");
@@ -272,55 +241,21 @@ keep this note
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-apply-concurrent-",
     });
-    const targetPath = path.join(rootDir, "entities", "shared.md");
-    await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    await fs.writeFile(
-      targetPath,
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "entity",
-          id: "entity.shared",
-          title: "Shared",
-        },
-        body: "# Shared\n",
-      }),
-      "utf8",
-    );
+    const targetPath = await writeEntity(rootDir, "Shared");
 
-    await Promise.all([
-      applyMemoryWikiMutation({
-        config,
-        mutation: {
-          op: "update_metadata",
-          lookup: "entity.shared",
-          sourceIds: ["source.concurrent"],
-        },
-      }),
-      applyMemoryWikiMutation({
-        config,
-        mutation: {
-          op: "update_metadata",
-          lookup: "entity.shared",
-          questions: ["Which agent owns the next action?"],
-        },
-      }),
-      applyMemoryWikiMutation({
-        config,
-        mutation: {
-          op: "update_metadata",
-          lookup: "entity.shared",
-          confidence: 0.9,
-        },
-      }),
-      applyMemoryWikiMutation({
-        config,
-        mutation: {
-          op: "update_metadata",
-          lookup: "entity.shared",
-          status: "review",
-        },
-      }),
-    ]);
+    await Promise.all(
+      [
+        { sourceIds: ["source.concurrent"] },
+        { questions: ["Which agent owns the next action?"] },
+        { confidence: 0.9 },
+        { status: "review" },
+      ].map((metadata) =>
+        applyMemoryWikiMutation({
+          config,
+          mutation: { op: "update_metadata", lookup: "entity.shared", ...metadata },
+        }),
+      ),
+    );
 
     const parsed = parseWikiMarkdown(await fs.readFile(targetPath, "utf8"));
     expect(parsed.frontmatter).toMatchObject({

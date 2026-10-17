@@ -1,15 +1,11 @@
 // Memory Wiki tests cover agent-scoped vault isolation through the public tools.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
 } from "openclaw/plugin-sdk/memory-host-core";
-import type { AnyAgentTool, OpenClawPluginToolFactory } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it } from "vitest";
-import memoryCorePlugin from "../../memory-core/index.js";
 import type { OpenClawConfig } from "../api.js";
 import {
   resolveMemoryWikiAgentConfig,
@@ -17,65 +13,14 @@ import {
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
 import { createWikiCorpusSupplement } from "./corpus-supplement.js";
+import { assertToolDetailsRecord, registerMemoryCoreTools } from "./memory-core.test-support.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { createWikiApplyTool, createWikiGetTool, createWikiSearchTool } from "./tool.js";
 
 const { createTempDir } = createMemoryWikiTestHarness();
 
-function assertToolDetailsRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected tool details object");
-  }
-  return value as Record<string, unknown>;
-}
-
 function textContent(result: { content: Array<{ type: string; text?: string }> }): string {
   return result.content.find((part) => part.type === "text")?.text ?? "";
-}
-
-function registerMemoryCoreToolFactories(
-  appConfig: OpenClawConfig,
-): Map<string, OpenClawPluginToolFactory> {
-  const factories = new Map<string, OpenClawPluginToolFactory>();
-  memoryCorePlugin.register(
-    createTestPluginApi({
-      id: "memory-core",
-      config: appConfig,
-      runtime: createPluginRuntimeMock(),
-      registerTool(tool, options) {
-        if (typeof tool !== "function") {
-          return;
-        }
-        for (const name of options?.names ?? []) {
-          factories.set(name, tool);
-        }
-      },
-    }),
-  );
-  return factories;
-}
-
-function createMemoryCoreTool(params: {
-  factories: Map<string, OpenClawPluginToolFactory>;
-  name: "memory_search" | "memory_get";
-  appConfig: OpenClawConfig;
-  agentId: string;
-}): AnyAgentTool {
-  const factory = params.factories.get(params.name);
-  if (!factory) {
-    throw new Error(`Expected memory-core to register ${params.name}`);
-  }
-  const tool = factory({
-    config: params.appConfig,
-    runtimeConfig: params.appConfig,
-    getRuntimeConfig: () => params.appConfig,
-    agentId: params.agentId,
-    sessionKey: `agent:${params.agentId}:main`,
-  });
-  if (!tool || Array.isArray(tool)) {
-    throw new Error(`Expected one ${params.name} tool`);
-  }
-  return tool;
 }
 
 describe("agent-scoped memory-wiki tools", () => {
@@ -100,27 +45,13 @@ describe("agent-scoped memory-wiki tools", () => {
       config: ResolvedMemoryWikiConfig;
       pagePath?: string;
     }> = [
-      {
-        id: "support",
-        title: "Support Private Synthesis",
-        sentinel: "SUPPORT_ONLY_7f3c21",
-        config: resolveMemoryWikiAgentConfig({
-          config: baseConfig,
-          appConfig,
-          agentId: "support",
-        }),
-      },
-      {
-        id: "marketing",
-        title: "Marketing Private Synthesis",
-        sentinel: "MARKETING_ONLY_8e4d62",
-        config: resolveMemoryWikiAgentConfig({
-          config: baseConfig,
-          appConfig,
-          agentId: "marketing",
-        }),
-      },
-    ];
+      { id: "support", title: "Support Private Synthesis", sentinel: "SUPPORT_ONLY_7f3c21" },
+      { id: "marketing", title: "Marketing Private Synthesis", sentinel: "MARKETING_ONLY_8e4d62" },
+    ].map((agent) =>
+      Object.assign(agent, {
+        config: resolveMemoryWikiAgentConfig({ config: baseConfig, appConfig, agentId: agent.id }),
+      }),
+    );
 
     for (const agent of agents) {
       const result = await createWikiApplyTool(agent.config, appConfig).execute(
@@ -200,7 +131,7 @@ describe("agent-scoped memory-wiki tools", () => {
           getAppConfig: () => appConfig,
         }),
       );
-      const memoryCoreFactories = registerMemoryCoreToolFactories(appConfig);
+      const memoryCoreTool = registerMemoryCoreTools(appConfig);
 
       for (const agent of agents) {
         const foreignAgent = agents.find((candidate) => candidate.id !== agent.id);
@@ -208,12 +139,7 @@ describe("agent-scoped memory-wiki tools", () => {
           throw new Error("Expected both agent synthesis paths");
         }
 
-        const memorySearch = createMemoryCoreTool({
-          factories: memoryCoreFactories,
-          name: "memory_search",
-          appConfig,
-          agentId: agent.id,
-        });
+        const memorySearch = memoryCoreTool("memory_search", agent.id, "main");
         const ownMemorySearch = await memorySearch.execute(`memory-search-own-${agent.id}`, {
           query: agent.sentinel,
           corpus: "wiki",
@@ -235,12 +161,7 @@ describe("agent-scoped memory-wiki tools", () => {
         );
         expect(assertToolDetailsRecord(foreignMemorySearch.details).results).toEqual([]);
 
-        const memoryGet = createMemoryCoreTool({
-          factories: memoryCoreFactories,
-          name: "memory_get",
-          appConfig,
-          agentId: agent.id,
-        });
+        const memoryGet = memoryCoreTool("memory_get", agent.id, "main");
         const ownMemoryGet = await memoryGet.execute(`memory-get-own-${agent.id}`, {
           path: agent.pagePath,
           corpus: "wiki",

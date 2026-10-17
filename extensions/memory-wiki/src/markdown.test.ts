@@ -1,5 +1,3 @@
-// Memory Wiki tests cover markdown plugin behavior.
-
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -42,21 +40,15 @@ describe("human Notes blocks", () => {
   const endMarker = "<!-- openclaw:human:end -->";
   const rendered = ["# Source", "", "## Notes", startMarker, endMarker, ""].join("\n");
 
-  it.each([endMarker])("ignores a standalone marker inside fenced source content", (marker) => {
-    const existing = ["# Source", "", "## Content", "```text", marker, "```", ""].join("\n");
+  it("ignores a standalone marker inside fenced source content", () => {
+    const existing = `# Source\n\n## Content\n\`\`\`text\n${endMarker}\n\`\`\`\n`;
 
     expect(extractHumanNotesBlock(existing)).toBeNull();
     expect(preserveHumanNotesBlock(rendered, existing)).toBe(rendered);
   });
 
   it("preserves marker comments embedded in complete human Notes", () => {
-    const notes = [
-      "Before copied markers",
-      startMarker,
-      "Between copied markers",
-      endMarker,
-      "After copied markers",
-    ].join("\n");
+    const notes = `Before copied markers\n${startMarker}\nBetween copied markers\n${endMarker}\nAfter copied markers`;
     const existing = rendered.replace(
       `${startMarker}\n${endMarker}`,
       `${startMarker}\n${notes}\n${endMarker}`,
@@ -132,17 +124,21 @@ describe("toWikiPageSummary", () => {
       throw new Error("expected wiki summary");
     }
 
-    expect(summary.entityType).toBe("person");
-    expect(summary.canonicalId).toBe("maintainer.brad-groux");
-    expect(summary.aliases).toEqual(["brad", "bgroux"]);
-    expect(summary.privacyTier).toBe("local-private");
-    expect(summary.bestUsedFor).toEqual(["Microsoft ecosystem routing"]);
-    expect(summary.notEnoughFor).toEqual(["legal approval"]);
-    expect(summary.lastRefreshedAt).toBe("2026-04-29T00:00:00.000Z");
-    expect(summary.personCard?.handles).toEqual(["@bgroux"]);
-    expect(summary.personCard?.emails).toEqual(["brad@example.com"]);
-    expect(summary.personCard?.lane).toBe("Microsoft Teams");
-    expect(summary.personCard?.privacyTier).toBe("confirm-before-use");
+    expect(summary).toMatchObject({
+      entityType: "person",
+      canonicalId: "maintainer.brad-groux",
+      aliases: ["brad", "bgroux"],
+      privacyTier: "local-private",
+      bestUsedFor: ["Microsoft ecosystem routing"],
+      notEnoughFor: ["legal approval"],
+      lastRefreshedAt: "2026-04-29T00:00:00.000Z",
+      personCard: expect.objectContaining({
+        handles: ["@bgroux"],
+        emails: ["brad@example.com"],
+        lane: "Microsoft Teams",
+        privacyTier: "confirm-before-use",
+      }),
+    });
     expect(summary.relationships).toEqual([
       {
         targetId: "entity.alice",
@@ -165,59 +161,35 @@ describe("toWikiPageSummary", () => {
     ]);
   });
 
-  it.each([{ name: "sequence", frontmatter: "- pageType: synthesis" }])(
-    "reports and excludes $name frontmatter roots from page scans",
-    ({ frontmatter }) => {
-      const raw = ["---", frontmatter, "---", "", "# Invalid Root"].join("\n");
-      const params = {
-        absolutePath: "/tmp/wiki/syntheses/invalid-root.md",
-        relativePath: "syntheses/invalid-root.md",
-        raw,
-      };
-      const result = scanWikiPageSummary(params);
-      if (result.status !== "invalid-frontmatter") {
-        throw new Error("expected invalid frontmatter result");
-      }
+  it("reports and excludes sequence frontmatter roots from page scans", () => {
+    const raw = "---\n- pageType: synthesis\n---\n\n# Invalid Root";
+    const params = {
+      absolutePath: "/tmp/wiki/syntheses/invalid-root.md",
+      relativePath: "syntheses/invalid-root.md",
+      raw,
+    };
+    const result = scanWikiPageSummary(params);
+    if (result.status !== "invalid-frontmatter") {
+      throw new Error("expected invalid frontmatter result");
+    }
 
-      expect(result.error.message).toBe("Wiki frontmatter must be a YAML mapping");
-      expect(toWikiPageSummary(params)).toBeNull();
-      expect(() => parseWikiMarkdown(raw)).toThrow("Wiki frontmatter must be a YAML mapping");
-    },
-  );
+    expect(result.error.message).toBe("Wiki frontmatter must be a YAML mapping");
+    expect(toWikiPageSummary(params)).toBeNull();
+    expect(() => parseWikiMarkdown(raw)).toThrow("Wiki frontmatter must be a YAML mapping");
+  });
 });
 
 describe("scanWikiPageSummary linkTargets", () => {
   it("accepts a closing fence longer than the opening fence (#97945)", () => {
-    // CommonMark allows the closing fence to be the same or longer than the
-    // opening fence.  A `` ``` `` opener with a `` ```` `` closer must still
-    // strip the block so the Scala generic inside is not extracted.
-    const markdown = [
-      "# Longer Close",
-      "",
-      "```scala",
-      "def handle(req: Request[A]): Future[Option[User]] = ???",
-      "````",
-      "",
-      "Prose: [[RealTarget]]",
-    ].join("\n");
+    const markdown =
+      "# Longer Close\n\n```scala\ndef handle(req: Request[A]): Future[Option[User]] = ???\n````\n\nProse: [[RealTarget]]";
     const links = scanWikiLinkTargets(markdown, "entities/test.md");
     expect(links).toEqual(["RealTarget"]);
   });
 
   it("does not leak [[…]] when a shorter fence-like line appears inside a longer fenced block (#97945)", () => {
-    // A 6-backtick block containing a shorter 3-backtick line before the real
-    // 6-backtick close must not cause the scanner to exit early.
-    const markdown = [
-      "# Long Fence With Shorter Inner Line",
-      "",
-      "``````bash",
-      "some code",
-      "```",
-      "[[not-a-link]]",
-      "``````",
-      "",
-      "After fence: [[RealPage]]",
-    ].join("\n");
+    const markdown =
+      "# Long Fence With Shorter Inner Line\n\n``````bash\nsome code\n```\n[[not-a-link]]\n``````\n\nAfter fence: [[RealPage]]";
     const links = scanWikiLinkTargets(markdown, "entities/test.md");
     expect(links).toEqual(["RealPage"]);
   });

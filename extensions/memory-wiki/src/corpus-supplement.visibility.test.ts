@@ -1,18 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
 } from "openclaw/plugin-sdk/memory-host-core";
-import type { AnyAgentTool, OpenClawPluginToolFactory } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it } from "vitest";
-import memoryCorePlugin from "../../memory-core/index.js";
 import type { OpenClawConfig } from "../api.js";
 import { resolveMemoryWikiAgentConfig } from "./config.js";
 import { createWikiCorpusSupplement } from "./corpus-supplement.js";
 import { renderWikiMarkdown } from "./markdown.js";
+import { assertToolDetailsRecord, registerMemoryCoreTools } from "./memory-core.test-support.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
@@ -47,57 +44,6 @@ async function writeBridgePage(params: {
     }),
     "utf8",
   );
-}
-
-function assertToolDetailsRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected tool details object");
-  }
-  return value as Record<string, unknown>;
-}
-
-function registerMemoryCoreToolFactories(): Map<string, OpenClawPluginToolFactory> {
-  const factories = new Map<string, OpenClawPluginToolFactory>();
-  memoryCorePlugin.register(
-    createTestPluginApi({
-      id: "memory-core",
-      config: appConfig,
-      runtime: createPluginRuntimeMock(),
-      registerTool(tool, options) {
-        if (typeof tool !== "function") {
-          return;
-        }
-        for (const name of options?.names ?? []) {
-          factories.set(name, tool);
-        }
-      },
-    }),
-  );
-  return factories;
-}
-
-function createMemoryCoreTool(params: {
-  factories: Map<string, OpenClawPluginToolFactory>;
-  name: "memory_search" | "memory_get";
-  agentId: string;
-  sandboxed: boolean;
-}): AnyAgentTool {
-  const factory = params.factories.get(params.name);
-  if (!factory) {
-    throw new Error(`Expected memory-core to register ${params.name}`);
-  }
-  const tool = factory({
-    config: appConfig,
-    runtimeConfig: appConfig,
-    getRuntimeConfig: () => appConfig,
-    agentId: params.agentId,
-    sessionKey: `agent:${params.agentId}:child-session`,
-    sandboxed: params.sandboxed,
-  });
-  if (!tool || Array.isArray(tool)) {
-    throw new Error(`Expected one ${params.name} tool`);
-  }
-  return tool;
 }
 
 describe("memory-wiki corpus supplement visibility", () => {
@@ -162,31 +108,11 @@ describe("memory-wiki corpus supplement visibility", () => {
     clearMemoryPluginState();
     try {
       registerMemoryCorpusSupplement("memory-wiki", supplement);
-      const factories = registerMemoryCoreToolFactories();
-      const sandboxedGet = createMemoryCoreTool({
-        factories,
-        name: "memory_get",
-        agentId: "main",
-        sandboxed: true,
-      });
-      const sandboxedSearch = createMemoryCoreTool({
-        factories,
-        name: "memory_search",
-        agentId: "main",
-        sandboxed: true,
-      });
-      const openGet = createMemoryCoreTool({
-        factories,
-        name: "memory_get",
-        agentId: "main",
-        sandboxed: false,
-      });
-      const openSearch = createMemoryCoreTool({
-        factories,
-        name: "memory_search",
-        agentId: "main",
-        sandboxed: false,
-      });
+      const memoryCoreTool = registerMemoryCoreTools(appConfig);
+      const sandboxedGet = memoryCoreTool("memory_get", "main", "child-session", true);
+      const sandboxedSearch = memoryCoreTool("memory_search", "main", "child-session", true);
+      const openGet = memoryCoreTool("memory_get", "main", "child-session", false);
+      const openSearch = memoryCoreTool("memory_search", "main", "child-session", false);
 
       const foreignGet = await sandboxedGet.execute("memory-get-foreign", {
         path: "sources/secondary-private.md",

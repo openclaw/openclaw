@@ -51,6 +51,49 @@ function observeOpen(configure: (handle: Handle) => void | Promise<void>) {
   };
 }
 
+function trackClose(handle: Handle, failure?: Error) {
+  const close = handle.close.bind(handle);
+  const calls = { count: 0 };
+  Object.defineProperty(handle, "close", {
+    value: async () => {
+      calls.count++;
+      await close();
+      if (failure) {
+        throw failure;
+      }
+    },
+  });
+  return calls;
+}
+
+function trackReads(
+  handle: Handle,
+  beforeRead: (buffer: Buffer, length: number, count: number) => void,
+) {
+  const read = handle.read.bind(handle);
+  const calls = { count: 0 };
+  Object.defineProperty(handle, "read", {
+    value: async (buffer: Buffer, offset: number, length: number, position: null) => {
+      beforeRead(buffer, length, ++calls.count);
+      return read(buffer, offset, length, position);
+    },
+  });
+  return calls;
+}
+
+function afterStat(effect: () => Promise<unknown>) {
+  observeOpen((handle) => {
+    const stat = handle.stat.bind(handle);
+    Object.defineProperty(handle, "stat", {
+      value: async () => {
+        const initial = await stat();
+        await effect();
+        return initial;
+      },
+    });
+  });
+}
+
 describe("loadMemoryWikiVaultIdentity", () => {
   it("replays LF, CRLF and an authoritative final record without a newline", async () => {
     for (const raw of [journal, journal.replaceAll("\n", "\r\n"), journal.trimEnd()]) {
@@ -120,29 +163,18 @@ describe("loadMemoryWikiVaultIdentity", () => {
     const { root } = await createJournal(
       generation + row({ note: "x".repeat(1024) }).repeat(1024) + reservation + publication,
     );
-    let reads = 0;
-    let closes = 0;
+    let reads = { count: 0 };
+    let closes = { count: 0 };
     observeOpen((handle) => {
-      const read = handle.read.bind(handle);
-      const close = handle.close.bind(handle);
-      Object.defineProperty(handle, "read", {
-        value: async (buffer: Buffer, offset: number, length: number, position: null) => {
-          assert.ok(buffer.byteLength <= 64 * 1024);
-          assert.ok(length <= buffer.byteLength);
-          reads++;
-          return read(buffer, offset, length, position);
-        },
+      reads = trackReads(handle, (buffer, length) => {
+        assert.ok(buffer.byteLength <= 64 * 1024);
+        assert.ok(length <= buffer.byteLength);
       });
-      Object.defineProperty(handle, "close", {
-        value: async () => {
-          closes++;
-          await close();
-        },
-      });
+      closes = trackClose(handle);
     });
     assert.deepEqual(await loadMemoryWikiVaultIdentity(root), expected);
-    assert.ok(reads > 1);
-    assert.equal(closes, 1);
+    assert.ok(reads.count > 1);
+    assert.equal(closes.count, 1);
   });
 
   it("returns empty for a missing journal and propagates other open failures", async () => {
@@ -160,33 +192,23 @@ describe("loadMemoryWikiVaultIdentity", () => {
     it(`never returns partial authority after a ${code} read failure and closes once`, async () => {
       const { root } = await createJournal(journal + row({ note: "x".repeat(128 * 1024) }));
       const failure = Object.assign(new Error("read failed"), { code });
-      let reads = 0;
-      let closes = 0;
+      let reads = { count: 0 };
+      let closes = { count: 0 };
       observeOpen((handle) => {
-        const read = handle.read.bind(handle);
-        const close = handle.close.bind(handle);
-        Object.defineProperty(handle, "read", {
-          value: async (buffer: Buffer, offset: number, length: number, position: null) => {
-            if (++reads === 2) {
-              throw failure;
-            }
-            return read(buffer, offset, length, position);
-          },
+        reads = trackReads(handle, (_buffer, _length, count) => {
+          if (count === 2) {
+            throw failure;
+          }
         });
-        Object.defineProperty(handle, "close", {
-          value: async () => {
-            closes++;
-            await close();
-          },
-        });
+        closes = trackClose(handle);
       });
       if (code === "ENOENT") {
         assert.deepEqual(await loadMemoryWikiVaultIdentity(root), empty);
       } else {
         await assert.rejects(loadMemoryWikiVaultIdentity(root), (error) => error === failure);
       }
-      assert.equal(reads, 2);
-      assert.equal(closes, 1);
+      assert.equal(reads.count, 2);
+      assert.equal(closes.count, 1);
     });
   }
 
@@ -194,21 +216,14 @@ describe("loadMemoryWikiVaultIdentity", () => {
     const { root } = await createJournal();
     const readError = new Error("stat failed");
     const closeError = new Error("close failed");
-    let closes = 0;
+    let closes = { count: 0 };
     observeOpen((handle) => {
-      const close = handle.close.bind(handle);
       Object.defineProperty(handle, "stat", {
         value: async () => {
           throw readError;
         },
       });
-      Object.defineProperty(handle, "close", {
-        value: async () => {
-          closes++;
-          await close();
-          throw closeError;
-        },
-      });
+      closes = trackClose(handle, closeError);
     });
     await assert.rejects(loadMemoryWikiVaultIdentity(root), (error) => {
       assert.ok(error instanceof AggregateError);
@@ -217,39 +232,23 @@ describe("loadMemoryWikiVaultIdentity", () => {
       assert.equal(error.message, "Memory Wiki journal read and close failed.");
       return true;
     });
-    assert.equal(closes, 1);
+    assert.equal(closes.count, 1);
   });
 
   it("does not return an identity when closing the handle fails", async () => {
     const { root } = await createJournal();
     const failure = new Error("close failed");
-    let closes = 0;
+    let closes = { count: 0 };
     observeOpen((handle) => {
-      const close = handle.close.bind(handle);
-      Object.defineProperty(handle, "close", {
-        value: async () => {
-          closes++;
-          await close();
-          throw failure;
-        },
-      });
+      closes = trackClose(handle, failure);
     });
     await assert.rejects(loadMemoryWikiVaultIdentity(root), (error) => error === failure);
-    assert.equal(closes, 1);
+    assert.equal(closes.count, 1);
   });
 
   it("bounds regular journals at their initial extent and sees appends next time", async () => {
     const { root, file } = await createJournal(generation + reservation);
-    observeOpen((handle) => {
-      const stat = handle.stat.bind(handle);
-      Object.defineProperty(handle, "stat", {
-        value: async () => {
-          const initial = await stat();
-          await fs.appendFile(file, publication);
-          return initial;
-        },
-      });
-    });
+    afterStat(() => fs.appendFile(file, publication));
     assert.deepEqual(await loadMemoryWikiVaultIdentity(root), {
       ...empty,
       vaultGeneration: "vault",
@@ -261,16 +260,7 @@ describe("loadMemoryWikiVaultIdentity", () => {
 
   it("reads an initially empty file to EOF instead of a fixed empty prefix", async () => {
     const { root, file } = await createJournal("");
-    observeOpen((handle) => {
-      const stat = handle.stat.bind(handle);
-      Object.defineProperty(handle, "stat", {
-        value: async () => {
-          const initial = await stat();
-          await fs.appendFile(file, journal);
-          return initial;
-        },
-      });
-    });
+    afterStat(() => fs.appendFile(file, journal));
     assert.deepEqual(await loadMemoryWikiVaultIdentity(root), expected);
   });
 
@@ -285,16 +275,7 @@ describe("loadMemoryWikiVaultIdentity", () => {
 
   it("stops at EOF after truncation and ignores a now-partial publication", async () => {
     const { root, file } = await createJournal();
-    observeOpen((handle) => {
-      const stat = handle.stat.bind(handle);
-      Object.defineProperty(handle, "stat", {
-        value: async () => {
-          const initial = await stat();
-          await fs.truncate(file, Buffer.byteLength(generation + reservation) + 10);
-          return initial;
-        },
-      });
-    });
+    afterStat(() => fs.truncate(file, Buffer.byteLength(generation + reservation) + 10));
     assert.deepEqual(await loadMemoryWikiVaultIdentity(root), {
       ...empty,
       vaultGeneration: "vault",
