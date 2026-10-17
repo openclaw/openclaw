@@ -20,6 +20,8 @@ import {
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
 
+const defaults = { defaultAgentId: "ops", mainKey: "home", mainSessionKey: "agent:ops:current" };
+
 it.each([
   ["agent:ops:dingtalk:AbC", "ops", "dingtalk:AbC", "dingtalk:abc"],
   ["main", null, null, null],
@@ -99,15 +101,11 @@ it("reuses comparison keys until bounded eviction without changing their identit
 });
 
 it.each([
+  ["catalog:fixture:N%3AA:T%3AB", "catalog:fixture:N%3AA:T%3AB", "catalog:fixture:N%3AA:t%3Ab"],
   [
-    "catalog:fixture:node%3AA:Thread%3AB",
-    "catalog:fixture:node%3AA:Thread%3AB",
-    "catalog:fixture:node%3AA:thread%3Ab",
-  ],
-  [
-    "matrix:channel:!R:E.Org:thread:$E",
-    "Matrix:Channel:!R:E.Org:Thread:$E",
-    "matrix:channel:!R:E.Org:thread:$e",
+    "matrix:channel:!R:E:thread:$E",
+    "Matrix:Channel:!R:E:Thread:$E",
+    "matrix:channel:!R:E:thread:$e",
   ],
   ["signal:group:AbC=:thread:xyz", "Signal:Group:AbC=:Thread:XyZ", "signal:group:abc=:thread:xyz"],
 ])("preserves opaque IDs in %s for live events and persistence", (selected, alias, distinct) => {
@@ -143,15 +141,7 @@ it.each([
     const host = {
       agentsList,
       assistantAgentId: agentId,
-      hello: {
-        snapshot: {
-          sessionDefaults: {
-            defaultAgentId: "ops",
-            mainKey: "home",
-            mainSessionKey: "agent:ops:current",
-          },
-        },
-      },
+      hello: { snapshot: { sessionDefaults: defaults } },
     };
     expect(resolveUiConversationIdentity(host, key, agentIdOverride)).toEqual({
       sessionKey,

@@ -19,6 +19,14 @@ const sidebar = { rowMode: "sidebar" as const };
 function revised(rows: GatewaySessionRow[], rowsRevision: string, ts = 1) {
   return { ...sessionsResult(rows, ts), rowsRevision };
 }
+function delta(
+  rows: GatewaySessionRow[],
+  revision: string,
+  order: number[],
+  baseRevision = "first",
+) {
+  return { ...revised(rows, revision, 2), rowsDelta: { baseRevision, order } };
+}
 function sidebarReader(
   request: Parameters<typeof createTestGatewayClient>[0],
   query: Parameters<typeof requestSessionListParams>[1] = sidebar,
@@ -29,9 +37,7 @@ function sidebarReader(
 function expectRevision(request: ReturnType<typeof vi.fn>, revision: string) {
   expect(request).toHaveBeenLastCalledWith(
     "sessions.list",
-    expect.objectContaining({
-      ifRowsRevision: `delta:${revision}`,
-    }),
+    expect.objectContaining({ ifRowsRevision: `delta:${revision}` }),
   );
 }
 
@@ -95,8 +101,8 @@ it("retains titles and previews throughout a bounded managed window and its refr
       nextOffset: offset + limit,
     };
   });
-  const gateway = createGatewayHarness(createTestGatewayClient(request));
-  const sessions = createTestSessionCapability(gateway.gateway);
+  const { gateway } = createGatewayHarness(createTestGatewayClient(request));
+  const sessions = createTestSessionCapability(gateway);
   let held: ReturnType<typeof sessionsResult> | null = null;
   const query = {
     limit: 300,
@@ -108,56 +114,43 @@ it("retains titles and previews throughout a bounded managed window and its refr
   const observer = sessions.observeList(query, (snapshot) => {
     held = snapshot.result;
   });
-  try {
-    for (revision of [1, 2]) {
-      await observer.refresh();
-      const result = sessions.listSnapshot(query).result;
-      expect(result).toBe(held);
-      expect(result?.sessions).toHaveLength(300);
-      expect(result).toMatchObject({ hasMore: true, nextOffset: 300 });
-      for (const row of result?.sessions ?? []) {
-        expect(row.derivedTitle).toBe(`Title ${row.sessionId} v${revision}`);
-        expect(row.lastMessagePreview).toBe(`Preview ${row.sessionId} v${revision}`);
-      }
+  for (revision of [1, 2]) {
+    await observer.refresh();
+    const result = sessions.listSnapshot(query).result;
+    expect(result).toBe(held);
+    expect(result?.sessions).toHaveLength(300);
+    expect(result).toMatchObject({ hasMore: true, nextOffset: 300 });
+    for (const row of result?.sessions ?? []) {
+      expect(row.derivedTitle).toBe(`Title ${row.sessionId} v${revision}`);
+      expect(row.lastMessagePreview).toBe(`Preview ${row.sessionId} v${revision}`);
     }
-  } finally {
-    observer.dispose();
   }
 });
 
 it("reconstructs sidebar delta membership, order and facts before capability publication", async () => {
   const labelled = (id: string) => makeRow(id, { label: id, updatedAt: 1 });
   const [a, b, c, d] = [labelled("a"), labelled("b"), labelled("c"), labelled("d")] as const;
+  const actor = { type: "human" as const, id: "new-owner", label: "New owner" };
+  const owners = [{ actor: { type: "human", id: "new-owner" }, label: "Fresh facet" }];
+  const renamed = { ...a, label: "Renamed", updatedAt: 2 };
   const request = vi.fn().mockResolvedValue(revised([a, b, c], "first"));
   const { sessions } = createSessionCapabilityHarness(request);
   const query = { agentId: "main", rowMode: "sidebar" as const };
   await sessions.refresh({ ...query, force: true });
   request.mockResolvedValue({
-    ...revised(
-      [
-        { ...a, label: "Renamed", updatedAt: 2 },
-        { ...d, sharedFacts: [0] },
-      ],
-      "next",
-      2,
-    ),
+    ...delta([renamed, { ...d, sharedFacts: [0] }], "next", [2, 4, 3]),
     count: 3,
     totalCount: 19,
-    rowsDelta: { baseRevision: "first", order: [2, 4, 3] },
-    sharedFacts: [{ owner: { actor: { type: "human", id: "new-owner", label: "New owner" } } }],
-    owners: [{ actor: { type: "human", id: "new-owner" }, label: "Fresh facet" }],
+    sharedFacts: [{ owner: { actor } }],
+    owners,
   });
   await sessions.refresh({ ...query, force: true });
   expectRevision(request, "first");
   expect(sessions.state.result).toMatchObject({
     count: 3,
     totalCount: 19,
-    sessions: [
-      c,
-      { ...d, owner: { actor: { type: "human", id: "new-owner", label: "New owner" } } },
-      { ...a, label: "Renamed", updatedAt: 2 },
-    ],
-    owners: [{ actor: { type: "human", id: "new-owner" }, label: "Fresh facet" }],
+    sessions: [c, { ...d, owner: { actor } }, renamed],
+    owners,
   });
   expect(sessions.state.result).not.toHaveProperty("rowsDelta");
   expect(sessions.state.result).not.toHaveProperty("sharedFacts");
@@ -181,10 +174,7 @@ it.each([
     const { sessions } = createSessionCapabilityHarness(request);
     const query = { rowMode: "sidebar" as const, agentId: "main" };
     await sessions.list(query);
-    request.mockResolvedValue({
-      ...revised([], "bad", 2),
-      rowsDelta: { baseRevision, order },
-    });
+    request.mockResolvedValue(delta([], "bad", order, baseRevision));
     await expect(sessions.list(query)).rejects.toThrow(message);
     request.mockResolvedValue({
       ...revised([], "first", 3),
@@ -203,9 +193,8 @@ it("applies an empty-row reorder/removal delta without collapsing cross-agent ra
     .fn()
     .mockResolvedValueOnce(revised([a, b, removed], "first"))
     .mockResolvedValueOnce({
-      ...revised([], "next", 2),
+      ...delta([], "next", [1, 0]),
       count: 2,
-      rowsDelta: { baseRevision: "first", order: [1, 0] },
     });
   const read = sidebarReader(request);
   const initial = await read();
@@ -250,18 +239,12 @@ it("reconstructs parallel deltas against each request's captured raw rows", asyn
     .fn()
     .mockResolvedValueOnce(revised([a], "first"))
     .mockReturnValueOnce(older.promise)
-    .mockResolvedValueOnce({
-      ...revised([{ ...a, label: "Newer" }], "newer", 3),
-      rowsDelta: { baseRevision: "first", order: [1] },
-    });
+    .mockResolvedValueOnce({ ...delta([{ ...a, label: "Newer" }], "newer", [1]), ts: 3 });
   const read = sidebarReader(request);
   const initial = await read();
   const pending = read();
   expect((await read())?.sessions[0]?.label).toBe("Newer");
-  older.resolve({
-    ...revised([b], "older", 2),
-    rowsDelta: { baseRevision: "first", order: [0, 1] },
-  });
+  older.resolve(delta([b], "older", [0, 1]));
   const completed = await pending;
   expect(completed?.sessions).toEqual([a, b]);
   expect(completed?.sessions[0]).toBe(initial?.sessions[0]);

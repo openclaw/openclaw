@@ -186,7 +186,6 @@ it.each([
       acknowledgement.resolve(patchResult);
       refresh.resolve(sessionsResult([confirmed], ackAt));
       await pending;
-      observation.dispose();
       sessions.dispose();
     }
   },

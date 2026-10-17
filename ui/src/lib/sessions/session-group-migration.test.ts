@@ -11,7 +11,7 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 import type { SessionGateway } from "./session-capability.ts";
-import { sessionRpc as groupRequests } from "./session-rpc.test-support.ts";
+import { sessionRpc as groupRequests, sessionChanged } from "./session-rpc.test-support.ts";
 
 const legacyKey = "openclaw:sessions:custom-groups";
 const clientGroup = { name: "Client", position: 0 };
@@ -73,12 +73,7 @@ it.each(["disconnected", "disposed"] as const)(
       },
       { connectionBootstrap: bootstrap },
     );
-    const invalidate = () =>
-      harness.emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: { reason: "groups" },
-      });
+    const invalidate = () => harness.emitEvent(sessionChanged({ reason: "groups" }));
     try {
       invalidate();
       await vi.waitFor(() => expect(reads).toBe(1));

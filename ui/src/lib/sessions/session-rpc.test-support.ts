@@ -24,7 +24,13 @@ export function sessionRpcHarness(
   const request = sessionRpc(handlers);
   const client = makeClient(request);
   const harness = createGatewayHarness(client);
-  return { ...harness, client, request, sessions: createTestSessionCapability(harness.gateway) };
+  return {
+    ...harness,
+    client,
+    request,
+    sessions: createTestSessionCapability(harness.gateway),
+    changed: (payload: Record<string, unknown>) => harness.emitEvent(sessionChanged(payload)),
+  };
 }
 
 export function sessionRow(id: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
@@ -59,4 +65,8 @@ export function liveSessionEvent(
       sessionKey: row.key,
     },
   };
+}
+
+export function sessionChanged(payload: Record<string, unknown>): GatewayEventFrame {
+  return { type: "event", event: "sessions.changed", payload };
 }

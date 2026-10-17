@@ -6,12 +6,16 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
-import { sessionRpcHarness, sessionRow } from "./session-rpc.test-support.ts";
+import { sessionRpcHarness, sessionRow, patchReceipt } from "./session-rpc.test-support.ts";
 
 type RpcHandler = () => unknown;
 
 function archiveRow(id: string, updatedAt: number, fields: Partial<GatewaySessionRow> = {}) {
   return sessionRow(id, { archived: false, updatedAt, ...fields });
+}
+function expectUnpinned(row: GatewaySessionRow | null | undefined, sessionId?: string) {
+  expect(row).toMatchObject({ archived: true, pinned: false, ...(sessionId ? { sessionId } : {}) });
+  expect(row?.pinnedAt).toBeUndefined();
 }
 
 function createMutationHarness(handlers: Record<string, RpcHandler>) {
@@ -119,18 +123,17 @@ it.each([
   "reconciles archive ack after read at $readUpdatedAt and failed readback",
   async ({ readUpdatedAt, archived }) => {
     const row = archiveRow("archive-equal-time", 30);
-    const result = {
-      ok: true,
-      path: "(multiple)",
-      key: row.key,
-      // A stored future timestamp survives the archive's earlier wall-clock time.
-      entry: {
+    // The stored future timestamp survives the archive's earlier wall-clock time.
+    const result = patchReceipt(
+      row.key,
+      {
         sessionId: row.sessionId,
         updatedAt: 30,
         archivedAt: 20,
         archiveReason: "manual",
       },
-    };
+      "(multiple)",
+    );
     const response = createDeferred<typeof result>();
     let listCalls = 0;
     let failReadback = false;
@@ -193,44 +196,35 @@ it("confirms a replacement archive held only by a row observer", async () => {
     }),
   });
   const target = { key: previous.key, agentId: "main" };
-  let observer: ReturnType<typeof sessions.observeRow> | undefined;
-  try {
-    await sessions.refresh({ force: true, archivedFilter: "all" });
-    await sessions.patchMany([{ ...target, expectedSessionId: previous.sessionId }], {
-      archived: true,
-    });
-    expect(sessions.archiveVisibility(previous.key)).toBe("archived");
-    rows = [];
-    await sessions.refresh({ force: true, archivedFilter: "all" });
-    rows = [{ ...previous, sessionId: "archive-successor", updatedAt: 30 }];
-    // The canonical list owns incarnation admission; a descriptor cannot replace it.
-    expect(
-      (await sessions.list({ agentId: "main", archivedFilter: "all" }))?.sessions[0]?.sessionId,
-    ).toBe("archive-successor");
-    rows = [];
-    observer = sessions.observeRow(target, () => {});
-    expect(observer.row).toBeNull();
-    const reconcile = observer.captureReconcile();
-    const described = await client.request<{ session: typeof previous }>(
-      "sessions.describe",
-      target,
-    );
-    expect(reconcile(described.session)).toMatchObject({
-      status: "current",
-      row: { sessionId: "archive-successor" },
-    });
-    expect(observer.row?.sessionId).toBe("archive-successor");
-    expect(sessions.archiveVisibility(previous.key)).toBeUndefined();
+  await sessions.refresh({ force: true, archivedFilter: "all" });
+  await sessions.patchMany([{ ...target, expectedSessionId: previous.sessionId }], {
+    archived: true,
+  });
+  expect(sessions.archiveVisibility(previous.key)).toBe("archived");
+  rows = [];
+  await sessions.refresh({ force: true, archivedFilter: "all" });
+  rows = [{ ...previous, sessionId: "archive-successor", updatedAt: 30 }];
+  // The canonical list owns incarnation admission; a descriptor cannot replace it.
+  expect(
+    (await sessions.list({ agentId: "main", archivedFilter: "all" }))?.sessions[0]?.sessionId,
+  ).toBe("archive-successor");
+  rows = [];
+  const observer = sessions.observeRow(target, () => {});
+  expect(observer.row).toBeNull();
+  const reconcile = observer.captureReconcile();
+  const described = await client.request<{ session: typeof previous }>("sessions.describe", target);
+  expect(reconcile(described.session)).toMatchObject({
+    status: "current",
+    row: { sessionId: "archive-successor" },
+  });
+  expect(observer.row?.sessionId).toBe("archive-successor");
+  expect(sessions.archiveVisibility(previous.key)).toBeUndefined();
 
-    await sessions.patchMany([{ ...target, expectedSessionId: "archive-successor" }], {
-      archived: true,
-    });
-    expect(observer.row?.archived).toBe(true);
-    expect(sessions.archiveVisibility(previous.key)).toBe("archived");
-  } finally {
-    observer?.dispose();
-    sessions.dispose();
-  }
+  await sessions.patchMany([{ ...target, expectedSessionId: "archive-successor" }], {
+    archived: true,
+  });
+  expect(observer.row?.archived).toBe(true);
+  expect(sessions.archiveVisibility(previous.key)).toBe("archived");
 });
 
 it("retires an archived descriptor on canonical succession", async () => {
@@ -250,7 +244,6 @@ it("retires an archived descriptor on canonical succession", async () => {
     "sessions.patchMany": () => response.promise,
   });
   const target = { key: row.key, agentId: "main" };
-  let observer: ReturnType<typeof sessions.observeRow> | undefined;
   let archive: ReturnType<typeof sessions.patchMany> | undefined;
   let reading: Promise<unknown> | undefined;
   try {
@@ -259,12 +252,11 @@ it("retires an archived descriptor on canonical succession", async () => {
     archive = sessions.patchMany([{ ...target, expectedSessionId: row.sessionId }], {
       archived: true,
     });
-    observer = sessions.observeRow(target, () => {});
+    const observer = sessions.observeRow(target, () => {});
     reading = sessions.refresh({ force: true });
     response.resolve(result);
     await expect(archive).resolves.toEqual(result);
-    expect(observer.row).toMatchObject({ archived: true, pinned: false });
-    expect(observer.row?.pinnedAt).toBeUndefined();
+    expectUnpinned(observer.row);
     readResponse.resolve({ ...row, sessionId: "successor", updatedAt: 30, pinnedAt: 30 });
     await reading;
     expect(observer.isCurrent()).toBe(false);
@@ -276,7 +268,6 @@ it("retires an archived descriptor on canonical succession", async () => {
       pinnedAt: 30,
     });
   } finally {
-    observer?.dispose();
     sessions.dispose();
     response.resolve(result);
     readResponse.resolve(null);
@@ -293,7 +284,7 @@ it("retains archive fields when an invalidated descriptor refresh fails", async 
   const response = createDeferred<typeof result>();
   const readResponse = createDeferred<{ session: typeof row | null }>();
   const describeDispatched = createDeferred();
-  const { sessions, client, emitEvent } = createMutationHarness({
+  const { sessions, client, changed } = createMutationHarness({
     "sessions.list": () => sessionsResult([{ ...row }, { ...unrelated }], 10),
     "sessions.patchMany": () => response.promise,
     "sessions.describe": () => {
@@ -318,31 +309,22 @@ it("retains archive fields when an invalidated descriptor refresh fails", async 
     archive = sessions.patchMany([{ ...target, expectedSessionId: row.sessionId }], {
       archived: true,
     });
-    emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: { ...target, sessionKey: row.key, sessionId: row.sessionId, reason: "patch" },
-    });
+    changed({ ...target, sessionKey: row.key, sessionId: row.sessionId, reason: "patch" });
     await describeDispatched.promise;
     expect(invalidated).toHaveBeenCalledTimes(1);
     expect(observer.row).toMatchObject(row);
 
     response.resolve(result);
     await expect(archive).resolves.toEqual(result);
-    const confirmed = { sessionId: row.sessionId, archived: true, pinned: false };
-    expect(sessions.state.result?.sessions[0]).toMatchObject(confirmed);
-    expect(sessions.state.result?.sessions[0]?.pinnedAt).toBeUndefined();
+    expectUnpinned(sessions.state.result?.sessions[0], row.sessionId);
     expect(sessions.archiveVisibility(row.key)).toBe("archived");
     readResponse.reject(new Error("Descriptor refresh unavailable"));
     await expect(reading).resolves.toMatchObject({ message: "Descriptor refresh unavailable" });
     expect(otherObserver.row).toMatchObject(unrelated);
     expect(observer.isCurrent()).toBe(true);
-    expect(observer.row).toMatchObject(confirmed);
-    expect(observer.row?.pinnedAt).toBeUndefined();
+    expectUnpinned(observer.row, row.sessionId);
   } finally {
     try {
-      observer.dispose();
-      otherObserver.dispose();
       sessions.dispose();
       response.resolve(result);
       readResponse.resolve({ session: row });
@@ -356,7 +338,7 @@ it("retains archive fields when an invalidated descriptor refresh fails", async 
 it("retires archive progress without letting old completion clear a retry", async () => {
   const key = "agent:main:archive-retry";
   const sessionId = "archive-retry";
-  const { publish, sessions, emitEvent } = createMutationHarness({
+  const { publish, sessions, changed } = createMutationHarness({
     "sessions.list": () => sessionsResult([{ key, sessionId, kind: "direct" }], 1),
   });
   await sessions.refresh();
@@ -365,11 +347,7 @@ it("retires archive progress without letting old completion clear a retry", asyn
   expect(sessions.archiveVisibility(key)).toBe("pending");
   expect(sessions.beginArchive(key, sessionId)).toBeNull();
 
-  emitEvent({
-    type: "event",
-    event: "sessions.changed",
-    payload: { key, sessionKey: key, archived: false, reason: "update" },
-  });
+  changed({ key, sessionKey: key, archived: false, reason: "update" });
   expect(sessions.archiveVisibility(key)).toBe("pending");
   publish(false);
   expect(sessions.archiveVisibility(key)).toBeUndefined();
@@ -379,17 +357,13 @@ it("retires archive progress without letting old completion clear a retry", asyn
   expect(finishRetry).not.toBeNull();
   finishPrevious?.();
   expect(sessions.archiveVisibility(key)).toBe("pending");
-  emitEvent({
-    type: "event",
-    event: "sessions.changed",
-    payload: {
-      key,
-      sessionKey: key,
-      sessionId,
-      archived: true,
-      archivedAt: 2,
-      reason: "patch",
-    },
+  changed({
+    key,
+    sessionKey: key,
+    sessionId,
+    archived: true,
+    archivedAt: 2,
+    reason: "patch",
   });
   expect(sessions.archiveVisibility(key)).toBe("archived");
   finishRetry?.();
