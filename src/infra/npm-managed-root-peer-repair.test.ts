@@ -37,20 +37,13 @@ async function writeManagedPeerMetadata(
   });
 }
 
-async function writePeerShims(npmRoot: string, version: string): Promise<void> {
+async function writePeerShims(npmRoot: string): Promise<void> {
   const modules = path.join(npmRoot, "node_modules");
   await fs.mkdir(path.join(modules, ".bin"), { recursive: true });
-  for (const [name, content] of Object.entries({
-    openclaw: "shim",
-    "openclaw.cmd": "cmd shim",
-    "openclaw.ps1": "ps1 shim",
-  })) {
-    await fs.writeFile(path.join(modules, ".bin", name), content);
+  for (const name of ["openclaw", "openclaw.cmd", "openclaw.ps1"]) {
+    await fs.writeFile(path.join(modules, ".bin", name), "shim");
   }
-  await writeFixtureJson(path.join(modules, ".package-lock.json"), {
-    lockfileVersion: 3,
-    packages: { "node_modules/openclaw": { version } },
-  });
+  await fs.writeFile(path.join(modules, ".package-lock.json"), "hidden lockfile");
 }
 
 async function expectPeerMetadataRemoved(
@@ -58,20 +51,19 @@ async function expectPeerMetadataRemoved(
   peerName: string,
   peerVersion: string,
 ): Promise<void> {
-  const manifest = JSON.parse(await fs.readFile(path.join(npmRoot, "package.json"), "utf8")) as {
-    dependencies?: Record<string, string>;
-  };
-  expect(manifest.dependencies).toEqual({ [peerName]: peerVersion });
-  const lockfile = JSON.parse(
-    await fs.readFile(path.join(npmRoot, "package-lock.json"), "utf8"),
-  ) as {
-    packages?: Record<string, { dependencies?: Record<string, string>; version?: string }>;
-    dependencies?: Record<string, unknown>;
-  };
-  expect(lockfile.packages?.[""]?.dependencies).toEqual({ [peerName]: peerVersion });
-  expect(lockfile.packages?.["node_modules/openclaw"]).toBeUndefined();
-  expect(lockfile.packages?.[`node_modules/${peerName}`]?.version).toBe(peerVersion);
-  expect(lockfile.dependencies?.openclaw).toBeUndefined();
+  await expect(readManifest(npmRoot)).resolves.toEqual({
+    private: true,
+    dependencies: { [peerName]: peerVersion },
+  });
+  const lockfile = JSON.parse(await fs.readFile(path.join(npmRoot, "package-lock.json"), "utf8"));
+  expect(lockfile).toEqual({
+    lockfileVersion: 3,
+    packages: {
+      "": { dependencies: { [peerName]: peerVersion } },
+      [`node_modules/${peerName}`]: { version: peerVersion },
+    },
+    dependencies: {},
+  });
   for (const binName of ["openclaw", "openclaw.cmd", "openclaw.ps1"]) {
     await expectPathMissing(path.join(npmRoot, "node_modules", ".bin", binName));
   }
@@ -93,7 +85,7 @@ describe("managed npm root peer repair", () => {
         name: "openclaw",
         version: "2026.5.4",
       });
-      await writePeerShims(npmRoot, "2026.5.4");
+      await writePeerShims(npmRoot);
 
       const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
       await expect(
@@ -134,7 +126,7 @@ describe("managed npm root peer repair", () => {
       version,
     });
     if (linked) {
-      await writePeerShims(npmRoot, version);
+      await writePeerShims(npmRoot);
       await fs.symlink(hostPackageRoot, managedPackageRoot, "dir");
     }
     const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
@@ -142,9 +134,7 @@ describe("managed npm root peer repair", () => {
       repairManagedNpmRootOpenClawPeer({ npmRoot, packageRoot: hostPackageRoot, runCommand }),
     ).resolves.toBe(linked);
     expect(runCommand).not.toHaveBeenCalled();
-    await expect(
-      fs.readFile(path.join(hostPackageRoot, "package.json"), "utf8"),
-    ).resolves.toContain(version);
+    await expect(readManifest(hostPackageRoot)).resolves.toEqual({ name: "openclaw", version });
     if (linked) {
       await expect(fs.realpath(managedPackageRoot)).resolves.toBe(
         await fs.realpath(hostPackageRoot),

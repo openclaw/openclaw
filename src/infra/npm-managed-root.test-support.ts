@@ -49,9 +49,12 @@ export function useManagedNpmRootFixture() {
     snapshot = undefined;
     await tracker.cleanup();
   });
-  return async () => {
+  return async (manifest?: unknown) => {
     const dir = await tracker.make("case");
     tempDirs.push(dir);
+    if (manifest !== undefined) {
+      await writeFixtureJson(path.join(dir, "package.json"), manifest);
+    }
     return dir;
   };
 }

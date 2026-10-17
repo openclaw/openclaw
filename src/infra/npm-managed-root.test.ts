@@ -33,6 +33,17 @@ function requireCommandOptions(
   return options;
 }
 
+function mockPeerPlan(plan: (cwd: string, call: number) => Promise<void | typeof successfulSpawn>) {
+  let calls = 0;
+  return vi.fn(async (_args: string[], rawOptions: number | CommandOptions) => {
+    const { cwd } = requireCommandOptions(rawOptions, "npm peer plan");
+    if (!cwd) {
+      throw new Error("expected npm peer plan cwd");
+    }
+    return (await plan(cwd, ++calls)) ?? successfulSpawn;
+  });
+}
+
 describe("managed npm root", () => {
   it("finds explicitly required optional packages for the current platform", async () => {
     const npmRoot = await makeTempRoot();
@@ -41,30 +52,18 @@ describe("managed npm root", () => {
     const foreignPackage = "@vendor/tool-foreign";
     const unconstrainedPackage = "@vendor/tool-optional";
     const unlistedPackage = "@vendor/tool-unlisted";
+    const platform = { optional: true, os: [process.platform], cpu: [process.arch] };
     await writeLockfile(npmRoot, {
       "": {},
-      [`node_modules/${matchingPackage}`]: {
-        optional: true,
-        os: [process.platform],
-        cpu: [process.arch],
-      },
-      [`node_modules/${scriptedPackage}`]: {
-        optional: true,
-        hasInstallScript: true,
-        os: [process.platform],
-        cpu: [process.arch],
-      },
+      [`node_modules/${matchingPackage}`]: platform,
+      [`node_modules/${scriptedPackage}`]: { ...platform, hasInstallScript: true },
       [`node_modules/${foreignPackage}`]: {
         optional: true,
         os: [`not-${process.platform}`],
         cpu: [process.arch],
       },
       [`node_modules/${unconstrainedPackage}`]: { optional: true },
-      [`node_modules/${unlistedPackage}`]: {
-        optional: true,
-        os: [process.platform],
-        cpu: [process.arch],
-      },
+      [`node_modules/${unlistedPackage}`]: platform,
     });
 
     await expect(
@@ -115,7 +114,7 @@ describe("managed npm root", () => {
 
       if (installedState === "invalid package manifest") {
         await fs.writeFile(path.join(packagePath, "package.json"), "{", "utf8");
-      } else if (installedState !== "missing package manifest") {
+      } else {
         await writeFixtureJson(path.join(packagePath, "package.json"), {
           name: canonicalPackage,
           version: "1.0.0-platform",
@@ -124,16 +123,11 @@ describe("managed npm root", () => {
         const nativeBinDir = path.join(packagePath, "vendor", "current-platform", "bin");
         await fs.mkdir(nativeBinDir, { recursive: true });
         await fs.writeFile(path.join(nativeBinDir, "tool-helper"), "helper", "utf8");
-        if (
-          installedState === "installed native executable" ||
-          installedState === "non-executable native executable"
-        ) {
-          const executableName = process.platform === "win32" ? "tool.exe" : "tool";
-          await fs.writeFile(path.join(nativeBinDir, executableName), "native executable", {
-            encoding: "utf8",
-            mode: installedState === "installed native executable" ? 0o755 : 0o644,
-          });
-        }
+        const executableName = process.platform === "win32" ? "tool.exe" : "tool";
+        await fs.writeFile(path.join(nativeBinDir, executableName), "native executable", {
+          encoding: "utf8",
+          mode: installedState === "installed native executable" ? 0o755 : 0o644,
+        });
       }
 
       await expect(
@@ -163,45 +157,39 @@ describe("managed npm root", () => {
     });
   });
 
-  it("drops managed overrides that conflict with an explicitly installed package", async () => {
-    const npmRoot = await makeTempRoot();
-
-    await upsertManagedNpmRootDependency({
-      npmRoot,
-      packageName: "pinned-package",
-      dependencySpec: "2.0.0",
+  it.each([
+    {
+      name: "drops a conflicting package pin",
       managedOverrides: { "pinned-package": "1.0.0", axios: "1.18.0" },
-    });
-
-    await expect(readManifest(npmRoot)).resolves.toEqual({
-      private: true,
-      dependencies: { "pinned-package": "2.0.0" },
       overrides: { axios: "1.18.0" },
-      openclaw: { managedOverrides: ["axios"] },
-    });
-  });
-
-  it("keeps child override rules when only the root entry conflicts with an installed package", async () => {
+      managedKeys: ["axios"],
+    },
+    {
+      name: "keeps child rules under a conflicting root pin",
+      managedOverrides: { "pinned-package": { ".": "1.0.0", "vuln-child": "3.0.0" } },
+      overrides: { "pinned-package": { "vuln-child": "3.0.0" } },
+      managedKeys: ["pinned-package"],
+    },
+  ])("$name", async ({ managedOverrides, overrides, managedKeys }) => {
     const npmRoot = await makeTempRoot();
 
     await upsertManagedNpmRootDependency({
       npmRoot,
       packageName: "pinned-package",
       dependencySpec: "2.0.0",
-      managedOverrides: { "pinned-package": { ".": "1.0.0", "vuln-child": "3.0.0" } },
+      managedOverrides,
     });
 
     await expect(readManifest(npmRoot)).resolves.toEqual({
       private: true,
       dependencies: { "pinned-package": "2.0.0" },
-      overrides: { "pinned-package": { "vuln-child": "3.0.0" } },
-      openclaw: { managedOverrides: ["pinned-package"] },
+      overrides,
+      openclaw: { managedOverrides: managedKeys },
     });
   });
 
   it("transfers ownership of a managed peer pin when it is explicitly installed", async () => {
-    const npmRoot = await makeTempRoot();
-    await writeFixtureJson(path.join(npmRoot, "package.json"), {
+    const npmRoot = await makeTempRoot({
       private: true,
       dependencies: { plugin: "1.0.0", "runtime-peer": "4.12.23" },
       openclaw: { managedPeerDependencies: ["runtime-peer"] },
@@ -213,8 +201,6 @@ describe("managed npm root", () => {
       dependencySpec: "5.0.0",
     });
 
-    // The installed package leaves managedPeerDependencies so the next peer sync
-    // cannot re-pin or delete the explicitly requested version.
     await expect(readManifest(npmRoot)).resolves.toEqual({
       private: true,
       dependencies: { plugin: "1.0.0", "runtime-peer": "5.0.0" },
@@ -222,9 +208,8 @@ describe("managed npm root", () => {
   });
 
   it("resolves workspace pnpm overrides from packaged dist chunks", async () => {
-    const packageRoot = await makeTempRoot();
+    const packageRoot = await makeTempRoot({ name: "openclaw" });
     await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-    await writeFixtureJson(path.join(packageRoot, "package.json"), { name: "openclaw" });
     await fs.writeFile(
       path.join(packageRoot, "pnpm-workspace.yaml"),
       "overrides:\n  axios: 1.18.0\n",
@@ -239,8 +224,7 @@ describe("managed npm root", () => {
   });
 
   it("normalizes workspace overrides before managed npm use", async () => {
-    const packageRoot = await makeTempRoot();
-    await writeFixtureJson(path.join(packageRoot, "package.json"), {
+    const packageRoot = await makeTempRoot({
       name: "openclaw",
       dependencies: {
         "managed-runtime": "3.1024.0",
@@ -283,31 +267,14 @@ describe("managed npm root", () => {
     });
   });
 
-  it("pins managed dependencies to the resolved version", () => {
+  it.each(["stable", undefined])("pins resolved version with selector %s", (selector) => {
     expect(
       resolveManagedNpmRootDependencySpec({
         parsedSpec: {
           name: "@openclaw/discord",
-          raw: "@openclaw/discord@stable",
-          selector: "stable",
-          selectorKind: "tag",
-          selectorIsPrerelease: false,
-        },
-        resolution: {
-          name: "@openclaw/discord",
-          version: "2026.5.2",
-          resolvedSpec: "@openclaw/discord@2026.5.2",
-          resolvedAt: "2026-05-03T00:00:00.000Z",
-        },
-      }),
-    ).toBe("2026.5.2");
-
-    expect(
-      resolveManagedNpmRootDependencySpec({
-        parsedSpec: {
-          name: "@openclaw/discord",
-          raw: "@openclaw/discord",
-          selectorKind: "none",
+          raw: selector ? "@openclaw/discord@stable" : "@openclaw/discord",
+          selector,
+          selectorKind: selector ? "tag" : "none",
           selectorIsPrerelease: false,
         },
         resolution: {
@@ -322,51 +289,36 @@ describe("managed npm root", () => {
 
   it("reads installed dependency metadata from package-lock", async () => {
     const npmRoot = await makeTempRoot();
+    const metadata = {
+      version: "2026.5.2",
+      resolved: "https://registry.npmjs.org/@openclaw/discord/-/discord-2026.5.2.tgz",
+      integrity: "sha512-discord",
+    };
     await writeLockfile(npmRoot, {
-      "node_modules/@openclaw/discord": {
-        version: "2026.5.2",
-        resolved: "https://registry.npmjs.org/@openclaw/discord/-/discord-2026.5.2.tgz",
-        integrity: "sha512-discord",
-      },
+      "node_modules/@openclaw/discord": metadata,
     });
 
     await expect(
       readManagedNpmRootInstalledDependency({ npmRoot, packageName: "@openclaw/discord" }),
-    ).resolves.toEqual({
-      version: "2026.5.2",
-      resolved: "https://registry.npmjs.org/@openclaw/discord/-/discord-2026.5.2.tgz",
-      integrity: "sha512-discord",
-    });
+    ).resolves.toEqual(metadata);
   });
 
-  it.each([
-    {
-      name: "unbounded update",
-      timeoutMs: 120_000,
-      workTimeoutMs: null,
-      expectedTimeoutMs: undefined,
-    },
-  ])("syncs managed peer pins with the $name budget", async (testCase) => {
-    const npmRoot = await makeTempRoot();
-    await writeFixtureJson(path.join(npmRoot, "package.json"), {
+  it("syncs managed peer pins with an unbounded update budget", async () => {
+    const npmRoot = await makeTempRoot({
       private: true,
       dependencies: { "existing-root": "1.0.0", "old-peer": "1.0.0", plugin: "1.0.0" },
       devDependencies: { "dev-plugin": "1.0.0" },
       openclaw: { managedPeerDependencies: ["old-peer"] },
     });
 
-    const runCommand = vi.fn(async (_args: string[], optionsOrTimeout: number | CommandOptions) => {
-      const options = requireCommandOptions(optionsOrTimeout, "npm peer plan");
-      if (!options.cwd) {
-        throw new Error("expected npm peer plan cwd");
-      }
+    const runCommand = mockPeerPlan(async (cwd) => {
       const tempManifest = JSON.parse(
-        await fs.readFile(path.join(options.cwd, "package.json"), "utf8"),
+        await fs.readFile(path.join(cwd, "package.json"), "utf8"),
       ) as {
         dependencies?: Record<string, string>;
       };
       expect(tempManifest.dependencies).toEqual({ "existing-root": "1.0.0", plugin: "1.0.0" });
-      await writeLockfile(options.cwd, {
+      await writeLockfile(cwd, {
         "": { dependencies: tempManifest.dependencies },
         "node_modules/existing-root": { version: "1.0.0" },
         "node_modules/dev-peer": { dev: true, version: "3.0.0" },
@@ -392,15 +344,14 @@ describe("managed npm root", () => {
           version: "1.0.0",
         },
       });
-      return successfulSpawn;
     });
 
     await expect(
       syncManagedNpmRootPeerDependencies({
         npmRoot,
         runCommand,
-        timeoutMs: testCase.timeoutMs,
-        workTimeoutMs: testCase.workTimeoutMs,
+        timeoutMs: 120_000,
+        workTimeoutMs: null,
       }),
     ).resolves.toBe(true);
 
@@ -422,8 +373,10 @@ describe("managed npm root", () => {
       "--no-fund",
     ]);
     expect(options?.cwd).not.toBe(npmRoot);
-    expect(options.timeoutMs).toBe(testCase.expectedTimeoutMs);
-    expect(options?.env?.npm_config_legacy_peer_deps).toBe("false");
+    expect(options).toMatchObject({
+      timeoutMs: undefined,
+      env: { npm_config_legacy_peer_deps: "false" },
+    });
 
     await expect(readManifest(npmRoot)).resolves.toEqual({
       private: true,
@@ -434,28 +387,25 @@ describe("managed npm root", () => {
   });
 
   it("advances stale managed peer pins to the override-aware npm plan", async () => {
-    const npmRoot = await makeTempRoot();
-    await writeFixtureJson(path.join(npmRoot, "package.json"), {
+    const npmRoot = await makeTempRoot({
       private: true,
       dependencies: { plugin: "1.0.0", "runtime-peer": "4.12.23" },
       overrides: { "runtime-peer": "4.12.18" },
       openclaw: { managedOverrides: ["runtime-peer"], managedPeerDependencies: ["runtime-peer"] },
     });
 
-    const runCommand = vi.fn(async (_args: string[], optionsOrTimeout: number | CommandOptions) => {
-      const options = requireCommandOptions(optionsOrTimeout, "npm peer plan");
-      if (!options.cwd) {
-        throw new Error("expected npm peer plan cwd");
-      }
+    const runCommand = mockPeerPlan(async (cwd) => {
       const tempManifest = JSON.parse(
-        await fs.readFile(path.join(options.cwd, "package.json"), "utf8"),
+        await fs.readFile(path.join(cwd, "package.json"), "utf8"),
       ) as {
         dependencies?: Record<string, string>;
         overrides?: Record<string, string>;
       };
-      expect(tempManifest.dependencies).toEqual({ plugin: "1.0.0" });
-      expect(tempManifest.overrides).toEqual({ "runtime-peer": "4.12.18" });
-      await writeLockfile(options.cwd, {
+      expect([tempManifest.dependencies, tempManifest.overrides]).toEqual([
+        { plugin: "1.0.0" },
+        { "runtime-peer": "4.12.18" },
+      ]);
+      await writeLockfile(cwd, {
         "": { dependencies: tempManifest.dependencies },
         "node_modules/plugin": {
           peerDependencies: { "runtime-peer": "^4.0.0" },
@@ -463,7 +413,6 @@ describe("managed npm root", () => {
         },
         "node_modules/runtime-peer": { peer: true, version: "4.12.18" },
       });
-      return successfulSpawn;
     });
 
     await expect(
@@ -483,21 +432,17 @@ describe("managed npm root", () => {
   });
 
   it("reconciles preserved stale pins with managed overrides when peer planning fails", async () => {
-    const npmRoot = await makeTempRoot();
-    await writeFixtureJson(path.join(npmRoot, "package.json"), {
+    const npmRoot = await makeTempRoot({
       private: true,
       dependencies: { "aliased-peer": "3.0.10", plugin: "1.0.0", "runtime-peer": "4.12.23" },
       openclaw: { managedPeerDependencies: ["aliased-peer", "runtime-peer"] },
     });
 
-    const runCommand = vi.fn(async () => ({
+    const runCommand = vi.fn().mockResolvedValue({
+      ...successfulSpawn,
       code: 1,
-      stdout: "",
       stderr: "npm ERR! network request failed",
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
-    }));
+    });
 
     await expect(
       syncManagedNpmRootPeerDependencies({
@@ -523,35 +468,26 @@ describe("managed npm root", () => {
   });
 
   it("uses lockfile metadata to preserve non-host peers when host peer planning fails", async () => {
-    const npmRoot = await makeTempRoot();
-    await writeFixtureJson(path.join(npmRoot, "package.json"), {
+    const npmRoot = await makeTempRoot({
       private: true,
       dependencies: { plugin: "1.0.0" },
     });
 
-    const runCommand = vi.fn(async (_args: string[], optionsOrTimeout: number | CommandOptions) => {
-      const options = requireCommandOptions(optionsOrTimeout, "npm peer plan");
-      if (!options.cwd) {
-        throw new Error("expected npm peer plan cwd");
-      }
-      if (runCommand.mock.calls.length === 1) {
+    const runCommand = mockPeerPlan(async (cwd, call) => {
+      if (call === 1) {
         return {
+          ...successfulSpawn,
           code: 1,
-          stdout: "",
           stderr: "npm ERR! notarget No matching version found for openclaw@2026.5.99-beta.1",
-          signal: null,
-          killed: false,
-          termination: "exit" as const,
         };
       }
-      await writeLockfile(options.cwd, {
+      await writeLockfile(cwd, {
         "": { dependencies: { plugin: "1.0.0" } },
         "node_modules/plugin": {
           peerDependencies: { openclaw: "2026.5.99-beta.1", "runtime-peer": "^2.0.0" },
           version: "1.0.0",
         },
       });
-      return successfulSpawn;
     });
 
     await expect(
@@ -575,18 +511,13 @@ describe("managed npm root", () => {
   });
 
   it("does not promote nested bundled peer ranges without a root peer package", async () => {
-    const npmRoot = await makeTempRoot();
-    await writeFixtureJson(path.join(npmRoot, "package.json"), {
+    const npmRoot = await makeTempRoot({
       private: true,
       dependencies: { plugin: "file:./plugin.tgz" },
     });
 
-    const runCommand = vi.fn(async (_args: string[], optionsOrTimeout: number | CommandOptions) => {
-      const options = requireCommandOptions(optionsOrTimeout, "npm peer plan");
-      if (!options.cwd) {
-        throw new Error("expected npm peer plan cwd");
-      }
-      await writeLockfile(options.cwd, {
+    const runCommand = mockPeerPlan(async (cwd) => {
+      await writeLockfile(cwd, {
         "": { dependencies: { plugin: "file:./plugin.tgz" } },
         "node_modules/plugin": { version: "1.0.0" },
         "node_modules/plugin/node_modules/runtime-lib": {
@@ -595,7 +526,6 @@ describe("managed npm root", () => {
         },
         "node_modules/plugin/node_modules/zod": { version: "4.4.3" },
       });
-      return successfulSpawn;
     });
 
     await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(false);

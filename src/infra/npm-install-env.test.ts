@@ -38,6 +38,18 @@ function createIsolatedNpmConfigEnv(dir: string): NodeJS.ProcessEnv {
   return { HOME: home, NPM_CONFIG_GLOBALCONFIG: globalconfig };
 }
 
+function withNpmConfig(run: (dir: string, env: NodeJS.ProcessEnv) => void) {
+  return withTempDir("openclaw-npm-config-", async (dir) => {
+    run(dir, createIsolatedNpmConfigEnv(dir));
+  });
+}
+
+function expectBefore(env: NodeJS.ProcessEnv, dir: string, npmConfigPrefix?: string) {
+  expect(
+    createNpmFreshnessBypassArgs(env, FROZEN_NOW, { npmConfigCwd: dir, npmConfigPrefix }),
+  ).toEqual(BEFORE_ARGS);
+}
+
 describe("npm project install env", () => {
   it.each([["NPM_CONFIG_FETCH_RETRIES", "0"]])(
     "preserves explicit network config %s without a competing default",
@@ -68,14 +80,12 @@ describe("npm project install env", () => {
     });
   });
 
-  it("preserves explicit npm script shell config", () => {
+  it.each(["NPM_CONFIG_SCRIPT_SHELL", "npm_config_script_shell"])("preserves %s", (key) => {
     withMockedPlatform("linux", () => {
-      expect(
-        createNpmProjectInstallEnv({ NPM_CONFIG_SCRIPT_SHELL: "/custom/sh" }, {}, FROZEN_NOW),
-      ).toEqual({ ...EXPECTED_PROJECT_ENV, NPM_CONFIG_SCRIPT_SHELL: "/custom/sh" });
-      expect(
-        createNpmProjectInstallEnv({ npm_config_script_shell: "/custom/lower-sh" }, {}, FROZEN_NOW),
-      ).toEqual({ ...EXPECTED_PROJECT_ENV, npm_config_script_shell: "/custom/lower-sh" });
+      expect(createNpmProjectInstallEnv({ [key]: "/custom/sh" }, {}, FROZEN_NOW)).toEqual({
+        ...EXPECTED_PROJECT_ENV,
+        [key]: "/custom/sh",
+      });
     });
   });
 
@@ -83,26 +93,12 @@ describe("npm project install env", () => {
     expect(createNpmFreshnessBypassArgs({}, FROZEN_NOW)).toEqual(["--min-release-age=0"]);
   });
 
-  it("uses before args for expanded npm userconfig paths", async () => {
-    await withTempDir("openclaw-home-npmrc-", async (dir) => {
-      const baseEnv = createIsolatedNpmConfigEnv(dir);
+  it.each(["~/.npmrc", "${HOME}/.npmrc"])("expands userconfig %s", async (userconfig) => {
+    await withNpmConfig((dir, baseEnv) => {
       // Keep user config outside the project scope so path expansion must succeed.
       writePolicy(path.join(dir, "home", ".npmrc"));
 
-      expect(
-        createNpmFreshnessBypassArgs(
-          { ...baseEnv, NPM_CONFIG_USERCONFIG: "~/.npmrc" },
-          FROZEN_NOW,
-          { npmConfigCwd: dir },
-        ),
-      ).toEqual(BEFORE_ARGS);
-      expect(
-        createNpmFreshnessBypassArgs(
-          { ...baseEnv, NPM_CONFIG_USERCONFIG: "${HOME}/.npmrc" },
-          FROZEN_NOW,
-          { npmConfigCwd: dir },
-        ),
-      ).toEqual(BEFORE_ARGS);
+      expectBefore({ ...baseEnv, NPM_CONFIG_USERCONFIG: userconfig }, dir);
     });
   });
 
@@ -112,43 +108,32 @@ describe("npm project install env", () => {
       fsSync.mkdirSync(home, { recursive: true });
       writePolicy(path.join(dir, "etc", "npmrc"));
 
-      expect(
-        createNpmFreshnessBypassArgs({ HOME: home, NPM_CONFIG_PREFIX: dir }, FROZEN_NOW, {
-          npmConfigCwd: dir,
-        }),
-      ).toEqual(BEFORE_ARGS);
+      expectBefore({ HOME: home, NPM_CONFIG_PREFIX: dir }, dir);
     });
   });
 
   it("uses before args for command project npmrc before policies", async () => {
-    await withTempDir("openclaw-project-npmrc-", async (dir) => {
-      const baseEnv = createIsolatedNpmConfigEnv(dir);
+    await withNpmConfig((dir, baseEnv) => {
       writePolicy(path.join(dir, ".npmrc"));
 
-      expect(createNpmFreshnessBypassArgs(baseEnv, FROZEN_NOW, { npmConfigCwd: dir })).toEqual(
-        BEFORE_ARGS,
-      );
+      expectBefore(baseEnv, dir);
 
       const env = createNpmProjectInstallEnv(baseEnv, { npmConfigCwd: dir }, FROZEN_NOW);
-      expect(env.npm_config_min_release_age).toBe("");
-      expect(env.npm_config_before).toBe(FROZEN_NOW.toISOString());
+      expect(env).toMatchObject({
+        npm_config_min_release_age: "",
+        npm_config_before: FROZEN_NOW.toISOString(),
+      });
     });
   });
 
   it("prefers scoped npm prefix policy over parent npm prefix policy", async () => {
-    await withTempDir("openclaw-prefix-npmrc-", async (dir) => {
-      const baseEnv = createIsolatedNpmConfigEnv(dir);
+    await withNpmConfig((dir, baseEnv) => {
       const scopedPrefix = path.join(dir, "scoped-prefix");
       const parentPrefix = path.join(dir, "parent-prefix");
       writePolicy(path.join(scopedPrefix, "etc", "npmrc"));
       writePolicy(path.join(parentPrefix, "etc", "npmrc"), "min-release-age=7");
 
-      expect(
-        createNpmFreshnessBypassArgs({ ...baseEnv, NPM_CONFIG_PREFIX: parentPrefix }, FROZEN_NOW, {
-          npmConfigCwd: dir,
-          npmConfigPrefix: scopedPrefix,
-        }),
-      ).toEqual(BEFORE_ARGS);
+      expectBefore({ ...baseEnv, NPM_CONFIG_PREFIX: parentPrefix }, dir, scopedPrefix);
     });
   });
 });
