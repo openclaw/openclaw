@@ -89,9 +89,10 @@ function createHomeFixture(options: HomeWire = {}, entries: EntrySummary[] = [])
     ],
     invoke,
   });
+  const findEntry = (sessionKey: string) =>
+    runtimeFixture.entries.find((candidate) => candidate.sessionKey === sessionKey)?.entry;
   vi.spyOn(runtimeFixture.runtime.agent.session, "getSessionEntryAsync").mockImplementation(
-    async ({ sessionKey }) =>
-      runtimeFixture.entries.find((candidate) => candidate.sessionKey === sessionKey)?.entry,
+    async ({ sessionKey }) => findEntry(sessionKey),
   );
   const config: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
   const { api, getProvider } = createGatewayApi(runtimeFixture.runtime, config);
@@ -115,7 +116,6 @@ function createHomeFixture(options: HomeWire = {}, entries: EntrySummary[] = [])
     });
   return {
     ...runtimeFixture,
-    invoke,
     provider,
     wire,
     continueAt,
@@ -129,13 +129,11 @@ function createHomeFixture(options: HomeWire = {}, entries: EntrySummary[] = [])
       expect(importHistory).not.toHaveBeenCalled();
     },
     entry: (sessionKey: string) => {
-      const summary = runtimeFixture.entries.find(
-        (candidate) => candidate.sessionKey === sessionKey,
-      );
-      if (!summary) {
+      const entry = findEntry(sessionKey);
+      if (!entry) {
         throw new Error("missing adopted session entry");
       }
-      return summary.entry;
+      return entry;
     },
   };
 }
