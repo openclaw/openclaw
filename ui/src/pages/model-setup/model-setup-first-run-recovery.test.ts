@@ -6,6 +6,11 @@ import type { WizardNextResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { readFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
 import {
+  waitForText,
+  waitForElement,
+  runningStep,
+  authButton,
+  pageButton,
   authOption,
   activated,
   mockRequests,
@@ -17,6 +22,7 @@ import {
   createFirstRunContext,
   detection,
   mountDetection,
+  reconnectGateway,
   waitForModelSetupDetection,
 } from "./model-setup-first-run.test-support.ts";
 import { MODEL_SETUP_VERIFY_TIMEOUT_MS } from "./state.ts";
@@ -32,7 +38,7 @@ async function interruptedActivation() {
   });
   expect(original.request).not.toHaveBeenCalled();
   await clickCandidate(page, "openai-api-key");
-  await waitForFast(() => expect(page.textContent).toContain("The Gateway is restarting"));
+  await waitForText(page, "The Gateway is restarting");
   unmountModelSetupPage(page);
   provider.remove();
 
@@ -47,11 +53,7 @@ describe("ModelSetupPage first-run application recovery", () => {
       ...detection,
       authOptions: [authOption("custom-api-key", "Custom provider", "custom")],
     };
-    const question = {
-      done: false,
-      status: "running",
-      step: { id: "provider-url", type: "text", message: "API Base URL" },
-    };
+    const question = runningStep({ id: "provider-url", type: "text", message: "API Base URL" });
     let sessionId: string | undefined;
     mockRequests(original.request, {
       "openclaw.setup.auth.start": (params) => {
@@ -65,10 +67,8 @@ describe("ModelSetupPage first-run application recovery", () => {
       original.client,
       result,
     );
-    previous
-      .querySelector<HTMLButtonElement>('[data-auth-choice="custom-api-key"] button')!
-      .click();
-    await waitForFast(() => expect(previous.textContent).toContain("API Base URL"));
+    authButton(previous, "custom-api-key")!.click();
+    await waitForText(previous, "API Base URL");
     unmountModelSetupPage(previous);
     provider.remove();
 
@@ -97,18 +97,13 @@ describe("ModelSetupPage first-run application recovery", () => {
         { timeoutMs: null, signal: expect.any(AbortSignal) },
       ),
     );
-    await waitForFast(() =>
-      expect(page.textContent).toContain("Gateway no longer has this setup session"),
-    );
+    await waitForText(page, "Gateway no longer has this setup session");
     await waitForFast(() => {
-      expect(
-        page.querySelector<HTMLButtonElement>('[data-auth-choice="custom-api-key"] button')!
-          .disabled,
-      ).toBe(true);
+      expect(authButton(page, "custom-api-key")!.disabled).toBe(true);
       expect(readFirstRunActivationReceipt(relaunched.context)).not.toBeNull();
     });
     if (failDetection) {
-      await waitForFast(() => expect(page.textContent).toContain("Setup detection is unavailable"));
+      await waitForText(page, "Setup detection is unavailable");
       const close = modalButton(page, "Close")!;
       close.click();
       failDetection = false;
@@ -118,10 +113,7 @@ describe("ModelSetupPage first-run application recovery", () => {
       retry.click();
       await waitForFast(() => {
         expect(readFirstRunActivationReceipt(relaunched.context)).toBeNull();
-        expect(
-          page.querySelector<HTMLButtonElement>('[data-auth-choice="custom-api-key"] button')!
-            .disabled,
-        ).toBe(false);
+        expect(authButton(page, "custom-api-key")!.disabled).toBe(false);
       });
     }
     expect(
@@ -183,9 +175,9 @@ describe("ModelSetupPage first-run application recovery", () => {
     await waitForFast(() => {
       expect(page.textContent).toContain("previous activation is unresolved");
       expect(page.textContent).toContain("Check again");
-      expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(true);
+      expect(pageButton(page, "[data-models-connect]")?.disabled).toBe(true);
     });
-    page.querySelector<HTMLButtonElement>("[data-models-connect]")?.click();
+    pageButton(page, "[data-models-connect]")?.click();
     expect(relaunched.request).not.toHaveBeenCalled();
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 500_000);
     [...page.querySelectorAll<HTMLButtonElement>(".model-setup__intro .btn")]
@@ -236,17 +228,7 @@ describe("ModelSetupPage first-run application recovery", () => {
     await clickCandidate(page, "openai-api-key");
     await waitForFast(() => expect(resolveFirstActivation).toBeTypeOf("function"));
 
-    publishGatewaySnapshot({
-      ...context.gateway.snapshot,
-      phase: "reconnecting",
-      hello: null,
-    });
-    await page.updateComplete;
-    publishGatewaySnapshot({
-      ...snapshot,
-      phase: "connected",
-      hello: { ...snapshot.hello },
-    });
+    await reconnectGateway(page, snapshot, publishGatewaySnapshot);
 
     await waitForFast(() => {
       expect(page.textContent).toContain("previous activation is unresolved");
@@ -255,17 +237,15 @@ describe("ModelSetupPage first-run application recovery", () => {
     expect(activationCount).toBe(1);
     expect(context.navigate).not.toHaveBeenCalled();
 
-    await waitForFast(() =>
-      expect(page.querySelector(".model-setup__recovery .btn")).not.toBeNull(),
-    );
+    await waitForElement(page, ".model-setup__recovery .btn");
     await waitForModelSetupDetection(page);
-    const retry = page.querySelector<HTMLButtonElement>(".model-setup__recovery .btn")!;
+    const retry = pageButton(page, ".model-setup__recovery .btn")!;
     expect(retry.disabled).toBe(false);
     expect(JSON.parse(pendingReceipt()!).deadlineMs).toBeGreaterThan(Date.now());
     retry.click();
     await page.updateComplete;
     expect(activationCount).toBe(1);
-    await waitForFast(() => expect(page.textContent).toContain("may still be running"));
+    await waitForText(page, "may still be running");
     await waitForModelSetupDetection(page);
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 500_000);
     retry.click();

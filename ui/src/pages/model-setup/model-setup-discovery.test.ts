@@ -6,6 +6,13 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
+  waitForText,
+  waitForElement,
+  runningStep,
+  authButton,
+  authOption,
+  answerWizard,
+  enterManualKey,
   mockRequests,
   useFirstRunFixtures,
   pendingReceipt,
@@ -22,6 +29,7 @@ import {
 
 describe("Model Setup explicit discovery", () => {
   useFirstRunFixtures("test-device-key");
+  const nativeInput = ".model-setup__native-discovery input";
   it.each(["cancel at credentials", "finish final commit"] as const)(
     "retains the admitted wizard after protected cancellation: %s",
     async (outcome) => {
@@ -85,21 +93,18 @@ describe("Model Setup explicit discovery", () => {
         page.querySelector("openclaw-modal-dialog")!.dispatchEvent(new CustomEvent("modal-cancel"));
       try {
         await clickCandidate(page, "openai-api-key");
-        await waitForFast(() => expect(page.textContent).toContain("Install provider?"));
-        const confirm = modalButton(page, "Yes")!;
-        confirm.click();
+        await waitForText(page, "Install provider?");
+        modalButton(page, "Yes")!.click();
         await installed.promise;
         cancel();
-        await waitForFast(() =>
-          expect(page.textContent).toContain("Setup is finishing the current step"),
-        );
+        await waitForText(page, "Setup is finishing the current step");
         expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
         expect(pendingReceipt()).not.toBeNull();
         expect(session!.getStatus()).toBe("running");
         expect(answers).toEqual([true]);
         expect(starts).toBe(1);
         allowInstall.resolve();
-        await waitForFast(() => expect(page.textContent).toContain("Provider API key"));
+        await waitForText(page, "Provider API key");
         if (outcome === "cancel at credentials") {
           cancel();
           await terminal.promise;
@@ -107,24 +112,14 @@ describe("Model Setup explicit discovery", () => {
           expect(session!.getStatus()).toBe("cancelled");
           expect(answers).toEqual([true]);
         } else {
-          const input = page.querySelector<HTMLInputElement>(
-            'openclaw-modal-dialog input[type="password"]',
-          )!;
-          input.value = "synthetic-key";
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-          await page.updateComplete;
-          page
-            .querySelector<HTMLFormElement>("openclaw-modal-dialog form")!
-            .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+          await answerWizard(page, "synthetic-key", 'openclaw-modal-dialog input[type="password"]');
           await committed.promise;
           cancel();
-          await waitForFast(() =>
-            expect(page.textContent).toContain("Setup is finishing the current step"),
-          );
+          await waitForText(page, "Setup is finishing the current step");
           expect(session!.getStatus()).toBe("running");
           allowCommit.resolve();
           await terminal.promise;
-          await waitForFast(() => expect(page.textContent).toContain("Connection verified"));
+          await waitForText(page, "Connection verified");
           expect(answers).toEqual([true, "synthetic-key"]);
         }
         expect(starts).toBe(1);
@@ -151,22 +146,17 @@ describe("Model Setup explicit discovery", () => {
               message: "wizard not found",
               details: { code: "WIZARD_NOT_FOUND" },
             })
-          : failure === "denied"
-            ? new GatewayRequestError({ code: "FORBIDDEN", message: "Cancel permission denied" })
-            : new Error("Cancellation transport failed");
+          : new GatewayRequestError({ code: "FORBIDDEN", message: "Cancel permission denied" });
       mockRequests(request, {
         "openclaw.setup.activate.start": () => ({ done: false, status: "running" }),
-        "wizard.next": () => ({
-          done: false,
-          status: "running",
-          step: {
+        "wizard.next": () =>
+          runningStep({
             id: "credential",
             type: "text",
             message: "Provider credential",
             sensitive: true,
             executor: "client",
-          },
-        }),
+          }),
         "wizard.cancel": () => {
           if (++cancels === 1) {
             throw error;
@@ -178,23 +168,21 @@ describe("Model Setup explicit discovery", () => {
         candidates: [candidate("openai-api-key", "openai/selected", true)],
       });
       await clickCandidate(page, "openai-api-key");
-      await waitForFast(() => expect(page.textContent).toContain("Provider credential"));
-      const receiptKey = "openclaw.modelSetup.pendingActivation.v1";
-      const receipt = localStorage.getItem(receiptKey);
+      await waitForText(page, "Provider credential");
+      const receipt = pendingReceipt();
       expect(receipt).not.toBeNull();
       const cancel = () =>
         page.querySelector("openclaw-modal-dialog")!.dispatchEvent(new CustomEvent("modal-cancel"));
       cancel();
       if (failure === "missing wizard") {
-        await waitForFast(() => expect(page.textContent).toContain("It may already have finished"));
+        await waitForText(page, "It may already have finished");
         expect(cancels).toBe(1);
-        expect(localStorage.getItem(receiptKey)).toBe(receipt);
-        const close = modalButton(page, "Close");
-        expect(close).toBeDefined();
-        close!.click();
+        expect(pendingReceipt()).toBe(receipt);
+        expect(modalButton(page, "Close")).toBeDefined();
+        modalButton(page, "Close")!.click();
         await waitForFast(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
         expect(page.querySelector(".model-setup__recovery")).not.toBeNull();
-        expect(localStorage.getItem(receiptKey)).toBe(receipt);
+        expect(pendingReceipt()).toBe(receipt);
       } else {
         await waitForFast(() =>
           expect(page.querySelector(".model-setup-wizard .callout.warning")?.textContent).toContain(
@@ -203,11 +191,11 @@ describe("Model Setup explicit discovery", () => {
         );
         expect(page.textContent).toContain(error.message);
         expect(page.textContent).toContain("Provider credential");
-        expect(localStorage.getItem(receiptKey)).toBe(receipt);
+        expect(pendingReceipt()).toBe(receipt);
         expect(cancels).toBe(1);
         cancel();
         await waitForFast(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
-        expect(localStorage.getItem(receiptKey)).toBeNull();
+        expect(pendingReceipt()).toBeNull();
         expect(cancels).toBe(2);
       }
       expect(callsFor(request, "openclaw.setup.activate.start")).toHaveLength(1);
@@ -216,27 +204,21 @@ describe("Model Setup explicit discovery", () => {
   );
 
   it("sends only an explicit fresh-install discovery opt-in", async () => {
-    const enabled = true;
     const { context, client, request } = createFirstRunContext();
     request.mockResolvedValue({ done: true, status: "cancelled" });
     const { page } = await mountDetection(context, client, {
       nativeSessionCatalogPreferenceRequired: true,
-      nativeSessionCatalogs: [
-        { pluginId: "anthropic", label: "Claude" },
-        { pluginId: "codex", label: "Codex" },
-      ],
+      nativeSessionCatalogs: [{ pluginId: "codex", label: "Codex" }],
       candidates: [candidate("codex-cli", "openai/available", true)],
       manualProviders: [{ id: "api-key", label: "API provider" }],
     });
-    const checkbox = page.querySelector<HTMLInputElement>(".model-setup__native-discovery input")!;
+    const checkbox = page.querySelector<HTMLInputElement>(nativeInput)!;
     expect(checkbox.checked).toBe(false);
     expect(page.querySelector("[data-selected]")).toBeNull();
     expect(request).not.toHaveBeenCalled();
     expect(pendingReceipt()).toBeNull();
-    if (enabled) {
-      checkbox.click();
-      await page.updateComplete;
-    }
+    checkbox.click();
+    await page.updateComplete;
     expect(request).not.toHaveBeenCalled();
     await clickCandidate(page, "codex-cli");
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
@@ -245,7 +227,7 @@ describe("Model Setup explicit discovery", () => {
       expect.objectContaining({
         kind: "codex-cli",
         modelRef: "openai/available",
-        nativeSessionCatalogsEnabled: enabled,
+        nativeSessionCatalogsEnabled: true,
       }),
       { timeoutMs: null },
     ]);
@@ -259,19 +241,10 @@ describe("Model Setup explicit discovery", () => {
       const { page } = await mountDetection(context, client, {
         nativeSessionCatalogPreferenceRequired: true,
         nativeSessionCatalogs: [{ pluginId: "catalog-plugin", label: "Native conversations" }],
-        authOptions: [
-          {
-            id: "manifest-auth",
-            label: kind === "install" ? "Meta" : "Compatible endpoint",
-            kind,
-            featured: false,
-          },
-        ],
+        authOptions: [authOption("manifest-auth", "Provider", kind, false)],
       });
       expect(request).not.toHaveBeenCalled();
-      const button = page.querySelector<HTMLButtonElement>(
-        '[data-auth-choice="manifest-auth"] button',
-      )!;
+      const button = authButton(page, "manifest-auth")!;
       expect(button.closest("details")).toBeNull();
       expect(button.textContent).toContain(
         kind === "install" ? "Review & install" : "Set up endpoint",
@@ -302,9 +275,7 @@ describe("Model Setup explicit discovery", () => {
     expect(request).not.toHaveBeenCalled();
     expect(page.querySelector(".model-setup__native-discovery")).toBeNull();
     expect(page.querySelector("[data-selected]")).toBeNull();
-    await selectManualProvider(page, "provider-key");
-    setInput(page, ".model-setup__manual input", "test-only-key");
-    page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
+    await enterManualKey(page, "provider-key", "test-only-key");
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(request.mock.calls[0]![1]).not.toHaveProperty("nativeSessionCatalogsEnabled");
   });
@@ -318,7 +289,7 @@ describe("Model Setup explicit discovery", () => {
     };
     request.mockResolvedValue(fresh);
     const { page } = await mountDetection(context, client, fresh);
-    page.querySelector<HTMLInputElement>(".model-setup__native-discovery input")!.click();
+    page.querySelector<HTMLInputElement>(nativeInput)!.click();
     await selectManualProvider(page, "provider-key");
     setInput(page, ".model-setup__manual input", "test-only-pending-key");
     await page.updateComplete;
@@ -332,13 +303,9 @@ describe("Model Setup explicit discovery", () => {
         expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.any(AbortSignal) }),
       ),
     );
-    await waitForFast(() =>
-      expect(page.querySelector(".model-setup__native-discovery input")).not.toBeNull(),
-    );
-    expect(
-      page.querySelector<HTMLInputElement>(".model-setup__native-discovery input")!.checked,
-    ).toBe(false);
-    expect(page.querySelector<HTMLInputElement>(".model-setup__manual input")!.value).toBe("");
+    await waitForElement(page, nativeInput);
+    expect(page.querySelector(nativeInput)).toMatchObject({ checked: false });
+    expect(page.querySelector(".model-setup__manual input")).toMatchObject({ value: "" });
     expect(page.querySelector("[data-selected]")).toBeNull();
     expect(request.mock.calls.map(([method]) => method)).toEqual(["openclaw.setup.detect"]);
   });

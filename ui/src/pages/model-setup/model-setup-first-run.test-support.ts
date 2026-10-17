@@ -6,11 +6,12 @@ import type { SystemAgentSetupDetectResult, WizardNextResult } from "../../api/t
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { mountPage } from "./test-helpers/page.test-support.ts";
+import { createContext, mountPage } from "./test-helpers/page.test-support.ts";
 import type { TestModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
 export { mountPage };
@@ -29,6 +30,23 @@ export function activated(
   details: Partial<NonNullable<WizardNextResult["modelActivation"]>> = {},
 ) {
   return { done: true, status: "done" as const, modelActivation: { modelRef, ...details } };
+}
+
+export const runningStep = (step: NonNullable<WizardNextResult["step"]>) => ({
+  done: false,
+  status: "running" as const,
+  step,
+});
+
+export function configSnapshot(config: Record<string, unknown> = {}, hash = "hash-1") {
+  return {
+    config,
+    sourceConfig: config,
+    raw: JSON.stringify(config),
+    hash,
+    valid: true,
+    issues: [],
+  };
 }
 
 export const detection: SystemAgentSetupDetectResult = {
@@ -65,77 +83,49 @@ export const pendingReceipt = () =>
   localStorage.getItem("openclaw.modelSetup.pendingActivation.v1");
 
 export function mockRequests(
-  request: ReturnType<typeof createFirstRunContext>["request"],
+  request: {
+    mockImplementation: (
+      handler: (method: string, params?: unknown) => Promise<unknown>,
+    ) => unknown;
+  },
   handlers: Record<string, (params: unknown) => unknown>,
 ) {
   request.mockImplementation(async (method, params) => {
     const handler = handlers[method];
-    if (!handler) {
+    if (!Object.hasOwn(handlers, method) || !handler) {
       throw new Error(`Unexpected method ${method}`);
     }
     return handler(params);
   });
 }
 
-function mutableGatewaySnapshot(snapshot: ApplicationGateway["snapshot"]) {
-  return snapshot;
-}
-
 export function createFirstRunContext(refreshError?: string, beforeRefresh?: () => Promise<void>) {
-  const request =
-    vi.fn<(...args: Parameters<GatewayBrowserClient["request"]>) => Promise<unknown>>();
+  const base = createContext();
+  // Replace the base capability only after installing the publishing Gateway.
+  base.runtimeConfig.dispose();
+  const { request } = base;
   const client = createTestGatewayClient(request);
-  const listeners = new Set<(snapshot: ApplicationGateway["snapshot"]) => void>();
   const snapshot = {
+    ...base.snapshot,
     client,
-    phase: "connected",
+    phase: "connected" as const,
     offlineStable: false,
     hello: {
-      type: "hello-ok",
-      protocol: 1,
-      auth: {
-        role: "operator",
-        scopes: ["operator.read", "operator.admin"],
-        recoveryScope: "synthetic-setup-owner",
-      },
-      features: {
-        methods: [
-          "config.set",
-          "openclaw.setup.detect",
-          "openclaw.setup.verify",
-          "openclaw.setup.activate.start",
-          "openclaw.setup.prepare.start",
-        ],
-      },
+      ...base.snapshot.hello,
+      auth: { ...base.snapshot.hello.auth, recoveryScope: "synthetic-setup-owner" },
     },
     canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
   } satisfies ApplicationGateway["snapshot"];
+  const publication = createApplicationGateway(snapshot);
   const gateway = {
-    snapshot: mutableGatewaySnapshot(snapshot),
-    connection: {
-      gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
-      token: "test-token",
-      password: "",
-      bootstrapToken: "",
+    ...base.context.gateway,
+    get snapshot() {
+      return publication.gateway.snapshot;
     },
     connectionRevision: 0,
-    eventLog: [],
     eventLogRevision: 0,
     loadSelfProfile: async () => null,
-    connect: () => undefined,
-    setSessionKey: () => undefined,
-    start: () => undefined,
-    stop: () => undefined,
-    subscribe: (listener: (next: ApplicationGateway["snapshot"]) => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    subscribeEventLog: () => () => undefined,
-    subscribeEvents: () => () => undefined,
+    subscribe: publication.gateway.subscribe,
   } satisfies ApplicationGateway;
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const runExternalMutation = vi.fn(
@@ -160,33 +150,16 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
     },
   );
   const context = {
+    ...base.context,
     gateway,
-    agentSelection: {
-      state: { selectedId: "main", scopeId: "main" },
-      subscribe: () => () => undefined,
-    },
-    settingsAgentSelection: {
-      state: { selectedId: "main", scopeId: "main" },
-      subscribe: () => () => undefined,
-    },
-    basePath: "/openclaw",
-    resourceBasePath: "/openclaw",
-    navigate: vi.fn(),
     runtimeConfig: { ...runtimeConfig, runExternalMutation },
-    // SAFETY: the first-run page consumes only the gateway, agent selection,
-    // navigation, and runtime config fixtures defined above.
   } as unknown as ApplicationContext;
   return {
     client,
     context,
     request,
     snapshot,
-    publishGatewaySnapshot: (next: ApplicationGateway["snapshot"]) => {
-      gateway.snapshot = next;
-      for (const listener of listeners) {
-        listener(next);
-      }
-    },
+    publishGatewaySnapshot: publication.publish,
   };
 }
 
@@ -209,6 +182,28 @@ export function modalButton(page: ParentNode, label: string) {
   );
 }
 
+export const pageButton = (page: ParentNode, selector: string) =>
+  page.querySelector<HTMLButtonElement>(selector);
+
+export const authButton = (page: ParentNode, id: string) =>
+  pageButton(page, `[data-auth-choice="${id}"] button`);
+
+export const waitForElement = (page: ParentNode, selector: string) =>
+  waitForFast(() => expect(page.querySelector(selector)).not.toBeNull());
+
+export const waitForText = (page: Node, text: string) =>
+  waitForFast(() => expect(page.textContent).toContain(text));
+
+export async function reconnectGateway(
+  page: TestModelSetupPage,
+  snapshot: ReturnType<typeof createFirstRunContext>["snapshot"],
+  publish: (snapshot: ApplicationGateway["snapshot"]) => void,
+) {
+  publish({ ...snapshot, phase: "reconnecting", hello: null });
+  await page.updateComplete;
+  publish({ ...snapshot, phase: "connected", hello: { ...snapshot.hello } });
+}
+
 export function callsFor<T extends readonly unknown[]>(
   request: { mock: { calls: T[] } },
   method: string,
@@ -220,6 +215,18 @@ export function setInput(page: ParentNode, selector: string, value: string) {
   const input = page.querySelector<HTMLInputElement>(selector)!;
   input.value = value;
   input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+export async function answerWizard(
+  page: TestModelSetupPage,
+  value: string,
+  selector = "#model-setup-wizard-text-input",
+) {
+  setInput(page, selector, value);
+  await page.updateComplete;
+  page
+    .querySelector<HTMLFormElement>("openclaw-modal-dialog form")!
+    .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 }
 
 export async function enterManualKey(page: TestModelSetupPage, provider: string, key: string) {
@@ -251,17 +258,13 @@ export function requestParameters(params: unknown) {
 }
 
 export async function clickCandidate(page: TestModelSetupPage, kind: string) {
-  await waitForFast(() => {
-    const candidateButton = page.querySelector<HTMLButtonElement>(
-      `[data-candidate-kind="${kind}"] button`,
-    );
-    expect(candidateButton).not.toBeNull();
-    expect(candidateButton!.disabled).toBe(false);
-  });
-  const button = page.querySelector<HTMLButtonElement>(`[data-candidate-kind="${kind}"] button`);
-  expect(button).not.toBeNull();
-  expect(button!.disabled).toBe(false);
-  button!.click();
+  const readyButton = () => {
+    const button = pageButton(page, `[data-candidate-kind="${kind}"] button`);
+    expect(button).toMatchObject({ disabled: false });
+    return button!;
+  };
+  await waitForFast(readyButton);
+  readyButton().click();
   await page.updateComplete;
 }
 
