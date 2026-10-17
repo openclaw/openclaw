@@ -148,6 +148,9 @@ function buildCliAssistantTranscriptUsage(
     cacheWrite: usage?.cacheWrite,
     totalTokens: usage?.total,
   });
+  if (usage?.cacheWrite1h) {
+    counters.cacheWrite1h = usage.cacheWrite1h;
+  }
   return usage?.contextUsage ? { ...counters, contextUsage: usage.contextUsage } : counters;
 }
 

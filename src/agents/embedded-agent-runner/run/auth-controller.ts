@@ -263,7 +263,6 @@ export function createEmbeddedRunAuthController(params: {
         throw new Error(`Runtime auth refresh requires a source credential.`);
       }
       const runtimeModel = state.models.runtime;
-      params.log.debug(`Refreshing runtime auth for ${runtimeModel.provider} (${reason})...`);
       const preparedAuth = await prepareRuntimeAuthForModel({
         runtimeModel,
         apiKey: sourceApiKey,
@@ -294,12 +293,6 @@ export function createEmbeddedRunAuthController(params: {
         apiKey: preparedAuth.apiKey,
         expiresAt: preparedAuth.expiresAt,
       };
-      if (preparedAuth.expiresAt) {
-        const remaining = preparedAuth.expiresAt - Date.now();
-        params.log.debug(
-          `Runtime auth refreshed for ${runtimeModel.provider}; expires in ${Math.max(0, Math.floor(remaining / 1000))}s.`,
-        );
-      }
     })()
       .catch((err: unknown) => {
         const runtimeModel = state.models.runtime;

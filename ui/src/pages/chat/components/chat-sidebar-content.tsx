@@ -213,7 +213,11 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
       </Match>
       <Match when={!model().src || model().imagePreview}>
         <div
-          class={`chat-assistant-attachment-card chat-assistant-attachment-card--${model().kind} sidebar-attachment-preview__state-card`}
+          class={[
+            "chat-assistant-attachment-card",
+            `chat-assistant-attachment-card--${model().kind}`,
+            "sidebar-attachment-preview__state-card",
+          ]}
           aria-busy={model().pending ? "true" : undefined}
         >
           <AttachmentCardHeader

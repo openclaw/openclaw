@@ -115,6 +115,7 @@ async function startHandoffAndReadCommand(params: {
   channel: "beta" | "extended-stable";
   tag?: string;
   acceptCapabilities?: boolean;
+  fullIntegrityCheck?: boolean;
   admission?: "auto" | "installed";
   reapplyLocalOverrides?: boolean;
   devTarget?: DevUpdateTarget;
@@ -140,6 +141,7 @@ async function startHandoffAndReadCommand(params: {
     channel: params.channel,
     ...(params.tag ? { tag: params.tag } : {}),
     ...(params.acceptCapabilities ? { acceptCapabilities: true } : {}),
+    ...(params.fullIntegrityCheck ? { fullIntegrityCheck: true } : {}),
     admission: params.admission,
     ...(params.reapplyLocalOverrides ? { reapplyLocalOverrides: true } : {}),
     parentPid: process.pid,
@@ -547,6 +549,15 @@ describe("managed service update handoff command", () => {
       const result = await startHandoffAndReadCommand({ channel: "beta", reapplyLocalOverrides });
       expect(result.commandArgv?.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
       expect(result.command.includes("--reapply-local-overrides")).toBe(reapplyLocalOverrides);
+    },
+  );
+
+  it.each([true, false])(
+    "preserves full integrity selection=%s across the detached handoff",
+    async (fullIntegrityCheck) => {
+      const result = await startHandoffAndReadCommand({ channel: "beta", fullIntegrityCheck });
+      expect(result.commandArgv?.includes("--full-integrity-check")).toBe(fullIntegrityCheck);
+      expect(result.command.includes("--full-integrity-check")).toBe(fullIntegrityCheck);
     },
   );
 

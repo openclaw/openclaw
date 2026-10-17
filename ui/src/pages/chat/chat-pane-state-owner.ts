@@ -107,9 +107,7 @@ export abstract class ChatPaneStateOwner {
       // live textarea while visibility change can still reach browser storage.
       state.handleChatDraftChange(liveDraft);
     }
-    if (draftChanged || state.chatStreamRenderFrame != null) {
-      requestChatPageUpdate(state);
-    }
+    requestChatPageUpdate(state);
   };
   start() {
     if (this.chatState.disposed) {

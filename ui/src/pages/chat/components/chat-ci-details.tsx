@@ -120,6 +120,7 @@ function createCiDetails(
     clearTimeout(refreshTimer);
   });
 
+  // Rebind Gateway connection notifications and retire requests from the old client.
   createEffect(
     () => props.gateway,
     (gateway) => {
@@ -144,10 +145,9 @@ function createCiDetails(
       props.pullRequest?.headSha,
     ]),
   );
-  const currentSessionKey = createMemo(() => props.sessionKey);
-  const presented = createMemo(() => props.presented);
+  // Session and visibility changes control the external checks request and disclosure.
   createEffect(
-    () => [currentSessionKey(), targetKey(), presented()] as const,
+    () => [props.sessionKey, targetKey(), props.presented] as const,
     ([sessionKey, nextTarget], previous) => {
       if (target !== nextTarget) {
         // Head changes refresh the same open monitor; session changes dismiss it.

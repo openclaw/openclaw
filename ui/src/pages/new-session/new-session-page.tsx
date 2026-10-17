@@ -325,11 +325,7 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
           )}
           onOpenImage={owner.setImageLightbox}
         />
-        <CreationComposer
-          composer={creationComposer()}
-          onOpenImage={owner.setImageLightbox}
-          renderRevision={revision()}
-        />
+        <CreationComposer composer={creationComposer()} onOpenImage={owner.setImageLightbox} />
         <ConnectMachineDialog
           {...page().connectMachine.view(page().place.isAdmin(), () => {
             owner.connectMachine.close();

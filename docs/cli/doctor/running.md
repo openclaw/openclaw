@@ -137,6 +137,19 @@ legacy workspace setup, legacy session stores, and exec approvals. Malformed or
 conflicting input is retained and requires the manual action in the diagnostic.
 The updater uses this repair path before accepting the installed target.
 
+Migration checks default to whole-database `quick_check`, full integrity checks
+for tables the migration rewrites or re-indexes, and foreign-key checks. Add
+`--full-integrity-check` to check every table and index during migration:
+
+```bash
+openclaw doctor --fix --full-integrity-check
+```
+
+The default can miss an index/table mismatch in an untouched table. Explicit
+verification, recovery, and compaction keep their existing checks. See
+[migration integrity checks](/install/updating#migration-integrity-checks) for
+the coverage and installed-updater boundary.
+
 Update-time Doctor runs startup-required repairs before optional inspections.
 When the installed updater supports post-restart inspections, Doctor moves
 lint-backed, inspection-only checks out of the stopped Gateway window. The
@@ -271,6 +284,7 @@ openclaw channels status --probe
 | `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                                                                               |
 | `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                                                                                         |
 | `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                                                                                   |
+| `--full-integrity-check`        | Use full database integrity checks during migrations instead of the default quick check plus full checks of affected tables.                                                                                                                          |
 | `--lint`                        | Run the [structured health checks](/cli/doctor/health-contract) in read-only mode and emit diagnostic findings.                                                                                                                                       |
 | `--post-upgrade`                | Run post-upgrade plugin compatibility checks; findings go to stdout; exit code 1 if any error-level finding is present.                                                                                                                               |
 | `--state-sqlite <mode>`         | Run explicit shared state SQLite maintenance. The only mode is `compact`.                                                                                                                                                                             |

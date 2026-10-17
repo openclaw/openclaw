@@ -22,7 +22,10 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import type { SessionActorOperations } from "./session-actor-contract.js";
 import { createSessionActorReplica } from "./session-actor-replica.js";
-import { seedSessionActorOutcomeTransferEntry } from "./session-actor-worker.test-support.js";
+import {
+  seedSessionActorOutcomeTransferEntry,
+  sessionActorFileTarget,
+} from "./session-actor-worker.test-support.js";
 import { createSessionActor, type SessionActorTransport } from "./session-actor.js";
 import { createSessionActorWorker } from "./session-actor.worker.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
@@ -59,15 +62,7 @@ export async function withActor(
     if (typeof identity.identity !== "string") {
       throw new Error("Fixture requires durable storage");
     }
-    const target = {
-      sessionKey: fixture.scope.sessionKey,
-      database: {
-        kind: "file" as const,
-        physicalIdentity: identity.identity,
-        birthtime: identity.birthtime,
-        nativeLocation: database.path,
-      },
-    };
+    const target = sessionActorFileTarget(database, fixture.scope.sessionKey);
     const options = { agentId: "main", path: database.path };
     const commands: string[] = [];
     const admissions: SqliteWorkerAdmissionRequest[] = [];

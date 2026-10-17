@@ -15,6 +15,7 @@ import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js"
 import { createSqliteWalCheckpoint } from "../sqlite-wal-checkpoint.js";
 import { WorkerTaskError } from "../worker-task-pool.js";
 import { resolveDatabaseEngineInput } from "./config.js";
+import { getScopedDatabaseEngineSelection } from "./context.js";
 import {
   assertDatabasePortNamespaceOwner,
   databasePortProviders,
@@ -56,6 +57,7 @@ export type DatabasePortTask =
       Identity)
   | { operation: "checkpoint"; sourcePath: string };
 export type DatabasePortInspection = Partial<Identity> & {
+  family: string;
   engine: "sqlite" | "postgres";
   version: number;
   descriptorHash: string;
@@ -265,7 +267,10 @@ async function stage(
   assertCurrent();
   await descriptor.admit?.(
     task.targetPath,
-    task.to === "postgres" ? await resolveDatabaseEngineInput(task.config) : undefined,
+    task.to === "postgres"
+      ? (getScopedDatabaseEngineSelection()?.postgres ??
+          (await resolveDatabaseEngineInput(task.config)))
+      : undefined,
   );
   if (task.to === "sqlite") {
     compare((await inspectSqlite(task.targetPath, descriptor)).verification!, verification);
@@ -349,7 +354,13 @@ async function execute(task: DatabasePortTask, assertCurrent: () => void): Promi
             verification: await inspectPostgres(db, descriptor, engine, false),
           }))
         : source.facts!;
-    return { ...engine, ...facts, descriptorHash, targetVersion: descriptor.version };
+    return {
+      ...engine,
+      ...facts,
+      family: descriptor.id,
+      descriptorHash,
+      targetVersion: descriptor.version,
+    };
   }
   if (task.operation === "migrate" || task.operation === "stage") {
     const verification =

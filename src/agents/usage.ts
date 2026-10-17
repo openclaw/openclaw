@@ -37,6 +37,8 @@ export type UsageLike = {
   completion_tokens?: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  // Anthropic splits cache writes by TTL; the 1h subset is billed at a higher rate.
+  cache_creation?: { ephemeral_1h_input_tokens?: number };
   reasoningTokens?: number;
   reasoning_tokens?: number;
   completion_tokens_details?: { reasoning_tokens?: number };
@@ -200,7 +202,9 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.prompt_tokens_details?.cache_write_tokens ??
       raw.prompt_tokens_details?.cache_creation_input_tokens,
   );
-  const cacheWrite1h = normalizeTokenCount(raw.cacheWrite1h);
+  const cacheWrite1h = normalizeTokenCount(
+    raw.cacheWrite1h ?? raw.cache_creation?.ephemeral_1h_input_tokens,
+  );
 
   const directInput = asFiniteNumber(raw.input);
   const rawInputValue =

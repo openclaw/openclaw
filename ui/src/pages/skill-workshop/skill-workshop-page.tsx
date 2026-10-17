@@ -70,6 +70,7 @@ class SkillWorkshopPageState {
     const selection = projectAgentSelection(context.agentSelection);
     const agents = projectAgents(context.agents);
     const config = projectRuntimeConfig(context.runtimeConfig);
+    // Connection and agent changes retire the workshop scope before issuing Gateway reads.
     createEffect(
       () =>
         [gateway.revision(), selection.revision(), agents.revision(), config.revision()] as const,

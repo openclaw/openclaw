@@ -1,5 +1,6 @@
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { vi } from "vitest";
+import { catalogFactory } from "./session-catalog-resident.test-support.js";
 import type {
   CodexSessionCatalogPage,
   CodexSessionCatalogPageParams,
@@ -7,7 +8,6 @@ import type {
 import {
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   config,
-  createCodexSessionCatalogControlFactory,
   createCodexTestBindingStore,
   createControl,
   createGatewayApi,
@@ -43,10 +43,7 @@ export function observe<T>(promise: Promise<T>) {
 
 export async function fixture(homeCount = 1) {
   const { runtime } = createRuntime();
-  const base = createCodexSessionCatalogControlFactory({
-    getPluginConfig: () => ({ supervision: { enabled: true } }),
-    getRuntimeConfig: () => config,
-  });
+  const base = catalogFactory({ getRuntimeConfig: () => config });
   const primary = (await base.homesForAgent("main"))[0]!;
   const homes = Array.from({ length: homeCount }, (_, index) => ({
     ...primary,

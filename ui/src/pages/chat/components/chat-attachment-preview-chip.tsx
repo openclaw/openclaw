@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, Show } from "solid-js";
+import { Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { attachmentAdmissionRef } from "./chat-attachment-admission-ref.ts";
 import "../../../styles/chat/selection-annotations.css";
 
 export type AttachmentChipRemoval = {
@@ -17,14 +18,7 @@ export function AttachmentPreviewChip(props: {
   removal?: AttachmentChipRemoval;
   elementRef?: (element: Element | undefined) => void;
 }) {
-  let element!: HTMLSpanElement;
-  createEffect(
-    () => props.elementRef,
-    (ref) => {
-      ref?.(element);
-      return () => ref?.(undefined);
-    },
-  );
+  const ref = attachmentAdmissionRef(() => props.elementRef);
   const label = () => (
     <>
       <span aria-hidden="true">{props.icon}</span>
@@ -40,9 +34,7 @@ export function AttachmentPreviewChip(props: {
   );
   return (
     <span
-      ref={(node) => {
-        element = node;
-      }}
+      ref={ref}
       class="chat-attachment-thumb chat-attachment-thumb--file chat-selection-annotations__chip"
       role={props.removal ? undefined : "button"}
       tabindex={props.removal ? undefined : 0}

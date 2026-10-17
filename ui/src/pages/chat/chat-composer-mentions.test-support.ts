@@ -109,7 +109,6 @@ export function composerFixture(
         mentionDirectory: unsupported ? undefined : directory,
         mentionsUnsupported: unsupported,
         onDraftChange: onInput,
-        onRequestUpdate: renderCurrent,
         onSlashCommand: slashCommand,
         canAbort: true,
         onAbort: abort,

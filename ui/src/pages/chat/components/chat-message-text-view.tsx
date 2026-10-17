@@ -5,7 +5,6 @@ import {
   createSignal,
   createRoot,
   getOwner,
-  onCleanup,
   runWithOwner,
   Show,
   useContext,
@@ -165,7 +164,6 @@ function DisclosureContent(props: {
 }) {
   const presented = useContext(ContentPresentation);
   let element!: HTMLDivElement;
-  let previous: ((element?: Element) => void) | undefined;
   const dependencies = createMemo(
     () => ({
       parts: props.parts,
@@ -182,12 +180,15 @@ function DisclosureContent(props: {
         before.parts.every((value, index) => value === next.parts[index]),
     },
   );
+  // The overflow observer measures the rendered markdown island.
   createEffect(dependencies, ({ expanded, forwarded, connected }) => {
-    previous?.(undefined);
-    previous = connected ? messageOverflowRef(expanded, forwarded) : undefined;
-    previous?.(element);
+    if (!connected) {
+      return undefined;
+    }
+    const overflow = messageOverflowRef(expanded, forwarded);
+    overflow(element);
+    return () => overflow(undefined);
   });
-  onCleanup(() => previous?.(undefined));
   return (
     <div
       class="chat-message-disclosure__content"

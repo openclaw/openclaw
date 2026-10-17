@@ -1140,7 +1140,36 @@ The same bounded wait applies if the owner exits or changes while Doctor waits;
 only acquiring the physical maintenance lock permits repair. Lost update
 authority or unresolved contention stops maintenance with recovery guidance.
 Ordinary Doctor commands and older update
-drivers without delegated Doctor authority retain their immediate refusal.
+drivers without delegated Doctor authority retain their immediate refusal for a
+Gateway holder.
+
+If another OpenClaw process that is not a Gateway holds state ownership when
+updater-run Doctor enters maintenance (for example a CLI or plugin command, an
+embedded agent run, or another Doctor), Doctor waits for it, with or without
+delegated Doctor authority. It prints which process and database it is waiting
+on and how long it will wait, repeats progress every 30 seconds, and continues
+once ownership is released. The wait holds no OpenClaw lock, so the other process
+can finish.
+
+The wait leaves Doctor time to finish within the default 30-minute update step
+allowance, counted from Doctor's own start. Installed updaters run activation
+Doctor without a step timeout unless the update was started with `--timeout`, and
+they don't pass that value to Doctor, so Doctor applies the default instead. It
+reserves twice the time this update's migration rehearsal (`candidate-doctor` in
+the update run) took,
+and at least 10 minutes (about twice the slowest measured update Doctor, 258 s on
+1 CPU with 10 MB/s disk), and waits only until the rest is used. By default that
+is up to 20 minutes, less the time Doctor already spent. All of Doctor's waits for
+other processes draw from this one deadline, so an earlier wait shortens later
+ones. An update started with a shorter `--timeout` can still time out while
+Doctor waits.
+If the holder is still running afterward, maintenance stops with the holder's PID
+and the usual deferred-maintenance warning: let that process finish or stop it,
+then run `openclaw update repair`. A holder whose role was not recorded is treated
+as a Gateway. The wait is part of the new version's Doctor, so it applies to any
+update to a release that contains it, regardless of the installed updater's
+version. Manual `openclaw doctor --fix` keeps failing immediately so the operator
+can decide.
 
 An active Gateway suspension keeps installation changes under its host operation’s
 control. The installation watcher does not independently restart the Gateway

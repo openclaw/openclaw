@@ -31,6 +31,5 @@
 }
 
 .sidebar-recent-session--creating .sidebar-recent-session__link {
-  padding-inline-start: 24px;
   cursor: default;
 }

@@ -243,8 +243,8 @@ export function ParticipantAvatar(props: {
   );
 }
 
-export type ViewerAvatarElement = SolidBridgeElement<ViewerAvatarProps>;
-export type ViewerFacepileElement = SolidBridgeElement<ViewerFacepileProps>;
+type ViewerAvatarElement = SolidBridgeElement<ViewerAvatarProps>;
+type ViewerFacepileElement = SolidBridgeElement<ViewerFacepileProps>;
 
 export const ViewerAvatar = defineSolidBridge<ViewerAvatarProps>(
   "openclaw-viewer-avatar",

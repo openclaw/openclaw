@@ -8,14 +8,16 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import * as processUrls from "./runtime-process-url.js";
+import { readSqliteDatabaseIntegrityVerification } from "./sqlite-database-admission.js";
+import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
 import { SqliteIntegrityWorkerInterruptedError } from "./sqlite-integrity-worker-error.js";
 import {
   assertSqliteIntegrityInWorker,
   withSqliteIntegrityWorkerScope,
 } from "./sqlite-integrity-worker.js";
-import type { SqliteIntegrityCheckTiming } from "./sqlite-integrity.js";
+import { sqliteIntegrityCheckSteps, type SqliteIntegrityCheckTiming } from "./sqlite-integrity.js";
 import * as inspectionBudget from "./sqlite-readonly-worker.js";
 
 const progress = vi.hoisted(() => vi.fn());
@@ -39,6 +41,32 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite integrity child", () => {
   afterEach(() => vi.restoreAllMocks());
+  it("does not publish a quick worker result as full integrity verification", async () => {
+    const source = path.join(tempDirs.make("openclaw-integrity-receipt-"), "source.sqlite");
+    using database = openNodeSqliteDatabase(source);
+    database.exec("CREATE TABLE records(value INTEGER); INSERT INTO records VALUES(1)");
+    const options = {
+      busyTimeoutMs: 250,
+      signal: new AbortController().signal,
+      beforeResume: () => {},
+    };
+    await runSqliteIntegrityOperationInWorker(
+      sqliteIntegrityCheckSteps(database, source, undefined, {
+        check: "quick",
+        tables: ["records"],
+      }),
+      options,
+    );
+    expect(readSqliteDatabaseIntegrityVerification(database)).toBeUndefined();
+    await runSqliteIntegrityOperationInWorker(
+      sqliteIntegrityCheckSteps(database, source, undefined, { check: "full" }),
+      options,
+    );
+    expect(readSqliteDatabaseIntegrityVerification(database)?.verifiedAt).toEqual(
+      expect.any(Number),
+    );
+  });
+
   it("reports bounded progress while native integrity is blocked and stops after cancellation", async () => {
     const source = path.join(tempDirs.make("openclaw-integrity-progress-"), "source.sqlite");
     fs.writeFileSync(source, "retained source");

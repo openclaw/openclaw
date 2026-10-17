@@ -24,7 +24,7 @@ const migratedMessageTurnFiles = [
   "extensions/telegram/src/bot-message-context.session.ts",
   "extensions/telegram/src/bot-message-dispatch-context.ts",
   "extensions/telegram/src/bot-message-dispatch.ts",
-  "extensions/whatsapp/src/auto-reply/monitor/group-gating.ts",
+  "extensions/whatsapp/src/auto-reply/monitor/on-message.ts",
   "extensions/zalouser/src/monitor.ts",
 ];
 

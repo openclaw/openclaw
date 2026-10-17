@@ -164,7 +164,7 @@ export function ApprovalsPage() {
     revision();
     return state;
   };
-
+  // Gateway replacement retires approval-history reads and rebinds resolution events.
   createEffect(
     () => context.gateway,
     (gateway) => {

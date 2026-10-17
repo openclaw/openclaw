@@ -556,10 +556,46 @@ describe("Gateway owner lease", () => {
     lookup.mockRestore();
     await lease.ready;
     await expect.poll(() => readGatewayOwnerLease({ env })?.state).toBe("live");
+    lease.markListening();
     expect(readGatewayOwnerLease({ env })).toMatchObject({
       owner: lease.owner,
       startedAt: pidAlive.getFileLockProcessStartTime(process.pid),
+      listeningAt: expect.any(Number),
     });
+  });
+
+  it("admits one competing Gateway and preserves its lease through listening publication", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-competing-gateways-") };
+    const attempts = await Promise.allSettled(
+      [19483, 19484].map((port) =>
+        acquireGatewayLock({
+          env,
+          allowInTests: true,
+          port,
+          listenerMode: "foreground",
+          timeoutMs: 100,
+          pollIntervalMs: 5,
+        }),
+      ),
+    );
+    const locks = attempts.flatMap((attempt) =>
+      attempt.status === "fulfilled" && attempt.value ? [attempt.value] : [],
+    );
+    try {
+      expect(locks).toHaveLength(1);
+      expect(attempts.filter((attempt) => attempt.status === "rejected")).toHaveLength(1);
+      const before = readGatewayOwnerLease({ env });
+      expect(before?.state).toBe("live");
+      locks[0]?.markListening?.();
+      expect(readGatewayOwnerLease({ env })).toMatchObject({
+        owner: before?.owner,
+        state: "live",
+        listeningAt: expect.any(Number),
+      });
+    } finally {
+      await Promise.all(locks.map((lock) => lock.release()));
+    }
+    expect(readGatewayOwnerLease({ env })).toBeUndefined();
   });
 
   it("admits existing state without copying it and records the owner before listening", async () => {
@@ -720,7 +756,9 @@ describe("Gateway owner lease", () => {
       );
       expect(Number(heartbeat?.heartbeat_at)).toBeGreaterThan(Number(heartbeat?.created_at));
 
-      expect(repairOpenClawStateDatabaseSchema({ env }).warnings).toEqual([]);
+      expect(repairOpenClawStateDatabaseSchema({ env, integrityCheck: "full" }).warnings).toEqual(
+        [],
+      );
       const held = cached ? openOpenClawStateDatabase({ env }) : undefined;
       if (!cached) {
         await closeOpenClawStateDatabaseAsync();

@@ -17,7 +17,13 @@ export function RealtimeTalkConversation(props: {
         <For each={props.entries} keyed={(entry) => entry.id}>
           {(entry) => (
             <div
-              class={`agent-chat__voice-turn agent-chat__voice-turn--${entry().role}`}
+              class={[
+                "agent-chat__voice-turn",
+                {
+                  "agent-chat__voice-turn--user": entry().role === "user",
+                  "agent-chat__voice-turn--assistant": entry().role === "assistant",
+                },
+              ]}
               data-role={entry().role}
             >
               <span class="agent-chat__voice-turn-speaker">

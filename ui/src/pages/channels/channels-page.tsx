@@ -602,7 +602,7 @@ function createChannelsPage(getContext: () => ApplicationContext) {
         editNostrForm((form) => ({ ...form, showAdvanced: !form.showAdvanced })),
     };
   }
-
+  // Rebind Gateway, channel, config, and theme subscriptions together when their context changes.
   createEffect(getContext, (context) =>
     untrack(() => {
       // Subscription callbacks reconcile synchronous owner receipts; their reads do not subscribe.
@@ -641,6 +641,7 @@ function createChannelsPage(getContext: () => ApplicationContext) {
       };
     }),
   );
+  // Scroll the pairing section only after its requested DOM has committed.
   createEffect(pairingScrollPending, afterRender);
   onSettled(() => listen(document, "visibilitychange", handleVisibilityChange));
   onCleanup(() => {

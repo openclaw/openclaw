@@ -56,6 +56,7 @@ const targets =
         "extensions/team-reports/src/postgres-store.test.ts",
         "src/infra/postgres-sync",
         "src/infra/database-engine",
+        "src/infra/update-candidate-state.postgres.test.ts",
         "src/state/openclaw-state-db.postgres.test.ts",
         "src/state/openclaw-agent-db.postgres.test.ts",
         "src/state/openclaw-agent-db-engine.postgres.test.ts",

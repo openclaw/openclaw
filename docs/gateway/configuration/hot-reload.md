@@ -48,6 +48,8 @@ for the newer config to apply. A superseding edit that overwrites an unapplied
 change still reports that earlier write as unconfirmed.
 
 Agent-only edits retain session admission and active runtimes for unchanged agents.
+Changing `agents.defaults.workspace` applies to new runs; an agent's explicit
+`workspace` still takes precedence.
 Creation prepares the new agent's runtime database before publishing its config entry.
 Overlapping creation and deletion preserve unchanged agents' prepared model generations
 and session creation. Registry discovery follows completed roster publications;

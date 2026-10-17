@@ -159,7 +159,6 @@ function ChatComposerView(input: ChatViewInput) {
   return (
     <ChatComposer
       {...input.props}
-      renderRevision={input.frame}
       progressCard={input.props.detailsEnabled ? null : input.props.progressCard}
       progressCardInitialLoading={
         input.props.detailsEnabled ? false : input.props.progressCardInitialLoading
@@ -168,7 +167,6 @@ function ChatComposerView(input: ChatViewInput) {
       displayQueue={input.frame.displayQueue}
       footerContent={<ChatFooterContent {...input} />}
       notices={<ChatComposerNoticesView {...input.props} />}
-      onRequestUpdate={input.frame.requestUpdate}
       onToggleRealtimeTalk={
         input.props.suggestionComposer ? undefined : input.props.onToggleRealtimeTalk
       }

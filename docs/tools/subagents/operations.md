@@ -99,6 +99,11 @@ and cannot authorize execution by itself. Missing, invalid, or revoked evidence 
 the interrupted result available for inspection; recovery never substitutes system
 authority. Start a new authorized requester turn to continue that work.
 
+Legacy individual completions without saved operator evidence record permanent
+non-delivery once. Later restarts leave their retained results available without
+attempting to restore the same missing authority again. Temporary worker overload,
+unavailable access policy, and failed settlement writes remain retryable.
+
 Visible and private requester-settle completions retain their processing outcome
 across restart. A replay of the same frozen child batch acknowledges an already
 completed requester turn without executing or delivering it again. Unfinished
