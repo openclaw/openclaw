@@ -380,7 +380,7 @@ describe.skipIf(process.platform !== "darwin")("Codex Darwin process inspector",
     const pid = await new Promise<number>((resolve, reject) => {
       const child = execFile(process.execPath, ["-e", ""], { env: {} }, (error) => {
         if (error) {
-          reject(error);
+          reject(new Error("Could not run the process snapshot fixture", { cause: error }));
         } else if (child.pid === undefined) {
           reject(new Error("Child PID is unavailable"));
         } else {
