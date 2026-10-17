@@ -49,11 +49,18 @@ const reviewer = (accountId: string) => ({
   senderId: "owner",
 });
 
-const request = (payload: {
-  command: string;
-  turnSourceChannel?: string;
-  turnSourceAccountId?: string;
-}) => ({ id: "approval-1", request: payload, createdAtMs: 1, expiresAtMs: 2 });
+const request = <T>(payload: T, id = "approval-1") => ({
+  id,
+  request: payload,
+  createdAtMs: 1,
+  expiresAtMs: 2,
+});
+type CustodyParams = Parameters<typeof prepareApprovalChannelCustody>[0];
+const prepare = (
+  approvalKind: CustodyParams["approvalKind"],
+  actor: CustodyParams["reviewer"],
+  cfg: OpenClawConfig = {},
+) => prepareApprovalChannelCustody({ cfg, approvalKind, reviewer: actor });
 
 describe("prepareApprovalChannelCustody", () => {
   beforeEach(() => {
@@ -108,11 +115,9 @@ describe("prepareApprovalChannelCustody", () => {
       }));
       for (const [accountId, authorized] of Object.entries(expected)) {
         expect(
-          await prepareApprovalChannelCustody({
-            cfg,
-            approvalKind: "exec",
-            reviewer: reviewer(accountId),
-          })?.authorizes(request({ command: "printf approval", ...source })),
+          await prepare("exec", reviewer(accountId), cfg)?.authorizes(
+            request({ command: "printf approval", ...source }),
+          ),
           accountId,
         ).toBe(authorized);
       }
@@ -141,41 +146,26 @@ describe("prepareApprovalChannelCustody", () => {
       context: { channel: "telegram", accountId },
       origin: { provider: "telegram", accountId },
     });
-    const custody = prepareApprovalChannelCustody({
-      cfg: { session: { store: location.path } },
-      approvalKind: "exec",
-      reviewer: reviewer("ops"),
-    });
-    const pending = {
-      ...request({ command: "printf approval" }),
-      request: { command: "printf approval", sessionKey },
-    };
+    const custody = prepare("exec", reviewer("ops"), { session: { store: location.path } });
+    const pending = request({ command: "printf approval", sessionKey });
     try {
       const storage = expectDefined(actor.storage, "memory actor storage");
-      readSessionActorStorageResult(
-        await storage.mutate(
-          {
-            type: "session.metadata.initialize",
-            input: {
-              scope: { agentId: "main", storePath: location.path, sessionKey, sessionId },
-              entry: { sessionId, updatedAt: 1, incognito: true, delivery: delivery("ops") },
-            },
-          },
-          authority,
-        ),
-      );
+      const mutate = async (operation: Parameters<typeof storage.mutate>[0]) =>
+        readSessionActorStorageResult(await storage.mutate(operation, authority));
+      await mutate({
+        type: "session.metadata.initialize",
+        input: {
+          scope: { agentId: "main", storePath: location.path, sessionKey, sessionId },
+          entry: { sessionId, updatedAt: 1, incognito: true, delivery: delivery("ops") },
+        },
+      });
       expect(await custody?.authorizes(pending)).toBe(true);
       expect(custody?.isCurrent(pending)).toBe(true);
 
-      readSessionActorStorageResult(
-        await storage.mutate(
-          {
-            type: "session.entry.patch",
-            input: { operation: { kind: "fields", patch: { delivery: delivery("default") } } },
-          },
-          authority,
-        ),
-      );
+      await mutate({
+        type: "session.entry.patch",
+        input: { operation: { kind: "fields", patch: { delivery: delivery("default") } } },
+      });
       expect(custody?.isCurrent(pending)).toBe(false);
       expect(await custody?.authorizes(pending)).toBe(false);
     } finally {
@@ -189,23 +179,18 @@ describe("prepareApprovalChannelCustody", () => {
     mocks.authorize.mockImplementation(({ request: pending }) => ({
       authorized: pending?.request.policySubject?.pluginKey === "calendar",
     }));
-    const custody = prepareApprovalChannelCustody({
-      cfg: {},
-      approvalKind: "plugin",
-      reviewer: reviewer("ops"),
-    });
-    const pending = (pluginKey: string) => ({
-      id: `plugin:${pluginKey}`,
-      request: {
-        title: "Plugin approval",
-        description: "Allow access",
-        policySubject: { pluginKey },
-        turnSourceChannel: "telegram",
-        turnSourceAccountId: "ops",
-      },
-      createdAtMs: 1,
-      expiresAtMs: 2,
-    });
+    const custody = prepare("plugin", reviewer("ops"));
+    const pending = (pluginKey: string) =>
+      request(
+        {
+          title: "Plugin approval",
+          description: "Allow access",
+          policySubject: { pluginKey },
+          turnSourceChannel: "telegram",
+          turnSourceAccountId: "ops",
+        },
+        `plugin:${pluginKey}`,
+      );
 
     expect(await custody?.authorizes(pending("calendar"))).toBe(true);
     expect(await custody?.authorizes(pending("other"))).toBe(false);
@@ -219,31 +204,21 @@ describe("prepareApprovalChannelCustody", () => {
       approvals: { plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } } },
     } as OpenClawConfig;
     const slackReviewer = { channel: "slack", accountId: "default", senderId: "U22222222" };
-    const pending = {
-      id: "plugin:calendar",
-      request: {
+    const pending = request(
+      {
         title: "Review",
         description: "Allow access",
         turnSourceChannel: "slack",
         turnSourceAccountId: "default",
       },
-      createdAtMs: 1,
-      expiresAtMs: 2,
-    };
+      "plugin:calendar",
+    );
 
-    expect(
-      prepareApprovalChannelCustody({ cfg, approvalKind: "plugin", reviewer: slackReviewer }),
-    ).toBeNull();
+    expect(prepare("plugin", slackReviewer, cfg)).toBeNull();
     expect(mocks.authorize).not.toHaveBeenCalled();
 
     mocks.supportsScopedPluginReviewers.value = true;
-    expect(
-      await prepareApprovalChannelCustody({
-        cfg,
-        approvalKind: "plugin",
-        reviewer: slackReviewer,
-      })?.authorizes(pending),
-    ).toBe(true);
+    expect(await prepare("plugin", slackReviewer, cfg)?.authorizes(pending)).toBe(true);
   });
 
   it("grants owner custody only for system changes on channels without approver settings", async () => {
@@ -257,11 +232,7 @@ describe("prepareApprovalChannelCustody", () => {
       ["exec", "alice", false],
       ["plugin", "alice", false],
     ] as const) {
-      const custody = prepareApprovalChannelCustody({
-        cfg,
-        approvalKind,
-        reviewer: { ...ircSender, senderId },
-      });
+      const custody = prepare(approvalKind, { ...ircSender, senderId }, cfg);
       if (allowed) {
         expect(await custody?.authorizes(change)).toBe(true);
       } else {
