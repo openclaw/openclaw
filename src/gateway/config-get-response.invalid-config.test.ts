@@ -7,6 +7,9 @@ type DiagnosticSnapshot = Omit<ConfigFileSnapshot, "sourceConfig">;
 
 const readSnapshot = vi.hoisted(() => vi.fn<() => Promise<DiagnosticSnapshot>>());
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot: readSnapshot }));
+vi.mock("../config/runtime-schema.js", () => ({
+  loadGatewayConfigRedactionHints: () => undefined,
+}));
 vi.mock("../plugins/runtime.js", () => ({ getActivePluginRegistryVersion: () => 1 }));
 
 beforeEach(() => {
@@ -40,7 +43,6 @@ describe("config.get diagnostic revisions", () => {
     const hash = vi.spyOn(runtimeSnapshot, "hashRuntimeConfigValue");
 
     const response = await readConfigGetResponse({
-      loadUiHints: () => undefined,
       revisionProjector: {
         projectRawHash: (value) => `raw:${value}`,
         projectResolvedHash: (value) => `resolved:${value}`,
