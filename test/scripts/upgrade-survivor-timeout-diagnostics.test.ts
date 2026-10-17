@@ -2,36 +2,43 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  captureUpdateProcesses,
-  formatUpdateTimeoutDiagnostics,
+  captureUpdateProcesses as capture,
+  formatUpdateTimeoutDiagnostics as format,
 } from "../../scripts/e2e/lib/upgrade-survivor/update-timeout-observation.mjs";
 
-const proc = vi.hoisted(() => ({
-  files: new Map<string, string>(),
-  directories: new Map<string, string[]>(),
-  links: new Map<string, string>(),
+const { proc, read } = vi.hoisted(() => ({
+  proc: {
+    files: new Map<string, string>(),
+    directories: new Map<string, string[]>(),
+    links: new Map<string, string>(),
+  },
+  read(map: Map<string, string>, file: string) {
+    const value = map.get(file);
+    if (value === undefined) {
+      throw new Error("unreadable proc entry");
+    }
+    return value;
+  },
 }));
+const copyRoot = "/private/openclaw-update-canary-a/.plugin-copy-b";
+const fsyncUnknown = "plugin snapshot copy fsync-bound; progress unknown";
+function expectText(output: string, ...texts: string[]) {
+  for (const text of texts) {
+    expect(output).toContain(text);
+  }
+}
 
 vi.mock("node:fs/promises", () => ({
   default: {
     open: async (file: string) => {
-      const value = proc.files.get(file);
-      if (value === undefined) {
-        throw new Error("unreadable proc entry");
-      }
+      const value = read(proc.files, file);
       return {
         read: async (buffer: Buffer) => ({ bytesRead: buffer.write(value) }),
         close: async () => {},
       };
     },
     readdir: async (directory: string) => proc.directories.get(directory) ?? [],
-    readlink: async (file: string) => {
-      const value = proc.links.get(file);
-      if (value === undefined) {
-        throw new Error("closed descriptor");
-      }
-      return value;
-    },
+    readlink: async (file: string) => read(proc.links, file),
   },
 }));
 
@@ -49,7 +56,7 @@ function processFixture(pid: number, parent: number, started = "123") {
   threadFixture(pid, pid);
   proc.directories.set(`${root}/task`, [String(pid)]);
   proc.directories.set(`${root}/fd`, ["18"]);
-  proc.links.set(`${root}/fd/18`, "/private/openclaw-update-canary-a/.plugin-copy-b/payload");
+  proc.links.set(`${root}/fd/18`, `${copyRoot}/payload`);
 }
 
 function threadFixture(pid: number, tid: number) {
@@ -61,9 +68,9 @@ function threadFixture(pid: number, tid: number) {
 }
 
 beforeEach(() => {
-  proc.files.clear();
-  proc.directories.clear();
-  proc.links.clear();
+  for (const map of Object.values(proc)) {
+    map.clear();
+  }
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -96,14 +103,12 @@ describe("published update interruption diagnostics", () => {
         "--",
         process.execPath,
         "-e",
-        "console.log(JSON.stringify({ ok: true })); process.exitCode = 37;",
+        "console.log('ok'); process.exitCode = 37;",
       ],
       { encoding: "utf8", timeout: 5_000, killSignal: "SIGKILL" },
     );
     expect(result.error).toBeUndefined();
-    expect(result.status).toBe(37);
-    expect(result.stdout).toBe('{"ok":true}\n');
-    expect(result.stderr).toBe("");
+    expect(result).toMatchObject({ status: 37, stdout: "ok\n", stderr: "" });
   });
 
   it("observes owned descendants and readable sync waits without exposing arguments or paths", async () => {
@@ -112,12 +117,10 @@ describe("published update interruption diagnostics", () => {
     proc.files.set("/proc/10/task/10/children", "11 12");
     processFixture(11, 10);
     processFixture(12, 999);
-    const sample = await captureUpdateProcesses(10);
+    const sample = await capture(10);
     expect(sample.processes.map((entry) => entry.pid)).toEqual([10, 11]);
-    const output = formatUpdateTimeoutDiagnostics([sample], sample.at);
-    expect(output).toContain("pid=11 ppid=10 role=snapshot-worker");
-    expect(output).toContain("wait=wait_log_commit");
-    expect(output).toContain("plugin snapshot copy fsync-bound; progress unknown");
+    const output = format([sample], sample.at);
+    expectText(output, "pid=11 ppid=10 role=snapshot-worker", "wait=wait_log_commit", fsyncUnknown);
     expect(JSON.stringify(sample) + output).not.toMatch(/private|--token/u);
   });
 
@@ -131,16 +134,8 @@ describe("published update interruption diagnostics", () => {
     ["files", "Copy observation over 5.0s ", "sampled new file handles=1", "progress continuing"],
     ["stationary", "progress stalled"],
     ["reused-pid", "progress unknown"],
-    [
-      "directory-idle",
-      "worker write bytes=+0",
-      "plugin snapshot copy fsync-bound; progress unknown",
-    ],
-    [
-      "directory-writes",
-      "worker write bytes=+4096",
-      "plugin snapshot copy fsync-bound; progress unknown",
-    ],
+    ["directory-idle", "worker write bytes=+0", fsyncUnknown],
+    ["directory-writes", "worker write bytes=+4096", fsyncUnknown],
     ...["recovered-all", "recovered-partial"].map((change) => [
       change,
       "worker write bytes=+0",
@@ -151,10 +146,7 @@ describe("published update interruption diagnostics", () => {
   ])("reports copy progress only from comparable observations: %s", async (change, ...expected) => {
     processFixture(10, 1);
     const descriptor = (fd: string, inode: number, position = 4096) => {
-      proc.links.set(
-        `/proc/10/fd/${fd}`,
-        "/private/openclaw-update-canary-a/.plugin-copy-b/.fs-safe-second.tmp",
-      );
+      proc.links.set(`/proc/10/fd/${fd}`, `${copyRoot}/.fs-safe-second.tmp`);
       proc.files.set(`/proc/10/fdinfo/${fd}`, `pos: ${position}\nino: ${inode}\nmnt_id: 7\n`);
     };
     if (["stationary", "recovered-partial", "incomplete-final"].includes(change)) {
@@ -162,7 +154,7 @@ describe("published update interruption diagnostics", () => {
       descriptor("19", change === "stationary" ? 99 : 100, change === "stationary" ? 0 : 4096);
     }
     if (change.startsWith("directory-")) {
-      proc.links.set("/proc/10/fd/18", "/private/openclaw-update-canary-a/.plugin-copy-b");
+      proc.links.set("/proc/10/fd/18", copyRoot);
     }
     const recovered = change === "recovered-partial" ? "19" : "18";
     if (change.startsWith("recovered-")) {
@@ -177,7 +169,7 @@ describe("published update interruption diagnostics", () => {
       descriptor("82", 100);
     }
     vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValueOnce(6_000);
-    const first = await captureUpdateProcesses(10);
+    const first = await capture(10);
     if (change === "reused-pid") {
       processFixture(10, 1, "456");
     }
@@ -199,15 +191,12 @@ describe("published update interruption diagnostics", () => {
         descriptors.filter((fd) => fd !== "19"),
       );
     }
-    const last = await captureUpdateProcesses(10);
-    const output = formatUpdateTimeoutDiagnostics([first, last], 6_000);
-    for (const text of expected) {
-      expect(output).toContain(text);
-    }
+    const last = await capture(10);
+    expectText(format([first, last], 6_000), ...expected);
     if (change === "stationary") {
       proc.files.delete("/proc/10/io");
-      const unreadable = await captureUpdateProcesses(10);
-      expect(formatUpdateTimeoutDiagnostics([first, unreadable])).toContain("progress unknown");
+      const unreadable = await capture(10);
+      expect(format([first, unreadable])).toContain("progress unknown");
     }
   });
 
@@ -224,26 +213,24 @@ describe("published update interruption diagnostics", () => {
       }
     }
     vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValueOnce(6_000);
-    const first = await captureUpdateProcesses(10);
-    const sample = await captureUpdateProcesses(10);
+    const first = await capture(10);
+    const sample = await capture(10);
     expect(sample.processes).toHaveLength(32);
     expect(sample.truncated).toBe(true);
     expect(sample.processes[1]?.waits).toHaveLength(16);
-    const output = formatUpdateTimeoutDiagnostics([first, sample], 6_000);
+    const output = format([first, sample], 6_000);
     expect(Buffer.byteLength(output)).toBeLessThanOrEqual(12_000);
     expect(output).toContain("Diagnostic output truncated.");
     const consoleTail = output.trimEnd().split("\n").slice(-120).join("\n");
-    expect(consoleTail).toContain("Last sample 0.0s ago");
-    expect(consoleTail).toContain("Copy observation over 5.0s");
-    expect(consoleTail).toContain(
+    expectText(
+      consoleTail,
+      "Last sample 0.0s ago",
+      "Copy observation over 5.0s",
       "published-driver plugin snapshot copy fsync-bound; progress stalled",
     );
   });
 
   it("keeps inaccessible process evidence explicitly unavailable", async () => {
-    const sample = await captureUpdateProcesses(10);
-    expect(formatUpdateTimeoutDiagnostics([sample])).toContain(
-      "process observation unavailable; progress unknown",
-    );
+    expectText(format([await capture(10)]), "process observation unavailable; progress unknown");
   });
 });

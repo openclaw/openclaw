@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -38,6 +38,28 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 const owner = resolve("scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh");
 let receipts: FixtureReceiptChannel;
 
+function output(result: SpawnSyncReturns<string>) {
+  expectStatus(result);
+  return result.stdout.trim();
+}
+
+const gatewayArgs = (program: string, port: string, ...args: string[]) => [
+  process.execPath,
+  program,
+  "gateway",
+  "--port",
+  port,
+  ...args,
+];
+
+async function expectRuntime(env: NodeJS.ProcessEnv, expected: object, loaded = false) {
+  const read = loaded ? readLoadedSystemdServiceRuntime : readSystemdServiceRuntime;
+  expect(await read(env)).toMatchObject(expected);
+}
+
+const writeEnvironment = (file: string, value: string) =>
+  writeFileSync(file, serializeSystemdEnvironmentFile({ FIXTURE_VALUE: value }));
+
 function fixture(registry?: string) {
   const home = realpathSync(tempDirs.make("survivor-manager-"));
   const artifacts = join(home, "artifacts ' \" $ `");
@@ -59,16 +81,16 @@ function fixture(registry?: string) {
     OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: paths.pid,
     OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: paths.daemonLog,
   };
+  const run = (command: string, args: string[], timeout = 40_000) =>
+    spawnSync(command, args, { env, encoding: "utf8", timeout });
   const shell = (script: string, args: string[] = []) =>
-    spawnSync(
-      "bash",
-      ["-c", 'set -euo pipefail; source "$1"; shift; ' + script, "fixture", owner, ...args],
-      {
-        env,
-        encoding: "utf8",
-        timeout: 40_000,
-      },
-    );
+    run("bash", [
+      "-c",
+      'set -euo pipefail; source "$1"; shift; ' + script,
+      "fixture",
+      owner,
+      ...args,
+    ]);
   const installed = shell(
     `install_update_restart_systemctl_shim\nprintf '%s\\n' "\${XDG_RUNTIME_DIR:-}" "\${DBUS_SESSION_BUS_ADDRESS:-}"`,
   );
@@ -76,24 +98,15 @@ function fixture(registry?: string) {
   const [runtimeDir, busAddress] = installed.stdout.trimEnd().split("\n");
   env.XDG_RUNTIME_DIR = runtimeDir || undefined;
   env.DBUS_SESSION_BUS_ADDRESS = busAddress || undefined;
-  const systemctl = (...args: string[]) =>
-    spawnSync(join(home, "bin/systemctl"), ["--user", ...args], {
-      env,
-      encoding: "utf8",
-      timeout: 40_000,
-    });
+  const systemctl = (...args: string[]) => run(join(home, "bin/systemctl"), ["--user", ...args]);
   const unit = join(home, ".config/systemd/user/openclaw-gateway.service");
   mkdirSync(join(home, ".config/systemd/user"), { recursive: true });
   const manager = (...args: string[]) =>
-    spawnSync(process.execPath, [join(home, "bin/systemd-fixture.mjs"), ...args], {
-      env,
-      encoding: "utf8",
-      timeout: 5_000,
-    });
+    run(process.execPath, [join(home, "bin/systemd-fixture.mjs"), ...args], 5_000);
   const execute = () => {
     const command = manager("command");
     expectStatus(command);
-    return spawnSync("bash", ["-c", command.stdout], { env, encoding: "utf8", timeout: 5_000 });
+    return run("bash", ["-c", command.stdout], 5_000);
   };
   const inspect = (options: Parameters<typeof readSystemdServiceExecStart>[1] = {}) =>
     readSystemdServiceExecStart(env, { requireEffective: true, ...options });
@@ -116,33 +129,24 @@ describe.skipIf(process.platform === "win32")("survivor manager fixture", () => 
       resolve("scripts/e2e/lib/upgrade-survivor/update-first-hop-compat.sh"),
       "utf8",
     );
-    const firstHopTiming = firstHop.slice(
-      firstHop.indexOf("first_hop_timing() {"),
-      firstHop.indexOf("run_update() {"),
-    );
-    const resetLane = firstHop.slice(
-      firstHop.indexOf("reset_lane() {"),
-      firstHop.indexOf("run_negative_control() {"),
-    );
+    const section = (start: string, end: string) =>
+      firstHop.slice(firstHop.indexOf(`${start}() {`), firstHop.indexOf(`${end}() {`));
     writeUnit({ programArguments: ["/usr/bin/fixture", "gateway"] });
     expect(systemctl("daemon-reload").status).toBe(0);
     rmSync(unit);
-    expect(await readLoadedSystemdServiceRuntime(env)).toMatchObject({ status: "stopped" });
+    await expectRuntime(env, { status: "stopped" }, true);
     const reset = shell(`
 ARTIFACT_DIR="$HOME"
 openclaw() { return 1; }
-${firstHopTiming}
-${resetLane}
+${section("first_hop_timing", "run_update")}
+${section("reset_lane", "run_negative_control")}
 reset_lane negative
 `);
     expectStatus(reset);
     expect(reset.stdout).toMatch(/^first-hop timing: negative reset \d+s$/m);
     expect(existsSync(`${unit}.loaded-unit`)).toBe(false);
-    expect(await readLoadedSystemdServiceRuntime(env)).toMatchObject({ status: "unknown" });
-    expect(await readSystemdServiceRuntime(env)).toMatchObject({
-      status: "stopped",
-      missingUnit: true,
-    });
+    await expectRuntime(env, { status: "unknown" }, true);
+    await expectRuntime(env, { status: "stopped", missingUnit: true });
     expect(existsSync(join(home, "negative-service-uninstall.json"))).toBe(true);
   });
 
@@ -171,9 +175,7 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
         expect(command.stdout).toContain("/sys/fs/cgroup/openclaw-gateway.service/cgroup.procs");
       } else {
         expect(runtime).not.toHaveProperty("controlGroup");
-        const child = execute();
-        expectStatus(child);
-        expect(child.stdout.trim()).toBe("fixture-started");
+        expect(output(execute())).toBe("fixture-started");
       }
     }
   });
@@ -183,7 +185,7 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
     const uid = vi.spyOn(process, "geteuid").mockReturnValue(0);
     try {
       const { home, env } = fixture();
-      expect(await readSystemdServiceRuntime(env)).toMatchObject({
+      await expectRuntime(env, {
         status: "stopped",
         missingUnit: true,
         systemd: {
@@ -215,35 +217,26 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
       ],
       { env, encoding: "utf8" },
     );
-    expectStatus(managerVersion);
-    expect(managerVersion.stdout.trim()).toBe('s "252.39-1~deb12u2"');
+    expect(output(managerVersion)).toBe('s "252.39-1~deb12u2"');
     // First install must reach the same effective reader used by the guarded writer.
-    expect(await readLoadedSystemdServiceRuntime(env)).toMatchObject({ status: "unknown" });
+    await expectRuntime(env, { status: "unknown" }, true);
     expect(existsSync(`${unit}.loaded-unit`)).toBe(false);
     expect(await inspect({ requireLoaded: true })).toBeNull();
     expect(await inspect()).toBeNull();
-    expect(await readSystemdServiceRuntime(env)).toMatchObject({
-      status: "stopped",
-      missingUnit: true,
-    });
+    await expectRuntime(env, { status: "stopped", missingUnit: true });
     expect(systemctl("is-enabled", "openclaw-gateway.service").status).not.toBe(0);
     const environmentFile = join(home, "gateway.systemd.env");
     writeFileSync(environmentFile, 'FIXTURE_VALUE="from file"\n');
-    const programArguments = [
-      process.execPath,
-      join(home, "package root/openclaw.mjs"),
-      "gateway",
-      "--port",
-      "18817",
-    ];
+    const programArguments = gatewayArgs(join(home, "package root/openclaw.mjs"), "18817");
+    const environment = {
+      OPENCLAW_STATE_DIR: join(home, "state"),
+      OPENCLAW_GATEWAY_PORT: "18817",
+      FIXTURE_VALUE: "inline",
+    };
     writeUnit({
       programArguments,
       workingDirectory: home,
-      environment: {
-        OPENCLAW_STATE_DIR: join(home, "state"),
-        OPENCLAW_GATEWAY_PORT: "18817",
-        FIXTURE_VALUE: "inline",
-      },
+      environment,
       environmentFiles: [environmentFile],
     });
     await expect(inspect({ requireLoaded: true })).rejects.toThrow("could not be inspected");
@@ -252,10 +245,7 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
     const maintenanceInspection = {
       requireEffective: true,
       requireLoaded: true,
-      loadForInspection: {
-        managerUid: process.getuid!(),
-        assertCurrent: () => undefined,
-      },
+      loadForInspection: { managerUid: process.getuid!(), assertCurrent: () => undefined },
     };
     expect(await inspect(maintenanceInspection)).toEqual(command);
     rmSync(`${unit}.loaded-unit`);
@@ -271,10 +261,8 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
     const loadedBefore = readFileSync(`${unit}.loaded-unit`, "utf8");
     const commandsBefore = readFileSync(paths.log, "utf8");
     expect(await inspect({ requireLoaded: true })).toEqual(command);
-    expect(await readLoadedSystemdServiceRuntime(env)).toMatchObject({
-      status: "stopped",
-      systemd: { managerUid: process.getuid?.(), tasksCurrent: 0 },
-    });
+    const systemd = { managerUid: process.getuid?.(), tasksCurrent: 0 };
+    await expectRuntime(env, { status: "stopped", systemd }, true);
     expect(readFileSync(`${unit}.loaded-unit`, "utf8")).toBe(loadedBefore);
     expect(readFileSync(paths.log, "utf8")).toBe(commandsBefore);
 
@@ -292,11 +280,7 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
       workingDirectory: home,
       sourcePath: unit,
       definitionPaths: [unit],
-      environment: {
-        OPENCLAW_STATE_DIR: join(home, "state"),
-        OPENCLAW_GATEWAY_PORT: "18817",
-        FIXTURE_VALUE: "from file",
-      },
+      environment: { ...environment, FIXTURE_VALUE: "from file" },
       environmentValueSources: { FIXTURE_VALUE: "inline-and-file" },
     });
     const peer = fixture();
@@ -318,10 +302,7 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
     );
 
     writeUnit({ programArguments: [...programArguments.slice(0, -1), "18818"] });
-    expect(await inspect()).toMatchObject({
-      programArguments,
-      reloadPending: true,
-    });
+    expect(await inspect()).toMatchObject({ programArguments, reloadPending: true });
     expect(systemctl("daemon-reload").status).toBe(0);
     expect((await inspect())?.programArguments.at(-1)).toBe("18818");
     writeFileSync(
@@ -329,14 +310,11 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
       readFileSync(unit, "utf8").replace("[Service]", "[Service]\nExecStartPre=/bin/true"),
     );
     await expect(inspect()).rejects.toThrow("could not be inspected");
-    expect(await readSystemdServiceRuntime(env)).toMatchObject({ status: "unknown" });
+    await expectRuntime(env, { status: "unknown" });
     rmSync(unit);
     expect(systemctl("daemon-reload").status).toBe(0);
     expect(await inspect()).toBeNull();
-    expect(await readSystemdServiceRuntime(env)).toMatchObject({
-      status: "stopped",
-      missingUnit: true,
-    });
+    await expectRuntime(env, { status: "stopped", missingUnit: true });
   });
 
   it("executes literal scalar paths through the copied fixture", async () => {
@@ -350,11 +328,8 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
     const environmentFile = join(stateDirectory, "gateway.systemd.env");
     const fileValue = 'file "quoted" \\ $literal `literal` %h %%h';
     const inlineValue = 'inline "quoted" \\ %h %%h';
-    writeFileSync(environmentFile, serializeSystemdEnvironmentFile({ FIXTURE_VALUE: fileValue }));
-    writeFileSync(
-      join(alternateDirectory, "gateway.systemd.env"),
-      serializeSystemdEnvironmentFile({ FIXTURE_VALUE: "wrong neighbor" }),
-    );
+    writeEnvironment(environmentFile, fileValue);
+    writeEnvironment(join(alternateDirectory, "gateway.systemd.env"), "wrong neighbor");
     const program = join(home, "finite child.mjs");
     writeFileSync(
       program,
@@ -396,9 +371,7 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
       workingDirectory,
       environment: { FIXTURE_INLINE: inlineValue, FIXTURE_VALUE: fileValue },
     });
-    const child = execute();
-    expectStatus(child);
-    expect(JSON.parse(child.stdout)).toEqual({
+    expect(JSON.parse(output(execute()))).toEqual({
       argv: programArguments.slice(2),
       cwd: workingDirectory,
       inline: inlineValue,
@@ -418,12 +391,8 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
       programArguments: [process.execPath, "-p", "process.cwd()"],
       workingDirectory: `${workingDirectory}/.`,
     });
-    expect.soft(await inspect()).toMatchObject({
-      workingDirectory,
-    });
-    const child = execute();
-    expectStatus(child);
-    expect(child.stdout.trim()).toBe(join(home, "target/cwd"));
+    expect.soft(await inspect()).toMatchObject({ workingDirectory });
+    expect(output(execute())).toBe(join(home, "target/cwd"));
   });
 
   it("does not broaden a missing optional literal file and fails when it is required", () => {
@@ -436,9 +405,7 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
       environmentFiles: [join(home, "state*/gateway.systemd.env")],
     });
     writeFileSync(unit, content);
-    const child = execute();
-    expectStatus(child);
-    expect(child.stdout.trim()).toBe("inline %h %%h");
+    expect(output(execute())).toBe("inline %h %%h");
     writeFileSync(unit, content.replace("EnvironmentFile=-", "EnvironmentFile="));
     expect(manager("reload").status).toBe(0);
     const required = manager("command");
@@ -460,7 +427,7 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
       const program = join(home, "gateway fixture.mjs");
       const environmentFile = join(home, "gateway.systemd.env");
       const fileValue = 'file "quoted" \\ $literal `literal`';
-      writeFileSync(environmentFile, serializeSystemdEnvironmentFile({ FIXTURE_VALUE: fileValue }));
+      writeEnvironment(environmentFile, fileValue);
       writeFileSync(
         program,
         `import fs from "node:fs";
@@ -471,37 +438,23 @@ setInterval(() => {}, 1000);
 sendReceipt(${JSON.stringify(record)}, "started");
 `,
       );
-      const programArguments = [
-        process.execPath,
-        program,
-        "gateway",
-        "--port",
-        "18819",
-        "literal $notExpanded",
-      ];
+      const programArguments = gatewayArgs(program, "18819", "literal $notExpanded");
       writeUnit({
         programArguments,
         workingDirectory: home,
         environment: { OPENCLAW_STATE_DIR: join(home, "state"), FIXTURE_VALUE: "inline" },
         environmentFiles: [environmentFile],
       });
-      const records = (): Array<{
-        pid: number;
-        argv: string[];
-        cwd: string;
-        value: string;
-        invocationId: string;
-      }> => {
+      const records = (): Array<{ pid: number; invocationId: string }> => {
         if (!existsSync(record)) {
           return [];
         }
-        // Abort cleanup can read while the service is appending its next record.
-        // Only newline-terminated starts count; corrupt completed records still fail.
-        const lines = readFileSync(record, "utf8").split("\n");
-        if (lines.at(-1) !== "") {
-          lines.pop();
-        }
-        return lines.filter((line) => line !== "").map((line) => JSON.parse(line));
+        // Abort cleanup may see a partial append; only completed lines count.
+        return readFileSync(record, "utf8")
+          .split("\n")
+          .slice(0, -1)
+          .filter((line) => line !== "")
+          .map((line) => JSON.parse(line));
       };
       const waitForStarts = async (count: number) => {
         await withinTest(receipts.waitFor(record, "started", count), signal);
@@ -584,12 +537,7 @@ raise SystemExit(code if code >= 0 else 128 - code)
         expect(firstRuntime.pid).not.toBe(Number(readFileSync(paths.pid, "utf8").trim()));
         expect.soft(systemctl("is-active", "openclaw-gateway.service").status).toBe(0);
         const inspected = await inspect();
-        expect(records()[0]).toEqual({
-          pid: expect.any(Number),
-          argv: inspected?.programArguments.slice(2),
-          cwd: inspected?.workingDirectory,
-          value: inspected?.environment?.FIXTURE_VALUE,
-          state: join(home, "state"),
+        const inheritedEnvironment = {
           npmRegistry: registry,
           npmLowerRegistry: registry,
           bunRegistry: registry,
@@ -598,6 +546,14 @@ raise SystemExit(code if code >= 0 else 128 - code)
           disableBonjour: "1",
           runtimeDir: env.XDG_RUNTIME_DIR,
           busAddress: env.DBUS_SESSION_BUS_ADDRESS,
+        };
+        expect(records()[0]).toEqual({
+          ...inheritedEnvironment,
+          pid: expect.any(Number),
+          argv: inspected?.programArguments.slice(2),
+          cwd: inspected?.workingDirectory,
+          value: inspected?.environment?.FIXTURE_VALUE,
+          state: join(home, "state"),
           invocationId: expect.stringMatching(/^[a-f0-9]{32}$/),
         });
         const stopPolicy = async (invocationId: string) => {
@@ -628,10 +584,7 @@ raise SystemExit(code if code >= 0 else 128 - code)
         };
         expect(await stopPolicy(records()[0]!.invocationId)).toEqual(expectedStopPolicy);
         const previousPid = readFileSync(paths.pid, "utf8").trim();
-        expect(await readSystemdServiceRuntime(env)).toMatchObject({
-          status: "running",
-          pid: records()[0]!.pid,
-        });
+        await expectRuntime(env, { status: "running", pid: records()[0]!.pid });
         const previousLines = readFileSync(paths.log, "utf8").trim().split("\n").length;
         const assertion = () =>
           shell('assert_update_restart_service_replaced "$1" "$2"', [
@@ -645,16 +598,7 @@ raise SystemExit(code if code >= 0 else 128 - code)
         env.OPENCLAW_DISABLE_BONJOUR = "0";
         expect(systemctl("restart", "openclaw-gateway.service").status).toBe(0);
         await waitForStarts(2);
-        expect(records()[1]).toMatchObject({
-          npmRegistry: registry,
-          npmLowerRegistry: registry,
-          bunRegistry: registry,
-          skipChannels: "1",
-          skipProviders: "1",
-          disableBonjour: "1",
-          runtimeDir: env.XDG_RUNTIME_DIR,
-          busAddress: env.DBUS_SESSION_BUS_ADDRESS,
-        });
+        expect(records()[1]).toMatchObject(inheritedEnvironment);
         const proof = assertion();
         expectStatus(proof);
         expect(records()[1]?.pid).not.toBe(records()[0]?.pid);
@@ -665,12 +609,8 @@ raise SystemExit(code if code >= 0 else 128 - code)
           warning: expect.stringContaining("InvocationID does not match the running process"),
         });
         expect(() => process.kill(records()[0]!.pid, 0)).toThrow();
-        expect(await readSystemdServiceRuntime(env)).toMatchObject({
-          status: "running",
-          pid: records()[1]!.pid,
-        });
-        const secondRuntime = await readLoadedSystemdServiceRuntime(env);
-        expect(secondRuntime).toMatchObject({ status: "running", pid: records()[1]!.pid });
+        await expectRuntime(env, { status: "running", pid: records()[1]!.pid });
+        await expectRuntime(env, { status: "running", pid: records()[1]!.pid }, true);
       } finally {
         const stopped = systemctl("stop", "openclaw-gateway.service");
         expectStatus(stopped);
@@ -688,29 +628,38 @@ raise SystemExit(code if code >= 0 else 128 - code)
         const runtime = await readSystemdServiceRuntime(env);
         expect(runtime).toMatchObject({ status: "stopped" });
         expect(runtime.missingUnit).not.toBe(true);
-        expect(await readLoadedSystemdServiceRuntime(env)).toMatchObject({
-          status: "stopped",
-          pid: undefined,
-        });
+        await expectRuntime(env, { status: "stopped", pid: undefined }, true);
       }
     }));
 
   it("binds installation paths for direct and native clients", async () => {
     const { home, env, paths, systemctl, shell, manager, writeUnit } = fixture();
+    const writeRuntime = (runtime: {
+      pid: number;
+      supervisorPid?: number;
+      groupPid?: number;
+      entered?: number;
+    }) => writeJson(`${paths.daemonLog}.runtime.json`, { restarts: 0, entered: 2, ...runtime });
     writeUnit({ programArguments: ["/usr/bin/fixture", "gateway"] });
     writeFileSync(paths.pid, `${process.pid}\n`);
-    writeJson(`${paths.daemonLog}.runtime.json`, {
-      pid: process.pid,
-      supervisorPid: process.pid,
-      restarts: 0,
-      entered: 1,
-    });
+    writeRuntime({ pid: process.pid, supervisorPid: process.pid, entered: 1 });
     writeJson(`${paths.daemonLog}.exit.json`, { last: { code: 78 } });
     const driftedEnv = {
       ...env,
       OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(home, "wrong.log"),
       OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: join(home, "wrong.pid"),
       OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: join(home, "wrong-daemon.log"),
+    };
+    const expectUnknown = async (strict = false) => {
+      const unknown = { status: "unknown", pid: undefined };
+      const check = strict ? expect : expect.soft;
+      check(await readSystemdServiceRuntime(driftedEnv)).toMatchObject(unknown);
+      check(await readLoadedSystemdServiceRuntime(driftedEnv)).toMatchObject({
+        ...unknown,
+        systemd: { tasksCurrent: undefined },
+      });
+      expect.soft(systemctl("is-active", "openclaw-gateway.service").status).toBe(1);
+      expect.soft(shell("assert_update_restart_probe_inactive").status).not.toBe(0);
     };
     const direct = spawnSync(
       join(home, "bin/systemctl"),
@@ -725,67 +674,35 @@ raise SystemExit(code if code >= 0 else 128 - code)
     expectStatus(direct);
     expect(direct.stdout).toContain(`MainPID=${process.pid}`);
     expect(direct.stdout).toContain("ExecMainStatus=78");
-    expect(await readSystemdServiceRuntime(driftedEnv)).toMatchObject({
-      status: "running",
-      pid: process.pid,
-      lastExitStatus: 78,
-    });
+    await expectRuntime(driftedEnv, { status: "running", pid: process.pid, lastExitStatus: 78 });
     // The manager may survive between service generations; that is not a live MainPID.
-    writeJson(`${paths.daemonLog}.runtime.json`, {
-      pid: 0,
-      supervisorPid: process.pid,
-      restarts: 0,
-      entered: 2,
-    });
-    expect(await readSystemdServiceRuntime(driftedEnv)).toMatchObject({
-      status: "unknown",
-      pid: undefined,
-    });
-    expect(await readLoadedSystemdServiceRuntime(driftedEnv)).toMatchObject({
-      status: "unknown",
-      pid: undefined,
-      systemd: { tasksCurrent: undefined },
-    });
-    expect.soft(systemctl("is-active", "openclaw-gateway.service").status).toBe(1);
-    expect.soft(shell("assert_update_restart_probe_inactive").status).not.toBe(0);
+    writeRuntime({ pid: 0, supervisorPid: process.pid });
+    await expectUnknown(true);
     // Observe an existing process group without signaling it: descendants can outlive
     // both the main child and manager, so their presence still forbids restoration.
-    const group = spawnSync("ps", ["-o", "pgid=", "-p", String(process.pid)], {
-      encoding: "utf8",
-    });
-    expectStatus(group);
-    const groupPid = Number(group.stdout.trim());
+    const group = spawnSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" });
+    const groupPid = Number(output(group));
     expect(groupPid).toBeGreaterThan(0);
     rmSync(paths.pid);
-    writeJson(`${paths.daemonLog}.runtime.json`, { pid: 0, groupPid, restarts: 0, entered: 2 });
-    expect.soft(await readSystemdServiceRuntime(driftedEnv)).toMatchObject({
-      status: "unknown",
-      pid: undefined,
-    });
-    expect.soft(await readLoadedSystemdServiceRuntime(driftedEnv)).toMatchObject({
-      status: "unknown",
-      pid: undefined,
-      systemd: { tasksCurrent: undefined },
-    });
-    expect.soft(systemctl("is-active", "openclaw-gateway.service").status).toBe(1);
-    expect.soft(shell("assert_update_restart_probe_inactive").status).not.toBe(0);
+    writeRuntime({ pid: 0, groupPid });
+    await expectUnknown();
     expect(manager("begin-start").status).not.toBe(0);
-    writeJson(`${paths.daemonLog}.runtime.json`, { pid: 0, groupPid: 0, restarts: 0, entered: 2 });
-    expect(await readLoadedSystemdServiceRuntime(driftedEnv)).toMatchObject({
-      status: "stopped",
-      pid: undefined,
-      systemd: { tasksCurrent: 0 },
-    });
+    writeRuntime({ pid: 0, groupPid: 0 });
+    await expectRuntime(
+      driftedEnv,
+      { status: "stopped", pid: undefined, systemd: { tasksCurrent: 0 } },
+      true,
+    );
     expect(shell("assert_update_restart_probe_inactive").status).toBe(0);
     const starting = manager("begin-start");
     expectStatus(starting);
     expect(systemctl("is-active", "openclaw-gateway.service").status).toBe(1);
     expect(shell("assert_update_restart_probe_inactive").status).not.toBe(0);
-    expect(await readLoadedSystemdServiceRuntime(driftedEnv)).toMatchObject({
-      status: "unknown",
-      pid: undefined,
-      systemd: { tasksCurrent: undefined },
-    });
+    await expectRuntime(
+      driftedEnv,
+      { status: "unknown", pid: undefined, systemd: { tasksCurrent: undefined } },
+      true,
+    );
     expect(manager("begin-start").status).not.toBe(0);
     expect(readFileSync(paths.log, "utf8")).toContain("--user show openclaw-gateway.service");
     expect(existsSync(driftedEnv.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG)).toBe(false);

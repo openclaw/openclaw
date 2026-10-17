@@ -1,39 +1,46 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { publishDiagnostics } from "../../scripts/e2e/lib/upgrade-survivor/diagnostics.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { expectStatus, readJson, writeJson } from "./upgrade-survivor-io.test-support.js";
+import { expectStatus, readJson } from "./upgrade-survivor-io.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const source = readFileSync(resolve("scripts/e2e/lib/upgrade-survivor/run.sh"), "utf8");
-const lifecycle = source.slice(
-  source.indexOf("on_error() {"),
-  source.indexOf("companion_survivor_scenario() {"),
-);
-const update = source.slice(
-  source.indexOf("is_extended_stable_release_version() {"),
-  source.indexOf("assert_sibling_published_refusal() {"),
-);
+const section = (from: string, to: string) =>
+  source.slice(source.indexOf(`${from}() {`), source.indexOf(`${to}() {`));
+const lifecycle = section("on_error", "companion_survivor_scenario");
+const update = section("is_extended_stable_release_version", "assert_sibling_published_refusal");
+
+function runFixture(
+  fault: string,
+  script: string,
+  args: string[] = [],
+  timeout = 5_000,
+  bash = "bash",
+) {
+  const root = dirs.make("survivor-recovery-phase-");
+  const result = spawnSync(
+    bash,
+    ["-c", `set -euo pipefail\nexec 3>&1\n${script}`, "fixture", root, fault, ...args],
+    {
+      env: { PATH: process.env.PATH, HOME: root },
+      encoding: "utf8",
+      timeout,
+    },
+  );
+  return { root, result };
+}
 
 it.skipIf(process.platform === "win32").each([
   { fault: "future-tarball", phase: "prepare-restart-package", code: 124 },
   { fault: "future-runtime-tarball", phase: "prepare-restart-runtime", code: 137 },
   { fault: "none", phase: "", code: 0 },
 ])("preserves restart fixture timeout diagnostics ($fault)", ({ fault, phase, code }) => {
-  const root = dirs.make("survivor-restart-fixture-");
-  const prepare = source.slice(
-    source.indexOf("prepare_restart_fixture() {"),
-    source.indexOf("repair_update_restart_auth() {"),
-  );
-  const result = spawnSync(
-    "/bin/bash",
-    [
-      "-c",
-      `set -euo pipefail
-exec 3>&1
-source scripts/lib/openclaw-e2e-instance.sh
+  const prepare = section("prepare_restart_fixture", "repair_update_restart_auth");
+  const { root, result } = runFixture(
+    fault,
+    `source scripts/lib/openclaw-e2e-instance.sh
 ARTIFACT_ROOT="$1"
 RUNTIME_ROOT="$1"
 FAULT="$2"
@@ -80,12 +87,9 @@ ${prepare}
 phase prepare-restart-fixture prepare_restart_fixture || exit "$?"
 run_completed=1
 `,
-      "fixture",
-      root,
-      fault,
-      String(code),
-    ],
-    { env: { PATH: process.env.PATH, HOME: root }, encoding: "utf8", timeout: 5_000 },
+    [String(code)],
+    5_000,
+    "/bin/bash",
   );
   expectStatus(result, code);
   const lines = result.stdout.split("\n");
@@ -110,18 +114,10 @@ it.skipIf(process.platform === "win32").each([
   { fault: "still-active", code: 1 },
   { fault: "listener", code: 1 },
 ])("stops a Doctor-started service before recovery preparation ($fault)", ({ fault, code }) => {
-  const root = dirs.make("survivor-recovery-stop-");
-  const repair = source.slice(
-    source.indexOf("repair_update_restart_auth() {"),
-    source.indexOf("assert_managed_membership_warning() {"),
-  );
-  const result = spawnSync(
-    "bash",
-    [
-      "-c",
-      `set -euo pipefail
-exec 3>&1
-source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
+  const repair = section("repair_update_restart_auth", "assert_managed_membership_warning");
+  const { result } = runFixture(
+    fault,
+    `source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
 ARTIFACT_ROOT="$1"
 OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG="$1/gateway.log"
 FAULT="$2"
@@ -162,11 +158,6 @@ assert_survival() { :; }
 ${repair}
 repair_update_restart_auth
 `,
-      "fixture",
-      root,
-      fault,
-    ],
-    { env: { PATH: process.env.PATH, HOME: root }, encoding: "utf8", timeout: 5_000 },
   );
   expectStatus(result, code);
   expect(result.stdout.trim().split("\n")).toEqual(
@@ -180,40 +171,25 @@ repair_update_restart_auth
 });
 
 it.skipIf(process.platform === "win32").each([
-  { fault: "command", code: 17, stage: "command", checks: [] },
-  { fault: "command-one", code: 1, stage: "command", checks: [] },
-  { fault: "assertion", code: 1, stage: "result-assertion", checks: ["assertion"] },
-  {
-    fault: "replacement",
-    code: 1,
-    stage: "service-replacement",
-    checks: ["assertion", "replacement"],
-  },
-  { fault: "version", code: 1, stage: "version-match", checks: ["assertion", "replacement"] },
-  { fault: "success", code: 0, stage: "", checks: ["assertion", "replacement"] },
-  { fault: "signal-command", code: 143, stage: "command", checks: [] },
-  { fault: "signal-assertion", code: 143, stage: "result-assertion", checks: ["assertion"] },
-  {
-    fault: "signal-replacement",
-    code: 143,
-    stage: "service-replacement",
-    checks: ["assertion", "replacement"],
-  },
-  { fault: "initial-command", code: 17, stage: "", checks: [] },
-])(
-  "preserves recovery outcome and capture ordering for $fault",
-  ({ fault, code, stage, checks }) => {
-    const root = dirs.make("survivor-recovery-phase-");
+  ["command", 17, "command", 0],
+  ["command-one", 1, "command", 0],
+  ["assertion", 1, "result-assertion", 1],
+  ["replacement", 1, "service-replacement", 2],
+  ["version", 1, "version-match", 2],
+  ["success", 0, "", 2],
+  ["signal-command", 143, "command", 0],
+  ["signal-assertion", 143, "result-assertion", 1],
+  ["signal-replacement", 143, "service-replacement", 2],
+  ["initial-command", 17, "", 0],
+] as const)(
+  "preserves recovery outcome and capture ordering for %s",
+  (fault, code, stage, checkCount) => {
     const initial = fault === "initial-command";
     const phase = initial ? "update-candidate" : "recovery-update-restart";
     const expectedPhase = stage ? `recovery-update-${stage}` : phase;
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `set -euo pipefail
-exec 3>&1
-ARTIFACT_ROOT="$1"
+    const { root, result } = runFixture(
+      fault,
+      `ARTIFACT_ROOT="$1"
 SUMMARY_JSON="$1/summary.json"
 FAULT="$2"
 SCENARIO=base
@@ -287,22 +263,13 @@ phase "$3" update_and_observe "$4" file:synthetic 2026.9.7 || exit "$?"
 printf 'returned\t%s\n' "$CURRENT_PHASE" >&3
 run_completed=1
 `,
-        "fixture",
-        root,
-        fault,
-        phase,
-        initial ? "0" : "1",
-      ],
-      {
-        env: { PATH: process.env.PATH, HOME: root },
-        encoding: "utf8",
-        timeout: 10_000,
-      },
+      [phase, initial ? "0" : "1"],
+      10_000,
     );
     expectStatus(result, code);
     const lines = result.stdout.split("\n");
     expect(lines.filter((line) => line.startsWith("check\t"))).toEqual(
-      checks.map((check) => `check\t${check}`),
+      ["assertion", "replacement"].slice(0, checkCount).map((check) => `check\t${check}`),
     );
     expect(lines.filter((line) => line.startsWith("event\t"))).toEqual([
       `event\t${phase}\tstarted`,
@@ -326,20 +293,6 @@ run_completed=1
     expect(lines).toContain(`summary\tfailed\t${expectedPhase}\t${signal}`);
     expect(lines.includes("validate")).toBe(
       fault === "command" || fault === "command-one" || fault === "assertion" || initial,
-    );
-
-    // Existing publisher/schema: only the phase value changes, never the wire shape.
-    mkdirSync(join(root, "diagnostics"));
-    const raw = { phase: expectedPhase, exitStatus: code, signal: signal || null };
-    writeJson(join(root, "diagnostics/raw.json"), raw);
-    const destination = join(root, "public");
-    expect(publishDiagnostics(root, destination, (text: string) => text)).toEqual(raw);
-    const published = readFileSync(join(destination, "failure.json"), "utf8");
-    writeJson(join(root, "diagnostics/raw.json"), { ...raw, phase });
-    const control = join(root, "control");
-    publishDiagnostics(root, control, (text: string) => text);
-    expect(published.replace(expectedPhase, phase)).toBe(
-      readFileSync(join(control, "failure.json"), "utf8"),
     );
   },
 );

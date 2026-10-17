@@ -7,18 +7,36 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { expectStatus, readJson, writeJson } from "./upgrade-survivor-io.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const command = resolve("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
-
 const schemaCommand = resolve("scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs");
+const runScript = (script: string, ...args: string[]) =>
+  spawnSync(process.execPath, [script, ...args], { encoding: "utf8", timeout: 10_000 });
+const fileBytes = (files: string[]) => files.map((file) => readFileSync(file));
 
-function writeSchema(file: string, version: number) {
-  mkdirSync(dirname(file), { recursive: true });
+function withDatabase(file: string, action: (database: DatabaseSync) => void) {
   const database = new DatabaseSync(file);
   try {
-    database.exec(`PRAGMA user_version = ${version}`);
+    action(database);
   } finally {
     database.close();
   }
+}
+
+function writeSchema(file: string, version: number) {
+  mkdirSync(dirname(file), { recursive: true });
+  withDatabase(file, (database) => database.exec(`PRAGMA user_version = ${version}`));
+}
+
+function expectRejected(result: ReturnType<typeof runScript>, diagnostic: string) {
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(diagnostic);
+}
+
+function expectReadOnly(files: string[], check: () => ReturnType<typeof runScript>) {
+  const before = fileBytes(files);
+  const result = check();
+  expectStatus(result);
+  expect(fileBytes(files)).toEqual(before);
+  return result;
 }
 
 function schemaFixture(
@@ -53,34 +71,18 @@ function schemaFixture(
   execFileSync("tar", ["-czf", tarball, "-C", root, "package"]);
   const snapshotFile = join(root, "snapshot.json");
   const afterFile = join(root, "schema-after.json");
-  const run = (...args: string[]) =>
-    spawnSync(process.execPath, [schemaCommand, ...args], {
-      encoding: "utf8",
-      timeout: 10_000,
-    });
+  const run = (...args: string[]) => runScript(schemaCommand, ...args);
   const prepare = () =>
     run("prepare", baselineVersion, tarball, stateDir, snapshotFile, configFile);
   const prepared = prepare();
   expectStatus(prepared);
-  function checkSchemaOutcome(
-    exitCode = 0,
-    installedVersion = candidateVersion,
-    acceptedOutcome = "success",
-  ) {
-    return run(
-      "assert",
-      snapshotFile,
-      String(exitCode),
-      installedVersion,
-      acceptedOutcome,
-      afterFile,
-    );
-  }
+  const check = (exitCode = 0, installed = candidateVersion, outcome = "success") =>
+    run("assert", snapshotFile, String(exitCode), installed, outcome, afterFile);
   return {
     prepared,
     prepare,
     stateDir,
-    check: checkSchemaOutcome,
+    check,
     stateDatabase,
     agentDatabase,
     snapshotFile,
@@ -92,18 +94,15 @@ function schemaFixture(
 function legacyAgentFixture() {
   const agentId = "main";
   const sessionKey = `agent:${agentId}:explicit:seeded-turn`;
+  const message = (
+    id: string,
+    role: string,
+    content: string | { type: string; text: string }[],
+  ) => ({ type: "message", id, message: { role, content } });
   const events = [
     { type: "session", id: "seeded-turn", version: 3 },
-    {
-      type: "message",
-      id: "user-message",
-      message: { role: "user", content: "Keep this history" },
-    },
-    {
-      type: "message",
-      id: "reply",
-      message: { role: "assistant", content: [{ type: "text", text: "Saved reply" }] },
-    },
+    message("user-message", "user", "Keep this history"),
+    message("reply", "assistant", [{ type: "text", text: "Saved reply" }]),
   ];
   const index = { [sessionKey]: { sessionId: "seeded-turn" } };
   const sourceNames = [
@@ -134,22 +133,16 @@ function legacyAgentFixture() {
   function migrate() {
     writeSchema(lane.stateDatabase, 16);
     writeSchema(databasePath, 19);
-    const db = new DatabaseSync(databasePath);
-    try {
+    withDatabase(databasePath, (db) => {
       db.exec(
         "CREATE TABLE session_nodes (session_key TEXT PRIMARY KEY, current_session_id TEXT); CREATE TABLE transcript_events (session_id TEXT, seq INTEGER, event_json TEXT)",
       );
       db.prepare("INSERT INTO session_nodes VALUES (?, ?)").run(sessionKey, "seeded-turn");
+      const insertEvent = db.prepare("INSERT INTO transcript_events VALUES (?, ?, ?)");
       for (const [seq, event] of events.entries()) {
-        db.prepare("INSERT INTO transcript_events VALUES (?, ?, ?)").run(
-          "seeded-turn",
-          seq,
-          JSON.stringify(event),
-        );
+        insertEvent.run("seeded-turn", seq, JSON.stringify(event));
       }
-    } finally {
-      db.close();
-    }
+    });
     mkdirSync(archiveDir, { recursive: true });
     const completedMoves = sourceNames.map((name) => {
       const sourcePath = join(sessions, name);
@@ -177,44 +170,42 @@ function legacyAgentFixture() {
   return { ...lane, migrate, databasePath, archiveDir, sessions, promptPath, manifestPath };
 }
 
+type LegacyLane = ReturnType<typeof legacyAgentFixture>;
+
+function consumeManifest(lane: LegacyLane, suffix = "") {
+  const manifest = readJson(lane.manifestPath);
+  const consumedArchives = manifest.targets.flatMap(
+    (target: { completedMoves: { archivePath: string }[] }) =>
+      target.completedMoves.map((move) => (move.archivePath += suffix)),
+  );
+  writeJson(lane.manifestPath, { ...manifest, restore: { consumedArchives } });
+}
+
 describe("published survivor schema outcome", () => {
-  it.each<{
-    name: string;
-    code?: number;
-    outcome?: string;
-    installed?: string;
-    state?: number | null;
-    agent?: number | null;
-    accepted?: boolean;
-    diagnostic?: string;
-  }>([
-    { name: "failed success", code: 1 },
-    { name: "recoverable zero exit", outcome: "recoverable", accepted: true },
-    { name: "recoverable warning", code: 1, outcome: "recoverable", accepted: true },
-    { name: "unrecoverable exit", code: 2, outcome: "recoverable" },
-    { name: "schema refusal", outcome: "schema-refusal" },
-    { name: "state migration missing", state: 15, diagnostic: "candidate schema" },
-    { name: "agent migration missing", agent: 18, diagnostic: "candidate schema" },
-    { name: "state schema too new", state: 17, diagnostic: "candidate schema" },
-    { name: "agent schema too new", agent: 20, diagnostic: "candidate schema" },
-    { name: "state database lost", state: null, diagnostic: "candidate schema" },
-    {
-      name: "agent database lost",
-      agent: null,
-      diagnostic: "required agent database missing before candidate probes: ops",
-    },
-    { name: "rollback", installed: "2026.9.1", diagnostic: "candidate package is not installed" },
-  ])(
-    "validates the installed candidate before probes: $name",
-    ({
-      code = 0,
-      outcome = "success",
-      installed,
-      state = 16,
-      agent = 19,
-      accepted = false,
-      diagnostic,
-    }) => {
+  it.each([
+    [1, "success", false],
+    [0, "recoverable", true],
+    [1, "recoverable", true],
+    [2, "recoverable", false],
+    [0, "schema-refusal", false],
+  ] as const)("validates exit %i with outcome %s before probes", (code, outcome, accepted) => {
+    const lane = schemaFixture("2026.9.1", 15, 18);
+    writeSchema(lane.stateDatabase, 16);
+    writeSchema(lane.agentDatabase, 19);
+    expectStatus(lane.check(code, lane.candidateVersion, outcome), accepted ? 0 : 1);
+  });
+
+  it.each([
+    [15, 19, "2026.9.2", "candidate schema"],
+    [16, 18, "2026.9.2", "candidate schema"],
+    [17, 19, "2026.9.2", "candidate schema"],
+    [16, 20, "2026.9.2", "candidate schema"],
+    [null, 19, "2026.9.2", "candidate schema"],
+    [16, null, "2026.9.2", "required agent database missing before candidate probes: ops"],
+    [16, 19, "2026.9.1", "candidate package is not installed"],
+  ] as const)(
+    "requires candidate schemas %s/%s and version %s before probes",
+    (state, agent, installed, diagnostic) => {
       const lane = schemaFixture("2026.9.1", 15, 18);
       for (const [file, version] of [
         [lane.stateDatabase, state],
@@ -226,11 +217,7 @@ describe("published survivor schema outcome", () => {
           writeSchema(file, version);
         }
       }
-      const result = lane.check(code, installed ?? lane.candidateVersion, outcome);
-      expectStatus(result, accepted ? 0 : 1);
-      if (diagnostic) {
-        expect(result.stderr).toContain(diagnostic);
-      }
+      expectRejected(lane.check(0, installed), diagnostic);
     },
   );
 
@@ -258,17 +245,12 @@ describe("published survivor schema outcome", () => {
             contentVersion: null,
           },
         ]);
-        expect(existsSync(lane.stateDatabase)).toBe(false);
-        expect(existsSync(lane.agentDatabase)).toBe(false);
+        expect([lane.stateDatabase, lane.agentDatabase].map(existsSync)).toEqual([false, false]);
       }
       writeSchema(lane.stateDatabase, 16);
       writeSchema(lane.agentDatabase, 19);
-      const files = [lane.stateDatabase, lane.agentDatabase];
-      const before = files.map((file) => readFileSync(file));
-      const result = lane.check();
-      expectStatus(result);
+      const result = expectReadOnly([lane.stateDatabase, lane.agentDatabase], lane.check);
       expect(result.stdout.trim()).toBe("success");
-      expect(files.map((file) => readFileSync(file))).toEqual(before);
     },
   );
 
@@ -280,26 +262,19 @@ describe("published survivor schema outcome", () => {
       writeFileSync(join(agentDir, "provider-cache", "unrelated.txt"), "Not a migration specimen");
     });
     const snapshot = readJson(lane.snapshotFile);
-    expect(snapshot.agents).toEqual([
-      {
-        agentId: "main",
-        databaseRelative: "agents/main/agent/openclaw-agent.sqlite",
+    expect(snapshot.agents).toEqual(
+      ["main", "ops"].map((agentId) => ({
+        agentId,
+        databaseRelative: `agents/${agentId}/agent/openclaw-agent.sqlite`,
         requiresDatabase: false,
         files: [],
-      },
-      {
-        agentId: "ops",
-        databaseRelative: "agents/ops/agent/openclaw-agent.sqlite",
-        requiresDatabase: false,
-        files: [],
-      },
-    ]);
+      })),
+    );
     const sessions = join(lane.stateDir, "agents", "main", "sessions");
     mkdirSync(sessions, { recursive: true });
     writeFileSync(join(sessions, "unknown.json"), "{}");
-    const result = lane.prepare();
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
+    expectRejected(
+      lane.prepare(),
       "unclassified baseline agent specimen: agents/main/sessions/unknown.json",
     );
   });
@@ -311,11 +286,8 @@ describe("published survivor schema outcome", () => {
     const eligibility = join(artifactRoot, "native-assignment-eligibility.json");
     const setAgents = (ids: string[]) =>
       writeJson(configFile, { agents: { entries: Object.fromEntries(ids.map((id) => [id, {}])) } });
-    const expectRosterRejected = () => {
-      const result = lane.prepare();
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("seeded agent roster changed");
-    };
+    const expectRosterRejected = () =>
+      expectRejected(lane.prepare(), "seeded agent roster changed");
     setAgents(["main", "native-proof", "ops"]);
     expectRosterRejected();
     writeJson(eligibility, { status: "not-applicable" });
@@ -329,17 +301,12 @@ describe("published survivor schema outcome", () => {
       readJson(lane.snapshotFile).agents.map((agent: { agentId: string }) => agent.agentId),
     ).toEqual(["main", "native-proof", "ops"]);
     writeSchema(lane.stateDatabase, 16);
-    const oldSchema = lane.check();
-    expect(oldSchema.status).toBe(1);
-    expect(oldSchema.stderr).toContain(
-      "required agent database lacks candidate schema: native-proof",
-    );
+    expectRejected(lane.check(), "required agent database lacks candidate schema: native-proof");
     writeSchema(nativeDatabase, 19);
     expect(lane.check().status).toBe(0);
     rmSync(nativeDatabase);
-    const missing = lane.check();
-    expect(missing.status).toBe(1);
-    expect(missing.stderr).toContain(
+    expectRejected(
+      lane.check(),
       "required agent database missing before candidate probes: native-proof",
     );
     for (const ids of [
@@ -358,14 +325,9 @@ describe("published survivor schema outcome", () => {
     (restored) => {
       const lane = legacyAgentFixture();
       const snapshot = readJson(lane.snapshotFile);
-      expect(
-        snapshot.agents.map((agent: { agentId: string; requiresDatabase: boolean }) => [
-          agent.agentId,
-          agent.requiresDatabase,
-        ]),
-      ).toEqual([
-        ["main", true],
-        ["ops", false],
+      expect(snapshot.agents).toMatchObject([
+        { agentId: "main", requiresDatabase: true },
+        { agentId: "ops", requiresDatabase: false },
       ]);
       expect(
         snapshot.agents[0].files.map((file: { kind: string }) => file.kind).toSorted(),
@@ -373,16 +335,7 @@ describe("published survivor schema outcome", () => {
       lane.migrate();
       if (restored) {
         const current = readJson(lane.manifestPath);
-        const consumed = structuredClone(current);
-        const consumedArchives: string[] = [];
-        for (const target of consumed.targets) {
-          for (const move of target.completedMoves) {
-            move.archivePath += ".consumed";
-            consumedArchives.push(move.archivePath);
-          }
-        }
-        consumed.restore = { consumedArchives };
-        writeJson(lane.manifestPath, consumed);
+        consumeManifest(lane, ".consumed");
         writeJson(join(dirname(lane.manifestPath), "reimport.json"), current);
       }
       const preserved = [
@@ -391,109 +344,59 @@ describe("published survivor schema outcome", () => {
         lane.manifestPath,
         join(lane.archiveDir, "seeded-turn.jsonl.imported-1"),
       ];
-      const before = preserved.map((file) => readFileSync(file));
-      const result = lane.check();
-      expectStatus(result);
-      expect(preserved.map((file) => readFileSync(file))).toEqual(before);
-      expect(
-        existsSync(join(lane.stateDir, "agents", "ops", "agent", "openclaw-agent.sqlite")),
-      ).toBe(false);
+      expectReadOnly(preserved, lane.check);
+      expect(existsSync(lane.agentDatabase)).toBe(false);
     },
   );
 
   it.each([
-    [
-      "required store removed",
-      (lane: ReturnType<typeof legacyAgentFixture>) => rmSync(lane.databasePath),
-      "required agent database missing",
-    ],
-    [
-      "old agent schema",
-      (lane: ReturnType<typeof legacyAgentFixture>) => writeSchema(lane.databasePath, 18),
-      "required agent database lacks candidate schema",
-    ],
-    [
-      "active legacy source",
-      (lane: ReturnType<typeof legacyAgentFixture>) =>
-        writeFileSync(join(lane.sessions, "sessions.json"), "{}"),
-      "specimen was not retired",
-    ],
-    [
-      "missing archive receipt",
-      (lane: ReturnType<typeof legacyAgentFixture>) => rmSync(lane.manifestPath),
-      "lacks completed archive receipt",
-    ],
-    [
-      "consumed archive receipt",
-      (lane: ReturnType<typeof legacyAgentFixture>) => {
-        const manifest = readJson(lane.manifestPath);
-        const consumedArchives: string[] = [];
-        for (const target of manifest.targets) {
-          for (const move of target.completedMoves) {
-            consumedArchives.push(move.archivePath);
-          }
-        }
-        manifest.restore = { consumedArchives };
-        writeJson(lane.manifestPath, manifest);
-      },
-      "lacks completed archive receipt",
-    ],
-    [
-      "lost transcript archive",
-      (lane: ReturnType<typeof legacyAgentFixture>) =>
-        rmSync(join(lane.archiveDir, "seeded-turn.jsonl.imported-1")),
-      "archive missing",
-    ],
-    [
-      "changed trajectory",
-      (lane: ReturnType<typeof legacyAgentFixture>) =>
-        writeFileSync(join(lane.archiveDir, "seeded-turn.trajectory.jsonl.imported-1"), "changed"),
-      "archive changed",
-    ],
-    [
-      "lost prompt blob",
-      (lane: ReturnType<typeof legacyAgentFixture>) => rmSync(lane.promptPath),
-      "skill prompt missing",
-    ],
-    [
-      "changed prompt blob",
-      (lane: ReturnType<typeof legacyAgentFixture>) => writeFileSync(lane.promptPath, "changed"),
-      "skill prompt changed",
-    ],
-    ...[
-      ["session row", "DELETE FROM session_nodes", "legacy session was not imported"],
-      [
-        "transcript event",
-        "DELETE FROM transcript_events WHERE seq = 2",
-        "legacy transcript event was not imported",
-      ],
-      [
-        "message content",
-        `UPDATE transcript_events SET event_json = '{"type":"message","id":"reply","message":{"role":"assistant","content":"lost reply"}}' WHERE seq = 2`,
-        "legacy transcript event was not imported",
-      ],
-    ].map(
-      ([label, sql, diagnostic]) =>
-        [
-          label,
-          (lane: ReturnType<typeof legacyAgentFixture>) => {
-            const db = new DatabaseSync(lane.databasePath);
-            try {
-              db.exec(sql!);
-            } finally {
-              db.close();
-            }
-          },
-          diagnostic,
-        ] as const,
-    ),
-  ] as const)("rejects %s before candidate probes", (_label, corrupt, diagnostic) => {
+    ["required store removed", "remove", "database", "required agent database missing"],
+    ["old agent schema", "schema", "database", "required agent database lacks candidate schema"],
+    ["active legacy source", "write", "index", "specimen was not retired"],
+    ["missing archive receipt", "remove", "manifest", "lacks completed archive receipt"],
+    ["consumed archive receipt", "consume", "manifest", "lacks completed archive receipt"],
+    ["lost transcript archive", "remove", "transcript", "archive missing"],
+    ["changed trajectory", "write", "trajectory", "archive changed"],
+    ["lost prompt blob", "remove", "prompt", "skill prompt missing"],
+    ["changed prompt blob", "write", "prompt", "skill prompt changed"],
+  ] as const)("rejects %s before candidate probes", (_label, operation, target, diagnostic) => {
     const lane = legacyAgentFixture();
     lane.migrate();
-    corrupt(lane);
-    const result = lane.check();
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(diagnostic);
+    const file = {
+      database: lane.databasePath,
+      index: join(lane.sessions, "sessions.json"),
+      manifest: lane.manifestPath,
+      transcript: join(lane.archiveDir, "seeded-turn.jsonl.imported-1"),
+      trajectory: join(lane.archiveDir, "seeded-turn.trajectory.jsonl.imported-1"),
+      prompt: lane.promptPath,
+    }[target];
+    const corrupt = {
+      remove: () => rmSync(file),
+      schema: () => writeSchema(file, 18),
+      consume: () => consumeManifest(lane),
+      write: () => writeFileSync(file, target === "index" ? "{}" : "changed"),
+    };
+    corrupt[operation]();
+    expectRejected(lane.check(), diagnostic);
+  });
+
+  it.each([
+    ["session row", "DELETE FROM session_nodes", "legacy session was not imported"],
+    [
+      "transcript event",
+      "DELETE FROM transcript_events WHERE seq = 2",
+      "legacy transcript event was not imported",
+    ],
+    [
+      "message content",
+      `UPDATE transcript_events SET event_json = '{"type":"message","id":"reply","message":{"role":"assistant","content":"lost reply"}}' WHERE seq = 2`,
+      "legacy transcript event was not imported",
+    ],
+  ] as const)("rejects missing or changed %s before probes", (_label, sql, diagnostic) => {
+    const lane = legacyAgentFixture();
+    lane.migrate();
+    withDatabase(lane.databasePath, (db) => db.exec(sql));
+    expectRejected(lane.check(), diagnostic);
   });
 
   it.each([
@@ -509,17 +412,14 @@ describe("published survivor schema outcome", () => {
     (published, marker, accepted) => {
       const lane = schemaFixture();
       writeSchema(lane.stateDatabase, published);
-      const database = new DatabaseSync(lane.stateDatabase);
-      try {
+      withDatabase(lane.stateDatabase, (database) => {
         database.exec(
           "CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT NOT NULL)",
         );
         database
           .prepare("INSERT INTO config_machine_state VALUES (?, ?)")
           .run("state.schema.contentVersion", marker);
-      } finally {
-        database.close();
-      }
+      });
       const before = readFileSync(lane.stateDatabase);
       const result = lane.check();
       expectStatus(result, accepted ? 0 : 1);
@@ -534,40 +434,4 @@ describe("published survivor schema outcome", () => {
       }
     },
   );
-
-  it.each([
-    ["assert-successful-update-json", "update did not report ok"],
-    ["assert-recoverable-update-json", "doctor-failed"],
-  ])("rejects typed schema refusal through %s", (assertion, diagnostic) => {
-    const file = join(tempDirs.make("survivor-refused-update-"), "update.json");
-    writeJson(file, {
-      status: "error",
-      mode: "npm",
-      reason: "doctor-failed",
-      before: { version: "2026.9.2" },
-      after: { version: "2026.9.2" },
-      steps: [
-        { name: "global update", exitCode: 0 },
-        { name: "global install swap", exitCode: 0 },
-        {
-          name: "openclaw doctor",
-          exitCode: 1,
-          stdoutTail: JSON.stringify({
-            ok: false,
-            error: { code: "update-schema-bump-unfenced" },
-          }),
-        },
-      ],
-    });
-    const result = spawnSync(
-      process.execPath,
-      [command, assertion, file, "2026.9.2", "", "2026.9.2"],
-      {
-        encoding: "utf8",
-        timeout: 10_000,
-      },
-    );
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(diagnostic);
-  });
 });
