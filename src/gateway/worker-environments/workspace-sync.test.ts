@@ -83,54 +83,50 @@ describe("worker workspace command transport retry", () => {
     },
   );
 
-  it("runs never commands once without changing the selected port", async () => {
-    // Pin the deadline so loaded runners still prove the exact dispatch budget.
-    vi.spyOn(performance, "now").mockReturnValue(1_000);
-    const run = vi.fn(async (argv: string[], _options: CommandOptions) =>
-      argv.at(-1)?.includes("never-command") ? result(255) : result(),
-    );
-    const actions = createWorkspaceActions(run);
+  it.each(["never", "idempotent"] as const)(
+    "bounds %s retry and preserves selected ports",
+    async (transportRetry) => {
+      let now = 1_000;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const run = vi.fn(async (argv: string[], _options: CommandOptions) => {
+        if (argv.at(-1)?.includes("command") && sshArgvPort(argv) === 2222) {
+          if (transportRetry === "idempotent") {
+            now += 175;
+          }
+          return result(255);
+        }
+        return result();
+      });
+      const actions = createWorkspaceActions(run);
 
-    await expect(
-      actions.runWorkspaceCommand({
-        transportRetry: "never",
-        argv: ["printf", "never-command"],
-        timeoutMs: 777,
-      }),
-    ).resolves.toMatchObject({ code: 255, termination: "exit" });
-    expect(run).toHaveBeenCalledOnce();
-    expect(sshArgvPort(run.mock.calls[0]![0])).toBe(2222);
-    expect(run.mock.calls[0]![1].timeoutMs).toBe(777);
-
-    await actions.runWorkspaceCommand({
-      transportRetry: "idempotent",
-      argv: ["printf", "selection-probe"],
-    });
-    expect(sshArgvPort(run.mock.calls[1]![0])).toBe(2222);
-  });
-
-  it("gives an idempotent fallback only the remaining operation timeout", async () => {
-    let now = 1_000;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    const run = vi.fn(async (argv: string[], _options: CommandOptions) => {
-      if (sshArgvPort(argv) === 2222) {
-        now += 175;
-        return result(255);
+      await expect(
+        actions.runWorkspaceCommand({
+          transportRetry,
+          argv: ["printf", "command"],
+          timeoutMs: transportRetry === "never" ? 777 : 1_000,
+        }),
+      ).resolves.toEqual(result(transportRetry === "never" ? 255 : 0));
+      expect(
+        run.mock.calls.map(([argv, options]) => [sshArgvPort(argv), options.timeoutMs]),
+      ).toEqual(
+        transportRetry === "never"
+          ? [[2222, 777]]
+          : [
+              [2222, 1_000],
+              [22, 825],
+            ],
+      );
+      if (transportRetry === "idempotent") {
+        expect(run.mock.calls[0]![1]).not.toBe(run.mock.calls[1]![1]);
+      } else {
+        await actions.runWorkspaceCommand({
+          transportRetry: "idempotent",
+          argv: ["printf", "selection-probe"],
+        });
+        expect(sshArgvPort(run.mock.calls[1]![0])).toBe(2222);
       }
-      return result();
-    });
-    const actions = createWorkspaceActions(run);
-
-    await expect(
-      actions.runWorkspaceCommand({
-        transportRetry: "idempotent",
-        argv: ["printf", "retry-with-deadline"],
-        timeoutMs: 1_000,
-      }),
-    ).resolves.toEqual(result());
-    expect(run.mock.calls.map(([, options]) => options.timeoutMs)).toEqual([1_000, 825]);
-    expect(run.mock.calls[0]![1]).not.toBe(run.mock.calls[1]![1]);
-  });
+    },
+  );
 });
 
 describe("bounded inbound workspace transfer", () => {
@@ -155,6 +151,31 @@ describe("bounded inbound workspace transfer", () => {
     });
   }
 
+  function interceptStat(file: string, inspect: () => void) {
+    const lstat = fsSync.lstatSync.bind(fsSync);
+    vi.spyOn(fsSync, "lstatSync").mockImplementation((target, options) => {
+      if (String(target) === file) {
+        inspect();
+      }
+      return lstat(target, options);
+    });
+  }
+
+  function pendingTransfer(active = true) {
+    const completed = createDeferred<SpawnResult>();
+    const state: { signal?: AbortSignal; settled: boolean } = { settled: false };
+    const runTask = async (_argv: string[], { signal }: CommandOptions) => {
+      state.signal = signal;
+      signal?.addEventListener("abort", () => completed.reject(new Error("transfer cancelled")), {
+        once: true,
+      });
+      return (active ? completed.promise : Promise.resolve(result())).finally(() => {
+        state.settled = true;
+      });
+    };
+    return { state, runTask, completed };
+  }
+
   it.each(["active", "completed"] as const)(
     "tolerates a disappearing temporary manifest only during an active transfer (%s)",
     async (transferState) => {
@@ -163,95 +184,49 @@ describe("bounded inbound workspace transfer", () => {
       const finalManifest = path.join(destinationRoot, "manifest.json");
       await fs.writeFile(temporaryManifest, "manifest");
       const renamed = createDeferred();
-      const completed = createDeferred<SpawnResult>();
-      const originalLstatSync = fsSync.lstatSync.bind(fsSync);
-      vi.spyOn(fsSync, "lstatSync").mockImplementation((target, options) => {
-        if (String(target) === temporaryManifest) {
-          // Rsync publishes a listed temporary file before the quota walker stats it.
-          fsSync.renameSync(temporaryManifest, finalManifest);
-          renamed.resolve();
-        }
-        return originalLstatSync(target, options);
+      const { completed, state, runTask } = pendingTransfer(transferState === "active");
+      interceptStat(temporaryManifest, () => {
+        // Rsync publishes a listed temporary file before the quota walker stats it.
+        fsSync.renameSync(temporaryManifest, finalManifest);
+        renamed.resolve();
       });
-      let transferSignal: AbortSignal | undefined;
-      const operation = transfer(destinationRoot, async (_argv, { signal }) => {
-        transferSignal = signal;
-        signal?.addEventListener("abort", () => completed.reject(signal.reason), { once: true });
-        return transferState === "active" ? await completed.promise : result();
-      });
-      const outcome = operation.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const outcome = transfer(destinationRoot, runTask).catch((error: unknown) => ({ error }));
       if (transferState === "active") {
         await vi.advanceTimersByTimeAsync(25);
         await renamed.promise;
         completed.resolve(result());
-        await expect(outcome).resolves.toEqual({ value: result() });
+        await expect(outcome).resolves.toEqual(result());
       } else {
         await expect(outcome).resolves.toMatchObject({
           error: { code: "not-found", cause: { code: "ENOENT", path: temporaryManifest } },
         });
       }
-      expect(transferSignal?.aborted).toBe(false);
+      expect(state.signal?.aborted).toBe(false);
       await expect(fs.readFile(finalManifest, "utf8")).resolves.toBe("manifest");
     },
   );
 
-  it("aborts and joins a transfer before reporting a failed directory scan", async () => {
-    const destinationRoot = tempDirs.make("openclaw-rsync-scan-");
-    const unreadable = path.join(destinationRoot, "unreadable");
-    await fs.writeFile(unreadable, "manifest");
-    const scanError = Object.assign(new Error("access denied"), { code: "EACCES" });
-    const originalLstatSync = fsSync.lstatSync.bind(fsSync);
-    vi.spyOn(fsSync, "lstatSync").mockImplementation((target, options) => {
-      if (String(target) === unreadable) {
-        throw scanError;
+  it.each(["scan", "quota"])(
+    "aborts and joins a transfer before reporting %s failure",
+    async (failure) => {
+      const destinationRoot = tempDirs.make("openclaw-rsync-failure-");
+      const file = path.join(destinationRoot, "manifest");
+      await fs.writeFile(file, "over quota");
+      const scanError = Object.assign(new Error("access denied"), { code: "EACCES" });
+      if (failure === "scan") {
+        interceptStat(file, () => {
+          throw scanError;
+        });
       }
-      return originalLstatSync(target, options);
-    });
-    let transferSignal: AbortSignal | undefined;
-    let settled = false;
-    const operation = transfer(destinationRoot, async (_argv, { signal }) => {
-      transferSignal = signal;
-      await new Promise<void>((resolve) => {
-        signal?.addEventListener("abort", () => resolve(), { once: true });
-      });
-      settled = true;
-      throw new Error("transfer cancelled");
-    });
-    const failed = expect(operation).rejects.toBe(scanError);
-    await vi.advanceTimersByTimeAsync(25);
-    await failed;
-    expect(transferSignal?.aborted).toBe(true);
-    expect(settled).toBe(true);
-  });
-
-  it("aborts an in-flight transfer when the destination crosses quota", async () => {
-    const destinationRoot = tempDirs.make("openclaw-rsync-quota-");
-    await fs.writeFile(path.join(destinationRoot, "oversized"), "over quota");
-    let transferSignal: AbortSignal | undefined;
-    const runTask = vi.fn(async (_argv: string[], options: CommandOptions) => {
-      transferSignal = options.signal;
-      return await new Promise<SpawnResult>((_resolve, reject) => {
-        const abort = () => {
-          const reason = options.signal?.reason;
-          reject(reason instanceof Error ? reason : new Error("aborted"));
-        };
-        options.signal?.addEventListener("abort", abort, { once: true });
-        if (options.signal?.aborted) {
-          abort();
-        }
-      });
-    });
-
-    const failed = expect(
-      transfer(destinationRoot, runTask, { totalByteLimit: 1 }),
-    ).rejects.toThrow("inbound transfer exceeds");
-    await vi.advanceTimersByTimeAsync(25);
-    await failed;
-    expect(transferSignal?.aborted).toBe(true);
-  });
+      const { state, runTask } = pendingTransfer();
+      const failed = expect(transfer(destinationRoot, runTask, { totalByteLimit: 1 })).rejects;
+      const checked =
+        failure === "scan" ? failed.toBe(scanError) : failed.toThrow("inbound transfer exceeds");
+      await vi.advanceTimersByTimeAsync(25);
+      await checked;
+      expect(state).toMatchObject({ signal: { aborted: true }, settled: true });
+    },
+  );
 
   it.each(["bytes", "entries"])(
     "rejects a completed transfer exceeding its %s quota",

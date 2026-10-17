@@ -30,6 +30,17 @@ afterEach(async () => {
 });
 
 const manifestRef = (raw: string) => `sha256:${createHash("sha256").update(raw).digest("hex")}`;
+const manifest = (entries: WorkerWorkspaceManifestEntry[]) =>
+  serializeWorkerWorkspaceManifest({ version: 1, baseCommit: null, entries });
+type FixtureOptions = {
+  largeFileBytes?: number;
+  objectFormat?: "sha1" | "sha256";
+  linked?: boolean;
+};
+function flipByte(bytes: Buffer, index: number, mask = 0xff) {
+  bytes[index] = bytes[index]! ^ mask;
+  return bytes;
+}
 
 function corruptBatch(
   repository: string,
@@ -62,12 +73,12 @@ async function git(root: string, args: string[]) {
 
 async function stagedFixture(
   fileCount = 64,
-  options: { largeFileBytes?: number; objectFormat?: "sha1" | "sha256"; linked?: boolean } = {},
+  { largeFileBytes = 0, objectFormat = "sha1", linked = false }: FixtureOptions = {},
 ) {
   const root = await fs.realpath(tempDirs.make("workspace-staged-reads-"));
   let repository = path.join(
     root,
-    options.linked
+    linked
       ? (process.platform === "win32" ? "repository-" : "repository-\n").padEnd(
           190 - root.length - 1,
           "r",
@@ -76,15 +87,10 @@ async function stagedFixture(
   );
   const input = path.join(root, "input");
   await Promise.all([fs.mkdir(repository), fs.mkdir(input)]);
-  if (options.objectFormat === "sha256" || options.linked) {
-    await git(repository, [
-      "init",
-      "--quiet",
-      "--template=",
-      `--object-format=${options.objectFormat ?? "sha1"}`,
-    ]);
+  if (objectFormat === "sha256" || linked) {
+    await git(repository, ["init", "--quiet", "--template=", `--object-format=${objectFormat}`]);
   }
-  if (options.linked) {
+  if (linked) {
     await git(repository, ["config", "core.longpaths", "false"]);
     await git(repository, [
       "-c",
@@ -99,15 +105,15 @@ async function stagedFixture(
       "-m",
       "base",
     ]);
-    const linked = path.join(
+    const linkedRoot = path.join(
       root,
       process.platform === "win32" ? "linked-result-worktree" : "linked\nresult-worktree",
     );
-    await git(repository, ["worktree", "add", "--quiet", "--detach", "--", linked, "HEAD"]);
-    vi.stubEnv("GIT_COMMON_DIR", path.relative(linked, path.join(repository, ".git")));
-    repository = linked;
+    await git(repository, ["worktree", "add", "--quiet", "--detach", "--", linkedRoot, "HEAD"]);
+    vi.stubEnv("GIT_COMMON_DIR", path.relative(linkedRoot, path.join(repository, ".git")));
+    repository = linkedRoot;
   }
-  const originalHead = options.linked ? await git(repository, ["rev-parse", "HEAD"]) : undefined;
+  const originalHead = linked ? await git(repository, ["rev-parse", "HEAD"]) : undefined;
   const files = new Map<string, Buffer>();
   for (let index = 0; index < fileCount; index++) {
     files.set(`file-${String(index).padStart(3, "0")}.txt`, Buffer.from(`payload ${index}\n`));
@@ -115,8 +121,8 @@ async function stagedFixture(
   const binaryPath = process.platform === "win32" ? "binary.bin" : "binary\nname.bin";
   files.set(binaryPath, Buffer.from([0, 10, 255, 13, 10, 0, 65]));
   files.set("executable.sh", Buffer.from("#!/bin/sh\nexit 0\n"));
-  if (options.largeFileBytes) {
-    files.set("large.bin", Buffer.alloc(options.largeFileBytes, 0x5a));
+  if (largeFileBytes) {
+    files.set("large.bin", Buffer.alloc(largeFileBytes, 0x5a));
   }
   const entries: WorkerWorkspaceManifestEntry[] = [];
   for (const [entryPath, content] of files) {
@@ -135,18 +141,10 @@ async function stagedFixture(
     await fs.symlink(binaryPath, path.join(input, "current-link"));
     entries.push({ path: "current-link", type: "symlink", mode: 0o777, target: binaryPath });
   }
-  const baseManifestRaw = serializeWorkerWorkspaceManifest({
-    version: 1,
-    baseCommit: null,
-    entries: [],
-  });
-  const currentManifestRaw = serializeWorkerWorkspaceManifest({
-    version: 1,
-    baseCommit: null,
-    entries,
-  });
+  const baseManifestRaw = manifest([]);
+  const currentManifestRaw = manifest(entries);
   const publishedRef = workerWorkspaceResultRef("f4c0d91b-491b-4be0-901d-419e277338af");
-  const stagedResultRef = options.linked
+  const stagedResultRef = linked
     ? preparedWorkerWorkspaceResultRef(publishedRef)
     : workerWorkspaceResultRef("read-batch");
   const commit = await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
@@ -167,25 +165,18 @@ async function stagedFixture(
     originalHead,
     commit,
     files,
-    entries,
     binaryPath,
   };
 }
 
-it.each([
-  { fileCount: 64, maxReads: 4, largeFileBytes: 0, objectFormat: "sha1" as const, linked: true },
-  { fileCount: 300, maxReads: 6, largeFileBytes: 0, objectFormat: "sha1" as const, linked: false },
-  {
-    fileCount: 0,
-    maxReads: 4,
-    largeFileBytes: 9 * 1024 * 1024,
-    objectFormat: "sha1" as const,
-    linked: false,
-  },
-  { fileCount: 0, maxReads: 4, largeFileBytes: 0, objectFormat: "sha256" as const, linked: false },
+it.each<[number, number, FixtureOptions]>([
+  [64, 4, { linked: true }],
+  [300, 6, {}],
+  [0, 4, { largeFileBytes: 9 * 1024 * 1024 }],
+  [0, 4, { objectFormat: "sha256" }],
 ])(
-  "materializes $fileCount files with $largeFileBytes large-file bytes in $objectFormat using bounded Git reads (linked=$linked)",
-  async ({ fileCount, maxReads, ...fixtureOptions }) => {
+  "materializes %i files with at most %i Git reads (%j)",
+  async (fileCount, maxReads, fixtureOptions) => {
     const fixture = await stagedFixture(fileCount, fixtureOptions);
     expect(fixture.commit).toBe(
       await git(fixture.repository, ["rev-parse", `${fixture.stagedResultRef}^{commit}`]),
@@ -198,19 +189,8 @@ it.each([
       }
       return await runBuffered(argv, options);
     });
-    const materialized: string[] = [];
-    const writeFile = fs.writeFile.bind(fs);
-    const symlink = fs.symlink.bind(fs);
-    vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-      if (typeof args[0] === "string") {
-        materialized.push(args[0]);
-      }
-      return await writeFile(...args);
-    });
-    vi.spyOn(fs, "symlink").mockImplementation(async (...args) => {
-      materialized.push(String(args[1]));
-      return await symlink(...args);
-    });
+    const writes = vi.spyOn(fs, "writeFile");
+    const links = vi.spyOn(fs, "symlink");
     let stagingRoot = "";
     await fixture.read(async (snapshot) => {
       stagingRoot = snapshot.stagingRoot;
@@ -226,6 +206,10 @@ it.each([
           }
         }
       }
+      const materialized = [
+        ...writes.mock.calls.map(([target]) => String(target)),
+        ...links.mock.calls.map(([, target]) => String(target)),
+      ];
       expect(
         materialized.filter((target) => target.startsWith(stagingRoot + path.sep)).toSorted(),
       ).toEqual(
@@ -233,32 +217,22 @@ it.each([
       );
     });
     await expect(fs.stat(stagingRoot)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(
-      gitReads.length,
-      JSON.stringify({ entries: fixture.entries.length, gitReads }),
-    ).toBeLessThanOrEqual(maxReads);
+    expect(gitReads.length, JSON.stringify(gitReads)).toBeLessThanOrEqual(maxReads);
     if (fixtureOptions.linked) {
+      const root = fixture.repository;
+      const refParams = (stagedResultRef: string) => ({ root, stagedResultRef });
+      const hasRef = (ref: string) => hasWorkerWorkspaceResultRef(refParams(ref));
       await updateWorkspaceResultRefs(fixture.repository, [
         { ref: fixture.publishedRef, objectId: fixture.commit },
         { ref: fixture.stagedResultRef },
       ]);
-      await expect(
-        hasWorkerWorkspaceResultRef({
-          root: fixture.repository,
-          stagedResultRef: fixture.stagedResultRef,
-        }),
-      ).resolves.toBe(false);
-      const cleanupRef = await moveStagedWorkerWorkspaceResultToCleanup({
-        root: fixture.repository,
-        stagedResultRef: fixture.publishedRef,
-      });
-      await expect(
-        hasWorkerWorkspaceResultRef({ root: fixture.repository, stagedResultRef: cleanupRef }),
-      ).resolves.toBe(true);
+      await expect(hasRef(fixture.stagedResultRef)).resolves.toBe(false);
+      const cleanupRef = await moveStagedWorkerWorkspaceResultToCleanup(
+        refParams(fixture.publishedRef),
+      );
+      await expect(hasRef(cleanupRef)).resolves.toBe(true);
       await deleteWorkerWorkspaceResultCleanupRefs({ root: fixture.repository });
-      await expect(
-        hasWorkerWorkspaceResultRef({ root: fixture.repository, stagedResultRef: cleanupRef }),
-      ).resolves.toBe(false);
+      await expect(hasRef(cleanupRef)).resolves.toBe(false);
       expect(await fs.readdir(fixture.repository)).toEqual([".git"]);
       expect(await git(fixture.repository, ["rev-parse", "HEAD"])).toBe(fixture.originalHead);
       expect(await git(fixture.repository, ["config", "--local", "--get", "core.longpaths"])).toBe(
@@ -275,31 +249,25 @@ it.each(["oid", "type", "size", "digest", "truncated", "trailing"] as const)(
     const corrupted = corruptBatch(fixture.repository, (bytes) => {
       const headerEnd = bytes.indexOf(0x0a);
       expect(headerEnd).toBeGreaterThan(0);
-      let stdout = bytes;
       switch (corruption) {
         case "oid":
           bytes[0] = bytes[0] === 0x30 ? 0x31 : 0x30;
-          break;
+          return bytes;
         case "type":
           bytes.write("tree", bytes.indexOf(" blob ") + 1);
-          break;
+          return bytes;
         case "size":
-          stdout = Buffer.concat([
+          return Buffer.concat([
             Buffer.from(bytes.subarray(0, headerEnd).toString("utf8").replace(/\d+$/u, "0")),
             bytes.subarray(headerEnd),
           ]);
-          break;
         case "digest":
-          bytes[headerEnd + 1] = bytes[headerEnd + 1]! ^ 0xff;
-          break;
+          return flipByte(bytes, headerEnd + 1);
         case "truncated":
-          stdout = bytes.subarray(0, -1);
-          break;
+          return bytes.subarray(0, -1);
         case "trailing":
-          stdout = Buffer.concat([bytes, Buffer.from([0])]);
-          break;
+          return Buffer.concat([bytes, Buffer.from([0])]);
       }
-      return stdout;
     });
     const temporary = vi.spyOn(fs, "mkdtemp");
     const writes = vi.spyOn(fs, "writeFile");
@@ -307,14 +275,12 @@ it.each(["oid", "type", "size", "digest", "truncated", "trailing"] as const)(
     const use = vi.fn(async () => {});
     await expect(fixture.read(use)).rejects.toThrow("payload");
     expect(corrupted).toHaveBeenCalledOnce();
-    expect(use).not.toHaveBeenCalled();
-    expect(writes).not.toHaveBeenCalled();
-    expect(links).not.toHaveBeenCalled();
+    for (const effect of [use, writes, links]) {
+      expect(effect).not.toHaveBeenCalled();
+    }
     expect(temporary).toHaveBeenCalledOnce();
     const created = temporary.mock.results[0];
-    if (created?.type !== "return") {
-      throw new Error("Staging did not create its temporary directory");
-    }
+    assert(created?.type === "return", "Staging did not create its temporary directory");
     await expect(fs.stat(await created.value)).rejects.toMatchObject({ code: "ENOENT" });
   },
 );
@@ -326,8 +292,7 @@ it.skipIf(process.platform === "win32")(
     const corrupted = corruptBatch(fixture.repository, (stdout) => {
       const target = stdout.indexOf(fixture.binaryPath);
       expect(target).toBeGreaterThan(0);
-      stdout[target] = stdout[target]! ^ 1;
-      return stdout;
+      return flipByte(stdout, target, 1);
     });
     const links = vi.spyOn(fs, "symlink");
     await expect(fixture.read(async () => {})).rejects.toThrow("payload is invalid: current-link");
@@ -340,11 +305,7 @@ it("authenticates the singleton blob returned by checkpoint previews", async () 
   const fixture = await stagedFixture(0);
   const corrupted = corruptBatch(
     fixture.repository,
-    (stdout) => {
-      const contentStart = stdout.indexOf(0x0a) + 1;
-      stdout[contentStart] = stdout[contentStart]! ^ 0xff;
-      return stdout;
-    },
+    (stdout) => flipByte(stdout, stdout.indexOf(0x0a) + 1),
     (args) => args[0] === "cat-file" && args[1] === "--batch",
   );
   await expect(

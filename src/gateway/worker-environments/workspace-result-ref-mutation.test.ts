@@ -56,8 +56,11 @@ it("shares ref serialization and deferred retention between snapshots and result
   vi.stubEnv("GIT_COMMON_DIR", undefined);
   const root = await repository();
   const other = await repository();
+  const hasRef = (stagedResultRef: string, repositoryRoot = root) =>
+    hasWorkerWorkspaceResultRef({ root: repositoryRoot, stagedResultRef });
+  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
   const service = new ManagedWorktreeService({
-    env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+    env,
     getConfig: () => ({}),
   });
   const worktree = await service.create({ repoRoot: root, name: "snapshot", baseRef: "HEAD" });
@@ -76,11 +79,9 @@ it("shares ref serialization and deferred retention between snapshots and result
   await requireGit(root, ["update-ref", retainedRef, "HEAD"]);
   const retainedRefs = new Set<string>();
   const readRetainedRefs = vi.fn(() => retainedRefs);
-  await updateRegistryWorktree(
-    { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
-    worktree.id,
-    { removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1 },
-  );
+  await updateRegistryWorktree(env, worktree.id, {
+    removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
+  });
 
   const started = createDeferred();
   const release = createDeferred();
@@ -131,9 +132,7 @@ it("shares ref serialization and deferred retention between snapshots and result
     // An independent full ref operation must progress while this repository's
     // writer is parked; a quick read alone can outrun the queued caller's discovery.
     await moveStagedWorkerWorkspaceResultToCleanup({ root: other, stagedResultRef });
-    await expect(hasWorkerWorkspaceResultRef({ root: linked, stagedResultRef })).resolves.toBe(
-      true,
-    );
+    await expect(hasRef(stagedResultRef, linked)).resolves.toBe(true);
     expect(mutations).toBe(1);
     expect(await requireGit(root, ["rev-parse", `${snapshotRef}^{commit}`])).toBe(snapshotHead);
     expect(readRetainedRefs).not.toHaveBeenCalled();
@@ -147,28 +146,24 @@ it("shares ref serialization and deferred retention between snapshots and result
   }
   await cleanup;
   expect(readRetainedRefs).toHaveBeenCalledOnce();
-  await expect(hasWorkerWorkspaceResultRef({ root, stagedResultRef: retainedRef })).resolves.toBe(
-    true,
-  );
+  await expect(hasRef(retainedRef)).resolves.toBe(true);
   expect((await pruning).snapshotsPruned).toBe(1);
   const cleanupRef = await expectDefined(move, "queued worker result move");
-  await expect(hasWorkerWorkspaceResultRef({ root, stagedResultRef })).resolves.toBe(false);
-  await expect(hasWorkerWorkspaceResultRef({ root, stagedResultRef: candidateRef })).resolves.toBe(
-    false,
-  );
-  await expect(hasWorkerWorkspaceResultRef({ root, stagedResultRef: cleanupRef })).resolves.toBe(
-    true,
-  );
+  expect({
+    staged: await hasRef(stagedResultRef),
+    candidate: await hasRef(candidateRef),
+    cleanup: await hasRef(cleanupRef),
+  }).toEqual({ staged: false, candidate: false, cleanup: true });
 
   await restoreStagedWorkerWorkspaceResultFromCleanup({
     root: linked,
     cleanupRef,
     stagedResultRef,
   });
-  await expect(hasWorkerWorkspaceResultRef({ root, stagedResultRef })).resolves.toBe(true);
-  await expect(hasWorkerWorkspaceResultRef({ root, stagedResultRef: cleanupRef })).resolves.toBe(
-    false,
-  );
+  expect({ staged: await hasRef(stagedResultRef), cleanup: await hasRef(cleanupRef) }).toEqual({
+    staged: true,
+    cleanup: false,
+  });
   await moveStagedWorkerWorkspaceResultToCleanup({ root: linked, stagedResultRef });
   await deleteWorkerWorkspaceResultCleanupRefs({ root: linked });
   expect(await requireGit(root, ["for-each-ref", "--format=%(refname)", "refs/openclaw/"])).toBe(

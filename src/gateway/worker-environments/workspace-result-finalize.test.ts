@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentUserMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { requireGit } from "../../agents/worktrees/git.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -16,7 +16,7 @@ import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import type { NodeWorkerWorkspaceRetainEntry } from "../../worker/node-workspace-retain-protocol.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
-import type { WorkerTunnelHandle } from "./tunnel-contract.js";
+import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -27,6 +27,7 @@ import {
   database,
   placements,
   readWorkerTurnTranscriptStorageRows,
+  reconcileUnchangedLocalWorkspace,
   root,
   seedActivePlacement,
   sessionTarget,
@@ -53,6 +54,30 @@ function executeRemoteExecTurn(params: Parameters<typeof executeRemoteExecTurnCo
     },
     () => executeRemoteExecTurnCore(params),
   );
+}
+
+function workspaceTunnel(
+  overrides: Partial<WorkerWorkspaceTunnelHandle> = {},
+): WorkerWorkspaceTunnelHandle {
+  return {
+    environmentId: ENVIRONMENT_ID,
+    ownerEpoch: OWNER_EPOCH,
+    runWorkspaceCommand: vi.fn(),
+    quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
+    reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+    syncWorkspace: vi.fn(),
+    stop: async () => {},
+    ...overrides,
+  };
+}
+
+function claimLocalTurn(runId: string) {
+  return placements.claimTurn({
+    ...sessionTarget,
+    owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+    claimId: runId,
+    runId,
+  });
 }
 
 function reconcileWorkspaceAfterTurn(
@@ -95,12 +120,7 @@ describe("concurrent worker workspace results", () => {
       );
       const before = source.getPersistedEntries();
       const beforeRows = readWorkerTurnTranscriptStorageRows();
-      const claim = await placements.claimTurn({
-        ...sessionTarget,
-        owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
-        claimId: `hydrate-${phase}-${change}`,
-        runId: `hydrate-${phase}-${change}`,
-      });
+      const claim = await claimLocalTurn(`hydrate-${phase}-${change}`);
       await placements.markWorkspaceResultPending(claim);
       const entered = createDeferred();
       const release = createDeferred();
@@ -118,24 +138,15 @@ describe("concurrent worker workspace results", () => {
         });
       const publish = vi.fn();
       const quiesce = vi.fn(async () => ({ assertActive: async () => {}, resume: async () => {} }));
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        runWorkspaceCommand: vi.fn(),
+      const tunnel = workspaceTunnel({
         quiesceWorkspace: quiesce,
         reconcileWorkspace: async (request) => {
           if (request.source.kind !== "local" || !request.source.stagedResult) {
             throw new Error("expected local staged result");
           }
           await request.source.stagedResult.record(request.source.stagedResult.ref);
-          await request.source.journal.commit(MANIFEST_REF);
           return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-            publishStagedResult: async () => {},
-            discardPreparedStagedResult: async () => {},
+            ...(await reconcileUnchangedLocalWorkspace(request)),
             getAppliedWorkspaceResult: () => ({
               manifestRef: MANIFEST_REF,
               manifest: { version: 1, baseCommit: null, entries: [] },
@@ -144,9 +155,8 @@ describe("concurrent worker workspace results", () => {
             }),
           };
         },
-        syncWorkspace: vi.fn(),
         stop: vi.fn(),
-      };
+      });
       const operation = reconcileWorkspaceAfterTurn({
         placement,
         placements,
@@ -232,16 +242,8 @@ describe("concurrent worker workspace results", () => {
         entries: loadWorkspaceSkills(source, { workspaceOnly: true }),
       }),
     };
-    const turnClaim = await placements.claimTurn({
-      ...sessionTarget,
-      owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
-      claimId: "cleanup-failure",
-      runId: inputTurn.runId,
-    });
     let failCleanup = true;
-    const tunnel: WorkerTunnelHandle = {
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
+    const tunnel = workspaceTunnel({
       runWorkspaceCommand: async (command) => {
         if (JSON.parse(command.input!).op === "cleanup" && failCleanup) {
           failCleanup = false;
@@ -260,66 +262,35 @@ describe("concurrent worker workspace results", () => {
           timeoutMs: 5_000,
         });
       },
-      quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
-      reconcileWorkspace: async (request) => {
-        if (request.source.kind !== "local") {
-          throw new Error("expected a local workspace source");
-        }
-        await request.source.journal.commit(MANIFEST_REF);
-        return {
-          manifestRef: MANIFEST_REF,
-          changed: false,
-          verifyStable: async () => {},
-          verifyLocalStable: async () => {},
-          publishStagedResult: async () => {},
-          discardPreparedStagedResult: async () => {},
-        };
-      },
-      syncWorkspace: vi.fn(),
-      stop: async () => {},
-    };
-    await expect(
+    });
+    const execute = async (
+      input: Parameters<typeof executeRemoteExecTurn>[0]["turn"],
+      runLocal: Parameters<typeof executeRemoteExecTurn>[0]["runLocal"],
+    ) =>
       executeRemoteExecTurn({
         environments: { get: attachedEnvironment, startTunnel: async () => tunnel },
         onHandoff: () => {},
         placement,
         placements,
         workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-        turn: inputTurn,
-        turnClaim,
+        turn: input,
+        turnClaim: await claimLocalTurn(input.runId),
         workspace: { kind: "local", path: root },
-        runLocal: async () => ({ meta: { durationMs: 1 } }),
-      }),
-    ).rejects.toThrow("Skill resource cleanup failed");
+        runLocal,
+      });
+    await expect(execute(inputTurn, async () => ({ meta: { durationMs: 1 } }))).rejects.toThrow(
+      "Skill resource cleanup failed",
+    );
     expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
 
-    const leftovers = await fs.readdir(remote);
-    expect(leftovers).toHaveLength(1);
-    const nextTurn = turn("cleanup-recovery");
-    const nextClaim = await placements.claimTurn({
-      ...sessionTarget,
-      owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
-      claimId: "cleanup-recovery",
-      runId: nextTurn.runId,
+    expect(await fs.readdir(remote)).toHaveLength(1);
+    const runLocal = vi.fn(async () => {
+      expect(await fs.readdir(remote)).toEqual([]);
+      return { meta: { durationMs: 1 } };
     });
-    let executed = false;
-    await executeRemoteExecTurn({
-      environments: { get: attachedEnvironment, startTunnel: async () => tunnel },
-      onHandoff: () => {},
-      placement,
-      placements,
-      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      turn: nextTurn,
-      turnClaim: nextClaim,
-      workspace: { kind: "local", path: root },
-      runLocal: async () => {
-        expect(await fs.readdir(remote)).toEqual([]);
-        executed = true;
-        return { meta: { durationMs: 1 } };
-      },
-    });
-    expect(executed).toBe(true);
+    await execute(turn("cleanup-recovery"), runLocal);
+    expect(runLocal).toHaveBeenCalled();
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   });
 
@@ -331,15 +302,7 @@ describe("concurrent worker workspace results", () => {
       const payload = path.join(root, "payload");
       await fs.mkdir(repository);
       await fs.mkdir(payload);
-      const git = async (cwd: string, ...args: string[]) => {
-        const result = await runCommandWithTimeout(["git", "-C", cwd, ...args], {
-          timeoutMs: 10_000,
-        });
-        if (result.code !== 0) {
-          throw new Error(result.stderr || result.stdout);
-        }
-        return result.stdout.trim();
-      };
+      const git = (cwd: string, ...args: string[]) => requireGit(cwd, args, { timeoutMs: 10_000 });
       await git(repository, "init", "--quiet");
       await git(
         repository,
@@ -347,8 +310,6 @@ describe("concurrent worker workspace results", () => {
         "user.name=Workspace Test",
         "-c",
         "user.email=workspace@example.invalid",
-        "-c",
-        `core.hooksPath=${os.devNull}`,
         "-c",
         "commit.gpgsign=false",
         "commit",
@@ -416,7 +377,7 @@ describe("concurrent worker workspace results", () => {
           generation: 1,
         };
         retain.push({ environmentId, sessionId, generation: 1, manifestRefs: [base.manifestRef] });
-        const tunnel: WorkerTunnelHandle = {
+        const tunnel = workspaceTunnel({
           environmentId,
           ownerEpoch: 1,
           runWorkspaceCommand: async () => {
@@ -425,8 +386,6 @@ describe("concurrent worker workspace results", () => {
           syncWorkspace: async () => {
             throw new Error("workspace already synced");
           },
-          stop: async () => {},
-          quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
           reconcileWorkspace: async (request) => {
             if (request.source.kind !== "local") {
               throw new Error("expected a local workspace source");
@@ -500,7 +459,7 @@ describe("concurrent worker workspace results", () => {
               verifyStable,
             };
           },
-        };
+        });
         jobs.push({
           placement,
           turnClaim,

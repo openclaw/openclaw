@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { deserialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
@@ -73,18 +71,11 @@ describe("repository workspace editor admission", () => {
         admit(request, grant);
       });
       try {
-        const saving = f.mutate(
-          async (assertCurrent) => {
-            assertCurrent();
-            await fs.writeFile(path.join(f.remote, "editor.txt"), editorBytes);
-            return { changed: true, value: "saved" };
-          },
-          () => {
-            if (revoked) {
-              throw new Error("repository editor authority closed");
-            }
-          },
-        );
+        const saving = f.save("editor.txt", editorBytes, () => {
+          if (revoked) {
+            throw new Error("repository editor authority closed");
+          }
+        });
         if (authority === "revoked") {
           await expect(saving).rejects.toThrow("repository editor authority closed");
         } else {
@@ -101,17 +92,12 @@ describe("repository workspace editor admission", () => {
             : manifestWrites.mock.calls[0]![0].manifestRef,
         );
         if (authority === "revoked") {
-          expect(await placements.listPendingWorkspaceResultsAsync(SESSION_ID)).toMatchObject([
-            {
-              repositoryWorkspaceId: f.repository.workspaceId,
-              stagedResultRef: expect.any(String),
-              workspaceAcceptedAtMs: null,
-              recoveryRequestedAtMs: expect.any(Number),
-            },
-          ]);
+          await f.expectUnaccepted({
+            repositoryWorkspaceId: f.repository.workspaceId,
+            stagedResultRef: expect.any(String),
+          });
         } else {
-          expect(await placements.listPendingWorkspaceResultsAsync(SESSION_ID)).toEqual([]);
-          expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+          await f.expectSettled();
         }
         const checkpoint = await readArtifact(f.repository.workspaceId, "editor.txt");
         expect(checkpoint.preview).toEqual(new Uint8Array(Buffer.from(editorBytes)));
@@ -140,7 +126,6 @@ describe("repository workspace editor admission", () => {
     const manifestQueued = createDeferredCore();
     const receive = brokerReply.receiveSqliteWorkerReply;
     const dispatch = brokerReply.dispatchSqliteWorkerJob;
-    const dispatchedSlots = new WeakMap<object, Slot>();
     const predecessorRequests = new WeakSet<object>();
     const updateManifest = placements.updateWorkspaceBaseManifest.bind(placements);
     let holding = false;
@@ -156,7 +141,6 @@ describe("repository workspace editor admission", () => {
     const dispatches = vi
       .spyOn(brokerReply, "dispatchSqliteWorkerJob")
       .mockImplementation((slot, job, onRejected) => {
-        dispatchedSlots.set(slot, slot);
         if (job.request.type === "execute") {
           const command: unknown = deserialize(job.request.input);
           if (
@@ -182,10 +166,7 @@ describe("repository workspace editor admission", () => {
           !reply.input
         ) {
           if (predecessorRequests.has(slot.current.request)) {
-            heldSlot = dispatchedSlots.get(slot);
-            if (!heldSlot) {
-              throw new Error("Repository predecessor has no observed native dispatch");
-            }
+            heldSlot = slot;
             deliver = () => receive(slot, reply, owner);
             predecessorHeld.resolve();
             if (signal.aborted) {
@@ -212,11 +193,7 @@ describe("repository workspace editor admission", () => {
         await predecessorHeld.promise;
         return updateManifest(...args);
       });
-    const saving = f.mutate(async (assertCurrent) => {
-      assertCurrent();
-      await fs.writeFile(path.join(f.remote, "queued-editor.txt"), editorBytes);
-      return { changed: true, value: "saved" };
-    });
+    const saving = f.save("queued-editor.txt", editorBytes);
     void saving.catch(() => {});
     try {
       await Promise.race([
@@ -247,14 +224,10 @@ describe("repository workspace editor admission", () => {
       expect(manifestWrites).toHaveBeenCalledOnce();
       expect(manifestWrites.mock.calls[0]![0].manifestRef).not.toBe(originalManifestRef);
       expect(placements.get(SESSION_ID)?.workspaceBaseManifestRef).toBe(originalManifestRef);
-      expect(await placements.listPendingWorkspaceResultsAsync(SESSION_ID)).toMatchObject([
-        {
-          repositoryWorkspaceId: f.repository.workspaceId,
-          stagedResultRef: expect.any(String),
-          workspaceAcceptedAtMs: null,
-          recoveryRequestedAtMs: expect.any(Number),
-        },
-      ]);
+      await f.expectUnaccepted({
+        repositoryWorkspaceId: f.repository.workspaceId,
+        stagedResultRef: expect.any(String),
+      });
       const checkpoint = await readArtifact(f.repository.workspaceId, "queued-editor.txt");
       expect(checkpoint.preview).toEqual(new Uint8Array(Buffer.from(editorBytes)));
     } finally {

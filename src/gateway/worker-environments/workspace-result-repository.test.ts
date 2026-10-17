@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -131,7 +132,7 @@ describe("repository workspace result ownership", () => {
       let resumes = 0;
       let assertMutationCurrent: (() => void) | undefined;
       let queueOwner: Promise<void> | undefined;
-      let saving: Promise<{ ok: true; value: string } | { ok: false; error: unknown }> | undefined;
+      let saving: Promise<string> | undefined;
       // Observe real operations; no authority predicate or physical effect is mocked.
       const imports = vi.spyOn(processExec, "runExec");
       const writes = vi.spyOn(fs, "writeFile");
@@ -140,7 +141,7 @@ describe("repository workspace result ownership", () => {
         imports.mock.calls.filter(
           ([command, args]) =>
             command === "git" && args.includes(artifactRoot) && args.includes("fast-import"),
-        ).length;
+        );
       const publicationWrites = () =>
         writes.mock.calls.filter(
           ([target]) => typeof target === "string" && target.startsWith(payloadPrefix),
@@ -205,34 +206,25 @@ describe("repository workspace result ownership", () => {
           },
         );
         const admittedClaims = vi.spyOn(placements, "claimWorkspaceMutationResult");
-        saving = f
-          .mutate(async (assertCurrent) => {
-            assertMutationCurrent = assertCurrent;
-            assertCurrent();
-            await fs.writeFile(path.join(f.remote, "editor.txt"), editorBytes);
-            return { changed: true, value: "saved" };
-          })
-          .then(
-            (value) => ({ ok: true as const, value }),
-            (error: unknown) => ({ ok: false as const, error }),
-          );
-        const earlyOutcome = await Promise.race([entered.promise.then(() => undefined), saving]);
-        if (earlyOutcome) {
-          if (!earlyOutcome.ok) {
-            throw earlyOutcome.error;
-          }
-          throw new Error("Editor save settled before its checkpoint boundary");
-        }
-        expect(observedBoundary).toBe(true);
-        if (!assertMutationCurrent) {
-          throw new Error("Repository mutation did not admit its editor operation");
-        }
+        saving = f.mutate(async (assertCurrent) => {
+          assertMutationCurrent = assertCurrent;
+          assertCurrent();
+          await f.write("editor.txt", editorBytes);
+          return { changed: true, value: "saved" };
+        });
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          saving,
+          "Editor save settled before its checkpoint boundary",
+        );
+        assert.ok(assertMutationCurrent, "Repository mutation did not admit its editor operation");
         expect(assertMutationCurrent).not.toThrow();
         expect(admittedClaims).toHaveBeenCalledTimes(1);
         const admission = admittedClaims.mock.results[0];
-        if (admission?.type !== "return") {
-          throw new Error("Repository mutation did not return its admitted claim");
-        }
+        assert.ok(
+          admission?.type === "return",
+          "Repository mutation did not return its admitted claim",
+        );
         const claim = await admission.value;
         expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
         const pausedCandidates = await candidates();
@@ -242,7 +234,7 @@ describe("repository workspace result ownership", () => {
           expect(raw.current.baseCommit).toBe(before.baseCommit);
           expect(raw.changedEntries.map((entry) => entry.path)).toContain("editor.txt");
         }
-        const importsBefore = fastImports();
+        const importsBefore = fastImports().length;
         const writesBefore = publicationWrites();
         expect(importsBefore).toBe(boundary === "publication-metadata" ? 1 : 0);
         expect(writesBefore).toBe(0);
@@ -260,11 +252,8 @@ describe("repository workspace result ownership", () => {
         expect(f.ownerSignal.aborted).toBe(false);
         expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
         release.resolve();
-        const outcome = await saving;
+        await expect(saving).rejects.toThrow("lost its exact session placement owner");
         await queueOwner;
-        const remainingCandidates = await candidates();
-        const after = (await f.store.get(before.workspaceId))!;
-        const pending = await placements.listPendingWorkspaceResultsAsync(SESSION_ID);
         // The intermediate copy is gone; only the real private import inputs exist.
         const importRoots: string[] = [];
         for (const [index, [prefix]] of temporary.mock.calls.entries()) {
@@ -281,32 +270,19 @@ describe("repository workspace result ownership", () => {
           await expect(fs.stat(importRoot)).rejects.toMatchObject({ code: "ENOENT" });
         }
         // Observe the real file-backed command rather than the retired buffered seam.
-        for (const [command, args, options] of imports.mock.calls) {
-          if (command === "git" && args.includes(artifactRoot) && args.includes("fast-import")) {
-            expect(options).toMatchObject({ stdinFileDescriptor: expect.any(Number) });
-          }
+        for (const call of fastImports()) {
+          expect(call[2]).toMatchObject({ stdinFileDescriptor: expect.any(Number) });
         }
         expect(importRoots).toHaveLength(1);
-        expect(remainingCandidates).toEqual([]);
+        expect(await candidates()).toEqual([]);
         expect(resumes).toBe(1);
         expect(f.ownerSignal.aborted).toBe(false);
         expect(await fs.readFile(path.join(f.remote, "editor.txt"), "utf8")).toBe(editorBytes);
-        expect(outcome).toMatchObject({
-          ok: false,
-          error: { message: expect.stringContaining("lost its exact session placement owner") },
-        });
-        expect(fastImports()).toBe(importsBefore);
+        expect(fastImports()).toHaveLength(importsBefore);
         expect(publicationWrites()).toBe(writesBefore);
-        expect(after).toEqual(before);
+        expect(await f.store.get(before.workspaceId)).toEqual(before);
         expect(await refs()).toBe(beforeRefs);
-        expect(pending).toMatchObject([
-          {
-            claimId: claim.claimId,
-            workspaceAcceptedAtMs: null,
-            stagedResultRef: null,
-            recoveryRequestedAtMs: expect.any(Number),
-          },
-        ]);
+        await f.expectUnaccepted({ claimId: claim.claimId, stagedResultRef: null });
         expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
       } finally {
         release.resolve();
@@ -404,27 +380,19 @@ describe("repository workspace result ownership", () => {
       "unchanged",
     );
     expect(await f.store.get(f.repository.workspaceId)).toEqual(accepted);
-    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
-    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    await f.expectSettled();
   });
 
   it("recovers unknown editor writes through pending result custody", async () => {
     const f = await fixture("worker-turn");
+    const content = "write completed before transport loss\n";
     await expect(
       f.mutate(async () => {
-        await fs.writeFile(
-          path.join(f.remote, "uncertain.txt"),
-          "write completed before transport loss\n",
-        );
+        await f.write("uncertain.txt", content);
         throw new Error("editor transport lost the acknowledgement");
       }),
     ).rejects.toThrow("lost the acknowledgement");
-    expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
-      {
-        workspaceAcceptedAtMs: null,
-        recoveryRequestedAtMs: expect.any(Number),
-      },
-    ]);
+    await f.expectUnaccepted();
     await recoverPendingWorkspaceResults(
       {
         placements,
@@ -439,12 +407,28 @@ describe("repository workspace result ownership", () => {
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
     const checkpoint = await readArtifact(f.repository.workspaceId, "uncertain.txt");
     assert.ok(checkpoint.preview);
-    assert.deepStrictEqual(
-      Buffer.from(checkpoint.preview),
-      Buffer.from("write completed before transport loss\n"),
-    );
+    assert.deepStrictEqual(Buffer.from(checkpoint.preview), Buffer.from(content));
     expect(checkpoint.preview.byteOffset).toBe(0);
     expect(checkpoint.preview.buffer.byteLength).toBe(checkpoint.preview.byteLength);
+  });
+
+  it("preserves editor result custody when capture returns without durable acceptance", async () => {
+    const f = await fixture("worker-turn");
+    vi.spyOn(f.tunnel, "reconcileWorkspace").mockResolvedValue({
+      manifestRef: placements.get(SESSION_ID)!.workspaceBaseManifestRef!,
+      changed: true,
+      verifyStable: async () => {},
+      verifyLocalStable: async () => {},
+      publishStagedResult: async () => {},
+      discardPreparedStagedResult: async () => {},
+    });
+    await expect(f.save("unaccepted.txt", "save requires a checkpoint\n")).rejects.toThrow(
+      "not durably accepted",
+    );
+    expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBe(
+      f.initialCheckpointRef,
+    );
+    await f.expectUnaccepted();
   });
 
   it.each(["publisher", "editor"] as const)(
@@ -467,34 +451,9 @@ describe("repository workspace result ownership", () => {
         });
       }
       expect(competing).not.toHaveBeenCalled();
-      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
-      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      await f.expectSettled();
     },
   );
-
-  it("preserves editor result custody when capture returns without durable acceptance", async () => {
-    const f = await fixture("worker-turn");
-    vi.spyOn(f.tunnel, "reconcileWorkspace").mockResolvedValue({
-      manifestRef: placements.get(SESSION_ID)!.workspaceBaseManifestRef!,
-      changed: true,
-      verifyStable: async () => {},
-      verifyLocalStable: async () => {},
-      publishStagedResult: async () => {},
-      discardPreparedStagedResult: async () => {},
-    });
-    await expect(
-      f.mutate(async () => {
-        await fs.writeFile(path.join(f.remote, "unaccepted.txt"), "save requires a checkpoint\n");
-        return { changed: true, value: "saved" };
-      }),
-    ).rejects.toThrow("not durably accepted");
-    expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBe(
-      f.initialCheckpointRef,
-    );
-    expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
-      { workspaceAcceptedAtMs: null, recoveryRequestedAtMs: expect.any(Number) },
-    ]);
-  });
 
   it("rejects editor writes during an admitted turn and fences writes if their placement starts draining", async () => {
     const f = await fixture("worker-turn");
@@ -507,7 +466,7 @@ describe("repository workspace result ownership", () => {
 
     await expect(
       f.mutate(async () => {
-        await fs.writeFile(path.join(f.remote, "interrupted.txt"), "must remain recoverable\n");
+        await f.write("interrupted.txt", "must remain recoverable\n");
         await expect(
           placements.startDrain({
             sessionId: SESSION_ID,
@@ -525,28 +484,20 @@ describe("repository workspace result ownership", () => {
     expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBe(
       f.initialCheckpointRef,
     );
-    expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
-      {
-        recoveryRequestedAtMs: expect.any(Number),
-        workspaceAcceptedAtMs: null,
-      },
-    ]);
+    await f.expectUnaccepted();
   });
 
   it("retains setup and cumulative changes through turns, editor saves, and Stop", async () => {
     const f = await fixture("worker-turn", true);
     const pinned = (await f.store.get(f.repository.workspaceId))!;
     expect(pinned.manifestHash).not.toBe(pinned.baseManifestHash);
-    await fs.writeFile(path.join(f.remote, "first.txt"), "first turn\n");
+    await f.write("first.txt", "first turn\n");
     const first = await f.beginTurn("first");
     await f.finishTurn(first);
-    await fs.writeFile(path.join(f.remote, "second.txt"), "second turn\n");
+    await f.write("second.txt", "second turn\n");
     await f.finishTurn(await f.beginTurn("second"));
     await f.finishTurn(await f.beginTurn("read-only"));
-    await f.mutate(async () => {
-      await fs.writeFile(path.join(f.remote, "editor.txt"), "editor save\n");
-      return { changed: true, value: undefined };
-    });
+    await f.save("editor.txt", "editor save\n");
     await f.stop(sessionTarget);
     expect(placements.get(SESSION_ID)?.state).toBe("reclaimed");
     const expected = new Map([
@@ -583,8 +534,7 @@ describe("repository workspace result ownership", () => {
         stagedResultRef: workerWorkspaceResultRef(first.turnClaim.claimId),
       }),
     ).toBe(true);
-    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
-    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    await f.expectSettled();
   });
 
   it("binds a staged repository result to its exact immutable session owner", async () => {
@@ -634,7 +584,7 @@ describe("repository workspace result ownership", () => {
     "recovers an accepted $executionMode checkpoint after restart during $phase",
     async ({ executionMode, materialized }) => {
       const f = await fixture(executionMode);
-      await fs.writeFile(path.join(f.remote, "survives.txt"), "durable before restart\n");
+      await f.write("survives.txt", "durable before restart\n");
       const owned = await f.beginTurn("interrupted", !materialized);
       const destination = path.join(root, "materialized-worktree");
       if (materialized) {

@@ -4,10 +4,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { requireGit } from "../../agents/worktrees/git.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
-import * as processExec from "../../process/exec.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -41,20 +41,7 @@ import {
 import { withWorkerTurnTranscriptDatabase } from "./worker-turn-transcript-target.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
-import { reconcileWorkspaceAfterTurn as reconcileWorkspaceAfterTurnCore } from "./workspace-result-finalize.js";
-
-function reconcileWorkspaceAfterTurn(
-  params: Parameters<typeof reconcileWorkspaceAfterTurnCore>[0],
-) {
-  return withWorkerTurnTranscriptDatabase(
-    { ...params.transcriptTarget, sessionTarget: params.transcriptTarget },
-    {
-      assertCurrent() {},
-      prepareAuthority: () => params.placements.prepareTurnClaimAuthority(params.turnClaim),
-    },
-    (transcriptTarget) => reconcileWorkspaceAfterTurnCore({ ...params, transcriptTarget }),
-  );
-}
+import { reconcileWorkspaceAfterTurn } from "./workspace-result-finalize.js";
 
 export function useRepositoryWorkspaceResultFixture() {
   const seedDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -86,8 +73,8 @@ export function useRepositoryWorkspaceResultFixture() {
         { mode: 0o755 },
       );
     }
-    const git = async (...args: string[]) => {
-      const result = await processExec.runCommandWithTimeout(["git", "-C", origin, ...args], {
+    const git = (...args: string[]) =>
+      requireGit(origin, args, {
         timeoutMs: 10_000,
         baseEnv: {
           PATH: process.env.PATH,
@@ -96,8 +83,6 @@ export function useRepositoryWorkspaceResultFixture() {
           GIT_CONFIG_NOSYSTEM: "1",
         },
       });
-      expect(result.code, result.stderr).toBe(0);
-    };
     await git("init", "--quiet");
     await git("add", ".");
     await git(
@@ -221,16 +206,26 @@ export function useRepositoryWorkspaceResultFixture() {
     const finishTurn = async (
       owned: Awaited<ReturnType<typeof beginTurn>>,
       publishAcceptedWorkspace?: () => Promise<void>,
-    ) =>
-      reconcileWorkspaceAfterTurn({
-        ...owned,
-        placements,
-        workspaceOperations,
-        workspace: { kind: "repository", repository: (await store.get(repository.workspaceId))! },
-        transcriptTarget: sessionTarget,
-        tunnel,
-        publishAcceptedWorkspace,
-      });
+    ) => {
+      const workspace = await resolveWorkspace();
+      return withWorkerTurnTranscriptDatabase(
+        { ...sessionTarget, sessionTarget },
+        {
+          assertCurrent() {},
+          prepareAuthority: () => placements.prepareTurnClaimAuthority(owned.turnClaim),
+        },
+        (transcriptTarget) =>
+          reconcileWorkspaceAfterTurn({
+            ...owned,
+            placements,
+            workspaceOperations,
+            workspace,
+            transcriptTarget,
+            tunnel,
+            publishAcceptedWorkspace,
+          }),
+      );
+    };
     const environments: WorkerDispatchEnvironmentService = {
       fenceWorkerTurnForRecovery: () => {
         throw new Error("Repository result fixture does not synthesize startup claims");
@@ -258,22 +253,32 @@ export function useRepositoryWorkspaceResultFixture() {
       kind: "repository" as const,
       repository: (await store.get(repository.workspaceId))!,
     });
-    const mutations = createRepositoryWorkspaceMutationService({
-      placements,
-      environments,
-      resolveWorkspace,
-      workspaceOperations,
-    });
+    const operations = { placements, environments, resolveWorkspace, workspaceOperations };
+    const mutations = createRepositoryWorkspaceMutationService(operations);
     function mutate<T>(
       operation: (assertCurrent: () => void) => Promise<{ changed: boolean; value: T }>,
       assertCurrent = () => {},
     ) {
       return mutations.mutate({ ...sessionTarget, assertCurrent, mutate: operation });
     }
+    const write = (file: string, content: string) => fs.writeFile(path.join(remote, file), content);
+    const save = (file: string, content: string, assertCurrent = () => {}) =>
+      mutate(async (assertOwned) => {
+        assertOwned();
+        await write(file, content);
+        return { changed: true, value: "saved" };
+      }, assertCurrent);
+    const expectSettled = async () => {
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    };
+    const expectUnaccepted = async (extra: Record<string, unknown> = {}) => {
+      expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
+        { workspaceAcceptedAtMs: null, recoveryRequestedAtMs: expect.any(Number), ...extra },
+      ]);
+    };
     const stop = createWorkerPlacementReclaim({
-      placements,
-      environments,
-      workspaceOperations,
+      ...operations,
       runReclaimBarrier: async ({ begin, reclaim }) =>
         await reclaim(await resolveWorkspace(), await begin()),
       withPreparedRecovery: createWorkerWorkspaceRecoveryFixture({ resolveWorkspace })
@@ -289,6 +294,10 @@ export function useRepositoryWorkspaceResultFixture() {
       workspaceOperations,
       mutations,
       mutate,
+      write,
+      save,
+      expectSettled,
+      expectUnaccepted,
       stop,
       environments,
       resolveWorkspace,

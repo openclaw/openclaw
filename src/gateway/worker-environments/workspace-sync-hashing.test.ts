@@ -14,12 +14,24 @@ async function manifestWorkspace() {
   const home = path.join(root, "home");
   const workspace = path.join(root, "workspace");
   await Promise.all([fs.mkdir(home), fs.mkdir(workspace)]);
-  return { root, home, workspace };
+  const auditPath = path.join(root, "audit.json");
+  return {
+    home,
+    workspace,
+    auditPath,
+    async capture(prelude: string, args: string[] = [], memo?: Array<[string, string]>) {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", prelude + REMOTE_WORKSPACE_MANIFEST_JS, workspace, ...args],
+        { timeoutMs: 10_000, baseEnv: { ...process.env, HOME: home }, input: JSON.stringify(memo) },
+      );
+      const audit: Record<string, unknown> = JSON.parse(await fs.readFile(auditPath, "utf8"));
+      return { result, audit };
+    },
+  };
 }
 
 it("hashes concurrently within four readers and preserves manifest and memo ordering", async () => {
-  const { root, home, workspace } = await manifestWorkspace();
-  const auditPath = path.join(root, "handles.json");
+  const { home, workspace, auditPath, capture } = await manifestWorkspace();
   const entries = await Promise.all(
     Array.from({ length: 8 }, async (_, index) => {
       const name = `${index}.bin`;
@@ -63,18 +75,7 @@ it("hashes concurrently within four readers and preserves manifest and memo orde
   let memo: Array<[string, string]> = [];
   let manifestRef: string | undefined;
   for (const cached of [false, true]) {
-    const result = await runCommandWithTimeout(
-      [
-        process.execPath,
-        "-e",
-        prelude + REMOTE_WORKSPACE_MANIFEST_JS,
-        workspace,
-        "",
-        "all",
-        "memo-v1",
-      ],
-      { timeoutMs: 10_000, baseEnv: { ...process.env, HOME: home }, input: JSON.stringify(memo) },
-    );
+    const { result, audit } = await capture(prelude, ["", "all", "memo-v1"], memo);
     expect(result).toMatchObject({ code: 0, stderr: "" });
     const response = parseRemoteWorkspaceManifestEnvelope(result.stdout);
     expect(response.metrics).toMatchObject({
@@ -94,7 +95,6 @@ it("hashes concurrently within four readers and preserves manifest and memo orde
     }
     memo = response.memo;
     manifestRef = response.manifestRef;
-    const audit = JSON.parse(await fs.readFile(auditPath, "utf8")) as { maximum: number };
     expect(audit).toMatchObject({ activeAtResult: 0, closed: Array(entries.length).fill(true) });
     expect(audit.maximum).toBeGreaterThan(1);
     expect(audit.maximum).toBeLessThanOrEqual(4);
@@ -104,10 +104,9 @@ it("hashes concurrently within four readers and preserves manifest and memo orde
 it.each(["pending-open", "active-reader"] as const)(
   "preserves the first failure and joins a %s before reporting it",
   async (mode) => {
-    const { root, home, workspace } = await manifestWorkspace();
+    const { home, workspace, auditPath, capture } = await manifestWorkspace();
     const first = path.join(workspace, "a.bin");
     const second = path.join(workspace, "b.bin");
-    const auditPath = path.join(root, "failure.json");
     await Promise.all([fs.writeFile(first, "first"), fs.writeFile(second, Buffer.alloc(64))]);
     // Real opens and streams are held at their I/O boundaries, without a timing race.
     const prelude = String.raw`{
@@ -180,15 +179,11 @@ it.each(["pending-open", "active-reader"] as const)(
       })));
     }
     `;
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", prelude + REMOTE_WORKSPACE_MANIFEST_JS, workspace],
-      { timeoutMs: 10_000, baseEnv: { ...process.env, HOME: home } },
-    );
+    const { result, audit } = await capture(prelude);
     expect(result.code).not.toBe(0);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("first manifest failure");
     expect(result.stderr).not.toContain("secondary close failure");
-    const audit = JSON.parse(await fs.readFile(auditPath, "utf8"));
     expect(audit).toMatchObject({
       opened: 2,
       pending: 0,
