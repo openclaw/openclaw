@@ -66,14 +66,18 @@ function readAffectedProducer(database: DatabaseSync, agentId: string) {
 
 function inspectProducer(pathname: string, agentId: string) {
   const snapshot = prepareSqliteReadOnlyLocationSync(pathname);
+  let producer: ReturnType<typeof readAffectedProducer>;
+  let cleanedUp: boolean;
   try {
     using database = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
-    return readAffectedProducer(database, agentId);
+    producer = readAffectedProducer(database, agentId);
   } finally {
-    if (!snapshot.cleanup()) {
-      throw new Error(`Could not release agent recovery inspection snapshot: ${snapshot.location}`);
-    }
+    cleanedUp = snapshot.cleanup();
   }
+  if (!cleanedUp) {
+    throw new Error(`Could not release agent recovery inspection snapshot: ${snapshot.location}`);
+  }
+  return producer;
 }
 
 /** Restore the published native-first cohort through the explicit per-agent restore owner. */

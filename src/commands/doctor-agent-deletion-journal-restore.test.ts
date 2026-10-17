@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
+import { assertOpenClawDatabasesReady } from "../state/openclaw-database-preflight.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -193,6 +194,14 @@ it.each(["present-incomplete", "other-version", "rewritten-stamp"])(
         path: agentPath,
       });
       expect(fs.readFileSync(agentPath)).toEqual(bytes);
+      await expect(
+        assertOpenClawDatabasesReady({
+          env,
+          operation: "doctor",
+          config: { agents: { entries: { main: {} } } },
+          configuredAgentDatabaseTargets: [{ agentId: "main", path: agentPath }],
+        }),
+      ).rejects.toThrow("Doctor could not complete repair");
     });
   },
 );
