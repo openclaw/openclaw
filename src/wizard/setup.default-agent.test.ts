@@ -297,6 +297,51 @@ describe("runSetupWizard default-agent ownership", () => {
     expect(persisted?.gateway?.port).toBe(24444);
   });
 
+  it.each([false, true])(
+    "checks first-agent authority by authored revision (changed=%s)",
+    async (changed) => {
+      const onboarding = await import("../commands/onboard-agent.js");
+      const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+      const runtimeConfig: OpenClawConfig = {
+        ...config,
+        plugins: { entries: { litellm: { enabled: true } } },
+      };
+      const creation = vi.spyOn(onboarding, "ensureOnboardingAgent").mockResolvedValueOnce({
+        config: runtimeConfig,
+        configBase: runtimeConfig,
+        configHash: "created-revision",
+        agentId: "main",
+        createdAgent: true,
+        bootstrapPending: false,
+      });
+      mocks.readAuthority.mockResolvedValue({
+        snapshot: {
+          exists: true,
+          valid: true,
+          config,
+          hash: changed ? "foreign-revision" : "created-revision",
+        },
+        assertCurrent: () => {},
+      });
+
+      try {
+        const result = runWizard({ workspace: "/tmp/global-workspace", agentName: "main" });
+        if (changed) {
+          await expect(result).rejects.toBeInstanceOf(ConfigMutationConflictError);
+          expect(mocks.writeConfig).not.toHaveBeenCalled();
+        } else {
+          await result;
+          expect(mocks.writeConfig).toHaveBeenCalledWith(
+            expect.objectContaining({ plugins: runtimeConfig.plugins }),
+            expect.any(Object),
+          );
+        }
+      } finally {
+        creation.mockRestore();
+      }
+    },
+  );
+
   it("waits for recommendation persistence and propagates failure before finalization", async () => {
     const commitStarted = createDeferred();
     const commit = createDeferred();

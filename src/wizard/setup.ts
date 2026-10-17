@@ -552,10 +552,8 @@ async function runSetupWizardOnce(
   });
   if (onboardingAgent.configHash) {
     const createdAuthority = await readSetupConfigAuthority();
-    if (
-      createdAuthority.snapshot.hash !== onboardingAgent.configHash ||
-      !isDeepStrictEqual(createdAuthority.snapshot.config, onboardingAgent.configBase)
-    ) {
+    // Plugin validation can materialize different defaults from the same authored revision.
+    if (createdAuthority.snapshot.hash !== onboardingAgent.configHash) {
       throw new ConfigMutationConflictError(
         "config changed after first-agent creation; rerun setup",
       );
