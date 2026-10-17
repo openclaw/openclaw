@@ -1,9 +1,9 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { PassThrough, Readable } from "node:stream";
-import { json as readJson, text as readText } from "node:stream/consumers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -13,7 +13,7 @@ import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
-import { runNativeHookRelayCliForTest } from "./native-hook-relay-cli.test-support.js";
+import { runNativeHookRelayCliFromArgvForTest } from "./native-hook-relay-cli.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -48,17 +48,24 @@ describe("native hook relay locator admission", () => {
       offsets: [0],
       signal: context.signal,
       createListener: () =>
-        createServer(async (request, reply) => {
-          authorized = request.headers.authorization === `Bearer ${token}`;
-          received = await readJson(request);
-          reply.setHeader("content-type", "application/json");
-          if (streaming) {
-            reply.once("close", () => responseClosed.resolve());
-            reply.write('{"ok":true,');
-            requested.resolve();
-          } else {
-            reply.end(JSON.stringify({ ok: true, result: response }));
-          }
+        createServer((request, reply) => {
+          let body = "";
+          request.setEncoding("utf8");
+          request.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          request.on("end", () => {
+            authorized = request.headers.authorization === `Bearer ${token}`;
+            received = JSON.parse(body);
+            reply.setHeader("content-type", "application/json");
+            if (streaming) {
+              reply.once("close", () => responseClosed.resolve());
+              reply.write('{"ok":true,');
+              requested.resolve();
+            } else {
+              reply.end(JSON.stringify({ ok: true, result: response }));
+            }
+          });
         }),
     });
     try {
@@ -80,11 +87,21 @@ describe("native hook relay locator admission", () => {
       await closeOpenClawStateDatabaseAsync();
       const blocker = locked ? new DatabaseSync(stateDbPath) : undefined;
       blocker?.exec("PRAGMA journal_mode=DELETE;");
-      const before = await fs.readFile(stateDbPath);
+      const before = createHash("sha256")
+        .update(await fs.readFile(stateDbPath))
+        .digest("hex");
       blocker?.exec("BEGIN EXCLUSIVE;");
 
       const stdout = new PassThrough();
       const stderr = new PassThrough();
+      let output = "";
+      let errorOutput = "";
+      stdout.on("data", (chunk: Buffer) => {
+        output += chunk.toString();
+      });
+      stderr.on("data", (chunk: Buffer) => {
+        errorOutput += chunk.toString();
+      });
       const gateway = vi.fn();
       const attempted = createDeferredCore();
       const readRecord = clientStore.readNativeHookRelayClientBridgeRecord;
@@ -99,7 +116,13 @@ describe("native hook relay locator admission", () => {
         });
       }
       if (locked) {
-        read.mockImplementation((params) => readRecord(params).finally(() => attempted.resolve()));
+        read.mockImplementation(async (params) => {
+          try {
+            return await readRecord(params);
+          } finally {
+            attempted.resolve();
+          }
+        });
       }
       if (mode !== "available") {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
@@ -115,15 +138,24 @@ describe("native hook relay locator admission", () => {
           ]
         : [];
       try {
-        const pending = runNativeHookRelayCliForTest(
-          {
-            provider: "codex",
+        const pending = runNativeHookRelayCliFromArgvForTest(
+          [
+            "node",
+            "openclaw",
+            "hooks",
+            "relay",
+            "--provider",
+            "codex",
+            "--relay-id",
             relayId,
-            stateDb: stateDbPath,
-            generation: "ordinary-generation",
-            event: locked || streaming ? "pre_tool_use" : "post_tool_use",
-            ...(locked || streaming ? { timeout: "25" } : {}),
-          },
+            "--state-db",
+            stateDbPath,
+            "--generation",
+            "ordinary-generation",
+            "--event",
+            locked || streaming ? "pre_tool_use" : "post_tool_use",
+            ...(locked || streaming ? ["--timeout", "25"] : []),
+          ],
           {
             stdin: Readable.from([JSON.stringify(rawPayload)]),
             stdout,
@@ -136,10 +168,6 @@ describe("native hook relay locator admission", () => {
           await vi.advanceTimersByTimeAsync(25);
         }
         const exitCode = await withinTest(pending, context.signal);
-        const [output, errorOutput] = await Promise.all([
-          readText(stdout.end()),
-          readText(stderr.end()),
-        ]);
         expect(exitCode).toBe(0);
         if (locked || streaming) {
           expect(JSON.parse(output)).toMatchObject({
@@ -157,27 +185,32 @@ describe("native hook relay locator admission", () => {
             expect(received).toBeUndefined();
           }
         } else {
-          expect({ output, errorOutput, authorized, received }).toEqual({
-            output: response.stdout,
-            errorOutput: "",
-            authorized: true,
-            received: {
-              provider: "codex",
-              relayId,
-              generation: "ordinary-generation",
-              event: "post_tool_use",
-              rawPayload,
-            },
+          expect(output).toBe(response.stdout);
+          expect(errorOutput).toBe("");
+          expect(authorized).toBe(true);
+          expect(received).toEqual({
+            provider: "codex",
+            relayId,
+            generation: "ordinary-generation",
+            event: "post_tool_use",
+            rawPayload,
           });
         }
         expect(gateway).not.toHaveBeenCalled();
         for (const spy of hostSql) {
           expect(spy).not.toHaveBeenCalled();
         }
-        expect(await fs.readFile(stateDbPath)).toEqual(before);
+        expect(
+          createHash("sha256")
+            .update(await fs.readFile(stateDbPath))
+            .digest("hex"),
+        ).toBe(before);
       } finally {
         vi.useRealTimers();
-        vi.restoreAllMocks();
+        read.mockRestore();
+        for (const spy of hostSql) {
+          spy.mockRestore();
+        }
         blocker?.exec("ROLLBACK;");
         blocker?.close();
       }
