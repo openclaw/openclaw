@@ -5,8 +5,8 @@ import {
   resolveDaemonRuntimePinStorePath,
 } from "../daemon/runtime-pin-store.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { CLIENT_CREDENTIAL_SCHEMA_VERSION } from "./client-credential-schema.js";
-import { resolveClientCredentialStorePath } from "./client-credential-store.js";
 import type { StateDatabaseDiscovery } from "./update-candidate-paths.js";
 import type { StateInput } from "./update-candidate-state.shared.js";
 

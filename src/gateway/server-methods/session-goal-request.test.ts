@@ -2,9 +2,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { loadOrCreateDeviceIdentity } from "../../infra/device-identity.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { fingerprintSessionGoalRequest } from "./session-goal-request.js";
 
 afterEach(async () => {
@@ -35,7 +37,7 @@ it("fingerprints chat sends with the cached identity while the state database is
     databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
   });
   try {
-    expect(() => loadOrCreateDeviceIdentity()).toThrow("offline maintenance");
+    expect(() => openOpenClawStateDatabase()).toThrow("offline maintenance");
     expect(await fingerprintSessionGoalRequest(request)).toBe(expected);
     expect(await fingerprintSessionGoalRequest({ ...request, message: "changed" })).not.toBe(
       expected,

@@ -9,7 +9,7 @@
           "identity_key": "primary",
           "device_id": "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
           "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=\n-----END PUBLIC KEY-----\n",
-          "private_key_pem": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f\n-----END PRIVATE KEY-----\n",
+          "private_key_pem": "synthetic:ed25519-seed-0-through-31",
           "created_at_ms": 123,
           "updated_at_ms": 456
         }
@@ -20,7 +20,7 @@
           "identity_key": "primary",
           "device_id": "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
           "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=\n-----END PUBLIC KEY-----\n",
-          "private_key_pem": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f\n-----END PRIVATE KEY-----\n",
+          "private_key_pem": "synthetic:ed25519-seed-0-through-31",
           "created_at_ms": 123,
           "updated_at_ms": 456
         }

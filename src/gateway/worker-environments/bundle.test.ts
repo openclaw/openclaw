@@ -54,6 +54,7 @@ async function writeFixture(
     "utf8",
   );
   for (const [artifactName, contents] of [
+    ["client-credential.worker.mjs", "export const clientCredentials = true;\n"],
     ["code-mode-node.worker.mjs", "export const codeModeNode = true;\n"],
     ["file-tool-planning.worker.mjs", "export const fileToolPlanning = true;\n"],
     ["file-tool-read.worker.mjs", "export const fileToolRead = true;\n"],
@@ -236,6 +237,7 @@ describe("worker bundle producer", () => {
       expect(first.tarballBytes).toBe(compressed.byteLength);
       const entries = await listTarball(first.tarballPath);
       expect(entries).toEqual([
+        "client-credential.worker.mjs",
         "code-mode-node.worker.mjs",
         "file-tool-planning.worker.mjs",
         "file-tool-read.worker.mjs",
@@ -260,6 +262,7 @@ describe("worker bundle producer", () => {
       await fs.mkdir(extractRoot);
       await tar.extract({ file: first.tarballPath, cwd: extractRoot });
       for (const [artifactName, expectedContents] of [
+        ["client-credential.worker.mjs", "export const clientCredentials = true;\n"],
         ["file-tool-planning.worker.mjs", "export const fileToolPlanning = true;\n"],
         ["file-tool-read.worker.mjs", "export const fileToolRead = true;\n"],
         ["gateway-state-owner-heartbeat.worker.mjs", "export const heartbeat = true;\n"],
@@ -302,6 +305,7 @@ describe("worker bundle producer", () => {
 
       let previousHash = first.bundleHash;
       for (const artifactName of [
+        "client-credential.worker.mjs",
         "file-tool-planning.worker.mjs",
         "file-tool-read.worker.mjs",
         "gateway-state-owner-heartbeat.worker.mjs",
@@ -737,6 +741,7 @@ describe("worker bundle producer", () => {
 
       expect(repaired.bundleHash).toBe(first.bundleHash);
       await expect(listTarball(repaired.tarballPath)).resolves.toEqual([
+        "client-credential.worker.mjs",
         "code-mode-node.worker.mjs",
         "file-tool-planning.worker.mjs",
         "file-tool-read.worker.mjs",
@@ -759,6 +764,7 @@ describe("worker bundle producer", () => {
   it.skipIf(process.platform === "win32")("rejects symlinked deploy artifacts", async () => {
     for (const artifactName of [
       "worker-chunk-symlink.mjs",
+      "client-credential.worker.mjs",
       "file-tool-planning.worker.mjs",
       "file-tool-read.worker.mjs",
       "gateway-state-owner-heartbeat.worker.mjs",

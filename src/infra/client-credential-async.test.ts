@@ -9,8 +9,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { runClientCredentialOperationAsync } from "./client-credential-async.js";
 import { requestClientCredentialsFromApp } from "./client-credential-ipc.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import {
-  resolveClientCredentialStorePath,
   runClientCredentialOperation,
   type ClientCredentialOperation,
 } from "./client-credential-store.js";

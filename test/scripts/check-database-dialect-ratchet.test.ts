@@ -420,6 +420,7 @@ it.each([
     [
       ["BEGIN EXCLUSIVE", "transaction-mode", 0],
       ["PRAGMA locking_mode=EXCLUSIVE", "pragma", 0],
+      ["PRAGMA schema_version", "schema-version", 0],
       ["VACUUM", "vacuum", 1],
       ["INSERT OR IGNORE INTO t VALUES (1)", "insert-conflict", 1],
       ["SELECT json_extract(value, '$') FROM t", "json-projection", 1],
@@ -468,10 +469,16 @@ it.each([
     vi.spyOn(console, "error").mockImplementation(() => {});
     const logs = vi.spyOn(console, "log").mockImplementation(() => {});
     expect(main(root, ["--base", base])).toBe(result);
-    expect(inventory(root)).toMatchObject([{ file, matches: [{ owner, construct }] }]);
+    const constructs = construct === "schema-version" ? ["pragma", construct] : [construct];
+    expect(inventory(root)).toMatchObject([
+      {
+        file,
+        matches: constructs.map((matchedConstruct) => ({ owner, construct: matchedConstruct })),
+      },
+    ]);
     if (result === 0) {
       expect(logs).toHaveBeenCalledWith(
-        "SQLite primitive owners: 1 engine-maintenance matches in changed files (excluded from comparison).",
+        `SQLite primitive owners: ${constructs.length} engine-maintenance matches in changed files (excluded from comparison).`,
       );
       expect(logs).toHaveBeenCalledWith(expect.stringContaining(`${construct} (owner)`));
     }

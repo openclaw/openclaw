@@ -34,6 +34,7 @@ import {
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { withStateMigrationBackupForTest } from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -196,7 +197,7 @@ describe("OpenClaw database schema preflight", () => {
     expect(snapshotPreflightSourceManifest(root)).toEqual(before);
   });
 
-  it("admits supported forward state migration after the Doctor-owned audit repair", async () => {
+  it("admits supported forward state migration after Doctor audit repair and backup custody", async () => {
     const { env, stateDir, statePath } = createReleasedStateDatabase();
     withDatabase(statePath, (database) => {
       expect(repairAuditEventsSchema(database)).toBe(true);
@@ -206,6 +207,7 @@ describe("OpenClaw database schema preflight", () => {
       assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: {} }),
     ).resolves.toBeUndefined();
     expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
+    await withStateMigrationBackupForTest({ env }, () => openOpenClawStateDatabase({ env }));
     const migrated = openOpenClawStateDatabase({ env });
     expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,

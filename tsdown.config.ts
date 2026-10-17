@@ -1003,6 +1003,9 @@ const configs: UserConfig[] = [
     "worker/code-mode-node.worker": "src/agents/code-mode-node.worker.ts",
   }),
   workerDeployBuildConfig({
+    "worker/client-credential.worker": "src/worker/worker-deploy-client-credentials.ts",
+  }),
+  workerDeployBuildConfig({
     "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
   }),
   workerDeployBuildConfig({

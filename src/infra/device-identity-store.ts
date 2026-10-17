@@ -1,7 +1,7 @@
 // Client private identities belong to the local credential owner, independently of shared state.
 import path from "node:path";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import {
-  resolveClientCredentialStorePath,
   runClientCredentialOperation,
   type ClientCredentialResult,
 } from "./client-credential-store.js";

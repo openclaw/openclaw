@@ -201,11 +201,21 @@ it.skipIf(process.platform === "win32")(
             );
             expect(typeof buildId).toBe("string");
             const deviceIdentity = loadOrCreateDeviceIdentity({
-              path: instance.state.path("proof-device.sqlite"),
+              path: instance.state.statePath(
+                "proof-identities",
+                "requester",
+                "client",
+                "credentials.sqlite",
+              ),
             });
             // A TEST observer must not replace the original Control UI token's issuer binding.
             const observerDeviceIdentity = loadOrCreateDeviceIdentity({
-              path: instance.state.path("proof-observer-device.sqlite"),
+              path: instance.state.statePath(
+                "proof-identities",
+                "observer",
+                "client",
+                "credentials.sqlite",
+              ),
             });
             const connect = (controlUi: boolean) =>
               acquireGatewayTestClient(

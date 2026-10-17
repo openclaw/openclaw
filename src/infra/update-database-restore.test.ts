@@ -23,9 +23,9 @@ import {
   type OpenClawTestState,
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import {
   openClientCredentialCustody,
-  resolveClientCredentialStorePath,
   runClientCredentialOperation,
   type ClientCredentialOperation,
 } from "./client-credential-store.js";

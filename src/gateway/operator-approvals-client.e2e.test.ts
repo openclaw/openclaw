@@ -170,7 +170,7 @@ describe("operator approval gateway client e2e", () => {
     const { stateDir, connect } = await gatewayFixture("openclaw-approval-surfaces-e2e-");
     const identity = (role: string) =>
       loadOrCreateDeviceIdentity({
-        path: path.join(stateDir, "test-device-identities", `approval-${role}.sqlite`),
+        path: path.join(stateDir, "test-device-identities", `approval-${role}`, "client", "credentials.sqlite"),
       });
     const requesterIdentity = identity("requester");
     const reviewerIdentity = identity("reviewer");

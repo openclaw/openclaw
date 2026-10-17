@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawProtocol
+import Synchronization
 import Testing
 @testable import OpenClawKit
 
@@ -3652,13 +3653,16 @@ struct GatewayNodeSessionTests {
     @Test(.stateDirectoryIsolated)
     func `failed device token write retains issuance without claiming persistence`() async throws {
         let gatewayID = "blocked-storage-gateway"
-        let stateDir = try #require(ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"])
-        let blocker = URL(fileURLWithPath: stateDir, isDirectory: true)
-            .appendingPathComponent("identity", isDirectory: false)
-        try Data().write(to: blocker)
-        // Block only the legacy auth directory. SQLite identity creation must
-        // still succeed so this test reaches the token persistence failure.
-        defer { try? FileManager.default.removeItem(at: blocker) }
+        let attemptedTokens = Mutex<[String]>([])
+        DeviceCredentialAccess.install { root, operation in
+            if operation.kind == .tokenReplace {
+                attemptedTokens.withLock { $0.append(operation.token?.token ?? "") }
+                throw CocoaError(.fileWriteNoPermission)
+            }
+            return try DeviceCredentialAccess.executeOffline(root: root, operation: operation)
+        }
+        defer { DeviceCredentialAccess.close() }
+        let identity = try DeviceIdentityStore.loadOrCreatePersistedOrThrow()
 
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "node-device-token",
@@ -3677,8 +3681,10 @@ struct GatewayNodeSessionTests {
             session: session)
 
         let authRoles = await gateway.currentDeviceAuthRoles()
+        #expect(attemptedTokens.withLock { $0 } == ["node-device-token"])
         #expect(authRoles.received == ["node"])
         #expect(authRoles.persisted.isEmpty)
+        #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node", gatewayID: gatewayID) == nil)
         await gateway.disconnect()
     }
 

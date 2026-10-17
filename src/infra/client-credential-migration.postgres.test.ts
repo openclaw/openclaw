@@ -16,11 +16,9 @@ import {
   prepareClientCredentialMigration,
   recoverClientCredentialStore,
 } from "./client-credential-migration.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { readClientCredentialReceipt } from "./client-credential-readiness.js";
-import {
-  openClientCredentialCustody,
-  resolveClientCredentialStorePath,
-} from "./client-credential-store.js";
+import { openClientCredentialCustody } from "./client-credential-store.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { openEngineStore } from "./database-engine/open.js";
 import { getPostgresPhysicalFacts } from "./database-engine/physical-facts.js";

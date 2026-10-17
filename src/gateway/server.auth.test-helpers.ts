@@ -1,6 +1,5 @@
 // Shared auth suite helpers provide WebSocket clients, signed device payloads,
 // pairing utilities, and gateway harness setup for auth-mode tests.
-import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
 import { WebSocket } from "ws";
@@ -32,15 +31,12 @@ let authIdentityPathSeq = 0;
 function nextAuthIdentityPath(prefix: string): string {
   const poolId = process.env.VITEST_POOL_ID ?? "0";
   const fileName =
-    prefix +
-    "-" +
-    String(process.pid) +
-    "-" +
-    poolId +
-    "-" +
-    String(authIdentityPathSeq++) +
-    ".sqlite";
-  return path.join(os.tmpdir(), fileName);
+    prefix + "-" + String(process.pid) + "-" + poolId + "-" + String(authIdentityPathSeq++);
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  if (!stateDir) {
+    throw new Error("OPENCLAW_STATE_DIR must be set by the gateway test hooks");
+  }
+  return path.join(stateDir, "test-device-identities", fileName, "client", "credentials.sqlite");
 }
 
 async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean> {

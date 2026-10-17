@@ -49,6 +49,10 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-con
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "../../state/openclaw-state-schema.test-support.js";
+import {
   beginAgentDeletionJournal,
   readAgentDeletionJournal,
 } from "../../test-utils/agent-deletion-journal.js";
@@ -267,6 +271,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
               delete_files INTEGER NOT NULL DEFAULT 1
             ) STRICT;`);
             legacy.exec(OPENCLAW_STATE_SCHEMA_SQL);
+            addPreCutoverClientCredentialTablesForTest(legacy);
             legacy.exec(`PRAGMA user_version = 20;
               INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
                 VALUES ('primary', 'global', 20, 1, 1);
@@ -289,7 +294,13 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           },
           plugins: { slots: { memory: "none" } },
         });
-        await captureRuntimeConfigAsyncReader()();
+        if (scenario === "legacy-retiring") {
+          await withStateMigrationBackupForTest({ env: state.env }, () =>
+            captureRuntimeConfigAsyncReader()(),
+          );
+        } else {
+          await captureRuntimeConfigAsyncReader()();
+        }
         const workspace = state.path("workspace-doomed");
         const created = await createAgent({ name: "doomed", workspace, skipBootstrap: true });
         signal.throwIfAborted();

@@ -1,9 +1,5 @@
 // Node pairing rate-limit tests protect repeated pairing attempts, pending
 // request cleanup, and protocol error details for node clients.
-import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
@@ -20,6 +16,7 @@ import {
 } from "../infra/device-pairing-node.js";
 import { listDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { useAuthIdentityFixture } from "./server.auth.identity-fixture.test-support.js";
 import * as gatewayWsConnection from "./server/ws-connection.js";
 import {
   connectReq,
@@ -30,6 +27,7 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
+const makeIdentityPath = useAuthIdentityFixture();
 
 const NODE_CLIENT = {
   id: GATEWAY_CLIENT_NAMES.NODE_HOST,
@@ -111,7 +109,7 @@ describe("node pairing rate limit", () => {
     "rejects a %s shared-token node during startup without creating pairing requests",
     async (_pairingState, approveDevice, omitDevice) => {
       testState.gatewayAuth = { mode: "token", token: "secret" };
-      const identityDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-node-startup-unpaired-"));
+      const identityPath = makeIdentityPath("openclaw-node-startup-unpaired");
       const attachGatewayWsConnectionHandler = gatewayWsConnection.attachGatewayWsConnectionHandler;
       const startupAdmission = vi
         .spyOn(gatewayWsConnection, "attachGatewayWsConnectionHandler")
@@ -121,7 +119,6 @@ describe("node pairing rate limit", () => {
 
       try {
         await withGatewayServer(async ({ port }) => {
-          const identityPath = path.join(identityDir, "identity.sqlite");
           if (approveDevice) {
             const identity = loadOrCreateDeviceIdentity({ path: identityPath });
             const pairing = await requestDevicePairing({
@@ -151,7 +148,6 @@ describe("node pairing rate limit", () => {
         });
       } finally {
         startupAdmission.mockRestore();
-        await rm(identityDir, { recursive: true, force: true });
       }
     },
   );
@@ -168,12 +164,11 @@ describe("node pairing rate limit", () => {
       },
     };
     await withGatewayServer(async ({ port }) => {
-      const identityPrefix = path.join(os.tmpdir(), `openclaw-node-pairing-${randomUUID()}`);
-
       const responses = await Promise.all(
         Array.from(
           { length: 8 },
-          async (_, index) => await attemptNodePairing(port, `${identityPrefix}-${index}.sqlite`),
+          async (_, index) =>
+            await attemptNodePairing(port, makeIdentityPath(`openclaw-node-pairing-${index}`)),
         ),
       );
       const rateLimited = responses.filter((res) => {
@@ -205,11 +200,7 @@ describe("node pairing rate limit", () => {
       },
     };
     await withGatewayServer(async ({ port }) => {
-      const identityPrefix = path.join(
-        os.tmpdir(),
-        `openclaw-node-pairing-upgrade-${randomUUID()}`,
-      );
-      const pairedIdentityPath = `${identityPrefix}-paired.sqlite`;
+      const pairedIdentityPath = makeIdentityPath("openclaw-node-pairing-upgrade-paired");
       const pairedIdentity = await approveNodeIdentity({
         identityPath: pairedIdentityPath,
         caps: ["camera"],
@@ -218,7 +209,11 @@ describe("node pairing rate limit", () => {
       const firstTimeResponses = await Promise.all(
         Array.from(
           { length: 3 },
-          async (_, index) => await attemptNodePairing(port, `${identityPrefix}-${index}.sqlite`),
+          async (_, index) =>
+            await attemptNodePairing(
+              port,
+              makeIdentityPath(`openclaw-node-pairing-upgrade-${index}`),
+            ),
         ),
       );
       expect(firstTimeResponses.filter((res) => res.ok)).toHaveLength(3);
@@ -266,10 +261,7 @@ describe("node pairing rate limit", () => {
       },
     };
     await withGatewayServer(async ({ port }) => {
-      const identityPath = path.join(
-        os.tmpdir(),
-        `openclaw-node-reapproval-${randomUUID()}.sqlite`,
-      );
+      const identityPath = makeIdentityPath("openclaw-node-reapproval");
       const identity = await approveNodeIdentity({ identityPath, caps: ["camera"] });
 
       const responses = await Promise.all(

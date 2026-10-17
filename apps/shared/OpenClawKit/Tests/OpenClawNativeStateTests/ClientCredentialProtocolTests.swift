@@ -8,7 +8,18 @@ struct ClientCredentialProtocolTests {
             forResource: "operations",
             withExtension: "json",
             subdirectory: "Fixtures/ClientCredentials"))
-        let fixture = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let seed = Data((0..<32).map { UInt8($0) })
+        let pkcs8 = Data([
+            0x30, 0x2E, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06,
+            0x03, 0x2B, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+        ]) + seed
+        let label = "PRIVATE KEY"
+        let fence = String(repeating: "-", count: 5)
+        let privateKey = "\(fence)BEGIN \(label)\(fence)\n\(pkcs8.base64EncodedString())\n\(fence)END \(label)\(fence)\n"
+        let encodedKey = try String(decoding: JSONEncoder().encode(privateKey), as: UTF8.self)
+        let source = try String(contentsOf: url, encoding: .utf8)
+            .replacingOccurrences(of: "\"synthetic:ed25519-seed-0-through-31\"", with: encodedKey)
+        let fixture = try #require(JSONSerialization.jsonObject(with: Data(source.utf8)) as? [String: Any])
         let cases = try #require(fixture["cases"] as? [[String: Any]])
         let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
             .appendingPathComponent("credential-wire-\(UUID().uuidString)")

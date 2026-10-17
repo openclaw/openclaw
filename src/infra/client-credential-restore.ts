@@ -7,15 +7,16 @@ import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { readIndependentClientCredentialSource } from "./client-credential-native-bootstrap.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import {
   readClientCredentialReceipt,
   writeClientCredentialReceipt,
 } from "./client-credential-readiness.js";
-import { readClientCredentialFileIdentity } from "./client-credential-receipt.js";
 import {
-  openClientCredentialCustody,
-  resolveClientCredentialStorePath,
-} from "./client-credential-store.js";
+  readClientCredentialFileIdentity,
+  type ClientCredentialFileIdentity,
+} from "./client-credential-receipt.js";
+import { openClientCredentialCustody } from "./client-credential-store.js";
 import { readEngineAnchor } from "./database-engine/open.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -26,8 +27,11 @@ function prepareMatchedReceipt(options: {
   sharedPath: string;
   originalSharedPath: string;
   restoredSharedPath: string;
+  originalSharedFile?: ClientCredentialFileIdentity;
   postgresStoreId?: string;
   postgresExportDirectory?: string;
+  projectPostgresToSqlite?: boolean;
+  preserveCopiedPhase?: boolean;
 }) {
   using local = openNodeSqliteDatabase(options.localPath, { readOnly: true });
   const stored = readClientCredentialReceipt(local);
@@ -36,7 +40,10 @@ function prepareMatchedReceipt(options: {
   }
   const original = stored.receipt.sharedFile;
   const source = stored.receipt.source;
-  if (stored.phase !== "complete" || original.path !== options.originalSharedPath) {
+  if (
+    (stored.phase !== "complete" && !options.preserveCopiedPhase) ||
+    original.path !== options.originalSharedPath
+  ) {
     throw new Error("Restored client credentials do not match the captured shared database.");
   }
   if (source?.kind === "independent") {
@@ -71,6 +78,13 @@ function prepareMatchedReceipt(options: {
       if (readStateSchemaContentVersion(image) < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION) {
         return null;
       }
+      if (options.projectPostgresToSqlite && source) {
+        const createdAt = image // sqlite-allow-raw -- Private rehearsal projects the verified export's immutable store identity.
+          .prepare("SELECT created_at FROM schema_meta WHERE meta_key='primary'")
+          .get()?.created_at;
+        source.engine = "sqlite";
+        source.identity = `${options.restoredSharedPath}:${String(createdAt)}`;
+      }
       // A fresh binding has no migration source. Its verified shared/local capture
       // still belongs together; the restore owner alone may replace the inode witness.
     } else {
@@ -95,14 +109,22 @@ function prepareMatchedReceipt(options: {
       }
     }
   }
-  return stored.receipt;
+  if (
+    options.originalSharedFile &&
+    (original.dev !== options.originalSharedFile.dev ||
+      original.ino !== options.originalSharedFile.ino)
+  ) {
+    throw new Error("Restored client credentials do not match the captured shared database.");
+  }
+  return stored;
 }
 
 function publishRestoredReceipt(
-  receipt: NonNullable<ReturnType<typeof prepareMatchedReceipt>>,
+  stored: NonNullable<ReturnType<typeof prepareMatchedReceipt>>,
   sharedPath: string,
   env: NodeJS.ProcessEnv,
 ): void {
+  const { receipt } = stored;
   const restored = readClientCredentialFileIdentity(sharedPath);
   if (!restored) {
     throw new Error("Restored shared database is missing.");
@@ -116,8 +138,36 @@ function publishRestoredReceipt(
   }
   receipt.sharedFile = restored;
   runSqliteImmediateTransactionSync(owner.database, () =>
-    writeClientCredentialReceipt(owner.database, receipt, "complete"),
+    writeClientCredentialReceipt(owner.database, receipt, stored.phase),
   );
+}
+
+/** The snapshot owner supplies only the admitted shared/local pair and its source witness. */
+export function rebindRehearsalClientCredentials(options: {
+  sourceSharedFile: ClientCredentialFileIdentity;
+  sharedPath: string;
+  localPath: string;
+  postgresStoreId?: string;
+  postgresExportDirectory?: string;
+}): void {
+  const receipt = prepareMatchedReceipt({
+    localPath: options.localPath,
+    sharedPath: options.postgresExportDirectory
+      ? path.join(options.postgresExportDirectory, "anchor.sqlite")
+      : options.sharedPath,
+    originalSharedPath: options.sourceSharedFile.path,
+    originalSharedFile: options.sourceSharedFile,
+    restoredSharedPath: options.sharedPath,
+    postgresStoreId: options.postgresStoreId,
+    postgresExportDirectory: options.postgresExportDirectory,
+    projectPostgresToSqlite: Boolean(options.postgresExportDirectory),
+    preserveCopiedPhase: true,
+  });
+  if (receipt) {
+    publishRestoredReceipt(receipt, options.sharedPath, {
+      OPENCLAW_STATE_DIR: path.dirname(path.dirname(options.localPath)),
+    });
+  }
 }
 
 /** Only the verified archive owner may relocate a matched shared/local pair. */

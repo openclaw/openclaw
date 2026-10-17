@@ -293,13 +293,13 @@ enum ExecApprovalsStore {
                     documentToWrite: ensured.needsWrite ? ensured.file : nil)
             }
             self.migrationRequiredCache.markResolved(stateDirectoryURL: stateDirectoryURL)
-            let socket = try DeviceCredentialAccess.execute(
-                root: stateDirectoryURL,
-                operation: ClientCredentialOperation(kind: .socketRead)).socket
-            guard let socket, let path = socket.path, let token = socket.token else {
-                throw OpenClawNativeStateError("Local execution socket credentials are not ready")
+            guard FileManager.default.fileExists(atPath: OpenClawClientCredentialStore.databaseURL(
+                rootURL: stateDirectoryURL).path)
+            else {
+                throw OpenClawNativeStateError("Local execution credentials require migration")
             }
-            return .success(self.resolveFromFile(file, agentId: agentId, socket: (path, token)))
+            let socket = try self.localSocketCredentials()
+            return .success(self.resolveFromFile(file, agentId: agentId, socket: (socket.socketPath, socket.token)))
         } catch let error as ExecApprovalsLegacyMigrationRequiredError {
             self.migrationRequiredCache.record(error)
             return .failure(.migrationRequired(error))

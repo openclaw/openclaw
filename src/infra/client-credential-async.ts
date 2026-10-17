@@ -3,8 +3,8 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { requestClientCredentialsFromApp } from "./client-credential-ipc.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import {
-  resolveClientCredentialStorePath,
   clientCredentialOperationCreatesStore,
   isClientCredentialMutation,
   isClientCredentialBusyError,

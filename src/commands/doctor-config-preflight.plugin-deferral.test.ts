@@ -11,6 +11,7 @@ import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js"
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
@@ -521,7 +522,13 @@ describe("configured plugin migration deferral", () => {
         const original = await fs.readFile(configPath, "utf8");
         const options = entry === "published-candidate" ? { observe: false, ...prepared } : {};
         await withEnvAsync(entry.endsWith("candidate") ? updating : notUpdating, async () => {
-          const pending = await doctor(options);
+          const pending =
+            entry === "published-candidate"
+              ? await withStateMigrationBackupForTest(
+                  { path: databasePath, env: process.env },
+                  () => doctor(options),
+                )
+              : await doctor(options);
           expect(pending.stateMigrationStepReceipts).toContainEqual(
             expect.objectContaining({
               id: `plugin:${pluginId}`,

@@ -367,8 +367,8 @@ describe("Telegram proof isolation and egress", () => {
           database.prepare("SELECT count(*) AS count FROM device_pairing_pending").get()?.count,
         ).toBe(0);
         expect(
-          database.prepare("SELECT count(*) AS count FROM device_identities").get()?.count,
-        ).toBe(0);
+          database.prepare("SELECT name FROM sqlite_schema WHERE name = 'device_identities'").get(),
+        ).toBeUndefined();
       } finally {
         database.close();
       }

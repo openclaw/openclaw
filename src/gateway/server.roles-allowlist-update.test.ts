@@ -388,10 +388,7 @@ async function respondToInvoke(
 
 function createDeviceIdentityForTest(prefix: string) {
   return loadOrCreateDeviceIdentity({
-    path: path.join(
-      os.tmpdir(),
-      `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`,
-    ),
+    path: path.join(updateDirs.make(`${prefix}-`), "client", "credentials.sqlite"),
   });
 }
 

@@ -16,10 +16,8 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-con
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { bindFreshClientCredentialStore } from "../client-credential-migration.js";
-import {
-  resolveClientCredentialStorePath,
-  runClientCredentialOperation,
-} from "../client-credential-store.js";
+import { resolveClientCredentialStorePath } from "../client-credential-paths.js";
+import { runClientCredentialOperation } from "../client-credential-store.js";
 import { generateStoredDeviceIdentity } from "../device-identity-material.js";
 import { acquireGatewayLock } from "../gateway-lock.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
@@ -58,16 +56,13 @@ import {
 // mock-isolation: Retain native workers and task transport while selecting their prepared artifacts.
 vi.mock("../worker-task-pool.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../worker-task-pool.js")>();
-  const { resolveBackupNativeWorkerTestUrl } =
+  const { resolveBackupNativeWorkerTestOptions } =
     await import("./backup-native-worker.test-support.js");
   return {
     ...actual,
     WorkerTaskPool: new Proxy(actual.WorkerTaskPool, {
       construct(Target, args: ConstructorParameters<typeof actual.WorkerTaskPool>) {
-        return new Target({
-          ...args[0],
-          workerUrl: resolveBackupNativeWorkerTestUrl(args[0].workerUrl),
-        });
+        return new Target(resolveBackupNativeWorkerTestOptions(args[0]));
       },
     }),
   };

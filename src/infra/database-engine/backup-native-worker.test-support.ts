@@ -1,5 +1,9 @@
 import { nativeProcessTestEntrypoints } from "../native-process-runtime.test-support.js";
-import { resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
+import {
+  resolveRuntimeWorkerThreadExecArgv,
+  resolveRuntimeWorkerUrl,
+} from "../runtime-worker-url.js";
+import type { WorkerTaskPoolOptions } from "../worker-task-pool.types.js";
 
 const workers = [
   {
@@ -17,7 +21,21 @@ const workers = [
 ];
 
 // Prepare the real workers before test deadlines instead of loading their source graph per task.
-export function resolveBackupNativeWorkerTestUrl(workerUrl: URL): URL {
-  const worker = workers.find(({ source }) => source.test(workerUrl.pathname));
-  return worker ? resolveRuntimeWorkerUrl(worker.entrypoint) : workerUrl;
+export function resolveBackupNativeWorkerTestOptions<Output>(
+  options: WorkerTaskPoolOptions<Output>,
+): WorkerTaskPoolOptions<Output> {
+  const worker = workers.find(({ source }) => source.test(options.workerUrl.pathname));
+  if (!worker) {
+    return options;
+  }
+  return {
+    ...options,
+    workerUrl: resolveRuntimeWorkerUrl(worker.entrypoint),
+    workerOptions: {
+      ...options.workerOptions,
+      // Prepared core workers still load plugin public APIs from this source host.
+      execArgv:
+        options.workerOptions?.execArgv ?? resolveRuntimeWorkerThreadExecArgv(options.workerUrl),
+    },
+  };
 }

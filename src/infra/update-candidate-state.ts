@@ -13,7 +13,8 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceOwnerHasSourceCustody,
 } from "../state/openclaw-state-maintenance-context.js";
-import { resolveClientCredentialStorePath } from "./client-credential-store.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
+import type { rebindRehearsalClientCredentials } from "./client-credential-restore.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { resolveStatePortRoots } from "./database-engine/state-port.js";
 import { resolveUserPath } from "./home-dir.js";
@@ -580,6 +581,12 @@ export async function snapshotUpdateCandidateState(
   const admittedDatabases = new Set(input.databaseInventory);
   const sourceRoot = path.resolve(input.stateDir);
   const shared = path.join(sourceRoot, "state", "openclaw.sqlite");
+  const localCredentials = resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: sourceRoot });
+  const { readClientCredentialFileIdentity } = await import("./client-credential-receipt.js");
+  let copiedShared:
+    | Omit<Parameters<typeof rebindRehearsalClientCredentials>[0], "localPath">
+    | undefined;
+  let copiedCredentials: string | undefined;
   const { createUpdateCandidateExecApprovalsProjection } =
     await import("./update-candidate-exec-approvals.js");
   const targetPath = (source: string) =>
@@ -614,6 +621,7 @@ export async function snapshotUpdateCandidateState(
       continue;
     }
     const target = targetPath(file);
+    const sourceSharedFile = file === shared ? readClientCredentialFileIdentity(file) : null;
     let contentVersion: number | undefined;
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
     const progress = createUpdateStateSnapshotReporter(file, "database snapshot", input.onProgress);
@@ -622,7 +630,8 @@ export async function snapshotUpdateCandidateState(
       await import("../snapshot/database-backup.js");
     const { userVersion } = await inspectSqliteSchemaHeaderInProcess(file, input.targetStateDir);
     // PostgreSQL anchors have header version zero; versioned SQLite uses online backup directly.
-    if (userVersion === 0 && readBackupEngine(file).engine === "postgres") {
+    const engine = userVersion === 0 ? readBackupEngine(file) : undefined;
+    if (engine?.engine === "postgres") {
       const directory = `${target}.postgres`;
       await capturePostgresBackup({
         sourcePath: file,
@@ -703,6 +712,22 @@ export async function snapshotUpdateCandidateState(
       userVersion: snapshot.userVersion,
       ...(contentVersion === undefined ? {} : { contentVersion }),
     });
+    if (sourceSharedFile) {
+      copiedShared = {
+        sourceSharedFile,
+        sharedPath: target,
+        ...(engine?.engine === "postgres"
+          ? { postgresStoreId: engine.storeId, postgresExportDirectory: `${target}.postgres` }
+          : {}),
+      };
+    }
+    if (file === localCredentials) {
+      copiedCredentials = target;
+    }
+  }
+  if (copiedShared && copiedCredentials) {
+    const { rebindRehearsalClientCredentials } = await import("./client-credential-restore.js");
+    rebindRehearsalClientCredentials({ ...copiedShared, localPath: copiedCredentials });
   }
   input.onProgress?.({ phase: "execution approvals snapshot", path: sourceRoot });
   await execApprovals.copySources();

@@ -213,7 +213,7 @@ export function prepareClientCredentialMigration(
       : getDoctorMigrationBackup(source, {
           path: options.path,
           env: options.env,
-          tables: CLIENT_CREDENTIAL_SOURCE_TABLES,
+          tables: [...CLIENT_CREDENTIAL_SOURCE_TABLES, "sqlite_stat1", "sqlite_stat4"],
         })?.capture);
   if (
     !maintenance?.ownsSchemaMaintenance ||

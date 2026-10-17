@@ -42,6 +42,34 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
+    func `valid shared policy initializes an empty local socket once`() async throws {
+        let root = self.realTemporaryDirectory
+            .appendingPathComponent("openclaw-empty-socket-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let policy = ExecApprovalsFile(
+            version: 1,
+            defaults: ExecApprovalsDefaults(security: .allowlist, ask: .off, autoAllowSkills: true),
+            agents: [:])
+        try ExecApprovalsSQLiteStore.write(policy, stateDirectoryURL: root)
+        try ExecApprovalsSocketTestSupport.seedLocalCredentials(in: root)
+        let owner = try OpenClawClientCredentialStore(rootURL: root, createIfMissing: false)
+        #expect(try owner.readSocketCredentials() == nil)
+        owner.close()
+
+        try await ExecApprovalsStore.withStateDirectory(root) {
+            let first = try ExecApprovalsStore.resolveResult(agentId: "main").get()
+            let second = try ExecApprovalsStore.resolveResult(agentId: "main").get()
+            #expect(first.agent.security == .allowlist)
+            #expect(first.agent.ask == .off)
+            #expect(first.agent.autoAllowSkills)
+            #expect(!first.token.isEmpty)
+            #expect(second.token == first.token)
+            #expect(first.file.socket == nil)
+            #expect(try ExecApprovalsSQLiteStore.read(stateDirectoryURL: root)?.document == policy)
+        }
+    }
+
+    @Test
     func `missing local socket is unavailable without changing effect-time policy authority`() async throws {
         try await self.withTempStateDir { root in
             let credentials = OpenClawClientCredentialStore.databaseURL(rootURL: root)

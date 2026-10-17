@@ -26,11 +26,11 @@ import {
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { readClientCredentialReceipt } from "./client-credential-readiness.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
 import {
   openClientCredentialCustody,
-  resolveClientCredentialStorePath,
   runClientCredentialOperation,
 } from "./client-credential-store.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
@@ -346,7 +346,14 @@ async function migrate(f: Fixture, captured?: Awaited<ReturnType<typeof capture>
     await maintenance!.releaseState();
     if (captured) {
       const writes = maintenance!.databaseWrites;
-      expect(writes?.unchanged).toBe(true);
+      expect(
+        writes?.unchanged,
+        JSON.stringify({
+          warnings: maintenance!.warnings,
+          source: captured.backup.sourceGenerations,
+          writes,
+        }),
+      ).toBe(true);
       expect(Object.keys(writes!.generations).toSorted()).toEqual(
         Object.keys(captured.backup.sourceGenerations).toSorted(),
       );
@@ -498,7 +505,11 @@ describe("client credential public update custody", () => {
     );
     const retirementBackup = archives.find((archive) => archive !== versionBackup)!;
     expect(retirementBackup.inspection).toMatchObject({ sourcePath: f.pathname, userVersion: 26 });
-    expect(retirementBackup.inspection.tables.map((table) => table.name)).toEqual(sourceTables);
+    expect(retirementBackup.inspection.tables.map((table) => table.name)).toEqual([
+      ...sourceTables,
+      "sqlite_stat1",
+      "sqlite_stat4",
+    ]);
     {
       using shared = openNodeSqliteDatabase(f.pathname);
       shared.exec(
@@ -535,6 +546,30 @@ describe("client credential public update custody", () => {
 
   it("preserves native bootstrap on updater refusal and migrates it through standalone Doctor", async () => {
     const f = await fixture("sqlite", true);
+    const sourceTables = credentialTables.slice(0, 2);
+    const inspect = (db: ReturnType<typeof openNodeSqliteDatabase>) => ({
+      credentials: Object.fromEntries(
+        sourceTables.map((table) => [table, db.prepare(`SELECT * FROM ${table}`).all()]),
+      ),
+      indexes: db
+        .prepare(
+          "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE type='index' AND tbl_name IN ('device_identities','device_auth_tokens') ORDER BY name",
+        )
+        .all(),
+      statistics: Object.fromEntries(
+        ["sqlite_stat1", "sqlite_stat4"]
+          .filter((table) => db.prepare("SELECT 1 FROM sqlite_schema WHERE name=?").get(table))
+          .map((table) => [table, db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]),
+      ),
+    });
+    const original = (() => {
+      using source = openNodeSqliteDatabase(f.pathname);
+      source.exec("ANALYZE");
+      return inspect(source);
+    })();
+    expect(original.statistics.sqlite_stat1).toEqual(
+      expect.arrayContaining([expect.objectContaining({ tbl: "device_identities" })]),
+    );
     const before = fs.readFileSync(f.pathname);
     expect(() => createUpdateRun({ trigger: "cli" }, { env: f.env })).toThrow(
       /schema role missing/,
@@ -549,20 +584,31 @@ describe("client credential public update custody", () => {
           name.startsWith("openclaw.sqlite.pre-startup-migration-") && name.endsWith(".scoped.bak"),
       );
     expect(backups).toHaveLength(1);
-    const backup = inspectScopedMigrationSnapshot(path.join(path.dirname(f.pathname), backups[0]!));
+    const backupPath = path.join(path.dirname(f.pathname), backups[0]!);
+    const backup = inspectScopedMigrationSnapshot(backupPath);
     expect(backup.sourcePath).toBe(f.pathname);
     expect(backup.userVersion).toBe(0);
+    {
+      using shared = openNodeSqliteDatabase(f.pathname, { readOnly: true });
+      expect(shared.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+      expect(
+        shared.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
+      ).toBeUndefined();
+      expect(
+        shared.prepare("SELECT * FROM sqlite_stat1 WHERE tbl='device_identities'").all(),
+      ).toEqual([]);
+    }
+    await restoreDoctorMigrationBackup({ sourcePath: f.pathname, backupPath, env: f.env });
+    using restored = openNodeSqliteDatabase(f.pathname, { readOnly: true });
+    expect(inspect(restored)).toEqual(original);
     expect(backup.tables.map((table) => table.name)).toEqual([
       ...credentialTables,
       "exec_approvals_config",
+      "sqlite_stat1",
+      "sqlite_stat4",
     ]);
-    using shared = openNodeSqliteDatabase(f.pathname, { readOnly: true });
-    expect(shared.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
-    expect(
-      shared.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
-    ).toBeUndefined();
   });
 
   it("refuses a foreign shared write after capture without retiring credentials", async () => {

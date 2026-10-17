@@ -167,7 +167,12 @@ it("produces the shared Swift wire fixture from actual typed owner operations", 
     token: null,
   });
 
-  await expect(`${JSON.stringify({ format: 1, cases }, null, 2)}\n`).toMatchFileSnapshot(
+  // Swift reconstructs the same fixed seed; the shared trace never stores a private PEM.
+  const fixture = `${JSON.stringify({ format: 1, cases }, null, 2)}\n`.replaceAll(
+    JSON.stringify(material.privateKeyPem),
+    JSON.stringify("synthetic:ed25519-seed-0-through-31"),
+  );
+  await expect(fixture).toMatchFileSnapshot(
     fileURLToPath(
       new URL(
         "../../apps/shared/OpenClawKit/Tests/OpenClawNativeStateTests/Fixtures/ClientCredentials/operations.json",

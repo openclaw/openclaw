@@ -114,7 +114,9 @@ function findSites(file: string, source: ts.SourceFile): DialectSite[] {
     // Keep other constructs at these owners, and these constructs at callers, in the ratchet.
     const nativeMaintenance =
       (file === "src/infra/update-doctor-migration-attribution.ts" &&
-        (match.construct === "transaction-mode" || match.construct === "pragma")) ||
+        (match.construct === "transaction-mode" ||
+          match.construct === "pragma" ||
+          match.construct === "schema-version")) ||
       (file === "src/infra/sqlite-migration-scoped-snapshot.ts" && match.construct === "rowid");
     const { line, character } = source.getLineAndCharacterOfPosition(position);
     sites.push({

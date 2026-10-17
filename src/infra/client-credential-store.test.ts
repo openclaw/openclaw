@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { importClientCredentialLegacy } from "./client-credential-legacy.js";
 import type { ClientIdentityRecord } from "./client-credential-operations.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { writeClientCredentialReceipt } from "./client-credential-readiness.js";
 import {
   emptyClientCredentialReceipt,
@@ -13,7 +14,6 @@ import {
 import {
   openClientCredentialCustody,
   isClientCredentialBusyError,
-  resolveClientCredentialStorePath,
   runClientCredentialOperation,
   type ClientTokenRecord,
 } from "./client-credential-store.js";
@@ -418,17 +418,24 @@ it("rolls back a cancelled operation before publishing new credential material",
 });
 
 it.runIf(process.platform !== "win32")(
-  "keeps directory aliases under the same retained credential owner",
+  "creates through a state-root alias and keeps one credential owner through the real root",
   () => {
     const { root, env } = fixture();
-    using owner = openClientCredentialCustody(env, { createIfMissing: true });
-    owner!.run({ kind: "identity.create", identity });
     const alias = path.join(root, "root-alias");
     fs.symlinkSync(root, alias, "dir");
-    expect(() =>
-      openClientCredentialCustody({ OPENCLAW_STATE_DIR: alias }, { timeoutMs: 0 }),
-    ).toThrowError(expect.objectContaining({ name: "ClientCredentialBusyError" }));
-    expect(owner!.run({ kind: "identity.read", identity_key: "node" })).toEqual({
+    {
+      using owner = openClientCredentialCustody(
+        { OPENCLAW_STATE_DIR: alias },
+        { createIfMissing: true },
+      );
+      owner!.run({ kind: "identity.create", identity });
+      expect(() => openClientCredentialCustody(env, { timeoutMs: 0 })).toThrowError(
+        expect.objectContaining({ name: "ClientCredentialBusyError" }),
+      );
+    }
+    expect(
+      runClientCredentialOperation(env, { kind: "identity.read", identity_key: "node" }),
+    ).toEqual({
       kind: "identity",
       identity,
     });

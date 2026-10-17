@@ -32,6 +32,7 @@ import {
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
+import { addPreCutoverClientCredentialTablesForTest } from "../state/openclaw-state-schema.test-support.js";
 import { VERSION } from "../version.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
@@ -250,6 +251,10 @@ it.each([
     const shared = openOpenClawStateDatabase({ env: state.env }).path;
     const run = createUpdateRun({ trigger: "cli", before: { version: driver } });
     await closeOpenClawStateDatabaseAsync();
+    {
+      using predecessor = new DatabaseSync(shared);
+      addPreCutoverClientCredentialTablesForTest(predecessor);
+    }
     setSchemaVersion(shared, OPENCLAW_STATE_SCHEMA_VERSION - 1);
     mocks.runContributions.mockImplementation(async () => {
       const result = repairOpenClawStateDatabaseSchema({ env: state.env });

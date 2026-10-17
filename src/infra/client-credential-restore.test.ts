@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import type { StatementSync } from "node:sqlite";
+import { describe, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import type { BackupManifest } from "../commands/backup-verify-manifest.js";
@@ -23,6 +24,7 @@ import { createBackupArchive } from "./backup-create.js";
 import {
   bindFreshClientCredentialStore,
   prepareClientCredentialMigration,
+  recoverClientCredentialStore,
 } from "./client-credential-migration.js";
 import {
   readClientCredentialReceipt,
@@ -36,10 +38,125 @@ import {
   runClientCredentialOperation,
 } from "./client-credential-store.js";
 import { generateStoredDeviceIdentity } from "./device-identity-material.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import {
+  readUpdateCandidateStateInventoryInProcess,
+  snapshotUpdateCandidateState,
+} from "./update-candidate-state.js";
 
 describe("whole-archive credential relocation", () => {
+  it("preserves interrupted completion through rehearsal until the copied owner recovers", async () => {
+    await withOpenClawTestState(
+      { layout: "split", scenario: "external-service", label: "credential-rehearsal" },
+      async (state) => {
+        const identity = generateStoredDeviceIdentity(23);
+        runClientCredentialOperation(state.env, {
+          kind: "identity.create",
+          identity: {
+            identity_key: "primary",
+            device_id: identity.deviceId,
+            public_key_pem: identity.publicKeyPem,
+            private_key_pem: identity.privateKeyPem,
+            created_at_ms: 23,
+            updated_at_ms: 23,
+          },
+        });
+        const sharedPath = state.statePath("state", "openclaw.sqlite");
+        fs.mkdirSync(path.dirname(sharedPath), { recursive: true, mode: 0o700 });
+        {
+          using source = openNodeSqliteDatabase(sharedPath);
+          const prototype = requireNodeSqlite().StatementSync.prototype;
+          // oxlint-disable-next-line typescript/unbound-method -- Forwarded with its native statement receiver.
+          const originalRun = prototype.run;
+          let interruptedAfterSourceCommit = false;
+          // Inject the write fault after admission without changing the accepted schema.
+          const completion = vi.spyOn(prototype, "run").mockImplementation(
+            new Proxy(originalRun, {
+              apply(run, statement: StatementSync, args) {
+                if (
+                  statement.sourceSQL.startsWith('insert into "client_credential_migration"') &&
+                  args.includes("complete")
+                ) {
+                  interruptedAfterSourceCommit = !source.isTransaction;
+                  throw new Error("fixture completion interrupted");
+                }
+                return Reflect.apply(run, statement, args);
+              },
+            }),
+          );
+          try {
+            runSqliteImmediateTransactionSync(source, () => {
+              executeCanonicalStateSchema(source, { includeVersionLazyAdditiveTables: true });
+              writeCurrentStateSchemaMetadata(source, 23);
+              bindFreshClientCredentialStore(source, { path: sharedPath, env: state.env });
+            });
+          } finally {
+            completion.mockRestore();
+          }
+          expect(interruptedAfterSourceCommit).toBe(true);
+        }
+        {
+          using local = openClientCredentialCustody(state.env, { migration: true })!;
+          expect(readClientCredentialReceipt(local.database)?.phase).toBe("copied");
+        }
+        const archive = await createBackupArchive({
+          output: state.path("interrupted.tar.gz"),
+          includeWorkspace: false,
+        });
+        const archiveTarget = state.path("archive-restore");
+        await expect(
+          backupRestoreCommand(createTestRuntime(), {
+            archive: archive.archivePath,
+            target: archiveTarget,
+          }),
+        ).rejects.toThrow("Backup restore failed; the incomplete target was cleaned");
+        expect(fs.existsSync(archiveTarget)).toBe(false);
+        const localPath = state.statePath("client", "credentials.sqlite");
+        const original = fs.readFileSync(localPath);
+        const targetStateDir = state.path("rehearsal");
+        const input = {
+          stateDir: state.stateDir,
+          targetStateDir,
+          candidateRoot: process.cwd(),
+          config: { plugins: { enabled: false } },
+          env: state.env,
+          additionalPaths: [],
+        };
+        const inventory = await readUpdateCandidateStateInventoryInProcess(input);
+        await snapshotUpdateCandidateState({
+          ...input,
+          pluginPlanPath: path.join(targetStateDir, inventory.pluginPlan),
+          databaseInventory: [...inventory.databases.keys()],
+        });
+        const copiedEnv = { ...state.env, OPENCLAW_STATE_DIR: targetStateDir };
+        {
+          using local = openClientCredentialCustody(copiedEnv, { migration: true })!;
+          expect(readClientCredentialReceipt(local.database)?.phase).toBe("copied");
+        }
+        const readIdentity = () =>
+          runClientCredentialOperation(copiedEnv, {
+            kind: "identity.read",
+            identity_key: "primary",
+          });
+        expect(readIdentity).toThrow("migration is incomplete or stale");
+        const copiedSharedPath = path.join(targetStateDir, "state", "openclaw.sqlite");
+        {
+          using copiedShared = openNodeSqliteDatabase(copiedSharedPath);
+          recoverClientCredentialStore(copiedShared, {
+            path: copiedSharedPath,
+            env: copiedEnv,
+          });
+        }
+        expect(readIdentity()).toMatchObject({
+          kind: "identity",
+          identity: { device_id: identity.deviceId, private_key_pem: identity.privateKeyPem },
+        });
+        expect(fs.readFileSync(localPath)).toEqual(original);
+      },
+    );
+  });
+
   it("keeps a local orphan fenced when the matched PostgreSQL export predates cutover", async () => {
     await withOpenClawTestState(
       { layout: "split", scenario: "external-service", label: "credential-pg-restore" },

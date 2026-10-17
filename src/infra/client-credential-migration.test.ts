@@ -26,6 +26,7 @@ import {
   recoverClientCredentialStore,
 } from "./client-credential-migration.js";
 import { readIndependentClientCredentialSource } from "./client-credential-native-bootstrap.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import {
   readClientCredentialReceipt,
   writeClientCredentialReceipt,
@@ -33,7 +34,6 @@ import {
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
 import {
   openClientCredentialCustody,
-  resolveClientCredentialStorePath,
   runClientCredentialOperation,
 } from "./client-credential-store.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
@@ -699,6 +699,10 @@ it("checks the Swift receipt fixture against actual canonical migration output",
     );
     using target = openClientCredentialCustody(f.env, { createIfMissing: false, migration: true })!;
     const actual = readClientCredentialReceipt(target.database)!;
+    expect(actual.receipt.source!.generation).toBe(f.maintenance.capture.generation);
+    expect(actual.receipt.source!.generation).toMatch(/^[a-f0-9]{64}$/u);
+    // Physical backup bytes vary across SQLite builds; keep the logical source hash exact.
+    actual.receipt.source!.generation = "0".repeat(64);
     actual.receipt.sharedFile = { path: "/fixture/state/openclaw.sqlite", dev: "1", ino: "2" };
     actual.receipt.source!.identity = "/fixture/state/openclaw.sqlite:123";
     const freshRoot = dirs.make("client-fresh-receipt-");

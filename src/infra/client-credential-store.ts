@@ -3,7 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createDirectorySync, createFileSync } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
-import { inspectDarwinAcl } from "@openclaw/fs-safe/permissions";
+import * as permissions from "@openclaw/fs-safe/permissions";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { openRootFileSync } from "./boundary-file-read.js";
@@ -12,6 +12,7 @@ import {
   type ClientCredentialOperation,
   type ClientCredentialResult,
 } from "./client-credential-operations.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import {
   admitClientCredentialStore,
   assertMissingClientCredentialStoreReady,
@@ -62,10 +63,6 @@ const schemaAdmission: SqliteDatabaseAdmissionKey<true> = {
   read: (value) => (value === true ? true : undefined),
 };
 
-export function resolveClientCredentialStorePath(env: NodeJS.ProcessEnv): string {
-  return path.join(resolveStateDir(env), "client", "credentials.sqlite");
-}
-
 function createPrivateIfMissing(create: () => void): void {
   try {
     create();
@@ -77,7 +74,7 @@ function createPrivateIfMissing(create: () => void): void {
 }
 
 function assertPrivateAcl(pathname: string): void {
-  if (process.platform === "darwin" && inspectDarwinAcl(pathname).kind !== "none") {
+  if (process.platform === "darwin" && permissions.inspectDarwinAcl(pathname).kind !== "none") {
     throw new Error("Client credentials require a private directory and file without ACL entries.");
   }
 }
@@ -130,12 +127,21 @@ export function openClientCredentialCustody(
   if (createIfMissing) {
     if (!parent) {
       fs.mkdirSync(path.dirname(directory), { recursive: true, mode: 0o700 });
-      createPrivateIfMissing(() => createDirectorySync(directory, { private: true }));
+    }
+    // Configured state roots may be aliases; credential children still must not be symlinks.
+    const creationDirectory = path.join(
+      fs.realpathSync.native(path.dirname(directory)),
+      path.basename(directory),
+    );
+    if (!parent) {
+      createPrivateIfMissing(() => createDirectorySync(creationDirectory, { private: true }));
     }
     applyPrivateModeSync(directory, 0o700);
     if (!fs.existsSync(pathname)) {
       createPrivateIfMissing(() => {
-        createFileSync(pathname, { private: true }).close();
+        createFileSync(path.join(creationDirectory, path.basename(pathname)), {
+          private: true,
+        }).close();
         created = true;
       });
     }

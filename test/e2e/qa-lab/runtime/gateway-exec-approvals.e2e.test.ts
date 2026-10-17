@@ -52,10 +52,22 @@ describe("gateway exec approvals QA", () => {
     cleanup.push(() => server.close());
 
     const requesterIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(stateDir, "test-device-identities", "exec-requester.sqlite"),
+      path: path.join(
+        stateDir,
+        "test-device-identities",
+        "exec-requester",
+        "client",
+        "credentials.sqlite",
+      ),
     });
     const reviewerIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(stateDir, "test-device-identities", "exec-reviewer.sqlite"),
+      path: path.join(
+        stateDir,
+        "test-device-identities",
+        "exec-reviewer",
+        "client",
+        "credentials.sqlite",
+      ),
     });
     expect(reviewerIdentity.deviceId).not.toBe(requesterIdentity.deviceId);
 

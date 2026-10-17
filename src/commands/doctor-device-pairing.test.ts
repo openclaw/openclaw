@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearDeviceAuthToken, loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import {
   seedDeviceAuthToken,
   readDeviceAuthTokenForTest,
@@ -111,10 +110,6 @@ describe("noteDevicePairingHealth", () => {
     noteMock.mockReset();
   });
 
-  afterEach(() => {
-    __setFsSafeTestHooksForTest(undefined);
-  });
-
   it("warns about pending scope upgrades from local pairing state when the gateway is down", async () => {
     await withApprovedOperatorPairing(async ({ identity, publicKey }) => {
       const pending = await requestDevicePairing({
@@ -197,7 +192,7 @@ describe("noteDevicePairingHealth", () => {
     },
   );
 
-  it("describes remaining device-auth files when import committed before source removal failed", async () => {
+  it("retains imported device-auth JSON without reimporting a removed token", async () => {
     await withOpenClawTestState(
       { prefix: "openclaw-doctor-device-auth-debt-", env: { OPENCLAW_TEST_FAST: "1" } },
       async (state) => {
@@ -206,7 +201,6 @@ describe("noteDevicePairingHealth", () => {
           "identity/device-auth.json",
           legacyDeviceAuthContents,
         );
-        // Migration lock release retires native handles; each read reacquires the owner.
         const readTokenRow = () => {
           const entry = readDeviceAuthTokenForTest({
             env: state.env,
@@ -215,19 +209,8 @@ describe("noteDevicePairingHealth", () => {
           });
           return entry ? { token: entry.token } : undefined;
         };
-        let rowAtRemoval: unknown;
-        let removalAttempts = 0;
-        __setFsSafeTestHooksForTest({
-          beforeRootFallbackMutation(operation, targetPath) {
-            if (operation === "remove" && targetPath === sourcePath) {
-              removalAttempts++;
-              rowAtRemoval = readTokenRow();
-              throw new Error("synthetic device-auth source removal failure");
-            }
-          },
-        });
-        try {
-          const result = await migrateLegacyDeviceAuth({
+        const migrate = () =>
+          migrateLegacyDeviceAuth({
             detected: detectLegacyDeviceAuth({
               stateDir: state.stateDir,
               doctorOnlyStateMigrations: true,
@@ -235,31 +218,28 @@ describe("noteDevicePairingHealth", () => {
             stateDir: state.stateDir,
             env: state.env,
           });
-          expect(removalAttempts).toBe(1);
-          expect(rowAtRemoval).toEqual({ token: expectedToken });
-          expect(result.warnings.length).toBeGreaterThan(0);
-        } finally {
-          __setFsSafeTestHooksForTest(undefined);
-        }
+        expect((await migrate()).warnings).toEqual([]);
         expect(readTokenRow()).toEqual({ token: expectedToken });
-        // Existing rows do not release the legacy-file access guard.
         await expect(
           loadDeviceAuthToken({ deviceId: "synthetic-device", role: "operator", env: state.env }),
-        ).rejects.toThrow("Legacy device auth requires migration");
+        ).resolves.toMatchObject({ token: expectedToken });
         const params = { cfg: { gateway: { mode: "remote" as const } }, healthOk: false };
         const findings = await collectDevicePairingHealthFindings(params);
-        expect(findings).toMatchObject([
-          {
-            requirement: "device-auth-store-legacy-file",
-            message: expect.stringContaining("is still present"),
-            fixHint: expect.stringContaining("migration or cleanup"),
-          },
-        ]);
+        expect(findings).toEqual([]);
         await noteDevicePairingHealth(params);
-        expect(requireNoteMessage()).not.toContain("has not been imported");
-        expect(requireNoteMessage()).not.toContain(expectedToken);
+        expect(noteMock).not.toHaveBeenCalled();
         expect(await fs.readFile(sourcePath, "utf8")).toBe(legacyDeviceAuthContents);
         expect(readTokenRow()).toEqual({ token: expectedToken });
+        expect(
+          await clearDeviceAuthToken({
+            deviceId: "synthetic-device",
+            role: "operator",
+            env: state.env,
+          }),
+        ).toBe(true);
+        expect((await migrate()).changes).toEqual([]);
+        expect(readTokenRow()).toBeUndefined();
+        expect(await fs.readFile(sourcePath, "utf8")).toBe(legacyDeviceAuthContents);
       },
     );
   });

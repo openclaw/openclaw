@@ -973,7 +973,7 @@ function resolveDefaultTestDeviceIdentityPath(params: {
     ),
   );
   const suiteRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
-  return path.join(suiteRoot, "test-device-identities", `${safe}.sqlite`);
+  return path.join(suiteRoot, "test-device-identities", safe, "client", "credentials.sqlite");
 }
 
 export async function readConnectChallengeNonce(
