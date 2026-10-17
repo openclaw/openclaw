@@ -9,6 +9,10 @@ import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { capturePostgresBackup } from "../snapshot/database-backup.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "../state/openclaw-state-db-contract.js";
 import { admitStatePostgres, stateEngineSchema } from "../state/openclaw-state-db-engine.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { advanceStateSchemaContentVersion } from "../state/openclaw-state-schema-publication.js";
@@ -60,6 +64,7 @@ async function fixture() {
     },
   });
   let capturedGeneration: string | undefined = undefined;
+  let cutoverContentVersionTimestamp: string | undefined;
   const open = (migrate: boolean, interrupt = false) =>
     maintenance.run(() =>
       withEngineStoreAdmission(() => {
@@ -89,6 +94,15 @@ async function fixture() {
             }
           },
           beforeMigrate(source, fromVersion) {
+            if (fromVersion === CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION - 1) {
+              cutoverContentVersionTimestamp = String(
+                source
+                  .prepare(
+                    "SELECT updated_at_ms FROM config_machine_state WHERE state_key='state.schema.contentVersion'",
+                  )
+                  .get()?.updated_at_ms,
+              );
+            }
             prepareClientCredentialMigration(source, {
               path: pathname,
               env,
@@ -105,7 +119,7 @@ async function fixture() {
               fromVersion,
               toVersion: stateEngineSchema.version,
             });
-            if (interrupt) {
+            if (interrupt && fromVersion === CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION - 1) {
               throw new Error("Interrupted after local copy before source commit");
             }
           },
@@ -194,6 +208,9 @@ async function fixture() {
     identity,
     client,
     open,
+    get cutoverContentVersionTimestamp() {
+      return cutoverContentVersionTimestamp;
+    },
     async close() {
       await maintenance.close();
       anchor.close();
@@ -281,7 +298,12 @@ describe.skipIf(!connection)(
                 "SELECT value_json,updated_at_ms FROM config_machine_state WHERE state_key='state.schema.contentVersion'",
               )
             ).rows,
-          ).toEqual([{ value_json: "27", updated_at_ms: "1" }]);
+          ).toEqual([
+            {
+              value_json: String(OPENCLAW_STATE_SCHEMA_VERSION),
+              updated_at_ms: f.cutoverContentVersionTimestamp,
+            },
+          ]);
         } finally {
           migrated.close();
         }

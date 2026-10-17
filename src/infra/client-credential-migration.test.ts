@@ -7,6 +7,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolvePublicSessionShareToken } from "../gateway/control-ui-public-session-token.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
+  CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "../state/openclaw-state-db-contract.js";
+import {
   executeCanonicalStateSchema,
   writeCurrentStateSchemaMetadata,
 } from "../state/openclaw-state-db-maintenance.js";
@@ -198,7 +202,9 @@ describe("local client credential extraction", () => {
         );
       }
       const shared = maintenance.run(() => openOpenClawStateDatabase({ env: f.env }));
-      expect(shared.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 27 });
+      expect(shared.db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
       expect(
         shared.db.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
       ).toBeUndefined();
@@ -659,7 +665,9 @@ describe("local client credential extraction", () => {
       } finally {
         target.close();
       }
-      f.source.exec("UPDATE schema_meta SET schema_version=27; PRAGMA user_version=27;");
+      f.source.exec(
+        `UPDATE schema_meta SET schema_version=${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION}; PRAGMA user_version=${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION};`,
+      );
       recoverClientCredentialStore(f.source, { path: f.sourcePath, env: f.env });
       const current = openClientCredentialCustody(f.env, {
         createIfMissing: false,
@@ -702,7 +710,7 @@ describe("local client credential extraction", () => {
         target.close();
       }
       f.source.exec(
-        "CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY,value_json TEXT); INSERT INTO config_machine_state VALUES ('state.schema.contentVersion','27');",
+        `CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY,value_json TEXT); INSERT INTO config_machine_state VALUES ('state.schema.contentVersion','${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION}');`,
       );
       expect(f.source.prepare("PRAGMA user_version").get()).toEqual({ user_version: 25 });
       recoverClientCredentialStore(f.source, { path: f.sourcePath, env: f.env });
