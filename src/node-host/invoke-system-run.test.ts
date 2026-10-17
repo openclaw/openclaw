@@ -1,5 +1,4 @@
 /** Tests node-host system.run policy, approval, allowlist, and execution behavior. */
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,7 +23,7 @@ import {
 import { deleteExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import * as approvalsStore from "../infra/exec-approvals-store.test-support.js";
 import * as execApprovals from "../infra/exec-approvals.js";
-import type { ExecAsk, ExecSecurity, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
+import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { createExecApprovalPolicySnapshot, loadExecApprovals } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import * as commandResolution from "../infra/exec-command-resolution.js";
@@ -42,7 +41,12 @@ import {
   expectOk,
   expectError,
   firstMockCall,
+  allowlistPolicy,
+  createExactCommandPattern,
   invokeResult,
+  localResult,
+  macSuccess,
+  policy,
   runArgv,
   readMacCall,
   expectExecDeniedEvent,
@@ -108,18 +112,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       process.env.OPENCLAW_HOME = previousOpenClawHome;
     }
   });
-
-  function localResult(stdout = "local-ok") {
-    return {
-      success: true,
-      stdout,
-      stderr: "",
-      timedOut: false,
-      truncated: false,
-      exitCode: 0,
-      error: null,
-    };
-  }
 
   function executable(dir: string, name: string): string {
     const fileName = process.platform === "win32" ? `${name}.exe` : name;
@@ -209,53 +201,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       initialBody: 'console.log("SAFE");\n',
       changedBody: 'console.log("PWNED");\n',
     };
-  }
-
-  function macSuccess(stdout = "app-ok"): ExecHostResponse {
-    return {
-      ok: true,
-      payload: {
-        success: true,
-        stdout,
-        stderr: "",
-        timedOut: false,
-        exitCode: 0,
-        error: null,
-      },
-    };
-  }
-
-  function allowlistPolicy(params?: {
-    autoAllowSkills?: boolean;
-    agents?: Parameters<typeof approvalsStore.saveExecApprovals>[0]["agents"];
-  }): Parameters<typeof approvalsStore.saveExecApprovals>[0] {
-    return {
-      version: 1,
-      defaults: {
-        security: "allowlist",
-        ask: "on-miss",
-        askFallback: "deny",
-        ...(params?.autoAllowSkills ? { autoAllowSkills: true } : {}),
-      },
-      agents: params?.agents ?? {},
-    };
-  }
-
-  function policy(
-    security: ExecSecurity,
-    ask: ExecAsk,
-    askFallback: ExecSecurity,
-    agents?: Parameters<typeof approvalsStore.saveExecApprovals>[0]["agents"],
-  ): Parameters<typeof approvalsStore.saveExecApprovals>[0] {
-    return {
-      version: 1,
-      defaults: { security, ask, askFallback },
-      ...(agents === undefined ? {} : { agents }),
-    };
-  }
-
-  function createExactCommandPattern(commandText: string): string {
-    return `=command:${crypto.createHash("sha256").update(commandText).digest("hex").slice(0, 16)}`;
   }
 
   function durableFixture(options: { payload?: string; fallback?: boolean } = {}) {
@@ -518,6 +463,30 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       },
     });
     expectExecDeniedEvent(result.sendNodeEvent, "cwd-unavailable");
+    expect(result.runCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      reason: "allowlist-miss",
+      message: "SYSTEM_RUN_DENIED: allowlist miss",
+      guidance: "ask the user to approve this exact command",
+    },
+    {
+      reason: "security=deny",
+      message: "SYSTEM_RUN_DISABLED: security=deny",
+      guidance: "Ask the operator to change the exec security policy",
+    },
+  ] as const)("guides native $reason denials without executing", async (testCase) => {
+    const result = await runMac({
+      runViaResponse: {
+        ok: false,
+        error: { code: "UNAVAILABLE", reason: testCase.reason, message: testCase.message },
+      },
+    });
+
+    expectExecDeniedEvent(result.sendNodeEvent, testCase.reason);
+    expectError(result.sendInvokeResult, testCase.guidance);
     expect(result.runCommand).not.toHaveBeenCalled();
   });
 
@@ -1617,7 +1586,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
 
     expect(invoke.runCommand).not.toHaveBeenCalled();
-    expectError(invoke.sendInvokeResult, "requires explicit approval in strictInlineEval mode");
+    expectError(
+      invoke.sendInvokeResult,
+      "gawk --source requires explicit approval in strictInlineEval mode)\n" +
+        "Do not attempt the same outcome through a workaround, indirect execution, or policy circumvention. Proceed only with a materially safer alternative, or ask the user to approve this exact command after explaining the risk.",
+    );
   });
 
   it("persists benign awk allow-always approvals in strict inline-eval mode without reopening inline carriers", async () => {

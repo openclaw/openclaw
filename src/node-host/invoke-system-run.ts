@@ -82,6 +82,9 @@ import {
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
 import {
+  appendExecDenialGuidance,
+  APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE,
+  APPROVAL_STATE_WRITE_FAILED_MESSAGE,
   normalizeDeniedReason,
   sendSystemRunDenied,
   type SystemRunDeniedReason,
@@ -105,10 +108,6 @@ const safeBinTrustedDirWarningCache = createDedupeCache({
   ttlMs: 0,
   maxSize: 4096,
 });
-const APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE =
-  "SYSTEM_RUN_DENIED: approval missing script operand binding";
-const APPROVAL_STATE_WRITE_FAILED_MESSAGE =
-  "SYSTEM_RUN_DENIED: approval state could not be persisted";
 
 function warnWritableTrustedDirOnce(message: string): void {
   if (safeBinTrustedDirWarningCache.check(message)) {
@@ -443,7 +442,8 @@ async function evaluateSystemRunPolicyPhase(
   if (strictInlineEvalRequiresApproval) {
     return parsed.deny(
       `SYSTEM_RUN_DENIED: approval required (` +
-        `${describeInterpreterInlineEval(inlineEvalHit)} requires explicit approval in strictInlineEval mode)`,
+        `${describeInterpreterInlineEval(inlineEvalHit)} requires explicit approval in strictInlineEval mode)\n` +
+        EXEC_AUTO_REVIEW_DENIAL_GUIDANCE,
     );
   }
 
@@ -769,7 +769,7 @@ async function executeSystemRunPhase(
     }
     if (!response.ok) {
       await phase.deny(
-        response.error.message,
+        appendExecDenialGuidance(response.error.message, response.error.reason),
         normalizeDeniedReason(response.error.reason),
         response.error.code === "PERMISSION_MISSING" ? response.error.details : undefined,
       );
