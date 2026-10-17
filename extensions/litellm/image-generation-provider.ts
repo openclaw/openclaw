@@ -72,12 +72,16 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
     resolveAllowPrivateNetwork: ({ baseUrl }) =>
       shouldAutoAllowPrivateLitellmEndpoint(baseUrl) ? true : undefined,
     useConfiguredRequest: true,
+    // `n` defaults to 1 on the OpenAI-compatible Images API, and LiteLLM
+    // rejects an explicit `n` for models that do not support it (for example
+    // Gemini image models on /v1/images/edits throw UnsupportedParamsError).
+    // Only send the field when it differs from the API default.
     buildGenerateRequest: ({ req, model, count }) => ({
       kind: "json",
       body: {
         model,
         prompt: req.prompt,
-        n: count,
+        ...(count > 1 ? { n: count } : {}),
         size: req.size ?? DEFAULT_SIZE,
       },
     }),
@@ -88,7 +92,9 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
       const form = new FormData();
       form.set("model", model);
       form.set("prompt", req.prompt);
-      form.set("n", String(count));
+      if (count > 1) {
+        form.set("n", String(count));
+      }
       form.set("size", req.size ?? DEFAULT_SIZE);
       // OpenAI-compatible edits take repeated `image[]` parts when more than one
       // reference is supplied, and a single `image` part otherwise.

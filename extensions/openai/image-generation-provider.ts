@@ -74,6 +74,10 @@ const OPENAI_FLEXIBLE_IMAGE_MODELS = [
   ...OPENAI_IMAGE_25_MODELS,
   "gpt-image-2-2026-04-21",
 ] as const;
+// gpt-image-1-series models accept only the fixed size list (and `auto`),
+// unlike gpt-image-2's flexible dimensions. Azure rejects flexible sizes
+// such as 2048x1152 for these models with HTTP 400 invalid_value.
+const OPENAI_LEGACY_IMAGE_MODELS = ["gpt-image-1", "gpt-image-1-mini", "gpt-image-1.5"] as const;
 
 const AZURE_HOSTNAME_SUFFIXES = [
   ".openai.azure.com",
@@ -203,13 +207,10 @@ function resolveOpenAIImageRequestModel(
 }
 
 function resolveNativeOpenAIImageSizesForModel(model: string): readonly string[] {
-  switch (model) {
-    case "gpt-image-1":
-    case "gpt-image-1-mini":
-      return OPENAI_LEGACY_IMAGE_SIZES;
-    default:
-      return OPENAI_SUPPORTED_SIZES;
+  if (OPENAI_LEGACY_IMAGE_MODELS.some((candidate) => candidate === model)) {
+    return OPENAI_LEGACY_IMAGE_SIZES;
   }
+  return OPENAI_SUPPORTED_SIZES;
 }
 
 function isValidFlexibleOpenAIImageSize(model: string, size: string | undefined): size is string {
@@ -683,8 +684,14 @@ export function buildOpenAIImageGenerationProvider(
       },
       geometry: {
         sizes: [...OPENAI_SUPPORTED_SIZES],
-        // Empty model-specific lists stop core from snapping valid flexible dimensions.
-        sizesByModel: Object.fromEntries(OPENAI_FLEXIBLE_IMAGE_MODELS.map((model) => [model, []])),
+        // Empty model-specific lists stop core from snapping valid flexible dimensions;
+        // legacy models pin the fixed size list instead.
+        sizesByModel: {
+          ...Object.fromEntries(OPENAI_FLEXIBLE_IMAGE_MODELS.map((model) => [model, []])),
+          ...Object.fromEntries(
+            OPENAI_LEGACY_IMAGE_MODELS.map((model) => [model, [...OPENAI_LEGACY_IMAGE_SIZES]]),
+          ),
+        },
       },
       output: {
         formats: [...OPENAI_OUTPUT_FORMATS],

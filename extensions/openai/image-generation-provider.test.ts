@@ -534,6 +534,25 @@ describe("openai image generation provider", () => {
     expect(result.metadata).toEqual({ requestedSize: "2048x1152", normalizedSize: "1536x1024" });
   });
 
+  it("restricts gpt-image-1.5 to the fixed native size list", async () => {
+    // gpt-image-1.5 accepts only 1024x1024, 1536x1024, 1024x1536 and auto;
+    // flexible gpt-image-2 sizes are rejected upstream (HTTP 400 invalid_value).
+    const result = await generateOpenAIImage("Wide legacy image", {
+      model: "gpt-image-1.5",
+      size: "2048x1152",
+    });
+    expect(jsonRequestCall().body).toMatchObject({ model: "gpt-image-1.5", size: "1536x1024" });
+    expect(result.metadata).toEqual({ requestedSize: "2048x1152", normalizedSize: "1536x1024" });
+  });
+
+  it("advertises only fixed sizes for gpt-image-1.5 capabilities", () => {
+    expect(provider.capabilities.geometry?.sizesByModel).toMatchObject({
+      "gpt-image-1": ["1024x1024", "1536x1024", "1024x1536"],
+      "gpt-image-1-mini": ["1024x1024", "1536x1024", "1024x1536"],
+      "gpt-image-1.5": ["1024x1024", "1536x1024", "1024x1536"],
+    });
+  });
+
   it("preserves custom-endpoint model and geometry choices", async () => {
     const result = await generateOpenAIImage("Transparent custom image", {
       cfg: openAIImageConfig({ baseUrl: "https://openai-compatible.example.com/v1" }),
