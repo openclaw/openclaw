@@ -18,6 +18,7 @@ import {
 } from "../../plugins/before-agent-reply.js";
 import {
   buildAgentHookContextChannelFields,
+  buildAgentHookContextCronFields,
   buildAgentHookContextIdentityFields,
 } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -470,6 +471,11 @@ async function runEmbeddedAgentForSession(
               const hookCtx = {
                 runId: params.runId,
                 jobId: params.jobId,
+                ...buildAgentHookContextCronFields({
+                  runId: params.runId,
+                  agentId: workspaceResolution.agentId,
+                  trigger: params.trigger,
+                }),
                 agentId: workspaceResolution.agentId,
                 sessionKey: resolvedSessionKey,
                 sessionId: params.sessionId,

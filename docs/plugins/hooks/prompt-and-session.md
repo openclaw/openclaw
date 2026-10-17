@@ -200,6 +200,15 @@ by the emitter, so hooks can scope metrics, side effects, or state to a specific
 scheduled job. Do not assume every agent event carries it. `ctx.jobId` is not
 part of the `before_tool_call` tool context.
 
+Agent prompt and lifecycle hooks for active isolated cron runs also expose
+`ctx.jobConfigRevision`, an opaque revision of the definition the cron executor
+captured for that run. Editing the job while its run is active does not change
+this revision. The host supplies it only when the active cron record belongs to
+the same agent; other triggers and contexts built after the run settles omit it.
+It is correlation metadata, not an action approval or standing grant. Never
+replace a missing snapshot revision with a lookup of the current job definition.
+The `before_tool_call` tool context does not expose this field.
+
 For `before_prompt_build`, `ctx.inputProvenance` carries the host-classified
 origin of the turn's user-role input on the embedded, CLI, Codex, and Copilot
 prompt paths. Its `kind` is `external_user`, `inter_session`, or

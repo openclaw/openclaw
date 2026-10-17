@@ -36,6 +36,7 @@ vi.mock("../../../infra/diagnostic-events.js", () => ({
 }));
 vi.mock("../../../plugins/hook-agent-context.js", () => ({
   buildAgentHookContextChannelFields: hoisted.buildAgentHookContextChannelFields,
+  buildAgentHookContextCronFields: vi.fn(() => ({})),
   buildAgentHookContextIdentityFields: hoisted.buildAgentHookContextIdentityFields,
 }));
 vi.mock("../../../trajectory/runtime.js", () => ({

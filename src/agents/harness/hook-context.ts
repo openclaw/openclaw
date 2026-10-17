@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildAgentHookContextIdentityFields } from "../../plugins/hook-agent-context.js";
+import {
+  buildAgentHookContextCronFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import {
   assertMemoryAudienceCurrent,
@@ -33,6 +36,7 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.runId ? { runId: params.runId } : {}),
     ...(params.trace ? { trace: params.trace } : {}),
     ...(params.jobId ? { jobId: params.jobId } : {}),
+    ...buildAgentHookContextCronFields(params),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),

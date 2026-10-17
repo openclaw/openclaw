@@ -1,5 +1,6 @@
 /** Builds plugin hook agent context snapshots from active session and model state. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { lookupCronRunExecSource } from "../infra/cron-run-exec-source.js";
 import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
 import type { PluginHookChannelContext } from "./hook-channel-context.types.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
@@ -158,4 +159,22 @@ export function buildAgentHookContextIdentityFields(params: {
     ...(chatId ? { chatId } : {}),
     ...(channelContext ? { channelContext } : {}),
   };
+}
+
+/** Projects only the cron executor's active snapshot into agent hooks. */
+export function buildAgentHookContextCronFields(params: {
+  runId?: string;
+  agentId?: string;
+  trigger?: string;
+}): Pick<PluginHookAgentContext, "jobId" | "jobConfigRevision"> {
+  if (params.trigger !== "cron") {
+    return {};
+  }
+  const source = lookupCronRunExecSource(params.runId);
+  if (!source || source.agentId !== params.agentId) {
+    return {};
+  }
+  // The executor owns this record and clears it at settlement. Reading mutable
+  // job configuration here could bind a newly edited definition to an older run.
+  return { jobId: source.jobId, jobConfigRevision: source.jobConfigRevision };
 }
