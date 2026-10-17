@@ -2353,6 +2353,7 @@
     "openai": "7.31.0",
     "p-limit": "7.3.3",
     "p-map": "7.0.8",
+    "parse5": "8.0.1",
     "partial-json": "0.1.7",
     "pg": "8.23.1",
     "playwright-core": "1.64.0",

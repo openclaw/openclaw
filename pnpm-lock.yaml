@@ -383,6 +383,9 @@ importers:
       p-map:
         specifier: 7.0.8
         version: 7.0.8
+      parse5:
+        specifier: 8.0.1
+        version: 8.0.1
       partial-json:
         specifier: 0.1.7
         version: 0.1.7
