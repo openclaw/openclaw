@@ -117,7 +117,12 @@ function createExistingSessionProcessFixture(
   });
   setChromeMcpSessionFactoryForTest(factory);
   const ctx = createBrowserRouteContext({ getState: () => state });
-  return { callTool, factory, listProcesses, profile, ctx };
+  const { app, getHandlers } = createBrowserRouteApp();
+  registerBrowserBasicRoutes(app, ctx);
+  const response = createBrowserRouteResponse();
+  const status = () =>
+    getHandlers.get("/")?.({ params: {}, query: { profile: profile.name } }, response.res);
+  return { callTool, factory, listProcesses, profile, ctx, response, status };
 }
 
 describe("browser server-context listProfiles", () => {
@@ -143,15 +148,8 @@ describe("browser server-context listProfiles", () => {
 
   it("preserves healthy transport status when the shared page probe fails", async () => {
     const fixture = createExistingSessionProcessFixture({ pageFailure: true });
-    const { ctx } = fixture;
-    const { app, getHandlers } = createBrowserRouteApp();
-    registerBrowserBasicRoutes(app, ctx);
-    const response = createBrowserRouteResponse();
-
-    await getHandlers.get("/")?.(
-      { params: {}, query: { profile: fixture.profile.name } },
-      response.res,
-    );
+    const { ctx, response, status } = fixture;
+    await status();
 
     expect(response.body).toMatchObject({ running: true, cdpReady: true, pageReady: false });
     expect(fixture.factory).toHaveBeenCalledOnce();
@@ -169,15 +167,8 @@ describe("browser server-context listProfiles", () => {
         attachElapsedMs: 3_000,
         hangingPage: true,
       });
-      const { ctx } = fixture;
-      const { app, getHandlers } = createBrowserRouteApp();
-      registerBrowserBasicRoutes(app, ctx);
-      const response = createBrowserRouteResponse();
-
-      const pending = getHandlers.get("/")?.(
-        { params: {}, query: { profile: fixture.profile.name } },
-        response.res,
-      );
+      const { response, status } = fixture;
+      const pending = status();
       await vi.advanceTimersByTimeAsync(0);
 
       expect(fixture.callTool).toHaveBeenCalledWith(

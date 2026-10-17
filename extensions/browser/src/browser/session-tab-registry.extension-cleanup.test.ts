@@ -1,42 +1,12 @@
 // Browser tests cover extension-tab cleanup through live runtime-owned credentials.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  OpenKeyedStoreOptions,
-  PluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerBrowserPlugin } from "../../plugin-registration.js";
-import type { OpenClawPluginApi } from "../../runtime-api.js";
-import { useAutoCleanupTempDirTracker } from "../../test-support.js";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getBrowserStateRuntime } from "../browser-runtime-state.js";
-import type { closeTrackedCdpTarget } from "./cdp.helpers.js";
 import { resolveBrowserConfig, type ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
 import { browserSessionTabNativeIdentity } from "./session-tab-identity.js";
 import { readColdNativeActivity } from "./session-tab-process-state.js";
-import { durableOwnership } from "./session-tab-registry.sqlite.test-helpers.js";
-import { ensureBrowserSessionTabStoreReady } from "./session-tab-store.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const cdpMocks = vi.hoisted(() => ({
-  closeTrackedCdpTarget: vi.fn<typeof closeTrackedCdpTarget>(),
-}));
-
-vi.mock("./cdp.helpers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./cdp.helpers.js")>()),
-  closeTrackedCdpTarget: cdpMocks.closeTrackedCdpTarget,
-}));
-
 import {
   closeTrackedBrowserTabsForSessions,
   sweepTrackedBrowserTabs,
@@ -44,95 +14,27 @@ import {
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./session-tab-registry.js";
+import {
+  cdpMocks,
+  installSessionTabRegistrySqliteHarness,
+} from "./session-tab-registry.sqlite.test-harness.js";
+import { durableOwnership } from "./session-tab-registry.sqlite.test-helpers.js";
 
 const config = {
   browser: {
     defaultProfile: "chrome",
     profiles: {
-      chrome: {
-        driver: "extension",
-        cdpPort: 18_799,
-        color: "#123456",
-      },
+      chrome: { driver: "extension", cdpPort: 18_799, color: "#123456" },
     },
   },
 } satisfies OpenClawConfig;
 
-function clearProcessLocalTabState(): void {
-  const state = globalThis as Record<symbol, unknown>;
-  for (const name of [
-    "openclaw.browser.session-tabs.volatile",
-    "openclaw.browser.session-tabs.volatile-cleanup",
-    "openclaw.browser.session-tabs.active-durable-keys",
-    "openclaw.browser.session-tabs.cold-native-activity",
-    "openclaw.browser.session-tabs.interaction-storage-keys",
-    "openclaw.browser.session-tabs.exact-interaction-storage-keys",
-    "openclaw.browser.session-tabs.volatile-aliases",
-    "openclaw.browser.session-tabs.exact-volatile-aliases",
-    "openclaw.browser.session-tabs.deferred-diagnostics",
-  ]) {
-    delete state[Symbol.for(name)];
-  }
-}
-
-async function installRuntime(): Promise<void> {
-  registerBrowserPlugin(
-    createTestPluginApi({
-      id: "browser",
-      name: "Browser",
-      source: "test",
-      rootDir: "/plugins/browser",
-      config: {},
-      runtime: {
-        state: {
-          openKeyedStore: (options: OpenKeyedStoreOptions) =>
-            createPluginStateKeyedStoreForTests("browser", options),
-        },
-      } as unknown as OpenClawPluginApi["runtime"],
-    }),
-  );
-  await ensureBrowserSessionTabStoreReady();
-}
-
-function openStore(): PluginStateSyncKeyedStore<unknown> {
-  return createPluginStateSyncKeyedStoreForTests("browser", {
-    namespace: "browser.session-tabs",
-    maxEntries: 5_000,
-    overflowPolicy: "reject-new",
-  });
-}
-
 describe("durable extension session tab cleanup", () => {
-  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+  const { openStore } = installSessionTabRegistrySqliteHarness();
   let resolved: ResolvedBrowserConfig;
-
-  beforeEach(async () => {
-    clearRuntimeConfigSnapshot();
-    clearProcessLocalTabState();
-    process.env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-browser-extension-tabs-");
-    resetPluginStateStoreForTests();
-    await installRuntime();
-    openStore().clear();
-    cdpMocks.closeTrackedCdpTarget
-      .mockReset()
-      .mockImplementation(async ({ closeIfCurrent }) =>
-        closeIfCurrent
-          ? await closeIfCurrent(async () => ({ status: "closed" }))
-          : { status: "closed" },
-      );
+  beforeEach(() => {
     setRuntimeConfigSnapshot(config, config);
     resolved = resolveBrowserConfig(config.browser, config);
-  });
-
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-    clearProcessLocalTabState();
-    resetPluginStateStoreForTests();
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
   });
 
   async function trackColdSiblings(nativeTargetId: string) {
@@ -259,11 +161,7 @@ describe("durable extension session tab cleanup", () => {
       extensionRelayInternalTokens: { chrome: internalToken },
     };
     await expect(
-      sweepTrackedBrowserTabs({
-        now: afterRetireAge + 1,
-        idleMs: 1,
-        getResolvedBrowserConfig,
-      }),
+      sweepTrackedBrowserTabs({ now: afterRetireAge + 1, idleMs: 1, getResolvedBrowserConfig }),
     ).resolves.toBe(1);
     expect(cdpMocks.closeTrackedCdpTarget).toHaveBeenCalledWith(
       expect.objectContaining({

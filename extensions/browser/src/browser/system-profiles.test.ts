@@ -62,6 +62,8 @@ const { readSystemProfileCookies, importSystemProfileCookies } =
   await import("./system-profiles.js");
 
 const KEYCHAIN_FIXTURE = "fixture-value";
+const source = { browser: "chrome", systemProfile: "Default" };
+const counts = { total: 2, imported: 1, failed: 0, skipped: 1 };
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -113,7 +115,7 @@ function createSystemProfileFixture(): string {
     database.close();
   }
   vi.spyOn(os, "homedir").mockReturnValue(homeDir);
-  return homeDir;
+  return path.join(profileDir, "Cookies");
 }
 
 function createManagedProfileFixture() {
@@ -161,45 +163,31 @@ describe("system profile cookie reader", () => {
     const readSecret = vi.fn(async () => Buffer.from(KEYCHAIN_FIXTURE));
 
     const result = await readSystemProfileCookies(
-      { browser: "chrome", systemProfile: "Default", domains: ["example.com"] },
+      { ...source, domains: ["example.com"] },
       { readSecret },
     );
 
     expect(result).toMatchObject({
       browser: "chrome",
       systemProfile: "Default",
-      counts: { total: 2, imported: 1, failed: 0, skipped: 1 },
+      counts,
       domains: [".example.com"],
     });
     expect(result.cookies).toEqual([
-      expect.objectContaining({
-        name: "session",
-        value: "allowed-value",
-        domain: ".example.com",
-      }),
+      expect.objectContaining({ name: "session", value: "allowed-value", domain: ".example.com" }),
     ]);
     expect(readSecret).toHaveBeenCalledOnce();
     expect(fs.readdirSync(profileMocks.tempRoot)).toEqual([]);
   });
 
   it("removes cookie snapshot scratch when opening the source database fails", async () => {
-    const homeDir = createSystemProfileFixture();
-    const cookiesFile = path.join(
-      homeDir,
-      "Library",
-      "Application Support",
-      "Google",
-      "Chrome",
-      "Default",
-      "Network",
-      "Cookies",
-    );
+    const cookiesFile = createSystemProfileFixture();
     fs.rmSync(cookiesFile);
     fs.mkdirSync(cookiesFile);
 
-    await expect(
-      readSystemProfileCookies({ browser: "chrome", systemProfile: "Default" }),
-    ).rejects.toMatchObject({ code: "ERR_SQLITE_ERROR" });
+    await expect(readSystemProfileCookies(source)).rejects.toMatchObject({
+      code: "ERR_SQLITE_ERROR",
+    });
     expect(fs.readdirSync(profileMocks.tempRoot)).toEqual([]);
   });
 
@@ -208,11 +196,11 @@ describe("system profile cookie reader", () => {
     const runtime = createManagedProfileFixture();
 
     const result = await importSystemProfileCookies(
-      { browser: "chrome", systemProfile: "Default", into: "imported", domains: ["example.com"] },
+      { ...source, into: "imported", domains: ["example.com"] },
       runtime as never,
     );
 
-    expect(result.cookies).toEqual({ total: 2, imported: 1, failed: 0, skipped: 1 });
+    expect(result.cookies).toEqual(counts);
     expect(profileMocks.cookiesSetManyViaPlaywright).toHaveBeenCalledWith(
       expect.objectContaining({
         cdpUrl: "http://127.0.0.1:18800",

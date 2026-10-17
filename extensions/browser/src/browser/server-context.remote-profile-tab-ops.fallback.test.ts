@@ -20,15 +20,33 @@ function rawTab(id: string, url: string, type = "page") {
   };
 }
 
+function withoutPlaywright() {
+  vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+}
+function rawCreate(created: ReturnType<typeof rawTab>) {
+  withoutPlaywright();
+  vi.spyOn(deps.cdpModule, "createTargetViaCdp").mockRejectedValue(
+    new Error("Target.createTarget unavailable"),
+  );
+  return deps.createRemoteRouteHarness(
+    vi.fn(async (url: unknown) => {
+      if (!String(url).includes("/json/new")) {
+        throw new Error(`unexpected fetch: ${url}`);
+      }
+      return { ok: true, json: async () => created } as unknown as Response;
+    }),
+  );
+}
+function attachOnlyState() {
+  const state = deps.makeState("openclaw");
+  state.resolved.attachOnly = false;
+  state.resolved.profiles.openclaw = { cdpPort: 18800, attachOnly: true, color: "#FF4500" };
+  return state;
+}
+
 describe("browser remote profile fallback and attachOnly behavior", () => {
   it("uses profile-level attachOnly when global attachOnly is false", async () => {
-    const state = deps.makeState("openclaw");
-    state.resolved.attachOnly = false;
-    state.resolved.profiles.openclaw = {
-      cdpPort: 18800,
-      attachOnly: true,
-      color: "#FF4500",
-    };
+    const state = attachOnlyState();
 
     const reachableMock = vi
       .mocked(deps.chromeModule.isChromeReachable)
@@ -44,13 +62,7 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
   });
 
   it("keeps attachOnly websocket failures off the loopback ownership error path", async () => {
-    const state = deps.makeState("openclaw");
-    state.resolved.attachOnly = false;
-    state.resolved.profiles.openclaw = {
-      cdpPort: 18800,
-      attachOnly: true,
-      color: "#FF4500",
-    };
+    const state = attachOnlyState();
 
     const httpReachableMock = vi
       .mocked(deps.chromeModule.isChromeReachable)
@@ -70,7 +82,7 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
   });
 
   it("filters browser-internal and non-page targets from raw CDP tab listing", async () => {
-    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    withoutPlaywright();
     const { remote } = deps.createRemoteRouteHarness(
       vi.fn(
         deps.createJsonListFetchMock([
@@ -89,16 +101,14 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
   });
 
   it("rejects policy-blocked discovered CDP websocket URLs from raw tab listings", async () => {
-    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    withoutPlaywright();
     const { state, remote } = deps.createRemoteRouteHarness(
       vi.fn(
         deps.createJsonListFetchMock([
           {
-            id: "T_BLOCKED",
+            ...rawTab("T_BLOCKED", "https://example.com"),
             title: "Blocked",
-            url: "https://example.com",
             webSocketDebuggerUrl: "ws://169.254.169.254/devtools/page/T_BLOCKED",
-            type: "page",
           },
         ]),
       ),
@@ -109,27 +119,11 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
   });
 
   it("rejects policy-blocked discovered CDP websocket URLs from raw tab creation", async () => {
-    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
-    vi.spyOn(deps.cdpModule, "createTargetViaCdp").mockRejectedValue(
-      new Error("Target.createTarget unavailable"),
-    );
-    const fetchMock = vi.fn(async (url: unknown) => {
-      const u = String(url);
-      if (!u.includes("/json/new")) {
-        throw new Error(`unexpected fetch: ${u}`);
-      }
-      return {
-        ok: true,
-        json: async () => ({
-          id: "T_BLOCKED",
-          title: "Blocked",
-          url: "about:blank",
-          webSocketDebuggerUrl: "ws://169.254.169.254/devtools/page/T_BLOCKED",
-          type: "page",
-        }),
-      } as unknown as Response;
+    const { state, remote } = rawCreate({
+      ...rawTab("T_BLOCKED", "about:blank"),
+      title: "Blocked",
+      webSocketDebuggerUrl: "ws://169.254.169.254/devtools/page/T_BLOCKED",
     });
-    const { state, remote } = deps.createRemoteRouteHarness(fetchMock);
     state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
 
     await expect(remote.openTab("about:blank")).rejects.toBeInstanceOf(
@@ -140,31 +134,14 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
 
   it("rejects non-page targets returned by raw tab creation", async () => {
     const created = rawTab("WORKER", "https://example.com/worker.js", "worker");
-    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
-    vi.spyOn(deps.cdpModule, "createTargetViaCdp").mockRejectedValue(
-      new Error("Target.createTarget unavailable"),
-    );
-    const fetchMock = vi.fn(async (url: unknown) => {
-      const u = String(url);
-      if (!u.includes("/json/new")) {
-        throw new Error(`unexpected fetch: ${u}`);
-      }
-      return {
-        ok: true,
-        json: async () => ({
-          ...created,
-          webSocketDebuggerUrl: `wss://1.1.1.1:9222/devtools/page/${created.id}`,
-        }),
-      } as unknown as Response;
-    });
-    const { state, remote } = deps.createRemoteRouteHarness(fetchMock);
+    const { state, remote } = rawCreate(created);
 
     await expect(remote.openTab("https://example.com")).rejects.toThrow(/non-selectable target/);
     expect(state.profiles.get("remote")?.lastTargetId).not.toBe(created.id);
   });
 
   it("fails closed for remote tab opens in strict mode without Playwright", async () => {
-    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    withoutPlaywright();
     const { state, remote, fetchMock } = deps.createRemoteRouteHarness();
     state.resolved.ssrfPolicy = { dangerouslyAllowPrivateNetwork: false };
 
@@ -175,26 +152,20 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
   });
 
   it("uses remote-class tab-open timeouts for attachOnly loopback CDP profiles", async () => {
-    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    withoutPlaywright();
     const createTargetViaCdp = vi
       .spyOn(deps.cdpModule, "createTargetViaCdp")
       .mockResolvedValue({ targetId: "T_ATTACH", finalUrl: "https://example.com" });
     const state = deps.makeState("openclaw");
     state.resolved.remoteCdpTimeoutMs = 2345;
     state.resolved.remoteCdpHandshakeTimeoutMs = 6789;
-    state.resolved.profiles.openclaw = {
-      cdpPort: 18800,
-      attachOnly: true,
-      color: "#FF4500",
-    };
+    state.resolved.profiles.openclaw = { cdpPort: 18800, attachOnly: true, color: "#FF4500" };
     const fetchMock = vi.fn(
       deps.createJsonListFetchMock([
         {
-          id: "T_ATTACH",
+          ...rawTab("T_ATTACH", "https://example.com"),
           title: "Attach Tab",
-          url: "https://example.com",
           webSocketDebuggerUrl: "ws://127.0.0.1:18800/devtools/page/T_ATTACH",
-          type: "page",
         },
       ]),
     );
@@ -210,15 +181,12 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
       ssrfPolicy: undefined,
       signal: expect.any(AbortSignal),
       waitForNavigationResult: true,
-      timeouts: {
-        httpTimeoutMs: 2345,
-        handshakeTimeoutMs: 6789,
-      },
+      timeouts: { httpTimeoutMs: 2345, handshakeTimeoutMs: 6789 },
     });
   });
 
   it("uses the remote HTTP timeout for /json/new fallback tab opens", async () => {
-    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    withoutPlaywright();
     vi.spyOn(deps.cdpModule, "createTargetViaCdp").mockRejectedValue(
       new Error("Target.createTarget unavailable"),
     );
@@ -256,10 +224,12 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     expect(String(fetchUrl)).toBe(
       "https://1.1.1.1:9222/chrome/json/new?token=abc&url=https%3A%2F%2Fexample.com",
     );
-    expect(fetchInit.method).toBe("PUT");
+    expect(fetchInit).toMatchObject({
+      method: "PUT",
+      redirect: "manual",
+      signal: expect.any(AbortSignal),
+    });
     expect(fetchInit.headers).toEqual({});
-    expect(fetchInit.redirect).toBe("manual");
-    expect(fetchInit.signal).toBeInstanceOf(AbortSignal);
     expect(fetchInit.dispatcher).toBeUndefined();
   });
 });
@@ -273,9 +243,8 @@ function expectFetchCalledWithManualRedirect(
     throw new Error(`Expected fetch call for ${expectedUrl}`);
   }
   const init = call[1] as RequestInit | undefined;
-  expect(init?.redirect).toBe("manual");
+  expect(init).toMatchObject({ redirect: "manual", signal: expect.any(AbortSignal) });
   expect(init?.headers).toEqual({});
-  expect(init?.signal).toBeInstanceOf(AbortSignal);
 }
 
 describe("browser server-context loopback direct WebSocket profiles", () => {
@@ -287,11 +256,9 @@ describe("browser server-context loopback direct WebSocket profiles", () => {
           ok: true,
           json: async () => [
             {
-              id: "T2",
+              ...rawTab("T2", "https://example.com"),
               title: "Secure Tab",
-              url: "https://example.com",
               webSocketDebuggerUrl: "wss://127.0.0.1/devtools/page/T2",
-              type: "page",
             },
           ],
         } as unknown as Response;
