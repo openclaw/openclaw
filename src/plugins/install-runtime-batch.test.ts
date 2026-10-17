@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runClawPluginBatch } from "../claws/plugin-runtime.js";
 import * as configIO from "../config/io.factory.js";
@@ -15,7 +16,10 @@ import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js"
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadReads } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
-import { PluginInstallRuntimeBatch } from "./install-runtime-batch.js";
+import {
+  PluginInstallRuntimeBatch,
+  type PluginInstallRuntimeDeferral,
+} from "./install-runtime-batch.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
@@ -38,6 +42,49 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+
+async function recordInstall(
+  deferred: PluginInstallRuntimeDeferral,
+  source: string,
+  reason: string,
+) {
+  const captured = inspectPluginGenerationSources([{ pluginId: "fixture", rootDir: source }]);
+  const write = await commitPluginInstallRecordsWithConfig({
+    previousInstallRecords: {},
+    nextInstallRecords: { fixture: { source: "path", installPath: source, version: "1" } },
+    nextConfig: {},
+    writeOptions: { afterWrite: { mode: "none", reason } },
+  });
+  deferred.record({
+    operation: "install",
+    pluginId: "fixture",
+    sourceDigests: captured.sourceDigests,
+    write,
+  });
+}
+
+async function sourceFixture(prefix: string, previousName: string) {
+  const root = dirs.make(prefix);
+  const source = path.join(root, "current");
+  const previousSource = path.join(root, previousName);
+  const env = {
+    OPENCLAW_STATE_DIR: root,
+    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+  };
+  await fs.mkdir(source);
+  await fs.mkdir(previousSource);
+  await fs.writeFile(path.join(source, "index.ts"), "export const value = 1;");
+  await fs.writeFile(path.join(source, "package.json"), "{}");
+  await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+  return { root, source, previousSource, env };
+}
+
+const preparedReload = () =>
+  vi.fn(async () => ({
+    operationId: "prepared",
+    generation: 2,
+    pluginIds: ["fixture"],
+  }));
 
 async function preparationFixture() {
   const root = dirs.make("plugin-batch-prepare-");
@@ -108,21 +155,11 @@ const handoffFailures = [
 it.each(handoffFailures)(
   "retains replaced source when the post-lease handoff loses %s ownership",
   async (failure) => {
-    const root = dirs.make("plugin-batch-gap-");
-    const source = path.join(root, "current");
-    const previousSource = path.join(root, "previous");
-    await fs.mkdir(source);
-    await fs.mkdir(previousSource);
+    const fixture = await sourceFixture("plugin-batch-gap-", "previous");
+    const { root, source, previousSource } = fixture;
+    const env = { ...fixture.env, RETIRED_PATH: source };
     const retainedFile = path.join(previousSource, "retained.txt");
     await fs.writeFile(retainedFile, "Retain committed source bytes.\n");
-    await fs.writeFile(path.join(source, "index.ts"), "export const value = 1;");
-    await fs.writeFile(path.join(source, "package.json"), "{}");
-    const env = {
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-      RETIRED_PATH: source,
-    };
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
     await withEnvAsync(env, async () => {
       const records = { fixture: { source: "path" as const, installPath: source, version: "1" } };
       const cleanup = vi.fn(async (assertOwned: () => void) => {
@@ -163,19 +200,7 @@ it.each(handoffFailures)(
       const batch = new PluginInstallRuntimeBatch({ env }, reload);
       const deferred = batch.install();
       await withPluginLifecycleLease({ env }, async (lease) => {
-        const captured = inspectPluginGenerationSources([{ pluginId: "fixture", rootDir: source }]);
-        const write = await commitPluginInstallRecordsWithConfig({
-          previousInstallRecords: {},
-          nextInstallRecords: records,
-          nextConfig: {},
-          writeOptions: { afterWrite: { mode: "none", reason: "batch fixture" } },
-        });
-        deferred.record({
-          operation: "install",
-          pluginId: "fixture",
-          sourceDigests: captured.sourceDigests,
-          write,
-        });
+        await recordInstall(deferred, source, "batch fixture");
         deferred.deferCleanup(cleanup, previousSource);
         await batch.prepare(lease);
       });
@@ -203,12 +228,11 @@ it.each(handoffFailures)(
       const settlement = Promise.allSettled([finishing]);
       if (gate) {
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             gate.entered.promise,
-            finishing.then(() => {
-              throw new Error("Batch completed without awaiting its cleanup read");
-            }),
-          ]);
+            finishing,
+            "Batch completed without awaiting its cleanup read",
+          );
           expect(cleanup).not.toHaveBeenCalled();
           if (failure === "include-during-policy-read") {
             await fs.writeFile(includePath, JSON.stringify({ load: { paths: [previousSource] } }));
@@ -249,11 +273,7 @@ it.each(handoffFailures)(
 it("prepares the final persisted index off thread even after the lease cached an older row", async () => {
   const { env, records, index } = await preparationFixture();
   const current = { fixture: { ...records.fixture, version: "2" } };
-  const reload = vi.fn(async () => ({
-    operationId: "prepared",
-    generation: 2,
-    pluginIds: ["fixture"],
-  }));
+  const reload = preparedReload();
   const batch = new PluginInstallRuntimeBatch({ env }, reload);
   batch.retain("fixture");
   await withPluginLifecycleLease({ env }, async (lease) => {
@@ -283,11 +303,7 @@ it("prepares the final persisted index off thread even after the lease cached an
 
 it("refuses publication when authority is revoked during the real index read", async () => {
   const { env, records } = await preparationFixture();
-  const reload = vi.fn(async () => ({
-    operationId: "prepared",
-    generation: 2,
-    pluginIds: ["fixture"],
-  }));
+  const reload = preparedReload();
   const batch = new PluginInstallRuntimeBatch({ env }, reload);
   const deferred = batch.install();
   const controller = new AbortController();
@@ -315,12 +331,11 @@ it("refuses publication when authority is revoked during the real index read", a
       const pending = Promise.resolve(batch.prepare(lease));
       const settled = Promise.allSettled([pending]);
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           gate.entered.promise,
-          pending.then(() => {
-            throw new Error("Preparation completed without awaiting its index read");
-          }),
-        ]);
+          pending,
+          "Preparation completed without awaiting its index read",
+        );
         controller.abort(refusal);
       } finally {
         gate.resume.resolve();
@@ -365,12 +380,11 @@ it("holds the original batch lease until preparation settles before calling the 
   );
   const completion = Promise.allSettled([operation]);
   try {
-    await Promise.race([
+    await awaitGateBeforeSettlement(
       gate.entered.promise,
-      operation.then(() => {
-        throw new Error("Batch completed without awaiting preparation");
-      }),
-    ]);
+      operation,
+      "Batch completed without awaiting preparation",
+    );
     expect(reload).not.toHaveBeenCalled();
     await expect(
       withPluginLifecycleLease({ env, waitMs: 0 }, async () => "acquired"),
@@ -386,18 +400,12 @@ it("holds the original batch lease until preparation settles before calling the 
 it.each(["index", "deferred obligation"] as const)(
   "keeps the %s producer outside the cleanup lease until source deletion settles",
   async (producerKind) => {
-    const root = dirs.make("plugin-batch-cleanup-custody-");
-    const source = path.join(root, "current");
-    const retired = path.join(root, "retired");
-    const env = {
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-    };
-    await fs.mkdir(source);
-    await fs.mkdir(retired);
-    await fs.writeFile(path.join(source, "index.ts"), "export const value = 1;");
-    await fs.writeFile(path.join(source, "package.json"), "{}");
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+    const {
+      root,
+      source,
+      previousSource: retired,
+      env,
+    } = await sourceFixture("plugin-batch-cleanup-custody-", "retired");
 
     await withEnvAsync(env, async () => {
       const enteredCleanup = createDeferredCore();
@@ -411,21 +419,7 @@ it.each(["index", "deferred obligation"] as const)(
       }));
       const deferred = batch.install();
       await withPluginLifecycleLease({ env }, async (lease) => {
-        const captured = inspectPluginGenerationSources([{ pluginId: "fixture", rootDir: source }]);
-        const write = await commitPluginInstallRecordsWithConfig({
-          previousInstallRecords: {},
-          nextInstallRecords: {
-            fixture: { source: "path", installPath: source, version: "1" },
-          },
-          nextConfig: {},
-          writeOptions: { afterWrite: { mode: "none", reason: "cleanup custody fixture" } },
-        });
-        deferred.record({
-          operation: "install",
-          pluginId: "fixture",
-          sourceDigests: captured.sourceDigests,
-          write,
-        });
+        await recordInstall(deferred, source, "cleanup custody fixture");
         deferred.deferCleanup(async (assertOwned) => {
           const reads = observeMainThreadReads();
           try {
@@ -500,12 +494,11 @@ it.each(["index", "deferred obligation"] as const)(
       const finishing = batch.finish(() => {});
       let producer: Promise<void> | undefined;
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           enteredCleanup.promise,
-          finishing.then(() => {
-            throw new Error("Batch finished without entering its source cleanup");
-          }),
-        ]);
+          finishing,
+          "Batch finished without entering its source cleanup",
+        );
         producer = runOutsidePluginLifecycleLease(async () => {
           expect(hasPluginLifecycleLease()).toBe(false);
           if (producerKind === "index") {

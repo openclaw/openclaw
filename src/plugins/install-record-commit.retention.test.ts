@@ -22,9 +22,23 @@ import {
 } from "./test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
-function npmRecord(packageName: string, installPath: string): PluginInstallRecord {
-  return { source: "npm", spec: `${packageName}@1.0.0`, installPath };
+function managedPlugin(stateDir: string, pluginId: string) {
+  const packageName = `@openclaw/${pluginId}`;
+  const installPath = writeManagedNpmPlugin({
+    stateDir,
+    packageName,
+    pluginId,
+    version: "1.0.0",
+  });
+  const record: PluginInstallRecord = { source: "npm", spec: `${packageName}@1.0.0`, installPath };
+  return { installPath, records: { [pluginId]: record } };
 }
+
+const readRecords = (env: NodeJS.ProcessEnv) =>
+  readPersistedInstalledPluginIndexInstallRecordsAsync({ env });
+
+const recoveredIds = (stateDir: string) =>
+  listRecoveredManagedNpmInstallCandidates({ stateDir }).map((candidate) => candidate.pluginId);
 
 describe("retained managed npm record commits", () => {
   it("defers native receipts until install rollback has restored its index and markers", async () => {
@@ -33,16 +47,7 @@ describe("retained managed npm record commits", () => {
       await state.writeConfig(config);
       const records: Record<string, PluginInstallRecord> = {};
       for (const pluginId of ["unchanged", "removed"]) {
-        const packageName = `@openclaw/${pluginId}`;
-        records[pluginId] = npmRecord(
-          packageName,
-          writeManagedNpmPlugin({
-            stateDir: state.stateDir,
-            packageName,
-            pluginId,
-            version: "1.0.0",
-          }),
-        );
+        Object.assign(records, managedPlugin(state.stateDir, pluginId).records);
       }
       await seedInstalledPluginIndex(records, { config, env: state.env });
       const initial = await readPersistedInstalledPluginIndex({ env: state.env });
@@ -87,15 +92,9 @@ describe("retained managed npm record commits", () => {
         }),
       ).rejects.toBe(failure);
       expect(await readPersistedInstalledPluginIndex({ env: state.env })).toEqual(initial);
-      expect(
-        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
-      ).toEqual(records);
+      expect(await readRecords(state.env)).toEqual(records);
       expect(hasRetainedManagedNpmInstallMarker(removedPath)).toBe(false);
-      expect(
-        listRecoveredManagedNpmInstallCandidates({ stateDir: state.stateDir }).map(
-          (candidate) => candidate.pluginId,
-        ),
-      ).toContain("removed");
+      expect(recoveredIds(state.stateDir)).toContain("removed");
       expect(fs.readFileSync(state.configPath, "utf8")).toBe(configBefore);
       expect(published).toBe(false);
       expect(publicationRewroteIndex).toBe(false);
@@ -120,14 +119,7 @@ describe("retained managed npm record commits", () => {
     await withOpenClawTestState({ label: "retained-marker-read-refusal" }, async (state) => {
       const config = { plugins: { enabled: false } };
       await state.writeConfig(config);
-      const packageName = "@openclaw/retained-read-refusal";
-      const installPath = writeManagedNpmPlugin({
-        stateDir: state.stateDir,
-        packageName,
-        pluginId: "retained-read-refusal",
-        version: "1.0.0",
-      });
-      const records = { "retained-read-refusal": npmRecord(packageName, installPath) };
+      const { installPath, records } = managedPlugin(state.stateDir, "retained-read-refusal");
       await seedInstalledPluginIndex({}, { config, env: state.env });
       await markRetainedManagedNpmInstall({
         packageDir: installPath,
@@ -191,9 +183,7 @@ describe("retained managed npm record commits", () => {
           expect(readPersistedInstalledPluginIndexRowSync({ env: state.env })).toEqual(
             tentativeRow,
           );
-          expect(
-            await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
-          ).toEqual(records);
+          expect(await readRecords(state.env)).toEqual(records);
           expect(fs.existsSync(markerPath)).toBe(false);
           const directoryAfter = fs.statSync(markerDir, { bigint: true });
           expect([directoryAfter.dev, directoryAfter.ino]).toEqual([
@@ -211,9 +201,7 @@ describe("retained managed npm record commits", () => {
         nextInstallRecords: records,
         nextConfig: { ...config, gateway: { port: 18792 } },
       });
-      expect(
-        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
-      ).toEqual(records);
+      expect(await readRecords(state.env)).toEqual(records);
       expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).toMatchObject({
         gateway: { port: 18792 },
       });
@@ -223,19 +211,13 @@ describe("retained managed npm record commits", () => {
 
   it("does not retire a package still used by a symlink active install path", async () => {
     await withOpenClawTestState({ label: "retained-active-symlink" }, async (state) => {
-      const packageName = "@openclaw/retained-active";
-      const installPath = writeManagedNpmPlugin({
-        stateDir: state.stateDir,
-        packageName,
-        pluginId: "retained-active",
-        version: "1.0.0",
-      });
+      const { installPath, records } = managedPlugin(state.stateDir, "retained-active");
       const activePath = state.statePath("active", "retained-active");
       fs.mkdirSync(path.dirname(activePath), { recursive: true });
       fs.symlinkSync(installPath, activePath, "dir");
 
       await commitPluginInstallRecordsWithConfig({
-        previousInstallRecords: { "retained-active": npmRecord(packageName, installPath) },
+        previousInstallRecords: records,
         nextInstallRecords: {
           "retained-active": {
             source: "path",
@@ -253,41 +235,27 @@ describe("retained managed npm record commits", () => {
 
   it("does not retire a removed npm record outside the managed npm root", async () => {
     await withOpenClawTestState({ label: "retained-outside-root" }, async (state) => {
-      const outsideRoot = state.path("outside-root");
-      try {
-        const packageName = "@openclaw/outside-retained";
-        const installPath = writeManagedNpmPlugin({
-          stateDir: outsideRoot,
-          packageName,
-          pluginId: "outside-retained",
-          version: "1.0.0",
-        });
-        await commitPluginInstallRecordsWithConfig({
-          previousInstallRecords: { "outside-retained": npmRecord(packageName, installPath) },
-          nextInstallRecords: {},
-          nextConfig: {},
-        });
-        expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(false);
-      } finally {
-        fs.rmSync(outsideRoot, { recursive: true, force: true });
-      }
+      const { installPath, records } = managedPlugin(
+        state.path("outside-root"),
+        "outside-retained",
+      );
+      await commitPluginInstallRecordsWithConfig({
+        previousInstallRecords: records,
+        nextInstallRecords: {},
+        nextConfig: {},
+      });
+      expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(false);
     });
   });
 
   it("keeps npm-to-local source changes cleanup-eligible", async () => {
     await withOpenClawTestState({ label: "retained-source-change" }, async (state) => {
-      const packageName = "@openclaw/moved-local";
-      const installPath = writeManagedNpmPlugin({
-        stateDir: state.stateDir,
-        packageName,
-        pluginId: "moved-local",
-        version: "1.0.0",
-      });
+      const { installPath, records } = managedPlugin(state.stateDir, "moved-local");
       const localInstallPath = state.statePath("extensions", "moved-local");
       fs.mkdirSync(localInstallPath, { recursive: true });
 
       await commitPluginInstallRecordsWithConfig({
-        previousInstallRecords: { "moved-local": npmRecord(packageName, installPath) },
+        previousInstallRecords: records,
         nextInstallRecords: {
           "moved-local": {
             source: "path",
@@ -299,11 +267,7 @@ describe("retained managed npm record commits", () => {
       });
 
       expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(true);
-      expect(
-        listRecoveredManagedNpmInstallCandidates({ stateDir: state.stateDir }).map(
-          (candidate) => candidate.pluginId,
-        ),
-      ).not.toContain("moved-local");
+      expect(recoveredIds(state.stateDir)).not.toContain("moved-local");
       await expect(
         cleanupRetainedManagedNpmInstallGenerations({
           activeInstallPaths: [localInstallPath],
