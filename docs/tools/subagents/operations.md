@@ -99,9 +99,11 @@ and cannot authorize execution by itself. Missing, invalid, or revoked evidence 
 the interrupted result available for inspection; recovery never substitutes system
 authority. Start a new authorized requester turn to continue that work.
 
-Legacy individual completions without saved operator evidence record permanent
-non-delivery once. Later restarts leave their retained results available without
-attempting to restore the same missing authority again. Temporary worker overload,
+Legacy completions without saved operator evidence record permanent non-delivery
+once, including requester-settle wakes and yielded runs without a final outcome.
+Recovery clears the unavailable wake while preserving execution results and any
+recorded delivery receipt. Later restarts do not attempt to restore the same
+missing authority again. Temporary worker overload,
 unavailable access policy, and failed settlement writes remain retryable.
 
 Visible and private requester-settle completions retain their processing outcome
