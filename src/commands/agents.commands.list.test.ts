@@ -42,16 +42,12 @@ vi.mock("../state/agent-provenance.js", () => ({
 
 const { agentsListCommand } = await import("./agents.commands.list.js");
 
-function createRuntime() {
-  return {
+async function list(options: Parameters<typeof agentsListCommand>[0]) {
+  const runtime = {
     ...createTestRuntime(),
     writeStdout: vi.fn<OutputRuntimeEnv["writeStdout"]>(),
     writeJson: vi.fn<OutputRuntimeEnv["writeJson"]>(),
   };
-}
-
-async function list(options: Parameters<typeof agentsListCommand>[0]) {
-  const runtime = createRuntime();
   await agentsListCommand(options, runtime);
   return {
     json: runtime.writeJson.mock.calls[0]?.[0],
@@ -83,13 +79,14 @@ describe("agentsListCommand", () => {
   });
 
   it("keeps the migrated default in JSON after reloading explicit ownership", async () => {
-    const agentId = "research";
-    const legacy = {
+    const migrated = createCanonicalAgentConfigFixture({
       agents: {
-        list: ["main", "research"].map((id) => ({ id, default: id === agentId })),
+        list: [
+          { id: "main", default: false },
+          { id: "research", default: true },
+        ],
       },
-    };
-    const migrated = createCanonicalAgentConfigFixture(legacy).config;
+    }).config;
     const persisted = structuredClone<OpenClawConfig>({
       ...migrated,
       agents: { ...migrated.agents, ownership: "explicit" },
@@ -106,12 +103,7 @@ describe("agentsListCommand", () => {
   it("adds durable provenance to JSON without loading provider details", async () => {
     mocks.provenance.mockRejectedValue(new Error("unrelated stored provenance is invalid"));
     mocks.displayProvenance.mockResolvedValue([
-      {
-        agentId: "main",
-        createdVia: "operator",
-        creatorAgentId: null,
-        createdAtMs: 42,
-      },
+      { agentId: "main", createdVia: "operator", creatorAgentId: null, createdAtMs: 42 },
     ]);
 
     const { json } = await list({ json: true });
@@ -150,49 +142,37 @@ describe("agentsListCommand", () => {
     await withTestDir({ prefix: "openclaw-agent-identity-list-" }, async (workspace) => {
       const identityPath = path.join(workspace, "IDENTITY.md");
       const identityFile =
-        "- Name: Workspace Identity\n- Emoji: 🦞\n- Avatar: https://example.invalid/workspace.png\n";
+        "- Name: Workspace Identity\n- Emoji: 🦞\n- Avatar: https://example.test/ws.png\n";
       fs.writeFileSync(identityPath, identityFile);
       fs.writeFileSync(path.join(workspace, "avatar.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      const agent = (identity: { name?: string; emoji?: string; avatar?: string }) => ({
+        workspace,
+        identity,
+      });
       setEntries({
-        configured: {
-          workspace,
-          identity: {
-            name: " Chosen Identity ",
-            emoji: "🦉",
-            avatar: "https://example.invalid/new.png",
-          },
-        },
-        partial: { workspace, identity: { name: "Chosen Identity" } },
-        fallback: {
-          workspace,
-          identity: { name: " ", emoji: "\t", avatar: "slack://avatar.png" },
-        },
-        local: { workspace, identity: { avatar: "avatar.png" } },
+        configured: agent({
+          name: " Chosen Identity ",
+          emoji: "🦉",
+          avatar: "https://example.test/new.png",
+        }),
+        partial: agent({ name: "Chosen Identity" }),
+        fallback: agent({ name: " ", emoji: "\t", avatar: "slack://avatar.png" }),
+        local: agent({ avatar: "avatar.png" }),
         bare: { workspace: path.join(workspace, "empty") },
       });
       const { json } = await list({ json: true });
       expect(json).toMatchObject([
-        {
-          id: "configured",
-          identityName: "Chosen Identity",
-          identityEmoji: "🦉",
-          identityAvatarUrl: "https://example.invalid/new.png",
-          identitySource: "config",
-        },
-        {
-          id: "partial",
-          identityName: "Chosen Identity",
-          identityEmoji: "🦞",
-          identityAvatarUrl: "https://example.invalid/workspace.png",
-          identitySource: "config",
-        },
-        {
-          id: "fallback",
-          identityName: "Workspace Identity",
-          identityEmoji: "🦞",
-          identityAvatarUrl: "https://example.invalid/workspace.png",
-          identitySource: "identity",
-        },
+        ...[
+          ["configured", "Chosen Identity", "🦉", "https://example.test/new.png", "config"],
+          ["partial", "Chosen Identity", "🦞", "https://example.test/ws.png", "config"],
+          ["fallback", "Workspace Identity", "🦞", "https://example.test/ws.png", "identity"],
+        ].map(([id, identityName, identityEmoji, identityAvatarUrl, identitySource]) => ({
+          id,
+          identityName,
+          identityEmoji,
+          identityAvatarUrl,
+          identitySource,
+        })),
         {
           id: "local",
           identityAvatarUrl: "data:image/png;base64,iVBORw==",

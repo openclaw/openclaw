@@ -63,6 +63,14 @@ const conflictConfig: OpenClawConfig = {
   bindings: [route("telegram", "ops")],
 };
 const jsonRuntime = () => ({ ...runtime, writeStdout: vi.fn(), writeJson: vi.fn() });
+const expectNoCalls = (...mocks: ReturnType<typeof vi.fn>[]) => {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+};
+const unknownAgent = (id: string) =>
+  `Agent "${id}" not found. Run openclaw agents list to see configured agents.`;
+const explicitAgents = { ownership: "explicit" as const, entries: { main: {}, ops: {} } };
 
 describe("agents bind/unbind commands", () => {
   beforeAll(async () => {
@@ -87,9 +95,8 @@ describe("agents bind/unbind commands", () => {
     const agentId = "ops";
     const config: OpenClawConfig = {
       agents: {
-        ownership: "explicit",
+        ...explicitAgents,
         defaults: { systemAgent: { agentId } },
-        entries: { main: {}, ops: {} },
       },
     };
     setConfig(config);
@@ -105,7 +112,7 @@ describe("agents bind/unbind commands", () => {
 
   it("matches normalized account identities for conflicts, repeats, and removal", async () => {
     const config: OpenClawConfig = {
-      agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
+      agents: explicitAgents,
       bindings: [route("telegram", "Work", "ops")],
     };
     setConfig(config);
@@ -152,21 +159,10 @@ describe("agents bind/unbind commands", () => {
   });
 
   it.each([
+    ["bind", { agent: "агент✨", bind: ["telegram"] }, unknownAgent("агент✨")],
+    ["list", { agent: "ghost" }, unknownAgent("ghost")],
+    ["bind", {}, "Provide at least one --bind <channel[:accountId]>."],
     [
-      "strict-invalid agent",
-      "bind",
-      { agent: "агент✨", bind: ["telegram"] },
-      'Agent "агент✨" not found. Run openclaw agents list to see configured agents.',
-    ],
-    [
-      "unknown list agent",
-      "list",
-      { agent: "ghost" },
-      'Agent "ghost" not found. Run openclaw agents list to see configured agents.',
-    ],
-    ["empty bindings", "bind", {}, "Provide at least one --bind <channel[:accountId]>."],
-    [
-      "malformed binding batch",
       "bind",
       { bind: ["telegram:", "telegram:work:extra", "definitely-not-a-channel"] },
       [
@@ -175,15 +171,10 @@ describe("agents bind/unbind commands", () => {
         'Unknown channel "definitely-not-a-channel". Run `openclaw channels list --all` to see configured and installable channels.',
       ].join("\n"),
     ],
-    [
-      "incompatible unbind options",
-      "unbind",
-      { all: true, bind: ["telegram"] },
-      "Use either --all or --bind, not both.",
-    ],
-  ] satisfies Array<[string, "bind" | "list" | "unbind", UpdateOptions, string]>)(
-    "rejects %s before mutation",
-    async (_name, command, input, message) => {
+    ["unbind", { all: true, bind: ["telegram"] }, "Use either --all or --bind, not both."],
+  ] satisfies Array<["bind" | "list" | "unbind", UpdateOptions, string]>)(
+    "rejects %s %j before mutation",
+    async (command, input, message) => {
       const options = { ...input, json: true };
       const execution =
         command === "list"
@@ -195,9 +186,7 @@ describe("agents bind/unbind commands", () => {
         humanOutput: message,
         machineOutput: message,
       });
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expect(writeConfigFileMock).not.toHaveBeenCalled();
+      expectNoCalls(runtime.error, runtime.exit, writeConfigFileMock);
     },
   );
 
@@ -214,13 +203,11 @@ describe("agents bind/unbind commands", () => {
   it("reports empty unbind-all as JSON without writes or text logs", async () => {
     const output = jsonRuntime();
     await update("unbind", { agent: "main", all: true, json: true }, output);
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
-    expect(output.log).not.toHaveBeenCalled();
+    expectNoCalls(writeConfigFileMock, output.log, output.exit);
     expect(output.writeJson).toHaveBeenCalledExactlyOnceWith(
       { agentId: "main", removed: [], missing: [], conflicts: [] },
       2,
     );
-    expect(output.exit).not.toHaveBeenCalled();
   });
 
   it("reports human unbind ownership conflicts without writing", async () => {
