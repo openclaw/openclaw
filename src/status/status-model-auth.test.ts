@@ -23,6 +23,41 @@ const selection = {
   runtimeId: "codex",
   acceptedProviderIds: ["openai"],
 };
+const platformEndpoint = "https://api.openai.com/v1";
+function credentialConfig(apiKey: string, auth?: "api-key"): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        openai: { baseUrl: platformEndpoint, models: [], apiKey, ...(auth ? { auth } : {}) },
+      },
+    },
+  };
+}
+function oauthProfile(
+  patch: Partial<Extract<AuthProfileStore["profiles"][string], { type: "oauth" }>> = {},
+) {
+  return {
+    type: "oauth" as const,
+    provider: "openai",
+    access: "native-access",
+    refresh: "native-refresh",
+    expires: Date.now() + 60_000,
+    ...patch,
+  };
+}
+const pinnedProfile = (id: string): SessionEntry => ({
+  sessionId: "status-pin",
+  updatedAt: 1,
+  authProfileOverride: id,
+  authProfileOverrideSource: "user",
+  modelProvider: "openai",
+});
+function mockProfiles(profiles: AuthProfileStore["profiles"]) {
+  vi.spyOn(authProfiles, "loadAuthProfileStoreWithoutExternalProfiles").mockReturnValue({
+    version: 1,
+    profiles,
+  });
+}
 function statusAuth(
   mode?: PreparedAgentCredentialMode,
   options: {
@@ -127,38 +162,15 @@ describe("status model authentication and endpoint", () => {
       const override = source === "display override";
       const profiles: AuthProfileStore["profiles"] = override
         ? { "openai:test": { type: "api_key", provider: "openai", key: "synthetic-key" } }
-        : {
-            "openai:chatgpt": {
-              type: "oauth",
-              provider: "openai",
-              access: "native-access",
-              refresh: "native-refresh",
-              expires: Date.now() + 60_000,
-            },
-          };
+        : { "openai:chatgpt": oauthProfile() };
       if (!override) {
-        vi.spyOn(authProfiles, "loadAuthProfileStoreWithoutExternalProfiles").mockReturnValue({
-          version: 1,
-          profiles,
-        });
+        mockProfiles(profiles);
       }
       const resolve = statusAuth(undefined, {
         profiles,
         config: override
           ? cfg
-          : {
-              ...cfg,
-              models: {
-                providers: {
-                  openai: {
-                    auth: "api-key",
-                    apiKey: "configured-platform-key",
-                    baseUrl: "https://api.openai.com/v1",
-                    models: [],
-                  },
-                },
-              },
-            },
+          : { ...cfg, ...credentialConfig("configured-platform-key", "api-key") },
       });
       expect(
         await resolve({
@@ -212,17 +224,7 @@ describe("status model authentication and endpoint", () => {
   it("identifies a selected environment credential without exposing its value", async () => {
     vi.stubEnv("OPENAI_API_KEY", "synthetic-environment-key");
     const resolve = statusAuth(undefined, {
-      config: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: "OPENAI_API_KEY",
-              models: [],
-            },
-          },
-        },
-      },
+      config: credentialConfig("OPENAI_API_KEY"),
     });
     expect(await resolve({ ...selection, runtimeId: "openclaw" })).toEqual({
       authLabel: "api-key (environment)",
@@ -235,15 +237,12 @@ describe("status model authentication and endpoint", () => {
     async (runtimeId) => {
       const profileId = "personal:gateway-owner:00000000-0000-4000-8000-000000000001";
       const profiles: AuthProfileStore["profiles"] = {
-        [profileId]: {
-          type: "oauth",
-          provider: "openai",
+        [profileId]: oauthProfile({
           authFlow: "chatgpt-token-sharing",
           access: "sharing-access",
           refresh: "sharing-refresh",
-          expires: Date.now() + 60_000,
           email: "private@example.test",
-        },
+        }),
       };
       vi.spyOn(modelCatalogDecisions, "prepareModelCatalogDecisions").mockImplementation(
         async (params) =>
@@ -252,22 +251,13 @@ describe("status model authentication and endpoint", () => {
             preparedPersonalCatalog: { links: [], profiles: {}, isCurrent: () => true },
           }),
       );
-      vi.spyOn(authProfiles, "loadAuthProfileStoreWithoutExternalProfiles").mockReturnValue({
-        version: 1,
-        profiles,
-      });
+      mockProfiles(profiles);
       const resolve = statusAuth(
         { source: "native", mode: "oauth" },
         {
           profiles,
           nativeDiscovery: { accountType: "chatgpt", authMode: "oauth" },
-          sessionEntry: {
-            sessionId: "status-personal",
-            updatedAt: 1,
-            authProfileOverride: profileId,
-            authProfileOverrideSource: "user",
-            modelProvider: "openai",
-          },
+          sessionEntry: { ...pinnedProfile(profileId), sessionId: "status-personal" },
         },
       );
       expect(await resolve({ ...selection, runtimeId })).toEqual({
@@ -292,13 +282,7 @@ describe("status model authentication and endpoint", () => {
       reason: "unavailable explicit profile",
       mode: { source: "native", mode: "api_key" },
       options: {
-        sessionEntry: {
-          sessionId: "status-pin",
-          updatedAt: 1,
-          authProfileOverride: "openai:missing",
-          authProfileOverrideSource: "user",
-          modelProvider: "openai",
-        },
+        sessionEntry: pinnedProfile("openai:missing"),
       },
     },
     {

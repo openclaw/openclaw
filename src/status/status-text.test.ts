@@ -56,6 +56,8 @@ function statusParams(overrides: Partial<StatusTextParams>): StatusTextParams {
     ...overrides,
   };
 }
+const renderStatus = (overrides: Partial<StatusTextParams>) =>
+  buildStatusText(statusParams(overrides));
 
 async function renderTelegramStatus(params: {
   cfg: StatusTextParams["cfg"];
@@ -64,21 +66,16 @@ async function renderTelegramStatus(params: {
   sessionKey?: string;
   agentId?: string;
 }): Promise<string> {
-  return await buildStatusText(
-    statusParams({
-      cfg: params.cfg,
-      sessionEntry: params.sessionEntry,
-      sessionKey: params.sessionKey ?? "agent:main:main",
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      statusChannel: "telegram",
-      ...(params.statusAccountId ? { statusAccountId: params.statusAccountId } : {}),
-      resolvedHarness: "pi",
-      pluginHealthLineOverride: "Plugins: test",
-      primaryModelLabelOverride: "openai/gpt-5.4-mini",
-      modelAuthOverride: "test",
-      activeModelAuthOverride: "test",
-    }),
-  );
+  return await renderStatus({
+    ...params,
+    sessionKey: params.sessionKey ?? "agent:main:main",
+    statusChannel: "telegram",
+    resolvedHarness: "pi",
+    pluginHealthLineOverride: "Plugins: test",
+    primaryModelLabelOverride: "openai/gpt-5.4-mini",
+    modelAuthOverride: "test",
+    activeModelAuthOverride: "test",
+  });
 }
 
 describe("buildStatusText channel features", () => {
@@ -193,7 +190,7 @@ describe("buildStatusText global subagent scope", () => {
 });
 
 describe("Codex usage after runtime fallback", () => {
-  beforeEach(() => {
+  it("shows Codex rate-limit usage for a Codex-bound session on OpenClaw Default", async () => {
     mocks.loadProviderUsageSummary.mockReset();
     mocks.loadProviderUsageSummary.mockImplementation(async (params) => ({
       updatedAt: Date.now(),
@@ -207,28 +204,18 @@ describe("Codex usage after runtime fallback", () => {
           ]
         : [],
     }));
-  });
-
-  async function renderFallbackStatus(agentHarnessId: "codex" | "openclaw"): Promise<string> {
-    return await buildStatusText(
-      statusParams({
-        sessionEntry: {
-          sessionId: `fallback-${agentHarnessId}`,
-          updatedAt: 0,
-          agentRuntimeOverride: "openclaw",
-          agentHarnessId,
-        },
-        pluginHealthLineOverride: "Plugins: test",
-        primaryModelLabelOverride: "openai/gpt-5.4-mini",
-        modelAuthOverride: "oauth",
-        activeModelAuthOverride: "oauth",
-      }),
-    );
-  }
-
-  it("shows Codex rate-limit usage for a Codex-bound session on OpenClaw Default", async () => {
-    const text = await renderFallbackStatus("codex");
-
+    const text = await renderStatus({
+      sessionEntry: {
+        sessionId: "fallback-codex",
+        updatedAt: 0,
+        agentRuntimeOverride: "openclaw",
+        agentHarnessId: "codex",
+      },
+      pluginHealthLineOverride: "Plugins: test",
+      primaryModelLabelOverride: "openai/gpt-5.4-mini",
+      modelAuthOverride: "oauth",
+      activeModelAuthOverride: "oauth",
+    });
     expect(text).toContain("📊 Usage: 5h 75% left");
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -272,7 +259,26 @@ describe("session status cost line", () => {
     outputCost: 0.23,
     cacheReadCost: 0,
     cacheWriteCost: 0,
+    missingCostEntries: 0,
   };
+  function cachedCost(stale = false) {
+    mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
+      cacheStatus: {
+        status: stale ? "stale" : "fresh",
+        cachedFiles: stale ? 0 : 1,
+        pendingFiles: stale ? 1 : 0,
+        staleFiles: stale ? 1 : 0,
+      },
+      summaries: [
+        {
+          ...costSummary,
+          ...(stale ? { input: 1, output: 1, totalTokens: 2, totalCost: 1, outputCost: 0 } : {}),
+        },
+      ],
+    });
+  }
+  const costLine = (existing: string | null = null) =>
+    appendSessionCostLine(existing, {}, "main", sessionEntry, storePath);
 
   beforeEach(() => {
     storePath = path.join(
@@ -286,24 +292,9 @@ describe("session status cost line", () => {
   });
 
   it("shows cached current-session cost and tokens", async () => {
-    mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
-      cacheStatus: {
-        status: "fresh" as const,
-        cachedFiles: 1,
-        pendingFiles: 0,
-        staleFiles: 0,
-      },
-      summaries: [
-        {
-          ...costSummary,
-          missingCostEntries: 0,
-        },
-      ],
-    });
+    cachedCost();
 
-    await expect(appendSessionCostLine(null, {}, "main", sessionEntry, storePath)).resolves.toBe(
-      "💵 $1.23 · 456k tok (today)",
-    );
+    await expect(costLine()).resolves.toBe("💵 $1.23 · 456k tok (today)");
     expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledWith(
       expect.objectContaining({
         sessions: [
@@ -316,35 +307,13 @@ describe("session status cost line", () => {
   it("preserves existing usage when the session cost cache fails", async () => {
     mocks.loadSessionCostSummariesFromCache.mockRejectedValue(new Error("cache unavailable"));
 
-    await expect(
-      appendSessionCostLine("existing usage", {}, "main", sessionEntry, storePath),
-    ).resolves.toBe("existing usage");
+    await expect(costLine("existing usage")).resolves.toBe("existing usage");
   });
 
   it("omits a stale cached summary", async () => {
-    mocks.loadSessionCostSummariesFromCache.mockResolvedValue({
-      cacheStatus: {
-        status: "stale",
-        cachedFiles: 0,
-        pendingFiles: 1,
-        staleFiles: 1,
-      },
-      summaries: [
-        {
-          ...costSummary,
-          input: 1,
-          output: 1,
-          totalTokens: 2,
-          totalCost: 1,
-          outputCost: 0,
-          missingCostEntries: 0,
-        },
-      ],
-    });
+    cachedCost(true);
 
-    await expect(
-      appendSessionCostLine(null, {}, "main", sessionEntry, storePath),
-    ).resolves.toBeNull();
+    await expect(costLine()).resolves.toBeNull();
   });
 
   it("marks incomplete pricing", async () => {
@@ -380,34 +349,32 @@ describe("buildStatusText thinking facts", () => {
   ])(
     "shows requested and effective thinking for an Ollama model (reasoning=$reasoning)",
     async ({ reasoning, expected }) => {
-      const text = await buildStatusText(
-        statusParams({
-          sessionEntry: {
-            sessionId: "wa-ollama-think",
-            updatedAt: 0,
-            thinkingLevel: "high",
-            modelOverride: "glm-5.2:cloud",
-            providerOverride: "ollama",
+      const text = await renderStatus({
+        sessionEntry: {
+          sessionId: "wa-ollama-think",
+          updatedAt: 0,
+          thinkingLevel: "high",
+          modelOverride: "glm-5.2:cloud",
+          providerOverride: "ollama",
+        },
+        statusChannel: "whatsapp",
+        provider: "ollama",
+        model: "glm-5.2:cloud",
+        thinkingCatalog: [
+          {
+            provider: "ollama",
+            id: "glm-5.2:cloud",
+            reasoning,
           },
-          statusChannel: "whatsapp",
-          provider: "ollama",
-          model: "glm-5.2:cloud",
-          thinkingCatalog: [
-            {
-              provider: "ollama",
-              id: "glm-5.2:cloud",
-              reasoning,
-            },
-          ],
-          resolvedThinkLevel: "high",
-          resolvedReasoningLevel: "on",
-          resolveDefaultThinkingLevel: async () => "high",
-          pluginHealthLineOverride: "Plugins: test",
-          primaryModelLabelOverride: "ollama/glm-5.2:cloud",
-          modelAuthOverride: "local",
-          activeModelAuthOverride: "local",
-        }),
-      );
+        ],
+        resolvedThinkLevel: "high",
+        resolvedReasoningLevel: "on",
+        resolveDefaultThinkingLevel: async () => "high",
+        pluginHealthLineOverride: "Plugins: test",
+        primaryModelLabelOverride: "ollama/glm-5.2:cloud",
+        modelAuthOverride: "local",
+        activeModelAuthOverride: "local",
+      });
 
       expect(text).toContain(expected);
     },

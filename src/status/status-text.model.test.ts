@@ -36,17 +36,38 @@ vi.mock(import("../infra/session-cost-usage.js"), async (importOriginal) => {
     ...actual,
     loadSessionCostSummariesFromCache: async () => ({
       summaries: [null],
-      cacheStatus: {
-        status: "partial",
-        cachedFiles: 0,
-        pendingFiles: 1,
-        staleFiles: 0,
-      },
+      cacheStatus: { status: "partial", cachedFiles: 0, pendingFiles: 1, staleFiles: 0 },
     }),
   };
 });
 
 type StatusTextParams = Parameters<typeof buildStatusReplyParts>[0];
+const selected = { provider: "deepseek", model: "deepseek-v4-flash" };
+const active = { provider: "fallback", model: "small-model" };
+const modelLimits = (provider: string, id: string, contextWindow: number) => ({
+  provider,
+  id,
+  contextWindow,
+  contextTokens: contextWindow,
+});
+const assistant = (patch: Record<string, unknown> = {}, runId = "settled-run") =>
+  attachSessionTranscriptRunId(
+    {
+      role: "assistant",
+      ...active,
+      stopReason: "stop",
+      content: [{ type: "text", text: "Synthetic response" }],
+      ...patch,
+    },
+    runId,
+  );
+function expectFallback(
+  parts: Awaited<ReturnType<typeof buildStatusReplyParts>>,
+  context = "45k/128k",
+) {
+  expect(parts.text).toContain("Fallback: fallback/small-model");
+  expect(parts.text).toContain(`Context: ${context}`);
+}
 
 describe("buildStatusText prepared context windows", () => {
   let state: OpenClawTestState;
@@ -67,39 +88,23 @@ describe("buildStatusText prepared context windows", () => {
     selectedModel: "deepseek/deepseek-v4-flash",
     activeModel: "fallback/small-model",
   } satisfies NonNullable<InternalSessionEntry["fallbackNotice"]>;
+  const notice = (patch: Partial<NonNullable<InternalSessionEntry["fallbackNotice"]>>) => ({
+    ...fallbackNotice,
+    ...patch,
+  });
   const catalog = [
-    {
-      provider: "deepseek",
-      id: "deepseek-v4-flash",
-      contextWindow: 1_000_000,
-      contextTokens: 1_000_000,
-    },
-    {
-      provider: "fallback",
-      id: "small-model",
-      contextWindow: 128_000,
-      contextTokens: 128_000,
-    },
-    {
-      provider: "openrouter",
-      id: "deepseek/deepseek-v4-flash",
-      contextWindow: 1_000_000,
-      contextTokens: 1_000_000,
-    },
+    modelLimits(selected.provider, selected.model, 1_000_000),
+    modelLimits(active.provider, active.model, 128_000),
+    modelLimits("openrouter", "deepseek/deepseek-v4-flash", 1_000_000),
   ];
 
   async function renderPreparedStatus(overrides: Partial<StatusTextParams> = {}) {
     return await buildStatusReplyParts({
       cfg: {},
-      sessionEntry: {
-        sessionId: "prepared-context",
-        updatedAt: 0,
-        ...tokenUsage,
-      },
+      sessionEntry: { sessionId: "prepared-context", updatedAt: 0, ...tokenUsage },
       sessionKey: "agent:main:main",
       statusChannel: "mobilechat",
-      provider: "deepseek",
-      model: "deepseek-v4-flash",
+      ...selected,
       thinkingCatalog: catalog,
       resolvedHarness: "openclaw",
       resolvedVerboseLevel: "off",
@@ -208,64 +213,57 @@ describe("buildStatusText prepared context windows", () => {
   });
 
   it.each([
-    { name: "current discovered limits", window: 262_144, expected: "45k/262k" },
-    { name: "unknown limits", window: undefined, expected: "45k/?" },
-    {
-      name: "another runtime's limits",
-      window: 262_144,
-      nativeRuntime: "other-runtime",
-      expected: "45k/?",
-    },
-    {
-      name: "API limits for a native runtime",
-      window: 262_144,
-      resolvedHarness: "fixture-native",
-      expected: "45k/?",
-    },
-  ])("renders $name without reusing a stale cache or estimate", async (scenario) => {
-    const provider = "ollama";
-    const model = "qwen3:8b";
-    const key = providerContextTokenCacheKey(provider, model);
-    const caches = getContextWindowCaches();
-    const cacheMaps = [caches.discoveredTokenCache, caches.contextWindowCache];
-    const previous = cacheMaps.map((cache) => cache.get(key));
-    for (const cache of cacheMaps) {
-      cache.set(key, 128_000);
-    }
-    try {
-      const parts = await renderPreparedStatus({
-        provider,
-        model,
-        resolvedHarness: scenario.resolvedHarness ?? "openclaw",
-        contextTokens: 200_000,
-        thinkingCatalog: [
-          {
-            provider,
-            id: model,
-            nativeRuntime: scenario.nativeRuntime,
-            contextWindow: scenario.window,
-            contextTokens: scenario.window,
-          },
-        ],
-      });
+    ["current discovered limits", 262_144, "45k/262k", undefined, undefined],
+    ["unknown limits", undefined, "45k/?", undefined, undefined],
+    ["another runtime's limits", 262_144, "45k/?", "other-runtime", undefined],
+    ["API limits for a native runtime", 262_144, "45k/?", undefined, "fixture-native"],
+  ] as const)(
+    "renders %s without reusing a stale cache or estimate",
+    async (_name, window, expected, nativeRuntime, resolvedHarness) => {
+      const provider = "ollama";
+      const model = "qwen3:8b";
+      const key = providerContextTokenCacheKey(provider, model);
+      const caches = getContextWindowCaches();
+      const cacheMaps = [caches.discoveredTokenCache, caches.contextWindowCache];
+      const previous = cacheMaps.map((cache) => cache.get(key));
+      for (const cache of cacheMaps) {
+        cache.set(key, 128_000);
+      }
+      try {
+        const parts = await renderPreparedStatus({
+          provider,
+          model,
+          resolvedHarness: resolvedHarness ?? "openclaw",
+          contextTokens: 200_000,
+          thinkingCatalog: [
+            {
+              provider,
+              id: model,
+              nativeRuntime,
+              contextWindow: window,
+              contextTokens: window,
+            },
+          ],
+        });
 
-      expect(parts.text).toContain(`Context: ${scenario.expected}`);
-      const table = parts.presentation.blocks.find((block) => block.type === "table");
-      expect(table?.type === "table" ? table.rows : []).toContainEqual([
-        "📚 Context",
-        expect.stringContaining(scenario.expected),
-      ]);
-    } finally {
-      cacheMaps.forEach((cache, index) => {
-        const value = previous[index];
-        if (value === undefined) {
-          cache.delete(key);
-        } else {
-          cache.set(key, value);
-        }
-      });
-    }
-  });
+        expect(parts.text).toContain(`Context: ${expected}`);
+        const table = parts.presentation.blocks.find((block) => block.type === "table");
+        expect(table?.type === "table" ? table.rows : []).toContainEqual([
+          "📚 Context",
+          expect.stringContaining(expected),
+        ]);
+      } finally {
+        cacheMaps.forEach((cache, index) => {
+          const value = previous[index];
+          if (value === undefined) {
+            cache.delete(key);
+          } else {
+            cache.set(key, value);
+          }
+        });
+      }
+    },
+  );
 
   it("renders the agent thinking default ahead of model and global defaults", async () => {
     const parts = await renderPreparedStatus({
@@ -292,35 +290,25 @@ describe("buildStatusText prepared context windows", () => {
   });
 
   it.each([
-    {
-      name: "selected model auto with a different active fallback cutoff",
-      configured: "auto",
-      activeFallback: true,
-      expected: "auto (120 sec)",
-    },
-    {
-      name: "session off overrides model on",
-      configured: true,
-      sessionFast: false,
-      expected: "off",
-    },
-    {
-      name: "prepared off overrides model on",
-      configured: true,
-      preparedFast: false,
-      expected: "off",
-    },
-  ] as const)("renders fast mode for $name", async (scenario) => {
+    [
+      "selected model auto with a different active fallback cutoff",
+      "auto",
+      { activeFallback: true },
+      "auto (120 sec)",
+    ],
+    ["session off overrides model on", true, { sessionFast: false }, "off"],
+    ["prepared off overrides model on", true, { preparedFast: false }, "off"],
+  ] as const)("renders fast mode for %s", async (_name, configured, scenario, expected) => {
     const parts = await renderPreparedStatus({
       cfg: {
         agents: {
           defaults: {
             models: {
               "openai/base-model": {
-                params: { fastMode: !scenario.configured, fastAutoOnSeconds: 30 },
+                params: { fastMode: !configured, fastAutoOnSeconds: 30 },
               },
               "anthropic/selected-model": {
-                params: { fastMode: scenario.configured, fastAutoOnSeconds: 120 },
+                params: { fastMode: configured, fastAutoOnSeconds: 120 },
               },
             },
           },
@@ -350,7 +338,7 @@ describe("buildStatusText prepared context windows", () => {
       model: "base-model",
     });
 
-    expect(parts.text).toContain(`fast ${scenario.expected}`);
+    expect(parts.text).toContain(`fast ${expected}`);
   });
 
   async function renderTerminalFallback(
@@ -388,19 +376,7 @@ describe("buildStatusText prepared context windows", () => {
       const append = (message: Record<string, unknown>) => {
         expect(appendTranscriptMessageSync(scope, { message }).ok).toBe(true);
       };
-      append(
-        attachSessionTranscriptRunId(
-          {
-            role: "assistant",
-            provider: "fallback",
-            model: "small-model",
-            stopReason: "stop",
-            content: [{ type: "text", text: "Synthetic response" }],
-            ...params.message,
-          },
-          "settled-run",
-        ),
-      );
+      append(assistant(params.message));
       if (params.laterMessage) {
         append(params.laterMessage);
       }
@@ -433,12 +409,7 @@ describe("buildStatusText prepared context windows", () => {
       "literal provider-local model",
       {
         status: { provider: "MiXeD", model: "Vendor/Model:opaque" },
-        entry: {
-          fallbackNotice: {
-            ...fallbackNotice,
-            selectedModel: "mixed/Vendor/Model:opaque",
-          },
-        },
+        entry: { fallbackNotice: notice({ selectedModel: "mixed/Vendor/Model:opaque" }) },
       },
     ],
     [
@@ -446,10 +417,7 @@ describe("buildStatusText prepared context windows", () => {
       {
         entry: {
           modelOverride: "MiXeD/Model:Case",
-          fallbackNotice: {
-            ...fallbackNotice,
-            selectedModel: "MiXeD/Model:Case",
-          },
+          fallbackNotice: notice({ selectedModel: "MiXeD/Model:Case" }),
         },
       },
     ],
@@ -457,8 +425,7 @@ describe("buildStatusText prepared context windows", () => {
     "projects a settled terminal fallback over %s without relabeling the entry",
     async (_name, params) => {
       const parts = await renderTerminalFallback(params);
-      expect(parts.text).toContain("Fallback: fallback/small-model");
-      expect(parts.text).toContain("Context: 45k/128k");
+      expectFallback(parts);
       expect(parts.text).not.toContain("45k/1.0m");
       const table = parts.presentation.blocks.find((block) => block.type === "table");
       expect(table?.type === "table" ? table.rows : []).toContainEqual([
@@ -479,27 +446,13 @@ describe("buildStatusText prepared context windows", () => {
     [
       "later run",
       {
-        laterMessage: attachSessionTranscriptRunId(
-          {
-            role: "assistant",
-            provider: "fallback",
-            model: "small-model",
-            stopReason: "stop",
-            content: [{ type: "text", text: "Other run" }],
-          },
-          "other-run",
-        ),
+        laterMessage: assistant({ content: [{ type: "text", text: "Other run" }] }, "other-run"),
       },
     ],
     [
       "unmatched active notice",
       {
-        entry: {
-          fallbackNotice: {
-            ...fallbackNotice,
-            activeModel: "fallback/other-model",
-          },
-        },
+        entry: { fallbackNotice: notice({ activeModel: "fallback/other-model" }) },
       },
     ],
   ] satisfies Array<[string, Parameters<typeof renderTerminalFallback>[0]]>)(
@@ -514,12 +467,7 @@ describe("buildStatusText prepared context windows", () => {
   it("skips terminal transcript access for a stale selected notice", async () => {
     const readTail = vi.spyOn(transcriptTail, "readSessionTranscriptBoundedMessageTailPageAsync");
     const parts = await renderTerminalFallback({
-      entry: {
-        fallbackNotice: {
-          ...fallbackNotice,
-          selectedModel: "deepseek/older-model",
-        },
-      },
+      entry: { fallbackNotice: notice({ selectedModel: "deepseek/older-model" }) },
     });
     expect(parts.text).not.toContain("Fallback: fallback/small-model");
     expect(parts.text).toContain("Context: 45k/1.0m");
@@ -540,14 +488,13 @@ describe("buildStatusText prepared context windows", () => {
         })),
       },
     });
-    expect(parts.text).toContain("Fallback: fallback/small-model");
-    expect(parts.text).toContain("Context: 45k/96k");
+    expectFallback(parts, "45k/96k");
   });
 
   it.each([
     ["accepted terminal pair", "fallback/small-model"],
     ["legacy usage fallback", "usage/previous-model"],
-  ])("keeps %s through independent usage hydration", async (_name, notice) => {
+  ])("keeps %s through independent usage hydration", async (_name, activeModel) => {
     const readUsage = vi
       .spyOn(transcriptUsage, "readRecentSessionUsageFromTranscriptAsync")
       .mockResolvedValue({
@@ -560,24 +507,19 @@ describe("buildStatusText prepared context windows", () => {
       entry: {
         modelProvider: undefined,
         model: undefined,
-        fallbackNotice: {
-          ...fallbackNotice,
-          activeModel: notice,
-          reason: "provider unavailable",
-        },
+        fallbackNotice: notice({ activeModel, reason: "provider unavailable" }),
       },
       status: { includeTranscriptUsage: true },
     });
     expect(readUsage).toHaveBeenCalled();
-    expect(parts.text).toContain(`Fallback: ${notice}`);
+    expect(parts.text).toContain(`Fallback: ${activeModel}`);
   });
 
   const budget: SessionContextBudgetStatus = {
     schemaVersion: 1,
     source: "pre-prompt-estimate",
     updatedAt: 1,
-    provider: "fallback",
-    model: "small-model",
+    ...active,
     route: "fits",
     shouldCompact: false,
     estimatedPromptTokens: 64_000,
@@ -644,10 +586,7 @@ describe("buildStatusText prepared context windows", () => {
           cfg: { agents: { defaults: { model: { primary: "candidate/entry" } } } },
           provider,
           model,
-          thinkingCatalog: [
-            ...catalog,
-            { provider, id: model, contextWindow: 128_000, contextTokens: 128_000 },
-          ],
+          thinkingCatalog: [...catalog, modelLimits(provider, model, 128_000)],
           primaryModelLabelOverride: expected,
           sessionEntry: { sessionId: "typed-selection", updatedAt: 1, ...patch },
         }),
