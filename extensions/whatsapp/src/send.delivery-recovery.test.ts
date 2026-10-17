@@ -1,4 +1,3 @@
-// Whatsapp tests cover the durable outbound handoff across startup recovery.
 import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from "baileys";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
@@ -46,6 +45,17 @@ vi.mock("./connection-controller-runtime-context.js", () => ({
 
 const cfg = { channels: { whatsapp: {} } } as OpenClawConfig;
 const accountId = "default";
+const chunkConfig = { channels: { whatsapp: { textChunkLimit: 160 } } };
+
+function installChunkSender(prefix: string) {
+  const sendMessage = vi.fn<ActiveWebListener["sendMessage"]>(async () =>
+    createAcceptedWhatsAppSendResult("text", `${prefix}-${sendMessage.mock.calls.length}`),
+  );
+  runtimeContextMocks.controllers.set(accountId, {
+    getActiveListener: () => ({ sendMessage, sendComposingTo: vi.fn() }),
+  });
+  return sendMessage;
+}
 
 async function drainDefaultWhatsAppDeliveries(stateDir: string) {
   const log = {
@@ -99,16 +109,10 @@ describe("WhatsApp delivery recovery", () => {
 
   it("preserves long styles and quotes only the first chunk", async () => {
     await withStateDirEnv("openclaw-whatsapp-styled-reply-", async () => {
-      const sendMessage = vi.fn<ActiveWebListener["sendMessage"]>();
-      sendMessage.mockImplementation(async () =>
-        createAcceptedWhatsAppSendResult("text", `part-${sendMessage.mock.calls.length}`),
-      );
-      runtimeContextMocks.controllers.set(accountId, {
-        getActiveListener: () => ({ sendMessage, sendComposingTo: vi.fn() }),
-      });
+      const sendMessage = installChunkSender("part");
       const onDeliveryResult = vi.fn();
       const result = await sendDurableMessageBatch({
-        cfg: { channels: { whatsapp: { textChunkLimit: 160 } } },
+        cfg: chunkConfig,
         channel: "whatsapp",
         to: "+1555",
         payloads: [{ text: `**${"x".repeat(340)}**` }],
@@ -143,18 +147,12 @@ describe("WhatsApp delivery recovery", () => {
   });
 
   it("keeps payload formatting intact under a narrower delivery limit", async () => {
-    const sendMessage = vi.fn<ActiveWebListener["sendMessage"]>();
-    sendMessage.mockImplementation(async () =>
-      createAcceptedWhatsAppSendResult("text", `payload-${sendMessage.mock.calls.length}`),
-    );
-    runtimeContextMocks.controllers.set(accountId, {
-      getActiveListener: () => ({ sendMessage, sendComposingTo: vi.fn() }),
-    });
+    const sendMessage = installChunkSender("payload");
     const onPlatformSendDispatch = vi.fn(async () => {});
     const onDeliveryResult = vi.fn();
     const text = `**${"x".repeat(4_200)}**`;
     await whatsappChannelOutbound.sendPayload!({
-      cfg: { channels: { whatsapp: { textChunkLimit: 160 } } },
+      cfg: chunkConfig,
       to: "+1555",
       text,
       payload: { text },
@@ -289,17 +287,15 @@ describe("WhatsApp delivery recovery", () => {
       mediaUrl: "fixture://voice.ogg",
     }).catch((error: unknown) => error);
 
-    expect([textResult, captionlessResult, documentResult, voiceResult, quotedResult]).toEqual([
-      { channel: "whatsapp", messageId: "native-1", toJid: "1555@s.whatsapp.net" },
-      { channel: "whatsapp", messageId: "native-2", toJid: "1555@s.whatsapp.net" },
-      { channel: "whatsapp", messageId: "native-3", toJid: "1555@s.whatsapp.net" },
-      { channel: "whatsapp", messageId: "native-4", toJid: "1555@s.whatsapp.net" },
-      { channel: "whatsapp", messageId: "native-6", toJid: "1555@s.whatsapp.net" },
-    ]);
+    const jid = "1555@s.whatsapp.net";
+    const audio = { audio: Buffer.from("ogg"), ptt: true, mimetype: "audio/ogg; codecs=opus" };
+    expect([textResult, captionlessResult, documentResult, voiceResult, quotedResult]).toEqual(
+      [1, 2, 3, 4, 6].map((id) => ({ channel: "whatsapp", messageId: `native-${id}`, toJid: jid })),
+    );
     expect(socketSend.mock.calls).toEqual([
-      ["1555@s.whatsapp.net", { text: "plain text" }],
+      [jid, { text: "plain text" }],
       [
-        "1555@s.whatsapp.net",
+        jid,
         {
           document: Buffer.from("pdf"),
           fileName: "captionless.pdf",
@@ -308,7 +304,7 @@ describe("WhatsApp delivery recovery", () => {
         },
       ],
       [
-        "1555@s.whatsapp.net",
+        jid,
         {
           document: Buffer.from("png"),
           fileName: "forced.png",
@@ -316,13 +312,10 @@ describe("WhatsApp delivery recovery", () => {
           mimetype: "image/png",
         },
       ],
+      [jid, audio],
+      [jid, { text: "voice caption" }],
       [
-        "1555@s.whatsapp.net",
-        { audio: Buffer.from("ogg"), ptt: true, mimetype: "audio/ogg; codecs=opus" },
-      ],
-      ["1555@s.whatsapp.net", { text: "voice caption" }],
-      [
-        "1555@s.whatsapp.net",
+        jid,
         { text: "quoted text" },
         {
           quoted: expect.objectContaining({
@@ -335,43 +328,16 @@ describe("WhatsApp delivery recovery", () => {
           }),
         },
       ],
-      [
-        "1555@s.whatsapp.net",
-        { audio: Buffer.from("ogg"), ptt: true, mimetype: "audio/ogg; codecs=opus" },
-      ],
-      ["1555@s.whatsapp.net", { text: "caption fails after voice acceptance" }],
+      [jid, audio],
+      [jid, { text: "caption fails after voice acceptance" }],
     ]);
-    expect(progress).toEqual([
-      "native-1",
-      "native-2",
-      "native-3",
-      "native-4",
-      "native-5",
-      "native-6",
-      "native-7",
-    ]);
+    expect(progress).toEqual(Array.from({ length: 7 }, (_, index) => `native-${index + 1}`));
     expect(order).toEqual([
-      "dispatch",
-      "socket:1",
-      "progress:native-1",
-      "dispatch",
-      "socket:2",
-      "progress:native-2",
-      "dispatch",
-      "socket:3",
-      "progress:native-3",
-      "dispatch",
-      "socket:4",
-      "progress:native-4",
-      "dispatch",
-      "socket:5",
-      "progress:native-5",
-      "dispatch",
-      "socket:6",
-      "progress:native-6",
-      "dispatch",
-      "socket:7",
-      "progress:native-7",
+      ...Array.from({ length: 7 }, (_, index) => [
+        "dispatch",
+        `socket:${index + 1}`,
+        `progress:native-${index + 1}`,
+      ]).flat(),
       "dispatch",
       "socket:8",
     ]);
@@ -418,7 +384,7 @@ describe("WhatsApp delivery recovery", () => {
           getActiveListener: () => ({ sendMessage, sendComposingTo: vi.fn() }),
         });
         const result = await sendDurableMessageBatch({
-          cfg: { channels: { whatsapp: { textChunkLimit: 160 } } },
+          cfg: chunkConfig,
           channel: "whatsapp",
           to: "+1555",
           payloads: [{ text: `**${"x".repeat(340)}**` }],

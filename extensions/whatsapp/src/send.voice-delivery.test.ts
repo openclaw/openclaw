@@ -1,4 +1,3 @@
-// WhatsApp tests cover provider-backed gateway voice delivery, captions, and accepted receipts.
 import type { WAMessage } from "baileys";
 import {
   createChannelPartialDeliveryError,
@@ -72,6 +71,22 @@ describe("WhatsApp gateway voice delivery", () => {
   const sendReaction = vi.fn(async () =>
     createAcceptedWhatsAppSendResult("reaction", "reaction123"),
   );
+  const sendVoice = (
+    options: Omit<Parameters<typeof sendMessageWhatsApp>[2], "verbose" | "cfg"> = {},
+  ) =>
+    sendMessageWhatsApp("+1555", "voice note", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/voice.ogg",
+      ...options,
+    });
+  function loadNativeAudio() {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("audio"),
+      contentType: "audio/ogg",
+      kind: "audio",
+    });
+  }
 
   beforeAll(async () => {
     ({ sendMessageWhatsApp } = await import("./send.js"));
@@ -110,22 +125,12 @@ describe("WhatsApp gateway voice delivery", () => {
       contentType: "audio/ogg",
       kind: "audio",
     });
-    const providerSendMessage = vi
-      .fn()
-      .mockResolvedValueOnce({
-        key: {
-          id: "gateway-scoped-voice",
-          remoteJid: "1555@s.whatsapp.net",
-          fromMe: true,
-        },
-      } as WAMessage)
-      .mockResolvedValueOnce({
-        key: {
-          id: "gateway-scoped-caption",
-          remoteJid: "1555@s.whatsapp.net",
-          fromMe: true,
-        },
+    const providerSendMessage = vi.fn();
+    for (const id of ["gateway-scoped-voice", "gateway-scoped-caption"]) {
+      providerSendMessage.mockResolvedValueOnce({
+        key: { id, remoteJid: "1555@s.whatsapp.net", fromMe: true },
       } as WAMessage);
+    }
     const sendApi = createWebSendApi({
       sock: {
         sendMessage: providerSendMessage,
@@ -167,26 +172,17 @@ describe("WhatsApp gateway voice delivery", () => {
     });
     expect(listenerSendMessage).toHaveBeenCalledTimes(2);
     expect(onDeliveryResult).toHaveBeenCalledTimes(2);
-    expect(onDeliveryResult).toHaveBeenNthCalledWith(1, {
-      messageId: "gateway-scoped-voice",
-      toJid: "1555@s.whatsapp.net",
-      receipt: expect.objectContaining({
-        platformMessageIds: ["gateway-scoped-voice"],
-        parts: [
-          expect.objectContaining({ platformMessageId: "gateway-scoped-voice", kind: "media" }),
-        ],
-      }),
-    });
-    expect(onDeliveryResult).toHaveBeenNthCalledWith(2, {
-      messageId: "gateway-scoped-caption",
-      toJid: "1555@s.whatsapp.net",
-      receipt: expect.objectContaining({
-        platformMessageIds: ["gateway-scoped-caption"],
-        parts: [
-          expect.objectContaining({ platformMessageId: "gateway-scoped-caption", kind: "text" }),
-        ],
-      }),
-    });
+    for (const [index, kind] of ["media", "text"].entries()) {
+      const messageId = index === 0 ? "gateway-scoped-voice" : "gateway-scoped-caption";
+      expect(onDeliveryResult).toHaveBeenNthCalledWith(index + 1, {
+        messageId,
+        toJid: "1555@s.whatsapp.net",
+        receipt: expect.objectContaining({
+          platformMessageIds: [messageId],
+          parts: [expect.objectContaining({ platformMessageId: messageId, kind })],
+        }),
+      });
+    }
     expect(recordChannelActivity).toHaveBeenCalledExactlyOnceWith({
       channel: "whatsapp",
       accountId: "default",
@@ -196,11 +192,7 @@ describe("WhatsApp gateway voice delivery", () => {
   });
 
   it("retains the accepted voice receipt when its gateway caption has no provider key", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("audio"),
-      contentType: "audio/ogg",
-      kind: "audio",
-    });
+    loadNativeAudio();
     sendMessage
       .mockResolvedValueOnce(createAcceptedWhatsAppSendResult("media", "gateway-voice-accepted"))
       .mockResolvedValueOnce({
@@ -211,12 +203,7 @@ describe("WhatsApp gateway voice delivery", () => {
       });
     const onDeliveryResult = vi.fn();
 
-    const failure = await sendMessageWhatsApp("+1555", "voice note", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "/tmp/voice.ogg",
-      onDeliveryResult,
-    }).catch((caught: unknown) => caught);
+    const failure = await sendVoice({ onDeliveryResult }).catch((caught: unknown) => caught);
 
     expect(isChannelPartialDeliveryError(failure)).toBe(true);
     if (!isChannelPartialDeliveryError(failure)) {
@@ -232,11 +219,7 @@ describe("WhatsApp gateway voice delivery", () => {
   });
 
   it("merges accepted gateway voice and nested accepted caption receipts", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("audio"),
-      contentType: "audio/ogg",
-      kind: "audio",
-    });
+    loadNativeAudio();
     const bookkeepingError = new Error("accepted gateway caption bookkeeping failed");
     const acceptedCaption = createAcceptedWhatsAppSendResult("text", "gateway-caption-accepted");
     sendMessage
@@ -249,11 +232,7 @@ describe("WhatsApp gateway voice delivery", () => {
         }),
       );
 
-    const failure = await sendMessageWhatsApp("+1555", "voice note", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "/tmp/voice.ogg",
-    }).catch((caught: unknown) => caught);
+    const failure = await sendVoice().catch((caught: unknown) => caught);
 
     expect(isChannelPartialDeliveryError(failure)).toBe(true);
     if (!isChannelPartialDeliveryError(failure)) {
@@ -283,11 +262,7 @@ describe("WhatsApp gateway voice delivery", () => {
       fileName: media.fileName,
     });
 
-    await sendMessageWhatsApp("+1555", "voice note", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: `/tmp/${media.fileName}`,
-    });
+    await sendVoice({ mediaUrl: `/tmp/${media.fileName}` });
 
     expect(hoisted.transcodeAudioBufferToOpus).toHaveBeenCalledWith({
       audioBuffer: buf,
