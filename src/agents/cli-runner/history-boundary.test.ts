@@ -29,6 +29,7 @@ import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { persistCliSessionBindingResult } from "../cli-session-store.js";
 import { claimAgentSessionWriter } from "../embedded-agent-runner/run/session-bootstrap.js";
+import { withSessionCompactionPersistenceAsync } from "../sessions/session-compaction-persistence.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../sessions/session-manager.js";
 import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
@@ -296,6 +297,51 @@ describe("CLI transcript account boundary", () => {
     }
     expect(projectPublicSessionEntry(entry)).not.toHaveProperty("cliHistoryBoundary");
   });
+
+  it.each([false, true])(
+    "keeps compacted history only when the complete source is account-owned (foreign tail: %s)",
+    async (foreignTail) => {
+      const f = await fixture();
+      await f.seed();
+      const retained = await f.run("epoch-a", async () =>
+        f.manager().appendMessage({
+          role: "user",
+          content: "Retained recent turn",
+          timestamp: 2,
+        }),
+      );
+      const manager = f.manager();
+      if (foreignTail) {
+        manager.appendMessage({ role: "user", content: "Unowned tail", timestamp: 3 });
+      }
+      if (!retained) {
+        throw new Error("Missing retained turn");
+      }
+      await withSessionCompactionPersistenceAsync(
+        manager,
+        (prepared) =>
+          sessionAccessor.persistCompactionBoundaryWithSessionEntryAsync(f.target, {
+            prepared,
+            transcriptByteCompactionLatch: {
+              sessionId: f.target.sessionId,
+              activeBytes: 2048,
+              maxBytes: 1024,
+            },
+          }),
+        () => manager.appendCompactionAsync("Compacted account summary", retained, 1000),
+      );
+      await f.run("epoch-a", async (allowed, params) => {
+        const prompt = await history(allowed, params);
+        if (foreignTail) {
+          expect(prompt).toBeUndefined();
+        } else {
+          expect(prompt?.match(/Compacted account summary/g)).toHaveLength(1);
+          expect(prompt?.match(/Retained recent turn/g)).toHaveLength(1);
+          expect(prompt).not.toContain("A private canary");
+        }
+      });
+    },
+  );
 
   it("distinguishes OAuth account identity from rotating or identity-less tokens", async () => {
     const f = await fixture();

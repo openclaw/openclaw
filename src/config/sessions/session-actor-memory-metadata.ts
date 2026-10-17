@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { reanchorCliHistoryBoundaryAfterCompaction } from "./cli-history-boundary.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
 import { installSessionActorMemoryEntry } from "./session-actor-memory-entry-install.js";
 import { createSessionActorMemoryEvents } from "./session-actor-memory-events.js";
@@ -305,6 +306,12 @@ export function createSessionActorMemoryMetadata(context: SessionActorMemoryStor
         }
         state.hot.entry = {
           ...state.hot.entry!,
+          cliHistoryBoundary: reanchorCliHistoryBoundaryAfterCompaction(
+            state.hot.entry!,
+            scope.sessionId,
+            before,
+            events.version(),
+          ),
           ...projectCompactionAccountingPatch(state.hot.entry!, {
             compactionKind: "context-engine",
             transcriptByteCompactionLatch: command.input.transcriptByteCompactionLatch,

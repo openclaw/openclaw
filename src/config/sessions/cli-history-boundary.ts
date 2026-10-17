@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry } from "./types.js";
 
 export type CliHistoryWriter = {
@@ -98,4 +99,24 @@ export function advanceCliHistoryBoundary(
     return undefined;
   }
   return { ...entry, cliHistoryBoundary: { ...boundary, generation, maxSeq: range.last } };
+}
+
+/** A summary preserves account ownership only when its entire source was covered. */
+export function reanchorCliHistoryBoundaryAfterCompaction(
+  entry: InternalSessionEntry,
+  sessionId: string,
+  before: SessionTranscriptContextVersion,
+  after: SessionTranscriptContextVersion,
+): CliHistoryBoundary | undefined {
+  const boundary = entry.cliHistoryBoundary;
+  if (
+    !isKnownCliHistoryBoundary(boundary) ||
+    entry.sessionId !== sessionId ||
+    boundary.sessionId !== sessionId ||
+    boundary.generation !== before.generation ||
+    boundary.maxSeq !== before.rawSeq
+  ) {
+    return boundary;
+  }
+  return { ...boundary, generation: after.generation, maxSeq: after.rawSeq };
 }

@@ -2,15 +2,21 @@ import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
+import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { sessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
+import { withSessionCompactionPersistenceAsync } from "../sessions/session-compaction-persistence.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { persistCliRunBlock } from "./cli-run-transcript.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
-import { hasCliSessionTranscript, loadCliSessionHistoryMessages } from "./session-history.js";
+import {
+  hasCliSessionTranscript,
+  loadCliSessionHistoryMessages,
+  loadCliSessionPromptContext,
+} from "./session-history.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
@@ -117,6 +123,28 @@ it("prepares private CLI history and refuses an unattributed append at execution
         expect(await sessionTranscriptHasContent(target)).toBe(true);
       });
       const manager = await SessionManager.openAsync(target);
+      const retained = manager.getLeafId();
+      assert(retained);
+      await withSessionCompactionPersistenceAsync(
+        manager,
+        (prepared) =>
+          persistCompactionBoundaryWithSessionEntryAsync(target, {
+            prepared,
+            transcriptByteCompactionLatch: {
+              sessionId: target.sessionId,
+              activeBytes: 2048,
+              maxBytes: 1024,
+            },
+          }),
+        () => manager.appendCompactionAsync("Private CLI summary", retained, 1000),
+      );
+      await writer.assertReadable();
+      const compacted = JSON.stringify(
+        (await loadCliSessionPromptContext({ sessionTarget: target })).reseedMessages,
+      );
+      expect(compacted.match(/Private CLI summary/g)).toHaveLength(1);
+      expect(compacted.match(/Private CLI answer/g)).toHaveLength(1);
+      expect(compacted).not.toContain("Private CLI context");
       await manager.appendMessageAsync(makeUserMessage("Different writer", 3));
       await expect(writer.assertReadable()).rejects.toThrow("CLI history authority changed");
     }

@@ -8,6 +8,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { reanchorCliHistoryBoundaryAfterCompaction } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptAccessScope,
   TranscriptEvent,
@@ -171,6 +172,12 @@ function persistCompactionBoundary(
       }
       const entry = projectCanonicalSessionEntryShape({
         ...fresh!,
+        cliHistoryBoundary: reanchorCliHistoryBoundaryAfterCompaction(
+          fresh!,
+          resolved.sessionId,
+          committed.before,
+          committed.after,
+        ),
         ...projectCompactionAccountingPatch(fresh!, {
           compactionKind: "context-engine",
           transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
