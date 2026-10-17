@@ -123,6 +123,26 @@ function createStore(
   };
 }
 
+function installCapture(
+  endSession = vi.fn<AsyncDebugProxyCaptureStore["endSession"]>(async () => {}),
+  release = vi.fn(async () => {}),
+) {
+  const upsertSession = vi.fn<AsyncDebugProxyCaptureStore["upsertSession"]>(async () => {});
+  const store = createStore(upsertSession, endSession);
+  acquireStore.mockResolvedValue({ store, release });
+  return { store, upsertSession, endSession, release };
+}
+const runChild = () => runDebugProxyRunCommand({ commandArgs: ["synthetic-child"] });
+function expectAggregate(error: unknown, expected: Error[]) {
+  if (!(error instanceof AggregateError)) {
+    throw new Error("Expected aggregate startup or cleanup failure", { cause: error });
+  }
+  expect(error.errors).toHaveLength(expected.length);
+  for (const [index, entry] of expected.entries()) {
+    expect(error.errors[index]).toBe(entry);
+  }
+}
+
 describe("proxy command cleanup errors", () => {
   it.each([
     { command: "start", enabled: true, stage: "acquire" },
@@ -148,12 +168,11 @@ describe("proxy command cleanup errors", () => {
         throw sessionFailure;
       };
       const endSession = vi.fn<AsyncDebugProxyCaptureStore["endSession"]>(closeSession);
-      const upsertSession = vi.fn<AsyncDebugProxyCaptureStore["upsertSession"]>(async () => {});
       const release = vi.fn(async () => {
         order.push("release");
         throw releaseFailure;
       });
-      acquireStore.mockResolvedValue({ store: createStore(upsertSession, endSession), release });
+      const { upsertSession } = installCapture(endSession, release);
       const failingOperation = {
         acquire: acquireStore,
         upsert: upsertSession,
@@ -163,9 +182,7 @@ describe("proxy command cleanup errors", () => {
       failingOperation.mockRejectedValue(startupFailure);
 
       const failure = await (
-        command === "start"
-          ? runDebugProxyStartCommand({})
-          : runDebugProxyRunCommand({ commandArgs: ["synthetic-child"] })
+        command === "start" ? runDebugProxyStartCommand({}) : runChild()
       ).catch((error: unknown) => error);
 
       const acquired = stage !== "acquire";
@@ -178,11 +195,7 @@ describe("proxy command cleanup errors", () => {
         expect(failure).toBe(startupFailure);
         return;
       }
-      expect(failure).toBeInstanceOf(AggregateError);
-      if (!(failure instanceof AggregateError)) {
-        throw new Error("Expected aggregate startup and cleanup failure");
-      }
-      expect(failure.errors).toEqual([startupFailure, sessionFailure, releaseFailure]);
+      expectAggregate(failure, [startupFailure, sessionFailure, releaseFailure]);
     },
   );
 
@@ -226,7 +239,7 @@ describe("proxy command cleanup errors", () => {
       stopServer.mockImplementation(async () => {
         order.push("stop");
       });
-      const command = runDebugProxyRunCommand({ commandArgs: ["synthetic-child"] });
+      const command = runChild();
       let onSignal: (typeof previousListeners)[number] | undefined;
       try {
         await awaitGateBeforeSettlement(launched.promise, command, "Proxy child was not launched");
@@ -270,12 +283,7 @@ describe("proxy command cleanup errors", () => {
       const launched = createDeferred<AbortSignal>();
       const closed = createDeferred<{ signal: NodeJS.Signals; failed: boolean }>();
       const work = new AsyncWorkScope();
-      const endSession = vi.fn(async () => {});
-      const release = vi.fn(async () => {});
-      acquireStore.mockResolvedValue({
-        store: createStore(async () => {}, endSession),
-        release,
-      });
+      const { endSession, release } = installCapture();
       spawnChild.mockImplementation((_argv, options) => {
         if (!options.cancelSignal) {
           throw new Error("Proxy child has no cancellation owner");
@@ -283,9 +291,7 @@ describe("proxy command cleanup errors", () => {
         launched.resolve(options.cancelSignal);
         return closed.promise;
       });
-      const command = work.track(() =>
-        runDebugProxyRunCommand({ commandArgs: ["synthetic-child"] }),
-      );
+      const command = work.track(runChild);
       let drain: Promise<void> | undefined;
       try {
         const signal = await awaitGateBeforeSettlement(
@@ -329,13 +335,11 @@ describe("proxy command cleanup errors", () => {
         order.push(`${name}:rejected`);
         throw error;
       };
-      const upsertSession = vi.fn<AsyncDebugProxyCaptureStore["upsertSession"]>(async () => {});
       const endSession = vi.fn<AsyncDebugProxyCaptureStore["endSession"]>(
         rejectCleanup("endSession", endFailure),
       );
       const release = vi.fn(rejectCleanup("release", releaseFailure));
-      const store = createStore(upsertSession, endSession);
-      acquireStore.mockResolvedValue({ store, release });
+      const { upsertSession } = installCapture(endSession, release);
       stopServer.mockImplementation(rejectCleanup("stop", stopFailure));
       spawnChild.mockImplementation(async () => {
         if (outcome === "error") {
@@ -344,12 +348,7 @@ describe("proxy command cleanup errors", () => {
         return { exitCode: 0 };
       });
 
-      let failure: unknown;
-      try {
-        await runDebugProxyRunCommand({ commandArgs: ["synthetic-child"] });
-      } catch (error) {
-        failure = error;
-      }
+      const failure = await runChild().catch((error: unknown) => error);
 
       expect(order).toEqual([
         "stop:start",
@@ -362,20 +361,12 @@ describe("proxy command cleanup errors", () => {
       expect(stopServer).toHaveBeenCalledTimes(1);
       expect(endSession).toHaveBeenCalledExactlyOnceWith(upsertSession.mock.calls[0]![0].id);
       expect(release).toHaveBeenCalledTimes(1);
-      expect(failure).toBeInstanceOf(AggregateError);
-      if (!(failure instanceof AggregateError)) {
-        throw new Error("Expected aggregate cleanup failure");
-      }
-      const expected = [
+      expectAggregate(failure, [
         ...(outcome === "error" ? [childFailure] : []),
         stopFailure,
         endFailure,
         releaseFailure,
-      ];
-      expect(failure.errors).toHaveLength(expected.length);
-      for (const [index, error] of expected.entries()) {
-        expect(failure.errors[index]).toBe(error);
-      }
+      ]);
     },
   );
 });

@@ -1,4 +1,3 @@
-// Route CLI tests cover route command registration, channel routing, and output.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 
@@ -85,7 +84,21 @@ describe("tryRouteCli", () => {
       loggingState.forceConsoleToStderr = originalForceStderr;
     }
     originalEnv.restore();
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
+
+  const route = (args: string[], options?: { machineOutput?: boolean }) =>
+    tryRouteCli(["node", "openclaw", ...args], options);
+  async function expectOutputRouting(args: string[], stderr: boolean, machineOutput?: boolean) {
+    const captured: boolean[] = [];
+    runRouteMock.mockImplementationOnce(async () => {
+      captured.push(loggingState.forceConsoleToStderr);
+      return true;
+    });
+    await expect(route(args, { machineOutput })).resolves.toBe(true);
+    expect(captured).toEqual([stderr]);
+  }
 
   it.each([
     ["status", "--json"],
@@ -96,37 +109,16 @@ describe("tryRouteCli", () => {
     ["gateway", "status", "--json"],
     ["sessions", "--json"],
   ])("dispatches %j without startup config observation or plugin activation", async (...args) => {
-    await expect(tryRouteCli(["node", "openclaw", ...args])).resolves.toBe(true);
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    await expect(route(args)).resolves.toBe(true);
     expect(runRouteMock).toHaveBeenCalledOnce();
   });
 
   it("suppresses config get machine output without running an observing startup guard", async () => {
-    const captured: boolean[] = [];
-    runRouteMock.mockImplementationOnce(async () => {
-      captured.push(loggingState.forceConsoleToStderr);
-      return true;
-    });
-
-    await expect(
-      tryRouteCli(["node", "openclaw", "config", "get", "gateway.port"], {
-        machineOutput: true,
-      }),
-    ).resolves.toBe(true);
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(captured).toEqual([true]);
+    await expectOutputRouting(["config", "get", "gateway.port"], true, true);
   });
 
   it("lets routed gateway health own its config read", async () => {
-    await expect(tryRouteCli(["node", "openclaw", "gateway", "health", "--json"])).resolves.toBe(
-      true,
-    );
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    await expect(route(["gateway", "health", "--json"])).resolves.toBe(true);
   });
 
   it("defers routed config mutation preparation to its state owner", async () => {
@@ -139,12 +131,7 @@ describe("tryRouteCli", () => {
       events.push("action");
       return true;
     });
-    await expect(
-      tryRouteCli(["node", "openclaw", "config", "unset", "gateway.port"]),
-    ).resolves.toBe(true);
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    await expect(route(["config", "unset", "gateway.port"])).resolves.toBe(true);
     expect(events).toEqual(["state-owner", "action"]);
   });
 
@@ -152,50 +139,24 @@ describe("tryRouteCli", () => {
     const error = new Error("synthetic state ownership refusal");
     runWithLocalStateOwnerMock.mockRejectedValueOnce(error);
 
-    await expect(tryRouteCli(["node", "openclaw", "config", "unset", "gateway.port"])).rejects.toBe(
-      error,
-    );
-
+    await expect(route(["config", "unset", "gateway.port"])).rejects.toBe(error);
     expect(runRouteMock).not.toHaveBeenCalled();
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("routes command-run logs to stderr for config-guard-skipping --json routes", async () => {
-    const captured: boolean[] = [];
-    runRouteMock.mockImplementationOnce(async () => {
-      captured.push(loggingState.forceConsoleToStderr);
-      return true;
-    });
-
-    await expect(tryRouteCli(["node", "openclaw", "models", "status", "--json"])).resolves.toBe(
-      true,
-    );
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(captured).toEqual([true]);
+    await expectOutputRouting(["models", "status", "--json"], true);
   });
 
   it("keeps human action output on stdout", async () => {
-    const captured: boolean[] = [];
-    runRouteMock.mockImplementationOnce(async () => {
-      captured.push(loggingState.forceConsoleToStderr);
-      return true;
-    });
-
-    await tryRouteCli(["node", "openclaw", "agents"]);
-
+    await expectOutputRouting(["agents"], false);
     expect(runRouteMock).toHaveBeenCalledOnce();
-    expect(captured[0]).toBe(false);
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 
   it("uses the last valid routed log level option", async () => {
-    await expect(
-      tryRouteCli(["node", "openclaw", "--log-level", "debug", "status", "--log-level=trace"]),
-    ).resolves.toBe(true);
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    await expect(route(["--log-level", "debug", "status", "--log-level=trace"])).resolves.toBe(
+      true,
+    );
     expect(runRouteMock).toHaveBeenCalledTimes(1);
     expect(process.env.OPENCLAW_LOG_LEVEL).toBe("trace");
   });
@@ -209,19 +170,12 @@ describe("tryRouteCli", () => {
   ])("falls back for %s routed log level options before bootstrap", async (_name, argv) => {
     await expect(tryRouteCli(argv)).resolves.toBe(false);
 
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
     expect(runRouteMock).not.toHaveBeenCalled();
     expect(process.env.OPENCLAW_LOG_LEVEL).toBeUndefined();
   });
 
   it("falls back before bootstrap when the route cannot parse the argv", async () => {
-    await expect(
-      tryRouteCli(["node", "openclaw", "sessions", "--json", "--unknown"]),
-    ).resolves.toBe(false);
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    await expect(route(["sessions", "--json", "--unknown"])).resolves.toBe(false);
     expect(runRouteMock).not.toHaveBeenCalled();
   });
 });

@@ -69,10 +69,9 @@ function createTokenGatewayConfig(customBindHost = "127.0.0.1") {
   };
 }
 
-function createRemoteQrConfig(params?: { withTailscale?: boolean }) {
+function createRemoteQrConfig() {
   return {
     gateway: {
-      ...(params?.withTailscale ? { tailscale: { mode: "serve" } } : {}),
       publicOrigin: "https://gateway.example.test",
       remote: { url: "wss://remote.example.com:444", token: "remote-tok" },
       auth: { mode: "token", token: "local-tok" },
@@ -89,60 +88,24 @@ function createRemoteQrConfig(params?: { withTailscale?: boolean }) {
   };
 }
 
-function createTailscaleRemoteRefConfig() {
-  return {
-    gateway: {
-      publicOrigin: "https://gateway.example.test",
-      tailscale: { mode: "serve" },
-      remote: {
-        token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
-      },
-      auth: {},
-    },
-  };
-}
-
-function createDefaultSecretProvider() {
-  return {
-    providers: {
-      default: { source: "env" as const },
-    },
-  };
-}
-
-function createLocalGatewayConfigWithAuth(auth: Record<string, unknown>) {
-  return {
-    secrets: createDefaultSecretProvider(),
+function setLocalAuth(auth: Record<string, unknown>, customBindHost = "127.0.0.1") {
+  loadConfig.mockReturnValue({
+    secrets: { providers: { default: { source: "env" } } },
     gateway: {
       bind: "custom",
-      customBindHost: "127.0.0.1",
+      customBindHost,
       auth,
     },
-  };
+  });
 }
 
-function createLocalGatewayPasswordRefAuth(secretId: string) {
-  return {
-    mode: "password",
-    password: { source: "env", provider: "default", id: secretId },
-  };
-}
-
-function createLocalGatewayEnvPasswordRefAuth(secretId: string) {
-  return {
-    password: { source: "env", provider: "default", id: secretId },
-  };
-}
+const secretRef = (id: string) => ({ source: "env", provider: "default", id });
+const missingPassword = secretRef("MISSING_LOCAL_GATEWAY_PASSWORD");
 
 describe("registerQrCli", () => {
-  function createProgram() {
+  async function runQr(args: string[]) {
     const program = new Command();
     registerQrCli(program);
-    return program;
-  }
-
-  async function runQr(args: string[]) {
-    const program = createProgram();
     await program.parseAsync(["qr", ...args], { from: "user" });
   }
 
@@ -157,6 +120,8 @@ describe("registerQrCli", () => {
     }
     return value === undefined ? "" : JSON.stringify(value);
   }
+
+  const errorText = () => runtimeError.mock.calls.map(readRuntimeCallText).join("\n");
 
   function parseLastLoggedQrJson() {
     const calls = runtimeLog.mock.calls;
@@ -178,16 +143,6 @@ describe("registerQrCli", () => {
       expiresAtMs: 123,
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
-  }
-
-  function expectLoggedLocalSetupCode() {
-    expectLoggedSetupCode("ws://127.0.0.1:18789");
-  }
-
-  function expectLimitedTransportWarning() {
-    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
-    expect(output).toContain("setup code was limited for safety");
-    expect(output).toContain("Use wss:// or Tailscale Serve");
   }
 
   function mockTailscaleStatusLookup() {
@@ -222,7 +177,7 @@ describe("registerQrCli", () => {
   ])(
     "issues trusted-proxy QR output with the existing $args grant",
     async ({ args, profile, access }) => {
-      loadConfig.mockReturnValue(createLocalGatewayConfigWithAuth({ mode: "trusted-proxy" }));
+      setLocalAuth({ mode: "trusted-proxy" });
 
       await runQr(["--json", "--url", "wss://gateway.example.test", ...args]);
 
@@ -287,7 +242,7 @@ describe("registerQrCli", () => {
 
     await expectQrExit(["--setup-code-only"]);
 
-    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
+    const output = errorText();
     expect(output).toContain("Tailscale and public mobile pairing require a secure gateway URL");
     expect(output).toContain("gateway.tailscale.mode=serve");
   });
@@ -301,93 +256,62 @@ describe("registerQrCli", () => {
     expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
       expect.objectContaining({ profile: PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
-    expectLimitedTransportWarning();
+    expect(errorText()).toContain("setup code was limited for safety");
+    expect(errorText()).toContain("Use wss:// or Tailscale Serve");
   });
 
   it("skips local password SecretRef resolution when --token override is provided", async () => {
-    loadConfig.mockReturnValue(
-      createLocalGatewayConfigWithAuth(
-        createLocalGatewayPasswordRefAuth("MISSING_LOCAL_GATEWAY_PASSWORD"),
-      ),
-    );
+    setLocalAuth({ mode: "password", password: missingPassword });
 
     await runQr(["--setup-code-only", "--token", "override-token"]);
 
-    expectLoggedLocalSetupCode();
+    expectLoggedSetupCode("ws://127.0.0.1:18789");
   });
 
   it("resolves local gateway auth password SecretRefs before setup code generation", async () => {
     vi.stubEnv("QR_LOCAL_GATEWAY_PASSWORD", "local-password-secret");
-    loadConfig.mockReturnValue(
-      createLocalGatewayConfigWithAuth(
-        createLocalGatewayPasswordRefAuth("QR_LOCAL_GATEWAY_PASSWORD"),
-      ),
-    );
+    setLocalAuth({ mode: "password", password: secretRef("QR_LOCAL_GATEWAY_PASSWORD") });
 
     await runQr(["--setup-code-only"]);
 
-    expectLoggedLocalSetupCode();
+    expectLoggedSetupCode("ws://127.0.0.1:18789");
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
   it("does not let OPENCLAW_GATEWAY_PASSWORD mask a local password SecretRef", async () => {
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "password-from-env");
-    loadConfig.mockReturnValue(
-      createLocalGatewayConfigWithAuth(
-        createLocalGatewayPasswordRefAuth("MISSING_LOCAL_GATEWAY_PASSWORD"),
-      ),
-    );
+    setLocalAuth({ mode: "password", password: missingPassword });
 
     await expectQrExit(["--setup-code-only"]);
-    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
-    expect(output).toContain("MISSING_LOCAL_GATEWAY_PASSWORD");
+    expect(errorText()).toContain("MISSING_LOCAL_GATEWAY_PASSWORD");
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
   it("does not resolve local password SecretRef when auth mode is token", async () => {
-    loadConfig.mockReturnValue(
-      createLocalGatewayConfigWithAuth({
-        mode: "token",
-        token: "token-123",
-        ...createLocalGatewayEnvPasswordRefAuth("MISSING_LOCAL_GATEWAY_PASSWORD"),
-      }),
-    );
+    setLocalAuth({ mode: "token", token: "token-123", password: missingPassword });
 
     await runQr(["--setup-code-only"]);
 
-    expectLoggedLocalSetupCode();
+    expectLoggedSetupCode("ws://127.0.0.1:18789");
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
   it("fails when token and password SecretRefs are both configured with inferred mode", async () => {
     vi.stubEnv("QR_INFERRED_GATEWAY_TOKEN", "inferred-token");
-    loadConfig.mockReturnValue({
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
-      gateway: {
-        bind: "custom",
-        customBindHost: "gateway.local",
-        auth: {
-          token: { source: "env", provider: "default", id: "QR_INFERRED_GATEWAY_TOKEN" },
-          password: { source: "env", provider: "default", id: "MISSING_LOCAL_GATEWAY_PASSWORD" },
-        },
-      },
-    });
+    setLocalAuth(
+      { token: secretRef("QR_INFERRED_GATEWAY_TOKEN"), password: missingPassword },
+      "gateway.local",
+    );
 
     await expectQrExit(["--setup-code-only"]);
-    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
-    expect(output).toContain("gateway.auth.mode is unset");
+    expect(errorText()).toContain("gateway.auth.mode is unset");
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
   it("rejects invalid gateway.remote.url before printing remote setup codes", async () => {
     loadConfig.mockReturnValue({
       gateway: {
-        bind: "custom",
-        customBindHost: "127.0.0.1",
+        ...createTokenGatewayConfig().gateway,
         remote: { url: "http://localhost:notaport", token: "remote-tok" },
         auth: { mode: "token", token: "local-tok" },
       },
@@ -395,8 +319,7 @@ describe("registerQrCli", () => {
 
     await expectQrExit(["--setup-code-only", "--remote"]);
 
-    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
-    expect(output).toContain("Configured gateway.remote.url is invalid.");
+    expect(errorText()).toContain("Configured gateway.remote.url is invalid.");
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
@@ -409,11 +332,9 @@ describe("registerQrCli", () => {
 
     await runQr(["--remote"]);
 
-    expect(
-      runtimeLog.mock.calls.some((call) =>
-        readRuntimeCallText(call).includes("gateway.remote.token inactive"),
-      ),
-    ).toBe(true);
+    expect(runtimeLog.mock.calls.map(readRuntimeCallText).join("\n")).toContain(
+      "gateway.remote.token inactive",
+    );
   });
 
   it("routes remote secret diagnostics to stderr for json output", async () => {
@@ -428,48 +349,41 @@ describe("registerQrCli", () => {
 
     const payload = parseLastLoggedQrJson();
     expect(payload.gatewayUrl).toBe("wss://remote.example.com:444");
-    expect(
-      runtimeError.mock.calls.some((call) =>
-        readRuntimeCallText(call).includes("gateway.remote.password inactive"),
-      ),
-    ).toBe(true);
+    expect(errorText()).toContain("gateway.remote.password inactive");
   });
 
   it("errors when --remote is set but no remote URL is configured", async () => {
     loadConfig.mockReturnValue(createTokenGatewayConfig("gateway.local"));
 
     await expectQrExit(["--remote"]);
-    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
-    expect(output).toContain("qr --remote requires");
+    expect(errorText()).toContain("qr --remote requires");
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
   it("preserves --remote Tailscale Serve with publicOrigin and no remote URL", async () => {
-    loadConfig.mockReturnValue(createTailscaleRemoteRefConfig());
+    const gateway = {
+      publicOrigin: "https://gateway.example.test",
+      tailscale: { mode: "serve" },
+      auth: {},
+    };
+    loadConfig.mockReturnValue({
+      gateway: { ...gateway, remote: { token: secretRef("REMOTE_GATEWAY_TOKEN") } },
+    });
     resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
       resolvedConfig: {
-        gateway: {
-          publicOrigin: "https://gateway.example.test",
-          tailscale: { mode: "serve" },
-          remote: {
-            token: "tailscale-remote-token",
-          },
-          auth: {},
-        },
+        gateway: { ...gateway, remote: { token: "tailscale-remote-token" } },
       },
       diagnostics: [],
     });
-    runCommandWithTimeout.mockResolvedValue({
-      code: 0,
-      stdout: '{"Self":{"DNSName":"ts-host.tailnet.ts.net."}}',
-      stderr: "",
-    });
+    mockTailscaleStatusLookup();
 
     await runQr(["--json", "--remote"]);
 
     const payload = parseLastLoggedQrJson();
-    expect(payload.gatewayUrl).toBe("wss://ts-host.tailnet.ts.net");
-    expect(payload.auth).toBe("token");
-    expect(payload.urlSource).toBe("gateway.tailscale.mode=serve");
+    expect(payload).toMatchObject({
+      gatewayUrl: "wss://ts-host.tailnet.ts.net",
+      auth: "token",
+      urlSource: "gateway.tailscale.mode=serve",
+    });
   });
 });

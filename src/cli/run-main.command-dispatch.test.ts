@@ -47,6 +47,41 @@ import { ExpectedCliError } from "./failure-output.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 import { registerRunMainTimelineTests } from "./run-main.timeline.test-support.js";
 
+function expectNoDispatch() {
+  expect(startProxyMock).not.toHaveBeenCalled();
+  expect(tryRouteCliMock).not.toHaveBeenCalled();
+  expect(buildProgramMock).not.toHaveBeenCalled();
+  expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+}
+function expectLazyRegistration(primary: string, skipPluginValidation: boolean) {
+  expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
+    expect.anything(),
+    undefined,
+    undefined,
+    {
+      mode: "lazy",
+      primary,
+      skipPluginValidation,
+      session: createPluginCliLoadSessionMock.mock.results.at(-1)?.value,
+    },
+  );
+}
+function expectPolicyError(error: unknown, text: string) {
+  expect(error).toBeInstanceOf(ExpectedCliError);
+  if (!(error instanceof ExpectedCliError)) {
+    throw new Error("Expected a CLI policy error");
+  }
+  expect(error.message).toContain(text);
+  expect(error.humanOutput).toBe(error.message);
+  expect(error.machineOutput).toBe(error.message);
+}
+function ownPluginRoot(primary: string) {
+  resolvePluginCliRootOwnerIdsMock.mockImplementation(
+    ({ primaryCommand }: { primaryCommand?: string }) =>
+      primaryCommand === primary ? [primary] : [],
+  );
+}
+
 describe("runCli exit behavior", () => {
   installRunMainTestHooks();
 
@@ -189,37 +224,21 @@ describe("runCli exit behavior", () => {
     tryRouteCliMock,
   });
 
-  it.each([["lint", ["--lint", "--json"]]])(
-    "reads source-only proxy config before Doctor %s owns state access",
-    async (_mode, args) => {
-      tryRouteCliMock.mockResolvedValueOnce(true);
-      readSourceConfigBestEffortMock.mockResolvedValueOnce({ proxy: { selected: "doctor" } });
-      loadConfigMock.mockImplementation(() => {
-        throw new Error("Shared state requires Doctor repair");
-      });
+  it("reads source-only proxy config before Doctor lint owns state access", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    readSourceConfigBestEffortMock.mockResolvedValueOnce({ proxy: { selected: "doctor" } });
+    loadConfigMock.mockImplementation(() => {
+      throw new Error("Shared state requires Doctor repair");
+    });
 
-      await runCli(cliArgs("doctor", ...args));
+    await runCli(cliArgs("doctor", "--lint", "--json"));
 
-      expect(readSourceConfigBestEffortMock).toHaveBeenCalledOnce();
-      expect(loadConfigMock).not.toHaveBeenCalled();
-      expect(startProxyMock).toHaveBeenCalledWith({ selected: "doctor" });
-    },
-  );
+    expect(readSourceConfigBestEffortMock).toHaveBeenCalledOnce();
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(startProxyMock).toHaveBeenCalledWith({ selected: "doctor" });
+  });
 
-  it.each([
-    {
-      name: "profiled version-pinned skill verification",
-      argv: cliArgs(
-        "--profile",
-        "work",
-        "skills",
-        "verify",
-        "@owner/weather",
-        "--version",
-        "1.2.3",
-      ),
-    },
-  ])("starts the managed proxy for $name", async ({ argv }) => {
+  it("starts the managed proxy for profiled version-pinned skill verification", async () => {
     await withEnvAsync(
       {
         OPENCLAW_PROFILE: undefined,
@@ -230,7 +249,9 @@ describe("runCli exit behavior", () => {
         hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(true);
         tryRouteCliMock.mockResolvedValueOnce(true);
 
-        await runCli(argv);
+        await runCli(
+          cliArgs("--profile", "work", "skills", "verify", "@owner/weather", "--version", "1.2.3"),
+        );
 
         expect(startProxyMock).toHaveBeenCalledWith(undefined);
         expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledOnce();
@@ -315,10 +336,7 @@ describe("runCli exit behavior", () => {
       "Did you mean this?\n  openclaw update\n",
     );
 
-    expect(startProxyMock).not.toHaveBeenCalled();
-    expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(buildProgramMock).not.toHaveBeenCalled();
-    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+    expectNoDispatch();
   });
 
   it("sanitizes control characters in unowned command diagnostics", async () => {
@@ -328,21 +346,13 @@ describe("runCli exit behavior", () => {
       'OpenClaw does not know the command "bad-red\\nforged\\tline".',
     );
 
-    expect(startProxyMock).not.toHaveBeenCalled();
-    expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(buildProgramMock).not.toHaveBeenCalled();
-    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+    expectNoDispatch();
   });
 
   it("bounds long unowned command diagnostics without splitting Unicode", async () => {
     const primary = "🦞".repeat(1_000);
 
-    let error: unknown;
-    try {
-      await runCli(cliArgs(primary));
-    } catch (caught) {
-      error = caught;
-    }
+    const error = await runCli(cliArgs(primary)).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
@@ -351,10 +361,7 @@ describe("runCli exit behavior", () => {
     expect(message).toContain(`OpenClaw does not know the command "${displayPrimary}".`);
     expect(message).not.toContain("�");
     expect(message.length).toBeLessThan(500);
-    expect(startProxyMock).not.toHaveBeenCalled();
-    expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(buildProgramMock).not.toHaveBeenCalled();
-    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+    expectNoDispatch();
   });
 
   it.each([
@@ -409,15 +416,9 @@ describe("runCli exit behavior", () => {
 
       const error = await runCli(cliArgs(command)).catch((cause: unknown) => cause);
 
-      expect(error).toBeInstanceOf(ExpectedCliError);
-      expect((error as ExpectedCliError).message).toContain(expectedText);
-      expect((error as ExpectedCliError).humanOutput).toBe((error as Error).message);
-      expect((error as ExpectedCliError).machineOutput).toBe((error as Error).message);
+      expectPolicyError(error, expectedText);
       expect((error as Error).message).not.toContain("Did you mean this?");
-      expect(startProxyMock).not.toHaveBeenCalled();
-      expect(tryRouteCliMock).not.toHaveBeenCalled();
-      expect(buildProgramMock).not.toHaveBeenCalled();
-      expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+      expectNoDispatch();
     },
   );
 
@@ -433,12 +434,10 @@ describe("runCli exit behavior", () => {
 
     const error = await runCli(cliArgs("workboard", "list")).catch((cause: unknown) => cause);
 
-    expect(error).toBeInstanceOf(ExpectedCliError);
-    expect((error as ExpectedCliError).message).toContain(
+    expectPolicyError(
+      error,
       'the "workboard" plugin, but that bundled plugin is disabled by default',
     );
-    expect((error as ExpectedCliError).humanOutput).toBe((error as Error).message);
-    expect((error as ExpectedCliError).machineOutput).toBe((error as Error).message);
     expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
       program,
       undefined,
@@ -458,10 +457,7 @@ describe("runCli exit behavior", () => {
       'OpenClaw does not know the command "foo".',
     );
 
-    expect(startProxyMock).not.toHaveBeenCalled();
-    expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(buildProgramMock).not.toHaveBeenCalled();
-    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+    expectNoDispatch();
   });
 
   it("preserves plugins.allow diagnostics for roots owned only by CLI metadata", async () => {
@@ -486,28 +482,23 @@ describe("runCli exit behavior", () => {
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
   });
 
-  it.each([["auth", cliArgs("auth", "--help")]])(
-    "keeps reserved %s command roots out of plugin command discovery",
-    async (_name, argv) => {
-      const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
-      const program = { commands: [], parseAsync };
-      buildProgramMock.mockReturnValueOnce(program);
+  it("keeps reserved auth command roots out of plugin command discovery", async () => {
+    const argv = cliArgs("auth", "--help");
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    const program = { commands: [], parseAsync };
+    buildProgramMock.mockReturnValueOnce(program);
 
-      await runCli(argv);
+    await runCli(argv);
 
-      expect(startProxyMock).not.toHaveBeenCalled();
-      expect(registerSubCliByNameMock.mock.calls).toEqual([[program, argv[2], argv]]);
-      expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
-      expect(parseAsync).toHaveBeenCalledWith(argv);
-    },
-  );
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(registerSubCliByNameMock.mock.calls).toEqual([[program, argv[2], argv]]);
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+    expect(parseAsync).toHaveBeenCalledWith(argv);
+  });
 
   it("routes incidental logs to stderr throughout --json startup and dispatch", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);
-    resolvePluginCliRootOwnerIdsMock.mockImplementation(
-      ({ primaryCommand }: { primaryCommand?: string }) =>
-        primaryCommand === "memory" ? ["memory"] : [],
-    );
+    ownPluginRoot("memory");
     let stderrDuringPluginRegistration = false;
     let stderrDuringParse = true;
     registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async () => {
@@ -521,17 +512,7 @@ describe("runCli exit behavior", () => {
 
     await runCli(cliArgs("memory", "search", "query", "--json"));
 
-    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
-      expect.anything(),
-      undefined,
-      undefined,
-      {
-        mode: "lazy",
-        primary: "memory",
-        skipPluginValidation: true,
-        session: createPluginCliLoadSessionMock.mock.results.at(-1)?.value,
-      },
-    );
+    expectLazyRegistration("memory", true);
     expect(stderrDuringPluginRegistration).toBe(true);
     expect(stderrDuringParse).toBe(true);
     expect(loggingState.forceConsoleToStderr).toBe(false);
@@ -585,10 +566,7 @@ describe("runCli exit behavior", () => {
 
   it("does not route lazy plugin registration logs for pass-through --json after terminator", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);
-    resolvePluginCliRootOwnerIdsMock.mockImplementation(
-      ({ primaryCommand }: { primaryCommand?: string }) =>
-        primaryCommand === "memory" ? ["memory"] : [],
-    );
+    ownPluginRoot("memory");
     let stderrDuringPluginRegistration = true;
     registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async () => {
       stderrDuringPluginRegistration = loggingState.forceConsoleToStderr;
@@ -599,17 +577,7 @@ describe("runCli exit behavior", () => {
 
     await runCli(cliArgs("memory", "--", "--json"));
 
-    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
-      expect.anything(),
-      undefined,
-      undefined,
-      {
-        mode: "lazy",
-        primary: "memory",
-        skipPluginValidation: false,
-        session: createPluginCliLoadSessionMock.mock.results.at(-1)?.value,
-      },
-    );
+    expectLazyRegistration("memory", false);
     const session = createPluginCliLoadSessionMock.mock.results.at(-1)?.value;
     expect(session?.close.mock.invocationCallOrder[0]).toBeLessThan(
       parseAsync.mock.invocationCallOrder[0]!,
@@ -650,15 +618,12 @@ describe("runCli exit behavior", () => {
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "config"]);
   });
 
-  it.each([["status plain", ["node", "openclaw", "models", "--status-plain"]]])(
-    "keeps models %s output free of proxy startup",
-    async (_name, argv) => {
-      tryRouteCliMock.mockResolvedValueOnce(true);
-      await runCli(argv);
-      expect(startProxyMock).not.toHaveBeenCalled();
-      expect(stopProxyMock).not.toHaveBeenCalled();
-    },
-  );
+  it("keeps models status plain output free of proxy startup", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    await runCli(cliArgs("models", "--status-plain"));
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(stopProxyMock).not.toHaveBeenCalled();
+  });
   it("suppresses startup progress for plain model output before full CLI parsing", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);
     const parseAsync = vi.fn(async () => expect(progressDoneMock).toHaveBeenCalled());
