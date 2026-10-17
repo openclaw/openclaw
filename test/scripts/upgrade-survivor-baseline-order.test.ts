@@ -1,4 +1,4 @@
-import { execFile, spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { delimiter, join, resolve } from "node:path";
@@ -9,18 +9,16 @@ import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-ru
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
+import * as fixture from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runner = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
 const runnerSection = (start: string, end: string) =>
   runner.slice(runner.indexOf(start), runner.indexOf(end));
-const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
-const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
-const executable = (file: string, body: string) => writeFileSync(file, body, { mode: 0o755 });
-const assertSuccess = (result: ReturnType<typeof spawnSync>) =>
+const assertSuccess = (result: ReturnType<typeof fixture.runProcess>) =>
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
 const bash = (script: string, ...args: string[]) =>
-  spawnSync("bash", ["-c", script, "survivor-fixture", ...args], { encoding: "utf8" });
+  fixture.runProcess("bash", ["-c", script, "survivor-fixture", ...args]);
 
 it("owns the model endpoint before authoring legacy operator configuration", async () => {
   const root = tempDirs.make("survivor-model-endpoint-");
@@ -126,10 +124,7 @@ configure_plugin_registry() {
 }
 seed_legacy_operator_gateway() { legacy_seeded=1; }
 start_native_assignment_fixture() {
-  if [ "$legacy_seeded" != "1" ]; then
-    echo "native agent makes the ownerless Cron roster ambiguous" >&2
-    return 92
-  fi
+  [ "$legacy_seeded" = "1" ] || return 92
   [ "$NPM_CONFIG_REGISTRY" = baseline-registry ]
 }
 prepare_schema_expectation() { printf 'schema-snapshot\\n'; }
@@ -139,10 +134,7 @@ install_update_restart_systemctl_shim() {
 }
 run_update_restart_probe_gateway() {
   [ "$#" -eq 3 ] && [ "$1" = start ] && [ "$2" = 18789 ] && [ "$3" = "$COMMAND_TIMEOUT" ] || return 97
-  if [ "$manager_registry" != "$NPM_CONFIG_REGISTRY" ]; then
-    printf 'manager retained stale registry: %s, current: %s\\n' "$manager_registry" "$NPM_CONFIG_REGISTRY" >&2
-    return 91
-  fi
+  [ "$manager_registry" = "$NPM_CONFIG_REGISTRY" ] || return 91
   printf 'service=%s\\n' "$manager_registry"
 }
 phase() {
@@ -184,7 +176,7 @@ it.each([
   const paths = readUpgradeSurvivorPaths(root, { OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario });
   if (scenario === "sqlite-volume") {
     mkdirSync(paths.packageRoot, { recursive: true });
-    writeJson(join(paths.packageRoot, "package.json"), {
+    fixture.writeJson(join(paths.packageRoot, "package.json"), {
       name: "openclaw",
       version: "2026.8.1",
       type: "module",
@@ -201,11 +193,11 @@ it.each([
   const probePath = join(root, "probe.mjs");
   const bin = join(root, "bin");
   mkdirSync(bin);
-  executable(
+  fixture.writeExecutable(
     join(bin, "openclaw"),
     '#!/usr/bin/env bash\nexec node --import "$TSX_IMPORT" "$PROBE_SCRIPT" "$@"\n',
   );
-  executable(
+  fixture.writeExecutable(
     join(bin, "systemctl"),
     `#!/usr/bin/env bash
   case "$2" in
@@ -305,30 +297,27 @@ ${runner.slice(boundary)}
   // The Darwin Bash guard must be able to replay this injected runner.
   const scriptPath = join(root, "runner.sh");
   writeFileSync(scriptPath, script);
-  const result = spawnSync("bash", [scriptPath], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      PATH: `${bin}${delimiter}${process.env.PATH}`,
-      HOME: root,
-      FIXTURE_HOME: root,
-      PROBE_SCRIPT: probePath,
-      PROBE_RESULT: resultPath,
-      PROBE_READY: join(root, "ready"),
-      PROBE_LIVE: join(root, "live"),
-      TSX_IMPORT: resolve("node_modules/tsx/dist/loader.mjs"),
-      OPENCLAW_TEST_STATE_FUNCTION_B64: "Og==",
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.8.1",
-      OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: mode,
-      ...paths.env,
-      OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS: "12",
-      OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION: "3",
-      OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS: "6",
-      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "",
-    },
+  const result = fixture.runProcess("bash", [scriptPath], {
+    ...process.env,
+    PATH: `${bin}${delimiter}${process.env.PATH}`,
+    HOME: root,
+    FIXTURE_HOME: root,
+    PROBE_SCRIPT: probePath,
+    PROBE_RESULT: resultPath,
+    PROBE_READY: join(root, "ready"),
+    PROBE_LIVE: join(root, "live"),
+    TSX_IMPORT: resolve("node_modules/tsx/dist/loader.mjs"),
+    OPENCLAW_TEST_STATE_FUNCTION_B64: "Og==",
+    OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.8.1",
+    OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: mode,
+    ...paths.env,
+    OPENCLAW_UPGRADE_SURVIVOR_VOLUME_SESSIONS: "12",
+    OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION: "3",
+    OPENCLAW_UPGRADE_SURVIVOR_VOLUME_CRON_JOBS: "6",
+    OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "",
   });
   assertSuccess(result);
-  expect(readJson(resultPath)).toEqual({
+  expect(fixture.readJson(resultPath)).toEqual({
     rows: scenario === "sqlite-volume" ? 15 : 3,
     volume: scenario === "sqlite-volume",
   });
@@ -349,10 +338,12 @@ it.each(["2026.9.2", "2026.9.4"])("preserves Cron ownership on %s", (version) =>
   }
   writeFileSync(configPath, "{}");
   if (version === "2026.9.4") {
-    writeJson(join(artifacts, "native-assignment-eligibility.json"), { status: "required" });
+    fixture.writeJson(join(artifacts, "native-assignment-eligibility.json"), {
+      status: "required",
+    });
   }
   // Shipped CLI ownership rules, including failure of global reads after adding ops.
-  executable(
+  fixture.writeExecutable(
     join(bin, "openclaw"),
     `#!${process.execPath}
 const assert = require("node:assert/strict");
@@ -415,10 +406,10 @@ if (args[0] === "--help") {
 `,
   );
   const run = (command: string) =>
-    spawnSync(process.execPath, [assertions, command], {
-      encoding: "utf8",
-      timeout: 10_000,
-      env: {
+    fixture.runProcess(
+      process.execPath,
+      [assertions, command],
+      {
         PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "legacy-operator-state",
         OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: version,
@@ -430,7 +421,8 @@ if (args[0] === "--help") {
         OPENCLAW_STATE_DIR: state,
         GATEWAY_AUTH_TOKEN_REF: "survivor-test-token",
       },
-    });
+      10_000,
+    );
   assertSuccess(run("seed-legacy-operator"));
   const earlyAgent = run("seed-legacy-operator-agent");
   expect(earlyAgent.status).toBe(1);
@@ -443,7 +435,7 @@ if (args[0] === "--help") {
   ]) {
     assertSuccess(run(command));
   }
-  const ledger = readJson(ledgerPath);
+  const ledger = fixture.readJson(ledgerPath);
   expect(ledger.jobs).toEqual([
     { id: "native-survivor-default-owner", name: "survivor-default-owner" },
     { id: "native-survivor-ops-owner", name: "survivor-ops-owner", agentId: "ops" },
@@ -462,5 +454,5 @@ if (args[0] === "--help") {
   expect(approvals.agents["native-proof"]).toEqual(
     version === "2026.9.4" ? { security: "full", ask: "off", askFallback: "deny" } : undefined,
   );
-  expect(readJson(configPath).agents.defaults.systemAgent).toBeUndefined();
+  expect(fixture.readJson(configPath).agents.defaults.systemAgent).toBeUndefined();
 });

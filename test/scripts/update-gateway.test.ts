@@ -16,38 +16,30 @@ import { linkPnpmBootstrapShellTools } from "./test-helpers.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 
-const cases: Array<[scenarios: string[], steps: number, exitCode?: number]> = [
-  [["success", "explicit-declarations", "hash-pin", "local-pin"], 4, 0],
-  [
-    [
-      "missing",
-      "enable-failure",
-      "dirty",
-      "interrupted",
-      "missing-pin",
-      "invalid-pin",
-      "invalid-json",
-      "missing-manifest",
-    ],
-    0,
-  ],
-  [["probe-failure", "wrong-version", "rebase-failure"], 1],
-  [["install-failure"], 2, 42],
-  [["symlink"], 2],
-  [["build-failure"], 3, 42],
+const cases: Array<[scenario: string, branch: string, steps: number, exitCode: number]> = [
+  ["success", "main", 4, 0],
+  ["success", "server", 4, 0],
+  ["explicit-declarations", "main", 4, 0],
+  ["hash-pin", "main", 4, 0],
+  ["local-pin", "server", 4, 0],
+  ["missing", "main", 0, 1],
+  ["enable-failure", "main", 0, 1],
+  ["dirty", "main", 0, 1],
+  ["interrupted", "main", 0, 1],
+  ["missing-pin", "main", 0, 1],
+  ["invalid-pin", "main", 0, 1],
+  ["invalid-json", "main", 0, 1],
+  ["missing-manifest", "main", 0, 1],
+  ["probe-failure", "main", 1, 1],
+  ["wrong-version", "main", 1, 1],
+  ["rebase-failure", "server", 1, 1],
+  ["install-failure", "main", 2, 42],
+  ["symlink", "main", 2, 1],
+  ["build-failure", "main", 3, 42],
 ];
-it.each(
-  cases.flatMap(([scenarios, steps, exitCode = 1]) =>
-    scenarios.flatMap((scenario) =>
-      (scenario === "success"
-        ? ["main", "server"]
-        : [scenario === "rebase-failure" || scenario === "local-pin" ? "server" : "main"]
-      ).map((branch) => ({ scenario, branch, steps, exitCode })),
-    ),
-  ),
-)(
-  "keeps checkout and restart boundaries for $scenario on $branch",
-  ({ scenario, branch, steps, exitCode }) => {
+it.each(cases)(
+  "keeps checkout and restart boundaries for %s on %s",
+  (scenario, branch, steps, exitCode) => {
     const root = tempDirs.make("openclaw-server-bootstrap-");
     const is = (...scenarios: string[]) => scenarios.includes(scenario);
     const read = (file: string) => readFileSync(join(root, file), "utf8");
@@ -68,6 +60,8 @@ it.each(
     writeFileSync(join(repo, "package.json"), originalManifest);
     writeFileSync(join(repo, ".git/HEAD"), originalHead);
     writeFileSync(join(root, "remote-head"), targetSha);
+    writeFileSync(join(repo, "pnpm-lock.yaml"), "untouched\n");
+    writeFileSync(join(repo, "pnpm-workspace.yaml"), "packages: []\n");
     writeFileSync(
       join(root, "fetched-package.json"),
       scenario === "invalid-json"
@@ -83,8 +77,6 @@ it.each(
             dependencies: { "must-not-install": "1.0.0" },
           }),
     );
-    writeFileSync(join(repo, "pnpm-lock.yaml"), "untouched\n");
-    writeFileSync(join(repo, "pnpm-workspace.yaml"), "packages: []\n");
     const executable = (name: string, body: string) => {
       writeFileSync(join(bin, name), `#!/bin/bash\nset -eu\n${body}\n`, { mode: 0o755 });
     };
@@ -149,7 +141,6 @@ NODE
         exit 0
       fi
       [[ "$PWD" == "$TARGET" ]]
-      [[ "$SCENARIO" != probe-failure ]] || exit 42
       node - "$1" <<'NODE'
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -202,8 +193,6 @@ NODE
         PNPM_CONFIG_LOCKFILE_DIR: root,
         pnpm_config_lockfile_dir: root,
         OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: scenario === "explicit-declarations" ? "0" : undefined,
-        // Bootstrap coverage uses the documented operator-owned lifecycle.
-        // Automatic recovery and lifecycle environment are covered separately.
         OPENCLAW_UPDATE_RESTART_CMD: "",
       },
     });
@@ -212,28 +201,29 @@ NODE
     const preflightFailure = !beforeFetch && steps < 2 && scenario !== "rebase-failure";
     const lines = (name: string) =>
       existsSync(join(root, name)) ? readFileSync(join(root, name), "utf8").trim().split("\n") : [];
-    if (preflightFailure) {
-      expect(read("repo/.git/HEAD"), "failed target preflight advanced HEAD").toBe(originalHead);
-      expect(read("repo/package.json")).toBe(originalManifest);
-      expect(lines("git-mutations")).toEqual(["fetch origin main"]);
-      expect(lines("git-calls")).toContain(`show ${targetSha}:package.json`);
-      expect(output).toContain("no checkout update or restart");
-    }
-    const succeeded = exitCode === 0;
     expect(result.status, output).toBe(exitCode);
     expect(lines("steps")).toEqual(["probe", "install", "build", "nested"].slice(0, steps));
+    const mutations = beforeFetch ? [] : ["fetch origin main"];
+    if (!beforeFetch && !preflightFailure) {
+      mutations.push(
+        branch === "main" ? `merge --ff-only ${targetSha}` : `rebase --rebase-merges ${targetSha}`,
+      );
+      if (scenario === "rebase-failure") {
+        mutations.push("rebase --abort");
+      }
+    }
+    expect(lines("git-mutations")).toEqual(mutations);
+    expect(read("repo/.git/HEAD")).toBe(
+      beforeFetch || preflightFailure || scenario === "rebase-failure" ? originalHead : targetSha,
+    );
     if (beforeFetch) {
       expect(existsSync(join(root, "git-mutations"))).toBe(false);
-    } else if (!preflightFailure) {
+    } else {
       expect(lines("git-calls")).toContain(`show ${targetSha}:package.json`);
-      expect(lines("git-mutations")).toEqual([
-        "fetch origin main",
-        branch === "main" ? `merge --ff-only ${targetSha}` : `rebase --rebase-merges ${targetSha}`,
-        ...(scenario === "rebase-failure" ? ["rebase --abort"] : []),
-      ]);
-      if (scenario !== "rebase-failure") {
-        expect(read("repo/.git/HEAD")).toBe(targetSha);
-      }
+    }
+    if (preflightFailure) {
+      expect(read("repo/package.json")).toBe(originalManifest);
+      expect(output).toContain("no checkout update or restart");
     }
     if (scenario === "missing" || scenario === "enable-failure") {
       expect(output).toContain("Corepack");
@@ -241,6 +231,6 @@ NODE
     expect(read("repo/pnpm-lock.yaml")).toBe("untouched\n");
     expect(read("repo/pnpm-workspace.yaml")).toBe("packages: []\n");
     expect(readdirSync(temp)).toEqual([]);
-    expect(result.stdout.includes("OK abc123")).toBe(succeeded);
+    expect(result.stdout.includes("OK abc123")).toBe(exitCode === 0);
   },
 );
