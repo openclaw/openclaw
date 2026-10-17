@@ -103,6 +103,13 @@ async function expectTitle(panel: Panel, title: string) {
 describe("Plugin link reader panel", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
+    // Section selection owns these requests; no viewport preload is admitted here.
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class extends IntersectionObserver {
+        override observe() {}
+      },
+    );
   });
   afterEach(() => {
     document.body.replaceChildren();

@@ -132,6 +132,16 @@ describe("gateway settings and layout persistence", () => {
   installSettingsStorageLifecycle();
   beforeEach(() => {
     setTestLocation({ protocol: "https:", host: "gateway.example:8443", pathname: "/" });
+    vi.stubGlobal("matchMedia", (media: string): MediaQueryList => ({
+      media,
+      matches: false,
+      onchange: null,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent: () => true,
+    }));
   });
 
   it("keeps development credentials scoped to the upstream when the Vite target changes", () => {

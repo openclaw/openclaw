@@ -80,25 +80,6 @@ export function setupSidebarTest() {
         value: (id: number) => frames.delete(id),
       });
     }
-    // JSDOM has no media queries or layout observation. Real browser tests keep
-    // their native implementations and own the layout and motion assertions.
-    if (typeof matchMedia === "undefined") {
-      Object.defineProperty(globalThis, "matchMedia", {
-        configurable: true,
-        writable: true,
-        value: (media: string) => ({
-          media,
-          matches: false,
-          onchange: null,
-          addListener() {},
-          removeListener() {},
-          addEventListener() {},
-          removeEventListener() {},
-          dispatchEvent: () => true,
-        }),
-      });
-    }
-
     for (const name of ["ResizeObserver", "IntersectionObserver"] as const) {
       if (globalThis[name] !== undefined) {
         continue;

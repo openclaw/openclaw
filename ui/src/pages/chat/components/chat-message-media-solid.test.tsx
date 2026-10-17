@@ -49,6 +49,7 @@ it("retries a standalone native image after a failed preview", async () => {
   vi.stubGlobal("fetch", fetchMock);
   await loadAssistantAttachmentAvailability(source);
   const view = mountSolid(() => <MessageImages images={[{ url: source }]} />);
+  await waitForSolid(() => expect(view.container.querySelector("img")).not.toBeNull());
   const image = view.container.querySelector("img")!;
   expect(image).not.toBeNull();
   image.dispatchEvent(new Event("error"));

@@ -46,7 +46,6 @@ describe("Browser panel text and touch input", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("ResizeObserver", undefined);
   });
 
   afterEach(() => {

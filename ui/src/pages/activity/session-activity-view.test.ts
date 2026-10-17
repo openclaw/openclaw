@@ -26,7 +26,16 @@ function show(input: Parameters<typeof props>[0] = {}, target = container) {
 beforeEach(() => {
   container = document.createElement("div");
   document.body.replaceChildren(container);
+  // Identity and navigation fixtures do not admit viewport-driven media discovery.
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class extends IntersectionObserver {
+      override observe() {}
+    },
+  );
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("session activity semantics", () => {
   afterEach(() => {

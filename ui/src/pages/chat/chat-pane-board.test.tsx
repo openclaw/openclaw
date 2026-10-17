@@ -126,6 +126,7 @@ function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
     ...createInitialChatRealtimeState(),
     chatError: null,
     chatLoading: false,
+    chatHistoryPagination: { hasMore: false },
     chatMessages: [],
     chatToolMessages: [],
     chatQueue: [],
