@@ -27,14 +27,12 @@ function createInventoryRepository() {
       [
         "-C",
         root,
-        "-c",
-        "commit.gpgSign=false",
-        "-c",
-        "user.name=Inventory Fixture",
-        "-c",
-        "user.email=fixture@example.invalid",
-        "-c",
-        `core.hooksPath=${path.join(root, "no-hooks")}`,
+        ...[
+          "commit.gpgSign=false",
+          "user.name=Inventory Fixture",
+          "user.email=fixture@example.invalid",
+          `core.hooksPath=${path.join(root, "no-hooks")}`,
+        ].flatMap((setting) => ["-c", setting]),
         ...args,
       ],
       { env, encoding: "utf8" },
@@ -148,11 +146,7 @@ describe("committed plugin inventory", () => {
     const result = spawnSync(
       process.execPath,
       [path.resolve("scripts/generate-plugin-inventory-doc.mts"), ...args],
-      {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 10_000,
-      },
+      { cwd: root, encoding: "utf8", timeout: 10_000 },
     );
     expect(result.error).toBeUndefined();
     expect(result.status).not.toBe(0);
@@ -161,14 +155,10 @@ describe("committed plugin inventory", () => {
   });
 });
 
-it.each<{
-  name: string;
-  manifest: Parameters<typeof resolvePluginSurface>[0];
-  expected: string[];
-}>([
-  {
-    name: "manifest identifiers as inline code",
-    manifest: {
+it.each<[string, Parameters<typeof resolvePluginSurface>[0], string[]]>([
+  [
+    "manifest identifiers as inline code",
+    {
       id: "example",
       channels: ["discord"],
       providers: ["openai"],
@@ -176,7 +166,7 @@ it.each<{
       dashboard: { dataBindings: [{ id: "items.list" }], actionVerbs: [{ id: "refresh" }] },
       skills: ["example"],
     },
-    expected: [
+    [
       "Channels: `discord`",
       "Providers: `openai`",
       "Contracts: `tools`, `webSearchProviders`",
@@ -184,40 +174,30 @@ it.each<{
       "Dashboard action verbs: `example.refresh`",
       "Skills",
     ],
-  },
-  { name: "no declared surfaces", manifest: {}, expected: [] },
-  {
-    name: "root CLI commands and runtime slash aliases",
-    manifest: {
-      cliCommands: [
-        { name: " voicecall " },
-        { name: "browser" },
-        { name: "voicecall" },
-        { name: " " },
-      ],
+  ],
+  ["no declared surfaces", {}, []],
+  [
+    "root CLI commands and runtime slash aliases",
+    {
+      cliCommands: [" voicecall ", "browser", "voicecall", " "].map((name) => ({ name })),
       commandAliases: [
-        { name: "voice", kind: "runtime-slash" },
-        { name: " voice ", kind: "runtime-slash" },
-        { name: " ", kind: "runtime-slash" },
+        ...["voice", " voice ", " "].map((name) => ({ name, kind: "runtime-slash" })),
         { name: "internal", kind: "activation-only" },
       ],
     },
-    expected: [
-      "CLI commands: `openclaw browser`, `openclaw voicecall`",
-      "Slash commands: `/voice`",
-    ],
-  },
-  {
-    name: "dashboard owner delimiter escaping",
-    manifest: { id: "dashboard.segmented", dashboard: { actionVerbs: [{ id: "refresh" }] } },
-    expected: ["Dashboard action verbs: `dashboard%2Esegmented.refresh`"],
-  },
-  {
-    name: "dashboard literal escape markers",
-    manifest: { id: "dashboard%2Esegmented", dashboard: { dataBindings: [{ id: "refresh" }] } },
-    expected: ["Dashboard data bindings: `dashboard%252Esegmented.refresh`"],
-  },
-])("renders $name", ({ manifest, expected }) => {
+    ["CLI commands: `openclaw browser`, `openclaw voicecall`", "Slash commands: `/voice`"],
+  ],
+  [
+    "dashboard owner delimiter escaping",
+    { id: "dashboard.segmented", dashboard: { actionVerbs: [{ id: "refresh" }] } },
+    ["Dashboard action verbs: `dashboard%2Esegmented.refresh`"],
+  ],
+  [
+    "dashboard literal escape markers",
+    { id: "dashboard%2Esegmented", dashboard: { dataBindings: [{ id: "refresh" }] } },
+    ["Dashboard data bindings: `dashboard%252Esegmented.refresh`"],
+  ],
+])("renders %s", (_name, manifest, expected) => {
   expect(resolvePluginSurface(manifest)).toEqual(expected);
 });
 

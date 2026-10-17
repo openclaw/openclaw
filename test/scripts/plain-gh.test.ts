@@ -1,5 +1,5 @@
 // Exercise real subprocess boundaries with disposable PATH routes and synthetic credentials.
-import { execFileSync } from "node:child_process";
+import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
 import {
   chmodSync,
   closeSync,
@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   execGhApiRead,
   execGhJson,
@@ -40,6 +40,22 @@ let commands: ReturnType<typeof makeCommandFixture>;
 beforeAll(() => {
   commands = makeCommandFixture();
 });
+
+const versionArgs = ["--version"];
+const protectedCall = (argv = versionArgs, override: string | null = null) => ({
+  route: "protected",
+  argv,
+  override,
+});
+const secondCall = (override: string) => ({ route: "second", argv: versionArgs, override });
+const normalizedColors = {
+  NO_COLOR: "1",
+  FORCE_COLOR: "0",
+  CLICOLOR: "0",
+  CLICOLOR_FORCE: "0",
+  COLORTERM: null,
+  GH_FORCE_TTY: null,
+};
 
 function makeCommandFixture(parent?: string) {
   const root = commandDirs.make("plain-gh-commands-", parent);
@@ -111,6 +127,7 @@ function makeFixture(fixtureCommands = commands) {
     secondBin,
     toolsBin,
     env,
+    options: { env, encoding: "utf8" as const, stdio: "pipe" as const },
     override: path.join(secondBin, "gh"),
     calls: () =>
       readFileSync(calls, "utf8")
@@ -121,16 +138,21 @@ function makeFixture(fixtureCommands = commands) {
   };
 }
 
+function runShell(script: string, env: NodeJS.ProcessEnv, args: string[] = [], cwd?: string) {
+  return execFileSync("/bin/bash", ["-c", script, "plain-gh", shellHelper, ...args], {
+    encoding: "utf8",
+    env,
+    cwd,
+    stdio: "pipe",
+  });
+}
+
 function runGh(engine: (typeof engines)[number], env: NodeJS.ProcessEnv, cwd?: string) {
   const options = { cwd, encoding: "utf8" as const, env, stdio: "pipe" as const };
   if (engine === "Node") {
     return execPlainGh(["--version"], options);
   }
-  return execFileSync(
-    "/bin/bash",
-    ["-c", 'source "$1"; shift; gh_plain "$@"', "plain-gh", shellHelper, "--version"],
-    options,
-  );
+  return runShell('source "$1"; shift; gh_plain "$@"', env, versionArgs, cwd);
 }
 
 describe.each(engines)("%s plain gh execution", (engine) => {
@@ -148,31 +170,12 @@ describe.each(engines)("%s plain gh execution", (engine) => {
         route: explicit ? "second" : "protected",
         argv: ["--version"],
         override: explicit ? fixture.override : null,
-        colors: {
-          NO_COLOR: "1",
-          FORCE_COLOR: "0",
-          CLICOLOR: "0",
-          CLICOLOR_FORCE: "0",
-          COLORTERM: null,
-          GH_FORCE_TTY: null,
-        },
+        colors: normalizedColors,
       });
       expect(result.tokens).toEqual(explicit ? { GH_TOKEN: "fixture-token" } : {});
       expect(fixture.calls()).toEqual([
-        ...(explicit
-          ? [
-              {
-                route: "protected",
-                argv: ["auth", "token"],
-                override: engine === "shell" ? "" : null,
-              },
-            ]
-          : []),
-        {
-          route: explicit ? "second" : "protected",
-          argv: ["--version"],
-          override: explicit ? fixture.override : null,
-        },
+        ...(explicit ? [protectedCall(["auth", "token"], engine === "shell" ? "" : null)] : []),
+        explicit ? secondCall(fixture.override) : protectedCall(),
       ]);
       expect(fixture.env).toEqual(before);
       expect(JSON.parse(readFileSync(parentPackage, "utf8"))).toEqual({ type: "module" });
@@ -189,7 +192,7 @@ describe.each(engines)("%s plain gh execution", (engine) => {
         stderr: "policy denied\n",
       }),
     );
-    expect(fixture.calls()).toEqual([{ route: "protected", argv: ["--version"], override: null }]);
+    expect(fixture.calls()).toEqual([protectedCall()]);
   });
 
   it.each(["missing PATH command", "nonexecutable override"])(
@@ -223,26 +226,15 @@ describe.each(engines)("%s plain gh execution", (engine) => {
       expect(result.tokens).toEqual({ [tokenName]: "fixture-ambient" });
       expect(fixture.env).toEqual(before);
     }
-    expect(fixture.calls()).toEqual([
-      { route: "protected", argv: ["--version"], override: null },
-      { route: "second", argv: ["--version"], override: fixture.override },
-    ]);
+    expect(fixture.calls()).toEqual([protectedCall(), secondCall(fixture.override)]);
   });
 
   it.each([
-    {
-      host: "github.com",
-      tokenName: "GH_TOKEN",
-      args: ["auth", "token", "--hostname", "github.com"],
-    },
-    {
-      host: "github.example.com",
-      tokenName: "GH_ENTERPRISE_TOKEN",
-      args: ["auth", "token", "--hostname", "github.example.com"],
-    },
+    { host: "github.com", tokenName: "GH_TOKEN" },
+    { host: "github.example.com", tokenName: "GH_ENTERPRISE_TOKEN" },
   ])(
     "forwards explicit override credentials for host $host only to the child",
-    ({ host, tokenName, args }) => {
+    ({ host, tokenName }) => {
       const fixture = makeFixture();
       Object.assign(fixture.env, { GH_HOST: host, OPENCLAW_GH_BIN: fixture.override });
       const before = { ...fixture.env };
@@ -258,17 +250,11 @@ const before = JSON.stringify(process.env);
 process.stdout.write(execPlainGh(["--version"], { encoding: "utf8" }));
 if (JSON.stringify(process.env) !== before) throw new Error("parent environment changed");`,
               ],
-              { encoding: "utf8", env: fixture.env, stdio: "pipe" },
+              fixture.options,
             )
-          : execFileSync(
-              "/bin/bash",
-              [
-                "-c",
-                'source "$1"; gh_plain --version && test -z "${GH_TOKEN-}${GH_ENTERPRISE_TOKEN-}"',
-                "plain-gh",
-                shellHelper,
-              ],
-              { encoding: "utf8", env: fixture.env, stdio: "pipe" },
+          : runShell(
+              'source "$1"; gh_plain --version && test -z "${GH_TOKEN-}${GH_ENTERPRISE_TOKEN-}"',
+              fixture.env,
             );
       const result = JSON.parse(output);
       expect(result).toMatchObject({
@@ -277,8 +263,8 @@ if (JSON.stringify(process.env) !== before) throw new Error("parent environment 
       });
       expect(result.tokens).toEqual({ [tokenName]: "fixture-token" });
       expect(fixture.calls()).toEqual([
-        { route: "protected", argv: args, override: engine === "shell" ? "" : null },
-        { route: "second", argv: ["--version"], override: fixture.override },
+        protectedCall(["auth", "token", "--hostname", host], engine === "shell" ? "" : null),
+        secondCall(fixture.override),
       ]);
       expect(fixture.env).toEqual(before);
     },
@@ -288,15 +274,9 @@ if (JSON.stringify(process.env) !== before) throw new Error("parent environment 
 describe("plain gh subprocess contracts", () => {
   it("ignores a shell function shadowing the external PATH executable", () => {
     const fixture = makeFixture();
-    const output = execFileSync(
-      "/bin/bash",
-      [
-        "-c",
-        'source "$1"; gh() { echo function-shadow >&2; return 71; }; resolved=$(resolve_plain_gh_bin); "$resolved" --version',
-        "plain-gh",
-        shellHelper,
-      ],
-      { encoding: "utf8", env: fixture.env, stdio: "pipe" },
+    const output = runShell(
+      'source "$1"; gh() { echo function-shadow >&2; return 71; }; resolved=$(resolve_plain_gh_bin); "$resolved" --version',
+      fixture.env,
     );
     expect(output).toContain('"route":"protected"');
     expect(fixture.calls()).toHaveLength(1);
@@ -313,12 +293,11 @@ describe("plain gh subprocess contracts", () => {
   it("keeps direct resolver/environment consumers on PATH without an auth probe", () => {
     const fixture = makeFixture();
     const output = execFileSync(resolvePlainGhBin(fixture.env), ["--version"], {
-      encoding: "utf8",
+      ...fixture.options,
       env: plainGhAuthenticatedEnv(fixture.env),
-      stdio: "pipe",
     });
     expect(JSON.parse(output).route).toBe("protected");
-    expect(fixture.calls()).toEqual([{ route: "protected", argv: ["--version"], override: null }]);
+    expect(fixture.calls()).toEqual([protectedCall()]);
   });
 
   it("keeps explicit reads override-independent and parses normalized JSON", async () => {
@@ -360,10 +339,7 @@ describe("plain gh subprocess contracts", () => {
     ).rejects.toMatchObject({
       code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
     });
-    expect(fixture.calls()).toEqual([
-      { route: "protected", argv: ["--version"], override: null },
-      { route: "protected", argv: ["--version"], override: null },
-    ]);
+    expect(fixture.calls()).toEqual([protectedCall(), protectedCall()]);
   });
 
   it.each([execPlainGh, execGhRead])(
@@ -398,36 +374,20 @@ describe("plain gh subprocess contracts", () => {
   );
 
   it("preserves bounded read options and invocation errors", () => {
-    const calls: unknown[][] = [];
-    expect(
-      execGhJson(
-        ["api", "repos/example/repo"],
-        {
-          killSignal: "SIGKILL",
-          stdio: ["ignore", "pipe", "inherit"],
-          timeout: 60_000,
-        },
-        {
-          execFileSyncImpl: (...args: unknown[]) => {
-            calls.push(args);
-            return '{"ok":true}';
-          },
-        },
-      ),
-    ).toEqual({ ok: true });
-    expect(calls).toEqual([
-      [
-        "gh",
-        ["api", "repos/example/repo"],
-        expect.objectContaining({
-          encoding: "utf8",
-          killSignal: "SIGKILL",
-          maxBuffer: 32 * 1024 * 1024,
-          stdio: ["ignore", "pipe", "inherit"],
-          timeout: 60_000,
-        }),
-      ],
-    ]);
+    const options = {
+      killSignal: "SIGKILL",
+      stdio: ["ignore", "pipe", "inherit"],
+      timeout: 60_000,
+    } satisfies ExecFileSyncOptions;
+    const execFileSyncImpl = vi.fn(() => '{"ok":true}');
+    expect(execGhJson(["api", "repos/example/repo"], options, { execFileSyncImpl })).toEqual({
+      ok: true,
+    });
+    expect(execFileSyncImpl).toHaveBeenCalledExactlyOnceWith(
+      "gh",
+      ["api", "repos/example/repo"],
+      expect.objectContaining({ ...options, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }),
+    );
     const failure = new Error("gh read failed");
     expect(() =>
       execGhRead(
