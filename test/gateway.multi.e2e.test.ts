@@ -1,7 +1,6 @@
 // Gateway multi E2E tests validate multi-gateway runtime behavior.
 import { spawnSync } from "node:child_process";
-import { watch } from "node:fs";
-import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -23,6 +22,7 @@ import {
   waitForNodeStatus,
 } from "./helpers/gateway-e2e-harness.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
+import { waitForFile } from "./helpers/process-wait.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
 const E2E_TIMEOUT_MS = 120_000;
@@ -101,47 +101,34 @@ describe("gateway multi-instance e2e", () => {
       };
       const gatewayAcquisitions = [spawnOwnedGateway("a"), spawnOwnedGateway("b")] as const;
       acquisitions.push(...gatewayAcquisitions);
-      const [gwA, gwB] = await Promise.all(gatewayAcquisitions);
-
-      const [hookResA, hookResB] = await Promise.all([
-        postJson(
-          `http://127.0.0.1:${gwA.port}/hooks/wake`,
-          {
-            text: "wake a",
-            mode: "now",
-          },
-          { "x-openclaw-token": gwA.hookToken },
+      const gateways = await Promise.all(gatewayAcquisitions);
+      const hookResults = await Promise.all(
+        gateways.map((gateway, index) =>
+          postJson(
+            `http://127.0.0.1:${gateway.port}/hooks/wake`,
+            { text: `wake ${index === 0 ? "a" : "b"}`, mode: "now" },
+            { "x-openclaw-token": gateway.hookToken },
+          ),
         ),
-        postJson(
-          `http://127.0.0.1:${gwB.port}/hooks/wake`,
-          {
-            text: "wake b",
-            mode: "now",
-          },
-          { "x-openclaw-token": gwB.hookToken },
-        ),
+      );
+      expect(hookResults).toMatchObject([
+        { status: 200, json: { ok: true } },
+        { status: 200, json: { ok: true } },
       ]);
-      expect(hookResA.status).toBe(200);
-      expect((hookResA.json as { ok?: boolean } | undefined)?.ok).toBe(true);
-      expect(hookResB.status).toBe(200);
-      expect((hookResB.json as { ok?: boolean } | undefined)?.ok).toBe(true);
 
       const connectOwnedNode = async (inst: GatewayInstance, label: string) => {
         const node = await connectNode(inst, label);
         nodeClients.push(node.client);
         return node;
       };
-      const nodeAcquisitions = [
-        connectOwnedNode(gwA, "node-a"),
-        connectOwnedNode(gwB, "node-b"),
-      ] as const;
+      const nodeAcquisitions = gateways.map((gateway, index) =>
+        connectOwnedNode(gateway, index === 0 ? "node-a" : "node-b"),
+      );
       acquisitions.push(...nodeAcquisitions);
-      const [nodeA, nodeB] = await Promise.all(nodeAcquisitions);
-
-      await Promise.all([
-        waitForNodeStatus(gwA, nodeA.nodeId),
-        waitForNodeStatus(gwB, nodeB.nodeId),
-      ]);
+      const nodes = await Promise.all(nodeAcquisitions);
+      await Promise.all(
+        gateways.map((gateway, index) => waitForNodeStatus(gateway, nodes[index]!.nodeId)),
+      );
     },
   );
 
@@ -328,7 +315,7 @@ try {
               expect(payload.nodeId).toBe(nodeIdentity.deviceId);
               responseWork = responseWork.then(async () => {
                 await writeFile(shiftPath, "shift\n");
-                await waitForFile(shiftReadyPath);
+                await waitForFile(shiftReadyPath, AbortSignal.timeout(5_000));
                 await new Promise<void>((resolve) => {
                   setTimeout(resolve, 50);
                 });
@@ -402,27 +389,3 @@ try {
     },
   );
 });
-
-async function waitForFile(filePath: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const watcher = watch(path.dirname(filePath), (_event, name) => {
-      if (String(name) === path.basename(filePath)) {
-        clearTimeout(timer);
-        watcher.close();
-        resolve();
-      }
-    });
-    const timer = setTimeout(() => {
-      watcher.close();
-      reject(new Error(`Timed out waiting for ${filePath}`));
-    }, 5_000);
-    void access(filePath).then(
-      () => {
-        clearTimeout(timer);
-        watcher.close();
-        resolve();
-      },
-      () => {},
-    );
-  });
-}

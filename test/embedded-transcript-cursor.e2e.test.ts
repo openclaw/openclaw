@@ -1,9 +1,8 @@
 // E2E: ordinary embedded Gateway turns preserve raw transcript cursor continuity.
 import { randomUUID } from "node:crypto";
-import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { readSessionTranscriptRawDelta } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   listSessionEntriesCore,
   loadSessionEntry,
@@ -22,7 +21,6 @@ import {
 
 const TEST_TIMEOUT_MS = 180_000;
 const SESSION_KEY = "agent:main:main";
-const GATEWAY_TOKEN_OPTION = "token";
 
 const instances: OpenClawTestInstance[] = [];
 const modelServers: OpenAiResponsesModelServer[] = [];
@@ -32,96 +30,91 @@ afterEach(async () => {
   await Promise.allSettled(modelServers.splice(0).map((server) => server.close()));
 });
 
-describe("embedded transcript cursor settlement", () => {
-  it(
-    "resumes a public raw cursor across /new and the next Gateway turn",
-    { timeout: TEST_TIMEOUT_MS },
-    async () => {
-      const modelServer = await startMockModelServer();
-      modelServers.push(modelServer);
-      const instance = await createOpenClawTestInstance({
-        name: "embedded-transcript-cursor",
-        config: createOpenAiResponsesModelConfig({
-          baseUrl: modelServer.baseUrl,
-          providerId: "cursor-settlement",
-          modelId: "cursor-settlement",
-          reasoning: false,
-          toolProfile: "minimal",
-        }),
-        env: {
-          OPENCLAW_SKIP_PROVIDERS: undefined,
-          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        },
-      });
-      instances.push(instance);
-      await instance.startGateway();
+it(
+  "resumes a public raw cursor across /new and the next Gateway turn",
+  { timeout: TEST_TIMEOUT_MS },
+  async () => {
+    const modelServer = await startMockModelServer();
+    modelServers.push(modelServer);
+    const instance = await createOpenClawTestInstance({
+      name: "embedded-transcript-cursor",
+      config: createOpenAiResponsesModelConfig({
+        baseUrl: modelServer.baseUrl,
+        providerId: "cursor-settlement",
+        modelId: "cursor-settlement",
+        reasoning: false,
+        toolProfile: "minimal",
+      }),
+      env: {
+        OPENCLAW_SKIP_PROVIDERS: undefined,
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+      },
+    });
+    instances.push(instance);
+    await instance.startGateway();
 
-      const client = await connectGatewayClient({
-        url: instance.url,
-        [GATEWAY_TOKEN_OPTION]: instance.gatewayToken,
-        role: "operator",
-        scopes: ["operator.admin", "operator.read", "operator.write"],
-      });
-      try {
-        await runAgentTurn(client, instance, "first cursor turn");
-        const storePath = path.join(instance.state.sessionsDir("main"), "sessions.json");
-        const sessionId = await waitForSessionId(storePath);
-        expect(
-          listSessionEntriesCore({ agentId: "main", storePath }).map((entry) => entry.sessionKey),
-          instance.logs(),
-        ).toEqual([SESSION_KEY]);
-        const target = { agentId: "main", sessionId, sessionKey: SESSION_KEY, storePath };
-        const bootstrap = await readSessionTranscriptRawDelta({
-          ...target,
+    const client = await connectGatewayClient({
+      url: instance.url,
+      token: instance.gatewayToken,
+      role: "operator",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    });
+    try {
+      await runAgentTurn(client, instance, "first cursor turn");
+      const storePath = path.join(instance.state.sessionsDir("main"), "sessions.json");
+      const sessionId = await waitForSessionId(storePath);
+      expect(
+        listSessionEntriesCore({ agentId: "main", storePath }).map((entry) => entry.sessionKey),
+        instance.logs(),
+      ).toEqual([SESSION_KEY]);
+      const readPage = async (cursor?: string) => {
+        const page = await readSessionTranscriptRawDelta({
+          agentId: "main",
+          sessionId,
+          sessionKey: SESSION_KEY,
+          storePath,
+          cursor,
           maxBytes: 1_000_000,
           maxEvents: 100,
         });
-        expect(bootstrap.kind, instance.logs()).toBe("page");
-        if (bootstrap.kind !== "page") {
-          throw new Error(`expected bootstrap page, got ${bootstrap.kind}`);
-        }
-        expect(bootstrap.hasMore).toBe(false);
-
-        const reset = await runAgentTurn(client, instance, "/new");
-        expect(
-          (reset as { result?: { meta?: { agentMeta?: { sessionId?: string } } } }).result?.meta
-            ?.agentMeta?.sessionId,
-          instance.logs(),
-        ).toBe(sessionId);
-        expect(await waitForSessionId(storePath), instance.logs()).toBe(sessionId);
-        await runAgentTurn(client, instance, "post-reset cursor turn");
-        const resumed = await readSessionTranscriptRawDelta({
-          ...target,
-          cursor: bootstrap.cursor,
-          maxBytes: 1_000_000,
-          maxEvents: 100,
+        expect(page, `${JSON.stringify(page)}\n${instance.logs()}`).toMatchObject({
+          kind: "page",
+          hasMore: false,
         });
-
-        expect(resumed.kind, `${JSON.stringify(resumed)}\n${instance.logs()}`).toBe("page");
-        if (resumed.kind !== "page") {
-          throw new Error(`expected resumed page, got ${resumed.kind}`);
+        if (page.kind !== "page") {
+          throw new Error(`expected transcript page, got ${page.kind}`);
         }
-        expect(resumed.hasMore).toBe(false);
-        expect(
-          resumed.events.some(
-            (row) =>
-              row.event &&
-              typeof row.event === "object" &&
-              (row.event as { type?: unknown }).type === "reset",
-          ),
-        ).toBe(true);
-        const messageTexts = resumed.events.flatMap((row) => readMessageText(row.event));
-        expect(messageTexts).toContain("post-reset cursor turn");
-        expect(messageTexts).toContain("cursor settlement response 2");
-        expect(messageTexts).not.toContain("first cursor turn");
-        expect(messageTexts).not.toContain("cursor settlement response 1");
-      } finally {
-        await disconnectGatewayClient(client);
-      }
-    },
-  );
-});
+        return page;
+      };
+      const bootstrap = await readPage();
 
+      const reset = await runAgentTurn(client, instance, "/new");
+      expect(
+        (reset as { result?: { meta?: { agentMeta?: { sessionId?: string } } } }).result?.meta
+          ?.agentMeta?.sessionId,
+        instance.logs(),
+      ).toBe(sessionId);
+      expect(await waitForSessionId(storePath), instance.logs()).toBe(sessionId);
+      await runAgentTurn(client, instance, "post-reset cursor turn");
+      const resumed = await readPage(bootstrap.cursor);
+      expect(
+        resumed.events.some(
+          (row) =>
+            row.event &&
+            typeof row.event === "object" &&
+            (row.event as { type?: unknown }).type === "reset",
+        ),
+      ).toBe(true);
+      const messageTexts = resumed.events.flatMap((row) => readMessageText(row.event));
+      expect(messageTexts).toContain("post-reset cursor turn");
+      expect(messageTexts).toContain("cursor settlement response 2");
+      expect(messageTexts).not.toContain("first cursor turn");
+      expect(messageTexts).not.toContain("cursor settlement response 1");
+    } finally {
+      await disconnectGatewayClient(client);
+    }
+  },
+);
 async function runAgentTurn(
   client: Awaited<ReturnType<typeof connectGatewayClient>>,
   instance: OpenClawTestInstance,
@@ -191,7 +184,9 @@ async function startMockModelServer(): Promise<OpenAiResponsesModelServer> {
     modelId: "cursor-settlement",
     bindError: "cursor settlement model server did not bind",
     onRequest: async (request, response) => {
-      await drainRequest(request);
+      for await (const chunk of request) {
+        void chunk;
+      }
       responseCount += 1;
       writeOpenAiResponsesText(response, {
         text: `cursor settlement response ${responseCount}`,
@@ -200,10 +195,4 @@ async function startMockModelServer(): Promise<OpenAiResponsesModelServer> {
       });
     },
   });
-}
-
-async function drainRequest(request: IncomingMessage): Promise<void> {
-  for await (const chunk of request) {
-    void chunk;
-  }
 }

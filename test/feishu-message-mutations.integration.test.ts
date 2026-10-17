@@ -27,6 +27,45 @@ const REACTION_PATH = `${MESSAGE_PATH}/reactions`;
 type WireRequest = { method: string; path: string; query: string; body: string };
 type ResponseHandler = (request: WireRequest, response: ServerResponse) => Promise<unknown>;
 
+const success = (data: unknown) => ({ code: 0, data });
+const reaction = (reaction_id: string, operator_type: string, operator_id: string) => ({
+  reaction_id,
+  operator: { operator_type, operator_id },
+});
+
+function defaultResponse({ method, path }: WireRequest, appId: string) {
+  if (path === AUTH_PATH) {
+    return { code: 0, tenant_access_token: "loopback-token", expire: 7200 };
+  }
+  if (method === "GET" && path === MESSAGE_PATH) {
+    return success({
+      items: [
+        {
+          message_id: MESSAGE_ID,
+          chat_id: TARGET,
+          chat_type: "group",
+          msg_type: "text",
+          body: { content: JSON.stringify({ text: "Original message" }) },
+        },
+      ],
+    });
+  }
+  if (method === "GET" && path === REACTION_PATH) {
+    return success({
+      items: [
+        reaction("reaction_foreign", "app", "another_app"),
+        reaction("reaction_user", "user", "ou_requester"),
+        { ...reaction("reaction_own", "app", appId), reaction_type: { emoji_type: "SMILE" } },
+      ],
+    });
+  }
+  return success({
+    message_id: MESSAGE_ID,
+    reaction_id: "reaction_own",
+    pin: { message_id: MESSAGE_ID, chat_id: TARGET },
+  });
+}
+
 const routes = [
   {
     name: "text edit",
@@ -114,54 +153,7 @@ async function withFeishuMutation(
           if (response.writableEnded) {
             return;
           }
-          const body =
-            override ??
-            (record.path === AUTH_PATH
-              ? { code: 0, tenant_access_token: "loopback-token", expire: 7200 }
-              : record.method === "GET" && record.path === MESSAGE_PATH
-                ? {
-                    code: 0,
-                    data: {
-                      items: [
-                        {
-                          message_id: MESSAGE_ID,
-                          chat_id: TARGET,
-                          chat_type: "group",
-                          msg_type: "text",
-                          body: { content: JSON.stringify({ text: "Original message" }) },
-                        },
-                      ],
-                    },
-                  }
-                : record.method === "GET" && record.path === REACTION_PATH
-                  ? {
-                      code: 0,
-                      data: {
-                        items: [
-                          {
-                            reaction_id: "reaction_foreign",
-                            operator: { operator_type: "app", operator_id: "another_app" },
-                          },
-                          {
-                            reaction_id: "reaction_user",
-                            operator: { operator_type: "user", operator_id: "ou_requester" },
-                          },
-                          {
-                            reaction_id: "reaction_own",
-                            reaction_type: { emoji_type: "SMILE" },
-                            operator: { operator_type: "app", operator_id: appId },
-                          },
-                        ],
-                      },
-                    }
-                  : {
-                      code: 0,
-                      data: {
-                        message_id: MESSAGE_ID,
-                        reaction_id: "reaction_own",
-                        pin: { message_id: MESSAGE_ID, chat_id: TARGET },
-                      },
-                    });
+          const body = override ?? defaultResponse(record, appId);
           response.writeHead(200, { "content-type": "application/json" });
           response.end(JSON.stringify(body));
         })().catch((error: unknown) => response.writeHead(500).end(String(error)));
@@ -334,13 +326,11 @@ describe("Feishu mutations through the message tool and Lark HTTP transport", ()
             code: 0,
             data: {
               items: [
-                {
-                  reaction_id: secondPage ? "reaction_own" : "reaction_foreign",
-                  operator: {
-                    operator_type: "app",
-                    operator_id: secondPage ? cfg.channels!.feishu!.appId : "another_app",
-                  },
-                },
+                reaction(
+                  secondPage ? "reaction_own" : "reaction_foreign",
+                  "app",
+                  secondPage ? cfg.channels!.feishu!.appId : "another_app",
+                ),
               ],
               has_more: !secondPage,
               page_token: secondPage ? undefined : "next_page",
@@ -370,10 +360,9 @@ describe("Feishu mutations through the message tool and Lark HTTP transport", ()
             return {
               code: 0,
               data: {
-                items: ["first", "second"].map((reaction_id) => ({
-                  reaction_id,
-                  operator: { operator_type: "app", operator_id: cfg.channels!.feishu!.appId },
-                })),
+                items: ["first", "second"].map((id) =>
+                  reaction(id, "app", cfg.channels!.feishu!.appId),
+                ),
               },
             };
           }

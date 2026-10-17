@@ -9,6 +9,7 @@ import {
 import { listConversations } from "../src/config/sessions/conversation-registry.js";
 import type { GatewaySessionRow } from "../src/gateway/session-utils.types.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { createOpenAiResponsesModelConfig } from "./helpers/openai-responses-model-fixture.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
 async function runAccountHistoryProof(compactionMode: "client" | "server-endpoint") {
@@ -102,14 +103,20 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
   if (!address || typeof address === "string") {
     throw new Error("Telegram fixture did not bind");
   }
+  const base = createOpenAiResponsesModelConfig({
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    providerId: "history-proof",
+    modelId: "history-proof",
+    reasoning: false,
+    toolProfile: "minimal",
+  });
   const instance = await createOpenClawTestInstance({
     name: "account-history",
     config: {
-      plugins: { slots: { memory: "none" } },
+      ...base,
       agents: {
         defaults: {
-          heartbeat: { every: "0m" },
-          model: { primary: "history-proof/history-proof" },
+          ...base.agents!.defaults!,
           models: {
             "history-proof/history-proof": {
               agentRuntime: { id: "openclaw" },
@@ -118,8 +125,6 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
                 : {}),
             },
           },
-          skipBootstrap: true,
-          skills: [],
           compaction: {
             mode: "default",
             keepRecentTokens: 1,
@@ -128,7 +133,6 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
           },
         },
       },
-      tools: { profile: "minimal" },
       messages: { visibleReplies: "automatic" },
       session: {
         dmScope: "per-channel-peer",
@@ -156,29 +160,6 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
                 peer: { historyLimit: 6 },
               },
             },
-          },
-        },
-      },
-      models: {
-        mode: "replace",
-        providers: {
-          "history-proof": {
-            baseUrl: `http://127.0.0.1:${address.port}/v1`,
-            apiKey: "test-token-placeholder",
-            api: "openai-responses",
-            request: { allowPrivateNetwork: true },
-            models: [
-              {
-                id: "history-proof",
-                name: "History proof",
-                api: "openai-responses",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128000,
-                maxTokens: 4096,
-              },
-            ],
           },
         },
       },
@@ -240,9 +221,9 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
       (await fetch(`${model.baseUrl}/debug/requests`).then((response) =>
         response.json(),
       )) as MockOpenAiRequestSnapshot[];
-    const prompt = (await requests()).findLast(
-      (request) => request.requestKind === "agent-initial",
-    )!;
+    const latestPrompt = async () =>
+      (await requests()).findLast((request) => request.requestKind === "agent-initial")!;
+    const prompt = await latestPrompt();
     expect(prompt.allInputText).toContain("HISTORY_TURN_6");
     expect(prompt.allInputText).not.toContain("HISTORY_TURN_1");
     expect(prompt.allInputText).not.toContain("HISTORY_TURN_2");
@@ -285,9 +266,7 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
         const firstTurn = generation * 6 + 1;
         for (let turn = firstTurn; turn < firstTurn + 6; turn++) {
           await sendTurn(turn);
-          const replay = (await requests()).findLast(
-            (request) => request.requestKind === "agent-initial",
-          )!;
+          const replay = await latestPrompt();
           const body = JSON.parse(replay.raw) as { input: Array<{ type?: string }> };
           const checkpoints = body.input.filter((item) => item.type === "compaction");
           expect(checkpoints).toHaveLength(1);
@@ -327,9 +306,7 @@ async function runAccountHistoryProof(compactionMode: "client" | "server-endpoin
     for (let turn = 7; turn <= 12; turn++) {
       await sendTurn(turn);
     }
-    const afterCompaction = (await requests()).findLast(
-      (request) => request.requestKind === "agent-initial",
-    )!;
+    const afterCompaction = await latestPrompt();
     expect(afterCompaction.allInputText).toContain(compacted.result!.summary);
     expect(afterCompaction.allInputText).toContain("HISTORY_TURN_12");
     expect(afterCompaction.allInputText).not.toContain("HISTORY_TURN_7.");

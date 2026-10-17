@@ -45,13 +45,11 @@ const ALLOWED = "oc_allowed";
 const BLOCKED = "oc_blocked";
 const DIRECT = "oc_direct";
 const SELF = "ou_current_sender";
-const MEMBER = "ou_group_member";
 const OTHER = "ou_other_member";
 const MESSAGE = "om_allowed";
 const AUTH_PATH = "/open-apis/auth/v3/tenant_access_token/internal";
 const MESSAGE_PATH = `/open-apis/im/v1/messages/${MESSAGE}`;
 const CHAT_PATH = `/open-apis/im/v1/chats/${ALLOWED}`;
-const MEMBERS_PATH = `${CHAT_PATH}/members`;
 const PINS_PATH = "/open-apis/im/v1/pins";
 const USER_PATH = `/open-apis/contact/v3/users/${MEMBER}`;
 const PEERS_PATH = "/open-apis/contact/v3/users";
@@ -225,26 +223,8 @@ beforeAll(async () => {
             },
           ],
         };
-      } else if (url.pathname === `${MESSAGE_PATH}/reactions`) {
-        data = {
-          items: [
-            {
-              reaction_id: "reaction-1",
-              reaction_type: { emoji_type: "THUMBSUP" },
-              operator: { operator_type: "user", operator_id: MEMBER },
-            },
-          ],
-          has_more: false,
-        };
       } else if (url.pathname === PINS_PATH) {
         data = { items: [{ message_id: MESSAGE, chat_id: ALLOWED }], has_more: false };
-      } else if (url.pathname === MEMBERS_PATH) {
-        const next = url.searchParams.get("page_token") === "members-next";
-        data = {
-          items: [{ member_id: next ? MEMBER : OTHER, member_id_type: "open_id" }],
-          has_more: !next,
-          ...(next ? {} : { page_token: "members-next" }),
-        };
       } else if (url.pathname === "/open-apis/im/v1/chats") {
         const next = url.searchParams.get("page_token") === "groups-next";
         data = {

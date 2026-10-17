@@ -2,12 +2,13 @@
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { isInternalRuntimeContextCarrierText } from "../extensions/qa-lab/api.js";
 import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import { createOpenAiResponsesModelConfig } from "./helpers/openai-responses-model-fixture.js";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
@@ -20,7 +21,6 @@ import { createDeferred } from "./helpers/promise.js";
 
 const SESSION_KEY = "agent:main:slack:channel:completion-replay";
 const CHILD_TASK = "Produce CHILD_REPLAY_RESULT.";
-const MODEL_REF = "completion-replay/completion-replay";
 const instances: OpenClawTestInstance[] = [];
 const servers: Array<Awaited<ReturnType<typeof startModel>>> = [];
 
@@ -33,195 +33,137 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
-describe("Gateway completed requester replay", () => {
-  it(
-    "does not repeat a real requester tool effect through fallback, settle wake, or restart",
-    {
-      timeout: 180_000,
-    },
-    async () => {
-      const model = await startModel();
-      servers.push(model);
-      const instance = await createOpenClawTestInstance({
-        name: "gateway-completion-replay",
-        config: config(model.url),
-        env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
-      });
-      instances.push(instance);
-      instance.state.applyEnv();
-      await instance.startGateway();
-      const effectPath = path.join(
-        instance.homeDir,
-        ".openclaw",
-        "workspace",
-        "replay-effects.txt",
-      );
-      const client = await connectGatewayClient({
-        url: instance.url,
-        token: instance.gatewayToken,
-        role: "operator",
-        scopes: ["operator.admin", "operator.read", "operator.write"],
-      });
-      try {
-        expect(
-          await client.request(
-            "agent",
-            {
-              sessionKey: SESSION_KEY,
-              message: "START_REPLAY_REQUESTER",
-              deliver: false,
-              idempotencyKey: "start-replay-requester",
-            },
-            { expectFinal: true, timeoutMs: 90_000 },
-          ),
-        ).toMatchObject({ status: "ok" });
-        await vi.waitFor(() => expect(model.childStarted()).toBe(true), { timeout: 30_000 });
-        model.releaseChild();
-        await vi.waitFor(
-          async () => expect(await fs.readFile(effectPath, "utf8")).toBe("effect\n"),
-          {
-            timeout: 30_000,
-          },
-        );
-        await vi.waitFor(
-          () => {
-            const entry = [...loadSubagentRegistryFromSqlite().values()].find(
-              (row) => row.task === CHILD_TASK,
-            );
-            expect(entry?.delivery).toMatchObject({
-              status: "suspended",
-              suspendedReason: "permanent_failure",
-              lastDropReason: "message_tool_delivery_missing",
-            });
-          },
-          { timeout: 30_000 },
-        );
-        const suspendedChild = [...loadSubagentRegistryFromSqlite().values()].find(
-          (row) => row.task === CHILD_TASK,
-        );
-        expect(model.effectCalls()).toBe(1);
-        expect(model.failures()).toEqual([]);
-        console.log(
-          "[gateway-completion-replay-runtime-proof]",
-          JSON.stringify({
-            phase: "requester-effect-before-restart",
-            requesterEffectCalls: model.effectCalls(),
-            persistedEffectLines: (await fs.readFile(effectPath, "utf8")).trim().split("\n").length,
-            childDeliveryStatus: suspendedChild?.delivery?.status,
-            childSuspendedReason: suspendedChild?.delivery?.suspendedReason,
-          }),
-        );
-      } catch (error) {
-        throw new Error(
-          String(error) +
-            "\nFixture failures: " +
-            JSON.stringify(model.failures()) +
-            "\nGateway: " +
-            instance.logs(),
-          { cause: error },
-        );
-      } finally {
-        model.releaseChild();
-        await disconnectGatewayClient(client);
-        await instance.stopGateway();
-      }
-
-      // No manually seeded terminal row: the child and completion above created it.
-      const before = [...loadSubagentRegistryFromSqlite().values()].find(
-        (row) => row.task === CHILD_TASK,
-      )!;
-      expect(before.execution.outcome).toMatchObject({ status: "ok" });
-      expect(before.completion?.resultText).toBe("CHILD_REPLAY_RESULT");
-      expect(before.delivery?.payload).toBeDefined();
-      expect(before.requesterSettleWake).toBeUndefined();
-      closeOpenClawStateDatabaseForTest();
-      expect(loadSubagentRegistryFromSqlite().get(before.runId)?.delivery).toEqual(before.delivery);
-      closeOpenClawStateDatabaseForTest();
-
-      await instance.startGateway();
-      const restoredClient = await connectGatewayClient({
-        url: instance.url,
-        token: instance.gatewayToken,
-      });
-      try {
-        // A real same-session round trip is the lane barrier, not a timed sleep.
-        const followup = await restoredClient.request(
+it(
+  "does not repeat a real requester tool effect through fallback, settle wake, or restart",
+  {
+    timeout: 180_000,
+  },
+  async () => {
+    const model = await startModel();
+    servers.push(model);
+    const instance = await createOpenClawTestInstance({
+      name: "gateway-completion-replay",
+      config: config(model.url),
+      env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
+    });
+    instances.push(instance);
+    instance.state.applyEnv();
+    await instance.startGateway();
+    const effectPath = path.join(instance.homeDir, ".openclaw", "workspace", "replay-effects.txt");
+    const client = await connectGatewayClient({
+      url: instance.url,
+      token: instance.gatewayToken,
+      role: "operator",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    });
+    try {
+      expect(
+        await client.request(
           "agent",
           {
             sessionKey: SESSION_KEY,
-            message: "EXPLICIT_FOLLOWUP_AFTER_RESTART",
+            message: "START_REPLAY_REQUESTER",
             deliver: false,
-            idempotencyKey: "followup-after-restart",
+            idempotencyKey: "start-replay-requester",
           },
-          { expectFinal: true, timeoutMs: 30_000 },
-        );
-        expect(followup).toMatchObject({ status: "ok" });
-        expect(model.effectCalls()).toBe(1);
-        expect(model.failures()).toEqual([]);
-        await expect(fs.readFile(effectPath, "utf8")).resolves.toBe("effect\n");
-        console.log(
-          "[gateway-completion-replay-runtime-proof]",
-          JSON.stringify({
-            phase: "requester-effect-after-restart",
-            followupStatus: (followup as { status?: string }).status,
-            requesterEffectCalls: model.effectCalls(),
-            persistedEffectLines: (await fs.readFile(effectPath, "utf8")).trim().split("\n").length,
-            effectUnchanged: (await fs.readFile(effectPath, "utf8")) === "effect\n",
-          }),
-        );
-      } finally {
-        await disconnectGatewayClient(restoredClient);
-        await instance.stopGateway();
-      }
-      const after = loadSubagentRegistryFromSqlite().get(before.runId)!;
-      expect(after.delivery).toEqual(before.delivery);
-      expect(after.requesterSettleWake).toBeUndefined();
-    },
-  );
-});
+          { expectFinal: true, timeoutMs: 90_000 },
+        ),
+      ).toMatchObject({ status: "ok" });
+      await vi.waitFor(() => expect(model.childStarted()).toBe(true), { timeout: 30_000 });
+      model.releaseChild();
+      await vi.waitFor(async () => expect(await fs.readFile(effectPath, "utf8")).toBe("effect\n"), {
+        timeout: 30_000,
+      });
+      await vi.waitFor(
+        () => {
+          const entry = [...loadSubagentRegistryFromSqlite().values()].find(
+            (row) => row.task === CHILD_TASK,
+          );
+          expect(entry?.delivery).toMatchObject({
+            status: "suspended",
+            suspendedReason: "permanent_failure",
+            lastDropReason: "message_tool_delivery_missing",
+          });
+        },
+        { timeout: 30_000 },
+      );
+      expect(model.effectCalls()).toBe(1);
+      expect(model.failures()).toEqual([]);
+    } catch (error) {
+      throw new Error(
+        String(error) +
+          "\nFixture failures: " +
+          JSON.stringify(model.failures()) +
+          "\nGateway: " +
+          instance.logs(),
+        { cause: error },
+      );
+    } finally {
+      model.releaseChild();
+      await disconnectGatewayClient(client);
+      await instance.stopGateway();
+    }
 
+    // No manually seeded terminal row: the child and completion above created it.
+    const before = [...loadSubagentRegistryFromSqlite().values()].find(
+      (row) => row.task === CHILD_TASK,
+    )!;
+    expect(before.execution.outcome).toMatchObject({ status: "ok" });
+    expect(before.completion?.resultText).toBe("CHILD_REPLAY_RESULT");
+    expect(before.delivery?.payload).toBeDefined();
+    expect(before.requesterSettleWake).toBeUndefined();
+    closeOpenClawStateDatabaseForTest();
+    expect(loadSubagentRegistryFromSqlite().get(before.runId)?.delivery).toEqual(before.delivery);
+    closeOpenClawStateDatabaseForTest();
+
+    await instance.startGateway();
+    const restoredClient = await connectGatewayClient({
+      url: instance.url,
+      token: instance.gatewayToken,
+    });
+    try {
+      // A real same-session round trip is the lane barrier, not a timed sleep.
+      const followup = await restoredClient.request(
+        "agent",
+        {
+          sessionKey: SESSION_KEY,
+          message: "EXPLICIT_FOLLOWUP_AFTER_RESTART",
+          deliver: false,
+          idempotencyKey: "followup-after-restart",
+        },
+        { expectFinal: true, timeoutMs: 30_000 },
+      );
+      expect(followup).toMatchObject({ status: "ok" });
+      expect(model.effectCalls()).toBe(1);
+      expect(model.failures()).toEqual([]);
+      await expect(fs.readFile(effectPath, "utf8")).resolves.toBe("effect\n");
+    } finally {
+      await disconnectGatewayClient(restoredClient);
+      await instance.stopGateway();
+    }
+    const after = loadSubagentRegistryFromSqlite().get(before.runId)!;
+    expect(after.delivery).toEqual(before.delivery);
+    expect(after.requesterSettleWake).toBeUndefined();
+  },
+);
 function config(url: string): OpenClawConfig {
+  const base = createOpenAiResponsesModelConfig({
+    baseUrl: url,
+    providerId: "completion-replay",
+    modelId: "completion-replay",
+    reasoning: false,
+    toolProfile: "coding",
+  });
   return {
+    ...base,
     plugins: { enabled: false },
     messages: { groupChat: { visibleReplies: "message_tool" } },
-    agents: {
-      defaults: {
-        heartbeat: { every: "0m" },
-        model: { primary: MODEL_REF },
-        models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
-        skipBootstrap: true,
-        skills: [],
-      },
-    },
     tools: {
       profile: "coding",
       codeMode: false,
       toolSearch: false,
       allow: ["sessions_spawn", "exec"],
       exec: { security: "full", ask: "off" },
-    },
-    models: {
-      mode: "replace",
-      providers: {
-        "completion-replay": {
-          baseUrl: url + "/v1",
-          apiKey: "test-placeholder",
-          api: "openai-responses",
-          request: { allowPrivateNetwork: true },
-          models: [
-            {
-              id: "completion-replay",
-              name: "completion-replay",
-              api: "openai-responses",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 128_000,
-              maxTokens: 4096,
-            },
-          ],
-        },
-      },
     },
   };
 }
@@ -275,9 +217,6 @@ async function startModel() {
     }
     const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { input?: ModelInput[] };
     const input = body.input ?? [];
-    const serializedUserTexts = input
-      .filter((item) => item.role === "user")
-      .map((item) => modelInputText(item.content));
     const latestUser = input
       .toReversed()
       .find(
@@ -286,19 +225,6 @@ async function startModel() {
           !isInternalRuntimeContextCarrierText(modelInputText(item.content)),
       );
     const text = JSON.stringify(latestUser?.content);
-    const selectedUserText = latestUser?.role === "user" ? modelInputText(latestUser.content) : "";
-    if (selectedUserText.includes("START_REPLAY_REQUESTER")) {
-      console.log(
-        "[gateway-completion-replay-provider-proof]",
-        JSON.stringify({
-          phase: "requester-selected",
-          serializedRuntimeCarriersSkipped: serializedUserTexts.filter(
-            isInternalRuntimeContextCarrierText,
-          ).length,
-          requesterTurnSelected: selectedUserText.includes("START_REPLAY_REQUESTER"),
-        }),
-      );
-    }
     const last = input.at(-1);
     const id = String(++sequence);
     const final = (value: string) =>
