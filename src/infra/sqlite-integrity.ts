@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
+import { consumeSqliteMaintenanceIntegrity } from "./sqlite-maintenance-integrity.js";
 import { readSqliteSchemaObjects } from "./sqlite-schema-admission.js";
 
 type SqliteIntegrityChecks = {
@@ -56,6 +57,13 @@ export function* sqliteIntegrityCheckSteps(
   diagnostics?: SqliteIntegrityDiagnostics,
   options: SqliteIntegrityCheckOptions = {},
 ): SqliteIntegrityOperation<void> {
+  if (consumeSqliteMaintenanceIntegrity(database, databaseLabel, options)) {
+    if (diagnostics) {
+      diagnostics.integrityGateMode = "quick";
+      diagnostics.integrityGateOutcome = "cached";
+    }
+    return;
+  }
   const startedAt = performance.now();
   const check: SqliteIntegrityCheck = { database, databaseLabel, ...options };
   if (diagnostics) {

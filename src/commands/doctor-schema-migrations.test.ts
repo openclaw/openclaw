@@ -65,6 +65,8 @@ it.each([
           );
         database.exec("PRAGMA writable_schema = OFF");
       }
+      fs.chmodSync(pathname, 0o600);
+      const worker = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
       const migration = {
         kind: "agent" as const,
         agentId: "main",
@@ -104,9 +106,14 @@ it.each([
           await expect(result).rejects.toThrow(/integrity_check.*idx_agent_cache_updated/su);
         } else {
           await expect(result).resolves.toMatchObject({ warnings: [] });
+          if (version === 24) {
+            // The byte-equal capture already checked this unchanged source.
+            expect(worker.mock.calls.filter((call) => call[0] === pathname)).toHaveLength(0);
+          }
         }
       } finally {
         await maintenance.close();
+        worker.mockRestore();
       }
       using database = new DatabaseSync(pathname, { readOnly: true });
       expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
