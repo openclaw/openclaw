@@ -153,20 +153,23 @@ suite.define(() => {
           return inventory.environments.find((environment) => environment.id === `node:${deviceId}`)
             ?.requiredNodeCommand;
         };
-        expect(await readCommandState(undeclaredIdentity.deviceId)).toEqual({
-          command: COMMAND,
-          state: "undeclared",
-          message: undeclaredMessage,
-        });
-        expect(await readCommandState(pendingIdentity.deviceId)).toEqual({
-          command: COMMAND,
-          state: "pending-approval",
-          message: pendingMessage,
-        });
-        expect(await readCommandState(unauthorizedIdentity.deviceId)).toEqual({
-          command: COMMAND,
-          state: "invocable",
-        });
+        const expectState = async (identity: DeviceIdentity, state: string, message?: string) =>
+          expect(await readCommandState(identity.deviceId)).toEqual({
+            command: COMMAND,
+            state,
+            ...(message === undefined ? {} : { message }),
+          });
+        const setCommands = async (allow: string[], deny: string[]) => {
+          const config = await operator.request<{ hash: string }>("config.get", {});
+          await operator.request("config.patch", {
+            raw: JSON.stringify({ gateway: { nodes: { commands: { allow, deny } } } }),
+            baseHash: config.hash,
+            replacePaths: ["gateway.nodes.commands.allow", "gateway.nodes.commands.deny"],
+          });
+        };
+        await expectState(undeclaredIdentity, "undeclared", undeclaredMessage);
+        await expectState(pendingIdentity, "pending-approval", pendingMessage);
+        await expectState(unauthorizedIdentity, "invocable");
 
         await suite.withPage(
           {
@@ -189,43 +192,29 @@ suite.define(() => {
             const place = page.locator(".oc-popover.new-session-page__where-popover");
             const row = (deviceId: string) => place.locator(`[data-value="device:${deviceId}"]`);
             const disabledReason = async (deviceId: string) => tooltipTitleText(row(deviceId));
+            const capture = async (name: string) => {
+              if (captureUiProof) {
+                // Preserve the viewport: full-page captures resize the shared screencast surface.
+                await page.screenshot({
+                  animations: "disabled",
+                  path: path.join(suite.artifactDir, name),
+                });
+              }
+            };
 
             await row(undeclaredIdentity.deviceId).waitFor();
             expect(await disabledReason(undeclaredIdentity.deviceId)).toContain(undeclaredMessage);
             await expect
               .poll(() => disabledReason(pendingIdentity.deviceId))
               .toContain(pendingMessage);
-            if (captureUiProof) {
-              // Keep captures at the recorded viewport size: clips and larger full-page
-              // screenshots temporarily resize Chromium's shared screencast surface.
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(suite.artifactDir, "00-undeclared.png"),
-              });
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(suite.artifactDir, "01-pending-approval.png"),
-              });
-            }
+            await capture("00-undeclared.png");
+            await capture("01-pending-approval.png");
             await page.keyboard.press("Escape");
 
-            const beforeConfig = await operator.request<{ hash: string }>("config.get", {});
             const unauthorizedHelloCount = helloCounts.get(unauthorizedNode) ?? 0;
-            await operator.request("config.patch", {
-              raw: JSON.stringify({
-                gateway: { nodes: { commands: { allow: [], deny: [COMMAND] } } },
-              }),
-              baseHash: beforeConfig.hash,
-              replacePaths: ["gateway.nodes.commands.allow", "gateway.nodes.commands.deny"],
-            });
+            await setCommands([], [COMMAND]);
             await vi.waitFor(
-              async () => {
-                expect(await readCommandState(unauthorizedIdentity.deviceId)).toEqual({
-                  command: COMMAND,
-                  state: "unauthorized",
-                  message: unauthorizedMessage,
-                });
-              },
+              () => expectState(unauthorizedIdentity, "unauthorized", unauthorizedMessage),
               { interval: 250, timeout: 60_000 },
             );
             expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
@@ -236,34 +225,15 @@ suite.define(() => {
             await expect
               .poll(() => disabledReason(unauthorizedIdentity.deviceId))
               .toContain(unauthorizedMessage);
-            if (captureUiProof) {
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(suite.artifactDir, "02-unauthorized-after-hot-reload.png"),
-              });
-            }
+            await capture("02-unauthorized-after-hot-reload.png");
             expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
             await page.keyboard.press("Escape");
 
-            const deniedConfig = await operator.request<{ hash: string }>("config.get", {});
-            await operator.request("config.patch", {
-              raw: JSON.stringify({
-                gateway: { nodes: { commands: { allow: [COMMAND], deny: [] } } },
-              }),
-              baseHash: deniedConfig.hash,
-              replacePaths: ["gateway.nodes.commands.allow", "gateway.nodes.commands.deny"],
-            });
+            await setCommands([COMMAND], []);
             await vi.waitFor(
               async () => {
-                expect(await readCommandState(unauthorizedIdentity.deviceId)).toEqual({
-                  command: COMMAND,
-                  state: "invocable",
-                });
-                expect(await readCommandState(pendingIdentity.deviceId)).toEqual({
-                  command: COMMAND,
-                  state: "pending-approval",
-                  message: pendingMessage,
-                });
+                await expectState(unauthorizedIdentity, "invocable");
+                await expectState(pendingIdentity, "pending-approval", pendingMessage);
               },
               { interval: 250, timeout: 60_000 },
             );
@@ -272,12 +242,7 @@ suite.define(() => {
             await page.locator("#new-session-where-trigger").click();
             await row(unauthorizedIdentity.deviceId).waitFor();
             expect(await row(unauthorizedIdentity.deviceId).isEnabled()).toBe(true);
-            if (captureUiProof) {
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(suite.artifactDir, "03-invocable-after-reallow.png"),
-              });
-            }
+            await capture("03-invocable-after-reallow.png");
           },
         );
       } finally {
@@ -295,6 +260,12 @@ suite.define(() => {
 });
 
 type GatewayHandle = Awaited<ReturnType<ReturnType<typeof createQaGatewayChild>["start"]>>;
+type NodeParams = {
+  displayName: string;
+  gateway: GatewayHandle;
+  identity: DeviceIdentity;
+  commands: string[];
+};
 
 async function connectOperator(gateway: GatewayHandle): Promise<GatewayClient> {
   return await connectClient({
@@ -308,13 +279,9 @@ async function connectOperator(gateway: GatewayHandle): Promise<GatewayClient> {
   });
 }
 
-async function connectPairedNode(params: {
-  displayName: string;
-  gateway: GatewayHandle;
-  identity: DeviceIdentity;
-  operator: GatewayClient;
-  commands: string[];
-}): Promise<GatewayClient> {
+async function connectPairedNode(
+  params: NodeParams & { operator: GatewayClient },
+): Promise<GatewayClient> {
   try {
     return await connectNode(params);
   } catch (error) {
@@ -344,12 +311,7 @@ function isPairingRequired(error: unknown): boolean {
   return details?.code === "PAIRING_REQUIRED" || String(error).includes("pairing required");
 }
 
-async function connectNode(params: {
-  displayName: string;
-  gateway: GatewayHandle;
-  identity: DeviceIdentity;
-  commands: string[];
-}): Promise<GatewayClient> {
+async function connectNode(params: NodeParams): Promise<GatewayClient> {
   return await connectClient({
     gateway: params.gateway,
     role: "node",
@@ -378,6 +340,7 @@ async function connectClient(params: {
   commands?: string[];
   deviceIdentity: DeviceIdentity | null;
 }): Promise<GatewayClient> {
+  const { gateway, ...options } = params;
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
     const finish = (client: GatewayClient, error?: Error) => {
@@ -394,20 +357,12 @@ async function connectClient(params: {
       }
     };
     const client = new GatewayClient({
-      url: params.gateway.wsUrl,
-      token: params.gateway.token,
-      env: params.gateway.runtimeEnv,
-      role: params.role,
-      clientName: params.clientName,
-      clientDisplayName: params.clientDisplayName,
+      ...options,
+      url: gateway.wsUrl,
+      token: gateway.token,
+      env: gateway.runtimeEnv,
       clientVersion: "1.0.0",
       platform: params.platform ?? process.platform,
-      deviceFamily: params.deviceFamily,
-      mode: params.mode,
-      scopes: params.scopes,
-      caps: params.caps,
-      commands: params.commands,
-      deviceIdentity: params.deviceIdentity,
       requestTimeoutMs: REQUEST_TIMEOUT_MS,
       onHelloOk: () => {
         helloCounts.set(client, (helloCounts.get(client) ?? 0) + 1);
@@ -417,8 +372,7 @@ async function connectClient(params: {
       onClose: (code, reason) => finish(client, new Error(`Gateway closed (${code}): ${reason}`)),
     });
     const timeout = setTimeout(
-      () =>
-        finish(client, new Error(`Gateway client connection timed out:\n${params.gateway.logs()}`)),
+      () => finish(client, new Error(`Gateway client connection timed out:\n${gateway.logs()}`)),
       REQUEST_TIMEOUT_MS,
     );
     timeout.unref();

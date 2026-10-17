@@ -222,6 +222,49 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
     let stateDb: string;
     let passed = false;
 
+    const agentRows = (sql: string, ...args: SQLInputValue[]) => rows(agentDb, sql, ...args);
+    const registryRows = (runId: SQLInputValue) =>
+      rows(stateDb, "SELECT * FROM subagent_runs WHERE run_id = ?", runId);
+    const pendingInputs = (sessionKey: string) =>
+      agentRows("SELECT * FROM session_pending_inputs WHERE session_key = ?", sessionKey);
+    const completionRows = (sessionKey: string) =>
+      agentRows(
+        "SELECT * FROM session_input_completions WHERE session_key = ? ORDER BY run_id",
+        sessionKey,
+      );
+    const sessionRow = (sessionKey: string) =>
+      agentRows(
+        "SELECT current_session_id FROM session_nodes WHERE session_key = ?",
+        sessionKey,
+      )[0];
+    const transcript = (sessionId: string) =>
+      agentRows(
+        "SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
+        sessionId,
+      );
+    const waitForReply = (
+      since: number,
+      expected: { sessionKey: unknown; runId?: unknown; state?: string },
+      marker: string | RegExp,
+    ) =>
+      waitForQaTransportCondition(
+        () =>
+          events.slice(since).some((event) => {
+            if (
+              !isRecord(event) ||
+              !Object.entries(expected).every(([key, value]) => event[key] === value)
+            ) {
+              return false;
+            }
+            const text = JSON.stringify(replies([event.message]));
+            return typeof marker === "string" ? text.includes(marker) : marker.test(text);
+          }) || undefined,
+        30_000,
+        100,
+      );
+    const installedJson = async (args: string[]) =>
+      record(JSON.parse((await runInstalled(args)).stdout));
+
     async function install(spec: string) {
       await exec("npm", ["install", "-g", "--prefix", prefix, spec, "--no-fund", "--no-audit"], {
         timeout: 300_000,
@@ -397,16 +440,10 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         120_000,
         100,
       );
-      const receipts = rows(
-        agentDb,
-        "SELECT * FROM session_input_completions WHERE session_key = ? ORDER BY run_id",
-        sessionKey,
-      );
+      const receipts = completionRows(sessionKey);
       const successfulReceipts = receipts.filter((receipt) => receipt.succeeded === 1);
       expect(successfulReceipts.length).toBeGreaterThanOrEqual(2);
-      expect(
-        rows(agentDb, "SELECT * FROM session_pending_inputs WHERE session_key = ?", sessionKey),
-      ).toEqual([]);
+      expect(pendingInputs(sessionKey)).toEqual([]);
       const stored = rows(
         stateDb,
         "SELECT payload_json FROM subagent_runs WHERE requester_session_key = ? ORDER BY run_id",
@@ -417,38 +454,18 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         stored.every((row) => record(JSON.parse(String(row.payload_json))).parentCompletion),
       ).toBe(true);
       await assertPrivateHistory(sessionKey);
-      await waitForQaTransportCondition(
-        () =>
-          events
-            .slice(eventCursor)
-            .some(
-              (event) =>
-                isRecord(event) &&
-                event.sessionKey === sessionKey &&
-                event.runId === kickoff.runId &&
-                event.state === "final" &&
-                JSON.stringify(replies([event.message])).includes("Worker started."),
-            ) || undefined,
-        30_000,
-        100,
+      await waitForReply(
+        eventCursor,
+        { sessionKey, runId: kickoff.runId, state: "final" },
+        "Worker started.",
       );
       for (const child of children) {
         expect(child.childSessionKey).toBeTypeOf("string");
         expect(child.runId).toBeTypeOf("string");
-        await waitForQaTransportCondition(
-          () =>
-            events
-              .slice(eventCursor)
-              .some(
-                (event) =>
-                  isRecord(event) &&
-                  event.sessionKey === child.childSessionKey &&
-                  event.runId === child.runId &&
-                  event.state === "final" &&
-                  privateMarker.test(JSON.stringify(replies([event.message]))),
-              ) || undefined,
-          30_000,
-          100,
+        await waitForReply(
+          eventCursor,
+          { sessionKey: child.childSessionKey, runId: child.runId, state: "final" },
+          privateMarker,
         );
       }
       assertPrivateReplies(capturedReplies(sessionKey, eventCursor));
@@ -483,19 +500,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         100,
       );
       // A positive live event qualifies the observation interval after startup.
-      await waitForQaTransportCondition(
-        () =>
-          events
-            .slice(eventCursor)
-            .some(
-              (event) =>
-                isRecord(event) &&
-                event.sessionKey === sessionKey &&
-                JSON.stringify(replies([event.message])).includes(ordinaryMarker),
-            ) || undefined,
-        30_000,
-        100,
-      );
+      await waitForReply(eventCursor, { sessionKey }, ordinaryMarker);
       return child;
     }
 
@@ -581,36 +586,16 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       ({ gateway, agentDb, stateDb } = await start());
       const ordinarySession = "agent:qa:package-released-ordinary";
       const ordinary = await ordinaryChild(ordinarySession);
-      const originalSession = rows(
-        agentDb,
-        "SELECT current_session_id FROM session_nodes WHERE session_key = ?",
-        ordinarySession,
-      )[0];
+      const originalSession = sessionRow(ordinarySession);
       if (!originalSession || typeof originalSession.current_session_id !== "string") {
         throw new Error("released ordinary session has no current session ID");
       }
       const originalSessionId = originalSession.current_session_id;
-      const originalTranscript = rows(
-        agentDb,
-        "SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
-        originalSessionId,
-      );
+      const originalTranscript = transcript(originalSessionId);
       expect(originalTranscript.length).toBeGreaterThan(0);
       function assertOriginalOrdinaryState() {
-        expect(
-          rows(
-            agentDb,
-            "SELECT current_session_id FROM session_nodes WHERE session_key = ?",
-            ordinarySession,
-          )[0],
-        ).toEqual(originalSession);
-        expect(
-          rows(
-            agentDb,
-            "SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
-            originalSessionId,
-          ),
-        ).toEqual(originalTranscript);
+        expect(sessionRow(ordinarySession)).toEqual(originalSession);
+        expect(transcript(originalSessionId)).toEqual(originalTranscript);
         expect(
           nativeRuns(ordinarySession).some(
             (task) => task.childSessionKey === ordinary.childSessionKey,
@@ -634,16 +619,16 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         expect((await lstat(repoLink)).isSymbolicLink()).toBe(true);
         expect(await readlink(repoLink)).toBe(repoRoot);
         await unlink(repoLink);
-        const backup = record(
-          JSON.parse(
-            (await runInstalled(["backup", "create", "--output", backupPath, "--verify", "--json"]))
-              .stdout,
-          ),
-        );
+        const backup = await installedJson([
+          "backup",
+          "create",
+          "--output",
+          backupPath,
+          "--verify",
+          "--json",
+        ]);
         expect(backup.verified).toBe(true);
-        const verified = record(
-          JSON.parse((await runInstalled(["backup", "verify", backupPath, "--json"])).stdout),
-        );
+        const verified = await installedJson(["backup", "verify", backupPath, "--json"]);
         expect(verified.ok).toBe(true);
         phases.push({
           phase: "released-verified-backup",
@@ -799,9 +784,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         120_000,
         100,
       );
-      expect(
-        rows(agentDb, "SELECT * FROM session_pending_inputs WHERE session_key = ?", pendingSession),
-      ).toEqual([]);
+      expect(pendingInputs(pendingSession)).toEqual([]);
       expect(
         rows(
           agentDb,
@@ -809,13 +792,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
           pendingInput.run_id,
         ),
       ).toEqual([{ succeeded: 1 }]);
-      expect(
-        rows(
-          agentDb,
-          "SELECT * FROM session_input_completions WHERE session_key = ? ORDER BY run_id",
-          privateState.sessionKey,
-        ),
-      ).toEqual(privateState.receipts);
+      expect(completionRows(privateState.sessionKey)).toEqual(privateState.receipts);
       expect(nativeRuns(privateState.sessionKey).map((task) => task.childSessionKey)).toEqual(
         privateState.children.map((task) => task.childSessionKey),
       );
@@ -840,12 +817,14 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
       await restartState(async ({ stateDir, configPath }) => {
         rollbackIdentity = await install(`openclaw@${releasedVersion}`);
         const target = path.join(prefix, "restored-backup");
-        const restored = record(
-          JSON.parse(
-            (await runInstalled(["backup", "restore", backupPath, "--target", target, "--json"]))
-              .stdout,
-          ),
-        );
+        const restored = await installedJson([
+          "backup",
+          "restore",
+          backupPath,
+          "--target",
+          target,
+          "--json",
+        ]);
         const manifest = record(
           JSON.parse(
             await readFile(
@@ -898,20 +877,10 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         }),
       );
       expect(probeRun.runId).toBe(capturedRow.run_id);
-      await waitForQaTransportCondition(
-        () =>
-          events
-            .slice(releasedChildEventCursor)
-            .some(
-              (event) =>
-                isRecord(event) &&
-                event.sessionKey === probeChild &&
-                event.runId === capturedRow.run_id &&
-                event.state === "final" &&
-                privateMarker.test(JSON.stringify(replies([event.message]))),
-            ) || undefined,
-        30_000,
-        100,
+      await waitForReply(
+        releasedChildEventCursor,
+        { sessionKey: probeChild, runId: capturedRow.run_id, state: "final" },
+        privateMarker,
       );
       const probeCursor = record(
         await (await fetch(`${mock.baseUrl}/debug/request-cursor`)).json(),
@@ -934,15 +903,9 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
         } finally {
           db.close();
         }
-        expect(
-          rows(stateDb, "SELECT * FROM subagent_runs WHERE run_id = ?", capturedRow.run_id),
-        ).toEqual([capturedRow]);
+        expect(registryRows(capturedRow.run_id)).toEqual([capturedRow]);
       });
-      const atProjection = rows(
-        stateDb,
-        "SELECT * FROM subagent_runs WHERE run_id = ?",
-        capturedRow.run_id,
-      );
+      const atProjection = registryRows(capturedRow.run_id);
       const projection = record(await gateway.call("sessions.list", { agentId: "qa", limit: 100 }));
       expect(Array.isArray(projection.sessions)).toBe(true);
       const listed = projection.sessions as Record<string, unknown>[];
@@ -961,11 +924,7 @@ describe.skipIf(!candidateTarball)("private completion installed-package compati
           await (await fetch(`${mock.baseUrl}/debug/requests?after=${String(probeCursor)}`)).json(),
         ),
       ).not.toMatch(privateMarker);
-      const remainingRows = rows(
-        stateDb,
-        "SELECT * FROM subagent_runs WHERE run_id = ?",
-        capturedRow.run_id,
-      );
+      const remainingRows = registryRows(capturedRow.run_id);
       if (remainingRows.length > 0) {
         expect(remainingRows).toEqual([capturedRow]);
       }

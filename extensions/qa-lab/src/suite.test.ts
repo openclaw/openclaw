@@ -35,6 +35,51 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 }));
 
 const tempDirs = createTempDirHarness();
+const rssSamples = [
+  { label: "suite-start", at: "2026-04-22T12:00:00.000Z", gatewayProcessRssBytes: 100_000_000 },
+  {
+    label: "scenario:canary:finish",
+    at: "2026-04-22T12:00:10.000Z",
+    gatewayProcessRssBytes: 140_000_000,
+  },
+];
+const heapSnapshots = [
+  {
+    label: "suite-start",
+    at: "2026-04-22T12:00:01.000Z",
+    path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
+    bytes: 12_345,
+  },
+];
+
+function cleanupErrorForTest(params: Parameters<typeof throwQaSuiteCleanupErrors>[0]): Error {
+  try {
+    throwQaSuiteCleanupErrors(params);
+  } catch (error) {
+    if (error instanceof Error) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("Expected cleanup to fail");
+}
+
+function isolatedWorkerParams(
+  overrides: Partial<Parameters<typeof buildQaIsolatedScenarioWorkerParams>[0]>,
+) {
+  return buildQaIsolatedScenarioWorkerParams({
+    repoRoot: "/repo",
+    outputDir: "/repo/.artifacts/qa-e2e/scenarios/patched-control-ui",
+    providerMode: "mock-openai",
+    transportId: "qa-channel",
+    primaryModel: "mock-openai/gpt-5.6-luna",
+    alternateModel: "mock-openai/gpt-5.6-luna-alt",
+    fastMode: true,
+    scenario: makeQaSuiteTestScenario("isolated-control-ui-ownership", { surface: "control-ui" }),
+    startLab: vi.fn(),
+    ...overrides,
+  });
+}
 
 afterEach(async () => {
   fetchWithSsrFGuardMock.mockReset();
@@ -99,44 +144,34 @@ describe("qa suite", () => {
     const runError = new Error("gateway infrastructure failed");
     const cleanupError = new Error("transport cleanup failed");
 
-    let thrown: unknown;
-    try {
-      throwQaSuiteCleanupErrors({
-        cleanupFailures: [{ phase: "transport before gateway stop", error: cleanupError }],
-        runFailed: true,
-        runError,
-      });
-    } catch (error) {
-      thrown = error;
-    }
+    const thrown = cleanupErrorForTest({
+      cleanupFailures: [{ phase: "transport before gateway stop", error: cleanupError }],
+      runFailed: true,
+      runError,
+    });
 
     expect(thrown).toMatchObject({
       cause: runError,
       errors: [runError, cleanupError],
     });
-    expect((thrown as Error).message.split("\n")[0]).toBe("QA suite and cleanup failed");
-    expect((thrown as Error).message).toContain(
+    expect(thrown.message.split("\n")[0]).toBe("QA suite and cleanup failed");
+    expect(thrown.message).toContain(
       "failed cleanup phases: transport before gateway stop: transport cleanup failed",
     );
   });
 
   it("reports cleanup failure before scenarios completed when no result exists", () => {
     const cleanupError = new Error("stop failed");
-    let thrown: unknown;
-    try {
-      throwQaSuiteCleanupErrors({
-        cleanupFailures: [{ phase: "lab stop", error: cleanupError }],
-        runFailed: false,
-        runError: undefined,
-      });
-    } catch (error) {
-      thrown = error;
-    }
+    const thrown = cleanupErrorForTest({
+      cleanupFailures: [{ phase: "lab stop", error: cleanupError }],
+      runFailed: false,
+      runError: undefined,
+    });
 
-    expect((thrown as Error).message.split("\n")[0]).toBe(
+    expect(thrown.message.split("\n")[0]).toBe(
       "QA suite cleanup failed before scenarios completed",
     );
-    expect((thrown as Error).cause).toBe(cleanupError);
+    expect(thrown.cause).toBe(cleanupError);
   });
 
   it("reports completed counts, labeled failures, and only written artifact paths", () => {
@@ -159,23 +194,18 @@ describe("qa suite", () => {
       watchUrl: "http://127.0.0.1:43123",
     } satisfies QaSuiteResult;
 
-    let thrown: unknown;
-    try {
-      throwQaSuiteCleanupErrors({
-        cleanupFailures: [
-          { phase: "agent\nharnesses", error: new Error("dispose failed") },
-          { phase: "lab stop", error: new Error("stop failed") },
-        ],
-        runFailed: false,
-        runError: undefined,
-        result,
-        evidenceWritten: false,
-      });
-    } catch (error) {
-      thrown = error;
-    }
+    const thrown = cleanupErrorForTest({
+      cleanupFailures: [
+        { phase: "agent\nharnesses", error: new Error("dispose failed") },
+        { phase: "lab stop", error: new Error("stop failed") },
+      ],
+      runFailed: false,
+      runError: undefined,
+      result,
+      evidenceWritten: false,
+    });
 
-    expect((thrown as Error).message).toBe(
+    expect(thrown.message).toBe(
       [
         "QA scenarios completed, but cleanup failed",
         "scenario counts: passed=1 failed=1 skipped=1 total=3",
@@ -183,8 +213,8 @@ describe("qa suite", () => {
         "retained artifacts: output=/qa-output retained report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json",
       ].join("\n"),
     );
-    expect("cause" in (thrown as object)).toBe(false);
-    expect((thrown as Error).message).not.toContain("evidence=");
+    expect("cause" in thrown).toBe(false);
+    expect(thrown.message).not.toContain("evidence=");
   });
 
   it.each(["never-spawned", "unconfirmed"] as const)(
@@ -346,57 +376,32 @@ describe("qa suite", () => {
 
   it("resolves transport-ready timeout from params and env", () => {
     expect(resolveQaSuiteTransportReadyTimeoutMs(undefined, {})).toBe(120_000);
-    expect(
-      resolveQaSuiteTransportReadyTimeoutMs(undefined, {
-        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000",
-      }),
-    ).toBe(180_000);
-    expect(
-      resolveQaSuiteTransportReadyTimeoutMs(undefined, {
-        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "bad",
-      }),
-    ).toBe(120_000);
-    for (const value of ["0x10", "1e3", "10.5"]) {
+    for (const [value, expected] of [
+      ["180000", 180_000],
+      ["bad", 120_000],
+      ["0x10", 120_000],
+      ["1e3", 120_000],
+      ["10.5", 120_000],
+    ] as const) {
       expect(
         resolveQaSuiteTransportReadyTimeoutMs(undefined, {
           OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: value,
         }),
-      ).toBe(120_000);
+      ).toBe(expected);
     }
     expect(resolveQaSuiteTransportReadyTimeoutMs(90_000, {})).toBe(90_000);
   });
 
   it("applies OPENCLAW_QA_SUITE_PROGRESS override and falls back on invalid values", () => {
-    expect(
-      shouldLogQaSuiteProgress({
-        CI: "false",
-        OPENCLAW_QA_SUITE_PROGRESS: "true",
-      }),
-    ).toBe(true);
-    expect(
-      shouldLogQaSuiteProgress({
-        CI: "true",
-        OPENCLAW_QA_SUITE_PROGRESS: "false",
-      }),
-    ).toBe(false);
-    expect(
-      shouldLogQaSuiteProgress({
-        CI: "false",
-        OPENCLAW_QA_SUITE_PROGRESS: "on",
-      }),
-    ).toBe(true);
-    expect(
-      shouldLogQaSuiteProgress({
-        CI: "true",
-        OPENCLAW_QA_SUITE_PROGRESS: "off",
-      }),
-    ).toBe(false);
-    expect(
-      shouldLogQaSuiteProgress({
-        CI: "true",
-        OPENCLAW_QA_SUITE_PROGRESS: "definitely",
-      }),
-    ).toBe(true);
+    for (const [CI, override, expected] of [
+      ["false", "true", true],
+      ["true", "false", false],
+      ["false", "on", true],
+      ["true", "off", false],
+      ["true", "definitely", true],
+    ] as const) {
+      expect(shouldLogQaSuiteProgress({ CI, OPENCLAW_QA_SUITE_PROGRESS: override })).toBe(expected);
+    }
   });
 
   it("sanitizes scenario ids for progress logs", () => {
@@ -436,26 +441,8 @@ describe("qa suite", () => {
         gatewayProcessCpuEndMs: 4_000,
         gatewayProcessRssStartBytes: 100_000_000,
         gatewayProcessRssEndBytes: 125_000_000,
-        gatewayProcessRssSamples: [
-          {
-            label: "suite-start",
-            at: "2026-04-22T12:00:00.000Z",
-            gatewayProcessRssBytes: 100_000_000,
-          },
-          {
-            label: "scenario:canary:finish",
-            at: "2026-04-22T12:00:10.000Z",
-            gatewayProcessRssBytes: 140_000_000,
-          },
-        ],
-        gatewayHeapSnapshots: [
-          {
-            label: "suite-start",
-            at: "2026-04-22T12:00:01.000Z",
-            path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
-            bytes: 12_345,
-          },
-        ],
+        gatewayProcessRssSamples: structuredClone(rssSamples),
+        gatewayHeapSnapshots: structuredClone(heapSnapshots),
       }),
     ).toEqual({
       wallMs: 12_000,
@@ -466,26 +453,8 @@ describe("qa suite", () => {
       gatewayProcessRssDeltaBytes: 25_000_000,
       gatewayProcessRssPeakBytes: 140_000_000,
       gatewayProcessRssPeakDeltaBytes: 40_000_000,
-      gatewayProcessRssSamples: [
-        {
-          label: "suite-start",
-          at: "2026-04-22T12:00:00.000Z",
-          gatewayProcessRssBytes: 100_000_000,
-        },
-        {
-          label: "scenario:canary:finish",
-          at: "2026-04-22T12:00:10.000Z",
-          gatewayProcessRssBytes: 140_000_000,
-        },
-      ],
-      gatewayHeapSnapshots: [
-        {
-          label: "suite-start",
-          at: "2026-04-22T12:00:01.000Z",
-          path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
-          bytes: 12_345,
-        },
-      ],
+      gatewayProcessRssSamples: rssSamples,
+      gatewayHeapSnapshots: heapSnapshots,
     });
   });
 
@@ -537,14 +506,7 @@ describe("qa suite", () => {
     };
 
     expect(
-      buildQaIsolatedScenarioWorkerParams({
-        repoRoot: "/repo",
-        outputDir: "/repo/.artifacts/qa-e2e/scenarios/patched-control-ui",
-        providerMode: "mock-openai",
-        transportId: "qa-channel",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        alternateModel: "mock-openai/gpt-5.6-luna-alt",
-        fastMode: true,
+      isolatedWorkerParams({
         scenario,
         startLab,
         input: {
@@ -578,27 +540,14 @@ describe("qa suite", () => {
     });
   });
 
-  it.each([{ surface: "control-ui", explicit: false, expected: false }])(
-    "preserves an explicit Control UI override for isolated $surface scenarios",
-    ({ surface, explicit, expected }) => {
-      const scenario = makeQaSuiteTestScenario("isolated-control-ui-ownership", { surface });
-
-      expect(
-        buildQaIsolatedScenarioWorkerParams({
-          repoRoot: "/repo",
-          outputDir: "/repo/.artifacts/qa-e2e/scenarios/isolated-control-ui-ownership",
-          providerMode: "mock-openai",
-          transportId: "qa-channel",
-          primaryModel: "mock-openai/gpt-5.6-luna",
-          alternateModel: "mock-openai/gpt-5.6-luna-alt",
-          fastMode: true,
-          scenario,
-          startLab: vi.fn(),
-          ...(explicit === undefined ? {} : { input: { controlUiEnabled: explicit } }),
-        }).controlUiEnabled,
-      ).toBe(expected);
-    },
-  );
+  it("preserves an explicit Control UI override for isolated scenarios", () => {
+    expect(
+      isolatedWorkerParams({
+        outputDir: "/repo/.artifacts/qa-e2e/scenarios/isolated-control-ui-ownership",
+        input: { controlUiEnabled: false },
+      }).controlUiEnabled,
+    ).toBe(false);
+  });
 
   it("keeps caller-owned serial labs on shared workers without a launcher", () => {
     const scenarios = [
@@ -634,20 +583,18 @@ describe("qa suite", () => {
   });
 
   it("remaps mock-openai model refs onto the app-server OpenAI provider for codex cells only", () => {
-    expect(
-      remapModelRefForForcedRuntime({
-        modelRef: "mock-openai/gpt-5.6-luna",
-        providerMode: "mock-openai",
-        forcedRuntime: "codex",
-      }),
-    ).toBe("openai/gpt-5.6-luna");
-    expect(
-      remapModelRefForForcedRuntime({
-        modelRef: "mock-openai/gpt-5.6-luna",
-        providerMode: "mock-openai",
-        forcedRuntime: "openclaw",
-      }),
-    ).toBe("mock-openai/gpt-5.6-luna");
+    for (const [forcedRuntime, expected] of [
+      ["codex", "openai/gpt-5.6-luna"],
+      ["openclaw", "mock-openai/gpt-5.6-luna"],
+    ] as const) {
+      expect(
+        remapModelRefForForcedRuntime({
+          modelRef: "mock-openai/gpt-5.6-luna",
+          providerMode: "mock-openai",
+          forcedRuntime,
+        }),
+      ).toBe(expected);
+    }
   });
 });
 
@@ -706,13 +653,15 @@ describe("buildQaSuiteSummaryJson", () => {
       alternateModel: "",
       scenarioIds: [],
     });
-    expect(json.run.primaryModel).toBe("not-a-real-ref");
-    expect(json.run.primaryProvider).toBeNull();
-    expect(json.run.primaryModelName).toBeNull();
-    expect(json.run.alternateModel).toBe("");
-    expect(json.run.alternateProvider).toBeNull();
-    expect(json.run.alternateModelName).toBeNull();
-    expect(json.run.scenarioIds).toBeNull();
+    expect(json.run).toMatchObject({
+      primaryModel: "not-a-real-ref",
+      primaryProvider: null,
+      primaryModelName: null,
+      alternateModel: "",
+      alternateProvider: null,
+      alternateModelName: null,
+      scenarioIds: null,
+    });
   });
 
   it("includes skipped scenarios in the canonical summary counts", () => {
@@ -743,26 +692,8 @@ describe("buildQaSuiteSummaryJson", () => {
       gatewayProcessRssDeltaBytes: 25_000_000,
       gatewayProcessRssPeakBytes: 140_000_000,
       gatewayProcessRssPeakDeltaBytes: 40_000_000,
-      gatewayProcessRssSamples: [
-        {
-          label: "suite-start",
-          at: "2026-04-22T12:00:00.000Z",
-          gatewayProcessRssBytes: 100_000_000,
-        },
-        {
-          label: "scenario:canary:finish",
-          at: "2026-04-22T12:00:10.000Z",
-          gatewayProcessRssBytes: 140_000_000,
-        },
-      ],
-      gatewayHeapSnapshots: [
-        {
-          label: "suite-start",
-          at: "2026-04-22T12:00:01.000Z",
-          path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
-          bytes: 12_345,
-        },
-      ],
+      gatewayProcessRssSamples: rssSamples,
+      gatewayHeapSnapshots: heapSnapshots,
     };
     const json = buildQaSuiteSummaryJson({ ...baseParams, metrics: structuredClone(metrics) });
 

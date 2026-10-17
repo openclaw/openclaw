@@ -19,6 +19,16 @@ import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const tempDirs = createTempDirHarness();
+const readJson = async (
+  file: string,
+): Promise<{
+  kind?: string;
+  entries?: unknown[];
+  evidence?: unknown;
+  run?: { channelCapabilityMatrixPath?: string; channelDriverSmokePath?: string };
+}> => JSON.parse(await fs.readFile(file, "utf8"));
+const expectMissing = (file: string) =>
+  expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
 
 afterEach(() => tempDirs.cleanup());
 
@@ -55,15 +65,10 @@ describe("suite artifacts", () => {
     const artifacts = await writeArtifacts(outputDir);
 
     expect(artifacts.evidencePath).toBe(path.join(outputDir, QA_EVIDENCE_FILENAME));
-    const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
-      kind?: string;
-      entries?: unknown[];
-    };
+    const evidence = await readJson(artifacts.evidencePath);
     expect(evidence.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
     expect(evidence.entries).toHaveLength(1);
-    const summary = JSON.parse(await fs.readFile(artifacts.summaryPath, "utf8")) as {
-      evidence?: unknown;
-    };
+    const summary = await readJson(artifacts.summaryPath);
     expect(summary.evidence).toEqual(evidence);
     expect(artifacts.evidence).toEqual(evidence);
     if (process.platform !== "win32") {
@@ -80,12 +85,10 @@ describe("suite artifacts", () => {
   it("can return evidence without writing duplicate child evidence files", async () => {
     const outputDir = await tempDirs.makeTempDir("qa-suite-artifacts-memory-evidence-");
     await fs.writeFile(path.join(outputDir, QA_EVIDENCE_FILENAME), "stale evidence\n", "utf8");
-    const artifacts = await writeArtifacts(outputDir, {
-      writeEvidenceFile: false,
-    });
+    const artifacts = await writeArtifacts(outputDir, { writeEvidenceFile: false });
 
     expect(artifacts.evidence?.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
-    await expect(fs.access(artifacts.evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(artifacts.evidencePath);
     await fs.access(artifacts.reportPath);
     await fs.access(artifacts.summaryPath);
   });
@@ -97,7 +100,7 @@ describe("suite artifacts", () => {
     expect(partial.report).toContain("- Status: running");
     expect(partial.report).toContain("- Updated: 2026-04-11T00:01:00.000Z");
     expect(partial.report).not.toContain("- Finished:");
-    await expect(fs.access(partial.evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(partial.evidencePath);
     await expect(fs.readFile(partial.summaryPath, "utf8")).resolves.toContain(
       '"status": "running"',
     );
@@ -168,6 +171,10 @@ describe("suite artifacts", () => {
       artifactGenerationDirectory,
       "crabline-provider-readiness.json",
     );
+    const transportArtifacts = [
+      { kind: "channel-capability-matrix", path: capabilityMatrixPath },
+      { kind: "channel-driver-smoke", path: providerReadinessArtifactPath },
+    ];
     await fs.mkdir(path.resolve(outputDir, artifactGenerationDirectory), { recursive: true });
     await fs.writeFile(
       path.resolve(outputDir, capabilityMatrixPath),
@@ -183,32 +190,19 @@ describe("suite artifacts", () => {
       channel: "telegram",
       channelDriver: "crabline",
       transportArtifacts: {
-        artifacts: [
-          { kind: "channel-capability-matrix", path: capabilityMatrixPath },
-          { kind: "channel-driver-smoke", path: providerReadinessArtifactPath },
-        ],
+        artifacts: structuredClone(transportArtifacts),
         reportNotes: ["Transport-owned artifact evidence captured."],
       },
     });
 
-    const summary = JSON.parse(await fs.readFile(artifacts.summaryPath, "utf8")) as {
-      run?: {
-        channelCapabilityMatrixPath?: string;
-        channelDriverSmokePath?: string;
-      };
-    };
-    expect(summary.run?.channelCapabilityMatrixPath).toBe(capabilityMatrixPath);
-    expect(summary.run?.channelDriverSmokePath).toBe(providerReadinessArtifactPath);
-    await expect(
-      fs.access(path.join(outputDir, "crabline-channel-driver-capabilities.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.access(path.join(outputDir, "crabline-provider-readiness.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    const evidence = validateQaEvidenceSummaryJson(
-      JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")),
-    );
-    const parsed = evidence;
+    expect((await readJson(artifacts.summaryPath)).run).toMatchObject({
+      channelCapabilityMatrixPath: capabilityMatrixPath,
+      channelDriverSmokePath: providerReadinessArtifactPath,
+    });
+    for (const artifact of transportArtifacts) {
+      await expectMissing(path.join(outputDir, path.basename(artifact.path)));
+    }
+    const parsed = validateQaEvidenceSummaryJson(await readJson(artifacts.evidencePath));
     expect(parsed.schemaVersion).toBe(3);
     if (parsed.schemaVersion !== 3) {
       throw new Error("expected recorded occurrences");
@@ -231,10 +225,7 @@ describe("suite artifacts", () => {
     for (const evidencePath of [artifacts.evidencePath, parentEvidencePath]) {
       const gallery = await buildQaEvidenceGalleryModel({ evidencePath, repoRoot });
       expect(gallery.counts).toEqual({ pass: 0, fail: 1, blocked: 0, skipped: 0 });
-      for (const [kind, relative] of [
-        ["channel-capability-matrix", capabilityMatrixPath],
-        ["channel-driver-smoke", providerReadinessArtifactPath],
-      ]) {
+      for (const { kind, path: relative } of transportArtifacts) {
         const artifactIndex = gallery.entries[0]!.artifacts.findIndex((item) => item.kind === kind);
         expect(artifactIndex).toBeGreaterThanOrEqual(0);
         const indexed = await resolveQaEvidenceArtifactFileByIndex({
@@ -246,20 +237,20 @@ describe("suite artifacts", () => {
         const declared = await resolveQaEvidenceArtifactFile({
           evidencePath,
           repoRoot,
-          artifactPath: path.join(outputDir, relative!),
+          artifactPath: path.join(outputDir, relative),
         });
         expect(await fs.readFile(indexed)).toEqual(await fs.readFile(declared));
         expect(await fs.readFile(indexed)).toEqual(
-          await fs.readFile(path.join(outputDir, relative!)),
+          await fs.readFile(path.join(outputDir, relative)),
         );
       }
     }
     expect(await fs.readFile(parentEvidencePath)).toEqual(originalBytes);
-    expect(evidence.entries?.[0]?.execution?.channel).toMatchObject({
+    expect(parsed.entries?.[0]?.execution?.channel).toMatchObject({
       driver: "crabline",
       id: "telegram",
     });
-    expect(evidence.entries?.[0]?.result).toMatchObject({
+    expect(parsed.entries?.[0]?.result).toMatchObject({
       failure: { reason: "active transport does not implement this scenario" },
       status: "fail",
     });
