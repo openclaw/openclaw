@@ -5,6 +5,87 @@ import { buildMemoryReadResult, buildMemoryReadResultFromSlice } from "./read-fi
 describe("memory read result slicing", () => {
   it.each([
     {
+      name: "a child section",
+      content:
+        "# Policy\n## Refunds\n30 days\n### Exceptions\nCustom orders excluded\n## Shipping\nNext",
+      heading: "Refunds",
+      from: 2,
+      text: "## Refunds\n30 days\n### Exceptions\nCustom orders excluded",
+    },
+    {
+      name: "Chinese text and closing markers",
+      content: "# 规则\r\n## 退款 ###\r\n定制品除外\r\n# 其它\r\n",
+      heading: "退款",
+      from: 2,
+      text: "## 退款 ###\r\n定制品除外\r",
+    },
+    {
+      name: "fenced examples",
+      content:
+        "```md\n## Refunds\n```\n~~~\n## Refunds\n~~~\n## Refunds\nActual\n```\n# Example\n```\n# Next",
+      heading: "Refunds",
+      from: 7,
+      text: "## Refunds\nActual\n```\n# Example\n```",
+    },
+    {
+      name: "frontmatter and indented code",
+      content: "---\n# Refunds\n---\n    ## Refunds\n## Refunds\nActual",
+      heading: "Refunds",
+      from: 5,
+      text: "## Refunds\nActual",
+    },
+  ])(
+    "reads $name with original line numbers and no sibling continuation",
+    ({ content, heading, from, text }) => {
+      expect(buildMemoryReadResult({ content, heading, relPath: "memory/policy.md" })).toEqual({
+        status: "ok",
+        path: "memory/policy.md",
+        from,
+        lines: text.split("\n").length,
+        text,
+      });
+    },
+  );
+
+  it("keeps budgeted continuation inside the selected section", () => {
+    const content = "# Policy\n## Refunds\n30 days\nCustom excluded\n## Shipping\nOther";
+    const request = { content, heading: "Refunds", relPath: "memory/policy.md", maxChars: 12 };
+    expect(buildMemoryReadResult(request)).toEqual({
+      status: "ok",
+      path: "memory/policy.md",
+      from: 2,
+      lines: 1,
+      truncated: true,
+      nextFrom: 3,
+      text: "## Refunds\n\n[More content available. Use from=3 to continue.]",
+    });
+    expect(buildMemoryReadResult({ ...request, from: 3, maxChars: 100 })).toEqual({
+      status: "ok",
+      path: "memory/policy.md",
+      from: 3,
+      lines: 2,
+      text: "30 days\nCustom excluded",
+    });
+    expect(buildMemoryReadResult({ ...request, lines: 2, maxChars: 100 })).toMatchObject({
+      nextFrom: 4,
+      truncated: true,
+    });
+    for (const from of [1, 5]) {
+      expect(() => buildMemoryReadResult({ ...request, from })).toThrow("from must be within");
+    }
+  });
+
+  it.each([
+    { content: "# Policy\nNo heading", code: "MEMORY_HEADING_NOT_FOUND" },
+    { content: "## Refunds\nOne\n## Refunds\nTwo", code: "MEMORY_HEADING_AMBIGUOUS" },
+  ])("rejects $code without returning an unrelated excerpt", ({ content, code }) => {
+    expect(() =>
+      buildMemoryReadResult({ content, heading: "Refunds", relPath: "memory/policy.md" }),
+    ).toThrow(expect.objectContaining({ code }));
+  });
+
+  it.each([
+    {
       name: "a terminal newline",
       content: "one\ntwo\n",
       requestedLines: 2,

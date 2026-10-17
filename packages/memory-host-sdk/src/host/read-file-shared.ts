@@ -11,6 +11,69 @@ const DEFAULT_MEMORY_READ_MAX_CHARS = 12_000;
 
 export type { LegacyMemoryReadResult, MemoryReadResult } from "./types.js";
 
+/** Select a unique top-level ATX section, keeping its child headings and source offsets. */
+function findMemoryHeadingRange(
+  fileLines: string[],
+  heading: string,
+): { start: number; end: number } {
+  const headings: Array<{ title: string; level: number; index: number }> = [];
+  let fence: { marker: string; length: number } | undefined;
+  let frontmatter = fileLines[0]?.trim() === "---";
+  for (let index = 0; index < fileLines.length; index += 1) {
+    const line = (fileLines[index] ?? "").replace(/\r$/u, "");
+    if (frontmatter) {
+      if (index > 0 && /^(?:---|\.\.\.)\s*$/u.test(line)) {
+        frontmatter = false;
+      }
+      continue;
+    }
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+    if (fence) {
+      if (
+        fenceMatch?.[1]?.[0] === fence.marker &&
+        fenceMatch[1].length >= fence.length &&
+        !fenceMatch[2]?.trim()
+      ) {
+        fence = undefined;
+      }
+      continue;
+    }
+    if (fenceMatch && !(fenceMatch[1]![0] === "`" && fenceMatch[2]?.includes("`"))) {
+      fence = { marker: fenceMatch[1]![0]!, length: fenceMatch[1]!.length };
+      continue;
+    }
+    const match = /^ {0,3}(#{1,6})(?:[\t ]+(.*)|[\t ]*)$/u.exec(line);
+    if (match) {
+      headings.push({
+        title: (match[2] ?? "").replace(/[\t ]+#+[\t ]*$/u, "").trim(),
+        level: match[1]!.length,
+        index,
+      });
+    }
+  }
+  const matches = headings.filter((item) => item.title === heading);
+  if (matches.length !== 1) {
+    throw Object.assign(
+      new Error(
+        matches.length === 0
+          ? "No matching ATX heading. Use from/lines to read by source line instead."
+          : `Heading is ambiguous (lines ${matches
+              .slice(0, 8)
+              .map((item) => item.index + 1)
+              .join(", ")}). Omit heading and use from/lines to select the intended section.`,
+      ),
+      { code: matches.length === 0 ? "MEMORY_HEADING_NOT_FOUND" : "MEMORY_HEADING_AMBIGUOUS" },
+    );
+  }
+  const selected = matches[0]!;
+  return {
+    start: selected.index + 1,
+    end:
+      headings.find((item) => item.index > selected.index && item.level <= selected.level)?.index ??
+      fileLines.length,
+  };
+}
+
 /** Build the continuation notice appended to truncated memory excerpts. */
 function buildContinuationNotice(params: {
   nextFrom: number | undefined;
@@ -99,6 +162,7 @@ export function buildMemoryReadResult(params: {
   relPath: string;
   from?: number;
   lines?: number;
+  heading?: string;
   defaultLines?: number;
   maxChars?: number;
   suggestReadFallback?: boolean;
@@ -109,14 +173,21 @@ export function buildMemoryReadResult(params: {
   if (fileLines.at(-1) === "") {
     fileLines.pop();
   }
-  const start = resolveIntegerOption(params.from, 1, { min: 1 });
+  const section = params.heading ? findMemoryHeadingRange(fileLines, params.heading) : undefined;
+  const start = resolveIntegerOption(params.from, section?.start ?? 1, { min: 1 });
+  if (section && (start < section.start || start > section.end)) {
+    throw Object.assign(new Error("from must be within the selected heading section."), {
+      code: "MEMORY_HEADING_RANGE_INVALID",
+    });
+  }
   const requestedCount = resolveIntegerOption(
     params.lines ?? params.defaultLines,
     DEFAULT_MEMORY_READ_LINES,
     { min: 1 },
   );
-  const selectedLines = fileLines.slice(start - 1, start - 1 + requestedCount);
-  const moreSourceLinesRemain = start - 1 + selectedLines.length < fileLines.length;
+  const end = section?.end ?? fileLines.length;
+  const selectedLines = fileLines.slice(start - 1, Math.min(end, start - 1 + requestedCount));
+  const moreSourceLinesRemain = start - 1 + selectedLines.length < end;
   return buildMemoryReadResultFromSlice({
     selectedLines,
     relPath: params.relPath,
