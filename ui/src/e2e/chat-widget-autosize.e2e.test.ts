@@ -1,14 +1,9 @@
-// Chat widgets size to their content: the in-frame reporter drives the host
-// frame, so a tall document must not end up scrolling inside its own row.
-import { readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
+import { readFileSync } from "node:fs";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
 import type { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -20,11 +15,14 @@ const suite = createControlUiE2eSuite({
 
 const documentId = "widget-autosize-proof";
 const documentPath = `/__openclaw__/canvas/documents/${documentId}/index.html`;
-// Taller than any viewport this suite uses, so a frame that fits the content
-// can only come from the reported height rather than from the layout box.
-const rowCount = 90;
-const rowHeight = 28;
+const tallContentHeight = 2520; // Exceeds every viewport, forcing reported-height sizing.
 const scrollTop = (target: Locator) => target.evaluate((element) => element.scrollTop);
+const widgetFrame = (page: Page) => page.locator(".chat-tool-card__preview-frame");
+const innerWidget = (page: Page) => widgetFrame(page).contentFrame().frameLocator("iframe");
+const readyMedia = (player: Locator) =>
+  expect
+    .poll(() => player.evaluate((element: HTMLVideoElement) => element.readyState))
+    .toBeGreaterThanOrEqual(2);
 const assistant = (content: unknown, timestamp: number) => ({
   role: "assistant",
   content,
@@ -34,14 +32,10 @@ const embed = (title: string) => [
   { type: "text", text: `[embed ref="${documentId}" title="${title}" /]` },
 ];
 
-async function captureFrame(page: Page, surface: Locator, anchor: Locator, file: string) {
-  const capture = await takeControlUiScreenshotFrame(page, surface, [anchor], {
-    animations: "disabled",
-  });
-  writeFileSync(file, capture.png);
-}
-const video = readFileSync(new URL("./fixtures/video-poster.mp4", import.meta.url));
-const trailer = `<div id="primetime-trailer"><video aria-label="Primetime official trailer" controls playsinline preload="auto" style="display:block;width:100%;aspect-ratio:16/9;background:#000;border-radius:12px"><source src="data:video/mp4;base64,${video.toString("base64")}" type="video/mp4"></video><p id="trailer-status" style="font:13px var(--font-body);color:var(--muted)">Press play. <a href="https://www.youtube.com/watch?v=synthetic" target="_blank" rel="noopener noreferrer">Watch on YouTube</a></p></div>`;
+const video = readFileSync(new URL("./fixtures/video-poster.mp4", import.meta.url)).toString(
+  "base64",
+);
+const trailer = `<div id="primetime-trailer"><video aria-label="Primetime official trailer" controls playsinline preload="auto" style="display:block;width:100%;aspect-ratio:16/9;background:#000;border-radius:12px"><source src="data:video/mp4;base64,${video}" type="video/mp4"></video><p id="trailer-status" style="font:13px var(--font-body);color:var(--muted)">Press play. <a href="https://www.youtube.com/watch?v=synthetic" target="_blank" rel="noopener noreferrer">Watch on YouTube</a></p></div>`;
 // Stored pre-fix shell and body reporter, independent of the current wrapper.
 const legacyTrailer = `<!doctype html><html><head><style>
   :root{color-scheme:dark;--font-body:Arial,sans-serif;--muted:#8b8b94}
@@ -77,11 +71,7 @@ suite.define(() => {
       const sessionKey = "agent:main:dashboard:widget-reload";
       const html = buildWidgetDocument(
         "Synthetic dashboard preview",
-        `<main style="height:700px;box-sizing:border-box;padding:24px;display:grid;grid-template-rows:repeat(7,1fr);background:#e8f0f7;color:#243b53">${Array.from(
-          { length: 7 },
-          (_, index) =>
-            `<div style="display:flex;align-items:center;border-bottom:1px solid #bcccdc">Synthetic dashboard row ${index + 1}${index === 6 ? ": All data in this preview is synthetic." : ""}</div>`,
-        ).join("")}</main>`,
+        '<main style="height:700px">All data in this preview is synthetic.</main>',
       );
       const gateway = await installMockGateway(page, {
         sessionKey,
@@ -113,11 +103,7 @@ suite.define(() => {
       await gateway.resolveDeferred("connect");
       await gateway.waitForRequest("canvas.document.view");
       await gateway.resolveDeferred("canvas.document.view");
-      const frame = page.locator(".chat-tool-card__preview-frame");
-      const ready = frame
-        .contentFrame()
-        .frameLocator("iframe")
-        .getByText("All data in this preview is synthetic.", { exact: false });
+      const ready = innerWidget(page).getByText("All data in this preview is synthetic.");
       await ready.waitFor();
       await page.waitForFunction(
         () =>
@@ -175,26 +161,18 @@ suite.define(() => {
       await preview.waitFor();
       await gateway.resolveDeferred("connect");
       await gateway.waitForRequest("canvas.document.view");
-      await page.waitForFunction(() => (window.widgetReloadFrames?.length ?? 0) >= 20, undefined, {
-        polling: "raf",
-      });
       await page.waitForFunction(
         () => {
-          const sample = window.widgetReloadFrames?.at(-1);
-          return sample && sample.scrollTop > 0 && Math.abs(sample.endGap) <= 1;
+          const frames = window.widgetReloadFrames ?? [];
+          const sample = frames.at(-1);
+          return (
+            frames.length >= 20 && sample && sample.scrollTop > 0 && Math.abs(sample.endGap) <= 1
+          );
         },
         undefined,
         { polling: "raf" },
       );
       const loadedStart = await page.evaluate(() => window.widgetReloadFrames!.length - 1);
-      const artifacts = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
-        ? createControlUiE2eArtifactDir("widget-reload")
-        : undefined;
-      const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-      const anchor = thread.locator('[data-entry-id="widget-reload-anchor"]');
-      if (artifacts) {
-        await captureFrame(page, thread, anchor, path.join(artifacts, "waiting.png"));
-      }
       await gateway.resolveDeferred("canvas.document.view");
       await ready.waitFor();
       const samples = await page.evaluate(async () => {
@@ -206,10 +184,6 @@ suite.define(() => {
         window.widgetReloadRecording = false;
         return window.widgetReloadFrames ?? [];
       });
-      if (artifacts) {
-        await captureFrame(page, thread, anchor, path.join(artifacts, "loaded.png"));
-        writeFileSync(path.join(artifacts, "frames.json"), JSON.stringify(samples));
-      }
       expect(samples.length).toBeGreaterThanOrEqual(40);
       for (const sample of samples) {
         expect(Math.abs(sample.previewHeight - learnedHeight)).toBeLessThanOrEqual(1);
@@ -232,20 +206,14 @@ suite.define(() => {
           },
           historyMessages: [assistant(embed("Primetime trailer"), 100)],
         });
-        const artifacts = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
-          ? createControlUiE2eArtifactDir("trailer")
-          : undefined;
         for (const saved of [false, true]) {
           if (saved) {
             await gateway.setMethodResponse("canvas.document.view", canvasView(legacyTrailer));
           }
           await page.goto(`${suite.server.baseUrl}chat`);
-          const frame = page.locator(".chat-tool-card__preview-frame");
-          const widget = frame.contentFrame().frameLocator("iframe");
+          const widget = innerWidget(page);
           const player = widget.getByLabel("Primetime official trailer");
-          await expect
-            .poll(() => player.evaluate((element: HTMLVideoElement) => element.readyState))
-            .toBeGreaterThanOrEqual(2);
+          await readyMedia(player);
           await expect
             .poll(() =>
               widget
@@ -255,19 +223,6 @@ suite.define(() => {
                 ),
             )
             .toBe(0);
-          if (artifacts) {
-            const preview = page.locator(
-              '.chat-tool-card__preview[data-content-kind="canvas-html"]',
-            );
-            const capture = await takeControlUiScreenshotFrame(page, preview, [frame], {
-              elements: [preview],
-              scrollTo: preview,
-              animations: "disabled",
-            });
-            const name = saved ? "saved" : "new";
-            writeFileSync(path.join(artifacts, `${name}.png`), capture.png);
-            writeFileSync(path.join(artifacts, `${name}-widget.png`), capture.elements[0]!.png);
-          }
           const measurements = await widget.locator("body").evaluate(() => ({
             overflow: document.scrollingElement!.scrollHeight - innerHeight,
             fullscreenEnabled: document.fullscreenEnabled,
@@ -299,21 +254,15 @@ suite.define(() => {
                 };
                 document.head.prepend = () => { steal(); throw new Error("Authored DOM override"); };
                 new MutationObserver(steal).observe(document, { childList: true, subtree: true });
-              </script><div style="display:grid">${Array.from(
-                { length: rowCount },
-                (_, index) =>
-                  `${
-                    index === rowCount / 2
-                      ? `<video aria-label="Synthetic video" controls loop playsinline preload="auto"
+              </script><div style="height:${tallContentHeight / 2}px"></div>
+                      <video aria-label="Synthetic video" controls loop playsinline preload="auto"
                         style="display:block;width:320px;height:180px"
-                        src="data:video/mp4;base64,${video.toString("base64")}"></video>
+                        src="data:video/mp4;base64,${video}"></video>
                       <div aria-label="Scrollable widget details" style="height:160px;overflow-y:auto">
                         <div style="height:640px">Nested details remain independently scrollable</div>
                       </div>
-                      <div aria-label="Wheel-controlled widget" style="height:80px">Wheel changes this control</div>`
-                      : ""
-                  }<div style="height:${rowHeight}px;line-height:${rowHeight}px">Row ${index + 1}</div>`,
-              ).join("")}</div><script>
+                      <div aria-label="Wheel-controlled widget" style="height:80px">Wheel changes this control</div>
+              <div style="height:${tallContentHeight / 2}px"></div><script>
                 document.querySelector('[aria-label="Wheel-controlled widget"]').addEventListener('wheel', event => {
                   event.preventDefault();
                   event.currentTarget.textContent = 'Wheel handled';
@@ -352,14 +301,12 @@ suite.define(() => {
         ],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const frame = page.locator(".chat-tool-card__preview-frame");
+      const frame = widgetFrame(page);
       await frame.waitFor();
-      const contentHeight = rowCount * rowHeight;
       await expect
         .poll(async () => Math.round((await frame.boundingBox())?.height ?? 0))
-        .toBeGreaterThanOrEqual(contentHeight);
-      // Measure inside the cross-origin frame to detect inaccessible nested overflow.
-      const widget = frame.contentFrame().frameLocator("iframe");
+        .toBeGreaterThanOrEqual(tallContentHeight);
+      const widget = innerWidget(page);
       const overflow = await widget
         .locator("body")
         .evaluate((body) => body.scrollHeight - innerHeight);
@@ -367,19 +314,15 @@ suite.define(() => {
 
       const player = widget.getByLabel("Synthetic video");
       const thread = page.locator(".chat-thread");
-      await expect
-        .poll(() => player.evaluate((element: HTMLVideoElement) => element.readyState))
-        .toBeGreaterThanOrEqual(2);
+      await readyMedia(player);
       // Media readiness does not mean the trusted bridge has received host state.
       // This deferred style is inserted only after receipt, without exposing its nonce.
       await expect
         .poll(() =>
           widget
-            .locator("head")
-            .evaluate((head) =>
-              [...head.querySelectorAll("style")].some(
-                (style) => style.textContent === ":where(body){display:flow-root}",
-              ),
+            .locator("head style")
+            .evaluateAll((styles) =>
+              styles.some((style) => style.textContent === ":where(body){display:flow-root}"),
             ),
         )
         .toBe(true);

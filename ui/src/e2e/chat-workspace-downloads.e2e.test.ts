@@ -1,12 +1,9 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { createServer, request } from "node:http";
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -83,20 +80,6 @@ suite.define(() => {
         }),
     });
     const baseUrl = "http://127.0.0.1:" + server.claim.port + "/";
-    const parent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifacts = parent
-      ? createControlUiE2eArtifactDir("file-stream-downloads", parent)
-      : undefined;
-    const capture = async (surface: Locator, name: string) => {
-      if (!artifacts) {
-        return;
-      }
-      const frame = await takeControlUiScreenshotFrame(page, surface, [surface], {
-        elements: [surface],
-        animations: "disabled",
-      });
-      await writeFile(path.join(artifacts, name), frame.elements[0]!.png);
-    };
     const save = async (button: Locator) => {
       expect(await button.isEnabled()).toBe(true);
       releaseBody = createDeferredCore();
@@ -146,8 +129,6 @@ suite.define(() => {
             message: "File access denied",
           });
           await page.getByText(/Could not download this file:.*File access denied/).waitFor();
-        } else {
-          await capture(rail, "large-list.png");
         }
         await save(button);
         expect((await gateway.getRequests("sessions.files.get")).length).toBe(beforePreviewReads);
@@ -183,9 +164,6 @@ suite.define(() => {
           .locator(".chat-files-panel__page:visible")
           .filter({ has: downloadButton(page) });
         await preview.waitFor();
-        if (file !== files[0]) {
-          await capture(preview, "large-preview.png");
-        }
         await save(downloadButton(preview));
         await preview.getByRole("button", { name: "Show in Files", exact: true }).click();
       }

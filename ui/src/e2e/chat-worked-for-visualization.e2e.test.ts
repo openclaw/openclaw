@@ -1,17 +1,6 @@
-// Control UI E2E covers completed-work expansion and persistent visual outcomes.
-import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { projectChatDisplayMessages } from "../../../src/gateway/chat-display-projection.ts";
 import { createNestedToolActivity } from "../../../src/sessions/nested-tool-activity.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-
-let artifactDir: string | undefined;
-beforeEach(() => {
-  const parent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-  artifactDir = parent
-    ? createControlUiE2eArtifactDir("chat-worked-for-visualization", parent)
-    : undefined;
-});
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
@@ -19,8 +8,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 declare global {
   interface Window {
-    pauseTranscriptResizeObservers: () => void;
-    resumeTranscriptResizeObservers: () => void;
+    transcriptResizeObserversPaused: boolean;
   }
 }
 
@@ -39,11 +27,42 @@ const chatMessage = <T>(role: string, content: T, timestamp: number) => ({
   timestamp,
 });
 
-async function captureProof(page: import("playwright").Page, name: string) {
-  if (!artifactDir) {
-    return;
-  }
-  await page.screenshot({ path: path.join(artifactDir, `${name}.png`), fullPage: true });
+function nestedExec(
+  id: string,
+  toolName: string,
+  input: Record<string, unknown>,
+  value: unknown,
+  timestamp: number,
+  details?: Record<string, unknown>,
+) {
+  const json = JSON.stringify(value);
+  const text =
+    toolName === "browser"
+      ? `<<<EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>\nSource: Browser\n---\n${json}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>`
+      : json;
+  const result = { content: [{ type: "text", text }], details };
+  return [
+    chatMessage("assistant", [{ type: "toolCall", id, name: "exec", arguments: {} }], timestamp),
+    createNestedToolActivity({
+      runId: "visual-order-run",
+      scopeId: id,
+      afterEntryId: id,
+      startOrder: 0,
+      parentToolCallId: id,
+      toolCallId: `${id}-child`,
+      toolName,
+      input,
+      result,
+      isError: false,
+      startedAt: timestamp + 100,
+      timestamp: timestamp + 200,
+    }),
+    {
+      ...chatMessage("toolResult", result.content, timestamp + 300),
+      toolCallId: id,
+      toolName: "exec",
+    },
+  ];
 }
 
 suite.define(() => {
@@ -71,47 +90,6 @@ suite.define(() => {
             targetId: "visual-order-tab",
             title: "Release reference",
             url: "https://example.com/release",
-          };
-          const nestedExec = (
-            id: string,
-            toolName: string,
-            input: Record<string, unknown>,
-            value: unknown,
-            timestamp: number,
-            details?: Record<string, unknown>,
-          ) => {
-            const json = JSON.stringify(value);
-            const text =
-              toolName === "browser"
-                ? `<<<EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>\nSource: Browser\n---\n${json}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="1234567890abcdef">>>`
-                : json;
-            const result = { content: [{ type: "text", text }], details };
-            return [
-              chatMessage(
-                "assistant",
-                [{ type: "toolCall", id, name: "exec", arguments: {} }],
-                timestamp,
-              ),
-              createNestedToolActivity({
-                runId: "visual-order-run",
-                scopeId: id,
-                afterEntryId: id,
-                startOrder: 0,
-                parentToolCallId: id,
-                toolCallId: `${id}-child`,
-                toolName,
-                input,
-                result,
-                isError: false,
-                startedAt: timestamp + 100,
-                timestamp: timestamp + 200,
-              }),
-              {
-                ...chatMessage("toolResult", result.content, timestamp + 300),
-                toolCallId: id,
-                toolName: "exec",
-              },
-            ];
           };
           const widgetMessages = [
             ...nestedExec(
@@ -147,7 +125,7 @@ suite.define(() => {
               { ok: true },
               5_000,
             ),
-            chatMessage("assistant", "The widget and release reference are ready.", 6_000),
+            chatMessage("assistant", "Ready.", 6_000),
           ];
           await installMockGateway(page, {
             sessionKey,
@@ -169,35 +147,30 @@ suite.define(() => {
             ),
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-          await page
-            .getByText("The widget and release reference are ready.", { exact: true })
-            .waitFor();
+          await page.getByText("Ready.", { exact: true }).waitFor();
           const widget = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
           const browser = page.locator("openclaw-browser-tab-card");
-          const expectSingleOutputs = async () => {
-            expect(await widget.count()).toBe(1);
-            expect(await browser.count()).toBe(1);
-          };
-          await widget.waitFor();
-          await browser.waitFor();
-          await waitForChatScrollIdle(page);
-          await expectSingleOutputs();
-          expect(
-            await page
+          const expectOutputs = async () => {
+            const outputs = await page
               .locator('.chat-tool-card__preview[data-kind="canvas"], openclaw-browser-tab-card')
               .evaluateAll((elements) =>
                 elements.map((element) =>
                   element.tagName === "OPENCLAW-BROWSER-TAB-CARD" ? "browser" : "widget",
                 ),
-              ),
-          ).toEqual(browserFirst ? ["browser", "widget"] : ["widget", "browser"]);
+              );
+            expect(outputs).toEqual(browserFirst ? ["browser", "widget"] : ["widget", "browser"]);
+          };
+          await widget.waitFor();
+          await browser.waitFor();
+          await waitForChatScrollIdle(page);
+          await expectOutputs();
           const workedFor = page.locator(".chat-work-group > .chat-activity-group__summary");
           expect(await workedFor.getAttribute("aria-expanded")).toBe("false");
           for (const expanded of [true, false]) {
             await workedFor.click();
             await waitForChatScrollIdle(page);
             expect(await workedFor.getAttribute("aria-expanded")).toBe(String(expanded));
-            await expectSingleOutputs();
+            await expectOutputs();
             const overlaps = await page.locator(".chat-virtual-row").evaluateAll((elements) => {
               const rects = elements.map((element) => element.getBoundingClientRect());
               return rects.flatMap((rect, index) => {
@@ -217,18 +190,11 @@ suite.define(() => {
     await suite.withPage({ viewport: { height: 900, width: 1200 } }, async ({ page }) => {
       const sessionKey = "agent:main:dashboard:worked-for-geometry";
       await page.addInitScript(() => {
-        const NativeResizeObserver = window.ResizeObserver;
-        let paused = false;
-        window.pauseTranscriptResizeObservers = () => {
-          paused = true;
-        };
-        window.resumeTranscriptResizeObservers = () => {
-          paused = false;
-        };
-        window.ResizeObserver = class PausableResizeObserver extends NativeResizeObserver {
+        window.transcriptResizeObserversPaused = false;
+        window.ResizeObserver = class extends window.ResizeObserver {
           constructor(callback: ResizeObserverCallback) {
             super((entries, observer) => {
-              if (!paused) {
+              if (!window.transcriptResizeObserversPaused) {
                 callback(entries, observer);
               }
             });
@@ -283,7 +249,6 @@ suite.define(() => {
       const workedFor = page.locator(".chat-work-group > .chat-activity-group__summary");
       await workedFor.waitFor();
       await waitForChatScrollIdle(page);
-      await captureProof(page, "worked-for-geometry-collapsed");
 
       const geometry = await workedFor.evaluate(async (element) => {
         const owner = element.closest("openclaw-chat-pane") as
@@ -294,7 +259,7 @@ suite.define(() => {
           throw new Error("Worked-for disclosure is missing its chat pane or thread");
         }
 
-        window.pauseTranscriptResizeObservers();
+        window.transcriptResizeObserversPaused = true;
         (element as HTMLButtonElement).click();
         await owner.updateComplete;
 
@@ -313,15 +278,8 @@ suite.define(() => {
         return { expanded: element.getAttribute("aria-expanded"), rows, overlaps };
       });
 
-      await captureProof(page, "worked-for-geometry-expanded");
       expect(geometry).toMatchObject({ expanded: "true", overlaps: [] });
       expect(geometry.rows.length).toBeGreaterThanOrEqual(3);
-
-      await page.evaluate(() => window.resumeTranscriptResizeObservers());
-      await workedFor.click();
-      await workedFor.click();
-      await waitForChatScrollIdle(page);
-      await captureProof(page, "worked-for-geometry-settled");
     });
   });
 });
