@@ -1,29 +1,35 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { contextBudgetStatusFixture } from "../../../config/sessions/context-budget.test-support.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { legacyCodexProviderIdentityKey } from "./codex-route-model-ref.js";
 import { repairCodexSessionStoreRoutes } from "./codex-route-session-repair.test-support.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
 
-function getSession(store: Record<string, SessionEntry>, key: string): SessionEntry {
-  return expectDefined(store[key], `store.${key} test invariant`);
+function session(fields: Partial<SessionEntry>): SessionEntry {
+  return { sessionId: "s1", updatedAt: 1, ...fields };
+}
+
+function autoSession(fields: Partial<SessionEntry>): SessionEntry {
+  return session({
+    modelOverrideSource: "auto",
+    authProfileOverride: "openai-codex:default",
+    authProfileOverrideSource: "auto",
+    ...fields,
+  });
 }
 
 describe("repairCodexSessionStoreRoutes", () => {
-  it("repairs persisted session routes while preserving selected auth accounts", () => {
-    const store: Record<string, SessionEntry> = {
-      main: {
-        sessionId: "s1",
-        updatedAt: 1,
+  it.each([
+    {
+      name: "persisted routes",
+      entry: autoSession({
         modelProvider: "openai-codex",
         model: "gpt-5.5",
         providerOverride: "openai-codex",
         modelOverride: "openai-codex/gpt-5.4",
-        modelOverrideSource: "auto",
         agentHarnessId: "codex",
         agentRuntimeOverride: "codex",
-        authProfileOverride: "openai-codex:default",
-        authProfileOverrideSource: "auto",
         authProfileOverrideCompactionCount: 2,
         fallbackNotice: {
           kind: "active",
@@ -31,51 +37,73 @@ describe("repairCodexSessionStoreRoutes", () => {
           activeModel: "openai-codex/gpt-5.4",
           reason: "rate-limit",
         },
+      }),
+      expected: {
+        modelProvider: "openai",
+        model: "gpt-5.5",
+        modelOverride: "gpt-5.4",
+        authProfileOverrideCompactionCount: 2,
+        agentRuntimeOverride: "codex",
       },
+      removed: ["agentHarnessId", "fallbackNotice"] as const,
+    },
+    {
+      name: "providerless auto overrides",
+      entry: autoSession({
+        modelProvider: "ollama",
+        model: "gpt-5.5",
+        modelOverride: "gpt-5.5",
+        contextTokens: 64_000,
+        contextTokensSource: "runtime",
+        contextBudgetStatus: contextBudgetStatusFixture({ model: "gpt-5.5" }),
+      }),
+      expected: { modelOverride: "gpt-5.5" },
+      removed: [
+        "modelProvider",
+        "model",
+        "contextTokens",
+        "contextTokensSource",
+        "contextBudgetStatus",
+      ] as const,
+    },
+  ])("repairs $name while preserving selected auth accounts", ({ entry, expected, removed }) => {
+    const store: Record<string, SessionEntry> = {
+      main: entry,
       other: { sessionId: "s2", updatedAt: 2, agentHarnessId: "codex" },
     };
-
-    const result = repairCodexSessionStoreRoutes({
-      store,
-      now: 123,
-      authProfileIdMap: new Map([["openai-codex:default", "openai:chatgpt-default"]]),
+    expect(
+      repairCodexSessionStoreRoutes({
+        store,
+        now: 123,
+        authProfileIdMap: new Map([["openai-codex:default", "openai:chatgpt-default"]]),
+      }),
+    ).toEqual(["main"]);
+    const main = expectDefined(store.main, "main");
+    expect(main).toMatchObject({
+      updatedAt: 123,
+      providerOverride: "openai",
+      modelOverrideSource: "auto",
+      modelOverrideRouteResolution: "resolved",
+      authProfileOverride: "openai:chatgpt-default",
+      authProfileOverrideSource: "auto",
+      ...expected,
     });
-
-    expect(result).toEqual(["main"]);
-    const main = getSession(store, "main");
-    expect(main.updatedAt).toBe(123);
-    expect(main.modelProvider).toBe("openai");
-    expect(main.model).toBe("gpt-5.5");
-    expect(main.providerOverride).toBe("openai");
-    expect(main.modelOverride).toBe("gpt-5.4");
-    expect(main.modelOverrideSource).toBe("auto");
-    expect(main.modelOverrideRouteResolution).toBe("resolved");
-    expect(main.authProfileOverride).toBe("openai:chatgpt-default");
-    expect(main.authProfileOverrideSource).toBe("auto");
-    expect(main.authProfileOverrideCompactionCount).toBe(2);
-    expect(main.agentHarnessId).toBeUndefined();
-    expect(main.agentRuntimeOverride).toBe("codex");
-    expect(main.fallbackNotice).toBeUndefined();
-    expect(getSession(store, "other")).toMatchObject({ updatedAt: 2, agentHarnessId: "codex" });
+    for (const key of removed) {
+      expect(main[key], key).toBeUndefined();
+    }
+    expect(store.other).toMatchObject({ updatedAt: 2, agentHarnessId: "codex" });
   });
 
   it("keeps the whole provider-conflicted session namespace legacy", () => {
     const store: Record<string, SessionEntry> = {
-      blocked: {
-        sessionId: "s-blocked",
-        updatedAt: 1,
+      blocked: session({
         modelProvider: "codex",
         model: "gpt-5.6-sol",
         providerOverride: "codex",
         modelOverride: "codex/gpt-5.6-sol",
-      },
-      migrate: {
-        sessionId: "s-migrate",
-        updatedAt: 2,
-        modelProvider: "codex",
-        model: "gpt-5.3-mini",
-      },
-      providerOnly: { sessionId: "s-provider-only", updatedAt: 3, modelProvider: "codex" },
+      }),
+      migrate: session({ updatedAt: 2, modelProvider: "codex", model: "gpt-5.3-mini" }),
+      providerOnly: session({ updatedAt: 3, modelProvider: "codex" }),
     };
     const blockedNamespace = expectDefined(
       legacyCodexProviderIdentityKey("codex"),
@@ -95,9 +123,7 @@ describe("repairCodexSessionStoreRoutes", () => {
 
   it("retains a fallback notice atomically when one legacy endpoint is blocked", () => {
     const store: Record<string, SessionEntry> = {
-      main: {
-        sessionId: "s1",
-        updatedAt: 1,
+      main: session({
         modelProvider: "openai",
         model: "gpt-5.6-sol",
         fallbackNotice: {
@@ -106,7 +132,7 @@ describe("repairCodexSessionStoreRoutes", () => {
           activeModel: "openai/gpt-5.6-sol",
           reason: "rate-limit",
         },
-      },
+      }),
     };
     const original = structuredClone(store);
     // Build the blocked identity through the production plan so the test
@@ -136,9 +162,8 @@ describe("repairCodexSessionStoreRoutes", () => {
   it("skips valid locked agent-harness rows while repairing ordinary legacy routes", () => {
     const supervisedKey = "agent:main:harness:codex:supervision:abc123";
     const ordinaryLockedKey = "agent:main:ordinary-locked";
-    const lockedEntry: SessionEntry = {
+    const lockedEntry = session({
       sessionId: "s-supervised",
-      updatedAt: 1,
       modelSelectionLocked: true,
       agentHarnessId: "codex",
       agentRuntimeOverride: "codex",
@@ -151,17 +176,17 @@ describe("repairCodexSessionStoreRoutes", () => {
         selectedModel: "openai-codex/gpt-5.5",
         activeModel: "openai-codex/gpt-5.4",
       },
-    };
+    });
     const store: Record<string, SessionEntry> = {
       [supervisedKey]: lockedEntry,
       [ordinaryLockedKey]: { ...lockedEntry, sessionId: "s-ordinary-locked" },
-      ordinary: {
+      ordinary: session({
         sessionId: "s-ordinary",
         updatedAt: 2,
         modelProvider: "openai-codex",
         model: "gpt-5.5",
         agentHarnessId: "codex",
-      },
+      }),
     };
     const supervised = structuredClone(store[supervisedKey]);
     const ordinaryLocked = structuredClone(store[ordinaryLockedKey]);
@@ -176,63 +201,6 @@ describe("repairCodexSessionStoreRoutes", () => {
       modelProvider: "openai",
       model: "gpt-5.5",
     });
-    expect(getSession(store, "ordinary").agentHarnessId).toBeUndefined();
-  });
-
-  it("repairs providerless auto Codex session overrides", () => {
-    const store: Record<string, SessionEntry> = {
-      main: {
-        sessionId: "s1",
-        updatedAt: 1,
-        modelProvider: "ollama",
-        model: "gpt-5.5",
-        modelOverride: "gpt-5.5",
-        modelOverrideSource: "auto",
-        authProfileOverride: "openai-codex:default",
-        authProfileOverrideSource: "auto",
-        contextTokens: 64_000,
-        contextTokensSource: "runtime",
-        contextBudgetStatus: {
-          schemaVersion: 1,
-          source: "pre-prompt-estimate",
-          updatedAt: 1,
-          provider: "ollama",
-          model: "gpt-5.5",
-          route: "fits",
-          shouldCompact: false,
-          estimatedPromptTokens: 1_000,
-          contextTokenBudget: 64_000,
-          promptBudgetBeforeReserve: 62_000,
-          reserveTokens: 2_000,
-          effectiveReserveTokens: 2_000,
-          remainingPromptBudgetTokens: 61_000,
-          overflowTokens: 0,
-          toolResultReducibleChars: 0,
-          messageCount: 1,
-          unwindowedMessageCount: 1,
-        },
-      },
-    };
-
-    const result = repairCodexSessionStoreRoutes({
-      store,
-      now: 123,
-      authProfileIdMap: new Map([["openai-codex:default", "openai:chatgpt-default"]]),
-    });
-
-    expect(result).toEqual(["main"]);
-    const main = getSession(store, "main");
-    expect(main.updatedAt).toBe(123);
-    expect(main.providerOverride).toBe("openai");
-    expect(main.modelOverride).toBe("gpt-5.5");
-    expect(main.modelOverrideSource).toBe("auto");
-    expect(main.modelOverrideRouteResolution).toBe("resolved");
-    expect(main.authProfileOverride).toBe("openai:chatgpt-default");
-    expect(main.authProfileOverrideSource).toBe("auto");
-    expect(main.modelProvider).toBeUndefined();
-    expect(main.model).toBeUndefined();
-    expect(main.contextTokens).toBeUndefined();
-    expect(main.contextTokensSource).toBeUndefined();
-    expect(main.contextBudgetStatus).toBeUndefined();
+    expect(store.ordinary?.agentHarnessId).toBeUndefined();
   });
 });

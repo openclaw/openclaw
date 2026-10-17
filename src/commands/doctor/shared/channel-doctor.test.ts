@@ -39,13 +39,6 @@ function createMatrixEnabledConfig() {
   return { channels: { matrix: { enabled: true } } };
 }
 
-function createNormalizeCompatibilityConfig(change = "matrix") {
-  return vi.fn(({ cfg }: { cfg: unknown }) => ({
-    config: cfg,
-    changes: [change],
-  }));
-}
-
 function mockReadOnlyPlugins(doctors: Record<string, Record<string, unknown> | undefined>) {
   mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
     plugins: Object.entries(doctors).map(([id, doctor]) => (doctor ? { id, doctor } : { id })),
@@ -64,8 +57,7 @@ function mockBundledMatrixPlugin(
 describe("channel doctor compatibility mutations", () => {
   beforeEach(() => {
     for (const mock of Object.values(mocks)) {
-      mock.mockReset();
-      mock.mockReturnValue(undefined);
+      mock.mockReset().mockReturnValue(undefined);
     }
     mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({ plugins: [] });
   });
@@ -187,7 +179,12 @@ describe("channel doctor compatibility mutations", () => {
           throw new Error("fixture repair failed");
         },
       },
-      slack: { normalizeCompatibilityConfig: createNormalizeCompatibilityConfig("slack") },
+      slack: {
+        normalizeCompatibilityConfig: ({ cfg: currentCfg }: { cfg: OpenClawConfig }) => ({
+          config: currentCfg,
+          changes: ["slack"],
+        }),
+      },
     });
 
     expect(collectChannelDoctorCompatibilityMutations(cfg)).toEqual([
@@ -201,16 +198,13 @@ describe("channel doctor compatibility mutations", () => {
   });
 
   it("retains informational channel guidance separately from changes and warnings", async () => {
+    const notes = {
+      changeNotes: ["Migrated explicit listener settings."],
+      infoNotes: ["The default listener remains available; set legacyWebhook:false to close it."],
+      warningNotes: ["The callback path requires Gateway authentication."],
+    };
     mockReadOnlyPlugins({
-      matrix: {
-        runConfigSequence: () => ({
-          changeNotes: ["Migrated explicit listener settings."],
-          infoNotes: [
-            "The default listener remains available; set legacyWebhook:false to close it.",
-          ],
-          warningNotes: ["The callback path requires Gateway authentication."],
-        }),
-      },
+      matrix: { runConfigSequence: () => structuredClone(notes) },
     });
     await expect(
       runChannelDoctorConfigSequences({
@@ -218,11 +212,7 @@ describe("channel doctor compatibility mutations", () => {
         env: {},
         shouldRepair: false,
       }),
-    ).resolves.toEqual({
-      changeNotes: ["Migrated explicit listener settings."],
-      infoNotes: ["The default listener remains available; set legacyWebhook:false to close it."],
-      warningNotes: ["The callback path requires Gateway authentication."],
-    });
+    ).resolves.toEqual(notes);
   });
 
   it("keeps unresolved SecretRef preview reads non-fatal", async () => {
@@ -291,16 +281,18 @@ describe("channel doctor compatibility mutations", () => {
       channelName,
       prefix: `channels.${channelName}.accounts.${id}`,
     });
-    expect(hooks.extraWarningsForAccount(account("matrix", "work"))).toEqual([
-      "channels.matrix.accounts.work extra",
+    const extraWarnings = (channel: string, id: string) =>
+      hooks.extraWarningsForAccount(account(channel, id));
+    expect([
+      extraWarnings("matrix", "work"),
+      extraWarnings("matrix", "personal"),
+      extraWarnings("slack", "team"),
+    ]).toEqual([
+      ["channels.matrix.accounts.work extra"],
+      ["channels.matrix.accounts.personal extra"],
+      ["channels.slack.accounts.team extra"],
     ]);
     expect(hooks.shouldSkipDefaultEmptyGroupAllowlistWarning(account("matrix", "work"))).toBe(true);
-    expect(hooks.extraWarningsForAccount(account("matrix", "personal"))).toEqual([
-      "channels.matrix.accounts.personal extra",
-    ]);
-    expect(hooks.extraWarningsForAccount(account("slack", "team"))).toEqual([
-      "channels.slack.accounts.team extra",
-    ]);
 
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledTimes(1);
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {

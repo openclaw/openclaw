@@ -11,10 +11,7 @@ import {
 } from "./channel-plugin-blockers.js";
 
 function createPackageChannelEnv(channelId: string, envVars: string[]) {
-  return {
-    id: channelId,
-    configuredState: { env: { anyOf: envVars } },
-  };
+  return { id: channelId, configuredState: { env: { anyOf: envVars } } };
 }
 
 function plugin(
@@ -105,10 +102,7 @@ describe("channel plugin blockers", () => {
         origin: "config",
         channelId: "legacy-chat",
         channelConfigs: {
-          "legacy-chat": {
-            schema: { type: "object" },
-            preferOver: ["legacy-chat"],
-          },
+          "legacy-chat": { schema: { type: "object" }, preferOver: ["legacy-chat"] },
         },
       }),
     ]);
@@ -118,10 +112,7 @@ describe("channel plugin blockers", () => {
       {
         channels,
         plugins: {
-          entries: {
-            "legacy-chat": { enabled: false },
-            "modern-chat": { enabled: true },
-          },
+          entries: { "legacy-chat": { enabled: false }, "modern-chat": { enabled: true } },
         },
       },
       process.env,
@@ -250,42 +241,31 @@ describe("channel plugin blockers", () => {
     expect(hits).toEqual([hit("shared-chat", "plugins disabled", "first-chat")]);
   });
 
-  it("diagnoses a package env channel whose bundled owner is opt-in", () => {
+  it.each([
+    {
+      plugins: undefined,
+      reason: "not enabled" as const,
+      warning:
+        '- channels.twitch: channel is configured, but plugin "twitch" is installed but not enabled. Add plugins.entries.twitch.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
+    },
+    {
+      plugins: { allow: ["browser"] },
+      reason: "not enabled and not in allowlist" as const,
+      warning:
+        '- channels.twitch: channel is configured, but plugin "twitch" is not enabled and is omitted from plugins.allow. Add plugins.entries.twitch.enabled=true and include "twitch" in plugins.allow. Fix plugin enablement before relying on setup guidance for this channel.',
+    },
+  ])("diagnoses bundled opt-in owner: $reason", ({ plugins, reason, warning }) => {
     mockManifestPlugins([
       plugin("twitch", {
         origin: "bundled",
         packageChannel: createPackageChannelEnv("twitch", ["OPENCLAW_TWITCH_ACCESS_TOKEN"]),
       }),
     ]);
-
-    const hits = scanConfiguredChannelPluginBlockers(
-      {},
-      { OPENCLAW_TWITCH_ACCESS_TOKEN: "configured" },
-    );
-
-    expect(hits).toEqual([hit("twitch", "not enabled")]);
-    expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
-      '- channels.twitch: channel is configured, but plugin "twitch" is installed but not enabled. Add plugins.entries.twitch.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
-    ]);
-  });
-
-  it("includes both actions for a bundled opt-in owner under a restrictive allowlist", () => {
-    mockManifestPlugins([
-      plugin("twitch", {
-        origin: "bundled",
-        packageChannel: createPackageChannelEnv("twitch", ["OPENCLAW_TWITCH_ACCESS_TOKEN"]),
-      }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers(
-      { plugins: { allow: ["browser"] } },
-      { OPENCLAW_TWITCH_ACCESS_TOKEN: "configured" },
-    );
-
-    expect(hits).toEqual([hit("twitch", "not enabled and not in allowlist")]);
-    expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
-      '- channels.twitch: channel is configured, but plugin "twitch" is not enabled and is omitted from plugins.allow. Add plugins.entries.twitch.enabled=true and include "twitch" in plugins.allow. Fix plugin enablement before relying on setup guidance for this channel.',
-    ]);
+    const hits = scanConfiguredChannelPluginBlockers(plugins ? { plugins } : {}, {
+      OPENCLAW_TWITCH_ACCESS_TOKEN: "configured",
+    });
+    expect(hits).toEqual([hit("twitch", reason)]);
+    expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([warning]);
   });
 
   it("honors explicit channel disablement over package env triggers", () => {
@@ -312,20 +292,12 @@ describe("channel plugin blockers", () => {
 
     const sourceConfig: OpenClawConfig = {
       channels: { "workspace-chat": { enabled: true } },
-      plugins: {
-        allow: ["browser"],
-        entries: {
-          "workspace-chat": { enabled: true },
-        },
-      },
+      plugins: { allow: ["browser"], entries: { "workspace-chat": { enabled: true } } },
     };
     const hits = scanConfiguredChannelPluginBlockers(
       {
         ...sourceConfig,
-        plugins: {
-          ...sourceConfig.plugins,
-          allow: ["browser", "workspace-chat"],
-        },
+        plugins: { ...sourceConfig.plugins, allow: ["browser", "workspace-chat"] },
       },
       process.env,
       sourceConfig,
@@ -375,10 +347,7 @@ describe("channel plugin blockers", () => {
     ]);
 
     const hits = scanConfiguredChannelPluginBlockers({
-      plugins: {
-        allow: ["browser"],
-        slots: { contextEngine: "workspace-chat" },
-      },
+      plugins: { allow: ["browser"], slots: { contextEngine: "workspace-chat" } },
       channels: { "workspace-chat": { token: "configured" } },
     });
 
