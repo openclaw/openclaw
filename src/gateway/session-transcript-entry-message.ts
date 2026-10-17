@@ -38,6 +38,7 @@ export function projectTranscriptEntryMessage(
   entry: unknown,
   seq: number,
   transcriptPosition?: TranscriptDisplayPosition,
+  options?: { includeCompactionSummary?: boolean },
 ): unknown {
   if (!isVisibleTranscriptRecord(entry)) {
     return null;
@@ -85,9 +86,13 @@ export function projectTranscriptEntryMessage(
   const kind = record.type;
   const compactionIdentity =
     kind === "compaction" ? asOptionalRecord(record["__openclaw"]) : undefined;
+  const summary =
+    kind === "compaction" && options?.includeCompactionSummary && typeof record.summary === "string"
+      ? record.summary
+      : undefined;
   return {
     role: "system",
-    content: [{ type: "text", text: kind === "compaction" ? "Compaction" : "Reset" }],
+    content: [{ type: "text", text: summary || (kind === "compaction" ? "Compaction" : "Reset") }],
     timestamp: Number.isFinite(parsedTimestamp) ? parsedTimestamp : Date.now(),
     __openclaw: {
       kind,

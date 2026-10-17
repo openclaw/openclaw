@@ -461,7 +461,12 @@ export function readSessionActorMemoryProjection(
       return {
         found: true,
         oversized: false,
-        message: message(row, index + 1),
+        message: projectTranscriptEntryMessage(
+          row.event,
+          index + 1,
+          position(row),
+          selection.options,
+        ),
         seq: index + 1,
         ...(selection.options?.maxBytes !== undefined
           ? { serializedBytes: row.serializedBytes - 1 }

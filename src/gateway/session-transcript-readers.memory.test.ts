@@ -110,6 +110,37 @@ async function fixture(sessionId = "one", agentId = "main", announce = false) {
 }
 
 describe("Gateway memory transcript readers", () => {
+  it("includes compaction text only for an explicitly requested summary", async () => {
+    const target = await fixture();
+    await runWithSessionActorStorage(target.binding, async () => {
+      await target.append({
+        type: "compaction",
+        id: "compacted",
+        parentId: "answer",
+        timestamp: "2026-10-11T00:00:01.000Z",
+        firstKeptEntryId: "user",
+        summary: "Remember the deployment plan.",
+        tokensBefore: 100,
+      });
+      const marker = { content: [{ type: "text", text: "Compaction" }] };
+      expect(await readSessionMessageByIdAsync(target.scope, "compacted")).toMatchObject({
+        found: true,
+        message: marker,
+      });
+      expect(
+        await readSessionMessageByIdAsync(target.scope, "compacted", {
+          includeCompactionSummary: true,
+        }),
+      ).toMatchObject({
+        found: true,
+        message: { content: [{ type: "text", text: "Remember the deployment plan." }] },
+      });
+      expect(
+        (await readRecentSessionMessagesWithStatsAsync(target.scope, { maxMessages: 10 })).messages,
+      ).toEqual(expect.arrayContaining([expect.objectContaining(marker)]));
+    });
+  });
+
   it("reads current conversation bindings from the selected owner's catalog", async () => {
     const root = await fixture();
     const other = await fixture("other", "helper");

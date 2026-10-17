@@ -39,7 +39,10 @@ import {
   readChatHistoryRecoveryContext,
 } from "./session-history-tail.js";
 import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
-import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
+import {
+  projectTranscriptEntryMessage,
+  sqliteMessageEventWithSeq,
+} from "./session-transcript-entry-message.js";
 import type { ResolvedTranscriptReadTarget } from "./session-transcript-read-target.js";
 import type {
   ReadRecentSessionMessagesOptions,
@@ -236,7 +239,12 @@ function selectSessionTranscriptProjection(
       return event
         ? {
             found: true,
-            message: sqliteMessageEventWithSeq(event),
+            message: projectTranscriptEntryMessage(
+              event.event,
+              event.seq,
+              event.displayPosition,
+              selection.options,
+            ),
             ...(selection.options?.historyVisibility
               ? {
                   historyContext: {
@@ -486,7 +494,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     const selected = found?.found
       ? found
       : opts?.allowResetArchiveFallback === true && !opts.currentOnly
-        ? await archivedTranscriptReader(target).readById(messageId, opts.historyVisibility)
+        ? await archivedTranscriptReader(target).readById(messageId, opts)
         : { found: false, oversized: false };
     return filterSessionMessageHistoryVisibility(
       selected,
