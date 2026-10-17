@@ -13,6 +13,17 @@ import type {
   GatewayRequestHandlerOptions,
 } from "./types.js";
 
+type ComputerMethods = Pick<GatewayComputerService, "status" | "invoke">;
+function computerService(methods: ComputerMethods): GatewayComputerService {
+  return {
+    ...methods,
+    close: async () => {},
+    reconcileRuntimePolicy: async () => {},
+    revokeRunAuthority: () => {},
+    preparePluginReload: () => ({ drain: async () => {}, resume: () => {} }),
+  };
+}
+
 function createClient(identity?: AgentRuntimeIdentity): GatewayClient {
   return {
     connId: "computer-operator",
@@ -46,32 +57,26 @@ function createIdentity(): AgentRuntimeIdentity {
 async function invoke(
   method: "computer.status" | "computer.invoke",
   params: Record<string, unknown>,
-  service?: Pick<GatewayComputerService, "status" | "invoke">,
+  service?: ComputerMethods,
   options: Partial<Omit<GatewayRequestHandlerOptions, "context">> & {
     context?: Partial<GatewayRequestContext>;
   } = {},
 ) {
   const respond = vi.fn();
   const { context, ...requestOptions } = options;
-  const gatewayComputerService: GatewayComputerService | undefined = service
-    ? {
-        ...service,
-        close: async () => {},
-        reconcileRuntimePolicy: async () => {},
-        revokeRunAuthority: () => {},
-        preparePluginReload: () => ({ drain: async () => {}, resume: () => {} }),
-      }
-    : undefined;
   await computerHandlers[method]!({
     req: { type: "req", id: "request-one", method, params },
     params,
     respond,
     client: createClient(),
     isWebchatConnect: () => false,
-    context: { gatewayComputerService, ...context },
+    context: { gatewayComputerService: service && computerService(service), ...context },
     ...requestOptions,
   } as GatewayRequestHandlerOptions);
   return respond.mock.calls[0];
+}
+async function succeeds(...args: Parameters<typeof invoke>) {
+  return (await invoke(...args))?.[0];
 }
 
 const snapshot = {
@@ -122,15 +127,10 @@ describe("Gateway computer RPC", () => {
         return {};
       },
     };
-    expect(
-      (await invoke("computer.invoke", snapshot, service, { client: clientForRequest() }))?.[0],
-    ).toBe(true);
-    const pending = invoke(
-      "computer.invoke",
-      { ...snapshot, idempotencyKey: "snapshot-two" },
-      service,
-      { client: clientForRequest() },
-    );
+    const dispatch = (params = snapshot) =>
+      invoke("computer.invoke", params, service, { client: clientForRequest() });
+    expect((await dispatch())?.[0]).toBe(true);
+    const pending = dispatch({ ...snapshot, idempotencyKey: "snapshot-two" });
     await entered.promise;
     grant.abort();
     prepared.resolve();
@@ -168,13 +168,13 @@ describe("Gateway computer RPC", () => {
 
   it.each([{ probe: "false" }])("rejects malformed status probes: %j", async (params) => {
     const status = vi.fn();
-    expect((await invoke("computer.status", params, { status, invoke: vi.fn() }))?.[0]).toBe(false);
+    expect(await succeeds("computer.status", params, { status, invoke: vi.fn() })).toBe(false);
     expect(status).not.toHaveBeenCalled();
   });
 
   it.each([{ probe: true }])("forwards status probe policy: %j", async (params) => {
     const status = vi.fn(async () => ({ configured: false, available: false }));
-    expect((await invoke("computer.status", params, { status, invoke: vi.fn() }))?.[0]).toBe(true);
+    expect(await succeeds("computer.status", params, { status, invoke: vi.fn() })).toBe(true);
     expect(status).toHaveBeenCalledWith(params);
   });
 
@@ -183,12 +183,9 @@ describe("Gateway computer RPC", () => {
     { ...snapshot, owner: "forged-operator" },
   ])("rejects malformed or authority-bearing wire requests: %j", async (params) => {
     const dispatch = vi.fn();
-    const result = await invoke("computer.invoke", params, {
-      status: vi.fn(),
-      invoke: dispatch,
-    });
-    expect(result?.[0]).toBe(false);
-    expect(result?.[2]).toMatchObject({ code: ErrorCodes.INVALID_REQUEST });
+    expect(
+      await invoke("computer.invoke", params, { status: vi.fn(), invoke: dispatch }),
+    ).toMatchObject([false, undefined, { code: ErrorCodes.INVALID_REQUEST }]);
     expect(dispatch).not.toHaveBeenCalled();
   });
 
@@ -246,14 +243,10 @@ describe("Gateway computer RPC", () => {
       return { captured: true };
     });
     const context: Partial<GatewayRequestContext> = {
-      gatewayComputerService: {
+      gatewayComputerService: computerService({
         invoke: dispatch,
         status: async () => ({ configured: true, available: true }),
-        close: async () => {},
-        reconcileRuntimePolicy: async () => {},
-        revokeRunAuthority: () => {},
-        preparePluginReload: () => ({ drain: async () => {}, resume: () => {} }),
-      },
+      }),
       validateAgentRuntimeApprovalAuthority: (candidate: AgentRuntimeIdentity) =>
         candidate === identity && active,
     };
@@ -261,41 +254,23 @@ describe("Gateway computer RPC", () => {
     first.connectionSignal = new AbortController().signal;
     const second = { ...createClient(identity), connId: "computer-next-connection" };
     for (const client of [first, second]) {
-      expect(
-        await invoke("computer.invoke", snapshot, undefined, {
-          client,
-          context,
-        }),
-      ).toEqual([true, { payload: { captured: true } }]);
+      expect(await invoke("computer.invoke", snapshot, undefined, { client, context })).toEqual([
+        true,
+        { payload: { captured: true } },
+      ]);
     }
     expect(owners[0]).toBe(owners[1]);
     active = false;
-    expect(
-      (
-        await invoke("computer.invoke", snapshot, undefined, {
-          client: second,
-          context,
-        })
-      )?.[0],
-    ).toBe(false);
+    const invokeRetired = (params: Record<string, unknown>) =>
+      invoke("computer.invoke", params, undefined, { client: second, context });
+    expect((await invokeRetired(snapshot))?.[0]).toBe(false);
     expect(dispatch).toHaveBeenCalledTimes(2);
-    expect(
-      (
-        await invoke(
-          "computer.invoke",
-          {
-            ...snapshot,
-            command: "computer.act",
-            params: { action: "__close_execution", executionId: "execution-one" },
-          },
-          undefined,
-          {
-            client: second,
-            context,
-          },
-        )
-      )?.[0],
-    ).toBe(true);
+    const closed = await invokeRetired({
+      ...snapshot,
+      command: "computer.act",
+      params: { action: "__close_execution", executionId: "execution-one" },
+    });
+    expect(closed?.[0]).toBe(true);
     expect(owners[2]).toBe(owners[0]);
   });
 
@@ -303,11 +278,13 @@ describe("Gateway computer RPC", () => {
     const client = createClient();
     client.internal = { syntheticClient: true };
     const dispatch = vi.fn();
-    expect(
-      (
-        await invoke("computer.invoke", snapshot, { status: vi.fn(), invoke: dispatch }, { client })
-      )?.[0],
-    ).toBe(false);
+    const result = await succeeds(
+      "computer.invoke",
+      snapshot,
+      { status: vi.fn(), invoke: dispatch },
+      { client },
+    );
+    expect(result).toBe(false);
     expect(dispatch).not.toHaveBeenCalled();
   });
 });

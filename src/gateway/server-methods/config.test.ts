@@ -1,7 +1,3 @@
-/**
- * Tests for config gateway methods, writes, validation, and auth transitions.
- */
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
@@ -28,13 +24,10 @@ const pluginValidationMocks = vi.hoisted(() => ({
   currentPluginMetadataSnapshot: undefined as PluginMetadataSnapshot | undefined,
 }));
 
-vi.mock("../../config/io.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/io.js")>("../../config/io.js");
-  return {
-    ...actual,
-    readConfigFileSnapshotForWrite: configWriteMocks.readConfigFileSnapshotForWrite,
-  };
-});
+vi.mock("../../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/io.js")>()),
+  readConfigFileSnapshotForWrite: configWriteMocks.readConfigFileSnapshotForWrite,
+}));
 
 // This suite owns config patch/merge behavior, while plugin validation is covered by
 // config.plugin-validation.test.ts and validation.channel-metadata.test.ts.
@@ -82,28 +75,24 @@ vi.mock("../../secrets/runtime.js", () => ({
   })),
 }));
 
-vi.mock("./config-write-flow.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./config-write-flow.js")>("./config-write-flow.js");
-  return {
-    ...actual,
-    commitGatewayConfigWrite: configWriteMocks.commitGatewayConfigWrite,
-    resolveGatewayConfigRestartWriteResult: vi.fn(async () => ({
-      payload: { kind: "config-patch", mode: "config.patch", configPath: "/tmp/openclaw.json" },
-      sentinelPersisted: false,
-      restart: undefined,
-    })),
-  };
-});
+vi.mock("./config-write-flow.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config-write-flow.js")>()),
+  commitGatewayConfigWrite: configWriteMocks.commitGatewayConfigWrite,
+  resolveGatewayConfigRestartWriteResult: vi.fn(async () => ({
+    payload: { kind: "config-patch", mode: "config.patch", configPath: "/tmp/openclaw.json" },
+    sentinelPersisted: false,
+    restart: undefined,
+  })),
+}));
 
 const { execOpenPathMock } = vi.hoisted(() => ({
   execOpenPathMock: vi.fn(),
 }));
 
-vi.mock("./open-path.js", async () => {
-  const actual = await vi.importActual<typeof import("./open-path.js")>("./open-path.js");
-  return { ...actual, execOpenPath: execOpenPathMock };
-});
+vi.mock("./open-path.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./open-path.js")>()),
+  execOpenPath: execOpenPathMock,
+}));
 
 vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/runtime-schema.js")>()),
@@ -113,6 +102,33 @@ vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
 
 function mockOpenPathError(error: Error) {
   execOpenPathMock.mockRejectedValue(error);
+}
+
+type Respond = ReturnType<typeof createConfigHandlerHarness>["respond"];
+function expectSuccess(respond: Respond, payload: unknown = expect.anything()) {
+  expect(respond).toHaveBeenCalledWith(true, payload, undefined);
+}
+function expectFailure(respond: Respond, message: unknown) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ message }));
+}
+const modelsPatch = (models: { id: string; name: string }[]) => ({
+  models: { providers: { custom: { models } } },
+});
+const duplicateModels = [
+  { id: "one", name: "First" },
+  { id: "one", name: "Second" },
+];
+function seedCustomModel() {
+  storedConfig = {
+    models: {
+      providers: {
+        custom: {
+          baseUrl: "https://example.invalid",
+          models: [{ id: "one", name: "One" }],
+        },
+      },
+    },
+  } as unknown as OpenClawConfig;
 }
 
 let storedConfig: OpenClawConfig;
@@ -145,10 +161,7 @@ beforeEach(() => {
     async ({
       snapshot,
       nextConfig,
-    }: {
-      snapshot: { hash?: string };
-      nextConfig: OpenClawConfig;
-    }) => {
+    }: Parameters<typeof import("./config-write-flow.js").commitGatewayConfigWrite>[0]) => {
       if (snapshot.hash !== storedHash) {
         throw new ConfigMutationConflictError("config changed since last load");
       }
@@ -198,19 +211,17 @@ describe("config.patch effective change receipt", () => {
       replacePaths: ["ui.prefs.sidebarEntries"],
     });
 
-    expect(harness.respond).toHaveBeenCalledWith(
-      true,
+    expectSuccess(
+      harness.respond,
       expect.objectContaining({
         changedPaths: expect.arrayContaining(["ui.prefs.sidebarEntries"]),
       }),
-      undefined,
     );
-    expect(harness.respond).toHaveBeenCalledWith(
-      true,
+    expectSuccess(
+      harness.respond,
       expect.not.objectContaining({
         changedPaths: expect.arrayContaining([`plugins.entries.${pluginId}.config`]),
       }),
-      undefined,
     );
   });
 
@@ -230,11 +241,7 @@ describe("config.patch effective change receipt", () => {
         raw: { channels: { matrix: { accounts: { sut: { accessToken: nextToken } } } } },
         baseHash: "base-hash",
       });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ changedPaths: expectedPaths }),
-        undefined,
-      );
+      expectSuccess(respond, expect.objectContaining({ changedPaths: expectedPaths }));
     },
   );
 });
@@ -263,32 +270,20 @@ describe("config application settlement", () => {
 
       const expectedMessage =
         outcome === "restart-pending" ? "accepted for restart" : "updated the active Gateway";
+      const message = expect.stringContaining(expectedMessage);
       expect(harness.respond).toHaveBeenCalledWith(
         false,
         undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          message: expect.stringContaining(expectedMessage),
-        }),
+        expect.objectContaining({ code: "UNAVAILABLE", message }),
       );
       const excludedMessages =
         outcome === "restart-pending"
           ? ["updated the active Gateway", "recovery restart", "reapply"]
           : ["was not applied", "reapply"];
       for (const excluded of excludedMessages) {
-        expect(harness.respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ message: expect.not.stringContaining(excluded) }),
-        );
+        expectFailure(harness.respond, expect.not.stringContaining(excluded));
       }
-      expect(harness.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          message: expect.stringContaining("wait for the Gateway to restart"),
-        }),
-      );
+      expectFailure(harness.respond, expect.stringContaining("wait for the Gateway to restart"));
       expect(harness.respond).toHaveBeenCalledOnce();
       expect(queueFollowUp).toHaveBeenCalledOnce();
     },
@@ -306,14 +301,7 @@ describe("config.openFile", () => {
 
       const { respond } = await invokeConfigOpenFile();
 
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          ok: true,
-          path: "/tmp/config $(touch pwned).json",
-        },
-        undefined,
-      );
+      expectSuccess(respond, { ok: true, path: "/tmp/config $(touch pwned).json" });
     });
   });
 
@@ -325,16 +313,12 @@ describe("config.openFile", () => {
 
         const { respond, logGateway } = await invokeConfigOpenFile();
 
-        expect(respond).toHaveBeenCalledWith(
-          true,
-          {
-            ok: false,
-            path: "/tmp/config.json",
-            error:
-              "Cannot open file in headless environment. File path: /tmp/config.json. This environment appears to lack a graphical or terminal browser handler.",
-          },
-          undefined,
-        );
+        expectSuccess(respond, {
+          ok: false,
+          path: "/tmp/config.json",
+          error:
+            "Cannot open file in headless environment. File path: /tmp/config.json. This environment appears to lack a graphical or terminal browser handler.",
+        });
         expect(logGateway.warn).toHaveBeenCalledWith(
           "config.openFile failed path=/tmp/config.json: spawn xdg-open ENOENT",
         );
@@ -390,7 +374,7 @@ describe("config write source preparation", () => {
 
       await expectDefined(configHandlers[method], "config write handler")(harness.options);
 
-      expect(harness.respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+      expectSuccess(harness.respond);
       expect(storedConfig).toStrictEqual({
         ...source,
         agents: { defaults: { params: method === "config.patch" ? {} : params } },
@@ -405,15 +389,7 @@ describe("config.patch hash-free ui.prefs LWW", () => {
       raw: { ui: { prefs: { theme: "knot" } }, gateway: { port: 19_001 } },
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      // The operator must see which path needs the base hash; a bare
-      // "hash required" with no path was a dead-end error.
-      expect.objectContaining({
-        message: expect.stringContaining("config base hash required for gateway.port"),
-      }),
-    );
+    expectFailure(respond, expect.stringContaining("config base hash required for gateway.port"));
     expect(storedConfig).toEqual({});
   });
 
@@ -426,11 +402,7 @@ describe("config.patch hash-free ui.prefs LWW", () => {
 
     const { respond } = await invokeConfigPatch({ raw });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("config base hash required") }),
-    );
+    expectFailure(respond, expect.stringContaining("config base hash required"));
     expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
   });
 
@@ -441,11 +413,7 @@ describe("config.patch hash-free ui.prefs LWW", () => {
       raw: { ui: { prefs: { chatFollowUpMode: null } } },
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ hash: "next-hash-1" }),
-      undefined,
-    );
+    expectSuccess(respond, expect.objectContaining({ hash: "next-hash-1" }));
     expect(storedConfig.ui?.prefs).toEqual({ theme: "claw" });
   });
 
@@ -455,23 +423,16 @@ describe("config.patch hash-free ui.prefs LWW", () => {
     const rejected = await invokeConfigPatch({
       raw: { ui: { prefs: { sidebarEntries: ["route:usage"] } } },
     });
-    expect(rejected.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("config.patch would remove entries from array path(s)"),
-      }),
+    expectFailure(
+      rejected.respond,
+      expect.stringContaining("config.patch would remove entries from array path(s)"),
     );
 
     const accepted = await invokeConfigPatch({
       raw: { ui: { prefs: { sidebarEntries: ["route:usage"] } } },
       replacePaths: ["ui.prefs.sidebarEntries"],
     });
-    expect(accepted.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ hash: "next-hash-1" }),
-      undefined,
-    );
+    expectSuccess(accepted.respond, expect.objectContaining({ hash: "next-hash-1" }));
     expect(storedConfig.ui?.prefs?.sidebarEntries).toEqual(["route:usage"]);
   });
 
@@ -487,13 +448,7 @@ describe("config.patch hash-free ui.prefs LWW", () => {
     });
 
     expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("config changed since last load"),
-      }),
-    );
+    expectFailure(respond, expect.stringContaining("config changed since last load"));
     expect(storedConfig.ui?.prefs).toEqual({ locale: "de" });
   });
 
@@ -508,107 +463,41 @@ describe("config.patch hash-free ui.prefs LWW", () => {
       raw: { ui: { prefs: { theme: "knot" } } },
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      // A non-retryable conflict fails the retry too; advising it is a dead end.
-      expect.objectContaining({
-        message: "config path owned by another writer",
-      }),
-    );
+    expectFailure(respond, "config path owned by another writer");
   });
 });
 
 describe("config.patch ID-keyed arrays", () => {
   it("rejects duplicate IDs before applying an ID-merged array patch", async () => {
-    storedConfig = {
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "https://example.invalid",
-            models: [{ id: "one", name: "One" }],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
+    seedCustomModel();
     const { respond } = await invokeConfigPatch({
-      raw: {
-        models: {
-          providers: {
-            custom: {
-              models: [
-                { id: "one", name: "First" },
-                { id: "one", name: "Second" },
-              ],
-            },
-          },
-        },
-      },
+      raw: modelsPatch(duplicateModels),
       baseHash: "base-hash",
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("duplicate ID one") }),
-    );
+    expectFailure(respond, expect.stringContaining("duplicate ID one"));
     expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
   });
 
   it("allows duplicate IDs for an explicit array replacement", async () => {
-    storedConfig = {
-      models: {
-        providers: {
-          custom: {
-            baseUrl: "https://example.invalid",
-            models: [{ id: "one", name: "One" }],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
+    seedCustomModel();
     const { respond } = await invokeConfigPatch({
-      raw: {
-        models: {
-          providers: {
-            custom: {
-              models: [
-                { id: "one", name: "First" },
-                { id: "one", name: "Second" },
-              ],
-            },
-          },
-        },
-      },
+      raw: modelsPatch(duplicateModels),
       baseHash: "base-hash",
       replacePaths: ["models.providers.custom.models"],
     });
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ ok: true, hash: "next-hash-1" }),
-      undefined,
-    );
+    expectSuccess(respond, expect.objectContaining({ ok: true, hash: "next-hash-1" }));
     expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
 
     const followUp = await invokeConfigPatch({
-      raw: {
-        models: {
-          providers: {
-            custom: { models: [{ id: "one", name: "Third" }] },
-          },
-        },
-      },
+      raw: modelsPatch([{ id: "one", name: "Third" }]),
       baseHash: "next-hash-1",
     });
 
-    expect(followUp.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        message: expect.stringContaining("current config contains duplicate ID one"),
-      }),
+    expectFailure(
+      followUp.respond,
+      expect.stringContaining("current config contains duplicate ID one"),
     );
     expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce();
   });
@@ -671,7 +560,7 @@ describe("config.patch model input normalization", () => {
       baseHash: storedHash,
     });
 
-    expect(harness.respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+    expectSuccess(harness.respond);
     expect(storedConfig.models?.providers?.myproxy?.models).toHaveLength(1);
     expect(storedConfig.models?.providers?.myproxy?.models?.[0]).toMatchObject({
       id: "vendor/modern-model",

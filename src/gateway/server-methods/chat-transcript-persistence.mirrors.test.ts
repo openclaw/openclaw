@@ -19,10 +19,7 @@ import { patchSessionEntryCore } from "../../config/sessions/session-accessor.sq
 import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
-import {
-  openOpenClawAgentDatabase,
-  resolveIncognitoOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayMetadataCloseFixture } from "../server-close.metadata.test-support.js";
@@ -48,45 +45,27 @@ const request = {
   },
 };
 
-async function withFixture(
-  run: (fixture: Awaited<ReturnType<typeof seed>>) => Promise<void>,
-  incognito = false,
-) {
+async function withFixture(run: (fixture: Awaited<ReturnType<typeof seed>>) => Promise<void>) {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     setRuntimeConfigSnapshot({});
-    await run(await seed(env, incognito));
+    await run(await seed(env));
   });
 }
 
-async function seed(
-  env: NodeJS.ProcessEnv,
-  incognito = false,
-  shared?: { agentId: string; storePath: string },
-) {
-  const agentId = shared?.agentId ?? "main";
-  const storePath =
-    shared?.storePath ??
-    (incognito ? resolveIncognitoOpenClawAgentSqlitePath({ agentId, env }) : undefined);
-  if (shared) {
-    openOpenClawAgentDatabase({ agentId: "main", path: storePath, env });
-  }
+async function seed(env: NodeJS.ProcessEnv) {
   const identity = {
-    agentId,
+    agentId: "main",
     sessionId: "mirror-session",
-    sessionKey: incognito
-      ? `agent:${agentId}:dashboard:incognito-mirrors`
-      : `agent:${agentId}:mirrors`,
-    storePath,
+    sessionKey: "agent:main:mirrors",
     env,
   };
   await replaceSessionEntry(identity, {
     sessionId: identity.sessionId,
     updatedAt: 1,
-    ...(incognito ? { incognito: true as const } : {}),
   });
   const scope = {
     ...identity,
-    storePath: openOpenClawAgentDatabase({ ...identity, agentId: "main", path: storePath }).path,
+    storePath: openOpenClawAgentDatabase(identity).path,
   };
   const append = (eventId: string, message: Record<string, unknown>) =>
     expect(appendTranscriptMessageSync(scope, { eventId, message })).toMatchObject({ ok: true });
@@ -125,6 +104,45 @@ async function seed(
       ...overrides,
     });
   return { scope, append, snapshot, keyed, source, indexed };
+}
+
+type Events = ReturnType<typeof loadTranscriptEventsSync>;
+const unselected = (events: Events) =>
+  events.filter((event) => !isRecord(event) || event.id !== "selected");
+const selected = (events: Events) =>
+  events.find((event) => isRecord(event) && event.id === "selected");
+const replaceSelected = (events: Events) =>
+  events.map((event) =>
+    isRecord(event) && event.id === "selected"
+      ? {
+          ...event,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "New authoritative delivery." }],
+          },
+        }
+      : event,
+  );
+
+// Run the interleaving once, at the first content read during preparation.
+function contentOnRead(text: string, action: () => void) {
+  let prepared = false;
+  const prepare = vi.fn(action);
+  return {
+    prepare,
+    content: [
+      {
+        type: "text",
+        get text() {
+          if (!prepared) {
+            prepared = true;
+            prepare();
+          }
+          return text;
+        },
+      },
+    ],
+  };
 }
 
 describe("durable transcript mirror corrections", () => {
@@ -174,11 +192,9 @@ describe("durable transcript mirror corrections", () => {
           hostSql.restore();
         }
         const after = fixture.snapshot();
-        const unselected = (events: typeof before) =>
-          events.filter((event) => !isRecord(event) || event.id !== "selected");
         expect(unselected(after)).toEqual(unselected(before));
         expect(after).toHaveLength(before.length);
-        expect(after.find((event) => isRecord(event) && event.id === "selected")).toMatchObject({
+        expect(selected(after)).toMatchObject({
           message: {
             idempotencyKey: "delivery-key",
             openclawDisplayContent: expect.arrayContaining(content),
@@ -216,118 +232,59 @@ describe("durable transcript mirror corrections", () => {
     });
   });
 
-  it.each([false])(
-    "reports refusal when indexed correction loses its source generation (incognito=%s)",
-    async (incognito) => {
-      await withFixture(async ({ scope, snapshot, indexed }) => {
-        const retained = snapshot().map((event) =>
-          isRecord(event) && event.id === "selected"
-            ? Object.assign({}, event, {
-                message: {
-                  role: "assistant",
-                  content: [{ type: "text", text: "New authoritative delivery." }],
-                },
-              })
-            : event,
-        );
-        let replaced = false;
-        const result = await indexed({
-          content: [
-            {
-              type: "text",
-              get text() {
-                if (!replaced) {
-                  replaced = true;
-                  expect(replaceTranscriptEventsSync(scope, retained)).toBe(true);
-                }
-                return "Stale correction.";
-              },
-            },
-          ],
-        });
-        expect(replaced).toBe(true);
-        expect(result).toBeNull();
-        expect(snapshot()).toEqual(retained);
-      }, incognito);
-    },
-  );
+  it("reports refusal when indexed correction loses its source generation", async () => {
+    await withFixture(async ({ scope, snapshot, indexed }) => {
+      const retained = replaceSelected(snapshot());
+      const replacement = contentOnRead("Stale correction.", () => {
+        expect(replaceTranscriptEventsSync(scope, retained)).toBe(true);
+      });
+      const result = await indexed({ content: replacement.content });
+      expect(replacement.prepare).toHaveBeenCalledOnce();
+      expect(result).toBeNull();
+      expect(snapshot()).toEqual(retained);
+    });
+  });
 
-  it.each([false])(
-    "retains an unrelated append during indexed correction (incognito=%s)",
-    async (incognito) => {
-      await withFixture(async ({ append, snapshot, indexed }) => {
-        let retained = snapshot();
-        let appended = false;
-        const result = await indexed({
-          content: [
-            {
-              type: "text",
-              get text() {
-                if (!appended) {
-                  appended = true;
-                  append("later", { role: "user", content: "Following turn." });
-                  retained = snapshot();
-                }
-                return "Corrected indexed delivery.";
-              },
-            },
-          ],
-        });
-        expect(appended).toBe(true);
-        expect(result).toMatchObject({ messageId: "selected", generation: expect.any(String) });
-        const after = snapshot();
-        const unselected = (events: typeof retained) =>
-          events.filter((event) => !isRecord(event) || event.id !== "selected");
-        expect(unselected(after)).toEqual(unselected(retained));
-        expect(after).toHaveLength(retained.length);
-        expect(after.find((event) => isRecord(event) && event.id === "later")).toMatchObject({
-          message: { role: "user", content: "Following turn." },
-        });
-        expect(after.find((event) => isRecord(event) && event.id === "selected")).toMatchObject({
-          message: {
-            openclawDisplayContent: expect.arrayContaining([
-              { type: "text", text: "Corrected indexed delivery." },
-            ]),
-          },
-        });
-      }, incognito);
-    },
-  );
+  it("retains an unrelated append during indexed correction", async () => {
+    await withFixture(async ({ append, snapshot, indexed }) => {
+      let retained = snapshot();
+      const replacement = contentOnRead("Corrected indexed delivery.", () => {
+        append("later", { role: "user", content: "Following turn." });
+        retained = snapshot();
+      });
+      const result = await indexed({ content: replacement.content });
+      expect(replacement.prepare).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({ messageId: "selected", generation: expect.any(String) });
+      const after = snapshot();
+      expect(unselected(after)).toEqual(unselected(retained));
+      expect(after).toHaveLength(retained.length);
+      expect(after.find((event) => isRecord(event) && event.id === "later")).toMatchObject({
+        message: { role: "user", content: "Following turn." },
+      });
+      expect(selected(after)).toMatchObject({
+        message: {
+          openclawDisplayContent: expect.arrayContaining([
+            { type: "text", text: "Corrected indexed delivery." },
+          ]),
+        },
+      });
+    });
+  });
 
   it.each(["rewrite", "revocation"] as const)(
     "rejects intervening %s during display preparation",
     async (change) => {
       await withFixture(async ({ scope, snapshot, keyed }) => {
         let current = true;
-        let prepared = false;
         let retained = snapshot();
-        const replacement = [
-          {
-            type: "text",
-            get text() {
-              if (!prepared) {
-                prepared = true;
-                if (change === "rewrite") {
-                  retained = retained.map((event) =>
-                    isRecord(event) && event.id === "selected"
-                      ? {
-                          ...event,
-                          message: {
-                            role: "assistant",
-                            content: [{ type: "text", text: "New authoritative delivery." }],
-                          },
-                        }
-                      : event,
-                  );
-                  expect(replaceTranscriptEventsSync(scope, retained)).toBe(true);
-                } else {
-                  current = false;
-                }
-              }
-              return "Stale correction.";
-            },
-          },
-        ];
+        const replacement = contentOnRead("Stale correction.", () => {
+          if (change === "rewrite") {
+            retained = replaceSelected(retained);
+            expect(replaceTranscriptEventsSync(scope, retained)).toBe(true);
+          } else {
+            current = false;
+          }
+        });
         await expect(
           withSessionTranscriptWriteAssertion(
             scope,
@@ -336,14 +293,14 @@ describe("durable transcript mirror corrections", () => {
                 throw new Error("Delivery authority revoked");
               }
             },
-            () => keyed(replacement),
+            () => keyed(replacement.content),
           ),
         ).rejects.toThrow(
           change === "rewrite"
             ? "SQLite transcript changed while preparing rewrite"
             : "Delivery authority revoked",
         );
-        expect(prepared).toBe(true);
+        expect(replacement.prepare).toHaveBeenCalledOnce();
         expect(snapshot()).toEqual(retained);
       });
     },
