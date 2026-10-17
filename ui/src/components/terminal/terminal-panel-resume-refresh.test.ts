@@ -17,6 +17,7 @@ import {
   createTestTerminalPanel,
   defineTestTerminalPanelElement,
   terminalOpenResult,
+  terminalPanelControllerForTest,
   terminalSessionsForTest,
   type CreateGhosttyTerminalMock,
 } from "./terminal-panel.test-support.ts";
@@ -42,9 +43,63 @@ beforeEach(async () => {
 afterEach(async () => {
   document.body.replaceChildren();
   await Promise.resolve();
+  vi.restoreAllMocks();
   createGhosttyTerminalMock.mockReset();
   vi.mocked(refreshControlUiServiceWorker).mockReset();
   vi.unstubAllGlobals();
+});
+
+it("settles availability changes while offline without repeatedly suspending the terminal", async () => {
+  const terminal = createTerminalController();
+  createGhosttyTerminalMock.mockResolvedValue(terminal);
+  const request = createGatewayRequestMock((method) =>
+    method === "terminal.open" ? terminalOpenResult("retained") : { ok: true },
+  );
+  const panel = createTestTerminalPanel(elementName);
+  panel.client = createTestGatewayClient(request);
+  panel.available = true;
+  document.body.append(panel);
+  panel.toggle();
+  const sessions = terminalSessionsForTest(panel);
+  await waitForFast(() => expect(sessions.tabs[0]?.gatewaySessionId).toBe("retained"));
+  panel.gatewayConnected = false;
+  await panel.updateComplete;
+  await waitForFast(() => expect(terminal.setReadOnly).toHaveBeenCalledWith(true));
+  await panel.updateComplete;
+  expect(terminal.dispose).not.toHaveBeenCalled();
+
+  const owner = terminalPanelControllerForTest(panel);
+  const requestUpdate = owner.requestUpdate.bind(owner);
+  let updates = 0;
+  // Bound a regressed render loop so it fails instead of starving the test worker.
+  vi.spyOn(owner, "requestUpdate").mockImplementation(() => {
+    if (++updates <= 8) {
+      requestUpdate();
+    }
+  });
+  const suspend = vi.spyOn(panel.terminalPanelUploadController, "suspend");
+  request.mockClear();
+
+  for (const available of [false, true]) {
+    panel.available = available;
+    await panel.updateComplete;
+    await vi.dynamicImportSettled();
+    await panel.updateComplete;
+    expect(updates).toBeLessThanOrEqual(8);
+    expect(suspend).toHaveBeenCalledOnce();
+    expect(terminal.dispose).toHaveBeenCalledOnce();
+    expect(sessions.tabs).toEqual([]);
+    expect(panel.terminalPanelOpen).toBe(available);
+    expect(panel.renderRoot.querySelector(".tp") !== null).toBe(available);
+    expect(request).not.toHaveBeenCalled();
+
+    updates = 0;
+    suspend.mockClear();
+    sessions.scheduleLifecycleSync();
+    await Promise.resolve();
+    expect(updates).toBe(0);
+    expect(suspend).not.toHaveBeenCalled();
+  }
 });
 
 it("holds retained PTYs and queued actions behind the same-client reconnect refresh", async () => {

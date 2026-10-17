@@ -252,10 +252,6 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     if (this.host.client?.recoveryScopeReady !== false) {
       this.activeRecoveryScope = recoveryScope;
     }
-    if (!clientChanged && !this.host.gatewayConnected) {
-      this.suspendTransport();
-      return;
-    }
     const resuming = !clientChanged && connectionChanged && this.host.available;
     const becameAvailable = availabilityChanged && this.host.available && this.hadAvailable;
     const priorEpoch = (clientChanged && this.hadClient) || becameAvailable;
@@ -282,6 +278,10 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       } else if (this.host.restoreTerminalPanelOpenState()) {
         shouldRestore = true;
       }
+    }
+    if (!clientChanged && !this.host.gatewayConnected) {
+      this.suspendTransport();
+      return;
     }
     if (reconnecting || resuming) {
       const operation = resuming ? this.captureTerminalOperation() : null;
