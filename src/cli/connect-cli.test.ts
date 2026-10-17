@@ -77,6 +77,35 @@ describe("connect cli", () => {
   });
 
   it.each([
+    ["Application/JSON; charset=utf-8", true],
+    ["APPLICATION/JSON", true],
+    ["text/html", false],
+    ["application/json-seq", false],
+  ])("recognizes the join response media type %s", async (contentType, accepted) => {
+    const release = vi.fn().mockResolvedValue(undefined);
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": contentType },
+      }),
+      release,
+    });
+
+    await runConnect([`https://gateway.example/j/${"a".repeat(22)}`]);
+
+    if (accepted) {
+      expect(mocks.runNodeHost).toHaveBeenCalledOnce();
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.runNodeHost).not.toHaveBeenCalled();
+      expect(mocks.runtime.error).toHaveBeenCalledWith(
+        "Gateway join code was not found or has expired.",
+      );
+    }
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it.each([
     {
       name: "HTTPS join URL",
       target: () => `https://gateway.example/openclaw-gw/j/${"a".repeat(22)}`,
