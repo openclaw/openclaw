@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import fileTransferPlugin from "../../../../extensions/file-transfer/index.js";
 import type { GatewayClient } from "../../../../src/gateway/client.js";
 import { withNodeGateway } from "./node-gateway-fixture.js";
@@ -22,153 +22,136 @@ type CapturedInvocation = {
   params: Record<string, unknown>;
 };
 
-describe("file-transfer exact approval transport", () => {
-  it("rejects a replaced file before final I/O", { timeout: E2E_TIMEOUT_MS }, async () => {
-    const command = fileTransferPlugin.nodeHostCommands?.find(
-      (entry) => entry.command === FILE_FETCH_COMMAND,
-    );
-    if (!command) {
-      throw new Error("file-transfer plugin omitted file.fetch");
-    }
-    const invocations: CapturedInvocation[] = [];
-    const handlerErrors: Error[] = [];
-    const invocationResponses: Promise<void>[] = [];
-    let target = "",
-      approvedObject = "",
-      canonicalPath = "";
-    let replaced = false;
-    await withNodeGateway(
-      {
-        label: "qa-file-transfer-exact-approval",
-        plugin: fileTransferPlugin,
-        platform: process.platform,
-        caps: ["file"],
-        commands: [FILE_FETCH_COMMAND],
-        config: async ({ state, nodeId }) => {
-          target = path.join(state.home, "report.txt");
-          approvedObject = path.join(state.home, "approved-object.txt");
-          await fs.writeFile(target, "approved");
-          canonicalPath = await fs.realpath(target);
-          return {
-            gateway: { nodes: { commands: { allow: [FILE_FETCH_COMMAND] } } },
-            agents: {
-              defaults: { heartbeat: { every: "0m" }, skipBootstrap: true },
-            },
-            plugins: {
-              allow: ["file-transfer"],
-              entries: {
-                "file-transfer": {
-                  enabled: true,
-                  config: {
-                    policyVersion: 2,
-                    nodes: { [nodeId]: { ask: "on-miss" } },
-                    literalGrants: [
-                      {
-                        nodeId,
-                        command: FILE_FETCH_COMMAND,
-                        requestedPath: target,
-                        canonicalPath,
-                      },
-                    ],
-                  },
+it("rejects a replaced file before final I/O", { timeout: E2E_TIMEOUT_MS }, async () => {
+  const command = fileTransferPlugin.nodeHostCommands?.find(
+    (entry) => entry.command === FILE_FETCH_COMMAND,
+  );
+  if (!command) {
+    throw new Error("file-transfer plugin omitted file.fetch");
+  }
+  const invocations: CapturedInvocation[] = [];
+  const handlerErrors: Error[] = [];
+  const invocationResponses: Promise<void>[] = [];
+  let target = "",
+    approvedObject = "",
+    canonicalPath = "";
+  let replaced = false;
+  await withNodeGateway(
+    {
+      label: "qa-file-transfer-exact-approval",
+      plugin: fileTransferPlugin,
+      platform: process.platform,
+      caps: ["file"],
+      commands: [FILE_FETCH_COMMAND],
+      config: async ({ state, nodeId }) => {
+        target = path.join(state.home, "report.txt");
+        approvedObject = path.join(state.home, "approved-object.txt");
+        await fs.writeFile(target, "approved");
+        canonicalPath = await fs.realpath(target);
+        return {
+          gateway: { nodes: { commands: { allow: [FILE_FETCH_COMMAND] } } },
+          agents: {
+            defaults: { heartbeat: { every: "0m" }, skipBootstrap: true },
+          },
+          plugins: {
+            allow: ["file-transfer"],
+            entries: {
+              "file-transfer": {
+                enabled: true,
+                config: {
+                  policyVersion: 2,
+                  nodes: { [nodeId]: { ask: "on-miss" } },
+                  literalGrants: [
+                    {
+                      nodeId,
+                      command: FILE_FETCH_COMMAND,
+                      requestedPath: target,
+                      canonicalPath,
+                    },
+                  ],
                 },
               },
             },
-          };
-        },
-        onInvoke: (client, frame) => {
-          invocationResponses.push(
-            respondToFileFetch({
-              client,
-              frame,
-              command,
-              invocations,
-              beforePreflightResponse: async () => {
-                if (replaced) {
-                  return;
-                }
-                replaced = true;
-                await fs.rename(target, approvedObject);
-                await fs.writeFile(target, "replacement");
-              },
-            }).catch((error: unknown) => {
-              handlerErrors.push(error instanceof Error ? error : new Error(String(error)));
-            }),
-          );
-        },
-        beforeCleanup: async () => {
-          await Promise.all(invocationResponses);
-        },
-      },
-      async ({ registry, operator, nodeId }) => {
-        expect(
-          registry.registry.nodeInvokePolicies.map(({ pluginId, policy }) => ({
-            pluginId,
-            commands: policy.commands,
-          })),
-        ).toEqual([
-          { pluginId: "file-transfer", commands: ["workspace.memory"] },
-          { pluginId: "file-transfer", commands: ["workspace.skills"] },
-          {
-            pluginId: "file-transfer",
-            commands: [
-              FILE_FETCH_COMMAND,
-              "file.stat",
-              "dir.list",
-              "dir.fetch",
-              "file.write",
-              "file.create",
-            ],
           },
-        ]);
-
-        await waitForNode(operator, nodeId);
-
-        const result = await operator.request<{
-          payload?: { ok?: boolean; code?: string };
-        }>("node.invoke", {
-          nodeId,
-          command: FILE_FETCH_COMMAND,
-          params: { path: target },
-          timeoutMs: 60_000,
-          idempotencyKey: randomUUID(),
-        });
-
-        expect(invocations).toEqual(
-          [
-            { preflightOnly: true, followSymlinks: false },
-            { expectedBinding: expect.objectContaining({ kind: "existing" }) },
-          ].map((params) => ({
-            command: FILE_FETCH_COMMAND,
-            params: expect.objectContaining({
-              path: target,
-              expectedCanonicalPath: canonicalPath,
-              ...params,
-            }),
-          })),
-        );
-        expect(result.payload).toMatchObject({ ok: false, code: "CANONICAL_PATH_CHANGED" });
-        await expect(fs.readFile(approvedObject, "utf8")).resolves.toBe("approved");
-        await expect(fs.readFile(target, "utf8")).resolves.toBe("replacement");
-        await Promise.all(invocationResponses);
-        expect(handlerErrors).toEqual([]);
+        };
       },
-    );
-  });
-});
-
-async function waitForNode(operator: GatewayClient, nodeId: string): Promise<void> {
-  await vi.waitFor(
-    async () => {
-      const result = await operator.request<{
-        nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
-      }>("node.list", {});
-      const node = result.nodes?.find((entry) => entry.nodeId === nodeId && entry.connected);
-      expect(node?.commands).toEqual([FILE_FETCH_COMMAND]);
+      onInvoke: (client, frame) => {
+        invocationResponses.push(
+          respondToFileFetch({
+            client,
+            frame,
+            command,
+            invocations,
+            beforePreflightResponse: async () => {
+              if (replaced) {
+                return;
+              }
+              replaced = true;
+              await fs.rename(target, approvedObject);
+              await fs.writeFile(target, "replacement");
+            },
+          }).catch((error: unknown) => {
+            handlerErrors.push(error instanceof Error ? error : new Error(String(error)));
+          }),
+        );
+      },
+      beforeCleanup: async () => {
+        await Promise.all(invocationResponses);
+      },
     },
-    { timeout: 15_000, interval: 100 },
+    async ({ registry, operator, nodeId }) => {
+      expect(
+        registry.registry.nodeInvokePolicies.map(({ pluginId, policy }) => ({
+          pluginId,
+          commands: policy.commands,
+        })),
+      ).toEqual([
+        { pluginId: "file-transfer", commands: ["workspace.memory"] },
+        { pluginId: "file-transfer", commands: ["workspace.skills"] },
+        {
+          pluginId: "file-transfer",
+          commands: [
+            FILE_FETCH_COMMAND,
+            "file.stat",
+            "dir.list",
+            "dir.fetch",
+            "file.write",
+            "file.create",
+          ],
+        },
+      ]);
+
+      const result = await operator.request<{
+        payload?: { ok?: boolean; code?: string };
+      }>("node.invoke", {
+        nodeId,
+        command: FILE_FETCH_COMMAND,
+        params: { path: target },
+        timeoutMs: 60_000,
+        idempotencyKey: randomUUID(),
+      });
+
+      expect(invocations).toEqual(
+        [
+          { preflightOnly: true, followSymlinks: false },
+          { expectedBinding: expect.objectContaining({ kind: "existing" }) },
+        ].map((params) => ({
+          command: FILE_FETCH_COMMAND,
+          params: expect.objectContaining({
+            path: target,
+            expectedCanonicalPath: canonicalPath,
+            ...params,
+          }),
+        })),
+      );
+      expect(result.payload).toMatchObject({ ok: false, code: "CANONICAL_PATH_CHANGED" });
+      await expect(fs.readFile(approvedObject, "utf8")).resolves.toBe("approved");
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("replacement");
+      await Promise.all(invocationResponses);
+      expect(handlerErrors).toEqual([]);
+    },
   );
-}
+});
 
 async function respondToFileFetch(params: {
   client: GatewayClient | undefined;

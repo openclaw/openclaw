@@ -1,7 +1,7 @@
 // ClawHub release candidate producer tests cover blocked script evidence output.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { validateQaEvidenceSummaryJson } from "../../../../extensions/qa-lab/test-api.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { runClawHubReleaseCandidateInstallProducer } from "./clawhub-release-candidate-install.js";
@@ -133,38 +133,37 @@ const modelCases: Array<
 ];
 afterEach(() => vi.unstubAllEnvs());
 
-describe("ClawHub release candidate install producer", () => {
-  for (const [
-    name,
-    expectedModel,
-    model,
-    windowsModel,
-    platform,
-    expectedProvider,
-    expectedModelName,
-  ] of modelCases) {
-    it(`writes blocked evidence with ${name}`, async () => {
-      const artifactBase = tempDirs.make("openclaw-clawhub-release-evidence-");
-      const missingTarballEnv = "OPENCLAW_TEST_MISSING_RELEASE_CANDIDATE_TARBALL";
-      vi.stubEnv(missingTarballEnv, "");
-      vi.stubEnv("OPENAI_API_KEY", "");
-      vi.stubEnv("OPENCLAW_PARALLELS_OPENAI_MODEL", model);
-      vi.stubEnv("OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL", windowsModel);
+for (const [
+  name,
+  expectedModel,
+  model,
+  windowsModel,
+  platform,
+  expectedProvider,
+  expectedModelName,
+] of modelCases) {
+  it(`writes blocked evidence with ${name}`, async () => {
+    const artifactBase = tempDirs.make("openclaw-clawhub-release-evidence-");
+    const missingTarballEnv = "OPENCLAW_TEST_MISSING_RELEASE_CANDIDATE_TARBALL";
+    vi.stubEnv(missingTarballEnv, "");
+    vi.stubEnv("OPENAI_API_KEY", "");
+    vi.stubEnv("OPENCLAW_PARALLELS_OPENAI_MODEL", model);
+    vi.stubEnv("OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL", windowsModel);
 
-      const result = await runClawHubReleaseCandidateInstallProducer({
-        artifactBase,
-        buildFromCheckout: false,
-        platform,
-        repoRoot: process.cwd(),
-        tarballEnv: missingTarballEnv,
-      });
-      const evidencePath = path.join(artifactBase, "qa-evidence.json");
-      const evidence = validateQaEvidenceSummaryJson(
-        JSON.parse(await fs.readFile(evidencePath, "utf8")),
-      );
-      expect(result).toEqual(evidence);
-      expect(evidence.entries).toHaveLength(1);
-      expect(evidence.entries[0]).toMatchObject({
+    const result = await runClawHubReleaseCandidateInstallProducer({
+      artifactBase,
+      buildFromCheckout: false,
+      platform,
+      repoRoot: process.cwd(),
+      tarballEnv: missingTarballEnv,
+    });
+    const evidencePath = path.join(artifactBase, "qa-evidence.json");
+    const evidence = validateQaEvidenceSummaryJson(
+      JSON.parse(await fs.readFile(evidencePath, "utf8")),
+    );
+    expect(result).toEqual(evidence);
+    expect(evidence.entries).toMatchObject([
+      {
         execution: {
           artifacts: [{ kind: "log", path: "parallels-npm-update.log", source: "script" }],
         },
@@ -174,21 +173,19 @@ describe("ClawHub release candidate install producer", () => {
             reason: `${missingTarballEnv} is not set; provide a candidate .tgz or pass --build-from-checkout.`,
           },
         },
-      });
-      expect(await fs.readFile(path.join(artifactBase, "parallels-npm-update.log"), "utf8")).toBe(
-        "",
-      );
-      expect(evidence.entries[0]?.execution?.provider).toMatchObject({
-        id: expectedProvider ?? (expectedModel === null ? "live-frontier" : "openai"),
-        live: true,
-        auth: "live-frontier",
-        model: {
-          ref: expectedModel,
-          ...(expectedModel === null ? { name: null } : {}),
-          ...(expectedModelName !== undefined ? { name: expectedModelName } : {}),
-        },
-      });
-      expect(evidence.entries[0]?.execution?.provider).not.toHaveProperty("fixture");
+      },
+    ]);
+    expect(await fs.readFile(path.join(artifactBase, "parallels-npm-update.log"), "utf8")).toBe("");
+    expect(evidence.entries[0]?.execution?.provider).toMatchObject({
+      id: expectedProvider ?? (expectedModel === null ? "live-frontier" : "openai"),
+      live: true,
+      auth: "live-frontier",
+      model: {
+        ref: expectedModel,
+        ...(expectedModel === null ? { name: null } : {}),
+        ...(expectedModelName !== undefined ? { name: expectedModelName } : {}),
+      },
     });
-  }
-});
+    expect(evidence.entries[0]?.execution?.provider).not.toHaveProperty("fixture");
+  });
+}

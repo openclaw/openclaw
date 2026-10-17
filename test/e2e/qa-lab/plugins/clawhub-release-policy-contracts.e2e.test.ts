@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../../helpers/temp-dir.js";
 import { writeJsonFile } from "../../../helpers/temp-repo.js";
 
@@ -94,8 +94,7 @@ function expectValidChecks(repoDir: string, version: string, args: string[] = []
     const result = runCheck(script, repoDir, args);
     const command =
       script === CLAWHUB_CHECK ? "plugin-clawhub-release-check" : "plugin-npm-release-check";
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(result, result.stderr).toMatchObject({ status: 0, stderr: "" });
     expect(result.stdout).toContain(`${command}: publishable plugin metadata looks OK.`);
     expect(result.stdout).toContain(`- ${PACKAGE_NAME}@${version} (stable, demo-plugin)`);
   }
@@ -104,8 +103,7 @@ function expectValidChecks(repoDir: string, version: string, args: string[] = []
 function expectInvalidChecks(repoDir: string, messages: string[]) {
   for (const script of [CLAWHUB_CHECK, NPM_CHECK]) {
     const result = runCheck(script, repoDir);
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
+    expect(result).toMatchObject({ status: 1, stdout: "" });
     for (const message of messages) {
       expect(result.stderr).toContain(message);
     }
@@ -121,60 +119,55 @@ function commitSourceChange(repoDir: string) {
   return commitFixture(repoDir, "change plugin source");
 }
 
-describe("ClawHub release policy contracts", () => {
-  it("validates package identity, version, and extension metadata through both release checks", () => {
-    const repoDir = createPluginRepo();
+it("validates package identity, version, and extension metadata through both release checks", () => {
+  expectValidChecks(createPluginRepo(), INITIAL_VERSION);
+});
 
-    expectValidChecks(repoDir, INITIAL_VERSION);
+it("requires the canonical repository provenance for ClawHub and npm publishing", () => {
+  const repoDir = createPluginRepo({
+    repositoryUrl: "https://example.invalid/not-openclaw",
+  });
+  expectInvalidChecks(repoDir, [
+    `package.json repository.url must be "${REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing`,
+  ]);
+});
+
+it("requires the external code plugin compatibility and build contract", () => {
+  const repoDir = createPluginRepo({
+    includeBuildVersion: false,
+    includePluginApi: false,
   });
 
-  it("requires the canonical repository provenance for ClawHub and npm publishing", () => {
-    const repoDir = createPluginRepo({
-      repositoryUrl: "https://example.invalid/not-openclaw",
-    });
-    expectInvalidChecks(repoDir, [
-      `package.json repository.url must be "${REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing`,
-    ]);
-  });
+  expectInvalidChecks(repoDir, [
+    "openclaw.compat.pluginApi is required for external code plugin packages.",
+    "openclaw.build.openclawVersion is required for external code plugin packages.",
+  ]);
+});
 
-  it("requires the external code plugin compatibility and build contract", () => {
-    const repoDir = createPluginRepo({
-      includeBuildVersion: false,
-      includePluginApi: false,
-    });
+it("rejects a changed publishable plugin whose committed version did not change", () => {
+  const repoDir = createPluginRepo();
+  const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
+  const headRef = commitSourceChange(repoDir);
 
-    expectInvalidChecks(repoDir, [
-      "openclaw.compat.pluginApi is required for external code plugin packages.",
-      "openclaw.build.openclawVersion is required for external code plugin packages.",
-    ]);
-  });
+  const result = runCheck(CLAWHUB_CHECK, repoDir, ["--base-ref", baseRef, "--head-ref", headRef]);
 
-  it("rejects a changed publishable plugin whose committed version did not change", () => {
-    const repoDir = createPluginRepo();
-    const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
-    const headRef = commitSourceChange(repoDir);
+  expect(result).toMatchObject({ status: 1, stdout: "" });
+  expect(result.stderr).toContain("version bumps required before ClawHub publish");
+  expect(result.stderr).toContain(
+    `${PACKAGE_NAME}@${INITIAL_VERSION}: changed publishable plugin still has the same version in package.json.`,
+  );
+});
 
-    const result = runCheck(CLAWHUB_CHECK, repoDir, ["--base-ref", baseRef, "--head-ref", headRef]);
+it("accepts a source change with a committed package version bump", () => {
+  const repoDir = createPluginRepo();
+  const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
+  const nextVersion = "2026.8.4";
+  writeJsonFile(
+    join(repoDir, "extensions/demo-plugin/package.json"),
+    packageManifest({ version: nextVersion }),
+  );
+  const headRef = commitSourceChange(repoDir);
+  const args = ["--base-ref", baseRef, "--head-ref", headRef];
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("version bumps required before ClawHub publish");
-    expect(result.stderr).toContain(
-      `${PACKAGE_NAME}@${INITIAL_VERSION}: changed publishable plugin still has the same version in package.json.`,
-    );
-  });
-
-  it("accepts a source change with a committed package version bump", () => {
-    const repoDir = createPluginRepo();
-    const baseRef = git(repoDir, ["rev-parse", "HEAD"]);
-    const nextVersion = "2026.8.4";
-    writeJsonFile(
-      join(repoDir, "extensions/demo-plugin/package.json"),
-      packageManifest({ version: nextVersion }),
-    );
-    const headRef = commitSourceChange(repoDir);
-    const args = ["--base-ref", baseRef, "--head-ref", headRef];
-
-    expectValidChecks(repoDir, nextVersion, args);
-  });
+  expectValidChecks(repoDir, nextVersion, args);
 });

@@ -5,6 +5,7 @@ import {
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../../../src/gateway/client.js";
 import { startGatewayServer } from "../../../../src/gateway/server.js";
@@ -150,6 +151,20 @@ export async function withNodeGateway(
         }
       },
     });
+    const activeOperator = operator;
+    await vi.waitFor(
+      async () => {
+        const result = await activeOperator.request<{
+          nodes?: Array<{ nodeId: string; connected?: boolean; commands?: string[] }>;
+        }>("node.list", {});
+        const connected = result.nodes?.find(
+          (entry) => entry.nodeId === context.nodeId && entry.connected,
+        );
+        expect(connected).toBeDefined();
+        expect(connected?.commands).toEqual([...options.commands].toSorted());
+      },
+      { timeout: 15_000, interval: 100 },
+    );
     await run({ ...context, config, registry, operator });
   } finally {
     await options.beforeCleanup?.();

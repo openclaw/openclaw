@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -19,6 +18,7 @@ import {
 } from "../../../../extensions/qa-lab/api.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaPluginEntryObservation } from "../../../helpers/qa-plugin-entry-observation.js";
+import { json, pluginIdentity, sha256 } from "./candidate-test-support.js";
 
 let startedAdapter: StartedOpenClawCrablineAdapter | undefined;
 let retainedResources = false;
@@ -50,10 +50,6 @@ function required(name: string): string {
     throw new Error(`${name} is required for candidate proof`);
   }
   return value;
-}
-
-function sha256(bytes: Buffer | string): string {
-  return createHash("sha256").update(bytes).digest("hex");
 }
 
 type FailureDetails = { name: string; message: string; errors?: FailureDetails[] };
@@ -151,30 +147,7 @@ async function candidateIdentity() {
   return identity;
 }
 
-async function json<T>(url: string, signal: AbortSignal): Promise<T> {
-  const response = await fetch(url, { signal });
-  expect(response.ok).toBe(true);
-  return (await response.json()) as T;
-}
-
-async function slackRuntimeIdentity() {
-  const root = path.join(await fs.realpath(repoRoot), "dist/extensions/slack");
-  const packageBytes = await fs.readFile(path.join(root, "package.json"));
-  const pkg = JSON.parse(packageBytes.toString("utf8")) as {
-    name: string;
-    openclaw: { extensions: string[] };
-  };
-  expect(pkg.name).toBe("@openclaw/slack");
-  expect(pkg.openclaw.extensions).toEqual([expect.stringMatching(/^\.\/index\.(?:c|m)?js$/u)]);
-  const entry = await fs.realpath(path.resolve(root, pkg.openclaw.extensions[0]!));
-  expect(path.dirname(entry)).toBe(root);
-  return {
-    entry,
-    packageSha256: sha256(packageBytes),
-    entrySha256: sha256(await fs.readFile(entry)),
-    sourceSha256: sha256(await fs.readFile(path.join(repoRoot, "extensions/slack/index.ts"))),
-  };
-}
+const slackRuntimeIdentity = () => pluginIdentity(repoRoot, "slack");
 
 // These are separate test cells: a nonstreaming callback pass never qualifies defaults.
 it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
@@ -295,6 +268,9 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       };
       assertActive();
       mock = await startQaMockOpenAiServer();
+      const requestUrl = `${mock.baseUrl}/debug/requests?after=`;
+      const modelRequests = (cursor: number) =>
+        json<MockOpenAiRequestSnapshot[]>(requestUrl + cursor, signal);
       assertActive();
       const channelConfig = transport.createGatewayConfig({ baseUrl: mock.baseUrl });
       runtimeIdentity = await slackRuntimeIdentity();
@@ -372,12 +348,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         expect.objectContaining({ ts: unbound.id, text: unboundMarker, user: "U0000000001" }),
       ]);
       await transport.waitForNoOutbound({ sinceIndex: first.busCursor });
-      expect(
-        await json<MockOpenAiRequestSnapshot[]>(
-          `${mock.baseUrl}/debug/requests?after=${first.modelCursor}`,
-          signal,
-        ),
-      ).toEqual([]);
+      expect(await modelRequests(first.modelCursor)).toEqual([]);
       cells.push({
         kind: "unbound",
         ...first,
@@ -414,13 +385,9 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
           ...(kind === "thread" ? { threadId: parentId } : {}),
           timeoutMs: 45_000,
         });
-        expect(normalized.text).toBe(reply);
+        expect(normalized).toMatchObject({ text: reply, accountId: "default" });
         expect(normalized.id).not.toBe("");
-        expect(normalized.accountId).toBe("default");
-        const requests = await json<MockOpenAiRequestSnapshot[]>(
-          `${mock.baseUrl}/debug/requests?after=${cursor.modelCursor}`,
-          signal,
-        );
+        const requests = await modelRequests(cursor.modelCursor);
         const ownRequests = requests.filter((entry) => entry.allInputText.includes(marker));
         expect(ownRequests).toHaveLength(1);
         expect(ownRequests[0]!.outcome).toBe("success");
@@ -459,10 +426,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         });
         parentId ??= inbound.id;
       }
-      const allRequests = await json<MockOpenAiRequestSnapshot[]>(
-        `${mock.baseUrl}/debug/requests?after=${first.modelCursor}`,
-        signal,
-      );
+      const allRequests = await modelRequests(first.modelCursor);
       expect(allRequests.every((entry) => !entry.allInputText.includes(unboundMarker))).toBe(true);
       completed = true;
     };
@@ -572,16 +536,22 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
         }),
         async () => {
           retainedResources = !(stopped && transportClosed && providerClosed);
+          const closure = { stopped, transportClosed, providerClosed };
           // The runner deletes its temporary namespace after this callback returns.
           // Copy only after every writer owner has actually completed its close.
           const retentionErrors: unknown[] = [];
-          try {
+          const retain = async (operation: () => unknown) => {
+            try {
+              await operation();
+            } catch (error) {
+              retentionErrors.push(error);
+            }
+          };
+          await retain(() => {
             console.log(
               JSON.stringify({
                 artifactDirectory: directory,
-                stopped,
-                transportClosed,
-                providerClosed,
+                ...closure,
                 bodyFailure:
                   bodyFailure instanceof Error
                     ? {
@@ -591,11 +561,9 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
                     : (bodyFailure ?? null),
               }),
             );
-          } catch (error) {
-            retentionErrors.push(error);
-          }
+          });
           let raw: { file: string; bytes: number; sha256: string } | null = null;
-          try {
+          await retain(async () => {
             if (retainedResources) {
               throw new Error("Recorder retention requires confirmed owner closures");
             }
@@ -620,10 +588,8 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
               },
               () => retained.close(),
             );
-          } catch (error) {
-            retentionErrors.push(error);
-          }
-          try {
+          });
+          await retain(async () => {
             await evidence.verify();
             const receipt = await fs.open(path.join(evidence.directory, "cell.json"), "wx", 0o600);
             await runQaGatewayFixture(
@@ -636,7 +602,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
                     identity,
                     source,
                     completed,
-                    closure: { stopped, transportClosed, providerClosed },
+                    closure,
                     raw,
                     bodyFailure: bodyFailure === undefined ? null : errorDetails(bodyFailure),
                     cleanupErrors,
@@ -647,9 +613,7 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
               },
               () => receipt.close(),
             );
-          } catch (error) {
-            retentionErrors.push(error);
-          }
+          });
           if (retentionErrors.length) {
             throw new AggregateError(retentionErrors, "Candidate evidence retention failed");
           }
