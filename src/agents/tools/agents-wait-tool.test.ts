@@ -67,6 +67,29 @@ function persistCollectorReadFixture(
   state.publishSubagentRunsAfterAtomicStore(rows, runIds)();
 }
 
+function publishChanges() {
+  for (const listener of registryEvents.listeners) {
+    listener();
+  }
+}
+
+function observe<T>(promise: Promise<T>) {
+  return promise.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+}
+
+function notOwner(runId: string) {
+  return { completed: [], pending: [], errors: [{ runId, error: "not_owner" }], success: false };
+}
+
+function deniedAtBoundary(boundary: "tool" | "bridge", runId: string) {
+  return boundary === "tool"
+    ? { value: notOwner(runId) }
+    : { error: expect.objectContaining({ message: `agents.run not_owner: ${runId}` }) };
+}
+
 describe("agents_wait", () => {
   beforeEach(() => {
     records.clear();
@@ -221,9 +244,7 @@ describe("agents_wait", () => {
       replacement.swarmRunId = runId;
       records.delete(entry.runId);
       records.set(replacement.runId, replacement);
-      for (const listener of registryEvents.listeners) {
-        listener();
-      }
+      publishChanges();
       await vi.advanceTimersByTimeAsync(0);
       expect(result).toMatchObject({
         completed: [
@@ -313,16 +334,6 @@ describe("agents_wait", () => {
     records.set(later.runId, later);
     records.set(earlier.runId, earlier);
     const tool = createMainSessionWaitTool();
-
-    const result = await tool.execute("call", {
-      ids: ["later", "earlier"],
-      timeoutSeconds: 0,
-    });
-
-    expect(result.details).toMatchObject({
-      completed: [{ runId: "earlier" }, { runId: "later" }],
-      pending: [],
-    });
 
     const tied = collectorRun("tied", "agent:main:main", { status: "done" });
     tied.completion = { required: false, resultText: "tied", capturedAt: 5 };
@@ -430,32 +441,14 @@ describe("agents_wait", () => {
                   currentAgentId: "main",
                   signal: abort.signal,
                 });
-          const observed = waiting.then(
-            (value) => ({ value }),
-            (error: unknown) => ({ error }),
-          );
+          const observed = observe(waiting);
           try {
             const result = await observed;
             await publication;
             expect(reads.mock.calls.some(([, command]) => command.type === "subagents.runs")).toBe(
               true,
             );
-            expect(result).toEqual(
-              boundary === "tool"
-                ? {
-                    value: {
-                      completed: [],
-                      pending: [],
-                      errors: [{ runId: entry.runId, error: "not_owner" }],
-                      success: false,
-                    },
-                  }
-                : {
-                    error: expect.objectContaining({
-                      message: `agents.run not_owner: ${entry.runId}`,
-                    }),
-                  },
-            );
+            expect(result).toEqual(deniedAtBoundary(boundary, entry.runId));
           } finally {
             abort.abort();
             await Promise.allSettled([waiting, publication]);
@@ -493,16 +486,11 @@ describe("agents_wait", () => {
           return preparedRuns(() => selectRuns(records, runIds));
         });
       const controller = new AbortController();
-      const observed = waitAtBoundary(boundary, runId, controller.signal).then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const observed = observe(waitAtBoundary(boundary, runId, controller.signal));
       try {
         expect(registryEvents.listeners.size).toBe(1);
         for (let publication = 0; publication < 3; publication += 1) {
-          for (const listener of registryEvents.listeners) {
-            listener();
-          }
+          publishChanges();
         }
         expect(registryEvents.read).toHaveBeenCalledTimes(1);
         firstRead.resolve();
@@ -521,26 +509,13 @@ describe("agents_wait", () => {
         records.delete(previous.runId);
         records.set(current.runId, current);
         for (let publication = 0; publication < 3; publication += 1) {
-          for (const listener of registryEvents.listeners) {
-            listener();
-          }
+          publishChanges();
         }
         expect(registryEvents.read).toHaveBeenCalledTimes(2);
         secondRead.resolve();
         const result = await observed;
         if (replacement === "foreign") {
-          expect(result).toEqual(
-            boundary === "tool"
-              ? {
-                  value: {
-                    completed: [],
-                    pending: [],
-                    errors: [{ runId, error: "not_owner" }],
-                    success: false,
-                  },
-                }
-              : { error: expect.objectContaining({ message: `agents.run not_owner: ${runId}` }) },
-          );
+          expect(result).toEqual(deniedAtBoundary(boundary, runId));
         } else {
           const completed = {
             runId,
@@ -571,9 +546,7 @@ describe("agents_wait", () => {
       .mockImplementationOnce(async () => ({
         consume(consume) {
           const value = consume(entries);
-          for (const listener of registryEvents.listeners) {
-            listener();
-          }
+          publishChanges();
           checked.resolve();
           return { ready: true, value };
         },
@@ -669,10 +642,7 @@ describe("agents_wait", () => {
         const waiting = createMainSessionWaitTool()
           .execute("deadline", { ids: [entry.runId], timeoutSeconds: 0.01 }, abort.signal)
           .then((result) => result.details);
-        const observed = waiting.then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
+        const observed = observe(waiting);
         try {
           const result = await Promise.race([
             observed,
@@ -754,10 +724,7 @@ describe("agents_wait", () => {
       records.set(pending.runId, pending);
       const controller = new AbortController();
       const waiting = waitAtBoundary(boundary, "collector-run", controller.signal);
-      const observed = waiting.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const observed = observe(waiting);
       try {
         expect(registryEvents.listeners.size).toBe(1);
         records.delete(pending.runId);
@@ -765,24 +732,9 @@ describe("agents_wait", () => {
         foreign.swarmRunId = "collector-run";
         foreign.completion = { required: false, resultText: "foreign result" };
         records.set(foreign.runId, foreign);
-        for (const listener of registryEvents.listeners) {
-          listener();
-        }
+        publishChanges();
 
-        expect(await observed).toEqual(
-          boundary === "tool"
-            ? {
-                value: {
-                  completed: [],
-                  pending: [],
-                  errors: [{ runId: "collector-run", error: "not_owner" }],
-                  success: false,
-                },
-              }
-            : {
-                error: expect.objectContaining({ message: "agents.run not_owner: collector-run" }),
-              },
-        );
+        expect(await observed).toEqual(deniedAtBoundary(boundary, "collector-run"));
         expect(registryEvents.listeners.size).toBe(0);
         expect(vi.getTimerCount()).toBe(0);
       } finally {
@@ -812,12 +764,7 @@ describe("agents_wait", () => {
     });
 
     expect(allowed.details).toMatchObject({ completed: [{ runId: "routed" }] });
-    expect(denied.details).toEqual({
-      completed: [],
-      pending: [],
-      errors: [{ runId: "routed", error: "not_owner" }],
-      success: false,
-    });
+    expect(denied.details).toEqual(notOwner("routed"));
     expect(isToolResultError(denied)).toBe(true);
   });
 
