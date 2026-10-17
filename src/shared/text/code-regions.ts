@@ -86,6 +86,7 @@ export function findCodeOwnership(
     completedParagraphs,
     paragraphs,
     definitions,
+    unsettledDefinitionStarts,
     unresolvedImageCodeStart,
   } = parseMarkdownOwnership(text, options);
   return {
@@ -94,6 +95,7 @@ export function findCodeOwnership(
     ...(unresolvedImageCodeStart === undefined ? {} : { unresolvedImageCodeStart }),
     completedParagraphs,
     definitions,
+    unsettledDefinitionStarts,
     ...(paragraphs ? { paragraphs } : {}),
   };
 }
@@ -118,6 +120,9 @@ export function canReuseMarkdownOwnership(
   if (!ownership) {
     return true;
   }
+  if (ownership.unsettledDefinitionStarts.length > 0) {
+    return false;
+  }
 
   // Image alt text can stop treating inline delimiters as code when its link closes.
   if (ownership.unresolvedImageCodeStart !== undefined && /[\x5b\x5d():]/u.test(appended)) {
@@ -126,12 +131,13 @@ export function canReuseMarkdownOwnership(
 
   // Unresolved image code can become alt text when a later reference definition arrives.
   // The parser's retainStart marks the earliest source block whose ownership can still move.
-  const lineStart = Math.max(previousText.lastIndexOf("\n"), previousText.lastIndexOf("\r")) + 1;
-  const suffixStart = Math.max(lineStart, previousText.length - 2005);
+  // Keep enough context for a definition prefix on the previous line whose
+  // destination arrives on the next line.
+  const suffixStart = Math.max(0, previousText.length - 2005);
   const suffix = previousText.slice(suffixStart) + appended;
-  const referenceDefinition =
-    /(?:^|\r\n|\n|\r(?!\n)) {0,3}\x5b((?:\\[\s\S]|(?!\x5d)[\s\S]){1,1999})\x5d:[ \t]+\S/gu;
-  for (const match of suffix.matchAll(referenceDefinition)) {
+  const referenceDefinitionCandidate =
+    /(?:^|\r\n|\n|\r(?!\n)) {0,3}\x5b((?:\\[\s\S]|(?!\x5d)[\s\S]){1,1999})\x5d:[^\r\n]*(?=$|\r\n|\n|\r(?!\n))/gu;
+  for (const match of suffix.matchAll(referenceDefinitionCandidate)) {
     const definitionStart = suffixStart + (match.index ?? 0) + match[0].indexOf("[");
     if (definitionStart < ownership.retainStart) {
       continue;
@@ -143,18 +149,6 @@ export function canReuseMarkdownOwnership(
     if (!alreadyParsed) {
       return false;
     }
-  }
-
-  // An unfinished reference title stays mutable until a blank block boundary arrives.
-  const hasUnsettledDefinition = ownership.definitions.some(
-    (definition) =>
-      definition.start >= ownership.retainStart && definition.start < previousText.length,
-  );
-  if (
-    hasUnsettledDefinition &&
-    /(?:\r\n|\n|\r(?!\n))[ \t]*(?:\r\n|\n|\r(?!\n))/u.test(boundaryContext)
-  ) {
-    return false;
   }
   return true;
 }

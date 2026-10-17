@@ -359,6 +359,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       retainStart: 0,
       completedParagraphs: [],
       definitions: [],
+      unsettledDefinitionStarts: [],
       ...(paragraphs ? { paragraphs } : {}),
     };
   }
@@ -384,6 +385,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
   const regions: MarkdownCodeRegion[] = [];
   const textSpans: Array<[number, number]> = [];
   const definitions: Array<{ identifier: string; start: number; end: number }> = [];
+  const unsettledDefinitionStarts: number[] = [];
   let unresolvedImageCodeStart: number | undefined;
   const blocks = tree.children ?? [];
   let retainStart = blocks.at(-1)?.position?.start?.offset ?? text.length;
@@ -503,6 +505,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
     }
     for (const definition of definitions) {
       if (definition.end > lastBlank) {
+        unsettledDefinitionStarts.push(definition.start);
         retainStart = Math.min(retainStart, definition.start);
       }
     }
@@ -516,6 +519,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
     ...(unresolvedImageCodeStart === undefined ? {} : { unresolvedImageCodeStart }),
     completedParagraphs,
     definitions,
+    unsettledDefinitionStarts,
     ...(paragraphs ? { paragraphs } : {}),
   };
 }
