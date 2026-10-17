@@ -127,7 +127,7 @@ describe("setup activation credentials and configuration", () => {
       };
       setup.deps.resolveApiKeyForProvider = async () => nativeAuth;
       const readNativeKey = vi.fn(() => credential);
-      setup.deps.readCodexCliActiveApiKey = readNativeKey;
+      setup.readCodexCliActiveApiKey.mockImplementation(readNativeKey);
       setup.run.mockImplementation(async (params) => {
         expect(params.authProfileId).toBeUndefined();
         expect(params.config?.plugins?.entries?.codex?.config?.appServer).toMatchObject({
@@ -254,7 +254,7 @@ describe("setup activation credentials and configuration", () => {
     "requires the official Codex source only for automatic setup (automatic: %s)",
     async (automatic) => {
       const setup = await fixture({ codex: true });
-      const resolveMetadata = setup.deps.resolvePluginMetadataSnapshot;
+      const resolveMetadata = setup.resolvePluginMetadataSnapshot.getMockImplementation();
       assert.ok(resolveMetadata);
       const acceptedSurface = {
         channels: [],
@@ -268,7 +268,7 @@ describe("setup activation credentials and configuration", () => {
         skills: [],
         dangerousConfigFlags: [],
       };
-      setup.deps.resolvePluginMetadataSnapshot = (params) => {
+      setup.resolvePluginMetadataSnapshot.mockImplementation((params) => {
         const metadata = resolveMetadata(params);
         return {
           ...metadata,
@@ -290,7 +290,7 @@ describe("setup activation credentials and configuration", () => {
             },
           },
         };
-      };
+      });
 
       const result = await setup.activate("codex-cli", automatic ? true : undefined, {
         automaticSetup: automatic ? true : undefined,
@@ -354,7 +354,7 @@ describe("setup activation credentials and configuration", () => {
 
   it("retains the detected Codex API-key setup path without guided login", async () => {
     const setup = await fixture({ codex: true });
-    setup.deps.readCodexCliActiveApiKey = () => credential;
+    setup.readCodexCliActiveApiKey.mockReturnValue(credential);
     const result = await setup.activate("codex-cli");
     expect(result, result.ok ? undefined : result.error).toMatchObject({ ok: true });
     expect(setup.login).not.toHaveBeenCalled();
