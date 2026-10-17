@@ -531,7 +531,7 @@ describe("markdown sidebar", () => {
       resolveSource: (onSourceChange, runtime) => {
         const availability = resolveAssistantAttachmentAvailability(source, {
           ...runtime,
-          onRequestUpdate: onSourceChange,
+          onMediaChange: onSourceChange,
         });
         return availability.status === "available"
           ? { status: "ready", src: source }

@@ -11,7 +11,7 @@ import { MessageImages } from "./chat-message-images-solid.tsx";
 import { stubObjectUrls, ticketResponse } from "./chat-message-media.test-helpers.ts";
 import {
   projectMessageMedia,
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type AttachmentItem,
   type AssistantAttachmentItem,
 } from "./chat-message-media.ts";
@@ -98,7 +98,7 @@ function drawReactive(
   options: AttachmentTestProps["options"] = {},
   onOpenSidebar?: AttachmentTestProps["onOpenSidebar"],
 ) {
-  const update = () => draw(content(), { ...options, onRequestUpdate: update }, onOpenSidebar);
+  const update = () => draw(content(), { ...options, mediaOwner: update }, onOpenSidebar);
   subscribers.add(update);
   update();
 }
@@ -152,7 +152,7 @@ afterEach(() => {
     unmountAttachments(target);
   }
   for (const subscriber of subscribers) {
-    releaseChatMediaResourceSubscriber(subscriber);
+    releaseChatMediaResourceOwner(subscriber);
   }
   subscribers.clear();
   document.body.replaceChildren();
@@ -221,7 +221,7 @@ describe("attachment sidebar source ownership", () => {
       const rerender = () =>
         draw([attachment], {
           authToken: "test-token",
-          onRequestUpdate: rerender,
+          mediaOwner: rerender,
         });
       subscribers.add(rerender);
       rerender();

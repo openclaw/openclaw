@@ -49,7 +49,7 @@ import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import "./chat-video-player.tsx";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
-import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
+import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import { ChatPdfPreview, isPdfAttachment } from "./chat-pdf-preview.tsx";
 import type {
   AttachmentSidebarRuntime,
@@ -156,13 +156,13 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
     const nextResolver = props.content.resolveSource;
     const nextIdentity = props.content.sourceIdentity ?? props.content.src;
     if (resolver !== nextResolver || identity !== nextIdentity) {
-      releaseChatMediaResourceSubscriber(sourceChanged);
+      releaseChatMediaResourceOwner(sourceChanged);
       resolver = nextResolver;
       identity = nextIdentity;
     }
     return prepareAttachment(props, sourceChanged);
   });
-  onCleanup(() => releaseChatMediaResourceSubscriber(sourceChanged));
+  onCleanup(() => releaseChatMediaResourceOwner(sourceChanged));
   return (
     <Switch
       fallback={

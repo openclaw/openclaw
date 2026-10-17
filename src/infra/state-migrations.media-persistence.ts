@@ -12,6 +12,7 @@ import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
   AGENT_STORAGE_SCHEMA_VERSION,
+  AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
   MEDIA_ROWS_MIGRATION_META_KEY,
 } from "../state/openclaw-agent-db-contract.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
@@ -338,6 +339,7 @@ async function migrateAgentDatabase(params: {
           const rewrittenTrajectoryRows = scanTrajectoryRows({
             database,
             pathname: params.pathname,
+            legacyTextStorage: userVersion < AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION,
             beforeRewrite,
           });
           if (mediaSchemaUpgrade) {
@@ -459,11 +461,8 @@ function migrateTranscriptArchive(
   if (!transformed.changed) {
     return false;
   }
-  const encoded = encodeArchiveContent(
-    transformed.content,
-    compressed ? "zstd" : "identity",
-    filePath,
-  );
+  const codec = compressed ? "zstd" : "identity";
+  const encoded = encodeArchiveContent(transformed.content, codec, filePath);
   options.beforeReplace?.();
   replaceFileAtomicSync({
     filePath,

@@ -25,7 +25,7 @@ import {
 } from "../chat-thread.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
 import * as groups from "./chat-message-group-view.tsx";
-import { assistantMediaPolicyKey, getChatMediaRenderVersion } from "./chat-message-media.ts";
+import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
 import { projectRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
@@ -299,7 +299,7 @@ export function projectChatTranscript(
     asyncQuestions,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onPermissionRetry: props.onPermissionRetry,
-    onRequestUpdate: props.onRequestUpdate,
+    mediaOwner: props.mediaOwner,
     resourceBasePath: props.resourceBasePath,
     mediaPolicyKey,
     connectionEpoch: props.connectionEpoch,
@@ -568,7 +568,6 @@ export function projectChatTranscript(
     getExpansionStateVersion(expandedUserMessages),
     expandedAssistantMessages,
     getExpansionStateVersion(expandedAssistantMessages),
-    getChatMediaRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
     latestBrowserTabsKey,
@@ -621,6 +620,7 @@ export function projectChatTranscript(
     props.sessionPublicOrigin,
     mediaPolicyKey,
     props.assistantAttachmentAuthToken,
+    props.mediaOwner,
     props.connectionEpoch,
     props.canvasPluginSurfaceUrl,
     props.embedSandboxMode ?? "scripts",
