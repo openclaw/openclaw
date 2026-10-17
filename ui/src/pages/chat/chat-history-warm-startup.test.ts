@@ -376,7 +376,7 @@ describe("first chat startup snapshot ordering", () => {
         pendingInputs,
         stateRevision,
         sessionInfo: initialInfo,
-        metadata: { commands, revision: stateRevision.commands },
+        metadata: { commands },
       });
       initial.connect();
       await initial.start();
@@ -446,10 +446,8 @@ describe("first chat startup snapshot ordering", () => {
           : change === "changed"
             ? [{ ...commands[0]!, name: "replacement_skill" }]
             : commands;
-      const metadata = {
-        revision: nextRevision.commands,
-        ...(nextRevision.commands === stateRevision.commands ? {} : { commands: nextCommands }),
-      };
+      const metadata =
+        nextRevision.commands === stateRevision.commands ? {} : { commands: nextCommands };
       // A sibling may publish a newer cache while this request still owns its earlier receipts.
       if (snapshot) {
         cacheChatSessionSnapshot(

@@ -341,7 +341,7 @@ export async function handleChatHistoryRequest({
       }
       // Hash the authorized wire projection: receipts never skip current-state reads or policy.
       const stateRevision = {
-        commands: startupMetadata?.commands !== undefined ? startupMetadata.revision : undefined,
+        commands: startupMetadata ? startupProjection?.commandsRevision : undefined,
         pendingInputs: sha256StableValue(projected.pendingInputs).digest,
         sessionInfo: projected.sessionInfo
           ? sha256StableValue({ ...projected.sessionInfo, snapshotAt: undefined }).digest

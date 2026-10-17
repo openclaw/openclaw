@@ -191,9 +191,9 @@ describe("gateway chat metadata runtime", () => {
         expect(first?.defaultModelCatalog).toBe(first?.sessionModelCatalog);
         expect(first?.metadata).toEqual({
           commands: [{ name: "command-1-1" }],
-          revision: compact.revision,
           swarmEnabled: true,
         });
+        expect(first?.commandsRevision).toBe(compact.revision);
       }
       expect(harness.buildProjection).toHaveBeenCalledTimes(1);
       expect(coldReads.map((mock) => mock.mock.calls)).toEqual([[], [], [], []]);

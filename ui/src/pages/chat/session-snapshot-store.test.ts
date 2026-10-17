@@ -201,6 +201,27 @@ describe("persistent chat session snapshots", () => {
     },
   );
 
+  it("restores persisted startup state from before command receipts were added", async () => {
+    const sessionKey = key("agent:main:existing-snapshot");
+    await persist(writer, sessionKey, snapshot("initialize database"));
+    const previous: ChatSessionSnapshot = {
+      ...snapshot("Existing conversation"),
+      deltaCursor: "existing-cursor",
+      historyState: {
+        stateRevision: { pendingInputs: "inputs-1", sessionInfo: "info-1" },
+        pendingInputs: { items: [], total: 0 },
+        sessionInfo: {
+          key: "agent:main:existing-snapshot",
+          kind: "direct",
+          sessionId: "session-1",
+          updatedAt: 1,
+        },
+      },
+    };
+    await putRawRecord(envelope(sessionKey, previous));
+    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(previous);
+  });
+
   it("restores bounded sidebar facts with legacy defaults and strips live-only fields", async () => {
     const store = makeStore(undefined, true);
     const sidebarKey = `${key("").split("\u0000")[0]}\u0000sidebar:operator`;

@@ -586,9 +586,10 @@ export function createGatewayChatMetadataRuntime(params: {
         ...(readParams.readPolicy === "ready"
           ? {}
           : {
+              // Command receipts must not give session worker policy a catalog lifetime.
+              commandsRevision: session.agent.revision,
               metadata: {
                 commands: session.agent.commands,
-                revision: session.agent.revision,
                 swarmEnabled: session.agent.swarmEnabled,
                 requiredWorkerInferenceProfileId: resolveRequiredWorkerInferenceProfileId(
                   readParams,
