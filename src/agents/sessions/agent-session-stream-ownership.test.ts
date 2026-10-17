@@ -32,7 +32,8 @@ it.each([
   "terminal-without-item-done-null-ciphertext",
 ] as const)(
   "persists replayable reasoning arriving at %s after an async prefix without freezing its producer",
-  async (ciphertextArrival) => {
+  async (arrival) => {
+    const hasItemDone = !arrival.startsWith("terminal-without-item-done");
     const model: Model = {
       ...baseModel,
       name: "Test model",
@@ -55,13 +56,10 @@ it.each([
       type: "reasoning",
       id: "rs_test",
       summary: [{ type: "summary_text", text: "Synthetic reasoning" }],
-      ...(ciphertextArrival === "terminal-without-item-done-absent-ciphertext"
+      ...(arrival.endsWith("absent-ciphertext")
         ? {}
         : {
-            encrypted_content:
-              ciphertextArrival === "terminal-without-item-done-null-ciphertext"
-                ? null
-                : "synthetic-ciphertext",
+            encrypted_content: arrival.endsWith("null-ciphertext") ? null : "synthetic-ciphertext",
           }),
     };
     const call = {
@@ -93,11 +91,11 @@ it.each([
     async function* events() {
       yield outputItem("added", 0, { type: "reasoning", id: "rs_test", summary: [] });
       const { encrypted_content: _ciphertext, ...unencryptedReasoning } = reasoning;
-      if (!ciphertextArrival.startsWith("terminal-without-item-done")) {
+      if (hasItemDone) {
         yield outputItem(
           "done",
           0,
-          ciphertextArrival === "item-done"
+          arrival === "item-done"
             ? { ...reasoning, encrypted_content: "streamed-ciphertext" }
             : unencryptedReasoning,
         );
@@ -216,15 +214,13 @@ it.each([
     if (thinking?.type !== "thinking") {
       throw new Error("Missing persisted reasoning");
     }
-    if (!ciphertextArrival.startsWith("terminal-without-item-done")) {
-      expect(JSON.parse(thinking.thinkingSignature ?? "null")).toMatchObject({ id: "rs_test" });
-    }
-    if (ciphertextArrival === "item-done") {
-      expect(thinking).toHaveProperty("openclawReasoningReplay", replayMetadata);
-      expect(JSON.parse(thinking.thinkingSignature ?? "null")).toHaveProperty(
-        "encrypted_content",
-        "synthetic-ciphertext",
-      );
+    if (hasItemDone) {
+      const signature = JSON.parse(thinking.thinkingSignature ?? "null");
+      expect(signature).toMatchObject({ id: "rs_test" });
+      if (arrival === "item-done") {
+        expect(thinking).toHaveProperty("openclawReasoningReplay", replayMetadata);
+        expect(signature).toHaveProperty("encrypted_content", "synthetic-ciphertext");
+      }
     }
     expect(Object.isFrozen(thinking)).toBe(true);
     expect(persisted.findLast((message) => message.role === "assistant")).toMatchObject({

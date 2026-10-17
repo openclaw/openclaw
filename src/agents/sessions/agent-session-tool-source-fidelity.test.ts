@@ -19,16 +19,13 @@ import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
   createAssistantResultStream,
+  createTestSession,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
-import { AuthStorage } from "./auth-storage.js";
-import { ModelRegistry } from "./model-registry.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
-import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
-import { SettingsManager } from "./settings-manager.js";
 import { createReadTool } from "./tools/read.js";
 
 registerAgentSessionLoopTestLifecycle();
@@ -70,10 +67,6 @@ it.each([
     id: api === "anthropic-messages" ? "claude-sonnet-4-6" : "gpt-4.1",
     baseUrl: "https://router.invalid",
   };
-  const settingsManager = SettingsManager.inMemory({
-    compaction: { enabled: false },
-    retry: { enabled: false },
-  });
   const scope = {
     agentId: "main",
     sessionId: "tool-source-fidelity",
@@ -122,22 +115,9 @@ it.each([
         ? streamAnthropic(model as Model<"anthropic-messages">, context, probeOptions)
         : streamOpenAIResponses(model as Model<"openai-responses">, context, probeOptions);
     });
-  const authStorage = AuthStorage.inMemory();
-  authStorage.setRuntimeApiKey(model.provider, "synthetic-probe-auth");
-  const modelRegistry = ModelRegistry.inMemory(authStorage);
-  modelRegistry.registerProvider(model.provider, {
-    api: model.api,
-    streamSimple: streamMocks.streamSimple,
-  });
-  const { session } = await createAgentSession({
-    systemPrompt: "Test session prompt",
-    cwd,
+  const { session } = await createTestSession({
     model,
-    thinkingLevel: "medium",
-    modelRegistry,
-    tools: [toolName],
     sessionManager,
-    settingsManager,
     resourceLoader,
     customTools: toToolDefinitions([readTool]),
   });

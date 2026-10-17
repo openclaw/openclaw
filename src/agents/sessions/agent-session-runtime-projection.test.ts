@@ -65,20 +65,6 @@ function mockExchange(content: AssistantMessage["content"], reply: string) {
     );
 }
 
-async function openTranscript(name: string) {
-  const dir = tempDirs.make(`openclaw-${name}-`);
-  const scope = {
-    agentId: "main",
-    sessionId: name,
-    sessionKey: `agent:main:${name}`,
-    storePath: path.join(dir, "sessions.json"),
-  };
-  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  const manager = SessionManager.open(scope, dir);
-  guardSessionManager(manager, { config: {}, allowedToolNames: ["lookup"] });
-  return { manager, reopen: () => SessionManager.open(scope, dir) };
-}
-
 it.for([
   { owner: "adapter", abortBeforeLaunch: false },
   { owner: "source", abortBeforeLaunch: false },
@@ -166,15 +152,11 @@ it.for([
     try {
       await withinTest(prompt, signal);
       expect(preparations).toHaveLength(1);
-      expect(order.filter((entry) => entry === "dispose")).toHaveLength(1);
-      expect(session.isStreaming).toBe(false);
-      expect(session.agent.state.pendingToolCalls.size).toBe(0);
+      expect([session.isStreaming, session.agent.state.pendingToolCalls.size]).toEqual([false, 0]);
       if (abortBeforeLaunch) {
         expect(execute).not.toHaveBeenCalled();
         expect(recorder.complete).not.toHaveBeenCalled();
         expect(updates).toEqual([]);
-        const settlement = ["start", "ready", "dispose", "end", "result"];
-        expect(order.filter((entry) => settlement.includes(entry))).toEqual(settlement);
         expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
         await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
         if (owner === "client") {
@@ -190,9 +172,6 @@ it.for([
         expect(updates).toEqual([partial]);
         expect(updates[0]).toBe(partial);
         expect(await fs.readFile(output, "utf8")).toBe(JSON.stringify(args));
-        expect(order).toEqual(
-          "start ready implementation update dispose end result agent_end agent_settled".split(" "),
-        );
         expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
         expect(streamMocks.streamSimple.mock.calls[1]?.[1].messages).toContainEqual(
           expect.objectContaining({
@@ -202,24 +181,25 @@ it.for([
           }),
         );
       }
-      expect(outcomes).toMatchObject([
-        {
-          toolCallId: "receipt-call",
-          isError: abortBeforeLaunch,
-          executionStarted: !abortBeforeLaunch,
-          ...(!abortBeforeLaunch
-            ? { result: result(JSON.stringify(args), { written: true }) }
-            : {}),
-        },
-      ]);
-      expect(order.slice(-2)).toEqual(["agent_end", "agent_settled"]);
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0]).toMatchObject({
+        toolCallId: "receipt-call",
+        isError: abortBeforeLaunch,
+        executionStarted: !abortBeforeLaunch,
+        ...(!abortBeforeLaunch ? { result: result(JSON.stringify(args), { written: true }) } : {}),
+      });
+      const lifecycle = abortBeforeLaunch
+        ? "start ready dispose end result agent_end agent_settled"
+        : "start ready implementation update dispose end result agent_end agent_settled";
+      expect(order.filter((step) => step !== "reserve" && step !== "discard")).toEqual(
+        lifecycle.split(" "),
+      );
     } finally {
       session.agent.abort();
       try {
         await withinTest(Promise.allSettled([prompt, session.agent.waitForIdle()]), signal);
       } finally {
         unsubscribe();
-        session.dispose();
       }
     }
   },
@@ -229,7 +209,16 @@ it.each(["value", "apiKey", "account"])(
   "preserves %s arguments, correlation IDs and delivery facts through persistence",
   async (field) => {
     const client = field !== "value";
-    const { manager: sessionManager, reopen } = await openTranscript("runtime-projection");
+    const dir = tempDirs.make("openclaw-runtime-projection-");
+    const scope = {
+      agentId: "main",
+      sessionId: "runtime-projection",
+      sessionKey: "agent:main:runtime-projection",
+      storePath: path.join(dir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const sessionManager = SessionManager.open(scope, dir);
+    guardSessionManager(sessionManager, { config: {}, allowedToolNames: ["lookup"] });
     const calls = vi.fn();
     const ids = client
       ? ["call_0", "call_1"]
@@ -290,7 +279,7 @@ it.each(["value", "apiKey", "account"])(
     });
     await session.prompt(client ? "Look up alpha and beta." : "Look up both records.");
     expect(streamMocks.streamSimple).toHaveBeenCalledTimes(client ? 1 : 2);
-    const stored = reopen()
+    const stored = SessionManager.open(scope, dir)
       .getBranch()
       .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
     const results = ids.map((toolCallId, index) => ({
@@ -307,15 +296,13 @@ it.each(["value", "apiKey", "account"])(
           }
         : result(values[index]!, { value: values[index] })),
     }));
+    const resultHistory = client ? session.state.messages : stored;
+    expect(resultHistory.filter((message) => message.role === "toolResult")).toMatchObject(results);
     if (client) {
       expect(calls.mock.calls).toEqual(values.map((value) => ["lookup", { [field]: value }]));
-      expect(
-        session.state.messages.filter((message) => message.role === "toolResult"),
-      ).toMatchObject(results);
       expect([session.isStreaming, session.agent.state.pendingToolCalls.size]).toEqual([false, 0]);
     } else {
       expect(started).toEqual(ids);
-      expect(stored.filter((message) => message.role === "toolResult")).toMatchObject(results);
     }
     const expected = {
       content: [
@@ -324,11 +311,8 @@ it.each(["value", "apiKey", "account"])(
       ],
       ...(client ? { openclawDelivery: { replyToCurrent: true } } : {}),
     };
-    if (client) {
-      expect(session.state.messages.find((message) => message.role === "assistant")).toMatchObject(
-        expected,
-      );
+    for (const history of client ? [session.state.messages, stored] : [stored]) {
+      expect(history.find((message) => message.role === "assistant")).toMatchObject(expected);
     }
-    expect(stored.find((message) => message.role === "assistant")).toMatchObject(expected);
   },
 );

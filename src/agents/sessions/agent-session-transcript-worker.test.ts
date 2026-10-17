@@ -349,6 +349,10 @@ it("keeps the active turn and all steers after an earlier steer receipt rewrites
     const releaseTool = createDeferredCore();
     let requests = 0;
     const words = ["W0XYZ", "W1XYZ", "W2XYZ", "W3XYZ", "W4XYZ"];
+    const inputs = words.map((word, index) => ({
+      text: `Also include the word ${word}.`,
+      idempotencyKey: `steer-${index}`,
+    }));
     streamMocks.streamSimple.mockImplementation((model, context) => {
       requests += 1;
       const text = context.messages
@@ -432,39 +436,33 @@ it("keeps the active turn and all steers after an earlier steer receipt rewrites
         active,
         "Active turn never ran its tool",
       );
-      const recorders = words.map((word, index) =>
-        createUserTurnTranscriptRecorder({
-          input: { text: `Also include the word ${word}.`, idempotencyKey: `steer-${index}` },
+      const recorders = inputs.map((input) => ({
+        input,
+        recorder: createUserTurnTranscriptRecorder({
+          input: { ...input },
           target: { ...target, sessionEntry: entry },
         }),
-      );
+      }));
       const staged = await Promise.all(
-        recorders.map((recorder, index) =>
-          recorder.stageApproved!({ runId: `steer-${index}`, assertCurrent() {} }),
+        recorders.map(({ recorder, input }) =>
+          recorder.stageApproved!({ runId: input.idempotencyKey, assertCurrent() {} }),
         ),
       );
       expect(staged).toEqual(words.map(() => true));
       const injectionTarget = replyRunRegistry.resolveCurrentMessageInjectionTarget(
         target.sessionKey,
       )!;
-      attempts.push(
-        ...(await Promise.all(
-          recorders.map((recorder, index) =>
-            beginReplyMessageInjectionTarget(
-              injectionTarget,
-              `Also include the word ${words[index]}.`,
-              {
-                steeringMode: "all",
-                isInboundUserMessage: true,
-                toolAuthorityFingerprint: "steer-fixture-authority",
-                waitForTranscriptCommit: true,
-                queueIdentity: `steer-${index}`,
-                userTurnTranscriptRecorder: recorder,
-              },
-            ),
-          ),
-        )),
+      const queued = recorders.map(({ recorder, input }) =>
+        beginReplyMessageInjectionTarget(injectionTarget, input.text, {
+          steeringMode: "all",
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: "steer-fixture-authority",
+          waitForTranscriptCommit: true,
+          queueIdentity: input.idempotencyKey,
+          userTurnTranscriptRecorder: recorder,
+        }),
       );
+      attempts.push(...(await Promise.all(queued)));
       expect(await Promise.all(attempts.map((attempt) => attempt.acceptance))).toEqual(
         words.map(() => true),
       );
@@ -485,14 +483,14 @@ it("keeps the active turn and all steers after an earlier steer receipt rewrites
           event.type === "message" && event.message.role === "user" ? [event.message] : [],
         );
       expect(users.slice(1)).toMatchObject(
-        words.map((word, index) => ({
+        inputs.map(({ text, idempotencyKey }) => ({
           role: "user",
-          content: `Also include the word ${word}.`,
-          idempotencyKey: `steer-${index}`,
+          content: text,
+          idempotencyKey,
           __openclaw: { steerTargetRunId: "active-run" },
         })),
       );
-      expect(recorders.every((recorder) => recorder.isPendingInputConsumed?.())).toBe(true);
+      expect(recorders.every(({ recorder }) => recorder.isPendingInputConsumed?.())).toBe(true);
     } finally {
       releaseTool.resolve();
       await Promise.allSettled([active, ...attempts.map((attempt) => attempt.outcome)]);
