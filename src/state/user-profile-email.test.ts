@@ -32,9 +32,7 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => {
   return {
     ...actual,
     runOpenClawStateWorkerOperation: (
-      context: Parameters<typeof actual.runOpenClawStateWorkerOperation>[0],
-      operation: Parameters<typeof actual.runOpenClawStateWorkerOperation>[1],
-      options: Parameters<typeof actual.runOpenClawStateWorkerOperation>[2],
+      ...[context, operation, options]: Parameters<typeof actual.runOpenClawStateWorkerOperation>
     ) => {
       const held = delivery.heldSettlement;
       const createAdmission = options?.createAdmission;
@@ -71,9 +69,21 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => {
   };
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   delivery.afterResult = undefined;
   delivery.heldSettlement = undefined;
 });
+
+const notFound = "user profile not found";
+function bindingId(profileId: string, email: string) {
+  const binding = readUserProfileEmailBindings(openOpenClawStateDatabase().db, profileId).find(
+    (entry) => entry.email === email,
+  )?.bindingId;
+  if (!binding) {
+    throw new Error("Expected committed email binding");
+  }
+  return binding;
+}
 
 it.each(["lost during close", "after alias reassignment"] as const)(
   "publishes current email bindings when the creation reply arrives %s",
@@ -93,10 +103,7 @@ it.each(["lost during close", "after alias reassignment"] as const)(
             throw new Error("synthetic profile result loss");
           }
           const created = ensureProfileForEmail("new@example.test");
-          originalBinding = readUserProfileEmailBindings(
-            openOpenClawStateDatabase().db,
-            created.id,
-          )[0]?.bindingId;
+          originalBinding = bindingId(created.id, "new@example.test");
           linkEmail("retained@example.test", created.id);
           linkEmail("new@example.test", existing.id);
           linkEmail("new@example.test", created.id);
@@ -121,9 +128,7 @@ it.each(["lost during close", "after alias reassignment"] as const)(
           } else {
             expect(current.emailBindingIds).toHaveLength(2);
             expect(current.emailBindingIds).not.toContain(originalBinding);
-            expect(() => current.readCurrentFacts([originalBinding!])).toThrow(
-              "user profile not found",
-            );
+            expect(() => current.readCurrentFacts([originalBinding!])).toThrow(notFound);
           }
           expect(() => current.readCurrentFacts(current.emailBindingIds)).not.toThrow();
         } finally {
@@ -151,7 +156,6 @@ it.each(["native supersession", "accepted precursor"] as const)(
           : ensureProfileForTailscaleIdentity({ login: "target@github" });
       const sourceReader = await prepareUserProfileIdentity(source.id);
       const targetReader = await prepareUserProfileIdentity(target.id);
-      const database = openOpenClawStateDatabase();
       const held: Array<{
         release: () => void;
         result: ReturnType<typeof linkCanonicalUserProfileEmail>;
@@ -170,13 +174,7 @@ it.each(["native supersession", "accepted precursor"] as const)(
         return pending;
       };
       try {
-        const initial = readUserProfileEmailBindings(database.db, source.id).find(
-          (binding) => binding.email === email,
-        );
-        if (!initial?.bindingId) {
-          throw new Error("Expected the original email binding");
-        }
-        const initialBindingId = initial.bindingId;
+        const initialBindingId = bindingId(source.id, email);
         const sourceBindings = sourceReader.emailBindingIds.filter((id) => id !== initialBindingId);
         const targetBindings = targetReader.emailBindingIds;
         const first = await holdLink(target.id);
@@ -185,40 +183,29 @@ it.each(["native supersession", "accepted precursor"] as const)(
         }
         const finalProfileId = order === "native supersession" ? target.id : source.id;
         const second = await holdLink(finalProfileId);
-        const committed = readUserProfileEmailBindings(database.db, finalProfileId).find(
-          (binding) => binding.email === email,
-        );
-        if (!committed?.bindingId) {
-          throw new Error("Expected the latest committed email binding");
-        }
+        const committed = bindingId(finalProfileId, email);
         first.release();
         await first.result;
         second.release();
         await second.result;
 
-        const native = vi.spyOn(database.db, "prepare");
-        try {
-          const current = order === "native supersession" ? targetReader : sourceReader;
-          expect(current.readCurrentFacts([committed.bindingId]).profile.emails).toContain(email);
-          expect(() => sourceReader.readCurrentFacts([initialBindingId])).toThrow(
-            "user profile not found",
-          );
-          expect(() => sourceReader.readCurrentFacts(sourceBindings)).not.toThrow();
-          if (order === "accepted precursor") {
-            expect(() => targetReader.readCurrentFacts()).toThrow("user profile not found");
-          } else {
-            expect(targetReader.readCurrentFacts(targetBindings).profile.emails).toEqual([
-              email,
-              "target-retained@example.test",
-            ]);
-            expect(sourceReader.readCurrentFacts().profile.emails).toEqual([
-              "source-retained@example.test",
-            ]);
-          }
-          expect(native).not.toHaveBeenCalled();
-        } finally {
-          native.mockRestore();
+        const native = vi.spyOn(openOpenClawStateDatabase().db, "prepare");
+        const current = order === "native supersession" ? targetReader : sourceReader;
+        expect(current.readCurrentFacts([committed]).profile.emails).toContain(email);
+        expect(() => sourceReader.readCurrentFacts([initialBindingId])).toThrow(notFound);
+        expect(() => sourceReader.readCurrentFacts(sourceBindings)).not.toThrow();
+        if (order === "accepted precursor") {
+          expect(() => targetReader.readCurrentFacts()).toThrow(notFound);
+        } else {
+          expect(targetReader.readCurrentFacts(targetBindings).profile.emails).toEqual([
+            email,
+            "target-retained@example.test",
+          ]);
+          expect(sourceReader.readCurrentFacts().profile.emails).toEqual([
+            "source-retained@example.test",
+          ]);
         }
+        expect(native).not.toHaveBeenCalled();
       } finally {
         delivery.heldSettlement = undefined;
         for (const pending of held) {

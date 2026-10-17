@@ -1,7 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -41,26 +39,14 @@ import {
 } from "./user-profile-writes.worker.js";
 import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
+import { useUserStateFixture } from "./user-state.test-support.js";
 
-const roots = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
-    for (const release of releases.splice(0)) {
-      release();
-    }
-    vi.restoreAllMocks();
-    for (const pathname of paths.splice(0)) {
-      closeOpenClawStateDatabaseByPath(pathname);
-    }
-    cleanup();
-  });
-});
-const paths: string[] = [];
 const releases: (() => void)[] = [];
-function fixture() {
-  const pathname = path.join(roots.make("resident-profiles-"), "openclaw.sqlite");
-  paths.push(pathname);
-  return { path: pathname };
-}
+const fixture = useUserStateFixture("resident-profiles-", () => {
+  for (const release of releases.splice(0)) {
+    release();
+  }
+});
 
 async function prepareIdentity(...args: Parameters<typeof prepareUserProfileIdentity>) {
   const prepared = await prepareUserProfileIdentity(...args);
@@ -72,6 +58,21 @@ async function prepareCatalog(options: ReturnType<typeof fixture>) {
   const catalog = await prepareUserProfileCatalog(options);
   releases.push(catalog.release);
   return catalog;
+}
+
+function syncAccount(
+  options: ReturnType<typeof fixture>,
+  email: string,
+  accountId: number,
+  login: string,
+) {
+  return syncGitHubIdentity(
+    {
+      identity: { accountId, login },
+      authenticationAlias: { kind: "email", email },
+    },
+    options,
+  );
 }
 
 describe("resident profile display and reference catalog", () => {
@@ -194,13 +195,7 @@ describe("resident profile display and reference catalog", () => {
       linkEmail("retained@example.test", first.id, options);
       const target = ensureProfileForEmail("target@example.test", options);
       if (producer === "github") {
-        syncGitHubIdentity(
-          {
-            identity: { accountId: 40, login: "first-account" },
-            authenticationAlias: { kind: "email", email },
-          },
-          options,
-        );
+        syncAccount(options, email, 40, "first-account");
       }
       const prepared = await prepareIdentity(first.id, options);
       const bindings = prepared.emailBindingIds;
@@ -255,13 +250,7 @@ describe("resident profile display and reference catalog", () => {
         linkEmail(email, target.id, options);
         linkEmail(email, first.id, options);
       } else if (producer === "github") {
-        syncGitHubIdentity(
-          {
-            identity: { accountId: 41, login: "second-account" },
-            authenticationAlias: { kind: "email", email },
-          },
-          options,
-        );
+        syncAccount(options, email, 41, "second-account");
       } else {
         migrateLegacyTailscaleProfileIdentities(options);
         linkEmail(email, first.id, options);
@@ -343,21 +332,14 @@ describe("resident profile display and reference catalog", () => {
       const first = ensureProfileForEmail("first@example.test", options);
       const second = ensureProfileForEmail("second@example.test", options);
       const third = ensureProfileForEmail("third@example.test", options);
-      const identity = { accountId: 41, login: "target-profile" };
       if (producer === "github") {
-        syncGitHubIdentity(
-          { identity, authenticationAlias: { kind: "email", email: "second@example.test" } },
-          options,
-        );
+        syncAccount(options, "second@example.test", 41, "target-profile");
       }
       await prepareCatalog(options);
       const merge = () =>
         producer === "email"
           ? linkEmail("first@example.test", second.id, options)
-          : syncGitHubIdentity(
-              { identity, authenticationAlias: { kind: "email", email: "first@example.test" } },
-              options,
-            );
+          : syncAccount(options, "first@example.test", 41, "target-profile");
       const seen = vi.fn(() => readResidentUserProfileAliases(second.id, options));
       releases.push(sessionChanges.subscribe(seen));
       expect(() =>
@@ -440,16 +422,11 @@ describe("resident profile display and reference catalog", () => {
       );
     `);
     const blobId = new Uint8Array([1, 2, 3]);
-    nonStrictDb
-      .prepare(
-        "INSERT INTO user_profiles (id, display_name, merged_into, updated_at) VALUES (?, ?, ?, 1)",
-      )
-      .run(blobId, "Native BLOB target", null);
-    nonStrictDb
-      .prepare(
-        "INSERT INTO user_profiles (id, display_name, merged_into, updated_at) VALUES (?, ?, ?, 1)",
-      )
-      .run("blob-alias", "Alias", blobId);
+    const insert = nonStrictDb.prepare(
+      "INSERT INTO user_profiles (id, display_name, merged_into, updated_at) VALUES (?, ?, ?, 1)",
+    );
+    insert.run(blobId, "Native BLOB target", null);
+    insert.run("blob-alias", "Alias", blobId);
     expect(
       getUserProfileDisplaysNative(["blob-alias"], nonStrictOptions).get("blob-alias"),
     ).toMatchObject({ displayName: "Native BLOB target" });
@@ -517,8 +494,7 @@ describe("resident profile display and reference catalog", () => {
     const target = ensureProfileForEmail("alias-target@example.test", canonical);
     setUserProfileRole(source.id, "reader", canonical);
     closeOpenClawStateDatabaseByPath(canonical.path);
-    const alias = { path: path.join(roots.make("resident-profile-alias-"), "alias.sqlite") };
-    paths.push(alias.path);
+    const alias = fixture("alias.sqlite");
     fs.symlinkSync(canonical.path, alias.path);
     const other = fixture();
     const privateProfile = ensureProfileForEmail("private@example.test", other);

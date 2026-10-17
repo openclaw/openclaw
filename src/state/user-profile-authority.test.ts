@@ -1,7 +1,5 @@
-import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
@@ -18,49 +16,49 @@ import {
 } from "./user-profile-events.js";
 import { setUserProfileRole } from "./user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
+import { useUserStateFixture } from "./user-state.test-support.js";
 
-const paths: string[] = [];
-const roots = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    for (const pathname of paths.splice(0)) {
-      await closeOpenClawStateDatabaseByPathAsync(pathname);
-    }
-    cleanup();
-  });
-});
+const stateOptions = useUserStateFixture("profile-authority-");
 
-async function fixture() {
-  const options = { path: path.join(roots.make("profile-authority-"), "openclaw.sqlite") };
-  paths.push(options.path);
+async function fixture(validateSchema = false) {
+  const options = stateOptions();
   const profile = ensureProfileForEmail("person@example.test", options);
   const other = ensureProfileForEmail("other@example.test", options);
   const context = captureOpenClawStateWorkerContext(options);
+  if (validateSchema) {
+    assertExistingOpenClawStateRuntimeSchema(
+      requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db),
+      options.path,
+      context.stateIntegrity,
+    );
+  }
   const authority = await captureUserProfileAuthorityRead(context.admission);
   const bound = authority.bind(profile.id)!;
   const unrelated = authority.bind(other.id)!;
   const settled = authority.transferSettled(profile.id);
-  return { options, profile, context, authority, bound, unrelated, settled };
+  const check = (
+    binding: ReturnType<typeof readProfileAuthority>,
+    settlement: ReturnType<typeof readProfileAuthority>,
+  ) => {
+    expect([
+      bound(),
+      readProfileAuthority(bound.transferable),
+      readProfileAuthority(settled),
+    ]).toEqual([binding === "current", binding, settlement]);
+  };
+  return { options, profile, context, authority, bound, unrelated, settled, check };
 }
 
 it("preserves profile authority through unrelated feature schema admission", async () => {
-  const { options, profile, context } = await fixture();
+  const { options, profile, authority, bound, check } = await fixture(true);
   const { db } = openOpenClawStateDatabase(options);
-  assertExistingOpenClawStateRuntimeSchema(
-    requireNativeSqliteDatabase(db),
-    options.path,
-    context.stateIntegrity,
-  );
-  const authority = await captureUserProfileAuthorityRead(context.admission);
-  const bound = authority.bind(profile.id)!;
-  const settled = authority.transferSettled(profile.id);
+  const checkSchema = () => {
+    runOpenClawStateWriteTransaction(() => ensureSecretStoreSchema(db), options);
+    check("current", "current");
+    expect(() => authority.assertSettled(profile.id)).not.toThrow();
+  };
   expect(bound()).toBe(true);
-
-  runOpenClawStateWriteTransaction(() => ensureSecretStoreSchema(db), options);
-  expect(bound()).toBe(true);
-  expect(readProfileAuthority(bound.transferable)).toBe("current");
-  expect(readProfileAuthority(settled)).toBe("current");
-  expect(() => authority.assertSettled(profile.id)).not.toThrow();
+  checkSchema();
 
   const repeatedDdl: string[] = [];
   const observation = observeHostDataSql((sql, database) => {
@@ -69,35 +67,27 @@ it("preserves profile authority through unrelated feature schema admission", asy
     }
   });
   try {
-    runOpenClawStateWriteTransaction(() => ensureSecretStoreSchema(db), options);
-    expect(bound()).toBe(true);
-    expect(readProfileAuthority(bound.transferable)).toBe("current");
-    expect(readProfileAuthority(settled)).toBe("current");
-    expect(() => authority.assertSettled(profile.id)).not.toThrow();
+    checkSchema();
     expect(repeatedDdl).toEqual([]);
   } finally {
     observation.restore();
   }
 
   setUserProfileRole(profile.id, "member", options);
-  expect(bound()).toBe(false);
-  expect(readProfileAuthority(bound.transferable)).toBe("revoked");
-  expect(readProfileAuthority(settled)).toBe("current");
+  check("revoked", "current");
 });
 
 it.each([false, true])(
   "fences transferred readers before native COMMIT (rollback=%s)",
   async (rollback) => {
-    const { options, profile, bound, unrelated, settled } = await fixture();
+    const { options, profile, unrelated, check } = await fixture();
     const { db } = openOpenClawStateDatabase(options);
     const execute = db.exec.bind(db);
     let commits = 0;
     vi.spyOn(db, "exec").mockImplementation((sql) => {
       if (sql === "COMMIT") {
         commits += 1;
-        expect(readProfileAuthority(bound.transferable)).toBe("pending");
-        expect(readProfileAuthority(settled)).toBe("pending");
-        expect(bound()).toBe(false);
+        check("pending", "pending");
         expect(unrelated()).toBe(true);
         if (rollback) {
           throw new Error("synthetic native COMMIT refusal");
@@ -109,8 +99,7 @@ it.each([false, true])(
       runOpenClawStateWriteTransaction(() => {
         setUserProfileRole(profile.id, "member", options);
         // A tentative SQL update can still roll back without retiring its bound authority.
-        expect(bound()).toBe(true);
-        expect(readProfileAuthority(bound.transferable)).toBe("current");
+        check("current", "current");
       }, options);
     if (rollback) {
       expect(mutate).toThrow("synthetic native COMMIT refusal");
@@ -118,8 +107,7 @@ it.each([false, true])(
       mutate();
     }
     expect(commits).toBe(1);
-    expect(readProfileAuthority(bound.transferable)).toBe(rollback ? "current" : "revoked");
-    expect(readProfileAuthority(settled)).toBe("current");
+    check(rollback ? "current" : "revoked", "current");
     expect(unrelated()).toBe(true);
   },
 );
@@ -153,28 +141,24 @@ it("keeps unknown native COMMIT authority closed before disposing the connection
 });
 
 it("keeps exact bindings retired while current-fact readers follow known settlement", async () => {
-  const { context, profile, authority, bound, unrelated, settled } = await fixture();
-  const mutation = fenceUserProfileMutationAuthority(context.admission, {
-    profiles: [profile.id],
-    identities: [],
-    channels: [],
-  });
-  expect(readProfileAuthority(bound.transferable)).toBe("revoked");
-  expect(readProfileAuthority(settled)).toBe("pending");
+  const { context, profile, authority, unrelated, check } = await fixture();
+  const fence = () =>
+    fenceUserProfileMutationAuthority(context.admission, {
+      profiles: [profile.id],
+      identities: [],
+      channels: [],
+    });
+  const mutation = fence();
+  check("revoked", "pending");
   expect(unrelated()).toBe(true);
   mutation.settle(true);
-  expect(readProfileAuthority(bound.transferable)).toBe("revoked");
-  expect(readProfileAuthority(settled)).toBe("current");
+  check("revoked", "current");
   expect(() => authority.assertSettled(profile.id)).not.toThrow();
 
-  const unknown = fenceUserProfileMutationAuthority(context.admission, {
-    profiles: [profile.id],
-    identities: [],
-    channels: [],
-  });
+  const unknown = fence();
   unknown.settle(false);
   unknown.settle(true);
-  expect(readProfileAuthority(settled)).toBe("uncertain");
+  check("revoked", "uncertain");
   expect(() => authority.assertSettled(profile.id)).toThrow("requires canonical recovery");
 });
 
@@ -195,8 +179,7 @@ it("rejects late registration after retirement and never revives a previous stor
 });
 
 it("retires pre-creation authority when the same admission becomes a physical file", async () => {
-  const options = { path: path.join(roots.make("profile-authority-create-"), "openclaw.sqlite") };
-  paths.push(options.path);
+  const options = stateOptions();
   const context = captureOpenClawStateWorkerContext(options);
   expect(context.admission.identity.key).toMatch(/^path:/);
   const before = await captureUserProfileAuthorityRead(context.admission);
