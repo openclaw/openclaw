@@ -118,7 +118,7 @@ describe("created initial target in selected mode", () => {
       const bridge = new ExtensionRelayBridge();
       connectExtension(bridge, h);
       const client = connectCdpClient(bridge);
-      const request = client.requestResult;
+      const request: typeof client.requestResult = (...args) => client.requestResult(...args);
       try {
         await request("Target.setAutoAttach", { autoAttach: true, flatten: true });
         const staleTabs = await h.tabsQuery();

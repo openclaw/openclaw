@@ -26,7 +26,7 @@ function captureCardsList(store: WorkboardStore) {
 describe("workboard card list revisions", () => {
   it("bounds card pages and invalidates the first page after a committed update", async () => {
     const { store, stores } = createWorkboardSqliteTestHarness();
-    for (let index = 0; index < 101; index++) {
+    for (let index = 0; index < 105; index++) {
       const id = `card-${String(index).padStart(3, "0")}`;
       await stores.cards.register(id, {
         version: 1,
@@ -49,9 +49,15 @@ describe("workboard card list revisions", () => {
     expect(first.nextCursor).toEqual({ position: 0, createdAt: 1, id: "card-099" });
     expect(first.cards[99].metadata.comments[0].body).toBe("Comment 99");
     const second = await list({ after: first.nextCursor, sinceRevision: first.revision });
-    expect(second.cards.map((card: { id: string }) => card.id)).toEqual(["card-100"]);
+    expect(second.cards.map((card: { id: string }) => card.id)).toEqual([
+      "card-100",
+      "card-101",
+      "card-102",
+      "card-103",
+      "card-104",
+    ]);
     expect(second.nextCursor).toBeUndefined();
-    expect(second.boards[0].total).toBe(101);
+    expect(second.boards[0].total).toBe(105);
     await store.update("card-000", { title: "Changed on the Gateway" });
     const refreshed = await list({ sinceRevision: first.revision });
     expect(refreshed.cards[0].title).toBe("Changed on the Gateway");

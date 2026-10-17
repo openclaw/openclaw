@@ -133,7 +133,11 @@ describe("release approval receipt", () => {
   ])(
     "creates receipts only with valid authority: %j",
     (override, error, approvals = [approved()]) => {
-      const create = () => createReleaseApprovalReceipt({ ...env, ...override }, () => approvals);
+      const create = () =>
+        createReleaseApprovalReceipt({ ...env, ...override }, (path: string) => {
+          expect(path).toBe("actions/runs/10/approvals");
+          return approvals;
+        });
       if (error) {
         expect(create).toThrow(error);
       } else {

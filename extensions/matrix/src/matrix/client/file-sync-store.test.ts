@@ -188,8 +188,9 @@ describe("SqliteBackedMatrixSyncStore", () => {
     const writer = await openStore();
     await writer.setSyncData(structuredClone(response));
     await writer.flush();
-    assert(response.rooms.join);
-    response.rooms.join["!room:example.org"]["org.matrix.msc4222.state_after"] = { events: [] };
+    const room = response.rooms.join?.["!room:example.org"];
+    assert(room);
+    room["org.matrix.msc4222.state_after"] = { events: [] };
     const expected = {
       nextBatch: "large-cursor",
       accountData: response.account_data.events,
