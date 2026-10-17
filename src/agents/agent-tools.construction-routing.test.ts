@@ -109,6 +109,24 @@ describe("createOpenClawCodingTools cron scope", () => {
     },
   );
 
+  it("lets the owner reach a retained owner-only tool and stops a non-owner before preparation", async () => {
+    for (const senderIsOwner of [true, false]) {
+      mocks.onToolExecute.mockClear();
+      mocks.onToolPrepare.mockClear();
+      const tools = createOpenClawCodingTools({ senderIsOwner });
+      const gateway = tools.find((tool) => tool.name === "gateway")!;
+      const result = await gateway.execute(`dispatch-${senderIsOwner}`, { action: "config.get" });
+      if (senderIsOwner) {
+        expect(mocks.onToolPrepare).toHaveBeenCalledOnce();
+        expect(mocks.onToolExecute).toHaveBeenCalledOnce();
+      } else {
+        expect(result.details).toMatchObject({ gated: true });
+        expect(mocks.onToolPrepare).not.toHaveBeenCalled();
+        expect(mocks.onToolExecute).not.toHaveBeenCalled();
+      }
+    }
+  });
+
   it("keeps self-scoped automation inspection available without sender ownership", async () => {
     const tools = createOpenClawCodingTools({
       trigger: "cron",

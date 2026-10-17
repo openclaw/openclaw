@@ -1,4 +1,7 @@
-import { gateAgentToolExecution } from "./agent-tool-availability.js";
+import {
+  gateAgentToolExecution,
+  markAgentToolExecutionUnavailable,
+} from "./agent-tool-availability.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -26,19 +29,20 @@ export function resolveTurnToolSurface(params: {
   const offered = (params.sessionTools ?? params.turnTools).filter(
     (tool) => tool !== params.withheld,
   );
-  const tools = offered.map((tool) =>
-    turnAuthorized(tool)
-      ? tool
-      : copyAgentToolMetadata(
-          tool,
-          gateAgentToolExecution(
-            tool,
-            params.ownerOnlyDenied.has(tool.name)
-              ? `${tool.name} needs the owner's authority, and this turn was not started by the owner. Do not retry ${tool.name}.`
-              : `${tool.name} is outside the authority this completion turn carries from its requester. Do not retry ${tool.name}.`,
-          ),
-        ),
-  );
+  const tools = offered.map((tool) => {
+    if (turnAuthorized(tool)) {
+      return tool;
+    }
+    const gated = gateAgentToolExecution(
+      tool,
+      params.ownerOnlyDenied.has(tool.name)
+        ? `${tool.name} needs the owner's authority, and this turn was not started by the owner. Do not retry ${tool.name}.`
+        : `${tool.name} is outside the authority this completion turn carries from its requester. Do not retry ${tool.name}.`,
+    );
+    // Copying hook metadata also copies the availability binding; re-mark the denial
+    // so dependent affordances (for example collector spawns) never treat it as callable.
+    return markAgentToolExecutionUnavailable(copyAgentToolMetadata(tool, gated));
+  });
   return {
     tools,
     turnAuthorized,
