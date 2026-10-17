@@ -54,6 +54,10 @@ function entry(): SessionEntry {
     },
   };
 }
+async function expectNoContinuation(params: Parameters<typeof enqueueGoalContinuation>[0]) {
+  expect(await enqueueGoalContinuation(params)).toBe(false);
+  expect(enqueueFollowupRun).not.toHaveBeenCalled();
+}
 function fixture() {
   const controller = new AbortController();
   const operation = createReplyOperation({
@@ -116,30 +120,19 @@ describe("Goal continuation eligibility", () => {
   it("rejects replaced, cleared, reset, stopped and external-runtime sessions", () => {
     const current = entry();
     expect(isGoalContinuationCurrent(identity, current)).toBe(true);
-    expect(isGoalContinuationCurrent(identity, undefined)).toBe(false);
-    expect(isGoalContinuationCurrent(identity, { ...current, goal: undefined })).toBe(false);
-    expect(isGoalContinuationCurrent(identity, { ...current, sessionId: "replacement" })).toBe(
-      false,
-    );
-    expect(
-      isGoalContinuationCurrent(identity, { ...current, lifecycleRevision: "revision-3" }),
-    ).toBe(false);
-    expect(isGoalContinuationCurrent(identity, { ...current, abortedLastRun: true })).toBe(false);
-    expect(isGoalContinuationCurrent(identity, { ...current, agentHarnessId: "codex" })).toBe(
-      false,
-    );
-    expect(
-      isGoalContinuationCurrent(identity, {
-        ...current,
-        goal: { ...current.goal!, id: "new-goal" },
-      }),
-    ).toBe(false);
-    expect(
-      isGoalContinuationCurrent(identity, {
-        ...current,
-        goal: { ...current.goal!, updatedAt: 3000 },
-      }),
-    ).toBe(true);
+    for (const replacement of [
+      undefined,
+      { ...current, goal: undefined },
+      { ...current, sessionId: "replacement" },
+      { ...current, lifecycleRevision: "revision-3" },
+      { ...current, abortedLastRun: true },
+      { ...current, agentHarnessId: "codex" },
+      { ...current, goal: { ...current.goal!, id: "new-goal" } },
+    ]) {
+      expect(isGoalContinuationCurrent(identity, replacement)).toBe(false);
+    }
+    const refreshed = { ...current, goal: { ...current.goal!, updatedAt: 3000 } };
+    expect(isGoalContinuationCurrent(identity, refreshed)).toBe(true);
   });
   it("observes fresh token exhaustion before scheduling another turn", () => {
     const current = entry();
@@ -161,8 +154,7 @@ describe("Goal continuation eligibility", () => {
   ])("preserves an existing continuation or failure owner: %j", async (meta) => {
     const f = fixture();
     f.params.result = { ...normal, meta: { ...normal.meta, ...meta } };
-    expect(await enqueueGoalContinuation(f.params)).toBe(false);
-    expect(enqueueFollowupRun).not.toHaveBeenCalled();
+    await expectNoContinuation(f.params);
   });
   it("does not nudge deterministic approval prompts or returned errors", async () => {
     const f = fixture();
@@ -198,8 +190,7 @@ describe("Goal queue custody", () => {
   it("leaves announcing children from earlier turns with their continuation owner", async () => {
     const f = fixture();
     children.mockResolvedValue([{ runId: "earlier-child" }]);
-    expect(await enqueueGoalContinuation(f.params)).toBe(false);
-    expect(enqueueFollowupRun).not.toHaveBeenCalled();
+    await expectNoContinuation(f.params);
   });
   it("allocates each successor before settling the previous one-shot delivery", async () => {
     const delivered = vi.fn(async () => ({ kind: "delivered" as const }));

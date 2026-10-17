@@ -1,4 +1,3 @@
-// Tests inbound context text built from sender and conversation metadata.
 import { describe, expect, it } from "vitest";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext } from "../templating.js";
@@ -6,6 +5,11 @@ import { appendChannelPromptContext } from "./channel-prompt-context.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 import { finalizeInboundContext, finalizeInboundContextForSdk } from "./inbound-context.js";
 import { buildInboundUserContextPrefix } from "./inbound-meta.js";
+
+const rawContext = [{ label: "raw", payload: { ok: true } }];
+function finalize(fields: MsgContext) {
+  return finalizeInboundContext({ Body: "hello", ...fields });
+}
 
 describe("inbound context contract (providers + extensions)", () => {
   it.each([
@@ -51,7 +55,7 @@ describe("inbound context contract (providers + extensions)", () => {
   });
 
   it("finalizes the group text and conversation contract", () => {
-    const ctx = finalizeInboundContext({
+    const ctx = finalize({
       ChatType: "group",
       From: "test:123",
       Body: "[Test] hello",
@@ -68,12 +72,9 @@ describe("inbound context contract (providers + extensions)", () => {
       CommandAuthorized: false,
     });
   });
-});
-
-describe("finalizeInboundContext text facts", () => {
   it("keeps suppressed text command input literal across repeated finalization", () => {
     const body = "/new keep this as task text";
-    const ctx = finalizeInboundContext({
+    const ctx = finalize({
       Body: body,
       RawBody: body,
       CommandBody: body,
@@ -108,21 +109,14 @@ describe("finalizeInboundContext text facts", () => {
   });
 
   it("preserves an explicitly empty raw projection", () => {
-    const ctx = finalizeInboundContext({
+    const ctx = finalize({
       Body: "fallback body",
       BodyForCommands: "/new payload",
       RawBody: "",
     });
 
-    expect(ctx).toMatchObject({
-      commandText: "/new payload",
-      agentText: "",
-      rawText: "",
-    });
+    expect(ctx).toMatchObject({ commandText: "/new payload", agentText: "", rawText: "" });
   });
-});
-
-describe("finalizeInboundContext media cleanup", () => {
   it("restores legacy media projections only for the shipped SDK adapter", () => {
     const ctx = finalizeInboundContextForSdk({
       Body: "hello",
@@ -148,7 +142,7 @@ describe("finalizeInboundContext media cleanup", () => {
   });
 
   it("keeps a singular legacy MediaUrl off the second inbound attachment slot", () => {
-    const ctx = finalizeInboundContext({
+    const ctx = finalize({
       Body: "two attachments",
       MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
       MediaUrls: ["file:///tmp/a.png"],
@@ -156,19 +150,14 @@ describe("finalizeInboundContext media cleanup", () => {
     });
 
     expect(ctx.media).toHaveLength(2);
-    expect(ctx.media?.[0]).toMatchObject({
-      path: "/tmp/a.png",
-      url: "file:///tmp/a.png",
-    });
-    expect(ctx.media?.[1]).toMatchObject({ path: "/tmp/b.png" });
+    expect(ctx.media).toMatchObject([
+      { path: "/tmp/a.png", url: "file:///tmp/a.png" },
+      { path: "/tmp/b.png" },
+    ]);
     expect(ctx.media?.[1]?.url).toBeUndefined();
   });
-});
-
-describe("finalizeInboundContext supplemental projection", () => {
   it("projects supplemental facts into legacy context fields", () => {
-    const ctx = finalizeInboundContext({
-      Body: "hello",
+    const ctx = finalize({
       SupplementalContext: {
         quote: {
           id: "reply-1",
@@ -177,19 +166,10 @@ describe("finalizeInboundContext supplemental projection", () => {
           sender: "Alice",
           isQuote: true,
         },
-        forwarded: {
-          from: "Bob",
-          fromType: "user",
-          fromId: "bob",
-          date: 1_700_000_000,
-        },
-        thread: {
-          starterBody: "starter",
-          historyBody: "history",
-          label: "thread label",
-        },
+        forwarded: { from: "Bob", fromType: "user", fromId: "bob", date: 1_700_000_000 },
+        thread: { starterBody: "starter", historyBody: "history", label: "thread label" },
         groupSystemPrompt: "group prompt",
-        channelStructuredContext: [{ label: "raw", payload: { ok: true } }],
+        channelStructuredContext: rawContext,
       },
     });
 
@@ -214,9 +194,9 @@ describe("finalizeInboundContext supplemental projection", () => {
 
   it("folds the deprecated supplemental structured-context key", () => {
     const supplemental: NonNullable<MsgContext["SupplementalContext"]> = {
-      untrustedContext: [{ label: "raw", payload: { ok: true } }],
+      untrustedContext: rawContext,
     };
-    const ctx = finalizeInboundContext({ Body: "hello", SupplementalContext: supplemental });
+    const ctx = finalize({ SupplementalContext: supplemental });
 
     expect(ctx.ChannelStructuredContext).toEqual([{ label: "raw", payload: { ok: true } }]);
     expect(supplemental.channelStructuredContext).toEqual([
@@ -224,9 +204,6 @@ describe("finalizeInboundContext supplemental projection", () => {
     ]);
     expect(Object.hasOwn(supplemental, "untrustedContext")).toBe(false);
   });
-});
-
-describe("finalizeInboundContext deprecated prompt-context aliases", () => {
   it("folds deprecated UntrustedStructuredContext before prompt rendering", () => {
     const entry = {
       label: "Channel metadata",
@@ -234,14 +211,8 @@ describe("finalizeInboundContext deprecated prompt-context aliases", () => {
       type: "channel_metadata",
       payload: { value: "same bytes" },
     };
-    const deprecated = finalizeInboundContext({
-      Body: "hello",
-      UntrustedStructuredContext: [entry],
-    });
-    const canonical = finalizeInboundContext({
-      Body: "hello",
-      ChannelStructuredContext: [entry],
-    });
+    const deprecated = finalize({ UntrustedStructuredContext: [entry] });
+    const canonical = finalize({ ChannelStructuredContext: [entry] });
 
     expect(buildInboundUserContextPrefix(deprecated)).toBe(
       buildInboundUserContextPrefix(canonical),
@@ -251,14 +222,8 @@ describe("finalizeInboundContext deprecated prompt-context aliases", () => {
   });
 
   it("folds deprecated UntrustedContext before prompt rendering", () => {
-    const deprecated = finalizeInboundContext({
-      Body: "hello",
-      UntrustedContext: ["Channel metadata (src)\r\nvalue"],
-    });
-    const canonical = finalizeInboundContext({
-      Body: "hello",
-      ChannelPromptContext: ["Channel metadata (src)\r\nvalue"],
-    });
+    const deprecated = finalize({ UntrustedContext: ["Channel metadata (src)\r\nvalue"] });
+    const canonical = finalize({ ChannelPromptContext: ["Channel metadata (src)\r\nvalue"] });
 
     const rendered = appendChannelPromptContext("hello", deprecated.ChannelPromptContext);
     expect(rendered).toBe(appendChannelPromptContext("hello", canonical.ChannelPromptContext));
