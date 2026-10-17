@@ -68,8 +68,9 @@ function renderPlace(
 const catalog = (overrides: Partial<ModelCatalogEntry>) => ({
   models: [{ ...model, ...overrides }],
 });
-const unavailableCatalog = (unavailableReason: ModelCatalogEntry["unavailableReason"]) =>
-  catalog({ runtimeChoices: [{ agentRuntime: runtime, available: false, unavailableReason }] });
+const unavailableCatalog = (
+  unavailableReason: NonNullable<ModelCatalogEntry["runtimeChoices"]>[number]["unavailableReason"],
+) => catalog({ runtimeChoices: [{ agentRuntime: runtime, available: false, unavailableReason }] });
 const modelAccount = (suffix: string, label: string, authType: string) => ({
   authProfileId: `personal:person-a:openai:${suffix}`,
   provider: "openai",

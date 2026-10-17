@@ -7,7 +7,7 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   retainSessionListForegroundWork,
@@ -45,7 +45,7 @@ function preparedSnapshot(projection: Projection, query: SnapshotQuery) {
 
 async function waitForPage(
   page: ReturnType<typeof listProjectedSessions>,
-  prepared: ReturnType<typeof createDeferredCore>,
+  prepared: Deferred<void>,
   signal: AbortSignal,
 ) {
   const abort = () => prepared.reject(signal.reason);

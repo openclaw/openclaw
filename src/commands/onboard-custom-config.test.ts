@@ -1,3 +1,4 @@
+// Onboard custom config tests cover provider-specific config merging and context-window bounds.
 import { setCurrentManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { describe, expect, it, vi } from "vitest";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
@@ -16,111 +17,109 @@ import {
   resolveCustomModelAliasError,
 } from "./onboard-custom-config.js";
 
+const EXPECTED_CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 const manifestPlugins = [
   {
-    modelIdNormalization: { providers: { custom: { aliases: { latest: "modern-model" } } } },
-  },
-] satisfies Array<Pick<PluginManifestRecord, "modelIdNormalization">>;
-const customBaseUrl = "https://llm.example.com/v1";
-const target = { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" };
-function applyCustom(overrides: Partial<Parameters<typeof applyCustomApiConfig>[0]> = {}) {
-  return applyCustomApiConfig({
-    config: {},
-    baseUrl: customBaseUrl,
-    modelId: "foo-large",
-    compatibility: "openai",
-    ...overrides,
-  });
-}
-function parseFlags(
-  overrides: Partial<Parameters<typeof parseNonInteractiveCustomApiFlags>[0]> = {},
-) {
-  return parseNonInteractiveCustomApiFlags({
-    baseUrl: customBaseUrl,
-    modelId: "foo-large",
-    ...overrides,
-  });
-}
-function providerConfig(
-  provider: Pick<ModelProviderConfig, "baseUrl"> & Partial<ModelProviderConfig>,
-  id = "custom",
-): OpenClawConfig {
-  return {
-    models: { providers: { [id]: { api: "openai-completions", models: [], ...provider } } },
-  };
-}
-function configuredModel(
-  id = "foo-large",
-  overrides: Partial<ModelProviderConfig["models"][number]> = {},
-) {
-  return {
-    id,
-    name: id,
-    contextWindow: 1,
-    maxTokens: 1,
-    input: ["text" as const],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    reasoning: false,
-    ...overrides,
-  };
-}
-
-function buildCustomProviderConfig(contextWindow: number) {
-  return providerConfig({
-    baseUrl: customBaseUrl,
-    models: [
-      configuredModel("foo-large", {
-        contextWindow,
-        maxTokens: contextWindow > CONTEXT_WINDOW_HARD_MIN_TOKENS ? 4096 : 1024,
-      }),
-    ],
-  });
-}
-
-it("keeps explicit custom-provider model state on its authored owner", () => {
-  const result = applyCustom({
-    config: {
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          systemAgent: { agentId: "ops" },
-          model: { primary: "anthropic/global" },
-          models: { "anthropic/global": { alias: "Global" } },
-        },
-        entries: {
-          main: { model: { primary: "anthropic/main" } },
-          OPS: {
-            model: { primary: "openai/ops" },
-            models: { "openai/ops": { alias: "Operations" } },
-            modelPolicy: { allow: ["openai/ops"] },
+    modelIdNormalization: {
+      providers: {
+        custom: {
+          aliases: {
+            latest: "modern-model",
           },
         },
       },
     },
-    providerId: "custom",
-    alias: "Custom",
-    target,
-  });
+  },
+] satisfies Array<Pick<PluginManifestRecord, "modelIdNormalization">>;
 
-  expect(result.config.agents?.entries?.OPS?.model).toEqual({ primary: "custom/foo-large" });
-  expect(result.config.agents?.entries?.OPS?.models).toEqual({
-    "openai/ops": { alias: "Operations" },
-    "custom/foo-large": { alias: "Custom" },
+function buildCustomProviderConfig(contextWindow?: number) {
+  if (contextWindow === undefined) {
+    return {} as OpenClawConfig;
+  }
+  return {
+    models: {
+      providers: {
+        custom: {
+          api: "openai-completions" as const,
+          baseUrl: "https://llm.example.com/v1",
+          models: [
+            {
+              id: "foo-large",
+              name: "foo-large",
+              contextWindow,
+              maxTokens: contextWindow > CONTEXT_WINDOW_HARD_MIN_TOKENS ? 4096 : 1024,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              reasoning: false,
+            },
+          ],
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function applyCustomModelConfigWithContextWindow(contextWindow?: number) {
+  return applyCustomApiConfig({
+    config: buildCustomProviderConfig(contextWindow),
+    baseUrl: "https://llm.example.com/v1",
+    modelId: "foo-large",
+    compatibility: "openai",
+    providerId: "custom",
   });
-  expect(result.config.agents?.entries?.OPS?.modelPolicy).toEqual({ allow: ["openai/ops"] });
-  expect(result.config.agents?.entries?.main?.model).toEqual({ primary: "anthropic/main" });
-  expect(result.config.agents?.defaults?.model).toEqual({ primary: "anthropic/global" });
-  expect(result.config.agents?.defaults?.models).toEqual({
-    "anthropic/global": { alias: "Global" },
-  });
-  expect(result.config.models?.providers?.custom?.models?.map((model) => model.id)).toEqual([
-    "foo-large",
-  ]);
-});
+}
+
+it.each([{ setAsPrimary: undefined, expectedPrimary: "custom/foo-large" }])(
+  "keeps explicit custom-provider model state on its authored owner ($setAsPrimary)",
+  ({ setAsPrimary, expectedPrimary }) => {
+    const result = applyCustomApiConfig({
+      config: {
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            systemAgent: { agentId: "ops" },
+            model: { primary: "anthropic/global" },
+            models: { "anthropic/global": { alias: "Global" } },
+          },
+          entries: {
+            main: { model: { primary: "anthropic/main" } },
+            OPS: {
+              model: { primary: "openai/ops" },
+              models: { "openai/ops": { alias: "Operations" } },
+              modelPolicy: { allow: ["openai/ops"] },
+            },
+          },
+        },
+      },
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      providerId: "custom",
+      alias: "Custom",
+      target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
+      setAsPrimary,
+    });
+
+    expect(result.config.agents?.entries?.OPS?.model).toEqual({ primary: expectedPrimary });
+    expect(result.config.agents?.entries?.OPS?.models).toEqual({
+      "openai/ops": { alias: "Operations" },
+      "custom/foo-large": { alias: "Custom" },
+    });
+    expect(result.config.agents?.entries?.OPS?.modelPolicy).toEqual({ allow: ["openai/ops"] });
+    expect(result.config.agents?.entries?.main?.model).toEqual({ primary: "anthropic/main" });
+    expect(result.config.agents?.defaults?.model).toEqual({ primary: "anthropic/global" });
+    expect(result.config.agents?.defaults?.models).toEqual({
+      "anthropic/global": { alias: "Global" },
+    });
+    expect(result.config.models?.providers?.custom?.models?.map((model) => model.id)).toEqual([
+      "foo-large",
+    ]);
+  },
+);
 
 it("rejects custom aliases already used by the selected agent", () => {
   expect(() =>
-    applyCustom({
+    applyCustomApiConfig({
       config: {
         agents: {
           ownership: "explicit",
@@ -128,9 +127,12 @@ it("rejects custom aliases already used by the selected agent", () => {
           entries: { ops: { models: { "openai/ops": { alias: "Operations" } } } },
         },
       },
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
       providerId: "custom",
       alias: "Operations",
-      target,
+      target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
     }),
   ).toThrow("Alias Operations already points to openai/ops.");
 });
@@ -164,24 +166,53 @@ it("validates authored and inherited aliases without discovering plugin metadata
       entries: { ops: { models: { "openai/ops": { alias: "Operations" } } } },
     },
   } as OpenClawConfig;
+
   try {
-    for (const [raw, provider, model, expected] of [
-      ["Operations", "custom", "new-model", "Alias Operations already points to openai/ops."],
-      ["Global", "custom", "new-model", "Alias Global already points to anthropic/global."],
-      ["Operations", "openai", "ops", undefined],
-      ["Legacy", "custom", "modern-model", undefined],
-      ["Canonical", "custom", "latest", undefined],
-    ] as const) {
-      expect(
-        resolveCustomModelAliasError({
-          raw,
-          cfg,
-          agentId: "ops",
-          modelRef: { provider, model },
-          manifestPlugins,
-        }),
-      ).toBe(expected);
-    }
+    expect(
+      resolveCustomModelAliasError({
+        raw: "Operations",
+        cfg,
+        agentId: "ops",
+        modelRef: { provider: "custom", model: "new-model" },
+        manifestPlugins,
+      }),
+    ).toBe("Alias Operations already points to openai/ops.");
+    expect(
+      resolveCustomModelAliasError({
+        raw: "Global",
+        cfg,
+        agentId: "ops",
+        modelRef: { provider: "custom", model: "new-model" },
+        manifestPlugins,
+      }),
+    ).toBe("Alias Global already points to anthropic/global.");
+    expect(
+      resolveCustomModelAliasError({
+        raw: "Operations",
+        cfg,
+        agentId: "ops",
+        modelRef: { provider: "openai", model: "ops" },
+        manifestPlugins,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveCustomModelAliasError({
+        raw: "Legacy",
+        cfg,
+        agentId: "ops",
+        modelRef: { provider: "custom", model: "modern-model" },
+        manifestPlugins,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveCustomModelAliasError({
+        raw: "Canonical",
+        cfg,
+        agentId: "ops",
+        modelRef: { provider: "custom", model: "latest" },
+        manifestPlugins,
+      }),
+    ).toBeUndefined();
   } finally {
     setCurrentManifestModelIdNormalizationPolicies(undefined);
     currentSnapshot.mockRestore();
@@ -191,7 +222,7 @@ it("validates authored and inherited aliases without discovering plugin metadata
 });
 
 it("preserves the roster when applying custom-provider model state", () => {
-  const result = applyCustom({
+  const result = applyCustomApiConfig({
     config: {
       agents: {
         ownership: "explicit",
@@ -202,9 +233,12 @@ it("preserves the roster when applying custom-provider model state", () => {
         },
       },
     },
+    baseUrl: "https://llm.example.com/v1",
+    modelId: "foo-large",
+    compatibility: "openai",
     providerId: "custom",
     alias: "Custom",
-    target,
+    target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
   });
 
   expect(result.config.agents).not.toHaveProperty("list");
@@ -221,34 +255,41 @@ it("preserves the roster when applying custom-provider model state", () => {
   ]);
 });
 
-it.each([
-  {
-    host: "openai",
-    modelId: "gpt-4.1",
-    path: "/openai/v1/responses",
-    body: { model: "gpt-4.1", input: "Hi", max_output_tokens: 16, stream: false },
-  },
-  {
-    host: "services.ai",
-    modelId: "deepseek-v3-0324",
-    path: "/openai/deployments/deepseek-v3-0324/chat/completions?api-version=2024-10-21",
-    body: {
-      model: "deepseek-v3-0324",
-      messages: [{ role: "user", content: "Hi" }],
-      max_tokens: 16,
-      stream: false,
-    },
-  },
-])("uses Azure $host verification endpoint, headers, and body", ({ host, modelId, path, body }) => {
+it("uses azure responses-specific headers and body for openai verification probes", () => {
   const request = buildOpenAiVerificationProbeRequest({
-    baseUrl: `https://my-resource.${host}.azure.com`,
+    baseUrl: "https://my-resource.openai.azure.com",
     apiKey: "azure-test-key",
-    modelId,
+    modelId: "gpt-4.1",
   });
-  expect(request.endpoint).toBe(`https://my-resource.${host}.azure.com${path}`);
+
+  expect(request.endpoint).toBe("https://my-resource.openai.azure.com/openai/v1/responses");
   expect(request.headers["api-key"]).toBe("azure-test-key");
   expect(request.headers.Authorization).toBeUndefined();
-  expect(request.body).toEqual(body);
+  expect(request.body).toEqual({
+    model: "gpt-4.1",
+    input: "Hi",
+    max_output_tokens: 16,
+    stream: false,
+  });
+});
+it("uses Azure Foundry chat-completions probes for services.ai URLs", () => {
+  const request = buildOpenAiVerificationProbeRequest({
+    baseUrl: "https://my-resource.services.ai.azure.com",
+    apiKey: "azure-test-key",
+    modelId: "deepseek-v3-0324",
+  });
+
+  expect(request.endpoint).toBe(
+    "https://my-resource.services.ai.azure.com/openai/deployments/deepseek-v3-0324/chat/completions?api-version=2024-10-21",
+  );
+  expect(request.headers["api-key"]).toBe("azure-test-key");
+  expect(request.headers.Authorization).toBeUndefined();
+  expect(request.body).toEqual({
+    model: "deepseek-v3-0324",
+    messages: [{ role: "user", content: "Hi" }],
+    max_tokens: 16,
+    stream: false,
+  });
 });
 it("uses expanded max_tokens for anthropic verification probes", () => {
   const request = buildAnthropicVerificationProbeRequest({
@@ -262,29 +303,52 @@ it("uses expanded max_tokens for anthropic verification probes", () => {
 });
 
 describe("applyCustomApiConfig", () => {
-  it("preserves explicit small context window when already valid", () => {
-    const result = applyCustom({ config: buildCustomProviderConfig(8192), providerId: "custom" });
+  it.each([
+    {
+      name: "preserves explicit small context window when already valid",
+      existingContextWindow: 8192,
+      expectedContextWindow: 8192,
+    },
+  ])("$name", ({ existingContextWindow, expectedContextWindow }) => {
+    const result = applyCustomModelConfigWithContextWindow(existingContextWindow);
     const model = result.config.models?.providers?.custom?.models?.find(
       (entry) => entry.id === "foo-large",
     );
-    expect(model?.contextWindow).toBe(8192);
+    expect(model?.contextWindow).toBe(expectedContextWindow);
   });
 
   it.each([
-    [
-      { baseUrl: "ftp://localhost/v1" },
-      "Custom provider base URL must be a valid HTTP or HTTPS URL.",
-    ],
-    [{ baseUrl: "not-a-url" }, "Custom provider base URL must be a valid HTTP or HTTPS URL."],
-    [{ providerId: "!!!" }, "Custom provider ID must include letters, numbers, or hyphens."],
-  ] as const)("rejects invalid custom config %j", (params, message) => {
-    expect(() => applyCustom(params)).toThrow(message);
+    ...["ftp://localhost/v1", "not-a-url"].map((baseUrl) => ({
+      name: `unsupported base URL ${baseUrl}`,
+      params: {
+        config: {},
+        baseUrl,
+        modelId: "foo-large",
+        compatibility: "openai" as const,
+      },
+      expectedMessage: "Custom provider base URL must be a valid HTTP or HTTPS URL.",
+    })),
+    {
+      name: "explicit provider ids that normalize to empty",
+      params: {
+        config: {},
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "openai" as const,
+        providerId: "!!!",
+      },
+      expectedMessage: "Custom provider ID must include letters, numbers, or hyphens.",
+    },
+  ])("rejects $name", ({ params, expectedMessage }) => {
+    expect(() => applyCustomApiConfig(params)).toThrow(expectedMessage);
   });
 
   it("produces azure-specific config for Azure OpenAI URLs with reasoning model", () => {
-    const result = applyCustom({
+    const result = applyCustomApiConfig({
+      config: {},
       baseUrl: "https://user123-resource.openai.azure.com",
       modelId: "o4-mini",
+      compatibility: "openai",
       apiKey: "abcd1234",
     });
     const providerId = result.providerId!;
@@ -312,14 +376,31 @@ describe("applyCustomApiConfig", () => {
   });
 
   it("strips pre-existing deployment path from Azure URL in stored config", () => {
-    const result = applyCustom({
+    const result = applyCustomApiConfig({
+      config: {},
       baseUrl: "https://my-resource.openai.azure.com/openai/deployments/gpt-4",
       modelId: "gpt-4",
+      compatibility: "openai",
       apiKey: "key456",
+    });
+    const providerId = result.providerId!;
+    const provider = result.config.models?.providers?.[providerId];
+
+    expect(provider?.baseUrl).toBe("https://my-resource.openai.azure.com/openai/v1");
+  });
+
+  it("persists auth none for no-auth custom endpoints", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://studio.example.ts.net/v1",
+      modelId: "qwen3.8",
+      compatibility: "openai",
+      noAuth: true,
     });
     const provider = result.config.models?.providers?.[result.providerId!];
 
-    expect(provider?.baseUrl).toBe("https://my-resource.openai.azure.com/openai/v1");
+    expect(provider?.auth).toBe("none");
+    expect(provider?.apiKey).toBeUndefined();
   });
 
   it.each([
@@ -329,7 +410,12 @@ describe("applyCustomApiConfig", () => {
   ] as const)("rejects no-auth on $baseUrl before saving", ({ baseUrl, compatibility }) => {
     expect(() =>
       applyCustomApiConfig({
-        ...parseFlags({ baseUrl, modelId: "some-model", compatibility, noAuth: true }),
+        ...parseNonInteractiveCustomApiFlags({
+          baseUrl,
+          modelId: "some-model",
+          compatibility,
+          noAuth: true,
+        }),
         config: {},
       }),
     ).toThrow(/auth: "none"/);
@@ -350,7 +436,13 @@ describe("applyCustomApiConfig", () => {
         compatibility: "openai-responses",
         noAuth: true,
       }),
-      config: providerConfig({ baseUrl: model.baseUrl, api: "openai-responses", models: [model] }),
+      config: {
+        models: {
+          providers: {
+            custom: { baseUrl: model.baseUrl, api: "openai-responses", models: [model] },
+          },
+        },
+      },
     });
     expect(result.config.models?.providers?.custom).toMatchObject({
       api: "openai-responses",
@@ -367,17 +459,24 @@ describe("applyCustomApiConfig", () => {
         api: "openai-completions",
         auth: "none",
         models: [
-          configuredModel("foo-large", {
+          {
+            id: "foo-large",
+            name: "foo-large",
             api: "openai-responses",
             contextWindow: 128_000,
             maxTokens: 4096,
-          }),
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            reasoning: false,
+          },
         ],
       } satisfies ModelProviderConfig;
       expect(() =>
-        applyCustom({
-          config: providerConfig(provider),
+        applyCustomApiConfig({
+          config: { models: { providers: { custom: provider } } },
           baseUrl: provider.baseUrl,
+          modelId: "foo-large",
+          compatibility: "openai",
           providerId: "custom",
           noAuth,
         }),
@@ -385,52 +484,88 @@ describe("applyCustomApiConfig", () => {
     },
   );
 
-  it.each([
-    ["new no-auth", undefined, true, undefined, "none", undefined],
-    [
-      "stale-key to no-auth",
-      { auth: "api-key", apiKey: "stale-key" },
-      true,
-      undefined,
-      "none",
-      undefined,
-    ],
-    ["no-auth to key", { auth: "none" }, undefined, "fresh-key", undefined, "fresh-key"],
-  ] as const)("persists auth transition: %s", (_name, existing, noAuth, apiKey, auth, key) => {
+  it("clears stale keys and auth modes when switching a provider to no-auth", () => {
     const providerId = "custom-studio-example-ts-net";
-    const result = applyCustom({
-      config: existing
-        ? providerConfig(
-            {
+    const result = applyCustomApiConfig({
+      config: {
+        models: {
+          providers: {
+            [providerId]: {
               baseUrl: "https://studio.example.ts.net/v1",
-              ...existing,
+              api: "openai-completions",
+              auth: "api-key",
+              apiKey: "stale-key",
+              models: [],
             },
-            providerId,
-          )
-        : {},
+          },
+        },
+      },
       baseUrl: "https://studio.example.ts.net/v1",
       modelId: "qwen3.8",
-      noAuth,
-      apiKey,
-      providerId: existing ? providerId : undefined,
+      compatibility: "openai",
+      noAuth: true,
+      providerId,
     });
-    const provider = result.config.models?.providers?.[result.providerId!];
-    expect(provider?.auth).toBe(auth);
-    expect(provider?.apiKey).toBe(key);
+    const provider = result.config.models?.providers?.[providerId];
+
+    expect(provider?.auth).toBe("none");
+    expect(provider?.apiKey).toBeUndefined();
+  });
+
+  it("clears a previous auth none when a real key is supplied later", () => {
+    const providerId = "custom-studio-example-ts-net";
+    const result = applyCustomApiConfig({
+      config: {
+        models: {
+          providers: {
+            [providerId]: {
+              baseUrl: "https://studio.example.ts.net/v1",
+              api: "openai-completions",
+              auth: "none",
+              models: [],
+            },
+          },
+        },
+      },
+      baseUrl: "https://studio.example.ts.net/v1",
+      modelId: "qwen3.8",
+      compatibility: "openai",
+      apiKey: "fresh-key",
+      providerId,
+    });
+    const provider = result.config.models?.providers?.[providerId];
+
+    expect(provider?.auth).toBeUndefined();
+    expect(provider?.apiKey).toBe("fresh-key");
   });
 
   it("re-onboard updates existing Azure provider instead of creating a duplicate", () => {
     const oldProviderId = "custom-my-resource-openai-azure-com";
-    const result = applyCustom({
-      config: providerConfig(
-        {
-          baseUrl: "https://my-resource.openai.azure.com/openai/deployments/gpt-4",
-          models: [configuredModel("gpt-4")],
+    const result = applyCustomApiConfig({
+      config: {
+        models: {
+          providers: {
+            [oldProviderId]: {
+              baseUrl: "https://my-resource.openai.azure.com/openai/deployments/gpt-4",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "gpt-4",
+                  name: "gpt-4",
+                  contextWindow: 1,
+                  maxTokens: 1,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  reasoning: false,
+                },
+              ],
+            },
+          },
         },
-        oldProviderId,
-      ),
+      },
       baseUrl: "https://my-resource.openai.azure.com",
       modelId: "gpt-4",
+      compatibility: "openai",
       apiKey: "key789",
     });
 
@@ -444,13 +579,31 @@ describe("applyCustomApiConfig", () => {
   });
 
   it("renames provider id when a non-azure baseUrl differs", () => {
-    const result = applyCustom({
-      config: providerConfig({
-        baseUrl: "http://old.example.com/v1",
-        models: [configuredModel("old-model", { name: "Old" })],
-      }),
+    const result = applyCustomApiConfig({
+      config: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "http://old.example.com/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "old-model",
+                  name: "Old",
+                  contextWindow: 1,
+                  maxTokens: 1,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  reasoning: false,
+                },
+              ],
+            },
+          },
+        },
+      },
       baseUrl: "http://localhost:11434/v1",
       modelId: "llama3",
+      compatibility: "openai",
       providerId: "custom",
     });
 
@@ -465,8 +618,11 @@ describe("applyCustomApiConfig", () => {
   });
 
   it("updates existing non-azure custom model input when image support is explicitly requested", () => {
-    const result = applyCustom({
+    const result = applyCustomApiConfig({
       config: buildCustomProviderConfig(CONTEXT_WINDOW_HARD_MIN_TOKENS),
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
       providerId: "custom",
       supportsImageInput: true,
     });
@@ -475,18 +631,25 @@ describe("applyCustomApiConfig", () => {
     );
 
     expect(model?.input).toEqual(["text", "image"]);
-    expect(model?.contextWindow).toBe(128_000);
+    expect(model?.contextWindow).toBe(EXPECTED_CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS);
   });
 
   it("preserves existing per-model thinking when already set for azure reasoning model", () => {
     const providerId = "custom-my-resource-openai-azure-com";
     const modelRef = `${providerId}/o3-mini`;
-    const result = applyCustom({
+    const result = applyCustomApiConfig({
       config: {
-        agents: { defaults: { models: { [modelRef]: { params: { thinking: "high" } } } } },
+        agents: {
+          defaults: {
+            models: {
+              [modelRef]: { params: { thinking: "high" } },
+            },
+          },
+        },
       } as OpenClawConfig,
       baseUrl: "https://my-resource.openai.azure.com",
       modelId: "o3-mini",
+      compatibility: "openai",
       apiKey: "key",
     });
     expect(result.config.agents?.defaults?.models?.[modelRef]?.params?.thinking).toBe("high");
@@ -514,52 +677,78 @@ describe("parseNonInteractiveCustomApiFlags", () => {
   it.each(["openai", "openai-responses"])(
     "allows omitted model ids for %s discovery",
     (compatibility) => {
-      expect(parseFlags({ modelId: undefined, compatibility })).toEqual({
-        baseUrl: "https://llm.example.com/v1",
-        modelId: "",
-        compatibility,
-      });
+      expect(
+        parseNonInteractiveCustomApiFlags({
+          baseUrl: "https://llm.example.com/v1",
+          compatibility,
+        }),
+      ).toEqual({ baseUrl: "https://llm.example.com/v1", modelId: "", compatibility });
     },
   );
 
   it("requires an explicit model id for Anthropic compatibility", () => {
     expect(() =>
-      parseFlags({
+      parseNonInteractiveCustomApiFlags({
         baseUrl: "https://llm.example.com",
-        modelId: undefined,
         compatibility: "anthropic",
       }),
     ).toThrow("--custom-model-id");
   });
 
   it("parses custom image input opt-in", () => {
-    expect(parseFlags({ supportsImageInput: true }).supportsImageInput).toBe(true);
+    const result = parseNonInteractiveCustomApiFlags({
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      supportsImageInput: true,
+    });
+
+    expect(result.supportsImageInput).toBe(true);
   });
 
   it("parses OpenAI Responses compatibility", () => {
-    expect(
-      parseFlags({ modelId: "gpt-5.4", compatibility: "openai-responses" }).compatibility,
-    ).toBe("openai-responses");
+    const result = parseNonInteractiveCustomApiFlags({
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "gpt-5.4",
+      compatibility: "openai-responses",
+    });
+
+    expect(result.compatibility).toBe("openai-responses");
   });
 
   it("parses the no-auth opt-in", () => {
-    const result = parseFlags({ noAuth: true });
+    const result = parseNonInteractiveCustomApiFlags({
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      noAuth: true,
+    });
+
     expect(result.noAuth).toBe(true);
     expect(result.apiKey).toBeUndefined();
   });
 
   it("rejects no-auth combined with an API key", () => {
     expect(() =>
-      parseFlags({
+      parseNonInteractiveCustomApiFlags({
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
         apiKey: "custom-test-key", // pragma: allowlist secret
         noAuth: true,
       }),
     ).toThrow("--custom-no-auth cannot be combined with --custom-api-key");
   });
 
-  it("rejects invalid compatibility values", () => {
-    expect(() => parseFlags({ compatibility: "xmlrpc" })).toThrow(
-      'Invalid --custom-compatibility (use "openai", "openai-responses", or "anthropic").',
-    );
+  it.each([
+    {
+      name: "invalid compatibility values",
+      flags: {
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "xmlrpc",
+      },
+      expectedMessage:
+        'Invalid --custom-compatibility (use "openai", "openai-responses", or "anthropic").',
+    },
+  ])("rejects $name", ({ flags, expectedMessage }) => {
+    expect(() => parseNonInteractiveCustomApiFlags(flags)).toThrow(expectedMessage);
   });
 });
