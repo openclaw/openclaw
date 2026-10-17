@@ -35,6 +35,31 @@ describeControlUiE2e("plugin install button progress", () => {
         featureMethods: [...pluginMethods, "openclaw.chat", "openclaw.chat.history"],
         methodResponses: pluginMethodResponses(),
       });
+      const installed = { ...calendarPlugin, catalogId: calendarDiscoveryPlugin.id };
+      const publishInstalled = async () => {
+        await gateway.setMethodResponse("plugins.list", inventory([installed], 1));
+        await gateway.setMethodResponse("plugins.inspect", {
+          ...calendarInspection,
+          plugin: installed,
+        });
+      };
+      const failure = {
+        failure: {
+          message: "Registry refused the dependency download.",
+          label: "Dependency installation failed",
+          completed: 4,
+        },
+        "runtime-failure": {
+          message: "Plugin service failed to start.",
+          label: "Plugin could not be applied to Gateway",
+          completed: 5,
+        },
+        "finalization-failure": {
+          message: "Installed catalog refresh failed.",
+          label: "Installation failed",
+          completed: 6,
+        },
+      };
       try {
         await page.goto(`${server.baseUrl}plugins/${calendarDiscoveryPlugin.id}`);
         const button = page.locator(".plugin-catalog-detail__install");
@@ -43,7 +68,6 @@ describeControlUiE2e("plugin install button progress", () => {
         await gateway.deferNext("plugins.install");
         await button.click();
         const request = await gateway.waitForRequest("plugins.install");
-        const installed = { ...calendarPlugin, catalogId: calendarDiscoveryPlugin.id };
         expect(await button.textContent()).toContain("Installing");
         expect(await button.isEnabled()).toBe(true);
         const activity = async (stage: string, status: string, requestId = request.id) => {
@@ -128,11 +152,7 @@ describeControlUiE2e("plugin install button progress", () => {
           expect(await button.textContent()).toContain("Installing");
           if (outcome === "success") {
             const inspections = (await gateway.getRequests("plugins.inspect")).length;
-            await gateway.setMethodResponse("plugins.list", inventory([installed], 1));
-            await gateway.setMethodResponse("plugins.inspect", {
-              ...calendarInspection,
-              plugin: installed,
-            });
+            await publishInstalled();
             await gateway.setMethodResponse("plugins.uiDescriptors", {
               ...enabledWorkboardCapabilities(),
               methods: [...pluginMethods, "openclaw.chat", "openclaw.chat.history"],
@@ -166,28 +186,14 @@ describeControlUiE2e("plugin install button progress", () => {
         if (outcome !== "success") {
           await gateway.rejectDeferred("plugins.install", {
             code: "UNAVAILABLE",
-            message:
-              outcome === "failure"
-                ? "Registry refused the dependency download."
-                : outcome === "runtime-failure"
-                  ? "Plugin service failed to start."
-                  : "Installed catalog refresh failed.",
+            message: failure[outcome].message,
             ...(outcome === "failure"
               ? { details: { pluginInstallRejected: true } }
               : { details: { persistence: { operation: "install", pluginId: installed.id } } }),
           });
-          await page
-            .getByText(
-              outcome === "failure"
-                ? "Dependency installation failed"
-                : outcome === "runtime-failure"
-                  ? "Plugin could not be applied to Gateway"
-                  : "Installation failed",
-              { exact: true },
-            )
-            .waitFor();
+          await page.getByText(failure[outcome].label, { exact: true }).waitFor();
           expect(await card.locator(".plugin-install-progress__activity--completed").count()).toBe(
-            outcome === "failure" ? 4 : outcome === "runtime-failure" ? 5 : 6,
+            failure[outcome].completed,
           );
           await page.screenshot({ path: `${evidence}/failure-state.png` });
           expect((await button.textContent())?.trim()).toBe(
@@ -250,11 +256,7 @@ describeControlUiE2e("plugin install button progress", () => {
             await gateway.waitForRequest("plugins.install", { after: 1 });
             expect(await button.textContent()).toContain("Installing");
             expect(await card.locator(".plugin-install-progress__activity").count()).toBe(0);
-            await gateway.setMethodResponse("plugins.list", inventory([installed], 1));
-            await gateway.setMethodResponse("plugins.inspect", {
-              ...calendarInspection,
-              plugin: installed,
-            });
+            await publishInstalled();
             await gateway.resolveDeferred("plugins.install", {
               ok: true,
               plugin: installed,
@@ -276,11 +278,7 @@ describeControlUiE2e("plugin install button progress", () => {
           const waitingAt = await timer.textContent();
           await page.clock.runFor(1100);
           await expect.poll(() => timer.textContent()).not.toBe(waitingAt);
-          await gateway.setMethodResponse("plugins.list", inventory([installed], 1));
-          await gateway.setMethodResponse("plugins.inspect", {
-            ...calendarInspection,
-            plugin: installed,
-          });
+          await publishInstalled();
           await gateway.deferNext("config.get");
           await gateway.resolveDeferred("plugins.install", {
             ok: true,

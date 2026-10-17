@@ -15,6 +15,8 @@ import {
   teardownPluginsE2e,
 } from "./plugins.e2e.test-support.ts";
 
+const objectSchema = (properties: Record<string, unknown>) => ({ type: "object", properties });
+
 describeControlUiE2e("Plugin overview", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
@@ -55,40 +57,21 @@ describeControlUiE2e("Plugin overview", () => {
             issues: [],
           },
           "config.schema": {
-            schema: {
-              type: "object",
-              properties: {
-                plugins: {
-                  type: "object",
-                  properties: {
-                    entries: {
-                      type: "object",
-                      properties: {
-                        [plugin.id]: {
-                          type: "object",
-                          properties: {
-                            config: {
-                              type: "object",
-                              properties: { timeZone: { type: "string", title: "Time zone" } },
-                            },
-                            hooks: {
-                              type: "object",
-                              additionalProperties: false,
-                              properties: {
-                                allowPromptInjection: {
-                                  type: "boolean",
-                                  title: "Allow prompt changes",
-                                },
-                              },
-                            },
-                          },
-                        },
-                      },
+            schema: objectSchema({
+              plugins: objectSchema({
+                entries: objectSchema({
+                  [plugin.id]: objectSchema({
+                    config: objectSchema({ timeZone: { type: "string", title: "Time zone" } }),
+                    hooks: {
+                      ...objectSchema({
+                        allowPromptInjection: { type: "boolean", title: "Allow prompt changes" },
+                      }),
+                      additionalProperties: false,
                     },
-                  },
-                },
-              },
-            },
+                  }),
+                }),
+              }),
+            }),
             uiHints: {},
             version: "calendar-schema",
             generatedAt: "2026-09-15T00:00:00Z",

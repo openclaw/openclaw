@@ -16,6 +16,11 @@ const bundledActivityIcons = import.meta.glob<string>(
   { eager: true, query: "?raw", import: "default" },
 );
 const nativeFetch = globalThis.fetch.bind(globalThis);
+const svg = (body: string, attributes = 'viewBox="0 0 24 24"') =>
+  `<svg xmlns="http://www.w3.org/2000/svg" ${attributes}>${body}</svg>`;
+const square = '<path d="M4 4h16v16H4Z"/>';
+const svgResponse = (body = square) =>
+  new Response(svg(body), { headers: { "content-type": "image/svg+xml" } });
 const common = {
   auth: { settings: { token: "synthetic-activity-token" } },
   resourceBasePath: "/openclaw",
@@ -111,14 +116,7 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
     const fetch = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response(null, { status: 401 }))
-      .mockResolvedValue(
-        new Response(
-          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4Z"/></svg>',
-          {
-            headers: { "content-type": "image/svg+xml" },
-          },
-        ),
-      );
+      .mockResolvedValue(svgResponse());
     const url = await fetchPluginActivityIconBlobUrl({
       ...common,
       auth: {
@@ -149,13 +147,7 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
     const fetch = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
-      .mockImplementation(
-        async () =>
-          new Response(
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ff0000" d="M4 4h16v16H4Z"/></svg>',
-            { headers: { "content-type": "image/svg+xml" } },
-          ),
-      );
+      .mockImplementation(async () => svgResponse('<path fill="#ff0000" d="M4 4h16v16H4Z"/>'));
     const params = {
       ...common,
       url: "/__openclaw__/plugin-theme-art/test/theme/icon/mark?v=recover",
@@ -170,13 +162,7 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
   it("rasterizes plugin theme artwork once per content URL, including concurrent callers", async () => {
     const fetch = vi
       .spyOn(globalThis, "fetch")
-      .mockImplementation(
-        async () =>
-          new Response(
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ff0000" d="M4 4h16v16H4Z"/></svg>',
-            { headers: { "content-type": "image/svg+xml" } },
-          ),
-      );
+      .mockImplementation(async () => svgResponse('<path fill="#ff0000" d="M4 4h16v16H4Z"/>'));
     const params = { ...common, url: "/__openclaw__/plugin-theme-art/test/theme/hat/beret?v=1" };
     const [first, concurrent] = await Promise.all([
       fetchPluginThemeArtworkBlobUrl(params),
@@ -201,16 +187,8 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
 
   it.each([
     ["package PNG", "image/png", "png"],
-    [
-      "active SVG",
-      "image/svg+xml",
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><script>alert(1)</script></svg>',
-    ],
-    [
-      "oversized element tree",
-      "image/svg+xml",
-      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path/><path/><path/><path/></svg>',
-    ],
+    ["active SVG", "image/svg+xml", svg("<script>alert(1)</script>")],
+    ["oversized element tree", "image/svg+xml", svg("<path/>".repeat(4))],
     ...(
       [
         ["event attribute", 'viewBox="0 0 24 24" onload="alert(1)"'],
@@ -219,17 +197,10 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
         ["oversized view box", 'viewBox="0 0 4097 24"'],
         ["oversized dimensions", 'width="24" height="4097"'],
       ] as const
-    ).map(([name, attributes]) => [
-      name,
-      "image/svg+xml",
-      `<svg xmlns="http://www.w3.org/2000/svg" ${attributes}><path d="M4 4h16v16H4Z"/></svg>`,
-    ]),
+    ).map(([name, attributes]) => [name, "image/svg+xml", svg(square, attributes)]),
   ])("keeps %s out of compact activity", async (_name, contentType, body) => {
     vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () =>
-        new Response(body, {
-          headers: { "content-type": contentType },
-        }),
+      async () => new Response(body, { headers: { "content-type": contentType } }),
     );
     await expect(
       fetchPluginActivityIconBlobUrl({

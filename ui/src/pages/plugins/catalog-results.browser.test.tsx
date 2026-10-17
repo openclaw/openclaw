@@ -5,7 +5,6 @@ import { page, userEvent } from "vitest/browser";
 import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import {
-  renderPluginCatalogResults,
   renderPluginCatalogResults as PluginCatalogResults,
   type PluginCatalogResultsProps,
 } from "./catalog-results.tsx";
@@ -25,6 +24,11 @@ function render(content: () => JSX.Element, container: HTMLDivElement) {
   views.set(container, view);
   flush();
 }
+
+const nextFrame = () =>
+  new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
 
 const entry = {
   id: "long-title",
@@ -91,30 +95,27 @@ function catalogProps(): PluginCatalogResultsProps {
   };
 }
 
+function renderCatalog(props: Partial<PluginCatalogResultsProps>) {
+  render(() => PluginCatalogResults({ ...catalogProps(), ...props }), container);
+}
+
 it.each([263, 362])(
   "keeps long identity text clear of the action within a %ipx card",
   async (width) => {
     const onInstall = vi.fn();
-    const props = { ...catalogProps(), onInstall };
     const progress = {
       startedAt: Date.now(),
       activities: [{ activityId: "dependencies", stage: "dependencies", status: "started" }],
     } satisfies PluginInstallProgress;
     for (const busy of [false, true]) {
-      render(
-        () =>
-          renderPluginCatalogResults({
-            ...props,
-            busy: busy ? { "install:long-title": "install" } : {},
-            installProgress: busy ? new Map([["install:long-title", progress]]) : undefined,
-          }),
-        container,
-      );
+      renderCatalog({
+        onInstall,
+        busy: busy ? { "install:long-title": "install" } : {},
+        installProgress: busy ? new Map([["install:long-title", progress]]) : undefined,
+      });
       const grid = container.querySelector<HTMLElement>(".plugin-catalog-grid")!;
       grid.style.gridTemplateColumns = `${width}px`;
-      await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      });
+      await nextFrame();
       const card = container.querySelector<HTMLElement>(".plugin-catalog-card")!;
       const identity = card.querySelector<HTMLElement>(".installed-plugins-card__identity")!;
       const action = card.querySelector<HTMLButtonElement>("button")!;
@@ -147,16 +148,9 @@ it.each([263, 362])(
 
 it.each([263, 362])("centers installed status dots in a %ipx card header", (width) => {
   for (const state of ["enabled", "disabled", "needs-setup", "error"] as const) {
-    render(
-      () =>
-        renderPluginCatalogResults({
-          ...catalogProps(),
-          result: {
-            items: [{ ...entry, local: { ...entry.local, installed: true, state } }],
-          },
-        }),
-      container,
-    );
+    renderCatalog({
+      result: { items: [{ ...entry, local: { ...entry.local, installed: true, state } }] },
+    });
     container.querySelector<HTMLElement>(".plugin-catalog-grid")!.style.gridTemplateColumns =
       `${width}px`;
     const card = container.querySelector<HTMLElement>(".plugin-catalog-card")!;
@@ -192,26 +186,17 @@ it.each([
         catalog: { ...entry.catalog, name: "Broken Artwork", imageUrl: failedSource },
       },
     ];
+    const artwork = (slug = "demo", name = "Demo") => (
+      <PluginArtTile slug={slug} name={name} iconUrl={icon} whiteBackground={whiteBackground} />
+    );
     render(
       () => (
         <>
           {whiteBackground ? (
-            <PluginArtTile
-              slug="official"
-              name="Official"
-              iconUrl={icon}
-              whiteBackground={whiteBackground}
-            />
+            artwork("official", "Official")
           ) : (
             <>
-              <span class="installed-plugins-card__art">
-                <PluginArtTile
-                  slug="demo"
-                  name="Demo"
-                  iconUrl={icon}
-                  whiteBackground={whiteBackground}
-                />
-              </span>
+              <span class="installed-plugins-card__art">{artwork()}</span>
               {renderPluginDetailShell({
                 id: "demo",
                 name: "Demo",
@@ -220,14 +205,7 @@ it.each([
                 onBack: vi.fn(),
                 identity: <></>,
                 panel: <></>,
-                icon: (
-                  <PluginArtTile
-                    slug="demo"
-                    name="Demo"
-                    iconUrl={icon}
-                    whiteBackground={whiteBackground}
-                  />
-                ),
+                icon: artwork(),
               })}
             </>
           )}
@@ -285,7 +263,7 @@ it.each([
 );
 
 it("fills the remaining viewport with card-sized placeholders across resizes", async () => {
-  render(() => renderPluginCatalogResults({ ...catalogProps(), loading: true }), container);
+  renderCatalog({ loading: true });
   const errors: string[] = [];
   const onError = (event: ErrorEvent) => errors.push(event.message);
   window.addEventListener("error", onError);
@@ -308,9 +286,7 @@ it("fills the remaining viewport with card-sized placeholders across resizes", a
         })
         .toBe(true);
     }
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-    });
+    await nextFrame();
     expect(errors).toEqual([]);
   } finally {
     window.removeEventListener("error", onError);

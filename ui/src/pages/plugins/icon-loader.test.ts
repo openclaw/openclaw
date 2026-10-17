@@ -13,6 +13,24 @@ import {
 const auth = {
   settings: { token: "test-token" },
 };
+const fallbackAuth = {
+  hello: { auth: { deviceToken: "stale-device-token" } },
+  settings: { token: "fallback-token" },
+};
+
+function loadIcon(
+  pluginId: string,
+  overrides: Partial<Parameters<typeof fetchPluginIconBlobUrl>[0]> = {},
+) {
+  return fetchPluginIconBlobUrl({
+    auth,
+    resourceBasePath: "",
+    gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
+    signal: new AbortController().signal,
+    pluginId,
+    ...overrides,
+  });
+}
 
 function imageResponse(): Response {
   return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
@@ -171,18 +189,7 @@ describe("catalog icon loader", () => {
     useLoopbackFetch(baseUrl);
 
     try {
-      await expect(
-        fetchPluginIconBlobUrl({
-          auth: {
-            hello: { auth: { deviceToken: "stale-device-token" } },
-            settings: { token: "fallback-token" },
-          },
-          resourceBasePath: "",
-          gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
-          pluginId: "streaming-errors",
-          signal: new AbortController().signal,
-        }),
-      ).resolves.toBeNull();
+      await expect(loadIcon("streaming-errors", { auth: fallbackAuth })).resolves.toBeNull();
 
       expect(requestCount).toBe(2);
       await vi.waitFor(() => expect(closedResponses).toEqual(new Set([0, 1])), {
@@ -206,15 +213,7 @@ describe("catalog icon loader", () => {
     useLoopbackFetch(baseUrl);
 
     try {
-      await expect(
-        fetchPluginIconBlobUrl({
-          auth,
-          resourceBasePath: "",
-          gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
-          pluginId: "wrong-mime",
-          signal: new AbortController().signal,
-        }),
-      ).resolves.toBeNull();
+      await expect(loadIcon("wrong-mime")).resolves.toBeNull();
 
       await vi.waitFor(() => expect(socketClosed).toBe(true), { timeout: 1_000 });
     } finally {
@@ -234,18 +233,7 @@ describe("catalog icon loader", () => {
       .mockResolvedValueOnce(rejectedResponse(404, cancel));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    await expect(
-      fetchPluginIconBlobUrl({
-        auth: {
-          hello: { auth: { deviceToken: "stale-device-token" } },
-          settings: { token: "fallback-token" },
-        },
-        resourceBasePath: "",
-        gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
-        pluginId: "stalled-cancellation",
-        signal: new AbortController().signal,
-      }),
-    ).resolves.toBeNull();
+    await expect(loadIcon("stalled-cancellation", { auth: fallbackAuth })).resolves.toBeNull();
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(cancel).toHaveBeenCalledTimes(2);
