@@ -471,9 +471,9 @@ function ChatHeaderSessionMenuContent(
         // Native opening reads the prepared items for validation and initial focus synchronously.
         flush();
       }}
-      onOpenChange={(open) => {
-        setOpen(open);
-        if (open) {
+      onOpenChange={(isOpen) => {
+        setOpen(isOpen);
+        if (isOpen) {
           actions.loadOwners();
           props.onOpen();
         } else {
