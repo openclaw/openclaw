@@ -262,7 +262,7 @@ function CardMenu(props: CardProps) {
         }}
       >
         <Menu
-          lazy
+          lazy="while-open"
           id={id}
           class={props.menuOptions?.class}
           triggerClass="session-progress-card__options"

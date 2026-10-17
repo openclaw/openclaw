@@ -135,7 +135,7 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
   const items = createMemo(() => entries()(), { lazy: true });
   return (
     <Menu
-      lazy
+      lazy="while-open"
       id={`side-panel-type-${id}`}
       class="side-panel-type-menu"
       panelClass="side-panel-type-menu__panel"
