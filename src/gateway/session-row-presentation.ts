@@ -76,7 +76,7 @@ type Publication = {
     string,
     {
       rows?: GatewaySessionRow[];
-      previousRows?: GatewaySessionRow[];
+      rowHistory?: GatewaySessionRow[][];
       selection?: SessionEntrySelection;
       selectedAt?: number;
       activityExpiresAt?: number;
@@ -85,6 +85,15 @@ type Publication = {
   >;
 };
 type PublicationView = () => Publication;
+
+const SIDEBAR_ROW_HISTORY_LIMIT = 32;
+
+function retainSidebarRows(rows: GatewaySessionRow[], history: GatewaySessionRow[][] = []) {
+  if (history.push(rows) > SIDEBAR_ROW_HISTORY_LIMIT) {
+    history.shift();
+  }
+  return history;
+}
 
 const publications = new WeakMap<
   SessionRowProjection,
@@ -167,7 +176,7 @@ const sharedLists = new WeakMap<
 export function shareSidebarSessionRows(
   rows: GatewaySessionRow[],
   ifRowsRevision?: string,
-  previousRows?: GatewaySessionRow[],
+  rowHistory?: GatewaySessionRow[][],
 ): Pick<
   SessionsListResult,
   "sessions" | "sharedFacts" | "rowsRevision" | "rowsUnchanged" | "rowsDelta"
@@ -185,11 +194,11 @@ export function shareSidebarSessionRows(
   if (revision === shared.rowsRevision) {
     return { sessions: [], rowsRevision: shared.rowsRevision, rowsUnchanged: true };
   }
-  if (
-    baseRevision !== undefined &&
-    previousRows &&
-    sharedLists.get(previousRows)?.rowsRevision === baseRevision
-  ) {
+  const previousRows =
+    baseRevision === undefined
+      ? undefined
+      : rowHistory?.find((previous) => sharedLists.get(previous)?.rowsRevision === baseRevision);
+  if (baseRevision !== undefined && previousRows) {
     const previous = new Map(previousRows.map((row, index) => [row, index]));
     const changed: GatewaySessionRow[] = [];
     const order = rows.map(
@@ -255,9 +264,11 @@ export function prepareSessionRowPublication(
         // Retire wire snapshots even when no reader returns after a publication or disposal.
         for (const list of retained.lists.values()) {
           if (change.kind === "reset") {
-            list.previousRows = list.rows = undefined;
+            list.rowHistory = list.rows = undefined;
           } else if (list.rows?.some((row) => row.key === change.key)) {
-            list.previousRows = list.rows[0]?.rowMode === "sidebar" ? list.rows : undefined;
+            if (list.rows[0]?.rowMode === "sidebar") {
+              list.rowHistory = retainSidebarRows(list.rows, list.rowHistory);
+            }
             list.rows = undefined;
           }
         }
@@ -691,17 +702,17 @@ export function prepareProjectedSessionPresentation(
       const view = listView(opts);
       const previous = view.rows;
       if (previous?.length === rows.length && rows.every((row, index) => row === previous[index])) {
-        return { sessions: previous, previousRows: view.previousRows };
+        return { sessions: previous, rowHistory: view.rowHistory };
       }
       Object.freeze(rows);
       // Sidebar replies encode the fact-packed rows in shareSidebarSessionRows.
       if (opts.rowMode !== "sidebar") {
         registerSerializedJsonArray(rows, rows.map(serializeSessionRow));
       } else if (previous) {
-        view.previousRows = previous;
+        view.rowHistory = retainSidebarRows(previous, view.rowHistory);
       }
       view.rows = rows;
-      return { sessions: rows, previousRows: view.previousRows };
+      return { sessions: rows, rowHistory: view.rowHistory };
     },
     snapshot(query: records.Lookup, options: PresentationOptions = {}) {
       const record = projection.describe(query);
