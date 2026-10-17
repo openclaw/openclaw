@@ -77,7 +77,7 @@ describe("sessions view", () => {
         groupBy,
         knownCategories: ["Work"],
         expandedSessionKey: "agent:research:chat-two",
-      } as const;
+      } satisfies Partial<ReturnType<typeof buildProps>>;
       try {
         renderView(result, { ...sharedProps, allAgentsScope: true }, container);
         const allHeaders = sessionTableHeaders(container);
