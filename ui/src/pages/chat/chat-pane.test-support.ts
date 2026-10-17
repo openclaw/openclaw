@@ -541,6 +541,17 @@ export function createTestChatPane(params: {
   client: GatewayBrowserClient;
   sessions?: SessionCapability;
 }) {
+  if (params.sessions) {
+    // Panes sharing a synthetic capability must keep the same owner and live getters.
+    const defaults = Object.getOwnPropertyDescriptors(
+      createSessionCapabilityFixture(params.sessions),
+    );
+    for (const [key, descriptor] of Object.entries(defaults)) {
+      if (!(key in params.sessions)) {
+        Object.defineProperty(params.sessions, key, descriptor);
+      }
+    }
+  }
   const context = createSessionContext(params.client, params.sessions);
   // SAFETY: TestChatPane declares the protected controller surface forwarded by the test host.
   const pane = createPaneTestHost(
