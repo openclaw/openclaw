@@ -521,7 +521,7 @@ export function renderTable(opts: RenderTableOptions): string {
   const padStr = repeat(" ", padding);
 
   const lines: string[] = [];
-  const renderRow = (record: Record<string, string>, isHeader = false) => {
+  const renderRow = (record: Record<string, string>, isHeader: boolean) => {
     const cells = columns.map((c) => (isHeader ? c.header : (record[c.key] ?? "")));
     const wrapped = contentWidths.map((width, i) => ({
       width,
