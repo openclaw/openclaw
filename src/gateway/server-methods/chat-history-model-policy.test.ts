@@ -26,6 +26,7 @@ import * as transcriptReaders from "../session-transcript-readers.js";
 import * as historyDelta from "./chat-history-delta.js";
 import {
   historyPayload as response,
+  historyRpc,
   seedHistorySession,
   withHistoryState,
 } from "./chat-history-fixture.test-support.js";
@@ -41,6 +42,13 @@ const historicalModel = { modelProvider: "example", model: "historical" };
 const allowedModel = { modelProvider: "example", model: "allowed" };
 const activeHistorical = { activeModelProvider: "example", activeModel: "historical" };
 const activeAllowed = { activeModelProvider: "example", activeModel: "allowed" };
+const assistant = (model: string, content: string) => ({
+  role: "assistant",
+  provider: "example",
+  model,
+  content,
+  stopReason: "stop",
+});
 const messageGet = expectDefined(chatMessageGetHandlers["chat.message.get"], "message handler");
 const recentGet = expectDefined(sessionByKeyReadHandlers["sessions.get"], "recent handler");
 const rosterGet = expectDefined(sessionReadHandlers["sessions.list"], "roster handler");
@@ -84,7 +92,18 @@ function fixture() {
   setRuntimeConfigSnapshot(cfg);
   const client = identifiedClient(person.id);
   client.connect.scopes = ["operator.read"];
-  return { cfg, client, person };
+  const changeRole = (role: string) => {
+    setUserProfileRole(person.id, role);
+    invalidateOperatorRolePolicy(person.id);
+  };
+  const setPolicy = (config: OpenClawConfig, allow: string[], deny?: string[]) => {
+    expectDefined(config.gateway?.roles?.definitions.reader, "reader role").modelPolicy = {
+      sourceAgent: "main",
+      allow,
+      ...(deny ? { deny } : {}),
+    };
+  };
+  return { cfg, client, person, changeRole, setPolicy };
 }
 
 function record(value: unknown) {
@@ -115,23 +134,21 @@ describe("historical model disclosure", () => {
         getRuntimeConfig: () => f.cfg,
         getCommittedRuntimeConfig: () => f.cfg,
       });
+      const rpc = historyRpc(context, scope.sessionKey);
       const read = vi.spyOn(historyPages, "readChatHistoryPage");
       try {
         for (const role of ["reader", "staff"] as const) {
-          setUserProfileRole(f.person.id, role);
-          invalidateOperatorRolePolicy(f.person.id);
-          const respond = vi.fn<RespondFn>();
-          await handleChatHistoryRequest({
-            params: { sessionKey: scope.sessionKey, maxChars: 20_000 },
-            client: f.client,
-            context,
-            respond,
-            acceptsSerializedJson: true,
-            acceptsDeflatedSegments: true,
-            req: { type: "req", id: role, method: "chat.history" },
-            isWebchatConnect: () => false,
-            method: "chat.history",
-          });
+          f.changeRole(role);
+          const respond = await rpc(
+            "chat.history",
+            { maxChars: 20_000 },
+            {
+              client: f.client,
+              acceptsSerializedJson: true,
+              acceptsDeflatedSegments: true,
+              req: { type: "req", id: role, method: "chat.history" },
+            },
+          );
           const page = await read.mock.results.at(-1)?.value;
           expect(Boolean(page?.encodedMessagesDeflate?.byteLength)).toBe(role === "staff");
           const payload = response(respond);
@@ -152,20 +169,13 @@ describe("historical model disclosure", () => {
       const f = fixture();
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       prepareGatewayRecipientProfile(f.client);
-      expectDefined(f.cfg.gateway?.roles?.definitions.reader, "reader role").modelPolicy = {
-        sourceAgent: "main",
-        allow: ["example/allowed*"],
-        deny: ["example/allowed-denied"],
-      };
+      f.setPolicy(f.cfg, ["example/allowed*"], ["example/allowed-denied"]);
       setRuntimeConfigSnapshot(f.cfg);
       const project = expectDefined(
         prepareOperatorModelPresentation({ cfg: f.cfg, policyConfig: f.cfg, client: f.client }),
         "restricted presentation",
       );
-      const deniedBudget = contextBudgetStatusFixture({
-        provider: "example",
-        model: "historical",
-      });
+      const deniedBudget = contextBudgetStatusFixture({ provider: "example", model: "historical" });
       const allowedBudget = contextBudgetStatusFixture({ provider: "example", model: "allowed" });
       for (const [row, expected] of [
         [{ ...historicalModel, ...activeAllowed }, activeAllowed],
@@ -240,30 +250,20 @@ describe("historical model disclosure", () => {
       const payload = { kind: "delta", deltaCursor: "unchanged-cursor", messages: [envelope] };
       const before = structuredClone(payload);
       const context = { getRuntimeConfig: () => f.cfg, getCommittedRuntimeConfig: () => f.cfg };
-      const result = projectOperatorModelRead(
-        { context, client: f.client, agentId: "main" },
-        payload,
-      );
-      expect(result).toEqual({
-        kind: "delta",
-        deltaCursor: "unchanged-cursor",
-        messages: [visibleEnvelope],
-      });
+      const read = <T extends Parameters<typeof projectOperatorModelRead>[1]>(input: T) =>
+        projectOperatorModelRead({ context, client: f.client, agentId: "main" }, input);
+      const result = read(payload);
+      expect(result).toEqual({ ...payload, messages: [visibleEnvelope] });
       expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(
         Buffer.byteLength(JSON.stringify(payload)),
       );
       expect(payload).toEqual(before);
       expect(
-        projectOperatorModelRead(
-          { context, client: f.client, agentId: "main" },
-          { messages: new SerializedJsonArray(Buffer.from(JSON.stringify([message]))) },
-        ).messages,
+        read({ messages: new SerializedJsonArray(Buffer.from(JSON.stringify([message]))) })
+          .messages,
       ).toEqual([projected]);
-      setUserProfileRole(f.person.id, "staff");
-      invalidateOperatorRolePolicy(f.person.id);
-      expect(
-        projectOperatorModelRead({ context, client: f.client, agentId: "main" }, payload),
-      ).toBe(payload);
+      f.changeRole("staff");
+      expect(read(payload)).toBe(payload);
     });
   });
 
@@ -281,17 +281,12 @@ describe("historical model disclosure", () => {
       await state.writeConfig(f.cfg);
       setRuntimeConfigSnapshot(f.cfg);
       let committed = f.cfg;
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:history-policy",
-        sessionId: "history-policy",
-      };
       const budget = contextBudgetStatusFixture({
         provider: "example",
         model: "historical",
-        sessionId: scope.sessionId,
+        sessionId: "history-policy",
       });
-      await seedHistorySession(scope.sessionId, {
+      const scope = await seedHistorySession("history-policy", {
         createdActor: { type: "human", source: "profile", id: f.person.id },
         providerOverride: "example",
         modelOverride: "historical",
@@ -327,16 +322,10 @@ describe("historical model disclosure", () => {
         typeof initialPayload.deltaCursor === "string" ? initialPayload.deltaCursor : undefined,
         "initial cursor",
       );
-      const content = "Stored example/historical reply survives policy narrowing.";
+      const content = "Saved example/historical reply.";
       await appendTranscriptMessage(scope, {
         eventId: "history-policy-reply",
-        message: {
-          role: "assistant",
-          provider: "example",
-          model: "historical",
-          content,
-          stopReason: "stop",
-        },
+        message: assistant("historical", content),
       });
       const currentSessionId = stage === "retained" ? "history-policy-successor" : scope.sessionId;
       if (stage === "retained") {
@@ -347,14 +336,8 @@ describe("historical model disclosure", () => {
         await appendTranscriptMessage(
           { ...scope, sessionId: currentSessionId },
           {
-            eventId: "history-policy-successor-reply",
-            message: {
-              role: "assistant",
-              provider: "example",
-              model: "allowed",
-              content: "The newer session must not replace retained history.",
-              stopReason: "stop",
-            },
+            eventId: "successor",
+            message: assistant("allowed", "Successor reply"),
           },
         );
       }
@@ -367,7 +350,7 @@ describe("historical model disclosure", () => {
         ready.resolve();
         await release.promise;
       };
-      const held = async <T>(result: Promise<T>) => {
+      const held = async <T>(result: T | Promise<T>) => {
         const value = await result;
         await hold();
         return value;
@@ -381,46 +364,34 @@ describe("historical model disclosure", () => {
             provider: "example",
             model: "historical",
           });
-          await hold();
-          return result;
+          return held(result);
         });
       } else if (stage === "delta read" || stage === "delta publication") {
         const read = historyDelta.readChatHistoryDelta;
         vi.spyOn(historyDelta, "readChatHistoryDelta").mockImplementationOnce(async (...args) => {
           preparedDelta = await read(...args);
-          if (stage === "delta read") {
-            await hold();
-          }
-          return preparedDelta;
+          return stage === "delta read" ? held(preparedDelta) : preparedDelta;
         });
-        if (stage === "delta publication") {
-          const prepare = rows.withPreparedExactRows.bind(rows);
-          vi.spyOn(rows, "withPreparedExactRows").mockImplementation(async (...args) => {
-            if (preparedDelta) {
-              await hold();
-            }
-            return prepare(...args);
-          });
-        }
       } else if (stage === "exact message") {
         const read = transcriptReaders.readSessionMessageByIdAsync;
         vi.spyOn(transcriptReaders, "readSessionMessageByIdAsync").mockImplementationOnce(
           (...args) => held(read(...args)),
         );
-      } else if (stage === "recent") {
-        const prepare = rows.withPreparedExactRows.bind(rows);
-        let preparations = 0;
-        vi.spyOn(rows, "withPreparedExactRows").mockImplementation(async (...args) => {
-          if (++preparations === 2) {
-            await hold();
-          }
-          return prepare(...args);
-        });
-      } else {
+      } else if (stage === "roster") {
         const prepare = rows.prepareSelection.bind(rows);
         vi.spyOn(rows, "prepareSelection").mockImplementationOnce((...args) =>
           held(prepare(...args)),
         );
+      }
+      if (stage === "recent" || stage === "delta publication") {
+        const prepare = rows.withPreparedExactRows.bind(rows);
+        let preparations = 0;
+        vi.spyOn(rows, "withPreparedExactRows").mockImplementation(async (...args) => {
+          if (stage === "recent" ? ++preparations === 2 : preparedDelta) {
+            await hold();
+          }
+          return prepare(...args);
+        });
       }
       const respond = vi.fn<RespondFn>();
       const opts = { ...historyOptions, respond };
@@ -451,7 +422,6 @@ describe("historical model disclosure", () => {
         ]);
         expect(respond).not.toHaveBeenCalled();
         if (stage.startsWith("delta")) {
-          expect(preparedDelta?.kind).toBe("delta");
           if (preparedDelta?.kind !== "delta") {
             throw new Error("Expected a prepared delta");
           }
@@ -465,13 +435,7 @@ describe("historical model disclosure", () => {
           expect(envelope.session).toHaveProperty("contextBudgetStatus", budget);
         }
         committed = structuredClone(f.cfg);
-        expectDefined(
-          committed.gateway?.roles?.definitions.reader,
-          "committed reader",
-        ).modelPolicy = {
-          sourceAgent: "main",
-          allow: ["example/allowed"],
-        };
+        f.setPolicy(committed, ["example/allowed"]);
         release.resolve();
         await pending;
         const payload = response(respond);

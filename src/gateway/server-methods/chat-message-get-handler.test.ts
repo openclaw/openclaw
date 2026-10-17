@@ -26,6 +26,7 @@ import {
 import { MAX_PAYLOAD_BYTES } from "../payload-limits.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
 import {
+  expectHistoryError,
   expectHistoryMessage,
   expectHistoryPayload,
   historyPayload,
@@ -49,6 +50,10 @@ async function replaceMessages(
     scope,
     messages.map(({ id, ...message }): [string, Record<string, unknown>] => [id, message]),
   );
+}
+
+function expectNotFound(respond: Parameters<typeof historyPayload>[0]) {
+  expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_found" });
 }
 
 it("hides attempt diagnostics across hidden announce chunks while retaining partial replies", async () => {
@@ -98,8 +103,7 @@ it("hides attempt diagnostics across hidden announce chunks while retaining part
     const failedMessage = expect.objectContaining({
       __openclaw: expect.objectContaining({ id: "failed" }),
     });
-    let respond = await lookup("failed");
-    expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_found" });
+    expectNotFound(await lookup("failed"));
     // Neither a bounded page nor a receipt-less attempt establishes terminal failure.
     expect(await readHistory({ offset: 1, limit: messages.length - 1 })).not.toContainEqual(
       failedMessage,
@@ -116,8 +120,7 @@ it("hides attempt diagnostics across hidden announce chunks while retaining part
       },
     });
     const persisted = await loadTranscriptEvents(scope);
-    respond = await lookup("failed");
-    expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_found" });
+    expectNotFound(await lookup("failed"));
     for (const params of [{ messageId: "failed" }, { offset: messages.length - 1 }]) {
       expect(await readHistory({ limit: 1, ...params })).toEqual(
         "messageId" in params
@@ -129,16 +132,18 @@ it("hides attempt diagnostics across hidden announce chunks while retaining part
     expect(await readHistory({ offset: 1, limit: messages.length })).not.toContainEqual(
       failedMessage,
     );
-    respond = await lookup("answer");
-    expectHistoryMessage(respond, { content: [{ type: "text", text: "Recovered answer" }] });
+    expectHistoryMessage(await lookup("answer"), {
+      content: [{ type: "text", text: "Recovered answer" }],
+    });
     expect(await loadTranscriptEvents(scope)).toEqual(persisted);
 
     await appendTranscriptMessage(scope, {
       eventId: "partial",
       message: { ...failure, content: [{ type: "text", text: "Partial answer" }] },
     });
-    respond = await lookup("partial");
-    expectHistoryMessage(respond, { content: [{ type: "text", text: "Partial answer" }] });
+    expectHistoryMessage(await lookup("partial"), {
+      content: [{ type: "text", text: "Partial answer" }],
+    });
   });
 });
 
@@ -175,19 +180,13 @@ it("resolves one indexed message per worker request while hiding stale announce 
         }
         expect(read.mock.calls.map(([input]) => input.kind)).toEqual(["message-by-id"]);
         if (messageId === "announce" || messageId === "stale-answer") {
-          expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_found" });
+          expectNotFound(respond);
         } else {
           expectHistoryMessage(respond, { __openclaw: expect.objectContaining({ id: messageId }) });
         }
       };
-      for (const messageId of [
-        "question",
-        "answer",
-        "announce",
-        "stale-answer",
-        "current-answer",
-      ]) {
-        await lookup(messageId);
+      for (const { id } of messages) {
+        await lookup(id);
       }
       await appendTranscriptEvent(scope, {
         type: "reset",
@@ -257,12 +256,12 @@ it("fetches a retained history reference without crossing conversation or pendin
       }),
       { content: output },
     );
-    expect(
+    expectNotFound(
       await request("chat.message.get", {
         messageId: `pending:${pending.inputId}`,
         sessionId: scope.sessionId,
       }),
-    ).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_found" });
+    );
 
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: "agent:main:other-reference" },
@@ -271,19 +270,16 @@ it("fetches a retained history reference without crossing conversation or pendin
         updatedAt: 1,
       },
     );
-    expect(
+    expectHistoryError(
       await request("chat.message.get", {
         sessionKey: "agent:main:other-reference",
         sessionId: scope.sessionId,
         messageId: "retained-output",
       }),
-    ).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
+      {
         code: "INVALID_REQUEST",
         message: "sessionId does not belong to sessionKey",
-      }),
+      },
     );
   });
 });
@@ -492,14 +488,10 @@ it.each([
           });
           expect(respond).toHaveBeenCalledOnce();
           if (explicitOwner && !explicitOwnerAllowed) {
-            expect(respond).toHaveBeenCalledWith(
-              false,
-              undefined,
-              expect.objectContaining({
-                code: "INVALID_REQUEST",
-                message: `Unknown agent id "${agentId}"`,
-              }),
-            );
+            expectHistoryError(respond, {
+              code: "INVALID_REQUEST",
+              message: `Unknown agent id "${agentId}"`,
+            });
             expect(readMessage).not.toHaveBeenCalled();
           } else {
             expectHistoryMessage(respond, {

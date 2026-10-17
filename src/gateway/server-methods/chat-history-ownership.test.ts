@@ -11,6 +11,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
+  expectHistoryError,
   expectHistoryPayload,
   historyRpc,
   withHistoryState,
@@ -19,14 +20,10 @@ import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { identifiedClient } from "./sessions-read-cache.test-support.js";
 
 function expectWrongSession(respond: Awaited<ReturnType<ReturnType<typeof historyRpc>>>) {
-  expect(respond).toHaveBeenCalledExactlyOnceWith(
-    false,
-    undefined,
-    expect.objectContaining({
-      code: "INVALID_REQUEST",
-      message: "sessionId does not belong to sessionKey",
-    }),
-  );
+  expectHistoryError(respond, {
+    code: "INVALID_REQUEST",
+    message: "sessionId does not belong to sessionKey",
+  });
 }
 
 async function seed(agentId: string, sessionKey: string, sessionId: string, content?: string) {

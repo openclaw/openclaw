@@ -12,6 +12,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as sharingPreparation from "../session-sharing-preparation.js";
 import {
+  expectHistoryError,
   expectHistoryPayload,
   historyPayload,
   historyRpc,
@@ -56,11 +57,7 @@ it("asks for a reload when an absent session is created during the read", async 
       });
     try {
       const respond = await historyRpc(context, scope.sessionKey)("chat.history");
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
-      );
+      expectHistoryError(respond, { code: "UNAVAILABLE", retryable: true });
     } finally {
       probe.mockRestore();
     }

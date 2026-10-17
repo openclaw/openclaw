@@ -87,3 +87,10 @@ export function expectHistoryMessage(
 ) {
   expectHistoryPayload(respond, { ok: true, message: expect.objectContaining(message) });
 }
+
+export function expectHistoryError(
+  respond: ReturnType<typeof vi.fn<RespondFn>>,
+  error: Record<string, unknown>,
+) {
+  expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, expect.objectContaining(error));
+}
