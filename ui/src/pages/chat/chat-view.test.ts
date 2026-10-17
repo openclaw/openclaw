@@ -3605,27 +3605,24 @@ describe("chat model controls", () => {
         label: "Workspace",
         authProfileId: profiles[0]!.profileId,
       };
-      const draw = () =>
-        renderModelControls(
-          state,
-          {
-            modelAuthStatusResult: status,
-            renderAccountSection: (model) =>
-              renderChatModelAccountControl({
-                owner: state,
-                client,
-                selection,
-                model,
-                modelAuthStatusResult: status,
-                disabled: false,
-                ownsSelection: () => true,
-                onSelect: vi.fn(),
-                onRequestUpdate: draw,
-              }),
-          },
-          container,
-        );
-      draw();
+      renderModelControls(
+        state,
+        {
+          modelAuthStatusResult: status,
+          renderAccountSection: (model) =>
+            renderChatModelAccountControl({
+              owner: state,
+              client,
+              selection,
+              model,
+              modelAuthStatusResult: status,
+              disabled: false,
+              ownsSelection: () => true,
+              onSelect: vi.fn(),
+            }),
+        },
+        container,
+      );
       expect(container.querySelector(".chat-controls__account-selection")?.textContent).toBe(
         "work@example.com · Sign in with ChatGPT",
       );

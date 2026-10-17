@@ -1,4 +1,3 @@
-import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
 import {
   dispatchCommandClientPresentation,
   type CommandClientPresentationAction,
@@ -16,11 +15,9 @@ import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
-import {
-  canonicalUiSessionKeyForPersistence,
-  isUiSelectedGlobalSessionKey,
-} from "../../lib/sessions/session-key.ts";
+import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-key.ts";
 import { resolveSpeechTextLimit } from "../../lib/speech-playback.ts";
+import { loadPageAssistantIdentity } from "./chat-assistant-identity.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { projectChatErrors } from "./chat-error-projection.ts";
 import { createChatErrorState } from "./chat-error-state.ts";
@@ -46,7 +43,6 @@ import { requestChatSend, resolveDisplayedLeafEntryId } from "./chat-send-reques
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { projectChatSessionPresentation } from "./chat-session-presentation-projection.ts";
-import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
@@ -103,51 +99,6 @@ export function invalidateImageLightbox(state: ChatPageHost) {
   state.imageLightbox = null;
   item?.release?.();
   return state.imageLightboxRequestVersion;
-}
-
-async function loadPageAssistantIdentity(state: ChatPageHost) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  const client = state.client;
-  const sessionKey = state.sessionKey.trim();
-  const agentId = resolveAgentIdForSession({
-    sessionKey,
-    assistantAgentId: state.assistantAgentId,
-    agentsList: state.agentsList,
-    hello: state.hello,
-  });
-  if (!agentId) {
-    return;
-  }
-  const requestVersion = ++state.assistantIdentityRequestVersion;
-  try {
-    const identity = await fetchAssistantIdentity(client, agentId);
-    if (
-      state.client !== client ||
-      !state.connected ||
-      state.assistantIdentityRequestVersion !== requestVersion ||
-      state.sessionKey.trim() !== sessionKey ||
-      resolveAgentIdForSession(state) !== agentId ||
-      !identity
-    ) {
-      return;
-    }
-    if (
-      state.assistantAgentId !== (identity.agentId ?? null) &&
-      isUiSelectedGlobalSessionKey(state, state.sessionKey)
-    ) {
-      retireChatModelSelectionOwnership(state);
-    }
-    state.assistantName = identity.name;
-    state.assistantAvatar = identity.avatar;
-    state.assistantAvatarStatus = identity.avatarStatus ?? null;
-    state.assistantAvatarReason = identity.avatarReason ?? null;
-    state.assistantAgentId = identity.agentId ?? null;
-    state.requestUpdate?.();
-  } catch {
-    // Keep the last known identity when the Gateway cannot answer.
-  }
 }
 
 export function createPageState(
@@ -246,6 +197,7 @@ export function createPageState(
     knownAgentRunIds: new Set(),
     waitingApprovalStatuses: new Map(),
     waitingApprovalResolvedIds: new Set(),
+    senderAgentAvatars: undefined,
     chatAvatarUrl: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
@@ -259,6 +211,8 @@ export function createPageState(
     chatModelSelectionPolicy: undefined,
     chatModelCatalogRetired: false,
     chatModelCatalogError: null,
+    chatModelCatalogRefreshFailed: undefined,
+    chatModelCatalogPendingProviders: undefined,
     chatAccountSelection: null,
     modelAuthStatusRequestVersion: 0,
     modelAuthStatusResult: null,
@@ -278,6 +232,7 @@ export function createPageState(
     chatSubmitGuards: new Set<string>(),
     chatGoalDraftMode: null,
     chatQueue: [],
+    chatSessionApprovalQueue: [],
     chatComposerFallbackByScope: {},
     chatSendingScopeKey: null,
     chatMessagesBySession,
@@ -666,6 +621,23 @@ export function createPageState(
     "chatAvatarStatus",
     "chatAvatarReason",
     "modelAuthStatusResult",
+    "assistantAvatar",
+    "assistantAvatarStatus",
+    "assistantAvatarReason",
+    "chatSessionApprovalQueue",
+    "senderAgentAvatars",
+    "chatModelSwitchPromises",
+    "chatModelPickerOpenSessionKey",
+    "chatModelsLoading",
+    "chatModelCatalog",
+    "chatModelCatalogInitialized",
+    "chatModelSelectionPolicy",
+    "chatModelCatalogRetired",
+    "chatModelCatalogError",
+    "chatModelCatalogRefreshFailed",
+    "chatModelCatalogPendingProviders",
+    "chatAccountSelection",
+    "chatThinkingLevel",
     "chatSending",
     "chatLoading",
     "chatHistoryPagination",
