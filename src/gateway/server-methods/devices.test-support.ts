@@ -8,72 +8,33 @@ import { runNodeWakeAttempt, runNodeWakeNudgeAttempt } from "../node-wake-state.
 import { resetNodeWakeStateForTest } from "../node-wake-state.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const {
-  approveDevicePairingMock,
-  getPairedDeviceMock,
-  getPendingDevicePairingMock,
-  listDevicePairingMock,
-  removePairedDeviceMock,
-  rejectDevicePairingMock,
-  revokeDeviceTokenMock,
-  rotateDeviceTokenMock,
-  updatePairedDeviceMetadataMock,
-} = vi.hoisted(() => ({
-  approveDevicePairingMock: vi.fn(),
-  getPairedDeviceMock: vi.fn(),
-  getPendingDevicePairingMock: vi.fn(),
-  listDevicePairingMock: vi.fn(),
-  removePairedDeviceMock: vi.fn(),
-  rejectDevicePairingMock: vi.fn(),
-  revokeDeviceTokenMock: vi.fn(),
-  rotateDeviceTokenMock: vi.fn(),
-  updatePairedDeviceMetadataMock: vi.fn(),
+const mocks = vi.hoisted(() => ({
+  pairing: {
+    getPairedDevice: vi.fn(),
+    getPendingDevicePairing: vi.fn(),
+    listDevicePairing: vi.fn(),
+    removePairedDevice: vi.fn(),
+    rejectDevicePairing: vi.fn(),
+    updatePairedDeviceMetadata: vi.fn(),
+  },
+  approval: { approveDevicePairing: vi.fn() },
+  tokens: { revokeDeviceToken: vi.fn(), rotateDeviceToken: vi.fn() },
+}));
+export { mocks };
+vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
+  ...mocks.pairing,
 }));
 
-export {
-  approveDevicePairingMock,
-  getPairedDeviceMock,
-  getPendingDevicePairingMock,
-  listDevicePairingMock,
-  removePairedDeviceMock,
-  rejectDevicePairingMock,
-  revokeDeviceTokenMock,
-  rotateDeviceTokenMock,
-  updatePairedDeviceMetadataMock,
-};
+vi.mock("../../infra/device-pairing-approval.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing-approval.js")>()),
+  ...mocks.approval,
+}));
 
-vi.mock("../../infra/device-pairing.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/device-pairing.js")>(
-    "../../infra/device-pairing.js",
-  );
-  return {
-    ...actual,
-    getPairedDevice: getPairedDeviceMock,
-    getPendingDevicePairing: getPendingDevicePairingMock,
-    listDevicePairing: listDevicePairingMock,
-    removePairedDevice: removePairedDeviceMock,
-    rejectDevicePairing: rejectDevicePairingMock,
-    updatePairedDeviceMetadata: updatePairedDeviceMetadataMock,
-  };
-});
-
-vi.mock("../../infra/device-pairing-approval.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/device-pairing-approval.js")>(
-    "../../infra/device-pairing-approval.js",
-  );
-  return { ...actual, approveDevicePairing: approveDevicePairingMock };
-});
-
-vi.mock("../../infra/device-pairing-tokens.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/device-pairing-tokens.js")>(
-    "../../infra/device-pairing-tokens.js",
-  );
-  return {
-    ...actual,
-    revokeDeviceToken: revokeDeviceTokenMock,
-    rotateDeviceToken: rotateDeviceTokenMock,
-  };
-});
+vi.mock("../../infra/device-pairing-tokens.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing-tokens.js")>()),
+  ...mocks.tokens,
+}));
 
 export function createClient(
   scopes: string[],
@@ -123,29 +84,12 @@ export function createDeviceClient(scopes = ["operator.pairing"], deviceId = "de
   return createClient(scopes, deviceId, { isDeviceTokenAuth: true });
 }
 
-export function mockPairedOperatorDevice(): void {
-  getPairedDeviceMock.mockResolvedValue({
-    deviceId: "device-1",
-    role: "operator",
-    roles: ["operator"],
-    scopes: ["operator.pairing"],
-    tokens: {
-      operator: {
-        token: "old-token",
-        role: "operator",
-        scopes: ["operator.pairing"],
-        createdAtMs: 123,
-      },
-    },
-  });
-}
-
 export function expectDeviceSuccess(opts: GatewayRequestHandlerOptions, payload: unknown) {
   expect(opts.respond).toHaveBeenCalledWith(true, payload, undefined);
 }
 
 export function mockRotateOperatorTokenSuccess(): void {
-  rotateDeviceTokenMock.mockResolvedValue({
+  mocks.tokens.rotateDeviceToken.mockResolvedValue({
     ok: true,
     entry: {
       token: "new-token",
@@ -157,10 +101,7 @@ export function mockRotateOperatorTokenSuccess(): void {
   });
 }
 
-export function expectRespondedErrorMessage(
-  opts: GatewayRequestHandlerOptions,
-  message: string,
-): void {
+export function expectDeviceError(opts: GatewayRequestHandlerOptions, message: string): void {
   expect(opts.respond).toHaveBeenCalledExactlyOnceWith(
     false,
     undefined,
