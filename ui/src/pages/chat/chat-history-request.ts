@@ -140,6 +140,18 @@ export function requestSharedHistory(
     historyState,
   ]: SharedChatHistoryArgs
 ): Promise<ChatHistoryResponse & { observation?: ChatHistoryObservation }> {
+  const knownState =
+    cursor !== undefined && historyState
+      ? {
+          ...(historyState.pendingInputs
+            ? { pendingInputs: historyState.stateRevision.pendingInputs }
+            : {}),
+          ...(historyState.sessionInfo
+            ? { sessionInfo: historyState.stateRevision.sessionInfo }
+            : {}),
+        }
+      : {};
+  requestKey += JSON.stringify(knownState);
   let owners = sharedChatHistoryRequests.get(client);
   if (!owners) {
     owners = new WeakMap();
@@ -157,21 +169,9 @@ export function requestSharedHistory(
     const params = {
       sessionKey,
       toolResultMaxChars: CHAT_HISTORY_TOOL_RESULT_MAX_CHARS,
-      knownState: {},
+      knownState,
       ...(requestAgentId ? { agentId: requestAgentId } : {}),
       ...(cursor !== undefined ? { cursor } : {}),
-      ...(cursor !== undefined && historyState
-        ? {
-            knownState: {
-              ...(historyState.pendingInputs
-                ? { pendingInputs: historyState.stateRevision.pendingInputs }
-                : {}),
-              ...(historyState.sessionInfo
-                ? { sessionInfo: historyState.stateRevision.sessionInfo }
-                : {}),
-            },
-          }
-        : {}),
       ...budget,
       ...(inputRunIds.length ? { inputRunIds } : {}),
     };

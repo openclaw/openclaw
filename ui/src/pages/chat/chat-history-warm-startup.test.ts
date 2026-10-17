@@ -535,6 +535,68 @@ describe("first chat startup snapshot ordering", () => {
     expect(second.state.chatPendingInputs?.page).toEqual(emptyInputs);
   });
 
+  it("requests missing pending inputs separately even when cached receipts match", async () => {
+    const initial = mountPane();
+    const pendingInputs = {
+      items: [
+        {
+          id: "followup-1",
+          runId: "run-followup-1",
+          message: { role: "user", content: "Check the attachment." },
+          acceptedAt: 1,
+          state: "queued" as const,
+          queued: true as const,
+        },
+      ],
+      total: 1,
+      queuedCount: 1,
+    };
+    const stateRevision = { pendingInputs: "pending-1", sessionInfo: "info-1" };
+    initial.read.resolve(null);
+    initial.connect();
+    initial.request.mockResolvedValueOnce({ ...initial.liveResult, pendingInputs, stateRevision });
+    await initial.start();
+    const snapshot = readChatSessionSnapshot(initial.state.chatMessagesBySession!, initial.state, {
+      sessionKey,
+    });
+    if (!snapshot?.historyState) {
+      throw new Error("expected cached startup metadata");
+    }
+    const first = mountPane();
+    const second = mountPane();
+    first.read.resolve(snapshot);
+    second.read.resolve({
+      ...snapshot,
+      historyState: { stateRevision, sessionInfo: snapshot.historyState.sessionInfo },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    first.connect();
+    second.connect();
+    second.state.client = first.client;
+    second.state.sessions = first.state.sessions;
+    const omitted = createDeferred<unknown>();
+    const full = createDeferred<unknown>();
+    first.request.mockReturnValueOnce(omitted.promise).mockReturnValueOnce(full.promise);
+    const loads = [first.start(), second.start()];
+    expect(first.request).toHaveBeenCalledTimes(2);
+    expect(first.request.mock.calls.map(([, params]) => params)).toEqual([
+      expect.objectContaining({ knownState: stateRevision }),
+      expect.objectContaining({ knownState: { sessionInfo: "info-1" } }),
+    ]);
+    const delta = {
+      kind: "delta",
+      messages: [],
+      deltaCursor: "next-cursor",
+      stateRevision,
+      sessionInfoSnapshotAt: 2,
+    };
+    omitted.resolve(delta);
+    full.resolve({ ...delta, pendingInputs });
+    await Promise.all(loads);
+    expect(first.state.chatPendingInputs?.queuedInputs).toEqual(pendingInputs.items);
+    expect(second.state.chatPendingInputs?.queuedInputs).toEqual(pendingInputs.items);
+  });
+
   it("shares an immediate startup between callers while the local read is pending", async () => {
     const h = mountPane();
     h.connect();
