@@ -89,16 +89,23 @@ function createCase({ storePath, replySpy }: { storePath: string; replySpy: Hear
     },
     channels: { telegram: { enabled: true, botToken: "fake", allowFrom: ["123"] } },
   };
+  const seed = (entry: SessionSeed = {}) =>
+    seedMainSessionStore(storePath, cfg, {
+      lastChannel: "telegram",
+      lastProvider: "telegram",
+      lastTo: "123",
+      ...entry,
+    });
   return {
     cfg,
     storePath,
     replySpy,
-    seed: (entry: SessionSeed = {}) =>
-      seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: "123",
+    seed,
+    seedPending: (text: string, ageMs = 0, entry: SessionSeed = {}) =>
+      seed({
         ...entry,
+        updatedAt: Date.now() - ageMs,
+        pendingFinalDelivery: { kind: "replayable", text, createdAt: Date.now() - ageMs },
       }),
     run: (overrides: RunOverrides = {}, deps: Partial<HeartbeatDeps> = {}) =>
       runHeartbeatOnce({
@@ -466,31 +473,18 @@ describe("heartbeat runner busy ownership", () => {
 
   it(
     "records a busy skip while a recent final delivery is pending",
-    heartbeatCase(async ({ seed, run, replySpy }) => {
-      await seed({
-        updatedAt: Date.now(),
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: "The requested report is ready.",
-          createdAt: Date.now(),
-        },
-      });
+    heartbeatCase(async ({ seedPending, run, replySpy }) => {
+      await seedPending("The requested report is ready.");
       expectBusy(await run(), replySpy);
     }),
   );
 
   it(
     "does not defer a recent pending acknowledgement under the fixed ack budget",
-    heartbeatCase(async ({ seed, run, replySpy }) => {
-      await seed({
+    heartbeatCase(async ({ seedPending, run, replySpy }) => {
+      await seedPending("HEARTBEAT_OK short", 0, {
         lastProvider: "heartbeat",
         lastTo: "heartbeat",
-        updatedAt: Date.now(),
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: "HEARTBEAT_OK short",
-          createdAt: Date.now(),
-        },
       });
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
       expect((await run()).status).toBe("ran");
@@ -500,16 +494,10 @@ describe("heartbeat runner busy ownership", () => {
 
   it(
     "does not replay stale pending final delivery through a later heartbeat",
-    heartbeatCase(async ({ cfg, seed, run, replySpy }) => {
+    heartbeatCase(async ({ cfg, seedPending, run, replySpy }) => {
       cfg.agents!.defaults!.heartbeat = { every: "30m", target: "telegram" };
-      await seed({
+      await seedPending("private prior user answer", 60_000, {
         lastTo: "default-heartbeat-target",
-        updatedAt: Date.now() - 60_000,
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: "private prior user answer",
-          createdAt: Date.now() - 60_000,
-        },
       });
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
       const telegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "default" });

@@ -93,6 +93,13 @@ function createCase({
           ...deps,
         },
       }),
+    claim: (sessionKey: string, runId = "next-user") =>
+      heartbeatOutcomeStore.claimHeartbeatOutcomeForRun({
+        agentId: "main",
+        sessionKey,
+        storePath,
+        runId,
+      }),
     read: (sessionKey: string) =>
       expectDefined(
         readSessionStoreForTest<SessionEntry>(storePath)[sessionKey],
@@ -102,6 +109,15 @@ function createCase({
 }
 function heartbeatCase(test: (fixture: ReturnType<typeof createCase>) => Promise<void>) {
   return () => withTempTelegramHeartbeatSandbox((sandbox) => test(createCase(sandbox)));
+}
+function telegramRegistry(heartbeat: typeof heartbeatRunnerTelegramPlugin.heartbeat) {
+  return createTestRegistry([
+    {
+      pluginId: "telegram",
+      source: "test",
+      plugin: { ...heartbeatRunnerTelegramPlugin, heartbeat },
+    },
+  ]);
 }
 function buttons(label: string, value: string) {
   return { presentation: { blocks: [{ type: "buttons" as const, buttons: [{ label, value }] }] } };
@@ -129,15 +145,7 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
           }
           return { ok: ready, reason: ready ? "ok" : "terminal-disconnect" };
         });
-        setActivePluginRegistry(
-          createTestRegistry([
-            {
-              pluginId: "telegram",
-              source: "test",
-              plugin: { ...heartbeatRunnerTelegramPlugin, heartbeat: { checkReady } },
-            },
-          ]),
-        );
+        setActivePluginRegistry(telegramRegistry({ checkReady }));
         if (failure === "no-target") {
           cfg.agents!.defaults!.heartbeat!.target = "none";
         }
@@ -175,21 +183,12 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
         const payload = "Check inbox for queued work.";
         const order: string[] = [];
         setActivePluginRegistry(
-          createTestRegistry([
-            {
-              pluginId: "telegram",
-              source: "test",
-              plugin: {
-                ...heartbeatRunnerTelegramPlugin,
-                heartbeat: {
-                  checkReady: async () => {
-                    order.push("readiness");
-                    return { ok: false, reason: "terminal-disconnect" };
-                  },
-                },
-              },
+          telegramRegistry({
+            checkReady: async () => {
+              order.push("readiness");
+              return { ok: false, reason: "terminal-disconnect" };
             },
-          ]),
+          }),
         );
         cfg.agents!.defaults!.heartbeat!.prompt =
           kind === "manual" ? payload : "Ambient monitor only.";
@@ -271,7 +270,7 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
   );
 
   it.each([false, true])("awaits outcome persistence failures (notify=%s)", async (notify) =>
-    heartbeatCase(async ({ cfg, storePath, seed, replySpy, sendTelegram, run }) => {
+    heartbeatCase(async ({ cfg, seed, replySpy, sendTelegram, run, claim }) => {
       cfg.agents!.defaults!.heartbeat!.target = "none";
       const sessionKey = await seed();
       replySpy.mockResolvedValue(
@@ -300,14 +299,7 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
         release.reject(new Error("outcome storage unavailable"));
         expect(await pending).toMatchObject({ status: "failed" });
         expect(sendTelegram).not.toHaveBeenCalled();
-        expect(
-          await heartbeatOutcomeStore.claimHeartbeatOutcomeForRun({
-            agentId: "main",
-            sessionKey,
-            storePath,
-            runId: "next-user",
-          }),
-        ).toBeUndefined();
+        expect(await claim(sessionKey)).toBeUndefined();
       } finally {
         release.resolve();
         await pending;
@@ -378,7 +370,7 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
   ])(
     "records a generated alert when $failure prevents confirmed delivery",
     async ({ failure, reason }) =>
-      heartbeatCase(async ({ cfg, storePath, seed, replySpy, sendTelegram, run }) => {
+      heartbeatCase(async ({ cfg, seed, replySpy, sendTelegram, run, claim }) => {
         cfg.agents!.defaults!.heartbeat!.target = failure === "target-none" ? "none" : "telegram";
         if (failure === "alerts-disabled") {
           cfg.channels = {
@@ -386,23 +378,14 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
             defaults: { heartbeatVisibility: { showAlerts: false } },
           };
         }
-        const registry = createTestRegistry([
-          {
-            pluginId: "telegram",
-            source: "test",
-            plugin: {
-              ...heartbeatRunnerTelegramPlugin,
-              heartbeat: {
-                checkReady: async () => {
-                  if (failure === "readiness-throws" && replySpy.mock.calls.length > 0) {
-                    throw new Error(reason);
-                  }
-                  return { ok: failure !== "readiness", reason };
-                },
-              },
-            },
+        const registry = telegramRegistry({
+          checkReady: async () => {
+            if (failure === "readiness-throws" && replySpy.mock.calls.length > 0) {
+              throw new Error(reason);
+            }
+            return { ok: failure !== "readiness", reason };
           },
-        ]);
+        });
         setActivePluginRegistry(registry);
         if (failure === "hook-cancelled") {
           addTestHook({
@@ -441,12 +424,7 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
           expect.soft(isRetryableHeartbeatSkipReason("channel-not-ready")).toBe(true);
         }
         await closeOpenClawAgentDatabasesAsync();
-        const stored = await heartbeatOutcomeStore.claimHeartbeatOutcomeForRun({
-          agentId: "main",
-          sessionKey,
-          storePath,
-          runId: "user-run",
-        });
+        const stored = await claim(sessionKey, "user-run");
         expect(stored).toMatchObject({
           outcome: "blocked",
           priority: "high",

@@ -82,9 +82,39 @@ async function createHeartbeatScenario(target: "none" | "telegram" = "none") {
     lastProvider: "telegram",
     lastTo: "-100155462274",
   });
-  return { cfg, sessionKey };
+  const run = (
+    source: "cron" | "exec-event",
+    telegram?: NonNullable<Parameters<typeof runHeartbeatOnce>[0]["deps"]>["telegram"],
+  ) =>
+    runHeartbeatOnce({
+      cfg,
+      agentId: "main",
+      sessionKey,
+      source,
+      reason: source === "cron" ? "cron:queue-check" : "exec-event",
+      ...(source === "exec-event" ? { intent: "event" as const } : {}),
+      deps: { getReplyFromConfig, telegram },
+    });
+  const humanReply = (Body: string) =>
+    getReplyFromConfig(
+      finalizeInboundContext({
+        Body,
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:123",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      }),
+      undefined,
+      cfg,
+    );
+  return { cfg, sessionKey, run, humanReply };
 }
 
+function eventIds(events: ReturnType<typeof peekSystemEventEntries>) {
+  return events.map((event) => event.id);
+}
 function completedTurn(sessionId: string, text = "Handled internally") {
   return {
     payloads: [{ text }],
@@ -98,7 +128,7 @@ function completedTurn(sessionId: string, text = "Handled internally") {
 it.each(["heartbeat wake"])(
   "delivers a creation notice about %s once through a cron wake",
   async (topic) => {
-    const { cfg, sessionKey } = await createHeartbeatScenario();
+    const { cfg, sessionKey, run: runSource } = await createHeartbeatScenario();
     const title = `Investigate ${topic}`;
     await recordSessionCreated(cfg, {
       sessionKey: "agent:main:dashboard:new-task",
@@ -118,15 +148,7 @@ it.each(["heartbeat wake"])(
     const runAgent = vi
       .spyOn(embeddedAgent, "runEmbeddedAgent")
       .mockImplementation(async (params) => completedTurn(params.sessionId));
-    const run = () =>
-      runHeartbeatOnce({
-        cfg,
-        agentId: "main",
-        sessionKey,
-        source: "cron",
-        reason: "cron:queue-check",
-        deps: { getReplyFromConfig },
-      });
+    const run = () => runSource("cron");
 
     expect((await run()).status).toBe("ran");
     expect(runAgent).toHaveBeenCalledTimes(1);
@@ -151,7 +173,7 @@ it.each(["heartbeat wake"])(
 it.for(["stopped", "failed"] as const)(
   "settles admitted generic events under a %s exec continuation",
   async (outcome, test) => {
-    const { cfg, sessionKey } = await createHeartbeatScenario();
+    const { sessionKey, run, humanReply } = await createHeartbeatScenario();
     const identity = {
       runId: "original-command-request",
       sessionKey,
@@ -162,7 +184,7 @@ it.for(["stopped", "failed"] as const)(
       turnKind: "btw" as const,
     };
     const owner = await withExecRequestTurn({ identity }, async () =>
-      expectDefined(captureExecRequestOwners(identity)?.[0], "original command owner"),
+      expectDefined(captureExecRequestOwners(identity)?.[0], "command request owner"),
     );
     const completionText = "Exec completed (owned-command, code 0) :: ORIGINAL_COMMAND_RESULT";
     const completion = expectDefined(
@@ -190,15 +212,7 @@ it.for(["stopped", "failed"] as const)(
         params.abortSignal?.throwIfAborted();
         return completedTurn(params.sessionId);
       });
-    const pending = runHeartbeatOnce({
-      cfg,
-      agentId: "main",
-      sessionKey,
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
-      deps: { getReplyFromConfig },
-    });
+    const pending = run("exec-event");
     try {
       await withinTest(
         awaitGateBeforeSettlement(entered.promise, pending, "heartbeat settled before model entry"),
@@ -240,8 +254,8 @@ it.for(["stopped", "failed"] as const)(
       }
       release.resolve();
       const result = await pending;
-      expect(peekSystemEventEntries(sessionKey).map((event) => event.id)).toEqual(
-        (outcome === "stopped" ? [...peers, late] : [completion, late]).map((event) => event.id),
+      expect(eventIds(peekSystemEventEntries(sessionKey))).toEqual(
+        eventIds(outcome === "stopped" ? [...peers, late] : [completion, late]),
       );
       if (outcome === "failed") {
         expect(result.status).toBe("failed");
@@ -259,19 +273,7 @@ it.for(["stopped", "failed"] as const)(
         return completedTurn(params.sessionId);
       });
       const nextBody = "Start my next independent request";
-      const nextReply = await getReplyFromConfig(
-        finalizeInboundContext({
-          Body: nextBody,
-          Provider: "telegram",
-          Surface: "telegram",
-          OriginatingChannel: "telegram",
-          OriginatingTo: "telegram:123",
-          ChatType: "direct",
-          SessionKey: sessionKey,
-        }),
-        undefined,
-        cfg,
-      );
+      const nextReply = await humanReply(nextBody);
       const replies = Array.isArray(nextReply) ? nextReply : nextReply ? [nextReply] : [];
       expect(replies.map((reply) => reply.text)).toContain("Handled internally");
       expect(runAgent).toHaveBeenCalledTimes(2);
@@ -295,7 +297,7 @@ it.for(["stopped", "failed"] as const)(
 it.for(["confirmed", "recovery-owned", "deferred admission abort"] as const)(
   "settles admitted generic events for a later human turn after %s",
   async (outcome, test) => {
-    const { cfg, sessionKey } = await createHeartbeatScenario("telegram");
+    const { cfg, sessionKey, run, humanReply } = await createHeartbeatScenario("telegram");
     const identity = {
       runId: "generic-delivery-request",
       sessionKey,
@@ -363,15 +365,7 @@ it.for(["confirmed", "recovery-owned", "deferred admission abort"] as const)(
         },
       );
     }
-    const pending = runHeartbeatOnce({
-      cfg,
-      agentId: "main",
-      sessionKey,
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
-      deps: { getReplyFromConfig, telegram },
-    });
+    const pending = run("exec-event", telegram);
     try {
       await withinTest(
         awaitGateBeforeSettlement(entered.promise, pending, "heartbeat missed its delivery gate"),
@@ -400,10 +394,7 @@ it.for(["confirmed", "recovery-owned", "deferred admission abort"] as const)(
         expect(telegram).not.toHaveBeenCalled();
         expect(await loadPendingDeliveries()).toEqual([]);
       }
-      expect(peekSystemEventEntries(sessionKey).map((event) => event.id)).toEqual([
-        completion.id,
-        generic.id,
-      ]);
+      expect(eventIds(peekSystemEventEntries(sessionKey))).toEqual([completion.id, generic.id]);
       const late = expectDefined(
         enqueueSystemEventEntry("Late notification for the next human turn", { sessionKey }),
         "late generic occurrence",
@@ -415,11 +406,11 @@ it.for(["confirmed", "recovery-owned", "deferred admission abort"] as const)(
       expect(await pending).toMatchObject({ status: "skipped" });
       expect(telegram).toHaveBeenCalledTimes(noSend ? 0 : 1);
       expect(received).toHaveLength(noSend ? 0 : 1);
-      expect(peekSystemEventEntries(sessionKey).map((event) => event.id)).toEqual(
-        (noSend ? [generic, late] : [late]).map((event) => event.id),
+      expect(eventIds(peekSystemEventEntries(sessionKey))).toEqual(
+        eventIds(noSend ? [generic, late] : [late]),
       );
-      expect(peekDeliverableSystemEventEntries(sessionKey).map((event) => event.id)).toEqual(
-        (noSend ? [generic, late] : [late]).map((event) => event.id),
+      expect(eventIds(peekDeliverableSystemEventEntries(sessionKey))).toEqual(
+        eventIds(noSend ? [generic, late] : [late]),
       );
       const recovery = await loadPendingDeliveries();
       expect(recovery).toHaveLength(outcome === "recovery-owned" ? 1 : 0);
@@ -438,19 +429,7 @@ it.for(["confirmed", "recovery-owned", "deferred admission abort"] as const)(
       }
 
       const nextBody = "Handle only my new instruction";
-      await getReplyFromConfig(
-        finalizeInboundContext({
-          Body: nextBody,
-          Provider: "telegram",
-          Surface: "telegram",
-          OriginatingChannel: "telegram",
-          OriginatingTo: "telegram:123",
-          ChatType: "direct",
-          SessionKey: sessionKey,
-        }),
-        undefined,
-        cfg,
-      );
+      await humanReply(nextBody);
       expect(runAgent).toHaveBeenCalledTimes(2);
       const next = expectDefined(runAgent.mock.calls[1]?.[0], "later human model input");
       expect(next.prompt).toContain(nextBody);

@@ -24,6 +24,14 @@ import {
 import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "./heartbeat-wake.js";
 import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
+const topicRoute = (threadId: number, accountId?: string) => ({
+  channel: "telegram",
+  to: `telegram:-1003774691294:topic:${threadId}`,
+  threadId,
+  ...(accountId ? { accountId } : {}),
+});
+const sharedSessionKey = "agent:main:telegram:group:-1003774691294";
+const topicSessionKey = `${sharedSessionKey}:topic:47`;
 const writeTelegramSessionStore = (
   storePath: string,
   sessionKey: string,
@@ -36,6 +44,13 @@ const writeTelegramSessionStore = (
     lastProvider: "telegram",
     lastTo: "-100155462274",
     ...overrides,
+  });
+
+const seedDriftedSession = (storePath: string, sessionKey: string) =>
+  writeTelegramSessionStore(storePath, sessionKey, {
+    lastTo: topicRoute(2175).to,
+    lastAccountId: "personal",
+    lastThreadId: 2175,
   });
 
 const expectTelegramSend = (
@@ -431,7 +446,7 @@ describe("Heartbeat event routing", () => {
 
   it("keeps the exec route when a cron wake sees both queued payloads", async () => {
     await withRouting(async ({ storePath, replySpy, sendTelegram, run }) => {
-      const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
+      const sessionKey = topicSessionKey;
       await writeTelegramSessionStore(storePath, sessionKey, {
         lastTo: "telegram:-1003774691294:topic:99",
         lastThreadId: 99,
@@ -439,20 +454,12 @@ describe("Heartbeat event routing", () => {
       enqueueSystemEvent("Exec completed (mixed-run, code 0) :: ready", {
         sessionKey,
         contextKey: "exec:fixture-2",
-        deliveryContext: {
-          channel: "telegram",
-          to: "telegram:-1003774691294:topic:47",
-          threadId: 47,
-        },
+        deliveryContext: topicRoute(47),
       });
       enqueueSystemEvent("Reminder: mixed cron follow-up", {
         sessionKey,
         contextKey: "cron:mixed-run",
-        deliveryContext: {
-          channel: "telegram",
-          to: "telegram:-1003774691294:topic:99",
-          threadId: 99,
-        },
+        deliveryContext: topicRoute(99),
       });
       replySpy.mockResolvedValue({ text: "Command completed." });
 
@@ -483,12 +490,8 @@ describe("Heartbeat event routing", () => {
     },
   ])("routes $name shared-session exec completion after topic drift", async ({ output, reply }) => {
     await withRouting(async ({ storePath, replySpy, sendTelegram, run }) => {
-      const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
-      await writeTelegramSessionStore(storePath, sessionKey, {
-        lastTo: "telegram:-1003774691294:topic:2175",
-        lastAccountId: "personal",
-        lastThreadId: 2175,
-      });
+      const sessionKey = topicSessionKey;
+      await seedDriftedSession(storePath, sessionKey);
 
       let projectedSystemEvents: string[] = [];
       replySpy.mockImplementation(async (_ctx, options) => {
@@ -499,12 +502,7 @@ describe("Heartbeat event routing", () => {
       enqueueSystemEvent(`Exec completed (review-run, code 0)${output ? ` :: ${output}` : ""}`, {
         sessionKey,
         contextKey: "exec:fixture-3",
-        deliveryContext: {
-          channel: "telegram",
-          to: "telegram:-1003774691294:topic:47",
-          accountId: "work",
-          threadId: 47,
-        },
+        deliveryContext: topicRoute(47, "work"),
       });
       enqueueSystemEvent("Node connected", {
         sessionKey,
@@ -534,22 +532,13 @@ describe("Heartbeat event routing", () => {
 
   it("automatically drains queued exec completions on their own routes", async ({ signal }) => {
     await withRouting(async ({ cfg, storePath, replySpy, sendTelegram, run }) => {
-      const sessionKey = "agent:main:telegram:group:-1003774691294";
-      await writeTelegramSessionStore(storePath, sessionKey, {
-        lastTo: "telegram:-1003774691294:topic:2175",
-        lastAccountId: "personal",
-        lastThreadId: 2175,
-      });
+      const sessionKey = sharedSessionKey;
+      await seedDriftedSession(storePath, sessionKey);
       const enqueueCompletion = (name: string, accountId: string, threadId: number) =>
         enqueueSystemEvent(`Exec completed (${name}, code 0) :: ${name} is ready`, {
           sessionKey,
           contextKey: "exec:fixture-4",
-          deliveryContext: {
-            channel: "telegram",
-            to: `telegram:-1003774691294:topic:${threadId}`,
-            accountId,
-            threadId,
-          },
+          deliveryContext: topicRoute(threadId, accountId),
         });
       enqueueCompletion("work-report", "work", 47);
       enqueueCompletion("personal-report", "personal", 99);
@@ -605,21 +594,12 @@ describe("Heartbeat event routing", () => {
 
   it("does not let a deferred exec route retarget scheduled work", async () => {
     await withRouting(async ({ storePath, replySpy, sendTelegram, run }) => {
-      const sessionKey = "agent:main:telegram:group:-1003774691294";
-      await writeTelegramSessionStore(storePath, sessionKey, {
-        lastTo: "telegram:-1003774691294:topic:2175",
-        lastAccountId: "personal",
-        lastThreadId: 2175,
-      });
+      const sessionKey = sharedSessionKey;
+      await seedDriftedSession(storePath, sessionKey);
       enqueueSystemEvent("Exec completed (work-report, code 0) :: report is ready", {
         sessionKey,
         contextKey: "exec:fixture-5",
-        deliveryContext: {
-          channel: "telegram",
-          to: "telegram:-1003774691294:topic:47",
-          accountId: "work",
-          threadId: 47,
-        },
+        deliveryContext: topicRoute(47, "work"),
       });
       replySpy.mockResolvedValue({ text: "Scheduled maintenance completed." });
 

@@ -37,6 +37,43 @@ import {
   resetSystemEventsForTest,
 } from "./system-events.js";
 
+const capturedRoute = {
+  channel: "telegram",
+  to: "telegram:-1003774691294:topic:47",
+  accountId: "work",
+  threadId: 47,
+};
+type Sandbox = Parameters<Parameters<typeof withTempHeartbeatSandbox>[0]>[0];
+async function custodyFixture(sandbox: Sandbox, personal = false, sessionId?: string) {
+  const { tmpDir, storePath, replySpy } = sandbox;
+  const cfg = heartbeatTestConfig(tmpDir, personal ? "telegram" : "last", "telegram", storePath);
+  const destination = personal ? { to: "123456789", accountId: "personal" } : capturedRoute;
+  if (personal) {
+    Object.assign(cfg.agents!.defaults!.heartbeat!, { target: "telegram", ...destination });
+  }
+  const sessionKey = await seedMainSessionStore(storePath, cfg, {
+    ...(sessionId ? { sessionId } : {}),
+    lastChannel: "telegram",
+    lastProvider: "telegram",
+    lastTo: destination.to,
+    lastAccountId: destination.accountId,
+    ...(personal ? {} : { lastThreadId: 47 }),
+  });
+  const run = (
+    telegram: NonNullable<Parameters<typeof runHeartbeatOnce>[0]["deps"]>["telegram"],
+    options: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps" | "sessionKey"> = {},
+  ) =>
+    runHeartbeatOnce({
+      cfg,
+      sessionKey,
+      source: "exec-event",
+      reason: "exec-event",
+      ...options,
+      deps: { getReplyFromConfig: replySpy, telegram },
+    });
+  return { cfg, sessionKey, route: capturedRoute, run };
+}
+
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
   resetSystemEventsForTest();
@@ -57,28 +94,21 @@ it.for([
   "preserves delivery custody when a coalesced peer is stopped during %s",
   async (stage, test) => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = heartbeatTestConfig(tmpDir, "last", "telegram", storePath);
+      const {
+        cfg,
+        sessionKey,
+        route,
+        run: runWith,
+      } = await custodyFixture({ tmpDir, storePath, replySpy }, false, "completion-owners");
       const sendsAck = stage === "acknowledgment delivery";
+      const beforeDispatch = stage === "before platform dispatch";
+      const unknownDelivery = stage === "ambiguous transport" || stage === "identityless transport";
       if (sendsAck) {
         cfg.channels = {
           ...cfg.channels,
           defaults: { heartbeatVisibility: { showOk: true } },
         };
       }
-      const route = {
-        channel: "telegram",
-        to: "telegram:-1003774691294:topic:47",
-        accountId: "work",
-        threadId: 47,
-      };
-      const sessionKey = await seedMainSessionStore(storePath, cfg, {
-        sessionId: "completion-owners",
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: route.to,
-        lastAccountId: "work",
-        lastThreadId: 47,
-      });
       const captureOwner = (runId: string) => {
         const identity = { runId, sessionKey, sessionId: "completion-owners", agentId: "main" };
         return withExecRequestTurn({ identity }, async () => {
@@ -117,6 +147,10 @@ it.for([
       );
       const entered = createDeferred();
       const release = createDeferred();
+      const pause = async () => {
+        entered.resolve();
+        await release.promise;
+      };
       const received: string[] = [];
       const telegram = vi.fn().mockImplementation(async (_to: string, text: string) => {
         received.push(text);
@@ -128,26 +162,23 @@ it.for([
           async (...args) => {
             const result = await send(...args);
             expect(result.status).toBe("sent");
-            entered.resolve();
-            await release.promise;
+            await pause();
             return result;
           },
         );
-      } else if (stage === "before platform dispatch") {
+      } else if (beforeDispatch) {
         const startLease = deliveryLease.startDeliveryProducerLease;
         vi.spyOn(deliveryLease, "startDeliveryProducerLease").mockImplementationOnce(
           async (params) => {
             const lease = await startLease(params);
-            entered.resolve();
-            await release.promise;
+            await pause();
             return lease;
           },
         );
-      } else if (stage === "ambiguous transport" || stage === "identityless transport") {
+      } else if (unknownDelivery) {
         telegram.mockImplementationOnce(async (_to: string, text: string) => {
           received.push(text);
-          entered.resolve();
-          await release.promise;
+          await pause();
           if (stage === "identityless transport") {
             return {};
           }
@@ -160,8 +191,7 @@ it.for([
           const result = await patch(...args);
           if (received.length === 1 && !gated) {
             gated = true;
-            entered.resolve();
-            await release.promise;
+            await pause();
           }
           return result;
         });
@@ -177,20 +207,11 @@ it.for([
           async (params) => {
             await persist(params);
             // Native rejection has released delivery custody; only heartbeat settlement remains.
-            entered.resolve();
-            await release.promise;
+            await pause();
           },
         );
       }
-      const run = () =>
-        runHeartbeatOnce({
-          cfg,
-          sessionKey,
-          source: "exec-event",
-          intent: "event",
-          reason: "exec-event",
-          deps: { getReplyFromConfig: replySpy, telegram },
-        });
+      const run = () => runWith(telegram, { intent: "event" });
       const pending = run();
       try {
         await withinTest(
@@ -203,23 +224,16 @@ it.for([
         );
         expect(replySpy.mock.calls[0]?.[0].Body).toContain("STOPPED_RESULT");
         expect(replySpy.mock.calls[0]?.[0].Body).toContain("LIVE_RESULT");
-        expect(telegram).toHaveBeenCalledTimes(stage === "before platform dispatch" ? 0 : 1);
+        expect(telegram).toHaveBeenCalledTimes(beforeDispatch ? 0 : 1);
         expect(await loadPendingDeliveries()).toHaveLength(
-          stage === "ambiguous transport" ||
-            stage === "identityless transport" ||
-            stage === "before platform dispatch"
+          stage === "ambiguous transport" || stage === "identityless transport" || beforeDispatch
             ? 1
             : 0,
         );
         cancelExecRequestOwners([stoppedOwner]);
         release.resolve();
         expect(liveOwner.signal.aborted).toBe(false);
-        if (
-          stage === "ambiguous transport" ||
-          stage === "identityless transport" ||
-          stage === "confirmed delivery" ||
-          sendsAck
-        ) {
+        if (unknownDelivery || stage === "confirmed delivery" || sendsAck) {
           expect(await pending).toEqual({ status: "skipped", reason: "no-pending-event" });
           expect(received).toEqual([
             expect.stringContaining(sendsAck ? "HEARTBEAT_OK" : "Combined completion result"),
@@ -229,7 +243,7 @@ it.for([
           expect(replySpy).toHaveBeenCalledOnce();
           expect(telegram).toHaveBeenCalledOnce();
           const recovery = await loadPendingDeliveries();
-          if (stage === "ambiguous transport" || stage === "identityless transport") {
+          if (unknownDelivery) {
             expect(recovery).toHaveLength(1);
             expect(recovery[0]).toMatchObject({
               to: route.to,
@@ -270,7 +284,7 @@ it.for([
         expect(replySpy).toHaveBeenCalledTimes(2);
         expect(replySpy.mock.calls[1]?.[0].Body).toContain("LIVE_RESULT");
         expect(replySpy.mock.calls[1]?.[0].Body).not.toContain("STOPPED_RESULT");
-        expect(telegram).toHaveBeenCalledTimes(stage === "before platform dispatch" ? 1 : 2);
+        expect(telegram).toHaveBeenCalledTimes(beforeDispatch ? 1 : 2);
         expect(telegram.mock.calls.at(-1)?.[1]).toContain("Live peer completion result");
         expect(received).toEqual([expect.stringContaining("Live peer completion result")]);
         expect(peekSystemEventEntries(sessionKey)).toEqual([]);
@@ -284,20 +298,7 @@ it.for([
 
 it("retains a proven unqueued completion for original-route recovery after transaction rollback", async () => {
   await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-    const cfg = heartbeatTestConfig(tmpDir, "last", "telegram", storePath);
-    const route = {
-      channel: "telegram",
-      to: "telegram:-1003774691294:topic:47",
-      accountId: "work",
-      threadId: 47,
-    };
-    const sessionKey = await seedMainSessionStore(storePath, cfg, {
-      lastChannel: "telegram",
-      lastProvider: "telegram",
-      lastTo: route.to,
-      lastAccountId: "work",
-      lastThreadId: 47,
-    });
+    const { cfg, sessionKey, route, run } = await custodyFixture({ tmpDir, storePath, replySpy });
     enqueueSystemEvent("Exec completed (queue-admission, code 0) :: original result", {
       sessionKey,
       contextKey: "exec:queue-admission",
@@ -340,13 +341,7 @@ it("retains a proven unqueued completion for original-route recovery after trans
     expect(telegram).not.toHaveBeenCalled();
     expect(await loadPendingDeliveries()).toHaveLength(0);
     expect(peekDeliverableSystemEventEntries(sessionKey)).toHaveLength(1);
-    await runHeartbeatOnce({
-      cfg,
-      sessionKey,
-      source: "exec-event",
-      reason: "exec-event",
-      deps: { getReplyFromConfig: replySpy, telegram },
-    });
+    await run(telegram);
     expect(telegram).toHaveBeenCalledExactlyOnceWith(
       route.to,
       expect.stringContaining("Original completion"),
@@ -360,20 +355,7 @@ it.each(["rejected", "ambiguous"] as const)(
   "does not regenerate %s queued completion on another route",
   async (kind) => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = heartbeatTestConfig(tmpDir, "last", "telegram", storePath);
-      const route = {
-        channel: "telegram",
-        to: "telegram:-1003774691294:topic:47",
-        accountId: "work",
-        threadId: 47,
-      };
-      const sessionKey = await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: route.to,
-        lastAccountId: "work",
-        lastThreadId: 47,
-      });
+      const { sessionKey, route, run } = await custodyFixture({ tmpDir, storePath, replySpy });
       enqueueSystemEvent("Exec completed (held-custody, code 0) :: ORIGINAL_QUEUED_RESULT", {
         sessionKey,
         contextKey: "exec:held-custody",
@@ -394,8 +376,7 @@ it.each(["rejected", "ambiguous"] as const)(
               }),
         )
         .mockResolvedValue({ messageId: "other", chatId: "-1003774691294" });
-      const deps = { getReplyFromConfig: replySpy, telegram };
-      await runHeartbeatOnce({ cfg, sessionKey, source: "exec-event", reason: "exec-event", deps });
+      await run(telegram);
       expect(telegram).toHaveBeenCalledOnce();
       const held = await loadPendingDeliveries();
       expect(held).toHaveLength(1);
@@ -406,7 +387,7 @@ it.each(["rejected", "ambiguous"] as const)(
         contextKey: "exec:other-route",
         deliveryContext: { ...route, to: "telegram:-1003774691294:topic:48", threadId: 48 },
       });
-      await runHeartbeatOnce({ cfg, sessionKey, source: "exec-event", reason: "exec-event", deps });
+      await run(telegram);
       expect(replySpy).toHaveBeenCalledTimes(2);
       expect(replySpy.mock.calls[1]?.[0].Body).not.toContain("ORIGINAL_QUEUED_RESULT");
       expect(telegram).toHaveBeenCalledTimes(2);
@@ -429,6 +410,16 @@ it.each(["exec", "notice", "invalid-exec"] as const)(
         lastTo: "telegram:123456789",
         lastAccountId: "personal",
       });
+      const run = (
+        telegram: NonNullable<Parameters<typeof runHeartbeatOnce>[0]["deps"]>["telegram"],
+      ) =>
+        runHeartbeatOnce({
+          cfg,
+          sessionKey,
+          source: "exec-event",
+          reason: "exec-event",
+          deps: { getReplyFromConfig: replySpy, telegram },
+        });
       enqueueSystemEvent("Exec completed (legacy-first, code 0) :: LEGACY_ONLY", {
         sessionKey,
         contextKey: "exec:legacy-first",
@@ -447,15 +438,14 @@ it.each(["exec", "notice", "invalid-exec"] as const)(
         text: ctx.Body?.includes("LEGACY_ONLY") ? "LEGACY_ONLY" : "CAPTURED_ONLY",
       }));
       const telegram = vi.fn().mockResolvedValue({ messageId: "done", chatId: "123456789" });
-      const deps = { getReplyFromConfig: replySpy, telegram };
-      await runHeartbeatOnce({ cfg, sessionKey, source: "exec-event", reason: "exec-event", deps });
+      await run(telegram);
       expect(replySpy.mock.calls[0]?.[0].Body).toContain("LEGACY_ONLY");
       expect(replySpy.mock.calls[0]?.[0].Body).not.toContain("CAPTURED_ONLY");
       if (kind !== "exec") {
         expect(telegram.mock.calls[0]?.[0]).toBe("telegram:123456789");
         return;
       }
-      await runHeartbeatOnce({ cfg, sessionKey, source: "exec-event", reason: "exec-event", deps });
+      await run(telegram);
       expect(replySpy.mock.calls[1]?.[0].Body).toContain("CAPTURED_ONLY");
       expect(replySpy.mock.calls[1]?.[0].Body).not.toContain("LEGACY_ONLY");
       expect(telegram.mock.calls[1]?.[0]).toBe("telegram:-1003774691294:topic:47");
@@ -465,20 +455,7 @@ it.each(["exec", "notice", "invalid-exec"] as const)(
 
 it("continues a deferred route after permanent rejection without replaying the rejected exec", async () => {
   await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-    const cfg = heartbeatTestConfig(tmpDir, "last", "telegram", storePath);
-    const route = {
-      channel: "telegram",
-      to: "telegram:-1003774691294:topic:47",
-      accountId: "work",
-      threadId: 47,
-    };
-    const sessionKey = await seedMainSessionStore(storePath, cfg, {
-      lastChannel: "telegram",
-      lastProvider: "telegram",
-      lastTo: route.to,
-      lastAccountId: "work",
-      lastThreadId: 47,
-    });
+    const { cfg, sessionKey, route } = await custodyFixture({ tmpDir, storePath, replySpy });
     for (const [name, threadId] of [
       ["REJECTED", 47],
       ["DEFERRED", 48],
@@ -546,38 +523,15 @@ it("continues a deferred route after permanent rejection without replaying the r
 
 it("does not let an uninspected exec route retarget an interval heartbeat", async () => {
   await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-    const cfg = heartbeatTestConfig(tmpDir, "telegram", "telegram", storePath);
-    cfg.agents!.defaults!.heartbeat = {
-      ...cfg.agents!.defaults!.heartbeat,
-      target: "telegram",
-      to: "123456789",
-      accountId: "personal",
-    };
-    const sessionKey = await seedMainSessionStore(storePath, cfg, {
-      lastChannel: "telegram",
-      lastProvider: "telegram",
-      lastTo: "123456789",
-      lastAccountId: "personal",
-    });
+    const { sessionKey, route, run } = await custodyFixture({ tmpDir, storePath, replySpy }, true);
     enqueueSystemEvent("Exec completed (not-selected, code 0) :: PRIVATE_EXEC_RESULT", {
       sessionKey,
       contextKey: "exec:not-selected",
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:-1003774691294:topic:47",
-        accountId: "work",
-        threadId: 47,
-      },
+      deliveryContext: route,
     });
     replySpy.mockResolvedValue({ text: "Scheduled monitor output" });
     const telegram = vi.fn().mockResolvedValue({ messageId: "monitor", chatId: "123456789" });
-    await runHeartbeatOnce({
-      cfg,
-      sessionKey,
-      source: "interval",
-      reason: "interval",
-      deps: { getReplyFromConfig: replySpy, telegram },
-    });
+    await run(telegram, { source: "interval", reason: "interval" });
     expect(replySpy.mock.calls[0]?.[0].Body).not.toContain("PRIVATE_EXEC_RESULT");
     expect(telegram).toHaveBeenCalledExactlyOnceWith(
       "123456789",
@@ -588,76 +542,17 @@ it("does not let an uninspected exec route retarget an interval heartbeat", asyn
   });
 });
 
-it("does not grant captured exec authority to an untagged look-alike event", async () => {
-  await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-    const cfg = heartbeatTestConfig(tmpDir, "telegram", "telegram", storePath);
-    cfg.agents!.defaults!.heartbeat = {
-      ...cfg.agents!.defaults!.heartbeat,
-      target: "telegram",
-      to: "123456789",
-      accountId: "personal",
-    };
-    const sessionKey = await seedMainSessionStore(storePath, cfg, {
-      lastChannel: "telegram",
-      lastProvider: "telegram",
-      lastTo: "123456789",
-      lastAccountId: "personal",
-    });
-    enqueueSystemEvent("Exec completed (lookalike, code 0) :: LOOKALIKE", {
-      sessionKey,
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:-1003774691294:topic:47",
-        accountId: "work",
-        threadId: 47,
-      },
-    });
-    replySpy.mockResolvedValue({ text: "Legacy notice" });
-    const telegram = vi.fn().mockResolvedValue({ messageId: "notice", chatId: "123456789" });
-    await runHeartbeatOnce({
-      cfg,
-      sessionKey,
-      source: "exec-event",
-      reason: "exec-event",
-      deps: { getReplyFromConfig: replySpy, telegram },
-    });
-    expect(telegram).toHaveBeenCalledExactlyOnceWith(
-      "123456789",
-      expect.stringContaining("Legacy notice"),
-      expect.objectContaining({ accountId: "personal" }),
-    );
-  });
-});
-
 it.each([true, false])(
   "separates same-route tagged and untagged completions (tagged first=%s)",
   async (taggedFirst) => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = heartbeatTestConfig(tmpDir, "telegram", "telegram", storePath);
-      cfg.agents!.defaults!.heartbeat = {
-        ...cfg.agents!.defaults!.heartbeat,
-        target: "telegram",
-        to: "123456789",
-        accountId: "personal",
-      };
-      const sessionKey = await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: "123456789",
-        lastAccountId: "personal",
-      });
-      const route = {
-        channel: "telegram",
-        to: "telegram:-1003774691294:topic:47",
-        accountId: "work",
-        threadId: 47,
-      };
+      const { sessionKey, route, run } = await custodyFixture(
+        { tmpDir, storePath, replySpy },
+        true,
+      );
       for (const tagged of [taggedFirst, !taggedFirst]) {
         enqueueSystemEvent(
-          "Exec completed (" +
-            (tagged ? "tagged" : "untagged") +
-            ", code 0) :: " +
-            (tagged ? "TAGGED_RESULT" : "UNTRUSTED_RESULT"),
+          `Exec completed (${tagged ? "tagged" : "untagged"}, code 0) :: ${tagged ? "TAGGED_RESULT" : "UNTRUSTED_RESULT"}`,
           { sessionKey, deliveryContext: route, ...(tagged ? { contextKey: "exec:tagged" } : {}) },
         );
       }
@@ -665,12 +560,11 @@ it.each([true, false])(
         text: ctx.Body?.includes("TAGGED_RESULT") ? "TAGGED_RESULT" : "UNTRUSTED_RESULT",
       }));
       const telegram = vi.fn().mockResolvedValue({ messageId: "receipt", chatId: "123456789" });
-      const deps = { getReplyFromConfig: replySpy, telegram };
-      await runHeartbeatOnce({ cfg, sessionKey, source: "exec-event", reason: "exec-event", deps });
+      await run(telegram);
       expect(replySpy.mock.calls[0]?.[0].Body).not.toContain(
         taggedFirst ? "UNTRUSTED_RESULT" : "TAGGED_RESULT",
       );
-      await runHeartbeatOnce({ cfg, sessionKey, source: "exec-event", reason: "exec-event", deps });
+      await run(telegram);
       expect(replySpy.mock.calls[1]?.[0].Body).not.toContain(
         taggedFirst ? "TAGGED_RESULT" : "UNTRUSTED_RESULT",
       );
