@@ -126,7 +126,11 @@ export function createChannelIngressQueue<
       signal?.throwIfAborted();
     };
     const claimClock =
-      type === "channelIngress.claim" || type === "channelIngress.claimNext" ? clock : undefined;
+      type === "channelIngress.claim" ||
+      type === "channelIngress.claimNext" ||
+      type === "channelIngress.enqueueAndClaim"
+        ? clock
+        : undefined;
     const result = await runOpenClawStateWorkerOperation(
       context,
       (worker) => worker.execute({ type, input }, { signal }),
@@ -374,6 +378,13 @@ export function createChannelIngressQueue<
     }
     return { kind: "pending", duplicate: true, record: requiredRecord<TPayload, TMetadata>(row) };
   };
+  const serializeEvent = (event: Parameters<NonNullable<Queue["enqueueBatch"]>>[0][number]) => ({
+    id: idFrom(event.id),
+    payloadJson: JSON.stringify(event.payload),
+    metadataJson: event.metadata === undefined ? null : JSON.stringify(event.metadata),
+    receivedAt: event.receivedAt ?? now(),
+    laneKey: event.laneKey,
+  });
   const enqueueBatch = async (
     events: Parameters<NonNullable<Queue["enqueueBatch"]>>[0],
     assertOperationCurrent?: () => void,
@@ -386,13 +397,7 @@ export function createChannelIngressQueue<
       "channelIngress.enqueue",
       {
         ...scope,
-        events: events.map((event) => ({
-          id: idFrom(event.id),
-          payloadJson: JSON.stringify(event.payload),
-          metadataJson: event.metadata === undefined ? null : JSON.stringify(event.metadata),
-          receivedAt: event.receivedAt ?? now(),
-          laneKey: event.laneKey,
-        })),
+        events: events.map(serializeEvent),
         now: now(),
       },
       capture(),
@@ -417,6 +422,23 @@ export function createChannelIngressQueue<
   return {
     enqueue,
     enqueueBatch,
+    async enqueueAndClaim(id, payload, enqueueOptions) {
+      const [entry] = await execute("channelIngress.enqueueAndClaim", {
+        ...scope,
+        events: [serializeEvent({ id, payload, ...enqueueOptions })],
+        now: now(),
+        idleClaimOwnerId: enqueueOptions.ownerId,
+        customClock: clock ? true : undefined,
+      });
+      const result = enqueueResult(entry!);
+      return {
+        result,
+        freshClaim:
+          result.kind === "accepted" && entry!.freshClaim
+            ? { ...result.record, claim: entry!.freshClaim }
+            : undefined,
+      };
+    },
     enqueueAuthorized: (id, payload, authorizedOptions) => {
       if (typeof authorizedOptions.assertCurrent !== "function") {
         return Promise.reject(

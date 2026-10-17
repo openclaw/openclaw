@@ -331,6 +331,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
       }
       return inspect(update, context);
     },
+    reuseAdmissionFactsForFreshClaims: true,
     payload: {
       version: TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
       serialize: (update, { receivedAt }) => {

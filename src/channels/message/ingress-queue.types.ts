@@ -140,6 +140,20 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
       laneKey?: string;
     }>,
   ): Promise<Array<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata>>>;
+  /** Claim a fresh singleton only when no pending or claimed row precedes it. */
+  enqueueAndClaim?(
+    id: string,
+    payload: TPayload,
+    options: {
+      ownerId: string;
+      metadata?: TMetadata;
+      receivedAt?: number;
+      laneKey?: string;
+    },
+  ): Promise<{
+    result: ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata>;
+    freshClaim?: ChannelIngressQueueClaim<TPayload, TMetadata>;
+  }>;
   enqueue(
     id: string,
     payload: TPayload,

@@ -45,8 +45,11 @@ The required options are:
 The monitor serializes admissions so append backoff cannot invert a lane. The
 default bounded append delays are `0`, `100`, and `300` ms; exhaustion rejects
 the transport callback instead of dispatching an event that was not made
-durable. At claim time it decodes the versioned payload, re-runs `inspect`, and
-rejects an id or lane mismatch before delivery. Set optional `inspectAsync(raw, context)` when inspection needs asynchronous
+durable. At claim time it decodes the versioned payload and normally re-runs
+`inspect`, rejecting an id or lane mismatch before delivery. Monitors may
+[reuse fresh admission facts](/plugins/sdk-channel-plugins/durable-ingress)
+when claim inspection neither prepares delivery data nor authorizes effects.
+Set optional `inspectAsync(raw, context)` when inspection needs asynchronous
 preparation. Supporting hosts prefer it over `inspect` in both admission and
 claim validation. Keep `inspect` as a synchronous fallback for older hosts, which
 ignore the companion. Both callbacks must derive the same identity and lane.
@@ -68,7 +71,7 @@ it again and report `isNew: true`.
 Pass an existing transport batch to `admitBatch(rawEvents)`. The core queue commits
 all inspected events in one worker request, with set-based inserts and durable
 deduplication; results preserve input order and the first payload for each event
-ID. Acknowledgments run after that commit, before the drain can claim the batch.
+ID. Acknowledgments run after that commit, before the drain can dispatch the batch.
 If an acknowledgment fails, the committed rows remain recoverable and transport
 replays deduplicate normally. This does not add a buffering or coalescing window.
 Plugin-supplied queues can implement optional `enqueueBatch(events)` with the same

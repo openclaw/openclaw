@@ -61,6 +61,8 @@ describe("IRC durable ingress", () => {
         ...queue,
         enqueue: vi.fn().mockRejectedValue(appendError),
       } satisfies IrcIngressQueue;
+      // Exercise a supplied queue without the optional fused admission capability.
+      delete failingQueue.enqueueAndClaim;
       const dispatch = vi.fn();
       const ingress = startIngress(failingQueue, dispatch);
       try {
