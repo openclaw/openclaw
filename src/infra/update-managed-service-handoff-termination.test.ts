@@ -154,13 +154,7 @@ function createBoundary(action: "update" | "triage" = "update") {
         });
       },
     });
-    child.stdio = [
-      new EventEmitter(),
-      new EventEmitter(),
-      new EventEmitter(),
-      new EventEmitter(),
-      gate,
-    ];
+    child.stdio = [...Array.from({ length: 4 }, () => new EventEmitter()), gate];
     return child;
   }
   const spawn = vi.fn((_executable: string, args: string[]) => {
@@ -269,19 +263,14 @@ it.each(["finalization", "diagnostics"] as const)(
     await completed;
     expectNoReplacement(fixture);
     expect(fixture.leaseStore.release).toHaveBeenCalledExactlyOnceWith(fixture.lease);
-    expect(fixture.order).toEqual(
-      stage === "finalization"
-        ? ["terminal:start", "terminal:done", "release", "cleanup", "cleanup"]
-        : [
-            "terminal:start",
-            "terminal:done",
-            "diagnostic:start",
-            "diagnostic:done",
-            "release",
-            "cleanup",
-            "cleanup",
-          ],
-    );
+    expect(fixture.order).toEqual([
+      "terminal:start",
+      "terminal:done",
+      ...(stage === "diagnostics" ? ["diagnostic:start", "diagnostic:done"] : []),
+      "release",
+      "cleanup",
+      "cleanup",
+    ]);
     expect(fixture.logs).toContain("managed update helper completed code=143");
     expect(fixture.process.exitCode).toBe(143);
     expect(fixture.process.stdin.destroy).toHaveBeenCalledOnce();
@@ -289,10 +278,20 @@ it.each(["finalization", "diagnostics"] as const)(
   },
 );
 
-it.each([true, false])(
-  "revalidates lease authority before diagnostics (current=%s)",
-  async (current) => {
-    const { fixture, completed } = await startSettlement();
+it.each(["current", "lost-before-diagnostics", "lost-before-admission"] as const)(
+  "revalidates diagnostic lease authority: %s",
+  async (authority) => {
+    const fixture = createBoundary();
+    const lateRevocation = authority === "lost-before-admission";
+    if (lateRevocation) {
+      fixture.fs.writeFileSync.mockImplementation((filePath) => {
+        if (filePath === "/fixture/diagnostics.json") {
+          fixture.authority.current = false;
+        }
+      });
+    }
+    const { completed } = await startSettlement(fixture);
+    const current = authority !== "lost-before-diagnostics";
     fixture.authority.current = current;
     fixture.terminalFinished.resolve();
     fixture.diagnosticFinished.resolve();
@@ -301,7 +300,11 @@ it.each([true, false])(
     expect(
       fixture.fs.writeFileSync.mock.calls.some(([file]) => file === "/fixture/diagnostics.json"),
     ).toBe(current);
-    if (current) {
+    if (lateRevocation) {
+      expect(fixture.children[1]?.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+      expect(fixture.order).not.toContain("diagnostic:start");
+      expect(fixture.process.stdin.destroy).toHaveBeenCalledOnce();
+    } else if (current) {
       expect(fixture.spawn.mock.calls[1]?.[1]).toEqual(
         expect.arrayContaining([
           "triage",
@@ -318,24 +321,6 @@ it.each([true, false])(
     expect(fixture.process.exitCode).toBe(1);
   },
 );
-
-it("revalidates the lease before admitting the diagnostic child", async () => {
-  const fixture = createBoundary();
-  fixture.fs.writeFileSync.mockImplementation((filePath) => {
-    if (filePath === "/fixture/diagnostics.json") {
-      fixture.authority.current = false;
-    }
-  });
-  const { completed } = await startSettlement(fixture);
-  fixture.terminalFinished.resolve();
-  await completed;
-  expect(fixture.spawn).toHaveBeenCalledTimes(2);
-  expect(fixture.children[1]?.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-  expect(fixture.order).not.toContain("diagnostic:start");
-  expectNoReplacement(fixture);
-  expect(fixture.process.stdin.destroy).toHaveBeenCalledOnce();
-  expect(fixture.process.exitCode).toBe(1);
-});
 
 it.each([0, 7])(
   "preserves failed admission through outer finalization when triage exits %s",

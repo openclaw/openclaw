@@ -27,6 +27,7 @@ import {
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 
 const roots: string[] = [];
+const unix = process.platform === "win32" ? it.skip : it;
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -51,18 +52,19 @@ function fixture() {
   const { databasePath: handoff } = installPrivateUpdateHandoffStore(privateTmp);
   const binding = createManagedHandoffTestBinding(privateTmp);
   const childEnv = writePrivateUpdateHandoffChildGuard(handoff, privateTmp);
-  vi.stubEnv("HOME", root);
-  vi.stubEnv("USERPROFILE", root);
-  vi.stubEnv("OPENCLAW_STATE_DIR", state);
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(state, "openclaw.json"));
-  const env = childEnv({
-    ...process.env,
+  const homeEnv = {
     HOME: root,
     USERPROFILE: root,
     OPENCLAW_STATE_DIR: state,
     OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
-  });
+  };
+  for (const [key, value] of Object.entries(homeEnv)) {
+    vi.stubEnv(key, value);
+  }
+  const env = childEnv({ ...process.env, ...homeEnv });
   const store = createManagedHandoffLeaseStore({ databasePath: handoff, serviceManagerEnv: env });
+  const pair = () => [store.read(install), store.read(slot)];
+  const expectAbsent = () => expect(pair()).toEqual([{ kind: "absent" }, { kind: "absent" }]);
   const child = path.join(root, "original-owner.mts");
   const executorUrl = new URL("../cli/update-cli/update-command-executor.ts", import.meta.url).href;
   const leaseUrl = new URL("./update-managed-service-handoff-lease.ts", import.meta.url).href;
@@ -115,12 +117,11 @@ await withUpdateCommandExecutor(runId, async (executor) => {
       const original = store.read(install),
         occupied = store.read(slot);
       assert(original.kind === "current" && occupied.kind === "current", "Missing new pair");
-      expect(original.lease.helper.pid).toBe(process.pid);
-      expect(occupied.lease.owner).toBe(original.lease.owner);
-      expect(store.current(original.lease)).toBe(true);
-      expect(store.current(occupied.lease)).toBe(true);
+      expect(original.lease.helper).toMatchObject({ pid: process.pid });
+      expect(occupied.lease).toMatchObject({ owner: original.lease.owner });
+      expect([original.lease, occupied.lease].map(store.current)).toEqual([true, true]);
     });
-  return { root, install, slot, handoff, store, env, crash, retry };
+  return { root, install, slot, handoff, store, env, crash, retry, pair, expectAbsent };
 }
 
 it("preserves both old generations while the occupied slot still has a live executor", async () => {
@@ -135,15 +136,13 @@ it("preserves both old generations while the occupied slot still has a live exec
     assert(holder.pid, "Missing holder pid");
     const before = f.crash("ordinary", holder.pid);
     await expect(f.retry()).rejects.toThrow("Another update executor");
-    expect(f.store.read(f.install)).toEqual(before.original);
-    expect(f.store.read(f.slot)).toEqual(before.occupied);
+    expect(f.pair()).toEqual([before.original, before.occupied]);
   } finally {
     holder.kill("SIGKILL");
     await closed;
   }
   await f.retry();
-  expect(f.store.read(f.install).kind).toBe("absent");
-  expect(f.store.read(f.slot).kind).toBe("absent");
+  f.expectAbsent();
 });
 
 it("does not reclaim original cancellation custody after the process dies", async () => {
@@ -151,8 +150,7 @@ it("does not reclaim original cancellation custody after the process dies", asyn
   const before = f.crash("cancelled");
   expect(before.original.lease.version).toBe(4);
   await expect(f.retry()).rejects.toThrow("Another update executor");
-  expect(f.store.read(f.install)).toEqual(before.original);
-  expect(f.store.read(f.slot)).toEqual(before.occupied);
+  expect(f.pair()).toEqual([before.original, before.occupied]);
 });
 
 it.each(["release", "releaseAll"] as const)(
@@ -175,25 +173,21 @@ it.each(["release", "releaseAll"] as const)(
       original.lease,
     );
     assert(occupied.kind === "acquired", "Occupied acquisition failed");
-    const beforeOriginal = store.read(f.install);
-    const beforeOccupied = store.read(f.slot);
+    const before = f.pair();
     expect(
       method === "release" ? store.release(original.lease) : store.releaseAll([original.lease]),
     ).toBe(false);
-    expect(store.read(f.install)).toEqual(beforeOriginal);
-    expect(store.read(f.slot)).toEqual(beforeOccupied);
-    expect(store.current(original.lease)).toBe(true);
-    expect(store.current(occupied.lease)).toBe(true);
+    expect(f.pair()).toEqual(before);
+    expect([original.lease, occupied.lease].map(store.current)).toEqual([true, true]);
     expect(store.acquire(f.install, "contender", { kind: "update" }).kind).toBe("busy");
 
     const rebound = store.bind(occupied.lease, process.pid);
     assert(rebound, "Occupied rebinding failed");
     expect(store.releaseAll([original.lease, occupied.lease])).toBe(false);
-    expect(store.read(f.install)).toEqual(beforeOriginal);
+    expect(store.read(f.install)).toEqual(before[0]);
     expect(store.current(rebound)).toBe(true);
     expect(store.releaseAll([original.lease, rebound])).toBe(true);
-    expect(store.read(f.install).kind).toBe("absent");
-    expect(store.read(f.slot).kind).toBe("absent");
+    f.expectAbsent();
     const next = store.acquire(f.install, "next", { kind: "update" });
     assert(next.kind === "acquired", "Next generation acquisition failed");
     expect(store.release(next.lease)).toBe(true);
@@ -249,7 +243,7 @@ function retainedCommandFixture(
   const commandKeys = [f.install, ...(options.mirror ? [f.slot] : [])].map(
     (root) => `${root}/.openclaw-update-child-previous-doctor/.openclaw-update-child-command`,
   );
-  database(true, (db) => {
+  database(true, (db) =>
     executeSqliteQuerySync(
       db,
       leaseQueries(db)
@@ -268,8 +262,8 @@ function retainedCommandFixture(
             updated_at: 2,
           })),
         ]),
-    );
-  });
+    ),
+  );
   const isDead = processIdentity.isPidDefinitelyDead;
   const readStart = processIdentity.getFileLockProcessStartTime;
   vi.spyOn(processIdentity, "isPidDefinitelyDead").mockImplementation((pid) =>
@@ -301,7 +295,7 @@ function retainedCommandFixture(
   return { ...f, database, rows, commandKeys, helper };
 }
 
-it.skipIf(process.platform === "win32").each([
+unix.each([
   { name: "ordinary root", mirror: false, orphan: false },
   { name: "original and occupied slot", mirror: true, orphan: false },
   { name: "orphaned command namespace", mirror: false, orphan: true },
@@ -328,7 +322,7 @@ it.skipIf(process.platform === "win32").each([
   }
 });
 
-it.skipIf(process.platform === "win32").each([
+unix.each([
   { name: "pending reservation", custody: "reserved" as const },
   { name: "live helper", helper: "live" as const },
   { name: "unverified helper", helper: "unknown" as const },
@@ -340,35 +334,32 @@ it.skipIf(process.platform === "win32").each([
   expect(f.rows()).toEqual(before);
 });
 
-it.skipIf(process.platform === "win32")(
-  "refuses reclamation when a command generation changes after observation",
-  () => {
-    const f = retainedCommandFixture();
-    const rootBefore = f.store.read(f.install);
-    const isDead = vi.mocked(processIdentity.isPidDefinitelyDead).getMockImplementation();
-    assert(isDead, "Missing process observation fixture");
-    let replaced = false;
-    vi.spyOn(processIdentity, "isPidDefinitelyDead").mockImplementation((pid) => {
-      if (pid === f.helper.pid && !replaced) {
-        replaced = true;
-        f.database(true, (db) => {
-          executeSqliteQuerySync(
-            db,
-            leaseQueries(db)
-              .updateTable("managed_update_handoffs")
-              .set({ owner: "replacement-doctor", updated_at: 3 })
-              .where("install_root", "=", f.commandKeys[0]!),
-          );
-        });
-      }
-      return isDead(pid);
-    });
-    expect(f.store.acquire(f.install, "repair", { kind: "update" }).kind).toBe("busy");
-    expect(replaced).toBe(true);
-    expect(f.store.read(f.install)).toEqual(rootBefore);
-    expect(f.rows().find((row) => row.install_root === f.commandKeys[0])).toMatchObject({
-      owner: "replacement-doctor",
-      updated_at: 3,
-    });
-  },
-);
+unix("refuses reclamation after a command generation changes", () => {
+  const f = retainedCommandFixture();
+  const rootBefore = f.store.read(f.install);
+  const isDead = vi.mocked(processIdentity.isPidDefinitelyDead).getMockImplementation();
+  assert(isDead, "Missing process observation fixture");
+  let replaced = false;
+  vi.spyOn(processIdentity, "isPidDefinitelyDead").mockImplementation((pid) => {
+    if (pid === f.helper.pid && !replaced) {
+      replaced = true;
+      f.database(true, (db) => {
+        executeSqliteQuerySync(
+          db,
+          leaseQueries(db)
+            .updateTable("managed_update_handoffs")
+            .set({ owner: "replacement-doctor", updated_at: 3 })
+            .where("install_root", "=", f.commandKeys[0]!),
+        );
+      });
+    }
+    return isDead(pid);
+  });
+  expect(f.store.acquire(f.install, "repair", { kind: "update" }).kind).toBe("busy");
+  expect(replaced).toBe(true);
+  expect(f.store.read(f.install)).toEqual(rootBefore);
+  expect(f.rows().find((row) => row.install_root === f.commandKeys[0])).toMatchObject({
+    owner: "replacement-doctor",
+    updated_at: 3,
+  });
+});
