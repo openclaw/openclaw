@@ -22,6 +22,7 @@ import {
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import {
   canvasPreviewsMatch,
+  readCanvasContentPreview,
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached, type CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
@@ -81,6 +82,7 @@ import {
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { copyLiveTerminalIdentity, readLiveTerminalRunId } from "./terminal-message-identity.ts";
 import type { ChatReasoning, CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps & {
@@ -228,6 +230,34 @@ export function buildChatItems(
     : undefined;
   let hasPersistedCompaction = false;
   for (const [i, item] of historyItems.entries()) {
+    const terminalRunId = readLiveTerminalRunId(item.message);
+    const terminal = terminalRunId ? asRecord(item.message) : null;
+    if (terminal && Array.isArray(terminal.content)) {
+      // The final wire tail repeats the run's Canvas blocks even when a saved
+      // assistant row already owns them. Reconcile only that live projection.
+      const turn = canvasTurns[i]!;
+      const owned = turn.previews.filter(
+        (entry) =>
+          entry.item !== item &&
+          !readLiveTerminalRunId(entry.item.message) &&
+          transcriptRunId(entry.item.message) === terminalRunId,
+      );
+      const isOwned = (preview: CanvasToolPreview) =>
+        owned.some((entry) => canvasPreviewsMatch(entry.preview, preview));
+      const content = terminal.content.filter((block) => {
+        const preview = readCanvasContentPreview(block);
+        return !preview || !isOwned(preview);
+      });
+      if (content.length !== terminal.content.length) {
+        const projection = { ...terminal, content };
+        copyLiveTerminalIdentity(terminal, projection);
+        item.message = projection;
+        normalizedHistory[i] = safeNormalizeMessage(projection);
+        turn.previews = turn.previews.filter(
+          (entry) => entry.item !== item || !isOwned(entry.preview),
+        );
+      }
+    }
     const msg = item.message;
     const itemKey = item.key;
     const raw = asRecord(msg) ?? {};

@@ -38,7 +38,7 @@ import {
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
 import { publishChatSessionProjectionMessages } from "./history-merge.ts";
-import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
+import { readLiveTerminalRevision, rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 
 const { extractToolCardsCached: extractToolCards } = toolCards;
 
@@ -1368,6 +1368,112 @@ describe("buildCachedChatItems", () => {
         ),
       ).toHaveLength(1);
       expect(messages).toEqual(original);
+    },
+  );
+
+  it.each([
+    {
+      savedReceipt: false,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      tailFirst: true,
+    },
+    { savedReceipt: true, finalRun: "other-run", finalView: "cv_final", live: true, count: 2 },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_other",
+      live: true,
+      count: 2,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: false,
+      count: 2,
+    },
+  ])(
+    "reconciles only the owned final Canvas tail: %j",
+    ({ savedReceipt, finalRun, finalView, live, count, tailFirst = false }) => {
+      const runId = "final-widget-run";
+      const parentToolCallId = "call_widget|fc_widget";
+      const output = canvasToolOutput("cv_final", "Counter", 100);
+      const nested = {
+        role: "custom",
+        runId,
+        timestamp: 1_002,
+        __openclaw: { id: "nested-receipt", seq: 2, runId },
+        content: [
+          { type: "toolCall", id: "nested-widget", name: "show_widget", runId, parentToolCallId },
+          {
+            type: "toolResult",
+            role: "toolResult",
+            toolCallId: "nested-widget",
+            toolName: "show_widget",
+            runId,
+            parentToolCallId,
+            content: [{ type: "text", text: output }],
+          },
+        ],
+      };
+      const canvas = {
+        type: "canvas",
+        preview: {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_final",
+        },
+      };
+      const saved = assistant([textBlock("Your counter is ready."), canvas], 1_003, {
+        __openclaw: { id: "saved-final", seq: 3, runId },
+      });
+      const final = assistant(
+        [
+          textBlock("Final tail."),
+          { ...canvas, preview: { ...canvas.preview, viewId: finalView } },
+        ],
+        1_004,
+        { __openclaw: { runId: finalRun } },
+      );
+      const terminal = live ? rememberLiveTerminalRun(final, finalRun) : final;
+      const messages = [
+        nativeUser(runId, "Show a counter", 1_000, { runId }),
+        ...(tailFirst ? [terminal] : []),
+        ...(savedReceipt ? [nested] : []),
+        saved,
+        ...(tailFirst ? [] : [terminal]),
+      ];
+      const original = structuredClone(messages);
+      const terminalRevision = readLiveTerminalRevision();
+      const groups = messageGroups({
+        messages,
+        toolMessages: savedReceipt ? [] : [nested],
+        showToolCalls: true,
+      });
+      expect(groups.flatMap(canvasBlocksAcross)).toHaveLength(count);
+      expect(cardsIn(groups).some((card) => card.callId === "nested-widget")).toBe(true);
+      expect(groups.flatMap(normalizedBlocks)).toContainEqual(textBlock("Final tail."));
+      expect(groups.flatMap(normalizedBlocks)).toContainEqual(textBlock("Your counter is ready."));
+      expect(messages).toEqual(original);
+      expect(readLiveTerminalRevision()).toBe(terminalRevision);
     },
   );
 
