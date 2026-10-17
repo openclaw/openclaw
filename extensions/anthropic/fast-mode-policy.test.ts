@@ -30,6 +30,7 @@ describe("selected request Fast applicability", () => {
       context: { modelId: "claude-sonnet-5", runtimeId: "codex" },
       expected: undefined,
     },
+    { name: "Claude CLI runtime", context: { runtimeId: "claude-cli" }, expected: false },
     {
       name: "explicit tier",
       context: { params: { serviceTier: "standard_only" } },

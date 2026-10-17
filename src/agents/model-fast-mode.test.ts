@@ -90,6 +90,7 @@ describe("private selected Fast metadata", () => {
         "codex",
       ),
     ).toBeUndefined();
+    expect(resolve(opus, { availability: true, routeResolution: null }, "claude-cli")).toBe(false);
   });
   it("uses the same model/agent parameter order as request construction", () => {
     const resolve = resolver({
