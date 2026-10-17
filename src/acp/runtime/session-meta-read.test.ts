@@ -27,6 +27,8 @@ import * as metadataReads from "./session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "./session-meta-write.js";
 
 const meta = createAcpMeta({ backend: "acpx" });
+const baseEntry = { sessionId: "session", lifecycleRevision: "original", updatedAt: 100 };
+const baseConfig = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -40,23 +42,17 @@ it.each(["cold-file", "incognito"] as const)(
     await withOpenClawTestState({ label: `acp-singular-${storage}` }, async (state) => {
       const incognito = storage === "incognito";
       const storePath = incognito ? undefined : state.path("custom.sqlite");
-      const cfg = {
-        agents: { ownership: "explicit" as const, entries: { main: {} } },
-        ...(storePath ? { session: { store: storePath } } : {}),
-      };
-      await state.writeConfig(cfg);
       const sessionKey = incognito ? "agent:main:dashboard:incognito-private" : "agent:main:main";
       const entry = {
-        sessionId: "session",
-        lifecycleRevision: "original",
-        updatedAt: 100,
+        ...baseEntry,
         skillsSnapshot: { prompt: "Saved instructions", skills: [{ name: "fixture" }] },
       };
+      const cfg = { ...baseConfig, ...(storePath ? { session: { store: storePath } } : {}) };
+      await state.writeConfig(cfg);
       await replaceSessionEntry({ agentId: "main", storePath, sessionKey, env: state.env }, entry);
-      const databaseKey = buildAcpDatabaseSessionKey(sessionKey, "main");
       seedCanonicalAcpSessionMeta({
         env: state.env,
-        sessionKey: databaseKey,
+        sessionKey: buildAcpDatabaseSessionKey(sessionKey, "main"),
         lifecycleRevision: "original",
         meta,
       });
@@ -66,58 +62,38 @@ it.each(["cold-file", "incognito"] as const)(
         resetConfigRuntimeState();
       }
       const sql = observeMainThreadSql();
-      try {
-        const result = await readAcpSessionEntryAsync(
-          incognito
-            ? { cfg, env: state.env, sessionKey }
-            : { sessionKey: " main ", agentId: "main" },
-        );
-        expect(result).toMatchObject({
-          sessionKey: incognito ? sessionKey : "main",
-          storeSessionKey: sessionKey,
-          agentId: "main",
-          ...(storePath ? { storePath } : {}),
-          entry: {
-            sessionId: entry.sessionId,
-            lifecycleRevision: entry.lifecycleRevision,
-            skillsSnapshot: entry.skillsSnapshot,
-          },
-          acp: meta,
+      const result = await readAcpSessionEntryAsync(
+        incognito ? { cfg, env: state.env, sessionKey } : { sessionKey: " main ", agentId: "main" },
+      );
+      expect(result).toMatchObject({
+        sessionKey: incognito ? sessionKey : "main",
+        storeSessionKey: sessionKey,
+        agentId: "main",
+        ...(storePath ? { storePath } : {}),
+        entry,
+        acp: meta,
+      });
+      if (incognito) {
+        expect(
+          [resolveIncognitoOpenClawAgentSqlitePath, resolveOpenClawAgentSqlitePath].map((resolve) =>
+            fs.existsSync(resolve({ agentId: "main", env: state.env })),
+          ),
+        ).toEqual([false, false]);
+      } else {
+        const readMeta = (current = entry) =>
+          metadataReads.readAcpSessionMetaForEntryAsync({ sessionKey, entry: current });
+        expect(await readAcpSessionMetaAsync({ sessionKey, agentId: "main" })).toEqual(meta);
+        expect(await readMeta()).toEqual(meta);
+        await upsertAcpSessionMeta({
+          cfg,
+          env: state.env,
+          sessionKey,
+          mutate: () => ({ ...meta, runtimeSessionName: "updated-runtime" }),
         });
-        if (incognito) {
-          expect(
-            fs.existsSync(
-              resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-            ),
-          ).toBe(false);
-          expect(
-            fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env })),
-          ).toBe(false);
-        } else {
-          expect(await readAcpSessionMetaAsync({ sessionKey, agentId: "main" })).toEqual(meta);
-          expect(
-            await metadataReads.readAcpSessionMetaForEntryAsync({ sessionKey, entry }),
-          ).toEqual(meta);
-          await upsertAcpSessionMeta({
-            cfg,
-            env: state.env,
-            sessionKey,
-            mutate: () => ({ ...meta, runtimeSessionName: "updated-runtime" }),
-          });
-          expect(
-            await metadataReads.readAcpSessionMetaForEntryAsync({ sessionKey, entry }),
-          ).toMatchObject({ runtimeSessionName: "updated-runtime" });
-          expect(
-            await metadataReads.readAcpSessionMetaForEntryAsync({
-              sessionKey,
-              entry: { ...entry, lifecycleRevision: "retired" },
-            }),
-          ).toBeUndefined();
-        }
-        sql.expectIdle();
-      } finally {
-        sql.restore();
+        expect(await readMeta()).toMatchObject({ runtimeSessionName: "updated-runtime" });
+        expect(await readMeta({ ...entry, lifecycleRevision: "retired" })).toBeUndefined();
       }
+      sql.expectIdle();
     });
   },
 );
@@ -125,42 +101,29 @@ it.each(["cold-file", "incognito"] as const)(
 it("retains absent ACP metadata across async reads and follows in-process set and clear", async () => {
   await withOpenClawTestState({ label: "acp-absent-receipt" }, async (state) => {
     const sessionKey = "agent:main:acp:absent";
-    const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
-    const entry = { sessionId: "session", lifecycleRevision: "original", updatedAt: 100 };
+    const entry = baseEntry;
+    const cfg = baseConfig;
     await state.writeConfig(cfg);
     await captureRuntimeConfigAsyncReader()();
     await replaceSessionEntry({ agentId: "main", sessionKey, env: state.env }, entry);
     openOpenClawStateDatabase({ env: state.env });
-    const read = () =>
-      metadataReads.readAcpSessionMetaForEntryAsync({
-        sessionKey,
-        agentId: "main",
-        entry,
-        env: state.env,
-      });
     const requests = vi.spyOn(stateReadPool, "startReadTask");
+    const input = { sessionKey, agentId: "main", entry, env: state.env };
+    const expectRead = async (expected: typeof meta | undefined, calls = 0) => {
+      expect(await metadataReads.readAcpSessionMetaForEntryAsync(input)).toEqual(expected);
+      expect(requests).toHaveBeenCalledTimes(calls);
+      requests.mockClear();
+    };
     const sql = observeMainThreadSql();
-    try {
-      expect(await read()).toBeUndefined();
-      expect(requests).toHaveBeenCalledTimes(1);
-      requests.mockClear();
-      expect(await read()).toBeUndefined();
-      expect(requests).not.toHaveBeenCalled();
-
-      await upsertAcpSessionMeta({ cfg, env: state.env, sessionKey, mutate: () => meta });
-      requests.mockClear();
-      expect(await read()).toEqual(meta);
-      expect(requests).not.toHaveBeenCalled();
-
-      await upsertAcpSessionMeta({ cfg, env: state.env, sessionKey, mutate: () => null });
-      requests.mockClear();
-      expect(await read()).toBeUndefined();
-      expect(requests).not.toHaveBeenCalled();
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-      requests.mockRestore();
-    }
+    await expectRead(undefined, 1);
+    await expectRead(undefined);
+    await upsertAcpSessionMeta({ cfg, env: state.env, sessionKey, mutate: () => meta });
+    requests.mockClear();
+    await expectRead(meta);
+    await upsertAcpSessionMeta({ cfg, env: state.env, sessionKey, mutate: () => null });
+    requests.mockClear();
+    await expectRead(undefined);
+    sql.expectIdle();
   });
 });
 
@@ -177,8 +140,7 @@ it("preserves missing-entry binding fences and unreadable-store results without 
     });
     expect(fs.existsSync(path.dirname(storePath))).toBe(false);
 
-    // A bound primary row wins selection, then fails its missing-entry fence.
-    // Missing entries must not make a bound canonical row readable.
+    // A bound canonical row cannot outlive its entry.
     seedCanonicalAcpSessionMeta({
       env: state.env,
       sessionKey: buildAcpDatabaseSessionKey(sessionKey, "main"),
@@ -215,7 +177,7 @@ it.each(["caller", "store"] as const)(
       const cfg = { session: { store: storePath } };
       await replaceSessionEntry(
         { agentId: "main", storePath, sessionKey, env: state.env },
-        { sessionId: "held", lifecycleRevision: "original", updatedAt: 100 },
+        { ...baseEntry, sessionId: "held" },
       );
       seedCanonicalAcpSessionMeta({
         env: state.env,
