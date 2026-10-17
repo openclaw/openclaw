@@ -81,7 +81,7 @@ export type NewSessionComposerOptions = {
   nativeTerminal?: boolean;
   onUnsupportedAttachment?: () => void;
   submitting: boolean;
-  textareaController: NewSessionComposerTextarea;
+  composerTextarea: NewSessionComposerTextarea;
   voiceControl?: JSX.Element;
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
@@ -97,37 +97,37 @@ export type NewSessionComposerOptions = {
 };
 
 function submitNewSession(options: NewSessionComposerOptions) {
-  options.textareaController.emojiMenu.close();
-  options.textareaController.mentionMenu.close();
-  options.textareaController.skillMenu.reset();
-  options.textareaController.slashMenu.reset();
+  options.composerTextarea.emojiMenu.close();
+  options.composerTextarea.mentionMenu.close();
+  options.composerTextarea.skillMenu.reset();
+  options.composerTextarea.slashMenu.reset();
   options.onSubmit();
 }
 
 /** Draft message box styled as the chat composer shell so both pickers match. */
 function prepareNewSessionComposer(options: NewSessionComposerOptions) {
-  const { attachmentDraft, context, textareaController } = options;
+  const { attachmentDraft, context, composerTextarea } = options;
   const readSignal = attachmentDraft.reads.readSignal;
   const gateway = context?.gateway;
   const commandClient = options.nativeTerminal ? null : (gateway?.snapshot.client ?? null);
   const mentionDirectory = resolveNewSessionMentionDirectory(options);
-  const { skillMenu, slashMenu, mentionMenu, emojiMenu } = textareaController;
+  const { skillMenu, slashMenu, mentionMenu, emojiMenu } = composerTextarea;
   const skillMenuState = skillMenu.state;
   const slashMenuState = slashMenu.state;
   const composerLocked =
     options.submitting || options.messageLocked === true || options.dictationActive === true;
   const skillMenuHost: SkillMenuHost = {
     paneId: "new-session",
-    getDraft: () => options.textareaController.getTextarea()?.value ?? options.message,
+    getDraft: () => options.composerTextarea.getTextarea()?.value ?? options.message,
     commitDraft: options.onInput,
-    getTextarea: options.textareaController.getTextarea,
+    getTextarea: options.composerTextarea.getTextarea,
     refreshCommands: commandClient
       ? () =>
           refreshSlashCommands({
             client: commandClient,
             agentId: options.agentId,
             shouldApply: () =>
-              textareaController.ownsSkillCommands(
+              composerTextarea.ownsSkillCommands(
                 commandClient,
                 options.agentId,
                 options.draftOwnerKey,
@@ -154,14 +154,14 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
       options.dictationActive ||
       options.submitting ||
       options.messageLocked ||
-      options.textareaController.composing ||
+      options.composerTextarea.composing ||
       isComposingKeyboardEvent(event)
     ) {
       return;
     }
     if (
-      options.textareaController.emojiMenu.handleKeydown(event, "new-session") ||
-      options.textareaController.mentionMenu.handleKeydown(event, mentionMenuHost) ||
+      options.composerTextarea.emojiMenu.handleKeydown(event, "new-session") ||
+      options.composerTextarea.mentionMenu.handleKeydown(event, mentionMenuHost) ||
       skillMenu.handleKeydown(event, skillMenuHost) ||
       slashMenu.handleKeydown(event, slashMenuHost)
     ) {
@@ -186,9 +186,9 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
     if (options.canSubmit || options.submitDisabledReason !== undefined) {
       event.preventDefault();
       if (background) {
-        options.textareaController.skillMenu.reset();
-        options.textareaController.slashMenu.reset();
-        options.textareaController.mentionMenu.close();
+        options.composerTextarea.skillMenu.reset();
+        options.composerTextarea.slashMenu.reset();
+        options.composerTextarea.mentionMenu.close();
         options.onBackgroundSubmit?.();
       } else {
         submitNewSession(options);
@@ -203,13 +203,13 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
       target,
       !composerLocked &&
         !options.nativeTerminal &&
-        !options.textareaController.composing &&
+        !options.composerTextarea.composing &&
         !commandsOpen &&
         !mentionMenu.open,
     );
   };
   const updateMenus = (target: HTMLTextAreaElement, event?: InputEvent) => {
-    if (options.nativeTerminal || options.textareaController.composing || event?.isComposing) {
+    if (options.nativeTerminal || options.composerTextarea.composing || event?.isComposing) {
       emojiMenu.close();
       return;
     }
@@ -269,7 +269,7 @@ function prepareNewSessionComposer(options: NewSessionComposerOptions) {
     canCompose: !composerLocked && !options.nativeTerminal,
   });
   const visibleMessage = options.dictationPreview ?? options.message;
-  options.textareaController.syncDraft(visibleMessage);
+  options.composerTextarea.syncDraft(visibleMessage);
   const messagePlaceholder = t(
     options.nativeTerminal ? "newSession.nativeTerminalPrompt" : "newSession.messagePlaceholder",
   );
@@ -381,7 +381,7 @@ function createComposerPlaceholder(options: () => NewSessionComposerOptions) {
       let pending: number;
       let length = 0;
       const step = (timestamp: number) => {
-        if (!options().textareaController.getTextarea()?.isConnected) {
+        if (!options().composerTextarea.getTextarea()?.isConnected) {
           return;
         }
         startedAt ??= timestamp;
@@ -426,7 +426,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
   const frame = createMemo(() => prepareNewSessionComposer(options()));
   const placeholder = createComposerPlaceholder(options);
   // The input and its synchronous owner share one mounted lifetime.
-  const textarea = untrack(() => options().textareaController);
+  const textarea = untrack(() => options().composerTextarea);
   // The textarea owner retires stale command requests and closes menus when its scope changes.
   createEffect(
     () =>

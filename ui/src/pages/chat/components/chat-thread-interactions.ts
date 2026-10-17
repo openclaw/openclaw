@@ -47,7 +47,7 @@ import {
   dismissConfirmedActionPopovers,
   isConfirmedActionPopoverFocused,
   openChatRewindConfirmation,
-} from "./chat-message-confirmation.ts";
+} from "./chat-message-confirmation-view.tsx";
 import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.types.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type { ChatSendStatusActions } from "./chat-message-send-status-view.tsx";

@@ -416,9 +416,9 @@ function Run(props: {
     );
   const usageSummary = createMemo(() => {
     const usage = props.entry.usage;
-    return usage && typeof usage.total_tokens === "number"
+    return usage?.total_tokens !== undefined
       ? `${formatCompactTokenCount(usage.total_tokens)} ${t("usage.metrics.tokens")}`
-      : usage && typeof usage.input_tokens === "number" && typeof usage.output_tokens === "number"
+      : usage?.input_tokens !== undefined && usage.output_tokens !== undefined
         ? `${formatCompactTokenCount(usage.input_tokens)} in / ${formatCompactTokenCount(usage.output_tokens)} out`
         : null;
   });
@@ -464,18 +464,18 @@ function Run(props: {
         </div>
         <div class="cron-run-entry__meta">
           <div>{props.formatTimestamp(props.entry.ts)}</div>
-          {typeof props.entry.runAtMs === "number" ? (
+          {props.entry.runAtMs !== undefined ? (
             <div class="muted">
               {t("cron.runEntry.runAt")} {props.formatTimestamp(props.entry.runAtMs)}
             </div>
           ) : undefined}
           <div class="muted">
-            {typeof props.entry.durationMs === "number" && Number.isFinite(props.entry.durationMs)
+            {props.entry.durationMs !== undefined
               ? (formatDurationCompact(props.entry.durationMs) ??
                 formatDurationHuman(props.entry.durationMs, t("common.na")))
               : t("common.na")}
           </div>
-          {typeof props.entry.nextRunAtMs === "number" ? (
+          {props.entry.nextRunAtMs !== undefined ? (
             <div class="muted">{formatRunNextLabel(props.entry.nextRunAtMs)}</div>
           ) : undefined}
           {props.entry.runId || props.entry.runAtMs !== undefined || props.entry.sessionKey ? (

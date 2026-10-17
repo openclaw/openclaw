@@ -659,6 +659,12 @@ another exact-entry read. Releasing a mutation's source leaves its selecting rea
 current; releasing that reader revokes every borrower. The destination worker keeps
 its transaction-local source comparison before the effect.
 
+During initial selection, the publication owner retains concurrent committed row
+facts and compares them with the selecting read before granting authority. A
+metadata-only change does not invalidate an unchanged policy. Once selected,
+policy or lifecycle changes still revoke the prepared check, independently of
+unrelated agent deletion and topology publications.
+
 Bundled native harnesses prepare session lineage once and retain the same entry
 predicate through terminal cleanup. Final lineage checks use published facts;
 tool policy and caller liveness still authorize each effect. Cleanup may borrow
@@ -859,6 +865,14 @@ methods or opaque transaction callbacks still call them. Incognito access uses
 the memory actor. A worker caller does not make the shared kernel worker-only. The
 inventory retains those calls as migration debt; raw-row removal guarded by
 Doctor's `expectedRawEntryJson` variant is an offline repair exception.
+
+Scheduled source replies preserve the admitted run's prepared authority through
+delivery capabilities. The transcript worker checks its source predicates in the
+write transaction, then obtains the live delivery owner's grant before commit.
+Manual `sessions.compact` requests use the same prepared request-authority boundary;
+revocation rolls back the replacement. Neither path needs a native transcript
+adapter. Released synchronous transcript SDK callbacks retain their separate
+native compatibility contract.
 
 Status presentation prepares bounded usage and terminal-model facts through the
 existing history worker before rendering. Goal mutations with ordinary host

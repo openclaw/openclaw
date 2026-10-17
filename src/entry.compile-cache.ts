@@ -1,4 +1,3 @@
-// Manages compile-cache respawn behavior for the CLI entrypoint.
 import { spawn } from "node:child_process";
 import { getCompileCacheDir } from "node:module";
 import path from "node:path";

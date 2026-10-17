@@ -16,7 +16,7 @@ import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js
 import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { projectManuallyCompactedSessionEntry } from "./session-manual-compact-entry.js";
 
-/** The native adapter and worker share the same transcript/entry compare-and-swap. */
+/** Compare the retained user data before replacing its transcript and accounting together. */
 export function applyManualCompactInTransaction(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,

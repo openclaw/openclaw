@@ -291,7 +291,6 @@ export async function prepareLlamaServerSetup(
   });
 }
 
-/** Interactive setup for an existing llama-server endpoint. */
 export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
   const defaultOrigin = resolveLlamaServerEndpoint(existing?.baseUrl).origin;

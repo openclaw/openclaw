@@ -470,7 +470,9 @@
     "!dist/plugin-sdk/memory-host-search.d.ts",
     "!dist/plugin-sdk/codex-client-version-runtime.d.ts",
     "!dist/plugin-sdk/realtime-transcription-provider.d.ts",
-    "!dist/plugin-sdk/meeting-config.d.ts"
+    "!dist/plugin-sdk/meeting-config.d.ts",
+    "!dist/plugin-sdk/collection-input-runtime.d.ts",
+    "!dist/plugin-sdk/http-response-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -479,6 +481,9 @@
     "./plugin-sdk/core": {
       "types": "./dist/plugin-sdk/core.d.ts",
       "default": "./dist/plugin-sdk/core.js"
+    },
+    "./plugin-sdk/collection-input-runtime": {
+      "default": "./dist/plugin-sdk/collection-input-runtime.js"
     },
     "./plugin-sdk/code-mode-executor-runtime": {
       "types": "./dist/plugin-sdk/code-mode-executor-runtime.d.ts",
@@ -722,6 +727,9 @@
     },
     "./plugin-sdk/heartbeat-runtime": {
       "default": "./dist/plugin-sdk/heartbeat-runtime.js"
+    },
+    "./plugin-sdk/http-response-runtime": {
+      "default": "./dist/plugin-sdk/http-response-runtime.js"
     },
     "./plugin-sdk/expect-runtime": {
       "default": "./dist/plugin-sdk/expect-runtime.js"
@@ -2308,7 +2316,7 @@
     "@modelcontextprotocol/sdk": "1.32.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.26.6",
+    "@openclaw/fs-safe": "0.26.7",
     "@openclaw/proc-safe": "0.3.0",
     "@openclaw/proxyline": "0.4.0",
     "@resvg/resvg-js": "2.6.2",

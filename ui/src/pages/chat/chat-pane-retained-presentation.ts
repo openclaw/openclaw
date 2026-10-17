@@ -41,7 +41,7 @@ import { refreshChatMetadata } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation.ts";
+import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation-view.tsx";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import {
   dismissThreadPortals,

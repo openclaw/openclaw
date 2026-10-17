@@ -13,11 +13,13 @@ import {
 import * as authProfileSqlite from "../../agents/auth-profiles/sqlite.js";
 import type { OAuthCredential } from "../../agents/auth-profiles/types.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
+import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
+import { ZERO_USAGE_FIXTURE } from "../../agents/test-helpers/usage-fixtures.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
-import { createPluginRegistry } from "../../plugins/registry.js";
+import { createRuntimeTestRegistry } from "../../plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
@@ -53,7 +55,8 @@ it.each([
     const pluginId = "probe-resource-fixture";
     const oauth = "oauth" in scenario ? scenario.oauth : undefined;
     const provider = oauth ? "openai" : "probe-resource-provider";
-    const profileId = `${credentialSource === "profile" ? provider : "unrelated-provider"}:stored`;
+    const profileProvider = credentialSource === "profile" ? provider : "unrelated-provider";
+    const profileId = `${profileProvider}:stored`;
     const originalOAuth: OAuthCredential = {
       type: "oauth",
       provider,
@@ -86,27 +89,19 @@ it.each([
     if (!refreshAddress || typeof refreshAddress === "string") {
       throw new Error("Expected the fixture refresh listener");
     }
-    const pluginRoot = state.path("plugin");
-    fs.mkdirSync(pluginRoot, { recursive: true });
-    const entry = path.join(pluginRoot, "index.cjs");
-    fs.writeFileSync(
-      path.join(pluginRoot, "package.json"),
-      JSON.stringify({
-        name: pluginId,
-        version: "1.0.0",
-        openclaw: { extensions: ["./index.cjs"] },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(pluginRoot, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: pluginId,
-        providers: [provider],
-        configSchema: { type: "object" },
-      }),
-    );
-    fs.writeFileSync(
-      entry,
+    const pluginRoot = state.statePath("plugin");
+    await state.writeJson("plugin/package.json", {
+      name: pluginId,
+      version: "1.0.0",
+      openclaw: { extensions: ["./index.cjs"] },
+    });
+    await state.writeJson("plugin/openclaw.plugin.json", {
+      id: pluginId,
+      providers: [provider],
+      configSchema: { type: "object" },
+    });
+    const entry = await state.writeText(
+      "plugin/index.cjs",
       `module.exports = { id: '${pluginId}', register(api) { api.registerProvider({ id: '${provider}', label: 'Probe fixture', auth: [], formatApiKey: c => c.access, refreshOAuth: async () => { const response = await fetch('http://127.0.0.1:${refreshAddress.port}/token'); return response.json(); } }); } };`,
     );
     const cfg: OpenClawConfig = {
@@ -141,55 +136,42 @@ it.each([
         entries: { [pluginId]: { enabled: true } },
       },
     };
-    const profileProvider = credentialSource === "profile" ? provider : "unrelated-provider";
     const credential = oauth
       ? originalOAuth
       : { type: "api_key" as const, provider: profileProvider, key: "stored-test-key" };
     await state.writeAuthProfiles({
       version: 1,
-      profiles: {
-        [profileId]: credential,
-      },
-      ...(oauth
-        ? {}
-        : {
-            lastGood: { [profileProvider]: profileId },
-            usageStats: {
-              [profileId]: { cooldownUntil: 1, cooldownReason: "rate_limit", errorCount: 2 },
-            },
-          }),
+      profiles: { [profileId]: credential },
+      lastGood: oauth ? undefined : { [profileProvider]: profileId },
+      usageStats: oauth
+        ? undefined
+        : { [profileId]: { cooldownUntil: 1, cooldownReason: "rate_limit", errorCount: 2 } },
     });
     if (oauth) {
       writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
       noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, state.env);
-      authProfileSqlite.writePersistedAuthProfileStoreRaw({
-        version: 1,
-        profiles: { [profileId]: originalOAuth },
-      });
-      authProfileSqlite.writePersistedAuthProfileStoreRaw(
-        { version: 1, profiles: {} },
-        state.agentDir(),
-      );
-      authProfileSqlite.writePersistedAuthProfileStoreRaw(
-        { version: 1, profiles: { [profileId]: originalOAuth } },
-        state.agentDir("historical"),
-      );
+      for (const agentDir of [undefined, state.agentDir(), state.agentDir("historical")]) {
+        authProfileSqlite.writePersistedAuthProfileStoreRaw(
+          {
+            version: 1,
+            profiles: agentDir === state.agentDir() ? {} : { [profileId]: originalOAuth },
+          },
+          agentDir,
+        );
+      }
     }
-    const authBefore = oauth
-      ? loadPersistedSharedAuthProfileStore(state.env)
-      : loadPersistedAuthProfileStore(state.agentDir());
+    const readAuth = () =>
+      oauth
+        ? loadPersistedSharedAuthProfileStore(state.env)
+        : loadPersistedAuthProfileStore(state.agentDir());
+    const authBefore = readAuth();
     await state.writeConfig(cfg);
-    const builder = createPluginRegistry({
-      runtime: createPluginRuntime(),
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-      activateGlobalSideEffects: false,
-    });
+    const builder = createRuntimeTestRegistry(createPluginRuntime());
     const record = createPluginRecord({ id: pluginId, source: entry });
     const source = new PluginRegistryInspectionResources(async () => {
       await getPluginInstance(record)?.dispose();
     });
     source.attach(builder.registry);
-    builder.registry.plugins.push(record);
     const api = builder.createApi(record, { config: cfg, registrationMode: "full" });
     const contextEngine = vi.fn(() => {
       throw new Error("A connection check must not create a context engine");
@@ -209,8 +191,7 @@ it.each([
       if (status === "timeout") {
         timeout.abort(new DOMException("The operation timed out", "TimeoutError"));
       }
-      return {
-        role: "assistant",
+      return makeAssistantMessageFixture({
         content:
           status === "ok"
             ? [{ type: "text", text: "OK" }]
@@ -220,20 +201,13 @@ it.each([
         provider,
         model: "probe-model",
         api: "openai-completions",
+        usage: { ...ZERO_USAGE_FIXTURE, input: 1, output: 1, totalTokens: 2 },
         stopReason: status === "timeout" ? "aborted" : status === "auth" ? "error" : "stop",
-        ...(status === "auth"
-          ? { errorMessage: "401 Invalid API key Authorization: Bearer sk-synthetic-private" }
-          : {}),
-        timestamp: 0,
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-      };
+        errorMessage:
+          status === "auth"
+            ? "401 Invalid API key Authorization: Bearer sk-synthetic-private"
+            : undefined,
+      });
     });
     const upsert = persist.upsertAuthProfileWithLock;
     const capture = vi
@@ -275,13 +249,9 @@ it.each([
         expect(result.results[0]?.error).toContain("401 Invalid API key");
         expect(result.results[0]?.error).not.toContain("sk-synthetic-private");
       }
-      const authAfter = oauth
-        ? loadPersistedSharedAuthProfileStore(state.env)
-        : loadPersistedAuthProfileStore(state.agentDir());
+      const authAfter = readAuth();
       if (oauth === "expired") {
-        expect(refreshCount).toBe(1);
-        expect(refreshOwnerFenced).toBe(true);
-        expect(refreshPeerFenced).toBe(true);
+        expect([refreshCount, refreshOwnerFenced, refreshPeerFenced]).toEqual([1, true, true]);
         expect(authAfter?.profiles[profileId]).toEqual(rotatedOAuth);
         expect(authAfter?.usageStats).toEqual(authBefore?.usageStats);
         expect(
@@ -306,11 +276,10 @@ it.each([
       expect(fs.existsSync(state.agentDir())).toBe(true);
     } finally {
       await parent.drain();
-      capture.mockRestore();
-      timeoutSignal.mockRestore();
+      for (const spy of [capture, timeoutSignal, credentialWrites, stateWrites]) {
+        spy.mockRestore();
+      }
       complete.mockReset();
-      credentialWrites.mockRestore();
-      stateWrites.mockRestore();
       await source.release();
       await resetPreparedModelRuntimeSnapshotsForTest();
       clearPluginMetadataLifecycleCaches();
@@ -348,8 +317,7 @@ it("releases direct state ownership before propagating a rejected no-tail operat
       ),
     ).rejects.toBe(original);
     expect(fs.existsSync(path.join(lockDir, "gateway.state.lock"))).toBe(false);
-    expect(signals.listenerCount("SIGINT")).toBe(0);
-    expect(signals.listenerCount("SIGTERM")).toBe(0);
+    expect(signals.eventNames()).toEqual([]);
   } finally {
     await state.cleanup();
   }

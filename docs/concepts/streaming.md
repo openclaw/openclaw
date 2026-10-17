@@ -116,6 +116,10 @@ commentary/final channels distinguish narration from final answers. Reasoning
 visibility settings and private-tag filtering also continue to apply; preserving
 visible text does not expose hidden reasoning.
 
+Shared text filtering skips repeated reasoning/final-tag scans for marker-free
+HTML, generic types, and comparisons. Recognized or ambiguous marker heads use
+the existing tag handling, including tags split across provider chunks.
+
 Answers containing only whitespace or invisible formatting characters stay empty,
 including when a character is split across provider chunks.
 

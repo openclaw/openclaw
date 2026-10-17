@@ -8,6 +8,7 @@
  * and retires that binding on every committed navigation or process termination.
  * Commands arrive as openclaw:native-conversation-command CustomEvent.detail.
  * Every requestId receives one command-result; document mismatches fail closed.
+ * Chat owns the queried page, panes, and composer; this bridge observes their committed DOM.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";

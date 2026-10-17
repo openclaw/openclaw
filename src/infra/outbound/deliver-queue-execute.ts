@@ -654,7 +654,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   } finally {
     writer?.release();
     generation?.release();
-    await producerLease?.stop();
     for (const outcome of payloadOutcomes) {
       if (outcome.status === "failed" && params.deliveryQueueOwner) {
         outcome.error = params.deliveryQueueOwner.project(outcome.error);
