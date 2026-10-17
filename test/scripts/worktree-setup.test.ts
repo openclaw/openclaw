@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { readBundledPluginAssetHooks } from "../../scripts/bundled-plugin-assets.mts";
 import { collectSourceCheckoutPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
@@ -23,16 +23,17 @@ const COLD_SCRIPT_INPUTS = collectRuntimeImportClosure(repoRoot, [
   "scripts/lib/output-root-guard.mjs",
 ]);
 
-type CommandCall = { kind: "pnpm"; args: string[]; cwd: string };
-
 function makePreparationFixture() {
   const directory = tempDirs.make("openclaw-preparation-");
   const rootDir = path.join(directory, "repo");
   const controls = path.join(directory, "controls");
   fs.mkdirSync(rootDir);
   fs.mkdirSync(controls);
+  const file = (relative: string) => path.join(rootDir, relative);
+  const read = (relative: string) => fs.readFileSync(file(relative), "utf8");
+  const exists = (relative: string) => fs.existsSync(file(relative));
   const write = (relative: string, value: string) => {
-    const target = path.join(rootDir, relative);
+    const target = file(relative);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, value);
   };
@@ -95,14 +96,12 @@ function makePreparationFixture() {
   git("init", "--quiet");
   git("add", ".");
   git(
-    "-c",
-    "user.name=Setup Test",
-    "-c",
-    "user.email=setup@example.invalid",
-    "-c",
-    "commit.gpgsign=false",
-    "-c",
-    "core.hooksPath=" + controls,
+    ...[
+      "user.name=Setup Test",
+      "user.email=setup@example.invalid",
+      "commit.gpgsign=false",
+      `core.hooksPath=${controls}`,
+    ].flatMap((setting) => ["-c", setting]),
     "commit",
     "--quiet",
     "-m",
@@ -152,7 +151,7 @@ function makePreparationFixture() {
     expect(result.error).toBeUndefined();
     return result;
   };
-  const calls = (): CommandCall[] =>
+  const calls = (): { args: string[] }[] =>
     fs.existsSync(callsPath)
       ? fs
           .readFileSync(callsPath, "utf8")
@@ -170,63 +169,56 @@ function makePreparationFixture() {
       "ui/node_modules",
       "apps/android/build",
     ]) {
-      expect(fs.existsSync(path.join(rootDir, relative)), relative).toBe(false);
+      expect(exists(relative), relative).toBe(false);
     }
   };
-  return { rootDir, controls, env, run, git, calls, assertNoOutputs };
+  return { rootDir, controls, env, run, git, calls, assertNoOutputs, file, read, exists };
 }
 
-describe("source-only worktree preparation", () => {
-  it("rejects invalid selectors before reading repository inputs", async () => {
-    expect(() => parseWorktreeSetupArgs(["gateway", "full"])).toThrow("Unexpected");
-    expect(() => parseWorktreeSetupArgs(["--profile", "gateway"])).toThrow("Unexpected");
-    expect(() => parseWorktreeSetupArgs(["--source-profile", "gateway"])).toThrow("Unexpected");
-    await expect(
-      createWorktreeSetupPlan({ rootDir: "/missing-worktree", workload: "unknown" }),
-    ).rejects.toThrow("Unknown preparation workload");
-  });
+it("rejects invalid selectors before reading repository inputs", async () => {
+  expect(() => parseWorktreeSetupArgs(["gateway", "full"])).toThrow("Unexpected");
+  expect(() => parseWorktreeSetupArgs(["--profile", "gateway"])).toThrow("Unexpected");
+  expect(() => parseWorktreeSetupArgs(["--source-profile", "gateway"])).toThrow("Unexpected");
+  await expect(
+    createWorktreeSetupPlan({ rootDir: "/missing-worktree", workload: "unknown" }),
+  ).rejects.toThrow("Unknown preparation workload");
+});
 
-  it.skipIf(process.platform === "win32")(
-    "keeps the actual Claude startup hook source-only",
-    () => {
-      const fixture = makePreparationFixture();
-      const settings = JSON.parse(
-        fs.readFileSync(path.join(repoRoot, ".claude/settings.json"), "utf8"),
-      ) as {
-        hooks: { SessionStart: { matcher: string; hooks: { type: string; command: string }[] }[] };
-      };
-      const hooks = settings.hooks.SessionStart.filter((entry) => entry.matcher === "startup")
-        .flatMap((entry) => entry.hooks)
-        .filter((hook) => hook.type === "command");
-      expect(hooks.length).toBeGreaterThan(0);
-      // Source startup must work even when the cone cannot prepare the gateway.
-      // Keep only scripts: the missing tracked plugin would fail input validation
-      // if startup accidentally inferred gateway preparation from sparse state.
-      for (const state of ["full", "sparse"]) {
-        if (state === "sparse") {
-          fixture.git("sparse-checkout", "set", "--cone", "scripts");
-          expect(fs.existsSync(path.join(fixture.rootDir, "extensions/isolated/index.ts"))).toBe(
-            false,
-          );
-        }
-        const before = fixture.git("status", "--porcelain", "--untracked-files=all");
-        for (const hook of hooks) {
-          const output = execFileSync("/bin/sh", ["-c", hook.command], {
-            cwd: path.join(fixture.rootDir, "scripts"),
-            env: fixture.env,
-            encoding: "utf8",
-          });
-          expect(output).toContain("Source-only");
-        }
-        expect(fixture.git("status", "--porcelain", "--untracked-files=all")).toBe(before);
-        if (state === "sparse") {
-          expect(fixture.git("sparse-checkout", "list").trim()).toBe("scripts");
-        }
-        expect(fixture.calls()).toEqual([]);
-        fixture.assertNoOutputs();
-      }
-    },
-  );
+it.skipIf(process.platform === "win32")("keeps the actual Claude startup hook source-only", () => {
+  const fixture = makePreparationFixture();
+  const settings = JSON.parse(
+    fs.readFileSync(path.join(repoRoot, ".claude/settings.json"), "utf8"),
+  ) as {
+    hooks: { SessionStart: { matcher: string; hooks: { type: string; command: string }[] }[] };
+  };
+  const hooks = settings.hooks.SessionStart.filter((entry) => entry.matcher === "startup")
+    .flatMap((entry) => entry.hooks)
+    .filter((hook) => hook.type === "command");
+  expect(hooks.length).toBeGreaterThan(0);
+  // Source startup must work even when the cone cannot prepare the gateway.
+  // Keep only scripts: the missing tracked plugin would fail input validation
+  // if startup accidentally inferred gateway preparation from sparse state.
+  for (const state of ["full", "sparse"]) {
+    if (state === "sparse") {
+      fixture.git("sparse-checkout", "set", "--cone", "scripts");
+      expect(fixture.exists("extensions/isolated/index.ts")).toBe(false);
+    }
+    const before = fixture.git("status", "--porcelain", "--untracked-files=all");
+    for (const hook of hooks) {
+      const output = execFileSync("/bin/sh", ["-c", hook.command], {
+        cwd: path.join(fixture.rootDir, "scripts"),
+        env: fixture.env,
+        encoding: "utf8",
+      });
+      expect(output).toContain("Source-only");
+    }
+    expect(fixture.git("status", "--porcelain", "--untracked-files=all")).toBe(before);
+    if (state === "sparse") {
+      expect(fixture.git("sparse-checkout", "list").trim()).toBe("scripts");
+    }
+    expect(fixture.calls()).toEqual([]);
+    fixture.assertNoOutputs();
+  }
 });
 
 it("plans the actual checkout from canonical source and both asset inventories", async () => {
@@ -279,11 +271,11 @@ it.each([
     if (isLink) {
       fs.mkdirSync(target);
       fs.writeFileSync(path.join(target, "sentinel"), "unchanged");
-      fs.mkdirSync(path.dirname(path.join(fixture.rootDir, linkedPath)), { recursive: true });
+      fs.mkdirSync(path.dirname(fixture.file(linkedPath)), { recursive: true });
       if (!afterStore) {
         fs.symlinkSync(
           target,
-          path.join(fixture.rootDir, linkedPath),
+          fixture.file(linkedPath),
           process.platform === "win32" ? "junction" : "dir",
         );
       } else {
@@ -310,20 +302,18 @@ it.each([
       afterStore ? [["--version"], ["store", "path"]] : [],
     );
     if (isLink) {
-      expect(fs.lstatSync(path.join(fixture.rootDir, linkedPath)).isSymbolicLink()).toBe(true);
+      expect(fs.lstatSync(fixture.file(linkedPath)).isSymbolicLink()).toBe(true);
       expect(fs.readdirSync(target)).toEqual(["sentinel"]);
       expect(fs.readFileSync(path.join(target, "sentinel"), "utf8")).toBe("unchanged");
       if (afterStore) {
-        expect(fs.existsSync(path.join(fixture.rootDir, "node_modules"))).toBe(false);
+        expect(fixture.exists("node_modules")).toBe(false);
       }
     } else {
       if (kind === "missing input") {
         expect(result.stderr).toContain(input);
-        expect(fs.existsSync(path.join(fixture.rootDir, input))).toBe(false);
+        expect(fixture.exists(input)).toBe(false);
       } else {
-        const pkg = JSON.parse(
-          fs.readFileSync(path.join(fixture.rootDir, "extensions/asset-copy/package.json"), "utf8"),
-        );
+        const pkg = JSON.parse(fixture.read("extensions/asset-copy/package.json"));
         expect(pkg.openclaw.assetScripts.copy).toBeUndefined();
       }
       fixture.assertNoOutputs();

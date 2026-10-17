@@ -36,13 +36,7 @@ function runMonitor(options: MonitorOptions) {
   fs.writeFileSync(markerSeed, "");
   const markerTime = options.marker?.modifiedAt ?? 1000;
   fs.utimesSync(markerSeed, markerTime, markerTime);
-  return spawnSync(
-    "bash",
-    [
-      "-euo",
-      "pipefail",
-      "-c",
-      `
+  const script = `
 clock=1000
 runner_ssh_port=64004
 idle_timeout=1
@@ -58,22 +52,20 @@ netstat() {
   if [ "$clock" -le "$ACTIVE_UNTIL" ]; then command cat "$HOME/connections"; fi
   return "$NETSTAT_EXIT"
 }
-${monitor}`,
-    ],
-    {
-      encoding: "utf8",
-      timeout: 5000,
-      env: {
-        ...process.env,
-        HOME: dir,
-        LOCAL_PORTS: options.ports ?? "22",
-        ACTIVE_UNTIL: String(options.activeUntil ?? 1090),
-        MARKER_AT: String(options.marker?.observedAt ?? 0),
-        DISCOVERY_EXIT: String(options.discoveryExit ?? 0),
-        NETSTAT_EXIT: String(options.netstatExit ?? 0),
-      },
+${monitor}`;
+  return spawnSync("bash", ["-euo", "pipefail", "-c", script], {
+    encoding: "utf8",
+    timeout: 5000,
+    env: {
+      ...process.env,
+      HOME: dir,
+      LOCAL_PORTS: options.ports ?? "22",
+      ACTIVE_UNTIL: String(options.activeUntil ?? 1090),
+      MARKER_AT: String(options.marker?.observedAt ?? 0),
+      DISCOVERY_EXIT: String(options.discoveryExit ?? 0),
+      NETSTAT_EXIT: String(options.netstatExit ?? 0),
     },
-  );
+  });
 }
 
 const sshOptions = (local: string, ports = "22"): MonitorOptions => ({
@@ -306,16 +298,14 @@ foreach ($case in $cases) {
 @{ installations=$cases.Count; descriptors=($aclCases.Count + 4) } | ConvertTo-Json -Compress
 `,
     );
+    const resolver = path.resolve("scripts/windows-testbox-openssh.ps1");
     const result = spawnSync(
       "pwsh",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-File",
-        fixture,
-        path.resolve("scripts/windows-testbox-openssh.ps1"),
-      ],
-      { encoding: "utf8", timeout: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS },
+      ["-NoProfile", "-NonInteractive", "-File", fixture, resolver],
+      {
+        encoding: "utf8",
+        timeout: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+      },
     );
     const redact = (text: string | null | undefined) => {
       let value = text ?? "";
