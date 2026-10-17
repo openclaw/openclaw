@@ -1,16 +1,16 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, expect, it } from "vitest";
 import {
-  assertProjectWorktreeImportReport,
-  assertProjectWorktreeStartupLog,
-  assertProjectWorktreeStartupPreservation,
+  assertProjectWorktreeImportReport as assertImport,
+  assertProjectWorktreeStartupLog as assertStartupLog,
+  assertProjectWorktreeStartupPreservation as assertPreserved,
 } from "../../scripts/e2e/lib/upgrade-survivor/project-worktree-startup.mjs";
 import {
-  readWorkerCellPackageIdentity,
-  resolveWorkerCellExport,
-  resolveWorkerCellFunctionBinding,
+  readWorkerCellPackageIdentity as readIdentity,
+  resolveWorkerCellExport as resolveExport,
+  resolveWorkerCellFunctionBinding as resolveBinding,
 } from "../../scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -29,13 +29,7 @@ const original = {
         session_key: sessionKey,
         current_session_id: "target",
         updated_at: 10,
-        entry_json: JSON.stringify({
-          sessionId: "target",
-          updatedAt: 10,
-          lastActivityAt: 10,
-          projectId: "project",
-          worktree: { id: "worktree", repoRoot: "/fixture/project" },
-        }),
+        entry_json: JSON.stringify({ worktree: { id: "worktree" } }),
       },
       { session_key: "other", current_session_id: "sentinel", updated_at: 20, entry_json: "{}" },
     ],
@@ -119,59 +113,50 @@ function doctorOwnerFixture(chunks: string[], definition = schemaDefinition) {
       name === "entry" ? schemaForwarder : definition,
     );
   }
-  return { root, identity: readWorkerCellPackageIdentity(root) };
+  return { root, identity: readIdentity(root) };
 }
 
-describe("published project-worktree Doctor ownership evidence", () => {
-  it.each<[string, string[], RegExp?, string?, boolean?]>([
-    ["forwarded owner", ["entry", "real"]],
-    ["two defining owners", ["real", "other"], /one installed defining/],
-    ["forwarder without a definition", ["entry"], /one installed defining/],
-    ["malformed definition", ["real"], /Cannot parse package owner/, `function ${schemaSymbol}( {`],
-    ["changed candidate bytes", ["real"], /Package owner changed/, undefined, true],
-  ])(
-    "resolves only an unchanged defining Doctor chunk: %s",
-    async (_name, chunks, error, definition, changed) => {
-      const { root, identity } = doctorOwnerFixture(chunks, definition);
-      if (changed) {
-        writeFileSync(
-          path.join(root, "dist/doctor-owner-real.mjs"),
-          `${schemaDefinition}\n// changed\n`,
-        );
-      }
-      const binding = resolveWorkerCellFunctionBinding(
-        identity,
-        root,
-        "doctor-owner",
-        schemaSymbol,
-        parser,
+it.each<[string, string[], RegExp?, string?, boolean?]>([
+  ["forwarded owner", ["entry", "real"]],
+  ["two defining owners", ["real", "other"], /one installed defining/],
+  ["forwarder without a definition", ["entry"], /one installed defining/],
+  ["malformed definition", ["real"], /Cannot parse package owner/, `function ${schemaSymbol}( {`],
+  ["changed candidate bytes", ["real"], /Package owner changed/, undefined, true],
+])(
+  "resolves only an unchanged defining Doctor chunk: %s",
+  async (_name, chunks, error, definition, changed) => {
+    const { root, identity } = doctorOwnerFixture(chunks, definition);
+    if (changed) {
+      writeFileSync(
+        path.join(root, "dist/doctor-owner-real.mjs"),
+        `${schemaDefinition}\n// changed\n`,
       );
-      if (error) {
-        await expect(binding).rejects.toThrow(error);
-      } else {
-        expect(resolveWorkerCellExport(schemaForwarder, schemaSymbol)).toBe(schemaSymbol);
-        expect(await binding).toEqual([
-          "doctor-owner-real.mjs",
-          schemaSymbol,
-          createHash("sha256").update(schemaDefinition).digest("hex"),
-        ]);
-      }
-    },
-  );
-
-  it("prepares the independent schema before startup and repairs workspace metadata between runs", () => {
-    const root = tempDirs.make("openclaw-project-worktree-doctor-order-");
-    const bin = path.join(root, "bin");
-    const artifacts = path.join(root, "artifacts");
-    const runtime = path.join(root, "runtime");
-    const events = path.join(root, "events");
-    for (const dir of [bin, artifacts, runtime]) {
-      mkdirSync(dir);
     }
-    // This orchestration unit test replaces package operations, not the runner's phase sequence.
-    writeExecutable(
-      path.join(bin, "openclaw"),
-      `#!/bin/bash
+    const binding = resolveBinding(identity, root, "doctor-owner", schemaSymbol, parser);
+    if (error) {
+      await expect(binding).rejects.toThrow(error);
+    } else {
+      expect(resolveExport(schemaForwarder, schemaSymbol)).toBe(schemaSymbol);
+      expect(await binding).toEqual([
+        "doctor-owner-real.mjs",
+        schemaSymbol,
+        createHash("sha256").update(schemaDefinition).digest("hex"),
+      ]);
+    }
+  },
+);
+
+it("prepares the independent schema before startup and repairs workspace metadata between runs", () => {
+  const root = tempDirs.make("openclaw-project-worktree-doctor-order-");
+  const runtime = path.join(root, "runtime");
+  const events = path.join(root, "events");
+  for (const dir of ["bin", "artifacts", "runtime"]) {
+    mkdirSync(path.join(root, dir));
+  }
+  // This orchestration unit test replaces package operations, not the runner's phase sequence.
+  writeExecutable(
+    path.join(root, "bin/openclaw"),
+    `#!/bin/bash
 set -eu
 if [ "$*" = 'doctor --fix --non-interactive' ]; then
   [ -z "\${OPENCLAW_UPDATE_IN_PROGRESS+x}" ]
@@ -184,19 +169,19 @@ else
   printf '{}\\n'
 fi
 `,
-    );
-    const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
-    const helpers = source.slice(
-      source.indexOf("run_project_worktree_import()"),
-      source.indexOf("validate_worker_cell()"),
-    );
-    const scenario = source.slice(
-      source.indexOf('if [ "$WORKER_CELL" = "1" ]; then\n  phase worker-baseline-identity'),
-      source.indexOf('\nif [ "$SCENARIO" = "workshop-doctor-recovery" ]; then\n  phase '),
-    );
-    const result = runProcess("/bin/bash", [
-      "-c",
-      `set -eu
+  );
+  const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+  const helpers = source.slice(
+    source.indexOf("run_project_worktree_import()"),
+    source.indexOf("validate_worker_cell()"),
+  );
+  const scenario = source.slice(
+    source.indexOf('if [ "$WORKER_CELL" = "1" ]; then\n  phase worker-baseline-identity'),
+    source.indexOf('\nif [ "$SCENARIO" = "workshop-doctor-recovery" ]; then\n  phase '),
+  );
+  const result = runProcess("/bin/bash", [
+    "-c",
+    `set -eu
 source scripts/lib/openclaw-e2e-instance.sh
 SCENARIO=projects-startup-migration
 WORKER_CELL=1
@@ -221,6 +206,12 @@ openclaw_test_state_create() {
   mkdir -p "$OPENCLAW_STATE_DIR"
 }
 openclaw_test_state_create "$RUNTIME_ROOT/state-home"
+workspace() { cat "$OPENCLAW_STATE_DIR/workspace-state"; }
+event() { printf '%s %s%s\\n' "$1" "$OPENCLAW_STATE_DIR" "\${2:+ $2}" >> "$UNIT_EVENTS"; }
+set_state() {
+  printf '%s' "$1" > "$OPENCLAW_STATE_DIR/workspace-state"
+  printf '%s' "$2" > "$OPENCLAW_STATE_DIR/schema-version"
+}
 node() {
   if [ "$1" = -e ]; then
     printf '%s\\n' "$OPENCLAW_STATE_DIR/sessions.json"
@@ -229,13 +220,12 @@ node() {
   elif [ "$1" = scripts/e2e/lib/upgrade-survivor/project-worktree-startup.mjs ]; then
     case "$2" in
       seed)
-        printf legacy > "$OPENCLAW_STATE_DIR/workspace-state"
-        printf 19 > "$OPENCLAW_STATE_DIR/schema-version"
-        printf 'seed %s\\n' "$OPENCLAW_STATE_DIR" >> "$UNIT_EVENTS" ;;
+        set_state legacy 19
+        event seed ;;
       prepare-schema)
         [ "$(cat "$OPENCLAW_STATE_DIR/schema-version")" = 19 ]
         printf 21 > "$OPENCLAW_STATE_DIR/schema-version"
-        printf 'schema-doctor %s\\n' "$OPENCLAW_STATE_DIR" >> "$UNIT_EVENTS" ;;
+        event schema-doctor ;;
       snapshot)
         case "$3" in
           published-import|before-schema) [ "$(cat "$OPENCLAW_STATE_DIR/schema-version")" = 19 ] ;;
@@ -245,7 +235,7 @@ node() {
               return 96
             fi ;;
         esac
-        printf 'snapshot %s %s %s\\n' "$3" "$OPENCLAW_STATE_DIR" "$(cat "$OPENCLAW_STATE_DIR/workspace-state")" >> "$UNIT_EVENTS" ;;
+        printf 'snapshot %s %s %s\\n' "$3" "$OPENCLAW_STATE_DIR" "$(workspace)" >> "$UNIT_EVENTS" ;;
       assert-import|assert-logs) : ;;
       *) return 97 ;;
     esac
@@ -254,15 +244,12 @@ node() {
   fi
 }
 update_candidate() {
-  printf repaired > "$OPENCLAW_STATE_DIR/workspace-state"
-  printf 21 > "$OPENCLAW_STATE_DIR/schema-version"
+  set_state repaired 21
   printf '{}\\n' > "$ARTIFACT_ROOT/installed-package-identity.json"
-  printf 'update %s\\n' "$OPENCLAW_STATE_DIR" >> "$UNIT_EVENTS"
+  event update
 }
-start_gateway() {
-  printf 'start %s %s\\n' "$OPENCLAW_STATE_DIR" "$(cat "$OPENCLAW_STATE_DIR/workspace-state")" >> "$UNIT_EVENTS"
-}
-stop_gateway() { printf 'stop %s\\n' "$OPENCLAW_STATE_DIR" >> "$UNIT_EVENTS"; }
+start_gateway() { event start "$(workspace)"; }
+stop_gateway() { event stop; }
 check_gateway_probes() { :; }
 phase() {
   shift
@@ -274,155 +261,146 @@ phase() {
 ${helpers}
 ${scenario}
 `,
-      "project-worktree-doctor-order",
-      root,
-    ]);
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    const first = path.join(runtime, "state-home/.openclaw");
-    const second = path.join(runtime, "worktree-startup-state/.openclaw");
-    expect(readFileSync(events, "utf8").trim().split("\n")).toEqual([
-      `seed ${first}`,
-      `snapshot published-import ${first} legacy`,
-      `seed ${second}`,
-      `snapshot published-import ${second} legacy`,
-      `update ${first}`,
-      `snapshot after-update ${first} repaired`,
-      `snapshot before-schema ${second} legacy`,
-      `schema-doctor ${second}`,
-      `snapshot before-startup ${second} legacy`,
-      `start ${second} legacy`,
-      `stop ${second}`,
-      `snapshot after-first-stop ${second} legacy`,
-      `doctor ${second}`,
-      `snapshot after-doctor ${second} repaired`,
-      `start ${second} repaired`,
-      `stop ${second}`,
-      `snapshot after-second-stop ${second} repaired`,
-    ]);
-  });
+    "project-worktree-doctor-order",
+    root,
+  ]);
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  const first = path.join(runtime, "state-home/.openclaw");
+  const second = path.join(runtime, "worktree-startup-state/.openclaw");
+  expect(readFileSync(events, "utf8").trim().split("\n")).toEqual([
+    `seed ${first}`,
+    `snapshot published-import ${first} legacy`,
+    `seed ${second}`,
+    `snapshot published-import ${second} legacy`,
+    `update ${first}`,
+    `snapshot after-update ${first} repaired`,
+    `snapshot before-schema ${second} legacy`,
+    `schema-doctor ${second}`,
+    `snapshot before-startup ${second} legacy`,
+    `start ${second} legacy`,
+    `stop ${second}`,
+    `snapshot after-first-stop ${second} legacy`,
+    `doctor ${second}`,
+    `snapshot after-doctor ${second} repaired`,
+    `start ${second} repaired`,
+    `stop ${second}`,
+    `snapshot after-second-stop ${second} repaired`,
+  ]);
+});
 
-  it("preserves imported bytes and permits only the Doctor-owned workspace repair", () => {
-    const check = (actual: typeof original, workspace?: string) => () =>
-      assertProjectWorktreeStartupPreservation(actual, original, workspace);
-    for (const [actual, workspace, accepted] of [
-      [original, undefined, true],
-      [migrated(), "/fixture/project", true],
-      [migrated(), undefined, false],
-      [original, "/fixture/project", false],
-    ] as const) {
-      if (accepted) {
-        expect(check(actual, workspace)).not.toThrow();
-      } else {
-        expect(check(actual, workspace)).toThrow();
+it("preserves imported bytes and permits only the Doctor-owned workspace repair", () => {
+  const check = (actual: typeof original, workspace?: string) => () =>
+    assertPreserved(actual, original, workspace);
+  for (const [actual, workspace, accepted] of [
+    [original, undefined, true],
+    [migrated(), "/fixture/project", true],
+    [migrated(), undefined, false],
+    [original, "/fixture/project", false],
+  ] as const) {
+    if (accepted) {
+      expect(check(actual, workspace)).not.toThrow();
+    } else {
+      expect(check(actual, workspace)).toThrow();
+    }
+  }
+  const corruptions: Array<(value: typeof original) => void> = [
+    (value) => value.agent.sessions[0]!.updated_at++,
+    (value) => (value.agent.sessions[0]!.current_session_id = "replacement"),
+    (value) => (value.agent.transcript[0]!.event_json = "rewritten"),
+    (value) => (value.shared.project[0]!.id = "other"),
+    (value) => (value.agent.sessions[1]!.entry_json = '{"changed":true}'),
+    (value) => value.agent.sessions.pop(),
+    (value) =>
+      (value.agent.sessions[0]!.entry_json =
+        migrated("/fixture/agent-default").agent.sessions[0]!.entry_json),
+  ];
+  for (const corrupt of corruptions) {
+    const value = migrated();
+    corrupt(value);
+    expect(check(value, "/fixture/project")).toThrow();
+  }
+  const rewritten = structuredClone(original);
+  const row = rewritten.agent.sessions[0]!;
+  row.entry_json = JSON.stringify(JSON.parse(row.entry_json), null, 2);
+  expect(check(rewritten)).toThrow();
+});
+
+it.each(["raw message", "rendered console"])(
+  "requires clean shutdown without a runtime repair in %s logs",
+  (format) => {
+    const prefix = (area: string) =>
+      format === "raw message" ? "" : `2026-09-16T15:10:34.169+00:00 [${area}] `;
+    const migration = `${prefix("gateway")}session: recorded canonical workspaces for 1 managed-worktree session(s)`;
+    const shutdownPrefix = prefix("shutdown") || "shutdown ";
+    const closed = `${shutdownPrefix}completed cleanly in 19ms`;
+    const warned = `${shutdownPrefix}completed in 19ms with warnings: database drain`;
+    const failed = `${shutdownPrefix}failed in 19ms`;
+    for (const start of ["first", "second"]) {
+      expect(assertStartupLog(closed, start)).toEqual({
+        backfills: [],
+        cleanShutdown: true,
+      });
+    }
+    for (const log of [
+      "gateway ready",
+      migration,
+      `${migration}\n${closed}`,
+      `${migration}\n${warned}`,
+      `${migration}\n${failed}`,
+      `${migration}\n${closed}\n${warned}`,
+      `${migration}\n${closed}\n${failed}`,
+    ]) {
+      expect(() => assertStartupLog(log, "first")).toThrow();
+    }
+    expect(() => assertStartupLog(`${migration}\n${closed}`, "second")).toThrow();
+  },
+);
+
+it("accepts complete published imports and rejects incomplete or mismatched evidence", () => {
+  const valid = publishedImportEvidence();
+  const check = ({ report, dryRun, manifest }: ReturnType<typeof publishedImportEvidence>) =>
+    assertImport(report, report.targets[0]!.storePath, dryRun, manifest);
+  expect(check(valid)).toEqual(valid.report.targets[0]);
+  const rejectChanges = (
+    select: (e: typeof valid) => object,
+    fields: Record<string, unknown[]>,
+  ) => {
+    for (const [key, values] of Object.entries(fields)) {
+      for (const value of values) {
+        const evidence = publishedImportEvidence();
+        Object.assign(select(evidence), { [key]: value });
+        expect(() => check(evidence)).toThrow();
       }
     }
-    const corruptions: Array<(value: typeof original) => void> = [
-      (value) => value.agent.sessions[0]!.updated_at++,
-      (value) => (value.agent.sessions[0]!.current_session_id = "replacement"),
-      (value) => (value.agent.transcript[0]!.event_json = "rewritten"),
-      (value) => (value.shared.project[0]!.id = "other"),
-      (value) => (value.agent.sessions[1]!.entry_json = '{"changed":true}'),
-      (value) => value.agent.sessions.pop(),
-      (value) =>
-        (value.agent.sessions[0]!.entry_json =
-          migrated("/fixture/agent-default").agent.sessions[0]!.entry_json),
-    ];
-    for (const corrupt of corruptions) {
-      const value = migrated();
-      corrupt(value);
-      expect(check(value, "/fixture/project")).toThrow();
-    }
-    const rewritten = structuredClone(original);
-    const row = rewritten.agent.sessions[0]!;
-    row.entry_json = JSON.stringify(JSON.parse(row.entry_json), null, 2);
-    expect(check(rewritten)).toThrow();
+  };
+  rejectChanges((e) => e.report.targets[0]!, {
+    agentId: ["other"],
+    importedEntries: [1],
+    importedTranscriptEvents: [3],
+    sqliteEntries: [1],
+    legacyEntries: [1],
+    referencedTranscriptFiles: [1],
+    validatedEntries: [1],
+    validatedTranscriptEvents: [1],
+    issues: [[{ code: "transcript_missing" }]],
   });
-
-  it.each([
-    {
-      format: "raw message",
-      migration: "session: recorded canonical workspaces for 1 managed-worktree session(s)",
-      shutdownPrefix: "shutdown",
-    },
-    {
-      format: "rendered console",
-      migration:
-        "2026-09-16T15:10:34.169+00:00 [gateway] session: recorded canonical workspaces for 1 managed-worktree session(s)",
-      shutdownPrefix: "2026-09-16T15:10:35.584+00:00 [shutdown]",
-    },
-  ])(
-    "requires clean shutdown without a runtime repair in $format logs",
-    ({ migration, shutdownPrefix }) => {
-      const closed = `${shutdownPrefix} completed cleanly in 19ms`;
-      const warned = `${shutdownPrefix} completed in 19ms with warnings: database drain`;
-      const failed = `${shutdownPrefix} failed in 19ms`;
-      for (const start of ["first", "second"]) {
-        expect(assertProjectWorktreeStartupLog(closed, start)).toEqual({
-          backfills: [],
-          cleanShutdown: true,
-        });
-      }
-      for (const log of [
-        "gateway ready",
-        migration,
-        `${migration}\n${closed}`,
-        `${migration}\n${warned}`,
-        `${migration}\n${failed}`,
-        `${migration}\n${closed}\n${warned}`,
-        `${migration}\n${closed}\n${failed}`,
-      ]) {
-        expect(() => assertProjectWorktreeStartupLog(log, "first")).toThrow();
-      }
-      expect(() => assertProjectWorktreeStartupLog(`${migration}\n${closed}`, "second")).toThrow();
-    },
-  );
-
-  it("accepts complete published imports and rejects incomplete or mismatched evidence", () => {
-    const valid = publishedImportEvidence();
-    const check = ({ report, dryRun, manifest }: ReturnType<typeof publishedImportEvidence>) =>
-      assertProjectWorktreeImportReport(report, report.targets[0]!.storePath, dryRun, manifest);
-    expect(check(valid)).toEqual(valid.report.targets[0]);
-    const rejectChanges = (
-      select: (e: typeof valid) => object,
-      fields: Record<string, unknown[]>,
-    ) => {
-      for (const [key, values] of Object.entries(fields)) {
-        for (const value of values) {
-          const evidence = publishedImportEvidence();
-          Object.assign(select(evidence), { [key]: value });
-          expect(() => check(evidence)).toThrow();
-        }
-      }
-    };
-    rejectChanges((e) => e.report.targets[0]!, {
-      agentId: ["other"],
-      importedEntries: [1],
-      importedTranscriptEvents: [3],
-      sqliteEntries: [1],
-      legacyEntries: [1],
-      referencedTranscriptFiles: [1],
-      validatedEntries: [1],
-      validatedTranscriptEvents: [1],
-      issues: [[{ code: "transcript_missing" }]],
-    });
-    rejectChanges((e) => e.dryRun.targets[0]!, {
-      validatedEntries: [1],
-      validatedTranscriptEvents: [3],
-      sqlitePath: ["/fixture/other.sqlite"],
-      issues: [[{ code: "transcript_malformed" }]],
-    });
-    rejectChanges((e) => e.manifest.targets[0]!, {
-      validationBeforeArchive: ["not_run", "failed", undefined],
-      agentId: ["other"],
-      storePath: ["/fixture/other.json"],
-      sqlitePath: ["/fixture/other.sqlite"],
-      issues: [[{ code: "sqlite_entry_missing" }]],
-    });
-    rejectChanges((e) => e.manifest, {
-      completedAt: [undefined],
-      failedAt: [valid.manifest.completedAt],
-      runId: ["other-run"],
-      targets: [[valid.manifest.targets[0], valid.manifest.targets[0]]],
-    });
+  rejectChanges((e) => e.dryRun.targets[0]!, {
+    validatedEntries: [1],
+    validatedTranscriptEvents: [3],
+    sqlitePath: ["/fixture/other.sqlite"],
+    issues: [[{ code: "transcript_malformed" }]],
+  });
+  rejectChanges((e) => e.manifest.targets[0]!, {
+    validationBeforeArchive: ["not_run", "failed", undefined],
+    agentId: ["other"],
+    storePath: ["/fixture/other.json"],
+    sqlitePath: ["/fixture/other.sqlite"],
+    issues: [[{ code: "sqlite_entry_missing" }]],
+  });
+  rejectChanges((e) => e.manifest, {
+    completedAt: [undefined],
+    failedAt: [valid.manifest.completedAt],
+    runId: ["other-run"],
+    targets: [[valid.manifest.targets[0], valid.manifest.targets[0]]],
   });
 });

@@ -1,10 +1,9 @@
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { assertPackageRecoveryEvidence } from "../../scripts/e2e/lib/upgrade-survivor/package-activation-recovery.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
@@ -12,7 +11,9 @@ import { readJson, runProcess, writeJson } from "./upgrade-survivor-shard.test-s
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const recoveryScript = "scripts/e2e/lib/upgrade-survivor/package-activation-recovery.mjs";
-const faultScript = path.resolve("scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs");
+const faultImport = pathToFileURL(
+  path.resolve("scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs"),
+).href;
 const runNode = (args: string[], env: NodeJS.ProcessEnv = {}) =>
   runProcess(process.execPath, args, { ...process.env, ...env }, 10_000);
 function faultFixture(cut: "publication-complete" | "verification", preload: string[] = []) {
@@ -23,18 +24,9 @@ function faultFixture(cut: "publication-complete" | "verification", preload: str
   const spec = path.join(root, "fault.json");
   writeJson(spec, { cut, evidence, ...(cut === "verification" ? { previousRoot } : { journal }) });
   const run = (code: string, ...args: string[]) =>
-    runNode(
-      [
-        ...preload,
-        "--import",
-        pathToFileURL(faultScript).href,
-        "--input-type=module",
-        "-e",
-        code,
-        ...args,
-      ],
-      { OPENCLAW_SURVIVOR_PACKAGE_FAULT: spec },
-    );
+    runNode([...preload, "--import", faultImport, "--input-type=module", "-e", code, ...args], {
+      OPENCLAW_SURVIVOR_PACKAGE_FAULT: spec,
+    });
   return { evidence, journal, previousRoot, run };
 }
 function writePackage(root: string, version: string, build: { buildId: string }) {
@@ -55,40 +47,34 @@ it.each([
   expect(paths.summaryJson).toBe(path.join(paths.artifactRoot, "summary.json"));
 });
 
-describe("release package interruption fixture", () => {
-  it("re-arms publication and Doctor faults when the same artifact directory is reused", () => {
-    const artifacts = fs.realpathSync(dirs.make("package-recovery-rearm-"));
-    const installed = path.join(artifacts, "installed");
-    const packed = path.join(artifacts, "package");
-    for (const [root, version, buildId] of [
-      [installed, "2026.9.8", "released"],
-      [packed, "2026.9.10", "candidate"],
-    ] as const) {
-      writePackage(root, version, { buildId });
-    }
-    const tarball = path.join(artifacts, "candidate.tgz");
-    const pack = spawnSync("tar", ["-czf", tarball, "-C", artifacts, "package"], {
-      encoding: "utf8",
-    });
-    expect(pack.status, pack.stderr).toBe(0);
-    const config = path.join(artifacts, "config.json");
-    writeJson(config, { gateway: {}, plugins: { enabled: false } });
-    const evidence = path.join(artifacts, "package-activation-cut.json");
-    for (const cut of ["publication-complete", "verification"]) {
-      fs.writeFileSync(evidence, '{"pid":"previous-run"}');
-      fs.writeFileSync(`${evidence}.doctor`, '{"exitCode":1}');
-      const setup = runNode([recoveryScript, "setup", artifacts, installed, tarball, cut, config]);
-      expect(setup.status, setup.stderr).toBe(0);
-      expect(fs.existsSync(evidence)).toBe(false);
-      expect(fs.existsSync(`${evidence}.doctor`)).toBe(false);
-      expect(readJson(path.join(artifacts, "package-activation-fault.json")).cut).toBe(cut);
-    }
-  });
-  it.each(["run", "all"])(
-    "kills only after the selected real SQLite commit through %s",
-    (method) => {
-      const { journal, evidence, run } = faultFixture("publication-complete", ["--import=tsx"]);
-      const result = run(`
+it("re-arms publication and Doctor faults when the same artifact directory is reused", () => {
+  const artifacts = fs.realpathSync(dirs.make("package-recovery-rearm-"));
+  const installed = path.join(artifacts, "installed");
+  const packed = path.join(artifacts, "package");
+  for (const [root, version, buildId] of [
+    [installed, "2026.9.8", "released"],
+    [packed, "2026.9.10", "candidate"],
+  ] as const) {
+    writePackage(root, version, { buildId });
+  }
+  const tarball = path.join(artifacts, "candidate.tgz");
+  const pack = runProcess("tar", ["-czf", tarball, "-C", artifacts, "package"]);
+  expect(pack.status, pack.stderr).toBe(0);
+  const config = path.join(artifacts, "config.json");
+  writeJson(config, { gateway: {}, plugins: { enabled: false } });
+  const evidence = path.join(artifacts, "package-activation-cut.json");
+  for (const cut of ["publication-complete", "verification"]) {
+    fs.writeFileSync(evidence, '{"pid":"previous-run"}');
+    fs.writeFileSync(`${evidence}.doctor`, '{"exitCode":1}');
+    const setup = runNode([recoveryScript, "setup", artifacts, installed, tarball, cut, config]);
+    expect(setup.status, setup.stderr).toBe(0);
+    expect([evidence, `${evidence}.doctor`].map(fs.existsSync)).toEqual([false, false]);
+    expect(readJson(path.join(artifacts, "package-activation-fault.json")).cut).toBe(cut);
+  }
+});
+it.each(["run", "all"])("kills only after the selected real SQLite commit through %s", (method) => {
+  const { journal, evidence, run } = faultFixture("publication-complete", ["--import=tsx"]);
+  const result = run(`
       import fs from 'node:fs';
       import { DatabaseSync } from 'node:sqlite';
       import { executeSqliteQuerySync, getNodeSqliteKysely } from './src/infra/kysely-sync.ts';
@@ -107,30 +93,26 @@ describe("release package interruption fixture", () => {
       db.exec('COMMIT');
       throw new Error('fault did not terminate the updater');
     `);
-      expect(result.error).toBeUndefined();
-      expect(result.signal, result.stderr).toBe("SIGKILL");
-      const cut = readJson(evidence);
-      expect(cut.row).toEqual({ slot: 1, phase: "publication-complete", intent_json: "null" });
-      const db = new DatabaseSync(journal, { readOnly: true });
-      try {
-        expect({ ...db.prepare("SELECT * FROM package_activation").get() }).toEqual(cut.row);
-      } finally {
-        db.close();
-      }
-    },
-  );
-  it("changes retained rollback bytes inside the Doctor child before reporting failure", () => {
-    const { evidence, previousRoot, run } = faultFixture("verification");
-    fs.mkdirSync(previousRoot);
-    const manifest = path.join(previousRoot, "package.json");
-    fs.writeFileSync(manifest, '{"version":"2026.9.8"}');
-    fs.writeFileSync(evidence, "{}");
-    const result = run("throw new Error('Doctor body must not run')", "doctor");
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(1);
-    expect(fs.readFileSync(manifest, "utf8")).toBe('{"version":"2026.9.8"}\n');
-    expect(readJson(`${evidence}.doctor`)).toMatchObject({ exitCode: 1 });
-  });
+  expect([result.error, result.signal], result.stderr).toEqual([undefined, "SIGKILL"]);
+  const cut = readJson(evidence);
+  expect(cut.row).toEqual({ slot: 1, phase: "publication-complete", intent_json: "null" });
+  const db = new DatabaseSync(journal, { readOnly: true });
+  try {
+    expect({ ...db.prepare("SELECT * FROM package_activation").get() }).toEqual(cut.row);
+  } finally {
+    db.close();
+  }
+});
+it("changes retained rollback bytes inside the Doctor child before reporting failure", () => {
+  const { evidence, previousRoot, run } = faultFixture("verification");
+  fs.mkdirSync(previousRoot);
+  const manifest = path.join(previousRoot, "package.json");
+  fs.writeFileSync(manifest, '{"version":"2026.9.8"}');
+  fs.writeFileSync(evidence, "{}");
+  const result = run("throw new Error('Doctor body must not run')", "doctor");
+  expect([result.error, result.status], result.stderr).toEqual([undefined, 1]);
+  expect(fs.readFileSync(manifest, "utf8")).toBe('{"version":"2026.9.8"}\n');
+  expect(readJson(`${evidence}.doctor`)).toMatchObject({ exitCode: 1 });
 });
 
 it("rejects repair receipts after non-manifest bytes change in either package tree", () => {
@@ -210,17 +192,14 @@ it("rejects repair receipts after non-manifest bytes change in either package tr
   }
 });
 
+const packageIdentity = (version: string, buildId: string) => ({ version, build: { buildId } });
 function completeEvidence() {
-  const installed = { version: "2026.9.11", build: { buildId: "next" }, manifest: "next-manifest" };
+  const installed = { ...packageIdentity("2026.9.11", "next"), manifest: "next-manifest" };
   const preserved = { exitCode: 0, retainedBytesPreserved: true, settingsPreserved: true };
   return {
     status: "passed",
-    baseline: { version: "2026.9.8", build: { buildId: "published" } },
-    candidate: {
-      version: "2026.9.10",
-      build: { buildId: "candidate" },
-      tarballSha256: "a".repeat(64),
-    },
+    baseline: packageIdentity("2026.9.8", "published"),
+    candidate: { ...packageIdentity("2026.9.10", "candidate"), tarballSha256: "a".repeat(64) },
     interruption: {
       phase: "publication-complete",
       cut: "publication-complete",
@@ -229,11 +208,7 @@ function completeEvidence() {
     },
     repair: { ...preserved, candidateUnchanged: true },
     repeatRepair: { exitCode: 0, settingsPreserved: true },
-    nextUpdate: {
-      ...preserved,
-      expected: installed,
-      installed,
-    },
+    nextUpdate: { ...preserved, expected: installed, installed },
     targetSelector: "installed-candidate",
   };
 }

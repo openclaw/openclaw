@@ -60,6 +60,10 @@ function request(method: string, params: object = {}): Promise<Result> {
   });
 }
 
+const readMessages = () =>
+  readJsonLines<Notification & { direction: string; id: number; message: string }>(logFile);
+const fixtureErrors = () => readMessages().filter((entry) => entry.direction === "fixture-error");
+
 const runningId = "native-upgrade-running";
 const completeId = "native-upgrade-complete";
 async function readThread(threadId: string, includeTurns = true) {
@@ -77,8 +81,8 @@ async function notificationWhere(matches: (entry: Notification) => boolean): Pro
   return observed;
 }
 
-async function completed(threadId: string, turnId: string) {
-  return await notificationWhere((entry) => isCompleted(entry, threadId, turnId));
+function completed(threadId: string, turnId: string) {
+  return notificationWhere((entry) => isCompleted(entry, threadId, turnId));
 }
 
 function isCompleted(entry: Notification, threadId: string, turnId: string) {
@@ -161,8 +165,7 @@ it("isolates native seeding, interruption, and closure from incidental parent tu
   const seeded = await startTurn(parent.id, "NATIVE_UPGRADE_SEED_ASSIGNMENTS");
   await completed(completeId, "native-complete-turn");
   const before = await readThread(parent.id);
-  const running = await readThread(runningId);
-  const finished = await readThread(completeId);
+  const [running, finished] = await Promise.all([readThread(runningId), readThread(completeId)]);
   expect(running).toMatchObject({
     status: { type: "active" },
     turns: [{ id: "native-running-turn", status: "inProgress" }],
@@ -192,8 +195,8 @@ it("isolates native seeding, interruption, and closure from incidental parent tu
   expect(interrupted.turns.some((turn) => turn.status === "inProgress")).toBe(false);
   expect(await readThread(runningId)).toEqual(running);
   expect(await readThread(completeId)).toEqual(finished);
-  const messages = readJsonLines<Notification & { direction: string; id: number }>(logFile);
-  expect(messages.filter((entry) => entry.direction === "fixture-error")).toEqual([]);
+  const messages = readMessages();
+  expect(fixtureErrors()).toEqual([]);
   const interruptRequest = messages.find(
     (entry) => entry.direction === "request" && entry.method === "turn/interrupt",
   );
@@ -251,11 +254,7 @@ it("isolates native seeding, interruption, and closure from incidental parent tu
       expect.objectContaining({ type: "agentMessage", text: "NATIVE_UPGRADE_CLOSE_OBSERVED" }),
     );
   }
-  expect(
-    readJsonLines<{ direction: string; message: string }>(logFile)
-      .filter((entry) => entry.direction === "fixture-error")
-      .map((entry) => entry.message),
-  ).toEqual([
+  expect(fixtureErrors().map((entry) => entry.message)).toEqual([
     "Native close confirmation is already pending on this connection",
     "Native close confirmation is already pending on this connection",
   ]);

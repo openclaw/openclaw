@@ -50,19 +50,17 @@ function importedState() {
   return {
     ...before,
     binding: {
-      ...before.binding,
+      key: before.binding.key,
       value: {
-        ...before.binding.value,
+        sessionId: owner.sessionId,
         nativeSubagentTaskImport: { version: 1, taskIds: ["released-0", "released-1"] },
         nativeSubagentAssignments: {
-          assignments: [
-            { runId: running, owner },
-            {
-              runId: completed,
-              owner,
-              recordedCompletion: { result: "NATIVE_UPGRADE_PENDING_RESULT" },
-            },
-          ],
+          assignments: before.tasks.map(({ run_id: runId, terminal_summary }) => ({
+            runId,
+            owner,
+            recordedCompletion:
+              terminal_summary === null ? undefined : { result: terminal_summary },
+          })),
         },
       },
     },
