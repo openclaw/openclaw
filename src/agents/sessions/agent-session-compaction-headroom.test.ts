@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import { compactionSettings } from "./agent-session-boundary.test-support.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
 import {
   createAssistant,
@@ -15,15 +16,8 @@ import {
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { createCompactionRequestBudget } from "./compaction/request-budget.js";
 import { SessionManager } from "./session-manager.js";
-import { SettingsManager } from "./settings-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
-
-const compactionSettings = () =>
-  SettingsManager.inMemory({
-    compaction: { enabled: true, reserveTokens: 1_024, keepRecentTokens: 1 },
-    retry: { enabled: false },
-  });
 
 function appendPending(manager: SessionManager, content: string, idempotencyKey: string) {
   const message: PersistedUserTurnMessage = { role: "user", content, timestamp: 3, idempotencyKey };
@@ -87,7 +81,7 @@ it.each([
     }
     const { session } = await createTestSession({
       model,
-      settingsManager: compactionSettings(),
+      settingsManager: compactionSettings({ enabled: true, reserveTokens: 1_024 }),
       sessionManager,
       systemPrompt,
     });
@@ -218,7 +212,7 @@ it.each([
   }));
   const { session } = await createTestSession({
     model,
-    settingsManager: compactionSettings(),
+    settingsManager: compactionSettings({ enabled: true, reserveTokens: 1_024 }),
     sessionManager,
     resourceLoader: createResourceLoader(new Map([["session_before_compact", [hook]]])),
     ...(fixedOnly ? { systemPrompt: "Required operating instructions. ".repeat(340) } : {}),
