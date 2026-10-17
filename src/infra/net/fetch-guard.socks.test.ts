@@ -43,6 +43,7 @@ const undiciTimers: { tick: (delay: number) => void } = createRequire(import.met
 const TARGET_URL = `https://${TARGET_HOST}/media`;
 const HTTP_URL = `http://${TARGET_HOST}/media`;
 const PAYLOAD_BYTES = Buffer.byteLength(PAYLOAD);
+const mediaRequest = { origin: `http://${TARGET_HOST}`, path: "/media", method: "GET" as const };
 type ProxyFixture = Parameters<Parameters<typeof withProxyFixture>[0]>[0];
 type EnvOptions = Parameters<typeof createHttp1EnvHttpProxyAgent>[0];
 
@@ -310,19 +311,14 @@ it.each(["flat array", "inherited object"])(
       const inherited = {};
       Object.setPrototypeOf(inherited, auth);
       await withDispatcher(dispatcher, async () => {
-        const requestOptions = {
-          origin: `http://${TARGET_HOST}`,
-          path: "/media",
-          method: "GET" as const,
-        };
         const request = dispatcher.request({
-          ...requestOptions,
+          ...mediaRequest,
           headers: form === "flat array" ? Object.entries(auth).flat() : inherited,
         });
         await expect(request).rejects.toMatchObject({ code: "UND_ERR_INVALID_ARG" });
         expect({ connections, originRoutes }).toEqual({ connections: [], originRoutes: [] });
         const response = await dispatcher.request({
-          ...requestOptions,
+          ...mediaRequest,
           headers: { Authorization: "Bearer fixture-origin-only" },
         });
         expect(await new UndiciResponse(response.body).text()).toBe(PAYLOAD);
@@ -588,11 +584,7 @@ it.each([
           });
           for (const bypass of ["", TARGET_HOST, ""]) {
             vi.stubEnv("no_proxy", bypass);
-            const response = await composed.request({
-              origin: `http://${TARGET_HOST}`,
-              path: "/media",
-              method: "GET",
-            });
+            const response = await composed.request(mediaRequest);
             expect(await new UndiciResponse(response.body).text()).toBe(PAYLOAD);
           }
           expect(originRoutes).toEqual(routes);
@@ -662,20 +654,17 @@ it("preserves target and redirect policy when trusted SOCKS owns DNS", () =>
     ]) {
       await expect(fetchWithSsrFGuard({ ...options, url })).rejects.toThrow("not in allowlist");
     }
-    await expect(
-      fetchWithSsrFGuard({
-        ...options,
-        url: "https://127.0.0.1/media",
-        policy: undefined,
-      }),
-    ).rejects.toThrow(/private|internal/i);
-    await expect(
-      fetchWithSsrFGuard({
-        ...options,
+    for (const overrides of [
+      { url: "https://127.0.0.1/media", policy: undefined },
+      {
         url: TARGET_URL,
         dispatcherPolicy: { ...options.dispatcherPolicy, allowPrivateProxy: false },
-      }),
-    ).rejects.toThrow(/private|internal/i);
+      },
+    ]) {
+      await expect(fetchWithSsrFGuard({ ...options, ...overrides })).rejects.toThrow(
+        /private|internal/i,
+      );
+    }
     expect(lookupFn.mock.calls.every(([hostname]) => hostname === "127.0.0.1")).toBe(true);
     expect(connections).toEqual([`socks:${TARGET_HOST}`, `socks:${TARGET_HOST}`]);
   }));

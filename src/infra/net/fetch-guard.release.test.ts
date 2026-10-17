@@ -1,4 +1,5 @@
 import type { ServerResponse } from "node:http";
+import { text } from "node:stream/consumers";
 import type { Dispatcher } from "undici";
 import { expect, it } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
@@ -31,25 +32,18 @@ it.each([
   const requests: Array<[string | undefined, string, string | undefined, string | undefined]> = [];
   let admissions = 0;
   await withServer(
-    (request, response) => {
-      let received = "";
-      request.setEncoding("utf8");
-      request.on("data", (chunk: string) => {
-        received += chunk;
-      });
-      request.on("end", () => {
-        requests.push([
-          request.url,
-          received,
-          request.headers["content-type"],
-          request.headers["content-length"],
-        ]);
-        if (request.url === "/start") {
-          response.writeHead(307, { location: "/complete" }).end();
-        } else {
-          response.end("complete");
-        }
-      });
+    async (request, response) => {
+      requests.push([
+        request.url,
+        await text(request),
+        request.headers["content-type"],
+        request.headers["content-length"],
+      ]);
+      if (request.url === "/start") {
+        response.writeHead(307, { location: "/complete" }).end();
+      } else {
+        response.end("complete");
+      }
     },
     async (baseUrl) => {
       const result = await fetchWithSsrFGuard({
@@ -62,13 +56,9 @@ it.each([
       });
       try {
         expect(await readText(result.response, 32)).toBe("complete");
+        const contentType = new Headers(init.headers).get("content-type") ?? body.type;
         expect(requests).toEqual(
-          ["/start", "/complete"].map((path) => [
-            path,
-            payload,
-            new Headers(init.headers).get("content-type") ?? body.type,
-            String(Buffer.byteLength(payload)),
-          ]),
+          ["/start", "/complete"].map((path) => [path, payload, contentType, String(body.size)]),
         );
         expect(admissions).toBe(2);
         expect(await readText(new Response(body), body.size)).toBe(payload);
@@ -157,11 +147,11 @@ it.each(["unread", "prefix", "overflow", "wrapped", "binary"] as const)(
           return result;
         };
         try {
-          const abandoned = await get("/abandoned");
+          const { response, release } = await get("/abandoned");
           const held = await get("/held");
           heldBody = readResponseWithLimit(held.response, 32);
           void heldBody.catch(() => undefined);
-          expect(abandoned.response.status).toBe(503);
+          expect(response.status).toBe(503);
           expect(held.dispatcherReused).toBe(true);
           expect(dispatchers[0]).toBeDefined();
           expect(dispatchers[1]).toBe(dispatchers[0]);
@@ -169,10 +159,7 @@ it.each(["unread", "prefix", "overflow", "wrapped", "binary"] as const)(
           abandonedOperation = (async () => {
             const reason = new Error("body limit reached");
             if (readerKind === "wrapped") {
-              const wrapped = wrapGuardedBodyStream({
-                body: abandoned.response.body!,
-                cleanup: abandoned.release,
-              });
+              const wrapped = wrapGuardedBodyStream({ body: response.body!, cleanup: release });
               const reader = wrapped.getReader();
               try {
                 expect((await reader.read()).value?.byteLength).toBeGreaterThan(0);
@@ -184,45 +171,39 @@ it.each(["unread", "prefix", "overflow", "wrapped", "binary"] as const)(
             }
             try {
               if (readerKind === "prefix") {
-                expect(await readResponseTextPrefix(abandoned.response, 4)).toMatchObject({
+                expect(await readResponseTextPrefix(response, 4)).toMatchObject({
                   text: "unus",
                   truncated: true,
                 });
               } else if (readerKind === "overflow") {
                 await expect(
-                  readResponseWithLimit(abandoned.response, 4, {
-                    onOverflow: () => reason,
-                  }),
+                  readResponseWithLimit(response, 4, { onOverflow: () => reason }),
                 ).rejects.toBe(reason);
               } else if (readerKind === "binary") {
-                const bounded = createBoundedProviderBinaryStream(abandoned.response.body!, {
+                const bounded = createBoundedProviderBinaryStream(response.body!, {
                   maxBytes: 4,
                   createOverflowError: () => reason,
                   createReleaseError: () => reason,
-                  cleanup: abandoned.release,
+                  cleanup: release,
                 });
-                const reader = bounded.stream.getReader();
                 try {
                   const chunks: Uint8Array[] = [];
                   await expect(
-                    (async () => {
-                      for (
-                        let chunk = await reader.read();
-                        !chunk.done;
-                        chunk = await reader.read()
-                      ) {
-                        chunks.push(chunk.value);
-                      }
-                    })(),
+                    bounded.stream.pipeTo(
+                      new WritableStream<Uint8Array>({
+                        write: (chunk) => {
+                          chunks.push(chunk);
+                        },
+                      }),
+                    ),
                   ).rejects.toBe(reason);
                   expect(Buffer.concat(chunks).toString()).toBe("unus");
                 } finally {
-                  reader.releaseLock();
                   await bounded.release();
                 }
               }
             } finally {
-              await abandoned.release();
+              await release();
             }
           })();
           await withinDeadline(abandonedOperation.then(() => abandonedClosed.promise));
@@ -238,9 +219,11 @@ it.each(["unread", "prefix", "overflow", "wrapped", "binary"] as const)(
           expect(completed.dispatcherReused).toBe(true);
           expect(dispatchers[2]).toBe(dispatchers[0]);
           const completedClone = completed.response.clone();
-          expect(completedClone.url).toBe(completed.response.url);
-          expect(completedClone.redirected).toBe(completed.response.redirected);
-          expect(completedClone.type).toBe(completed.response.type);
+          expect(completedClone).toMatchObject({
+            url: completed.response.url,
+            redirected: completed.response.redirected,
+            type: completed.response.type,
+          });
           expect(() => completed.response.headers.set("x-openclaw-test", "1")).toThrow();
           expect(() => completedClone.headers.set("x-openclaw-test", "1")).toThrow();
           expect(

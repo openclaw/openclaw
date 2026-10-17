@@ -46,19 +46,10 @@ const unsupportedLegacyIpv4Cases = `
   .split(/\s+/);
 
 const httpBaseUrlPolicyBuilders = [
-  {
-    name: "ssrfPolicyFromHttpBaseUrlAllowedHostname",
-    build: ssrfPolicyFromHttpBaseUrlAllowedHostname,
-  },
-  {
-    name: "ssrfPolicyFromHttpBaseUrlAllowedOrigin",
-    build: ssrfPolicyFromHttpBaseUrlAllowedOrigin,
-  },
-  {
-    name: "ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist",
-    build: ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
-  },
-];
+  ["allowed hostname", ssrfPolicyFromHttpBaseUrlAllowedHostname],
+  ["allowed origin", ssrfPolicyFromHttpBaseUrlAllowedOrigin],
+  ["fake-IP allowlist", ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist],
+] as const;
 
 describe("SSRF policy", () => {
   it("classifies blocked ip literals as private", () => {
@@ -71,8 +62,8 @@ describe("SSRF policy", () => {
     }
   });
   it.each(httpBaseUrlPolicyBuilders)(
-    "$name ignores empty, invalid, and non-HTTP URLs",
-    ({ build }) => {
+    "%s ignores empty, invalid, and non-HTTP URLs",
+    (_name, build) => {
       expect(build("")).toBeUndefined();
       expect(build("not-a-url")).toBeUndefined();
       expect(build("ftp://api.example.com")).toBeUndefined();
@@ -122,20 +113,16 @@ describe("SSRF policy", () => {
       hostnameAllowlist: ["api.example.com"],
     });
   });
-  it.each(["db.internal..."])(
-    "blocks reserved hostname with repeated trailing dots %s",
-    (hostname) => {
-      expect(isBlockedHostnameOrIp(hostname)).toBe(true);
-      expect(() => assertHostnameAllowedWithPolicy(hostname)).toThrow(/blocked/i);
-    },
-  );
+  it("blocks reserved hostname with repeated trailing dots", () => {
+    expect(isBlockedHostnameOrIp("db.internal...")).toBe(true);
+    expect(() => assertHostnameAllowedWithPolicy("db.internal...")).toThrow(/blocked/i);
+  });
 
-  it.each([["::ffff:198.18.0.1", { allowRfc2544BenchmarkRange: true }, false]] as const)(
-    "applies RFC2544 benchmark policy for %s",
-    (value, policy, expected) => {
-      expect(isBlockedHostnameOrIp(value, policy)).toBe(expected);
-    },
-  );
+  it("applies RFC2544 benchmark policy to IPv4-mapped IPv6", () => {
+    expect(isBlockedHostnameOrIp("::ffff:198.18.0.1", { allowRfc2544BenchmarkRange: true })).toBe(
+      false,
+    );
+  });
 
   // #74351: dual-stack fake-IP proxies need independent benchmark and ULA exemptions.
   it.each([

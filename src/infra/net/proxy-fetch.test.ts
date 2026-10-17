@@ -71,10 +71,10 @@ function requireProxyFetch(
   return fetchFn;
 }
 
-function requireUndiciFetchCall(index = 0) {
-  const call = undiciFetch.mock.calls[index];
+function requireUndiciFetchCall() {
+  const call = undiciFetch.mock.calls[0];
   if (!call) {
-    throw new Error(`expected undici fetch call at index ${index}`);
+    throw new Error("expected undici fetch call");
   }
   return call;
 }
@@ -119,11 +119,8 @@ describe("proxy fetch", () => {
     expect([headers.has("content-length"), headers.has("content-type")]).toEqual([false, false]);
   });
   it("returns undefined for plain fetch functions or blank metadata", () => {
-    const plainFetch = vi.fn() as unknown as typeof fetch;
-    const blankMetadataFetch = makeProxyFetch("   ");
-
-    expect(getProxyUrlFromFetch(plainFetch)).toBeUndefined();
-    expect(getProxyUrlFromFetch(blankMetadataFetch)).toBeUndefined();
+    expect(getProxyUrlFromFetch(vi.fn<typeof fetch>())).toBeUndefined();
+    expect(getProxyUrlFromFetch(makeProxyFetch("   "))).toBeUndefined();
   });
   it("returns proxy fetch using EnvHttpProxyAgent when HTTPS_PROXY is set", async () => {
     const fetchFn = requireProxyFetch(
