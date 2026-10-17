@@ -1,12 +1,7 @@
 import { X509Certificate } from "node:crypto";
 import { once } from "node:events";
 import { unlink, writeFile } from "node:fs/promises";
-import {
-  createServer as createHttpServer,
-  type RequestListener,
-  type Server,
-  type ServerResponse,
-} from "node:http";
+import * as http from "node:http";
 import { createServer } from "node:https";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
@@ -25,10 +20,8 @@ const tls = { cert: TEST_TLS_CERT_PEM, key: TEST_TLS_KEY_PEM };
 const pin = (cert: string) =>
   new X509Certificate(cert).fingerprint256.replaceAll(":", "").toLowerCase();
 const liveBody = '{"ok":true,"status":"live"}';
-const respondLive: RequestListener = (_request, response) => {
-  response.end(liveBody);
-};
-async function listen(server: Server) {
+const respondLive: http.RequestListener = (_request, response) => response.end(liveBody);
+async function listen(server: http.Server) {
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -37,7 +30,7 @@ async function listen(server: Server) {
   }
   return address.port;
 }
-async function close(server: Server) {
+async function close(server: http.Server) {
   server.closeAllConnections();
   await new Promise<void>((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
@@ -48,23 +41,27 @@ function requestHttp(
   port: number,
   options: Partial<Parameters<ConfiguredGatewayLocalProbe["requestHttp"]>[0]> = {},
 ) {
-  return probe.requestHttp({
-    host: "127.0.0.1",
-    port,
-    pathname: "/healthz",
-    timeoutMs: 1000,
-    ...options,
-  });
+  const defaults = { host: "127.0.0.1", pathname: "/healthz", timeoutMs: 1000 } as const;
+  return probe.requestHttp({ ...defaults, port, ...options });
 }
-const configFor = (certPath: string) => ({ gateway: { tls: { enabled: true, certPath } } });
+const configFor = (certPath: string) => ({
+  gateway: {
+    tls: {
+      enabled: true,
+      autoGenerate: false,
+      certPath,
+      keyPath: path.join(path.dirname(certPath), "missing-key.pem"),
+    },
+  },
+});
 
 describe("local TLS probes", () => {
   const dirs = createSuiteTempRootTracker({ prefix: "openclaw-local-http-probe-" });
-  const servers: Server[] = [];
+  const servers: http.Server[] = [];
   let directory: string, certPath: string, port: number;
   let server: ReturnType<typeof createServer>,
     probe: ConfiguredGatewayLocalProbe,
-    handler: RequestListener;
+    handler: http.RequestListener;
   beforeEach(async () => {
     directory = await dirs.setup();
     certPath = path.join(directory, "cert.pem");
@@ -86,17 +83,7 @@ describe("local TLS probes", () => {
       response.end(JSON.stringify({ ready: request.url === "/readyz" }));
     };
     // The configured private key is absent: client probes need only the public certificate.
-    const config = {
-      gateway: {
-        tls: {
-          enabled: true,
-          autoGenerate: false,
-          certPath,
-          keyPath: path.join(directory, "missing-key.pem"),
-        },
-      },
-    };
-    const client = createConfiguredGatewayLocalProbe(config);
+    const config = configFor(certPath);
     const proxy = await startProxy({ proxyUrl: "http://127.0.0.1:1" });
     try {
       await expect(
@@ -111,14 +98,12 @@ describe("local TLS probes", () => {
       expect(paths).toEqual(expect.arrayContaining(["/healthz", "/readyz"]));
       for (const host of ["0.0.0.0", "::", "127.0.0.1"]) {
         await expect(
-          requestHttp(client, port, { host, pathname: "/readyz" }),
+          requestHttp(probe, port, { host, pathname: "/readyz" }),
         ).resolves.toMatchObject({ statusCode: 200, body: JSON.stringify({ ready: true }) });
       }
       const mismatchedCertPath = path.join(directory, "mismatched-cert.pem");
       await writeFile(mismatchedCertPath, PROXY_FIXTURE_CERTIFICATE);
-      const mismatchedProbe = createConfiguredGatewayLocalProbe({
-        gateway: { tls: { enabled: true, autoGenerate: false, certPath: mismatchedCertPath } },
-      });
+      const mismatchedProbe = createConfiguredGatewayLocalProbe(configFor(mismatchedCertPath));
       await expect(requestHttp(mismatchedProbe, port, { pathname: "/readyz" })).resolves.toBeNull();
     } finally {
       await proxy?.stop();
@@ -153,8 +138,8 @@ describe("local TLS probes", () => {
   ] as const)(
     "retains the verified replacement after concurrent probes ($cache, $completion)",
     async ({ cache, completion }) => {
-      const oldResponse = createDeferredCore<ServerResponse>();
-      const newResponse = createDeferredCore<ServerResponse>();
+      const oldResponse = createDeferredCore<http.ServerResponse>();
+      const newResponse = createDeferredCore<http.ServerResponse>();
       let hold = false;
       handler = (request, response) => {
         if (hold) {
@@ -201,7 +186,7 @@ describe("local TLS probes", () => {
 });
 
 test("cancels pending readiness requests when the repair budget expires", async () => {
-  const server = createHttpServer();
+  const server = http.createServer();
   const port = await listen(server);
   const controller = new AbortController();
   const aborted = new Error("repair-budget");

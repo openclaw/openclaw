@@ -260,14 +260,11 @@ describe("built-in session tool role authority", () => {
         if (surface === "unselected wake") {
           expect(enqueueWake).not.toHaveBeenCalled();
         }
-        expect(
-          (
-            await history.execute("selected-history", {
-              sessionKey: PARTICIPANT_DRAFT,
-              user: alice.profileId,
-            })
-          ).details,
-        ).toMatchObject(draftMessages);
+        const selected = await history.execute("selected-history", {
+          sessionKey: PARTICIPANT_DRAFT,
+          user: alice.profileId,
+        });
+        expect(selected.details).toMatchObject(draftMessages);
       }),
   );
 
@@ -512,16 +509,10 @@ describe("built-in session tool role authority", () => {
             sessionKey: childKey,
             sessionId: child.sessionId,
           });
-          expect(transcript).toEqual(
-            expect.arrayContaining(
-              messages.map((message) =>
-                expect.objectContaining({
-                  type: "message",
-                  message: expect.objectContaining(message),
-                }),
-              ),
-            ),
+          const inherited = messages.map((message) =>
+            expect.objectContaining({ type: "message", message: expect.objectContaining(message) }),
           );
+          expect(transcript).toEqual(expect.arrayContaining(inherited));
           expect(startChild).toHaveBeenCalledOnce();
           const childMessage = startChild.mock.calls[0]?.[0].params.message;
           expect(childMessage).toContain("inherited conversation is background context");

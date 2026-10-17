@@ -96,11 +96,7 @@ it(
 
         providerServer = createServer(async (request, response) => {
           providerBodies.push(await text(request));
-          writeOpenAiResponsesText(response, {
-            text: "LINK_GATEWAY_OK",
-            messageId: "link-understanding-gateway-message",
-            responseId: "link-understanding-gateway-response",
-          });
+          writeOpenAiResponsesText(response, { text: "OK", messageId: "msg", responseId: "resp" });
         });
         const providerPort = await listen(providerServer);
         const provider = buildMockOpenAiResponsesProvider(`http://127.0.0.1:${providerPort}/v1`);
