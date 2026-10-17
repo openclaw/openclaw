@@ -14,7 +14,7 @@ import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
-import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
+import { cancelChatStreamRenderFrame, publishChatRunState } from "./chat-state-render.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
@@ -50,7 +50,7 @@ function transcriptSources(state: ChatPageHost): readonly unknown[] {
     state.chatStreamSegments,
     state.chatReasoning,
     state.guardianNotices,
-    state.realtimeTalkConversationState.entries,
+    state.realtimeTalk.snapshot.realtimeTalkConversationState.entries,
   ];
 }
 
@@ -308,11 +308,12 @@ export function createChatState<TState extends ChatPageHost>(
       // A render consumes both deferred producers before their next frame.
       cancelBackgroundRender();
       const state = stateValue;
+      // Owner projections can publish transcript changes without a page redraw request.
+      captureRenderLifecycleChanges();
       if (state?.chatStreamRenderFrame != null) {
         cancelChatStreamRenderFrame(state);
-        publishStateEffects();
+        publishChatRunState(state);
       }
-      captureRenderLifecycleChanges();
     },
   };
   return api;

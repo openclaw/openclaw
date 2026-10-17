@@ -159,17 +159,21 @@ describe("queued collector session projection", () => {
         expect(queued.activeRunIds).toEqual([second.runId]);
         await expectUnstartedChildHistory(context, queued.key, [second.runId!]);
         await Promise.all(publications);
-        const created = broadcast.mock.calls.find(
-          ([, event]) => event.sessionKey === second.childSessionKey && event.reason === "create",
+        // First observation can publish current facts instead of replaying the create reason.
+        const published = broadcast.mock.calls.find(
+          ([method, event]) =>
+            method === "sessions.changed" &&
+            event.sessionKey === second.childSessionKey &&
+            (event.reason === "create" || event.reason === "updated"),
         )?.[1];
-        expect.soft(created).toMatchObject({
+        expect.soft(published).toMatchObject({
           label: "Collector B",
           swarmGroupId: `swarm:${parentKey}:parent-turn`,
           subagentRunState: "active",
           hasActiveRun: true,
           status: "queued",
         });
-        expect.soft([created?.startedAt, created?.runtimeMs]).toEqual([undefined, null]);
+        expect.soft([published?.startedAt, published?.runtimeMs]).toEqual([undefined, null]);
 
         const stopResponse = await abortCollector(
           { key: second.childSessionKey, agentId: "main", clearQueued: true },

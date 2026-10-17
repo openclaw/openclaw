@@ -2034,6 +2034,49 @@ describe("canonical session message recovery", () => {
 });
 
 describe("chat state render lifecycle", () => {
+  it("publishes a pending run projection when an unrelated pane commit consumes its frame", () => {
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.set(1, callback);
+      return 1;
+    });
+    vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => frames.delete(id));
+    const redraw = vi.fn();
+    const controller = createChatState<ChatPageHost>({
+      invalidate: redraw,
+      updateComplete: Promise.resolve(true),
+    });
+    let state: ChatPageHost;
+    const rendered: (string | null)[] = [];
+    const dispose = createRoot((stop) => {
+      state = createPageState(createChatPageStateContext(), controller.createRenderLifecycle(), {
+        dispatchEvent: () => true,
+        querySelector: () => null,
+      });
+      controller.attach(state);
+      createEffect(
+        () => state.chatStream,
+        (stream) => {
+          rendered.push(stream);
+        },
+      );
+      return stop;
+    });
+    onTestFinished(() => {
+      controller.dispose();
+      dispose();
+    });
+    flush();
+    redraw.mockClear();
+    mutateChatRunState(state!, () => (state!.chatStream = "queued stream"), "animation-frame");
+    expect(frames.size).toBe(1);
+    controller.prepareRender();
+    flush();
+    expect(frames.size).toBe(0);
+    expect(rendered).toEqual([null, "queued stream"]);
+    expect(redraw).not.toHaveBeenCalled();
+  });
+
   it.each(["legacy-first", "run-first", "terminal"] as const)(
     "publishes mixed legacy and run updates through one frame: %s",
     (order) => {
@@ -2741,36 +2784,42 @@ describe("chat state render lifecycle", () => {
       querySelector: () => null,
     });
     const stop = vi.fn(() => {
-      expect(state.realtimeTalkSession).toBeNull();
+      expect(state.realtimeTalk.snapshot.realtimeTalkSession).toBeNull();
     });
-    state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
-    state.realtimeTalkActive = true;
-    state.realtimeTalkStatus = "listening";
-    state.realtimeTalkDetail = "live";
-    state.realtimeTalkInputLevel.set(0.8);
-    state.realtimeTalkConversationState.entries = [
+    state.realtimeTalk.update({
+      realtimeTalkSession: {
+        stop,
+      } as unknown as ChatPageHost["realtimeTalk"]["snapshot"]["realtimeTalkSession"],
+    });
+    state.realtimeTalk.update({ realtimeTalkActive: true });
+    state.realtimeTalk.update({ realtimeTalkStatus: "listening" });
+    state.realtimeTalk.update({ realtimeTalkDetail: "live" });
+    state.realtimeTalk.snapshot.realtimeTalkInputLevel.set(0.8);
+    state.realtimeTalk.snapshot.realtimeTalkConversationState.entries = [
       { id: "utterance", role: "user", text: "stale", isStreaming: true },
     ];
-    state.realtimeTalkVideoStream = {} as MediaStream;
-    state.realtimeTalkCameraDevices = [{ deviceId: "camera", label: "Camera" }];
-    state.realtimeTalkVideoCapable = true;
-    state.realtimeTalkVideoPending = true;
-    state.realtimeTalkCameraError = true;
+    state.realtimeTalk.update({ realtimeTalkVideoStream: {} as MediaStream });
+    state.realtimeTalk.update({
+      realtimeTalkCameraDevices: [{ deviceId: "camera", label: "Camera" }],
+    });
+    state.realtimeTalk.update({ realtimeTalkVideoCapable: true });
+    state.realtimeTalk.update({ realtimeTalkVideoPending: true });
+    state.realtimeTalk.update({ realtimeTalkCameraError: true });
     controller.attach(state);
 
     dispose();
 
     expect(stop).toHaveBeenCalledOnce();
-    expect(state.realtimeTalkActive).toBe(false);
-    expect(state.realtimeTalkStatus).toBe("idle");
-    expect(state.realtimeTalkDetail).toBeNull();
-    expect(state.realtimeTalkInputLevel.value).toBe(0);
-    expect(state.realtimeTalkConversationState.entries).toEqual([]);
-    expect(state.realtimeTalkVideoStream).toBeNull();
-    expect(state.realtimeTalkCameraDevices).toEqual([]);
-    expect(state.realtimeTalkVideoCapable).toBe(false);
-    expect(state.realtimeTalkVideoPending).toBe(false);
-    expect(state.realtimeTalkCameraError).toBe(false);
+    expect(state.realtimeTalk.snapshot.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("idle");
+    expect(state.realtimeTalk.snapshot.realtimeTalkDetail).toBeNull();
+    expect(state.realtimeTalk.snapshot.realtimeTalkInputLevel.value).toBe(0);
+    expect(state.realtimeTalk.snapshot.realtimeTalkConversationState.entries).toEqual([]);
+    expect(state.realtimeTalk.snapshot.realtimeTalkVideoStream).toBeNull();
+    expect(state.realtimeTalk.snapshot.realtimeTalkCameraDevices).toEqual([]);
+    expect(state.realtimeTalk.snapshot.realtimeTalkVideoCapable).toBe(false);
+    expect(state.realtimeTalk.snapshot.realtimeTalkVideoPending).toBe(false);
+    expect(state.realtimeTalk.snapshot.realtimeTalkCameraError).toBe(false);
   });
 
   it("aborts attachment reads when a chat pane disconnects", () => {

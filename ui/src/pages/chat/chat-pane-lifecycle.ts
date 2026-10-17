@@ -188,14 +188,17 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
 
   /** Receives one complete browser annotation without mixing generated context into the user's draft. */
   protected receiveBrowserAnnotation(event: Event): void {
+    const state = this.state;
     if (
+      !state ||
       !admitBrowserAnnotation(
-        this.state,
+        state,
         this.active && this.presented,
         event,
         this.chatState.attachmentReads.pendingBytes(
-          resolveChatAttachmentLimits(this.state?.hello?.policy),
+          resolveChatAttachmentLimits(state.hello?.policy),
         ),
+        this.chatState.attachmentInputProps(state).onAttachmentsChange,
       )
     ) {
       return;
@@ -225,7 +228,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     const shortcut = Object.values(SIDEBAR_PANEL_SHORTCUTS).find(
       (entry) => entry && matchesShortcutCombo(entry.combo, event),
     );
-    const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
+    const discussionState = this.sessionDiscussion.snapshot.states.get(state.sessionKey.trim());
     if (
       shortcut?.available({
         state,
@@ -562,7 +565,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       if (nextSessionKey) {
         // Availability belongs to one activation. The replacement probe starts
         // after its transcript commit in deferSessionHydrationUntilTranscript.
-        this.sessionDiscussionStates.delete(nextSessionKey);
+        this.sessionDiscussion.forgetState(nextSessionKey);
       }
       if (catalogKey && this.catalogRequestedSessionKey !== this.sessionKey) {
         this.catalogLoadGeneration += 1;

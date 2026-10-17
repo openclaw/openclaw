@@ -14,6 +14,7 @@ import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
+import type { ChatPendingInputView, PendingInputRequest } from "./chat-pending-inputs.types.ts";
 import { confirmQueuedMessageCustody, removeQueuedMessage } from "./chat-queue.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { publishChatRunState } from "./chat-state-render.ts";
@@ -25,29 +26,6 @@ import {
   reconcileChatInputCustody,
 } from "./history-merge.ts";
 import type { PendingInputStatus } from "./system-notice-kinds.ts";
-
-type PendingInputRequest = {
-  before?: number;
-  kind: "navigation" | "refresh" | "discovery";
-  client: NonNullable<ChatState["client"]>;
-  connectionEpoch: number;
-};
-
-export type ChatPendingInputView = {
-  sessionKey: string;
-  sessionId: string | null;
-  agentId: string | undefined;
-  page: ChatPendingInputsPage;
-  /** Live custody receipts keep the queue independent of retained-input pagination. */
-  queuedInputs: ChatPendingInputsPage["items"];
-  receiptRunIds: string[];
-  queuedCount: number;
-  queueBefore?: number;
-  before?: number;
-  readonly loading: boolean;
-  error?: string;
-  request?: PendingInputRequest;
-};
 
 function reconcileQueuedInputs(
   queued: ChatPendingInputsPage["items"],

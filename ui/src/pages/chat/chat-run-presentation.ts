@@ -77,7 +77,7 @@ class ChatRunPresentation<T extends object> {
     return () => this.listeners.delete(listener);
   }
 
-  batch<T>(operation: () => T, mode?: ChatRunPublication | false): T {
+  batch<TResult>(operation: () => TResult, mode?: ChatRunPublication | false): TResult {
     if (this.depth === 0) {
       this.cadence = mode ?? "immediate";
     } else if (mode === "immediate") {

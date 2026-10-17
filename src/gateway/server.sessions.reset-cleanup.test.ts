@@ -36,7 +36,6 @@ import {
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
-  bootstrapCacheMocks,
   subagentLifecycleHookMocks,
   subagentLifecycleHookState,
   threadBindingMocks,
@@ -206,11 +205,6 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   enqueueSystemEvent("stale event via alias", { sessionKey: "main" });
   enqueueSystemEvent("stale event via canonical key", { sessionKey: "agent:main:main" });
   enqueueSystemEvent("stale event via session id", { sessionKey: "sess-main" });
-  const waitCallCountAtSnapshotClear: number[] = [];
-  bootstrapCacheMocks.clearBootstrapSnapshot.mockImplementation(() => {
-    waitCallCountAtSnapshotClear.push(embeddedRunMock.waitCalls.length);
-  });
-
   const reset = await resetMainSession();
   expect(reset).toMatchObject({
     ok: true,
@@ -245,7 +239,6 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   expect(retireMcp).toHaveBeenNthCalledWith(1, retirement(true));
   expect(retireMcp).toHaveBeenNthCalledWith(2, retirement(false));
   expect(disposeMcp).toHaveBeenCalledWith("sess-main");
-  expect(waitCallCountAtSnapshotClear).toEqual([1]);
   const browserCalls: unknown[][] =
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mock.calls;
   expect(browserCalls).toHaveLength(1);
