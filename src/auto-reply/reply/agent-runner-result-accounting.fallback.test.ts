@@ -1,7 +1,4 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -11,22 +8,19 @@ import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils-row.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { readSessionFallbackModelAsync } from "../../status/session-fallback-model.js";
+import { useAccountingDatabase } from "./agent-runner-accounting.test-support.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
 const diagnostic = { provider: "primary-fixture", model: "thinking" };
-let root: string;
-let storePath: string;
+const database = useAccountingDatabase("openclaw-fallback-projection-");
 let sequence = 0;
 const operations: ReplyOperation[] = [];
 afterEach(() => {
@@ -35,21 +29,9 @@ afterEach(() => {
   }
   clearRuntimeConfigSnapshot();
 });
-beforeAll(() => {
-  // openclaw-temp-dir: allow suite database root drains before removal
-  root = fs.mkdtempSync(
-    path.join(fs.realpathSync.native(os.tmpdir()), "openclaw-fallback-projection-"),
-  );
-  storePath = path.join(root, "openclaw-agent.sqlite");
-});
-afterAll(async () => {
-  await drainSessionStoreWriterQueuesForTest();
-  await disposeOpenClawAgentDatabaseByPath(storePath);
-  await closeOpenClawAgentDatabasesAsync(root);
-  fs.rmSync(root, { recursive: true, force: true });
-});
 
 async function createFixture(selected = diagnostic) {
+  const { root, storePath } = database;
   const id = ++sequence;
   const sessionKey = `agent:main:fallback-${id}`;
   const entry: InternalSessionEntry = {
@@ -218,6 +200,7 @@ it("does not persist or project a fallback for the selected model's wire identit
 it.each([false, true])(
   "projects a completed fallback with stored primary=%s",
   async (storedPrimary) => {
+    const { storePath } = database;
     const fixture = await createFixture();
     const { context } = fixture;
     const entry = context.activeSessionEntry!;
@@ -271,8 +254,10 @@ it.each([false, true])(
       { providerOverride: "another-provider", modelOverride: "another-model" },
     ]) {
       const row = await project({ ...stored, ...changed });
-      expect(row.activeModel, JSON.stringify(changed)).toBeUndefined();
-      expect(row.activeModelProvider, JSON.stringify(changed)).toBeUndefined();
+      expect(row, JSON.stringify(changed)).toMatchObject({
+        activeModel: undefined,
+        activeModelProvider: undefined,
+      });
     }
 
     const activeRunId = `${context.runId}-active`;
@@ -284,8 +269,7 @@ it.each([false, true])(
     });
     try {
       const row = await project(stored);
-      expect(row.activeModel).toBeUndefined();
-      expect(row.activeModelProvider).toBeUndefined();
+      expect(row).toMatchObject({ activeModel: undefined, activeModelProvider: undefined });
     } finally {
       clearAgentRunContext(activeRunId);
     }

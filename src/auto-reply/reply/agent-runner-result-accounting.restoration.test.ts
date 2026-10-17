@@ -1,45 +1,28 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
-import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import * as transcript from "../../config/sessions/transcript.js";
 import { readModelFallbackNotice } from "../../shared/model-fallback-notice.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { useAccountingDatabase } from "./agent-runner-accounting.test-support.js";
 import {
   agentAccountingPersistenceDiagnostic as primary,
   createAgentAccountingPersistenceFixture,
 } from "./agent-runner-result-accounting.persistence.test-support.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
-// Runtime outcomes are fixed fixtures; completion, source fencing and canonical transcript writes are real.
-let root: string;
-let storePath: string;
+const database = useAccountingDatabase("openclaw-restoration-");
 let sequence = 0;
 const operations: ReplyOperation[] = [];
 const fallback = { provider: "fallback-fixture", model: "available" };
-beforeAll(() => {
-  // openclaw-temp-dir: allow suite database root drains before removal
-  root = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), "openclaw-restoration-"));
-  storePath = path.join(root, "openclaw-agent.sqlite");
-});
 afterEach(() => {
   vi.restoreAllMocks();
   for (const operation of operations.splice(0)) {
     operation.complete();
   }
 });
-afterAll(async () => {
-  await drainSessionStoreWriterQueuesForTest();
-  await disposeOpenClawAgentDatabaseByPath(storePath);
-  await closeOpenClawAgentDatabasesAsync(root);
-  fs.rmSync(root, { recursive: true, force: true });
-});
 
 async function fixture(lane: "ordinary" | "followup" = "ordinary") {
+  const { root, storePath } = database;
   const f = await createAgentAccountingPersistenceFixture({
     root,
     storePath,

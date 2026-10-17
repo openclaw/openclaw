@@ -23,6 +23,10 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.pa
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
+import {
+  attachSteerBackend,
+  createSteerParams,
+} from "./agent-runner-steer-adoption.test-support.js";
 import { MessageInjectionTargetUnavailableError } from "./message-injection-authority.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { createQueueTestRun, clearFollowupQueueForTest } from "./queue.test-helpers.js";
@@ -36,7 +40,6 @@ import type { ReplyBackendQueueMessageResult } from "./reply-run-registry.contra
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { prepareSteeringDelivery } from "./steering-delivery-preparation.js";
 import { createMockTypingController } from "./test-helpers.js";
-import { createTypingSignaler } from "./typing-mode.js";
 
 const text = "candidate committed answer";
 type QueueOptions = Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2];
@@ -56,24 +59,14 @@ function startSteer(
   state?: ReplyOperationRunState,
   storePath?: string,
 ) {
-  const typing = createMockTypingController();
-  return runActiveReplySteer({
-    followupRun: run,
-    opts: undefined,
-    providedReplyOperation: operation,
-    queueKey: key,
-    releaseAdmissionTicket: () => {},
-    replyOperationRunState: state,
-    resolvedQueue: { mode: "steer", debounceMs: 0 },
-    restartRecoverySourceTurnId: run.messageId,
-    runFollowup: followup,
-    sessionCtx: {},
-    sessionKey: key,
-    storePath,
-    touchActiveSessionEntry: async () => {},
-    typing,
-    typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
-  });
+  return runActiveReplySteer(
+    createSteerParams(key, run, operation, {
+      replyOperationRunState: state,
+      restartRecoverySourceTurnId: run.messageId,
+      runFollowup: followup,
+      storePath,
+    }),
+  );
 }
 
 function enqueue(
@@ -131,23 +124,15 @@ describe("question response custody through reply adoption", () => {
           await releaseFirst.promise;
         }
       });
-      operation.attachBackend({
-        kind: "embedded",
+      attachSteerBackend(operation, fingerprint, {
         runId: "accepted-backing-work",
-        toolAuthorityFingerprint: fingerprint,
-        cancel: vi.fn(),
-        messageInjectionV2: {
-          version: 2,
-          isAvailable: () => true,
-          queueMessage,
-          claimPendingUserInputAnswer: (message, options, assertCurrent, kind) =>
-            claimEmbeddedPendingUserInputAnswer(message, options, key, undefined, {
-              kind,
-              assertCurrent,
-            }),
-        },
+        queueMessage,
+        claimPendingUserInputAnswer: (message, options, assertCurrent, kind) =>
+          claimEmbeddedPendingUserInputAnswer(message, options, key, undefined, {
+            kind,
+            assertCurrent,
+          }),
       });
-      operation.setPhase("running");
       registerAgentRunContext("accepted-backing-work", {
         isControlUiVisible: false,
         projectSessionMessages: false,
@@ -213,14 +198,7 @@ describe("question response custody through reply adoption", () => {
         // No acceptance callback yet: the next parked input must wait for this outcome.
         return firstOutcome.promise;
       });
-      operation.attachBackend({
-        kind: "embedded",
-        runId: "accepted-backing-work",
-        toolAuthorityFingerprint: fingerprint,
-        cancel: vi.fn(),
-        messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
-      });
-      operation.setPhase("running");
+      attachSteerBackend(operation, fingerprint, { queueMessage, runId: "accepted-backing-work" });
       const firstSteer = startSteer(key, first, operation, followup);
       let waitingSteer: ReturnType<typeof startSteer> | undefined;
       try {
@@ -274,23 +252,16 @@ describe("question response custody through reply adoption", () => {
           onAbandoned: abandoned,
           onSettled: settled,
         };
-        operation.attachBackend({
-          kind: "embedded",
+        attachSteerBackend(operation, fingerprint, {
           runId: "accepted-backing-work",
-          toolAuthorityFingerprint: fingerprint,
           cancel,
-          messageInjectionV2: {
-            version: 2,
-            isAvailable: () => true,
-            queueMessage: (_message, options, assertCurrent) => {
-              assertCurrent();
-              options?.onQueueAccepted?.(true);
-              accepted.resolve();
-              return delivery.promise;
-            },
+          queueMessage: (_message, options, assertCurrent) => {
+            assertCurrent();
+            options?.onQueueAccepted?.(true);
+            accepted.resolve();
+            return delivery.promise;
           },
         });
-        operation.setPhase("running");
         const state: ReplyOperationRunState = {};
         const adoption = startSteer(key, run, operation, followup, state);
         void adoption.catch(() => undefined);
