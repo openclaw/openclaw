@@ -177,66 +177,60 @@ describe("loaded-only systemd runtime", () => {
     ).toBe(true);
   });
 
-  it.each(["bus"])(
-    "does not infer absent containment from empty %s metadata over a non-root cgroup",
-    async (transport) => {
-      busctl.mockImplementation(async (_env, args) =>
-        managerReply(args, { ControlGroup: { type: "s", data: "" } }),
-      );
-      systemctl.mockResolvedValue(
-        success(`Id=${unitName}\nLoadState=loaded\nActiveState=active\nMainPID=412\nControlGroup=`),
-      );
-      const read = fsSync.readFileSync;
-      const observation = vi.spyOn(fsSync, "readFileSync").mockImplementation((file, options) => {
-        if (file === `/proc/${process.pid}/cgroup` || file === "/proc/412/cgroup") {
-          return "0::/container.scope\n";
-        }
-        if (file === `/proc/${process.pid}/stat`) {
-          return `${process.pid} (caller) S 1 901\n`;
-        }
-        if (file === "/proc/412/stat") {
-          return "412 (gateway) S 1 900\n";
-        }
-        return read(file, options);
-      });
-      try {
-        const runtime = await readSystemdServiceRuntime(env, {
-          requireLoaded: transport === "bus",
-          commandInspection: { kind: "present" },
-        });
-        expect(runtime).toMatchObject({
-          status: "running",
-          pid: 412,
-          state: "active",
-          subState: "running",
-          lastExitStatus: 0,
-          lastExitReason: "exited",
-          systemd: {
-            unit: unitName,
-            result: "success",
-            nRestarts: 2,
-            tasksCurrent: 8,
-            memoryCurrent: 2048,
-          },
-        });
-        expect(systemctl).not.toHaveBeenCalled();
-        expect(
-          busctl.mock.calls.every(
-            ([selected, args]) =>
-              selected === env && args.includes("--auto-start=no") && !args.includes("LoadUnit"),
-          ),
-        ).toBe(true);
-        const pinned = busctl.mock.calls.filter(([, args]) => !args.includes("GetNameOwner"));
-        expect(pinned).toHaveLength(4);
-        expect(pinned.every(([, args]) => args.includes(":1.42"))).toBe(true);
-        expect(
-          inspectServiceProcessMembershipSync(runtime.pid!, "linux", runtime.systemd?.controlGroup),
-        ).toBe("unknown");
-      } finally {
-        observation.mockRestore();
+  it("does not infer absent containment from empty bus metadata over a non-root cgroup", async () => {
+    busctl.mockImplementation(async (_env, args) =>
+      managerReply(args, { ControlGroup: { type: "s", data: "" } }),
+    );
+    const read = fsSync.readFileSync;
+    const observation = vi.spyOn(fsSync, "readFileSync").mockImplementation((file, options) => {
+      if (file === `/proc/${process.pid}/cgroup` || file === "/proc/412/cgroup") {
+        return "0::/container.scope\n";
       }
-    },
-  );
+      if (file === `/proc/${process.pid}/stat`) {
+        return `${process.pid} (caller) S 1 901\n`;
+      }
+      if (file === "/proc/412/stat") {
+        return "412 (gateway) S 1 900\n";
+      }
+      return read(file, options);
+    });
+    try {
+      const runtime = await readSystemdServiceRuntime(env, {
+        requireLoaded: true,
+        commandInspection: { kind: "present" },
+      });
+      expect(runtime).toMatchObject({
+        status: "running",
+        pid: 412,
+        state: "active",
+        subState: "running",
+        lastExitStatus: 0,
+        lastExitReason: "exited",
+        systemd: {
+          unit: unitName,
+          result: "success",
+          nRestarts: 2,
+          tasksCurrent: 8,
+          memoryCurrent: 2048,
+        },
+      });
+      expect(systemctl).not.toHaveBeenCalled();
+      expect(
+        busctl.mock.calls.every(
+          ([selected, args]) =>
+            selected === env && args.includes("--auto-start=no") && !args.includes("LoadUnit"),
+        ),
+      ).toBe(true);
+      const pinned = busctl.mock.calls.filter(([, args]) => !args.includes("GetNameOwner"));
+      expect(pinned).toHaveLength(4);
+      expect(pinned.every(([, args]) => args.includes(":1.42"))).toBe(true);
+      expect(
+        inspectServiceProcessMembershipSync(runtime.pid!, "linux", runtime.systemd?.controlGroup),
+      ).toBe("unknown");
+    } finally {
+      observation.mockRestore();
+    }
+  });
 
   it.each([[-1], 2001].map((uid) => ({ uid })))(
     "refuses an invalid manager UID reply $uid",
@@ -253,18 +247,16 @@ describe("loaded-only systemd runtime", () => {
     },
   );
 
-  it.each(["deactivating"])("preserves terminal versus transitional state %s", async (state) => {
+  it("keeps a deactivating unit unknown even with drained processes", async () => {
     busctl.mockImplementation(async (_env, args) =>
       managerReply(args, {
-        ActiveState: { type: "s", data: state },
-        SubState: { type: "s", data: state === "inactive" ? "dead" : state },
+        ActiveState: { type: "s", data: "deactivating" },
+        SubState: { type: "s", data: "deactivating" },
         MainPID: { type: "u", data: 0 },
         TasksCurrent: { type: "t", data: 0 },
       }),
     );
-    expect((await readSystemdServiceRuntime(env, { requireLoaded: true })).status).toBe(
-      state === "inactive" || state === "failed" ? "stopped" : "unknown",
-    );
+    expect((await readSystemdServiceRuntime(env, { requireLoaded: true })).status).toBe("unknown");
     expect(systemctl).not.toHaveBeenCalled();
   });
 
@@ -291,9 +283,7 @@ describe("loaded-only systemd runtime", () => {
     async ({ data, expected }) => {
       busctl.mockImplementation(async (_env, args) => {
         if (args.includes("GetUnitProcesses")) {
-          return data === null
-            ? { code: 1, termination: "exit", stdout: "", stderr: "Access denied" }
-            : success(JSON.stringify({ type: "a(sus)", data }));
+          return success(JSON.stringify({ type: "a(sus)", data }));
         }
         return managerReply(args, {
           ActiveState: { type: "s", data: "inactive" },
