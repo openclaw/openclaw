@@ -7,6 +7,7 @@ import {
   withAgentProvenancePublication,
 } from "./agent-provenance-publication.js";
 import type { AgentCreatedVia, AgentProvenance } from "./agent-provenance.types.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
@@ -59,7 +60,6 @@ export async function readAgentProvenanceForDisplay(
   }
   const context = captureOpenClawStateWorkerContext(options);
   const requestedIds = agentIds.map(normalizeAgentId);
-  const { executeExistingOpenClawStateRead } = await import("./openclaw-state-db-readonly.js");
   const records: AgentProvenance[] = [];
   // Canonical IDs are bounded; chunking keeps roster growth below broker input
   // admission limits while preserving caller order and the first read error.
@@ -82,7 +82,6 @@ export async function listAgentProvenance(
   options: AgentProvenanceReadOptions = {},
 ): Promise<AgentProvenance[]> {
   const context = captureOpenClawStateWorkerContext(options);
-  const { executeExistingOpenClawStateRead } = await import("./openclaw-state-db-readonly.js");
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     { type: "agentProvenance.list", input: undefined },
