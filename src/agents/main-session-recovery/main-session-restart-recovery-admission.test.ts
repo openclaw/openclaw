@@ -64,6 +64,7 @@ describe("startup recovery admission", () => {
   let tmpDir: string;
   const { makeMainSessionFixture, writeCompletedToolTranscript } =
     createRestartRecoveryStoreFixture(() => tmpDir);
+  const recoveryCleanups: Array<() => Promise<void>> = [];
 
   function finalAttempt(
     cycleId: string,
@@ -78,29 +79,71 @@ describe("startup recovery admission", () => {
 
   function schedule(
     options: Partial<Parameters<typeof scheduleRestartAbortedMainSessionRecovery>[0]> = {},
+    release: () => void = () => {},
   ) {
-    return scheduleRestartAbortedMainSessionRecovery({
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
       getConfig: () => ({}),
       delayMs: 0,
       stateDir: tmpDir,
       gatewayRuntime,
       ...options,
     });
+    recoveryCleanups.push(async () => {
+      release();
+      dispatchSettlement.resolve();
+      await recovery.stop();
+    });
+    return recovery;
   }
 
-  function observeAdmission(settled: (origin?: string) => void) {
+  function observeAdmission(
+    settled: (origin: string | undefined, attempt: number) => void,
+    entered?: (origin?: string) => void,
+  ) {
     const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+    let attempt = 0;
     return vi
       .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
       .mockImplementation(
         async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal) => {
+          const ordinal = attempt++;
           try {
-            return await admit(run, origin, signal);
+            const admitted = admit(run, origin, signal);
+            entered?.(origin);
+            return await admitted;
           } finally {
-            settled(origin);
+            settled(origin, ordinal);
           }
         },
       );
+  }
+
+  function observeInfo(handlers: Record<string, () => void>) {
+    return vi.spyOn(mainSessionRecoveryLog, "info").mockImplementation((line) => {
+      for (const [fragment, handler] of Object.entries(handlers)) {
+        if (line.includes(fragment)) {
+          handler();
+        }
+      }
+    });
+  }
+
+  function trackPreparation<Args extends unknown[], Result>(
+    run: (...args: Args) => Promise<Result>,
+  ) {
+    let active = 0;
+    const tracker = {
+      peak: 0,
+      run: async (...args: Args) => {
+        tracker.peak = Math.max(tracker.peak, ++active);
+        try {
+          return await run(...args);
+        } finally {
+          active--;
+        }
+      },
+    };
+    return tracker;
   }
 
   function failDispatch() {
@@ -123,11 +166,17 @@ describe("startup recovery admission", () => {
   });
 
   afterEach(async () => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-    resetGatewayWorkAdmission();
-    await cleanupSessionStateForTest({ stateDir: tmpDir });
-    clearRuntimeConfigSnapshot();
+    try {
+      for (const cleanup of recoveryCleanups.splice(0)) {
+        await cleanup();
+      }
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+      resetGatewayWorkAdmission();
+      await cleanupSessionStateForTest({ stateDir: tmpDir });
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it.for(["resume", "crash", "stop", "replace", "healthy"] as const)(
@@ -202,82 +251,76 @@ describe("startup recovery admission", () => {
       });
       const completed = createDeferred();
       const dispatched = createDeferred();
-      const info = vi.spyOn(mainSessionRecoveryLog, "info").mockImplementation((message) => {
-        if (message.includes("restart recovery paused until")) {
+      const info = observeInfo({
+        "restart recovery paused until": () => {
           if (!vi.isFakeTimers()) {
             vi.useFakeTimers();
             vi.setSystemTime(now);
           }
           paused.resolve();
-        }
-        if (message.includes("startup complete:")) {
-          completed.resolve();
-        }
+        },
+        "startup complete:": () => completed.resolve(),
       });
       vi.mocked(callGateway).mockImplementation(async () => {
         dispatched.resolve();
         return { runId: "run-resumed" };
       });
-      const recovery = schedule({ startupCheckedStorePaths, gatewayRuntime: runtime });
-      try {
-        if (action === "healthy") {
-          await withinTest(completed.promise, signal);
-          expect(callGateway).toHaveBeenCalledOnce();
-          expect(inspect).not.toHaveBeenCalled();
-          return;
+      const recovery = schedule({ startupCheckedStorePaths, gatewayRuntime: runtime }, () =>
+        lifetime.abort(),
+      );
+      if (action === "healthy") {
+        await withinTest(completed.promise, signal);
+        expect(callGateway).toHaveBeenCalledOnce();
+        expect(inspect).not.toHaveBeenCalled();
+        return;
+      }
+      await withinTest(Promise.race([paused.promise, dispatched.promise]), signal);
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(loadSessionEntry(target)).toEqual(before);
+      expect(
+        info.mock.calls.filter(([line]) => line.includes("restart recovery paused until")),
+      ).toEqual([[expect.stringContaining(new Date(now + 10_001).toISOString())]]);
+      expect(notice).not.toHaveBeenCalled();
+      if (action === "resume") {
+        await expect(
+          retryRecovery({
+            ...target,
+            expectedSessionId: "main-session",
+            stateDir: tmpDir,
+            gatewayRuntime: runtime,
+          }),
+        ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
+        expect(loadSessionEntry(target)).toEqual(before);
+      }
+      if (action === "stop") {
+        await recovery.stop();
+      }
+      if (action === "replace") {
+        rotateAgentEventLifecycleGeneration();
+      }
+      const extendedPause = createDeferred();
+      if (action === "crash") {
+        const boot = (await beginGatewayBootLifecycle(env, now)).id;
+        await completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, now);
+        info.mockImplementation((message) => {
+          if (message.includes("restart recovery paused until")) {
+            extendedPause.resolve();
+          }
+        });
+      }
+      await vi.advanceTimersByTimeAsync(10_002);
+      if (action === "resume") {
+        await withinTest(completed.promise, signal);
+        expect(callGateway).toHaveBeenCalledOnce();
+        expect(loadSessionEntry(target)?.abortedLastRun).toBe(false);
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(callGateway).toHaveBeenCalledOnce();
+      } else {
+        if (action === "crash") {
+          await withinTest(extendedPause.promise, signal);
         }
-        await withinTest(Promise.race([paused.promise, dispatched.promise]), signal);
         expect(callGateway).not.toHaveBeenCalled();
         expect(loadSessionEntry(target)).toEqual(before);
-        expect(
-          info.mock.calls.filter(([line]) => line.includes("restart recovery paused until")),
-        ).toEqual([[expect.stringContaining(new Date(now + 10_001).toISOString())]]);
-        expect(notice).not.toHaveBeenCalled();
-        if (action === "resume") {
-          await expect(
-            retryRecovery({
-              ...target,
-              expectedSessionId: "main-session",
-              stateDir: tmpDir,
-              gatewayRuntime: runtime,
-            }),
-          ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
-          expect(loadSessionEntry(target)).toEqual(before);
-        }
-        if (action === "stop") {
-          await recovery.stop();
-        }
-        if (action === "replace") {
-          rotateAgentEventLifecycleGeneration();
-        }
-        const extendedPause = createDeferred();
-        if (action === "crash") {
-          const boot = (await beginGatewayBootLifecycle(env, now)).id;
-          await completeGatewayBootLifecycle(boot, { outcome: "startup_failed" }, env, now);
-          info.mockImplementation((message) => {
-            if (message.includes("restart recovery paused until")) {
-              extendedPause.resolve();
-            }
-          });
-        }
-        await vi.advanceTimersByTimeAsync(10_002);
-        if (action === "resume") {
-          await withinTest(completed.promise, signal);
-          expect(callGateway).toHaveBeenCalledOnce();
-          expect(loadSessionEntry(target)?.abortedLastRun).toBe(false);
-          await vi.advanceTimersByTimeAsync(20_000);
-          expect(callGateway).toHaveBeenCalledOnce();
-        } else {
-          if (action === "crash") {
-            await withinTest(extendedPause.promise, signal);
-          }
-          expect(callGateway).not.toHaveBeenCalled();
-          expect(loadSessionEntry(target)).toEqual(before);
-        }
-      } finally {
-        lifetime.abort();
-        dispatchSettlement.resolve();
-        await recovery.stop();
       }
     },
   );
@@ -407,89 +450,75 @@ describe("startup recovery admission", () => {
       const prepared = createDeferred();
       const releasePreparation = createDeferred();
       const read = transcriptReaders.readSessionMessagesAsync;
-      let preparing = 0;
-      let peakPreparation = 0;
+      const preparation = trackPreparation(async (...args: Parameters<typeof read>) => {
+        if (args[0].sessionId === "main-session") {
+          prepared.resolve();
+          await releasePreparation.promise;
+        }
+        return await read(...args);
+      });
       const readSpy = vi
         .spyOn(transcriptReaders, "readSessionMessagesAsync")
-        .mockImplementation(async (...args) => {
-          preparing++;
-          peakPreparation = Math.max(peakPreparation, preparing);
-          try {
-            if (args[0].sessionId === "main-session") {
-              prepared.resolve();
-              await releasePreparation.promise;
-            }
-            return await read(...args);
-          } finally {
-            preparing--;
-          }
-        });
+        .mockImplementation(preparation.run);
       const passFinished = createDeferred();
       observeAdmission((origin) => {
         if (origin === "main-session:startup-recovery") {
           passFinished.resolve();
         }
       });
-      const recovery = schedule({
-        getConfig: () => ({ agents: { entries: { main: {}, other: {} } } }),
-      });
-      try {
-        await withinTest(prepared.promise, signal);
-        expect(callGateway).not.toHaveBeenCalled();
-        expect(readSpy).toHaveBeenCalledOnce();
-        let stopping: Promise<void> | undefined;
-        if (action === "stop") {
-          stopping = recovery.stop();
-          expect(getActiveGatewayRootWorkCount()).toBe(1);
-        }
-        releasePreparation.resolve();
-        // Execution remains held by dispatchSettlement until this test's cleanup.
-        await withinTest(Promise.race([passFinished.promise, executionWait.promise]), signal);
-        await stopping;
-        expect(peakPreparation).toBe(1);
-        expect(callGateway).toHaveBeenCalledTimes(action === "stop" ? 0 : 2);
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-        for (const scope of [first, second]) {
-          expect(scope.readEntry()).toMatchObject({
-            status: action === "stop" ? "interrupted" : undefined,
-            abortedLastRun: action === "stop",
-          });
-        }
-        if (action === "continue") {
-          expect(waitSpy).not.toHaveBeenCalled();
-          const lines = info.mock.calls.map(([line]) => line);
-          expect(lines).toContainEqual(
-            expect.stringMatching(/startup complete: started=2 .*skipReasons=.*not_main_session:1/),
-          );
-          const decisions = lines
-            .filter((line) => line.startsWith("main-session restart recovery candidate "))
-            .map((line) =>
-              JSON.parse(line.slice("main-session restart recovery candidate ".length)),
-            );
-          expect(decisions).toHaveLength(2);
-          expect(decisions).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                sessionKey: first.sessionKey,
-                sourceRunId: "interrupted-main",
-                decision: "started",
-                nextOwner: "restart-recovery-lane",
-                boot: expect.any(String),
-                pass: expect.any(String),
-              }),
-            ]),
-          );
-        }
-        if (action === "stop") {
-          expect(first.readEntry()?.mainRestartRecovery).toMatchObject({
-            chargedAttempts: 0,
-            reservation: undefined,
-          });
-        }
-      } finally {
-        releasePreparation.resolve();
-        dispatchSettlement.resolve();
-        await recovery.stop();
+      const recovery = schedule(
+        {
+          getConfig: () => ({ agents: { entries: { main: {}, other: {} } } }),
+        },
+        () => releasePreparation.resolve(),
+      );
+      await withinTest(prepared.promise, signal);
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(readSpy).toHaveBeenCalledOnce();
+      let stopping: Promise<void> | undefined;
+      if (action === "stop") {
+        stopping = recovery.stop();
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+      }
+      releasePreparation.resolve();
+      // Execution remains held by dispatchSettlement until this test's cleanup.
+      await withinTest(Promise.race([passFinished.promise, executionWait.promise]), signal);
+      await stopping;
+      expect(preparation.peak).toBe(1);
+      expect(callGateway).toHaveBeenCalledTimes(action === "stop" ? 0 : 2);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      for (const scope of [first, second]) {
+        expect(scope.readEntry()).toMatchObject({
+          status: action === "stop" ? "interrupted" : undefined,
+          abortedLastRun: action === "stop",
+        });
+      }
+      if (action === "continue") {
+        expect(waitSpy).not.toHaveBeenCalled();
+        const lines = info.mock.calls.map(([line]) => line);
+        expect(lines).toContainEqual(
+          expect.stringMatching(/startup complete: started=2 .*skipReasons=.*not_main_session:1/),
+        );
+        const decisions = lines
+          .filter((line) => line.startsWith("main-session restart recovery candidate "))
+          .map((line) => JSON.parse(line.slice("main-session restart recovery candidate ".length)));
+        expect(decisions).toHaveLength(2);
+        expect(decisions).toContainEqual(
+          expect.objectContaining({
+            sessionKey: first.sessionKey,
+            sourceRunId: "interrupted-main",
+            decision: "started",
+            nextOwner: "restart-recovery-lane",
+            boot: expect.any(String),
+            pass: expect.any(String),
+          }),
+        );
+      }
+      if (action === "stop") {
+        expect(first.readEntry()?.mainRestartRecovery).toMatchObject({
+          chargedAttempts: 0,
+          reservation: undefined,
+        });
       }
     },
   );
@@ -558,77 +587,67 @@ describe("startup recovery admission", () => {
           failedAttempt.resolve();
         }
       });
-      const info = vi.spyOn(mainSessionRecoveryLog, "info").mockImplementation((line) => {
-        if (line.includes("startup complete:")) {
-          startup.resolve();
-        }
-        if (line.includes('"reason":"archived"')) {
-          blocked.resolve();
-        }
+      const info = observeInfo({
+        "startup complete:": () => startup.resolve(),
+        '"reason":"archived"': () => blocked.resolve(),
       });
       vi.mocked(callGateway).mockImplementation(async () => {
         resumed.resolve();
         return { runId: "run-resumed" };
       });
-      const recovery = schedule();
-      try {
-        await withinTest(startup.promise, signal);
-        expect(callGateway).not.toHaveBeenCalled();
-        expect(loadSessionEntry(target)?.mainRestartRecovery?.chargedAttempts).toBe(0);
-        if (action === "retry") {
-          vi.useFakeTimers();
-        }
-        if (timing === "publication replay") {
-          await withinTest(firstPreparationSettled.promise, signal);
-          holdPreparationRead = true;
-          await patchSessionEntryCore(target, () => ({ label: "preparation progress" }));
-        }
-        if (timing !== "preparation commit") {
-          await withinTest(replayLoaded.promise, signal);
-          expect(exactReads.at(-1)).toEqual({
-            sessionId: "main-session",
-            initializationPending: true,
-          });
-        }
-        if (action === "replace") {
-          await replaceSessionEntry(target, {
-            sessionId: "replacement-session",
-            updatedAt: Date.now(),
-          });
-          await recovery.stop();
-          expect(callGateway).not.toHaveBeenCalled();
-          expect(loadSessionEntry(target)?.sessionId).toBe("replacement-session");
-        } else {
-          await patchSessionEntryCore(target, () => ({
-            [field]: undefined,
-            ...(action === "archive" ? { archivedAt: Date.now() } : {}),
-          }));
-          releaseReplay.resolve();
-          if (action === "retry") {
-            await withinTest(failedAttempt.promise, signal);
-            expect(callGateway).not.toHaveBeenCalled();
-            expect(loadSessionEntry(target)?.mainRestartRecovery?.chargedAttempts).toBe(0);
-            await vi.advanceTimersByTimeAsync(5_000);
-          }
-          await withinTest(action === "archive" ? blocked.promise : resumed.promise, signal);
-          if (action === "resume" || action === "retry") {
-            await gatewayRuntime.expectAdmission(1, recovery, target);
-          } else {
-            await recovery.stop();
-          }
-          expect(callGateway).toHaveBeenCalledTimes(action === "archive" ? 0 : 1);
-          expect(loadSessionEntry(target)?.abortedLastRun).toBe(action === "archive");
-        }
-        const decisions = info.mock.calls.map(([line]) => line);
-        expect(decisions).toContainEqual(expect.stringContaining('"decision":"deferred"'));
-        expect(decisions).toContainEqual(
-          expect.stringContaining('"nextOwner":"session-preparation"'),
-        );
-      } finally {
-        releaseReplay.resolve();
-        dispatchSettlement.resolve();
-        await recovery.stop();
+      const recovery = schedule({}, () => releaseReplay.resolve());
+      await withinTest(startup.promise, signal);
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(loadSessionEntry(target)?.mainRestartRecovery?.chargedAttempts).toBe(0);
+      if (action === "retry") {
+        vi.useFakeTimers();
       }
+      if (timing === "publication replay") {
+        await withinTest(firstPreparationSettled.promise, signal);
+        holdPreparationRead = true;
+        await patchSessionEntryCore(target, () => ({ label: "preparation progress" }));
+      }
+      if (timing !== "preparation commit") {
+        await withinTest(replayLoaded.promise, signal);
+        expect(exactReads.at(-1)).toEqual({
+          sessionId: "main-session",
+          initializationPending: true,
+        });
+      }
+      if (action === "replace") {
+        await replaceSessionEntry(target, {
+          sessionId: "replacement-session",
+          updatedAt: Date.now(),
+        });
+        await recovery.stop();
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(loadSessionEntry(target)?.sessionId).toBe("replacement-session");
+      } else {
+        await patchSessionEntryCore(target, () => ({
+          [field]: undefined,
+          ...(action === "archive" ? { archivedAt: Date.now() } : {}),
+        }));
+        releaseReplay.resolve();
+        if (action === "retry") {
+          await withinTest(failedAttempt.promise, signal);
+          expect(callGateway).not.toHaveBeenCalled();
+          expect(loadSessionEntry(target)?.mainRestartRecovery?.chargedAttempts).toBe(0);
+          await vi.advanceTimersByTimeAsync(5_000);
+        }
+        await withinTest(action === "archive" ? blocked.promise : resumed.promise, signal);
+        if (action === "resume" || action === "retry") {
+          await gatewayRuntime.expectAdmission(1, recovery, target);
+        } else {
+          await recovery.stop();
+        }
+        expect(callGateway).toHaveBeenCalledTimes(action === "archive" ? 0 : 1);
+        expect(loadSessionEntry(target)?.abortedLastRun).toBe(action === "archive");
+      }
+      const decisions = info.mock.calls.map(([line]) => line);
+      expect(decisions).toContainEqual(expect.stringContaining('"decision":"deferred"'));
+      expect(decisions).toContainEqual(
+        expect.stringContaining('"nextOwner":"session-preparation"'),
+      );
     },
   );
 
@@ -658,49 +677,35 @@ describe("startup recovery admission", () => {
 
     const firstAttempt = createDeferred();
     const secondAttempt = createDeferred();
-    const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
-    let attempt = 0;
-    vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission").mockImplementation(
-      async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal) => {
-        const settled = attempt++ === 0 ? firstAttempt : secondAttempt;
-        try {
-          return await admit(run, origin, signal);
-        } finally {
-          settled.resolve();
-        }
-      },
-    );
+    observeAdmission((_, attempt) => (attempt === 0 ? firstAttempt : secondAttempt).resolve());
     vi.useFakeTimers();
-    const recovery = schedule({ maxRetries: 2 });
-
-    try {
-      await firstAttempt.promise;
-      expect(callGateway).toHaveBeenCalledTimes(2);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(callGateway).toHaveBeenCalledTimes(2);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect(suspensionRef.current?.release()).toBe(true);
-
-      await secondAttempt.promise;
-      expect(callGateway).toHaveBeenCalledTimes(3);
-      const entry = loadSessionEntry({ storePath, sessionKey });
-      expect(entry?.abortedLastRun).toBe(false);
-      const runIds = vi
-        .mocked(callGateway)
-        .mock.calls.map(([request]) =>
-          request.method === "agent"
-            ? (request.params as { idempotencyKey?: unknown }).idempotencyKey
-            : undefined,
-        )
-        .filter((runId) => runId !== undefined);
-      expect(new Set(runIds).size).toBe(1);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    } finally {
+    schedule({ maxRetries: 2 }, () => {
       suspensionRef.current?.release();
-      await recovery.stop();
-    }
+    });
+
+    await firstAttempt.promise;
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(suspensionRef.current?.release()).toBe(true);
+
+    await secondAttempt.promise;
+    expect(callGateway).toHaveBeenCalledTimes(3);
+    const entry = loadSessionEntry({ storePath, sessionKey });
+    expect(entry?.abortedLastRun).toBe(false);
+    const runIds = vi
+      .mocked(callGateway)
+      .mock.calls.map(([request]) =>
+        request.method === "agent"
+          ? (request.params as { idempotencyKey?: unknown }).idempotencyKey
+          : undefined,
+      )
+      .filter((runId) => runId !== undefined);
+    expect(new Set(runIds).size).toBe(1);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it.for([
@@ -800,49 +805,36 @@ describe("startup recovery admission", () => {
     const entered = createDeferred();
     const release = createDeferred();
     const prepare = recoveryTargets.prepareExpectedRestartRecoveryCurrent;
-    let preparing = 0;
-    let peakPreparation = 0;
     const preparedKeys: string[] = [];
+    const preparation = trackPreparation(async (params: Parameters<typeof prepare>[0]) => {
+      preparedKeys.push(params.expected.sessionKey);
+      if (params.expected.sessionKey === targets[0]!.sessionKey) {
+        entered.resolve();
+        await release.promise;
+        throw new Error("synthetic exhausted-target read failure");
+      }
+      return await prepare(params);
+    });
     vi.spyOn(recoveryTargets, "prepareExpectedRestartRecoveryCurrent").mockImplementation(
-      async (params) => {
-        preparedKeys.push(params.expected.sessionKey);
-        preparing++;
-        peakPreparation = Math.max(peakPreparation, preparing);
-        try {
-          if (params.expected.sessionKey === targets[0]!.sessionKey) {
-            entered.resolve();
-            await release.promise;
-            throw new Error("synthetic exhausted-target read failure");
-          }
-          return await prepare(params);
-        } finally {
-          preparing--;
-        }
-      },
+      preparation.run,
     );
     const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
-    const recovery = schedule({ maxRetries: 1 });
-    try {
-      await withinTest(entered.promise, signal);
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
-      release.resolve();
-      await gatewayRuntime.expectFailedRecovery(4, recovery, signal, targets[1]!);
-      expect(peakPreparation).toBe(1);
-      expect(preparedKeys).toEqual(targets.map(({ sessionKey }) => sessionKey));
-      expect(loadSessionEntry(targets[0]!)).toMatchObject({
-        status: "interrupted",
-        mainRestartRecovery: { chargedAttempts: 3 },
-      });
-      expect(loadSessionEntry(targets[1]!)?.mainRestartRecovery?.tombstone).toBeDefined();
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("synthetic exhausted-target read failure"),
-      );
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-    } finally {
-      release.resolve();
-      dispatchSettlement.resolve();
-      await recovery.stop();
-    }
+    const recovery = schedule({ maxRetries: 1 }, () => release.resolve());
+    await withinTest(entered.promise, signal);
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    release.resolve();
+    await gatewayRuntime.expectFailedRecovery(4, recovery, signal, targets[1]!);
+    expect(preparation.peak).toBe(1);
+    expect(preparedKeys).toEqual(targets.map(({ sessionKey }) => sessionKey));
+    expect(loadSessionEntry(targets[0]!)).toMatchObject({
+      status: "interrupted",
+      mainRestartRecovery: { chargedAttempts: 3 },
+    });
+    expect(loadSessionEntry(targets[1]!)?.mainRestartRecovery?.tombstone).toBeDefined();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("synthetic exhausted-target read failure"),
+    );
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it("stops exhaustion reconciliation while its Gateway admission is suspended", async () => {
@@ -856,37 +848,32 @@ describe("startup recovery admission", () => {
       .mockResolvedValueOnce({ runId: "run-resumed" });
     const warn = vi.spyOn(mainSessionRecoveryLog, "warn");
     const reconciliationEntered = createDeferred();
-    const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
-    vi.spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission").mockImplementation(
-      <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal) => {
-        const admitted = admit(run, origin, signal);
+    observeAdmission(
+      () => {},
+      (origin) => {
         if (origin === "main-session:target-recovery") {
           reconciliationEntered.resolve();
         }
-        return admitted;
       },
     );
-    const recovery = schedule({ maxRetries: 1 });
-    try {
-      await reconciliationEntered.promise;
-      expect(suspension.lease).not.toBeNull();
-      expect(callGateway).toHaveBeenCalledTimes(2);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      // Stop must settle while admission remains closed, not after reopening it.
-      await recovery.stop();
-      expect(suspension.lease?.rollback()).toBe(true);
-      expect(callGateway).toHaveBeenCalledTimes(2);
-      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
-        status: "interrupted",
-        abortedLastRun: true,
-        mainRestartRecovery: { chargedAttempts: 3 },
-      });
-      expect(warn).not.toHaveBeenCalledWith(
-        expect.stringContaining("main-session exhaustion reconciliation failed"),
-      );
-    } finally {
+    const recovery = schedule({ maxRetries: 1 }, () => {
       suspension.lease?.rollback();
-      await recovery.stop();
-    }
+    });
+    await reconciliationEntered.promise;
+    expect(suspension.lease).not.toBeNull();
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    // Stop must settle while admission remains closed, not after reopening it.
+    await recovery.stop();
+    expect(suspension.lease?.rollback()).toBe(true);
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      status: "interrupted",
+      abortedLastRun: true,
+      mainRestartRecovery: { chargedAttempts: 3 },
+    });
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("main-session exhaustion reconciliation failed"),
+    );
   });
 });

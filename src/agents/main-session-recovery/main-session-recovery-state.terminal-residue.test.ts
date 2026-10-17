@@ -14,6 +14,7 @@ import { recoverStore } from "./main-session-restart-recovery-store.js";
 // #118873: terminal-only custody must not block foreground admission forever.
 
 const sessionKey = "agent:main:main";
+const retired = { mainRestartRecovery: undefined, restartRecoveryRuns: undefined };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const unexpectedRuntimeCall = async (): Promise<never> => {
   throw new Error("terminal residue must not dispatch, wait, or send a notice");
@@ -31,6 +32,16 @@ function settledEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
     restartRecoveryRuns: [{ runId: "settled-run", lifecycleGeneration: "dead-generation" }],
     restartRecoveryTerminalRunIds: ["settled-run"],
     ...overrides,
+  });
+}
+
+function fencedEntry(live: boolean) {
+  return settledEntry({
+    restartRecoveryRuns: [
+      { runId: "settled-run", lifecycleGeneration: "dead-generation" },
+      { runId: "second-run", lifecycleGeneration: live ? "generation-1" : "dead-generation-2" },
+    ],
+    restartRecoveryTerminalRunIds: live ? ["settled-run"] : ["settled-run", "second-run"],
   });
 }
 
@@ -73,14 +84,7 @@ describe("main session recovery terminal-only residue", () => {
   it.each([false, true])(
     "retires foreground residue only if every fence is terminal (%s)",
     (live) => {
-      const runs = [
-        { runId: "settled-run", lifecycleGeneration: "dead-generation" },
-        { runId: "second-run", lifecycleGeneration: live ? "generation-1" : "dead-generation-2" },
-      ];
-      const entry = settledEntry({
-        restartRecoveryRuns: runs,
-        restartRecoveryTerminalRunIds: live ? ["settled-run"] : runs.map((run) => run.runId),
-      });
+      const entry = fencedEntry(live);
       expect(claimForeground(entry)).toEqual({ kind: live ? "no_change" : "applied" });
       if (live) {
         expect(entry.mainRestartRecovery).toBeDefined();
@@ -89,8 +93,7 @@ describe("main session recovery terminal-only residue", () => {
         expect(entry).toMatchObject({
           abortedLastRun: false,
           status: undefined,
-          restartRecoveryRuns: undefined,
-          mainRestartRecovery: undefined,
+          ...retired,
         });
       }
     },
@@ -115,10 +118,11 @@ describe("main session recovery terminal-only residue", () => {
       });
 
       if (terminal) {
-        expect(entry.status).toBe("failed");
-        expect(entry.mainRestartRecovery).toBeUndefined();
-        expect(entry.restartRecoveryRuns).toBeUndefined();
-        expect(entry.restartRecoveryDeliveryRunId).toBeUndefined();
+        expect(entry).toMatchObject({
+          status: "failed",
+          restartRecoveryDeliveryRunId: undefined,
+          ...retired,
+        });
       } else {
         expect(entry).toEqual(before);
       }
@@ -171,16 +175,14 @@ describe("main session recovery terminal-only residue", () => {
               restartRecoveryDeliverySourceRunId: "unadopted-run",
               restartRecoveryDeliveryRequestFingerprint: "accepted-request",
               restartRecoverySourceIngress: "control-ui",
-              ...(outcome === "failed-with-delivery"
-                ? {
-                    pendingFinalDelivery: {
-                      kind: "replayable" as const,
-                      text: "An older source still owns this delivery",
-                      createdAt: 100,
-                    },
-                  }
-                : {}),
             };
+      if (outcome === "failed-with-delivery") {
+        initialEntry.pendingFinalDelivery = {
+          kind: "replayable",
+          text: "An older source still owns this delivery",
+          createdAt: 100,
+        };
+      }
       await withStore(async ({ storePath, read, write, mark }) => {
         await write(initialEntry);
 
@@ -195,8 +197,7 @@ describe("main session recovery terminal-only residue", () => {
         ).resolves.toEqual({ started: 0, settled: 0, failed: 0, skipped: 1 });
 
         const entry = read();
-        expect(entry?.mainRestartRecovery).toBeUndefined();
-        expect(entry?.restartRecoveryRuns).toBeUndefined();
+        expect(entry).toMatchObject(retired);
         if (outcome !== "terminal-only") {
           expect(entry).toMatchObject(initialEntry);
           expect(entry?.restartRecoveryTerminalRunIds).toBeUndefined();
@@ -246,8 +247,7 @@ describe("main session recovery terminal-only residue", () => {
 
       const terminal = read();
       const live = read(liveSessionKey);
-      expect(terminal?.mainRestartRecovery).toBeUndefined();
-      expect(terminal?.restartRecoveryRuns).toBeUndefined();
+      expect(terminal).toMatchObject(retired);
       expect(live).toMatchObject({
         sessionId: "live-session",
         restartRecoveryDeliveryRunId: "live-run",
@@ -257,16 +257,7 @@ describe("main session recovery terminal-only residue", () => {
   });
 
   it.each([false, true])("standalone inspect blocks only live recovery fences (%s)", (live) => {
-    const entry = settledEntry(
-      live
-        ? {
-            restartRecoveryRuns: [
-              { runId: "settled-run", lifecycleGeneration: "dead-generation" },
-              { runId: "live-run", lifecycleGeneration: "generation-1" },
-            ],
-          }
-        : {},
-    );
+    const entry = live ? fencedEntry(true) : settledEntry();
 
     const result = transition(entry, {
       kind: "inspect",
