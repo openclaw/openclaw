@@ -16,8 +16,8 @@ import * as transcriptAnchors from "./session-transcript-anchor-read.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { withSessionTranscriptWriteAssertion } from "./transcript-write-context.js";
 import {
-  appendAssistantMessageToSessionTranscript,
-  appendExactAssistantMessageToSessionTranscript,
+  appendAssistantMessageToSessionTranscript as appendMirror,
+  appendExactAssistantMessageToSessionTranscript as appendExact,
 } from "./transcript.js";
 
 // Literal v2026.9.4 representation: the current constructor must not seed legacy fixtures.
@@ -39,6 +39,10 @@ function legacyMirrorMessage(text = "Chart") {
     stopReason: "stop" as const,
     timestamp: 1_700_000_000_000,
   };
+}
+
+function expectConflict(result: Promise<unknown>) {
+  return expect(result).rejects.toThrow("conflicts with the admitted message");
 }
 
 describe("assistant mirror media identity", () => {
@@ -78,7 +82,7 @@ describe("assistant mirror media identity", () => {
         expectedSessionId: scope.sessionId,
         message: legacyMirrorMessage(),
       };
-      const first = await appendExactAssistantMessageToSessionTranscript(params);
+      const first = await appendExact(params);
       expect(first.ok).toBe(true);
       let current = true;
       const assertCurrent = () => {
@@ -88,10 +92,8 @@ describe("assistant mirror media identity", () => {
       };
       const append = () =>
         authority === "explicit"
-          ? appendExactAssistantMessageToSessionTranscript({ ...params, assertCurrent })
-          : withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
-              appendExactAssistantMessageToSessionTranscript(params),
-            );
+          ? appendExact({ ...params, assertCurrent })
+          : withSessionTranscriptWriteAssertion(scope, assertCurrent, () => appendExact(params));
       await expect(append()).resolves.toEqual(first);
       const before = readRawEvents(scope.sessionId);
       const held = createDeferred();
@@ -137,20 +139,20 @@ describe("assistant mirror media identity", () => {
         ...(explicitContent ? { content: [{ type: "text" as const, text: "Chart" }] } : {}),
         mediaUrls: ["https://example.com/chart.png"],
       };
-      const first = await appendExactAssistantMessageToSessionTranscript({
+      const first = await appendExact({
         ...params,
         message: original,
       });
       expect(first.ok).toBe(true);
       const before = readRawEvents(scope.sessionId);
       expect(before.length).toBeGreaterThan(0);
-      expect(await appendAssistantMessageToSessionTranscript(params)).toEqual(first);
+      expect(await appendMirror(params)).toEqual(first);
       expect(readRawEvents(scope.sessionId)).toEqual(before);
 
       const owner = database();
       expect(await closeOpenClawAgentDatabaseByPathAsync(owner.path, scope.agentId)).toBe(true);
       expect(owner.db.isOpen).toBe(false);
-      expect(await appendAssistantMessageToSessionTranscript(params)).toEqual(first);
+      expect(await appendMirror(params)).toEqual(first);
       expect(database()).not.toBe(owner);
       expect(readRawEvents(scope.sessionId)).toEqual(before);
       const assistants = (await loadTranscriptEvents(scope))
@@ -158,36 +160,34 @@ describe("assistant mirror media identity", () => {
         .filter((message) => message?.role === "assistant");
       expect(assistants).toEqual([{ ...original, idempotencyKey: params.idempotencyKey }]);
 
-      await expect(
-        appendAssistantMessageToSessionTranscript({
+      await expectConflict(
+        appendMirror({
           ...params,
           text: "Different",
           ...(explicitContent ? { content: [{ type: "text" as const, text: "Different" }] } : {}),
         }),
-      ).rejects.toThrow("conflicts with the admitted message");
+      );
       expect(readRawEvents(scope.sessionId)).toEqual(before);
 
       // A legacy row cannot relax URL identity for new rows in the same database.
       const fresh = { ...params, idempotencyKey: "new-media-reply" };
-      const admitted = await appendAssistantMessageToSessionTranscript(fresh);
+      const admitted = await appendMirror(fresh);
       expect(admitted.ok).toBe(true);
-      expect(await appendAssistantMessageToSessionTranscript(fresh)).toEqual(admitted);
-      await expect(
-        appendAssistantMessageToSessionTranscript({
+      expect(await appendMirror(fresh)).toEqual(admitted);
+      await expectConflict(
+        appendMirror({
           ...fresh,
           mediaUrls: ["https://different.example/chart.png"],
         }),
-      ).rejects.toThrow("conflicts with the admitted message");
-      await expect(
-        appendAssistantMessageToSessionTranscript({ ...fresh, mediaUrls: undefined }),
-      ).rejects.toThrow("conflicts with the admitted message");
-      await expect(
-        appendAssistantMessageToSessionTranscript({
+      );
+      await expectConflict(appendMirror({ ...fresh, mediaUrls: undefined }));
+      await expectConflict(
+        appendMirror({
           ...fresh,
           text: "Different",
           ...(explicitContent ? { content: [{ type: "text" as const, text: "Different" }] } : {}),
         }),
-      ).rejects.toThrow("conflicts with the admitted message");
+      );
       const events = await loadTranscriptEvents(scope);
       expect(
         events.filter((event) => readTranscriptEventMessage(event)?.role === "assistant"),
@@ -214,19 +214,19 @@ describe("assistant mirror media identity", () => {
       idempotencyKey: "new-no-media-reply",
       content: [{ type: "text" as const, text: "Chart" }],
     };
-    const first = await appendAssistantMessageToSessionTranscript(params);
+    const first = await appendMirror(params);
     expect(first.ok).toBe(true);
-    expect(await appendAssistantMessageToSessionTranscript(params)).toEqual(first);
+    expect(await appendMirror(params)).toEqual(first);
     const before = readRawEvents(scope.sessionId);
     expect(
       (await loadTranscriptEvents(scope)).map(readTranscriptEventMessage).filter(Boolean),
     ).toEqual([expect.objectContaining({ openclawDelivery: { mediaUrls: [] } })]);
-    await expect(
-      appendAssistantMessageToSessionTranscript({
+    await expectConflict(
+      appendMirror({
         ...params,
         mediaUrls: ["https://example.com/chart.png"],
       }),
-    ).rejects.toThrow("conflicts with the admitted message");
+    );
     expect(readRawEvents(scope.sessionId)).toEqual(before);
   });
 
@@ -239,7 +239,7 @@ describe("assistant mirror media identity", () => {
       openclawDelivery: { audioAsVoice: true as const, replyToId: "source-message" },
       openclawDeliveryMirror: { kind: "channel-final", sourceMessageId: "source-message" },
     };
-    const first = await appendExactAssistantMessageToSessionTranscript({
+    const first = await appendExact({
       ...scope,
       message: original,
     });
@@ -252,9 +252,7 @@ describe("assistant mirror media identity", () => {
         mediaUrls: ["https://example.com/chart.png"],
       },
     };
-    expect(
-      await appendExactAssistantMessageToSessionTranscript({ ...scope, message: candidate }),
-    ).toEqual(first);
+    expect(await appendExact({ ...scope, message: candidate })).toEqual(first);
     for (const message of [
       { ...candidate, openclawDisplayContent: [{ type: "text", text: "Different" }] },
       { ...candidate, openclawDelivery: { ...candidate.openclawDelivery, replyToId: "other" } },
@@ -269,9 +267,7 @@ describe("assistant mirror media identity", () => {
       { ...candidate, usage: { ...candidate.usage, output: 1 } },
       { ...candidate, model: "gateway-injected" },
     ]) {
-      await expect(
-        appendExactAssistantMessageToSessionTranscript({ ...scope, message }),
-      ).rejects.toThrow("conflicts with the admitted message");
+      await expectConflict(appendExact({ ...scope, message }));
     }
     expect(readRawEvents(scope.sessionId)).toEqual(before);
   });
@@ -291,50 +287,45 @@ describe("assistant mirror media identity", () => {
       expect(first.message.openclawDelivery).toEqual({ mediaUrls });
       expect((await appendTranscriptMessage(scope, { message: original })).appended).toBe(false);
       const before = readRawEvents(scope.sessionId);
-      await expect(
-        appendAssistantMessageToSessionTranscript({
+      await expectConflict(
+        appendMirror({
           ...scope,
           idempotencyKey: original.idempotencyKey,
           content: original.content,
           mediaUrls: ["https://example.com/chart.png"],
         }),
-      ).rejects.toThrow("conflicts with the admitted message");
-      await expect(
-        appendExactAssistantMessageToSessionTranscript({
+      );
+      await expectConflict(
+        appendExact({
           ...scope,
           idempotencyKey: original.idempotencyKey,
           message: legacyMirrorMessage(),
         }),
-      ).rejects.toThrow("conflicts with the admitted message");
+      );
       expect(readRawEvents(scope.sessionId)).toEqual(before);
     },
   );
 
   it.each([
-    { role: "user", api: "openclaw-transcript", provider: "openclaw", model: "delivery-mirror" },
-    {
-      role: "assistant",
-      api: "openclaw-transcript",
-      provider: "openclaw",
-      model: "gateway-injected",
-    },
-    { role: "assistant", api: "provider-api", provider: "openclaw", model: "delivery-mirror" },
-    { role: "assistant", api: "openclaw-transcript", provider: "other", model: "delivery-mirror" },
-  ])("does not relax media identity for $role/$api/$provider/$model", async (identity) => {
+    { role: "user" },
+    { model: "gateway-injected" },
+    { api: "provider-api" },
+    { provider: "other" },
+  ])("does not relax media identity for %j", async (identity) => {
     const scope = await createScope();
     const original = { ...legacyMirrorMessage(), ...identity, idempotencyKey: "non-mirror" };
     const first = await appendTranscriptMessage(scope, { message: original });
     expect(first.appended).toBe(true);
     expect((await appendTranscriptMessage(scope, { message: original })).appended).toBe(false);
     const before = readRawEvents(scope.sessionId);
-    await expect(
+    await expectConflict(
       appendTranscriptMessage(scope, {
         message: {
           ...original,
           openclawDelivery: { mediaUrls: ["https://example.com/chart.png"] },
         },
       }),
-    ).rejects.toThrow("conflicts with the admitted message");
+    );
     expect(readRawEvents(scope.sessionId)).toEqual(before);
   });
 });

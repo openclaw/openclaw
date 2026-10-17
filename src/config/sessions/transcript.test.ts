@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { recordDeliveredCommandExchange } from "../../plugin-sdk/session-transcript-runtime.js";
@@ -87,6 +88,30 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   function createFixtureTranscriptScope() {
     return { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() };
   }
+  type FixtureAppend<P> = Omit<P, "sessionKey" | "storePath">;
+  function appendMirror(
+    text: string,
+    params: Omit<
+      FixtureAppend<Parameters<typeof appendAssistantMessageToSessionTranscript>[0]>,
+      "text"
+    > = {},
+  ) {
+    return appendAssistantMessageToSessionTranscript({
+      text,
+      sessionKey,
+      storePath: fixture.storePath(),
+      ...params,
+    });
+  }
+  function appendExact(
+    params: FixtureAppend<Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0]>,
+  ) {
+    return appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      ...params,
+    });
+  }
   type BeforeMessageWriteParams = Parameters<
     NonNullable<
       Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0]["beforeMessageWrite"]
@@ -162,29 +187,15 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     return event;
   }
 
-  async function loadFixtureMessages(
-    override: {
-      agentId?: string;
-      sessionId?: string;
-      sessionKey?: string;
-      storePath?: string;
-    } = {},
-  ): Promise<Array<{ message?: unknown }>> {
-    return (await loadTranscriptEvents({
-      agentId: override.agentId ?? "main",
-      sessionId: override.sessionId ?? sessionId,
-      sessionKey: override.sessionKey ?? sessionKey,
-      storePath: override.storePath ?? fixture.storePath(),
-    })) as Array<{ message?: unknown }>;
+  async function loadFixtureMessages(): Promise<Array<{ message?: unknown }>> {
+    return (await loadTranscriptEvents(createFixtureTranscriptScope())) as Array<{
+      message?: unknown;
+    }>;
   }
 
   it("appends replayable, redacted command exchanges exactly once without changing prior rows", async () => {
     await writeTranscriptStore();
-    await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
-      text: "Earlier reply",
-    });
+    await appendMirror("Earlier reply");
     const before = await loadFixtureMessages();
     const params = {
       sessionKey,
@@ -404,19 +415,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       vi.setSystemTime(firstAppendAt);
-      const first = await appendAssistantMessageToSessionTranscript({
-        sessionKey,
-        text: "Replay-safe marker",
-        storePath: fixture.storePath(),
-      });
+      const first = await appendMirror("Replay-safe marker");
       expect(first.ok).toBe(true);
 
       vi.setSystemTime(duplicateReplayAt);
-      const duplicate = await appendAssistantMessageToSessionTranscript({
-        sessionKey,
-        text: "Replay-safe marker",
-        storePath: fixture.storePath(),
-      });
+      const duplicate = await appendMirror("Replay-safe marker");
       expect(duplicate.ok).toBe(true);
 
       const saved = loadSessionEntry({
@@ -438,11 +441,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     fs.mkdirSync(taskCwd, { recursive: true });
     await writeTranscriptStore({ spawnedCwd: taskCwd });
 
-    const result = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Hello from task cwd!",
-      storePath: fixture.storePath(),
-    });
+    const result = await appendMirror("Hello from task cwd!");
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -607,11 +606,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       });
     let mirrorResult;
     try {
-      mirrorResult = await appendAssistantMessageToSessionTranscript({
-        sessionKey,
-        text: "Active branch reply",
-        storePath: fixture.storePath(),
-      });
+      mirrorResult = await appendMirror("Active branch reply");
       expect(hostRead).not.toHaveBeenCalled();
     } finally {
       hostRead.mockRestore();
@@ -626,24 +621,15 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it("idempotently appends identified channel finals while preserving repeated replies", async () => {
     await writeTranscriptStore();
 
-    const first = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Repeated command reply",
-      storePath: fixture.storePath(),
+    const first = await appendMirror("Repeated command reply", {
       idempotencyKey: "channel-final:message-1:0",
       deliveryMirror: { kind: "channel-final", sourceMessageId: "message-1" },
     });
-    const replay = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Repeated command reply",
-      storePath: fixture.storePath(),
+    const replay = await appendMirror("Repeated command reply", {
       idempotencyKey: "channel-final:message-1:0",
       deliveryMirror: { kind: "channel-final", sourceMessageId: "message-1" },
     });
-    const nextTurn = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Repeated command reply",
-      storePath: fixture.storePath(),
+    const nextTurn = await appendMirror("Repeated command reply", {
       idempotencyKey: "channel-final:message-2:0",
       deliveryMirror: { kind: "channel-final", sourceMessageId: "message-2" },
     });
@@ -668,9 +654,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it("does not dedupe delivery mirrors against an older assistant after a user turn", async () => {
     await writeTranscriptStore();
 
-    const exactResult = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
+    const exactResult = await appendExact({
       message: createExactAssistantMessage({ text: "Hello before the large user entry" }),
     });
 
@@ -684,23 +668,16 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       messages: [{ message: { role: "user", content: "x".repeat(128 * 1024) } }],
     });
 
-    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript({
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      storePath: fixture.storePath(),
-    });
+    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(
+      createFixtureTranscriptScope(),
+    );
     if (!latestAssistantText) {
       throw new Error("expected latest assistant text");
     }
     expect(latestAssistantText.id).toBe(exactResult.messageId);
     expect(latestAssistantText.text).toBe("Hello before the large user entry");
 
-    const mirrorResult = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Hello before the large user entry",
-      storePath: fixture.storePath(),
-    });
+    const mirrorResult = await appendMirror("Hello before the large user entry");
 
     expect(mirrorResult.ok).toBe(true);
     if (mirrorResult.ok) {
@@ -724,17 +701,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         { eventId: "assistant", message: { role: "assistant", content: "ordinary assistant" } },
       ],
     });
-    await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
-      text: "scheduled result",
+    await appendMirror("scheduled result", {
       idempotencyKey: "cron-delivery",
       deliveryMirror: { kind: CRON_DIRECT_DELIVERY_CONTEXT_KIND },
     });
-    await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
-      text: "ordinary delivery mirror",
+    await appendMirror("ordinary delivery mirror", {
       idempotencyKey: "channel-delivery",
       deliveryMirror: { kind: "channel-final" },
     });
@@ -872,9 +843,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it("skips transcript-only OpenClaw assistant entries when reading latest assistant text", async () => {
     await writeTranscriptStore();
 
-    const finalResult = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
+    const finalResult = await appendExact({
       message: createExactAssistantMessage({ text: "Complete final answer" }),
     });
     expect(finalResult.ok).toBe(true);
@@ -882,14 +851,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       return;
     }
 
-    await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Earlier retained preview",
-      storePath: fixture.storePath(),
-    });
-    await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
+    await appendMirror("Earlier retained preview");
+    await appendExact({
       message: createExactAssistantMessage({
         text: "Injected transcript text",
         provider: "openclaw",
@@ -897,12 +860,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       }),
     });
 
-    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript({
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      storePath: fixture.storePath(),
-    });
+    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(
+      createFixtureTranscriptScope(),
+    );
     expect(latestAssistantText?.id).toBe(finalResult.messageId);
     expect(latestAssistantText?.text).toBe("Complete final answer");
   });
@@ -910,31 +870,22 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it("does not report transcript-only OpenClaw assistant entries as latest assistant text", async () => {
     await writeTranscriptStore();
 
-    const mirrorResult = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Only delivery mirror",
-      storePath: fixture.storePath(),
-    });
+    const mirrorResult = await appendMirror("Only delivery mirror");
     expect(mirrorResult.ok).toBe(true);
     if (!mirrorResult.ok) {
       return;
     }
 
-    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript({
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      storePath: fixture.storePath(),
-    });
+    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(
+      createFixtureTranscriptScope(),
+    );
     expect(latestAssistantText).toBeUndefined();
   });
 
   it("scans past trailing assistant entries without visible text", async () => {
     await writeTranscriptStore();
 
-    const assistantResult = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
+    const assistantResult = await appendExact({
       message: createExactAssistantMessage({
         text: "Visible answer before tool call",
       }),
@@ -944,9 +895,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       return;
     }
 
-    const toolOnlyResult = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
+    const toolOnlyResult = await appendExact({
       message: {
         ...createExactAssistantMessage({
           content: [
@@ -1045,11 +994,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     const toolCallResult = toolCallTurn.messages[0];
     expect(toolCallResult?.messageId).toBeTypeOf("string");
 
-    const mirrorResult = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Maniple List Workers",
-      storePath: fixture.storePath(),
-    });
+    const mirrorResult = await appendMirror("Maniple List Workers");
 
     expect(mirrorResult.ok).toBe(true);
     if (!mirrorResult.ok) {
@@ -1106,9 +1051,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       content: [{ type: "text" as const, text: "[redacted by hook]" }],
     }));
     const append = () =>
-      appendExactAssistantMessageToSessionTranscript({
-        sessionKey,
-        storePath: fixture.storePath(),
+      appendExact({
         idempotencyKey: "cli-assistant:redacted",
         beforeMessageWrite,
         message: createExactAssistantMessage({ text: "secret output" }),
@@ -1142,10 +1085,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       content: [{ type: "text" as const, text: "[redacted by hook]" }],
     }));
     const append = () =>
-      appendAssistantMessageToSessionTranscript({
-        sessionKey,
-        storePath: fixture.storePath(),
-        text: "secret output",
+      appendMirror("secret output", {
         beforeMessageWrite,
       });
 
@@ -1203,11 +1143,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       return parse(text, reviver);
     });
     try {
-      const result = await appendAssistantMessageToSessionTranscript({
-        sessionKey,
-        storePath: fixture.storePath(),
-        text: "The current reply",
-      });
+      const result = await appendMirror("The current reply");
       expect(result).toMatchObject({ ok: true, messageId: "latest-reply" });
       expect(parsedHistoricalBodies).toBe(0);
     } finally {
@@ -1219,10 +1155,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it("reports assistant messages blocked by before_message_write", async () => {
     await writeTranscriptStore();
 
-    const result = await appendExactAssistantMessageToSessionTranscript({
+    const result = await appendExact({
       agentId: "main",
-      sessionKey,
-      storePath: fixture.storePath(),
       idempotencyKey: "cli-assistant:blocked",
       beforeMessageWrite: vi.fn(() => null),
       message: createExactAssistantMessage({ text: "secret output" }),
@@ -1236,14 +1170,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("rejects a concurrent session rebind before the assistant append", async () => {
     await writeTranscriptStore();
-    let releaseReset = () => {};
-    const resetGate = new Promise<void>((resolve) => {
-      releaseReset = resolve;
-    });
-    let markResetStarted = () => {};
-    const resetStarted = new Promise<void>((resolve) => {
-      markResetStarted = resolve;
-    });
+    const resetGate = createDeferred();
+    const resetStarted = createDeferred();
     const replacementSessionFile = resolveSessionTranscriptPathInDir(
       "replacement-session",
       fixture.sessionsDir(),
@@ -1255,26 +1183,24 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         sessionKey,
       },
       async () => {
-        markResetStarted();
-        await resetGate;
+        resetStarted.resolve();
+        await resetGate.promise;
         return {
           sessionId: "replacement-session",
           sessionFile: replacementSessionFile,
         };
       },
     );
-    await resetStarted;
+    await resetStarted.promise;
 
-    const append = appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
+    const append = appendExact({
       expectedSessionId: sessionId,
-      storePath: fixture.storePath(),
       message: createExactAssistantMessage({ text: "late output" }),
     });
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    releaseReset();
+    resetGate.resolve();
 
     await reset;
     const result = await append;
@@ -1289,14 +1215,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     await writeTranscriptStore({
       lifecycleRevision: "original-revision",
     });
-    let releaseOwnerChange = () => {};
-    const ownerChangeGate = new Promise<void>((resolve) => {
-      releaseOwnerChange = resolve;
-    });
-    let markOwnerChangeStarted = () => {};
-    const ownerChangeStarted = new Promise<void>((resolve) => {
-      markOwnerChangeStarted = resolve;
-    });
+    const ownerChangeGate = createDeferred();
+    const ownerChangeStarted = createDeferred();
     const ownerChange = updateSessionEntry(
       {
         agentId: "main",
@@ -1304,26 +1224,24 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         sessionKey,
       },
       async () => {
-        markOwnerChangeStarted();
-        await ownerChangeGate;
+        ownerChangeStarted.resolve();
+        await ownerChangeGate.promise;
         return {
           lifecycleRevision: "replacement-revision",
         };
       },
     );
-    await ownerChangeStarted;
+    await ownerChangeStarted.promise;
 
-    const append = appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
+    const append = appendExact({
       expectedLifecycleRevision: "original-revision",
       expectedSessionId: sessionId,
-      storePath: fixture.storePath(),
       message: createExactAssistantMessage({ text: "late output" }),
     });
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    releaseOwnerChange();
+    ownerChangeGate.resolve();
 
     await ownerChange;
     await expect(append).resolves.toMatchObject({
@@ -1341,11 +1259,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
     let revisionMaterialized = false;
 
-    const result = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
+    const result = await appendExact({
       expectedLifecycleRevision: null,
       expectedSessionId: sessionId,
-      storePath: fixture.storePath(),
       beforeMessageWrite: ({ message }) => {
         replaceSessionEntrySync(scope, {
           ...entry,
@@ -1368,14 +1284,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       activeWriterRunId: "run-a",
       lifecycleRevision: "owned-revision",
     } as InternalSessionEntry);
-    let releaseWriterChange = () => {};
-    const writerChangeGate = new Promise<void>((resolve) => {
-      releaseWriterChange = resolve;
-    });
-    let markWriterChangeStarted = () => {};
-    const writerChangeStarted = new Promise<void>((resolve) => {
-      markWriterChangeStarted = resolve;
-    });
+    const writerChangeGate = createDeferred();
+    const writerChangeStarted = createDeferred();
     const writerChange = updateSessionEntry(
       {
         agentId: "main",
@@ -1383,25 +1293,23 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         sessionKey,
       },
       async () => {
-        markWriterChangeStarted();
-        await writerChangeGate;
+        writerChangeStarted.resolve();
+        await writerChangeGate.promise;
         return { activeWriterRunId: "run-b" } as Partial<InternalSessionEntry>;
       },
     );
-    await writerChangeStarted;
+    await writerChangeStarted.promise;
 
-    const staleAppend = appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
+    const staleAppend = appendExact({
       expectedLifecycleRevision: "owned-revision",
       expectedSessionId: sessionId,
       expectedWriterRunId: "run-a",
-      storePath: fixture.storePath(),
       message: createExactAssistantMessage({ text: "late output" }),
     });
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    releaseWriterChange();
+    writerChangeGate.resolve();
 
     await writerChange;
     await expect(staleAppend).resolves.toMatchObject({
@@ -1409,12 +1317,10 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       code: "session-rebound",
     });
     await expect(
-      appendExactAssistantMessageToSessionTranscript({
-        sessionKey,
+      appendExact({
         expectedLifecycleRevision: "owned-revision",
         expectedSessionId: sessionId,
         expectedWriterRunId: "run-b",
-        storePath: fixture.storePath(),
         message: createExactAssistantMessage({ text: "current output" }),
       }),
     ).resolves.toMatchObject({ ok: true });
@@ -1426,9 +1332,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     const results = await Promise.all(
       Array.from({ length: 8 }, () =>
-        appendExactAssistantMessageToSessionTranscript({
-          sessionKey,
-          storePath: fixture.storePath(),
+        appendExact({
           idempotencyKey,
           updateMode: "none",
           message: createExactAssistantMessage({
@@ -1459,9 +1363,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     await writeTranscriptStore();
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
 
-    const result = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
+    const result = await appendExact({
       updateMode: "file-only",
       message: createExactAssistantMessage({
         text: "Done.",

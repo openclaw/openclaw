@@ -1,13 +1,12 @@
 // Transcript appends preserve source text while normalizing replay metadata.
-import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { createExactAssistantMessage } from "./transcript-message.test-support.js";
 import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
@@ -30,23 +29,18 @@ async function readStoredMessages(params: {
 describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () => {
   const fixture = useTempSessionsFixture("exact-assistant-redact-test-");
 
-  async function seedSessionEntry(params: {
-    sessionId: string;
-    sessionKey: string;
-    storePath: string;
-  }) {
-    await replaceSessionEntry(
-      { sessionKey: params.sessionKey, storePath: params.storePath },
-      { sessionId: params.sessionId, updatedAt: Date.now() },
-    );
+  async function seedSessionEntry() {
+    const scope = {
+      sessionId: "test-session",
+      sessionKey: "test-channel:test-user",
+      storePath: fixture.storePath(),
+    };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+    return scope;
   }
 
   it("retains validated opaque provider replay state exactly", async () => {
-    const sessionsDir = fixture.sessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionId = "test-session-provider-replay";
-    const sessionKey = "test-channel:test-provider-replay";
-    await seedSessionEntry({ sessionId, sessionKey, storePath });
+    const { sessionId, sessionKey, storePath } = await seedSessionEntry();
 
     const publicUpdates: Array<{ message?: unknown }> = [];
     const internalUpdates: Array<{ message?: unknown }> = [];
@@ -56,7 +50,7 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
     );
     const message: Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0]["message"] =
       {
-        role: "assistant",
+        ...createExactAssistantMessage({}),
         content: [{ type: "text", text: "visible" }],
         api: "openai-responses",
         provider: "openai",
@@ -74,16 +68,6 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
           sessionHash: "171dzdv17gum5g",
           authProfileHash: "oe8bkr3r8947",
         },
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
       };
     let result: Awaited<ReturnType<typeof appendExactAssistantMessageToSessionTranscript>>;
     try {
@@ -115,14 +99,9 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
   });
 
   it("preserves secret-shaped text in exact assistant transcript appends", async () => {
-    const sessionsDir = fixture.sessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionId = "test-session-redact-off";
-    const sessionKey = "test-channel:test-user";
-    await seedSessionEntry({ sessionId, sessionKey, storePath });
+    const { sessionId, sessionKey, storePath } = await seedSessionEntry();
 
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
-    const config: OpenClawConfig = {};
     const signature = JSON.stringify({
       id: "A".repeat(416),
       type: "reasoning",
@@ -133,27 +112,15 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
       storePath,
-      config,
-      message: {
-        role: "assistant",
+      config: {},
+      message: createExactAssistantMessage({
         content: [
           { type: "text", text: `Here is your key: ${fakeApiKey}` },
           { type: "thinking", thinking: "", thinkingSignature: signature },
         ],
-        api: "openai-responses",
         provider: "github-copilot",
         model: "test-model",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      },
+      }),
     });
 
     expect(result.ok).toBe(true);
@@ -170,14 +137,9 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
   });
 
   it("emits the persisted assistant source text for inline transcript updates", async () => {
-    const sessionsDir = fixture.sessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionId = "test-session-redact-event";
-    const sessionKey = "test-channel:test-redact-event";
-    await seedSessionEntry({ sessionId, sessionKey, storePath });
+    const { sessionId, sessionKey, storePath } = await seedSessionEntry();
 
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
-    const config: OpenClawConfig = {};
     const updates: Array<{ message?: unknown }> = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
 
@@ -185,24 +147,12 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
       const result = await appendExactAssistantMessageToSessionTranscript({
         sessionKey,
         storePath,
-        config,
-        message: {
-          role: "assistant",
+        config: {},
+        message: createExactAssistantMessage({
           content: [{ type: "text", text: `Here is your key: ${fakeApiKey}` }],
-          api: "openai-responses",
           provider: "openclaw",
           model: "test-model",
-          usage: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 0,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
-          stopReason: "stop",
-          timestamp: Date.now(),
-        },
+        }),
       });
 
       expect(result.ok).toBe(true);
@@ -221,27 +171,13 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
   });
 
   it("dedupes delivery mirrors against exact persisted text", async () => {
-    const sessionsDir = fixture.sessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionId = "test-session-redact-dedupe";
-    const sessionKey = "test-channel:test-redact-dedupe";
-    await seedSessionEntry({ sessionId, sessionKey, storePath });
+    const { sessionId, sessionKey, storePath } = await seedSessionEntry();
 
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
-    const config: OpenClawConfig = {};
 
-    const first = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath,
-      config,
-      text: `Here is your key: ${fakeApiKey}`,
-    });
-    const second = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath,
-      config,
-      text: `Here is your key: ${fakeApiKey}`,
-    });
+    const params = { sessionKey, storePath, config: {}, text: `Here is your key: ${fakeApiKey}` };
+    const first = await appendAssistantMessageToSessionTranscript(params);
+    const second = await appendAssistantMessageToSessionTranscript(params);
 
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
@@ -258,34 +194,18 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
   });
 
   it("dedupes delivery mirrors against existing assistant entries", async () => {
-    const sessionsDir = fixture.sessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionId = "test-session-redact-upgrade-dedupe";
-    const sessionKey = "test-channel:test-redact-upgrade-dedupe";
-    await seedSessionEntry({ sessionId, sessionKey, storePath });
+    const { sessionId, sessionKey, storePath } = await seedSessionEntry();
 
     const fakeApiKey = "sk-proj-OLDERUNREDACTEDTRANSCRIPT1234567890";
     const unredacted = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
       storePath,
       config: {},
-      message: {
-        role: "assistant",
+      message: createExactAssistantMessage({
         content: [{ type: "text", text: `Here is your key: ${fakeApiKey}` }],
-        api: "openai-responses",
         provider: "openclaw",
         model: "legacy-assistant",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      },
+      }),
     });
     const deduped = await appendAssistantMessageToSessionTranscript({
       sessionKey,

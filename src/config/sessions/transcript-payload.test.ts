@@ -115,10 +115,22 @@ function compressedRecord(bytes: Uint8Array, rawBytes = bytes.byteLength): Paylo
   };
 }
 
+function withDatabase(run: (database: DatabaseSync) => void) {
+  const database = openNodeSqliteDatabase(":memory:");
+  try {
+    run(database);
+  } finally {
+    database.close();
+  }
+}
+
+function identityRecord(eventJson: string): PayloadFixture {
+  return { event_json: eventJson, event_zstd: null, event_utf8_bytes: null, navigation_json: null };
+}
+
 describe("transcript payload storage boundary", () => {
   it("publishes predicate columns with inserts and rewrites and rolls both back together", () => {
-    const database = openNodeSqliteDatabase(":memory:");
-    try {
+    withDatabase((database) => {
       createTable(database);
       database.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
         ALTER TABLE transcript_events ADD COLUMN created_at INTEGER`);
@@ -166,9 +178,7 @@ describe("transcript payload storage boundary", () => {
         message_role: "user",
         navigation_valid: 1,
       });
-    } finally {
-      database.close();
-    }
+    });
   });
 
   it.each([
@@ -230,8 +240,7 @@ describe("transcript payload storage boundary", () => {
   });
 
   it("keeps malformed, giant and oversized-navigation identities usable without the codec", () => {
-    const database = openNodeSqliteDatabase(":memory:");
-    try {
+    withDatabase((database) => {
       createTable(database);
       const originals = [
         ["", null, null, 0],
@@ -274,14 +283,12 @@ describe("transcript payload storage boundary", () => {
         expect(readBody(database, seq)).toBe(original);
         expect(readBody(database, seq, "row")).toBe(original);
       }
-    } finally {
-      database.close();
-    }
+    });
   });
 
-  it.each([[3]])("keeps a genuine large header in identity storage with version %j", (version) => {
-    const database = openNodeSqliteDatabase(":memory:");
-    try {
+  it("keeps a genuine large header in identity storage with version 3", () => {
+    const version = 3;
+    withDatabase((database) => {
       admitSqliteSchema(database);
       const original = JSON.stringify({
         type: "session",
@@ -303,28 +310,18 @@ describe("transcript payload storage boundary", () => {
         navigation_last_custom_type: null,
         navigation_valid: 1,
       });
-    } finally {
-      database.close();
-    }
+    });
   });
 
-  it.each(["text fallback"])("preserves owner projections with %s JSON", (mode) => {
-    const jsonb =
-      mode === "text fallback"
-        ? vi.spyOn(nodeSqlite, "supportsNodeSqliteJsonb").mockReturnValue(false)
-        : undefined;
+  it("preserves owner projections with text fallback JSON", () => {
+    const jsonb = vi.spyOn(nodeSqlite, "supportsNodeSqliteJsonb").mockReturnValue(false);
     const database = openNodeSqliteDatabase(":memory:");
     try {
       createTable(database);
-      const original = `{"type":"message","type":"reset","id":"first","id":"last","parentId":"parent","targetId":"target","appendParentId":"append","appendMode":"preserve","firstKeptEntryId":"kept","timestamp":"2026-01-01","message":{"role":"assistant","content":[{"type":"toolCall","id":"call","name":"read","arguments":{"large":"${"argument ".repeat(mode === "large" ? 256 * 1024 : 512)}"}}],"providerReplay":{"type":"checkpoint","data":"opaque"}},"message":{"role":"user","role":"toolResult","toolCallId":"call"}}`;
+      const original = `{"type":"message","type":"reset","id":"first","id":"last","parentId":"parent","targetId":"target","appendParentId":"append","appendMode":"preserve","firstKeptEntryId":"kept","timestamp":"2026-01-01","message":{"role":"assistant","content":[{"type":"toolCall","id":"call","name":"read","arguments":{"large":"${"argument ".repeat(512)}"}}],"providerReplay":{"type":"checkpoint","data":"opaque"}},"message":{"role":"user","role":"toolResult","toolCallId":"call"}}`;
       const prepared = prepareTranscriptPayload(database, original);
       expect(prepared.event_zstd).not.toBeNull();
-      insert(database, 0, {
-        event_json: original,
-        event_zstd: null,
-        event_utf8_bytes: null,
-        navigation_json: null,
-      });
+      insert(database, 0, identityRecord(original));
       insert(database, 1, prepared);
       const db = getNodeSqliteKysely<PayloadDatabase>(database);
       const stored = executeSqliteQueryTakeFirstSync(
@@ -401,79 +398,69 @@ describe("transcript payload storage boundary", () => {
     }
   });
 
-  it.each(['"message":{"timestamp":1}'])(
-    "projects selected payloads once with native role semantics: %s",
-    (envelope) => {
-      const database = openNodeSqliteDatabase(":memory:");
-      const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
-      try {
-        createTable(database);
-        const fields =
-          ',"content":[{"type":"text","text":"visible"}],"details":{"receipt":true},"__openclaw":{"upstreamUserText":"private"},"providerReplay":{"type":"checkpoint","data":"opaque"}';
-        const original = `{"type":"message","data":"${"payload ".repeat(1024)}",${envelope.replaceAll("}", `${fields}}`)}}`;
-        const prepared = prepareTranscriptPayload(database, original);
-        expect(prepared.event_zstd !== null).toBe(
-          !envelope.includes("scalar") && !envelope.includes("42"),
-        );
-        insert(database, 0, {
-          event_json: original,
-          event_zstd: null,
-          event_utf8_bytes: null,
-          navigation_json: null,
-        });
-        insert(database, 1, prepared);
-        const db = getNodeSqliteKysely<PayloadDatabase>(database);
-        for (const omitCheckpoint of [0, 1]) {
-          for (const omission of [undefined, sql.val("body omitted")]) {
-            const native = executeSqliteQueryTakeFirstSync(
+  it("projects selected payloads once with native role semantics", () => {
+    const envelope = '"message":{"timestamp":1}';
+    const database = openNodeSqliteDatabase(":memory:");
+    const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
+    try {
+      createTable(database);
+      const fields =
+        ',"content":[{"type":"text","text":"visible"}],"details":{"receipt":true},"__openclaw":{"upstreamUserText":"private"},"providerReplay":{"type":"checkpoint","data":"opaque"}';
+      const original = `{"type":"message","data":"${"payload ".repeat(1024)}",${envelope.replaceAll("}", `${fields}}`)}}`;
+      const prepared = prepareTranscriptPayload(database, original);
+      expect(prepared.event_zstd).not.toBeNull();
+      insert(database, 0, identityRecord(original));
+      insert(database, 1, prepared);
+      const db = getNodeSqliteKysely<PayloadDatabase>(database);
+      for (const omitCheckpoint of [0, 1]) {
+        for (const omission of [undefined, sql.val("body omitted")]) {
+          const native = executeSqliteQueryTakeFirstSync(
+            database,
+            db
+              .selectFrom("transcript_events")
+              .select(
+                projectModelContextEventSql(
+                  database,
+                  nativeFixtureEvent,
+                  sql.val(omitCheckpoint),
+                  omission,
+                ).as("event"),
+              )
+              .where("seq", "=", 0),
+          );
+          for (const seq of [0, 1]) {
+            decompress.mockClear();
+            const stored = executeSqliteQueryTakeFirstSync(
               database,
               db
                 .selectFrom("transcript_events")
-                .select(
+                .select((eb) =>
                   projectModelContextEventSql(
                     database,
-                    nativeFixtureEvent,
-                    sql.val(omitCheckpoint),
+                    transcriptEventJsonSql(database),
+                    eb.val(omitCheckpoint),
                     omission,
+                    eb.fn("json_extract", [
+                      transcriptEventNavigationSql(database),
+                      eb.val("$.message.role"),
+                    ]),
                   ).as("event"),
                 )
-                .where("seq", "=", 0),
+                .where("seq", "=", seq),
             );
-            for (const seq of [0, 1]) {
-              decompress.mockClear();
-              const stored = executeSqliteQueryTakeFirstSync(
-                database,
-                db
-                  .selectFrom("transcript_events")
-                  .select((eb) =>
-                    projectModelContextEventSql(
-                      database,
-                      transcriptEventJsonSql(database),
-                      eb.val(omitCheckpoint),
-                      omission,
-                      eb.fn("json_extract", [
-                        transcriptEventNavigationSql(database),
-                        eb.val("$.message.role"),
-                      ]),
-                    ).as("event"),
-                  )
-                  .where("seq", "=", seq),
-              );
-              expect(stored).toEqual(native);
-              expect(decompress).toHaveBeenCalledTimes(seq === 1 && prepared.event_zstd ? 1 : 0);
-            }
+            expect(stored).toEqual(native);
+            expect(decompress).toHaveBeenCalledTimes(seq === 1 && prepared.event_zstd ? 1 : 0);
           }
         }
-      } finally {
-        decompress.mockRestore();
-        database.close();
       }
-    },
-  );
+    } finally {
+      decompress.mockRestore();
+      database.close();
+    }
+  });
 
   it("bounds malformed frames and rejects size, checksum and UTF-8 corruption", () => {
-    const database = openNodeSqliteDatabase(":memory:");
-    try {
+    withDatabase((database) => {
       createTable(database);
       const original = Buffer.from('{"type":"custom"}');
       const damaged = compressedRecord(original);
@@ -499,14 +486,11 @@ describe("transcript payload storage boundary", () => {
       insert(database, records.length, compressedRecord(withBom));
       expect(readBody(database, records.length)).toBe(withBom.toString("utf8"));
       expect(readBody(database, records.length, "row")).toBe(withBom.toString("utf8"));
-    } finally {
-      database.close();
-    }
+    });
   });
 
   it("materializes selected identity and compressed message rows without decoding excluded corruption", () => {
-    const database = openNodeSqliteDatabase(":memory:");
-    try {
+    withDatabase((database) => {
       createTable(database);
       const messages = [
         { type: "message", id: "identity", message: { role: "user", content: "identity 🦞" } },
@@ -540,9 +524,7 @@ describe("transcript payload storage boundary", () => {
       expect(() =>
         Array.from(readers.messages({ ...range, start: 0 }), parseActiveTranscriptMessageRow),
       ).toThrow();
-    } finally {
-      database.close();
-    }
+    });
   });
 
   it("registers on fresh read-only connections but refuses schema-triggered decoding", () => {
