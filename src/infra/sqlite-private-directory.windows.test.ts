@@ -26,6 +26,43 @@ import { createPrivateWindowsFile } from "./windows-private-directory.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function expectPrivateAcl(filename: string, kind: "Directory" | "File") {
+  const script = [
+    `$acl = [IO.${kind}]::GetAccessControl('${filename.replaceAll("'", "''")}')`,
+    "$user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+    "@{ protected = $acl.AreAccessRulesProtected; owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value; user = $user; rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | ForEach-Object { @{ sid = $_.IdentityReference.Value; rights = [int]$_.FileSystemRights; inheritance = [int]$_.InheritanceFlags; inherited = $_.IsInherited; allow = [int]$_.AccessControlType } }) } | ConvertTo-Json -Depth 4 -Compress",
+  ].join("; ");
+  const acl = JSON.parse(
+    childProcess.execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      { encoding: "utf8" },
+    ),
+  );
+  expect(acl).toMatchObject({ protected: true, owner: acl.user });
+  expect(acl.rules.map((rule: { sid: string }) => rule.sid).toSorted()).toEqual(
+    [acl.user, "S-1-5-18", "S-1-5-32-544"].toSorted((left, right) => left.localeCompare(right)),
+  );
+  for (const rule of acl.rules) {
+    expect(rule).toMatchObject({
+      rights: 2032127,
+      inherited: false,
+      allow: 0,
+      ...(kind === "Directory" ? { inheritance: 3 } : {}),
+    });
+  }
+}
+
+function writePrivateFile(filename: string, content: string) {
+  const file = createPrivateWindowsFile(filename);
+  try {
+    fsSync.writeSync(file.fd, content);
+  } finally {
+    file.close();
+  }
+  expect(fsSync.readFileSync(filename, "utf8")).toBe(content);
+}
+
 describe.runIf(process.platform === "win32")("private SQLite directory creation on Windows", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -61,29 +98,7 @@ describe.runIf(process.platform === "win32")("private SQLite directory creation 
     expect(childProcess.execFileSync).not.toHaveBeenCalled();
 
     for (const directory of [asyncPath, syncPath, workerPath]) {
-      const script = [
-        `$acl = [IO.Directory]::GetAccessControl('${directory.replaceAll("'", "''")}')`,
-        "$user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
-        "$rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))",
-        "@{ protected = $acl.AreAccessRulesProtected; owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value; user = $user; rules = @($rules | ForEach-Object { @{ sid = $_.IdentityReference.Value; rights = [int]$_.FileSystemRights; inheritance = [int]$_.InheritanceFlags; inherited = $_.IsInherited; allow = [int]$_.AccessControlType } }) } | ConvertTo-Json -Depth 4 -Compress",
-      ].join("; ");
-      const acl = JSON.parse(
-        childProcess.execFileSync(
-          "powershell.exe",
-          ["-NoProfile", "-NonInteractive", "-Command", script],
-          {
-            encoding: "utf8",
-          },
-        ),
-      );
-      expect(acl.protected).toBe(true);
-      expect(acl.owner).toBe(acl.user);
-      expect(acl.rules.map((rule: { sid: string }) => rule.sid).toSorted()).toEqual(
-        [acl.user, "S-1-5-18", "S-1-5-32-544"].toSorted((left, right) => left.localeCompare(right)),
-      );
-      for (const rule of acl.rules) {
-        expect(rule).toMatchObject({ rights: 2032127, inheritance: 3, inherited: false, allow: 0 });
-      }
+      expectPrivateAcl(directory, "Directory");
       await fs.writeFile(path.join(directory, "synthetic.sqlite"), "synthetic");
       const listing = childProcess.execFileSync("icacls.exe", [directory], { encoding: "utf8" });
       expect(listing).toContain("(OI)(CI)(F)");
@@ -94,13 +109,7 @@ describe.runIf(process.platform === "win32")("private SQLite directory creation 
   it("publishes a short private file that can be reopened normally", () => {
     const root = tempDirs.make("openclaw-private-short-");
     const filename = path.join(root, "private.sqlite");
-    const file = createPrivateWindowsFile(filename);
-    try {
-      fsSync.writeSync(file.fd, "short");
-    } finally {
-      file.close();
-    }
-    expect(fsSync.readFileSync(filename, "utf8")).toBe("short");
+    writePrivateFile(filename, "short");
     expect(fsSync.statSync(filename).nlink).toBe(1);
     expect(fsSync.readdirSync(root)).toEqual(["private.sqlite"]);
   });
@@ -115,13 +124,7 @@ describe.runIf(process.platform === "win32")("private SQLite directory creation 
       expect(fsSync.statSync(directory).isDirectory()).toBe(true);
       const filename = path.join(parent, "private.sqlite");
       expect(filename.length).toBe(parentLength + 15);
-      const file = createPrivateWindowsFile(filename);
-      try {
-        fsSync.writeSync(file.fd, "long");
-      } finally {
-        file.close();
-      }
-      expect(fsSync.readFileSync(filename, "utf8")).toBe("long");
+      writePrivateFile(filename, "long");
     },
   );
 
@@ -132,30 +135,7 @@ describe.runIf(process.platform === "win32")("private SQLite directory creation 
     let inspected = false;
     const spy = vi.spyOn(fsSync, "openSync").mockImplementation((pathname, flags, mode) => {
       if (path.basename(String(pathname)) === "private.sqlite") {
-        const script = [
-          `$acl = [IO.File]::GetAccessControl('${file.replaceAll("'", "''")}')`,
-          "$user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
-          "@{ protected = $acl.AreAccessRulesProtected; owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value; user = $user; rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | ForEach-Object { @{ sid = $_.IdentityReference.Value; rights = [int]$_.FileSystemRights; inherited = $_.IsInherited; allow = [int]$_.AccessControlType } }) } | ConvertTo-Json -Depth 4 -Compress",
-        ].join("; ");
-        const acl = JSON.parse(
-          childProcess.execFileSync(
-            "powershell.exe",
-            ["-NoProfile", "-NonInteractive", "-Command", script],
-            {
-              encoding: "utf8",
-            },
-          ),
-        );
-        expect(acl.protected).toBe(true);
-        expect(acl.owner).toBe(acl.user);
-        expect(acl.rules.map((rule: { sid: string }) => rule.sid).toSorted()).toEqual(
-          [acl.user, "S-1-5-18", "S-1-5-32-544"].toSorted((left, right) =>
-            left.localeCompare(right),
-          ),
-        );
-        for (const rule of acl.rules) {
-          expect(rule).toMatchObject({ rights: 2032127, inherited: false, allow: 0 });
-        }
+        expectPrivateAcl(file, "File");
         inspected = true;
       }
       return open(pathname, flags, mode);

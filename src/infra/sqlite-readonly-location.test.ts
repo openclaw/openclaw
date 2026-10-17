@@ -36,14 +36,29 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 function createTempDatabasePath(sql?: string): string {
   const pathname = path.join(tempDirs.make("openclaw-sqlite-readonly-"), "state.sqlite");
   if (sql) {
-    const database = new sqlite.DatabaseSync(pathname);
-    try {
-      database.exec(sql);
-    } finally {
-      database.close();
-    }
+    withDatabase(pathname, (database) => database.exec(sql));
   }
   return pathname;
+}
+
+function withDatabase<T>(pathname: string, inspect: (db: DatabaseSync) => T, readOnly = false): T {
+  const database = new sqlite.DatabaseSync(pathname, { readOnly });
+  try {
+    return inspect(database);
+  } finally {
+    database.close();
+  }
+}
+
+function inspectSnapshot(
+  prepared: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocationInProcess>>,
+  inspect: (db: DatabaseSync) => void,
+) {
+  try {
+    withDatabase(prepared.location, inspect, true);
+  } finally {
+    expect(prepared.cleanup()).toBe(true);
+  }
 }
 
 function readFamily(pathname: string): Map<string, Buffer> {
@@ -80,21 +95,14 @@ describe("prepareSqliteReadOnlyLocation", () => {
             const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
               preserveSourceArtifacts: true,
             });
-            try {
+            inspectSnapshot(prepared, (snapshot) => {
               expect(prepared.location.startsWith(`${cacheRoot}${path.sep}`)).toBe(true);
               expect(fs.statSync(path.dirname(prepared.location)).mode & 0o777).toBe(0o700);
               expect(readFamily(databasePath)).toEqual(familyBefore);
-              const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-              try {
-                expect(
-                  snapshot.prepare("SELECT value FROM probe ORDER BY rowid DESC LIMIT 1").get(),
-                ).toEqual({ value });
-              } finally {
-                snapshot.close();
-              }
-            } finally {
-              expect(prepared.cleanup()).toBe(true);
-            }
+              expect(
+                snapshot.prepare("SELECT value FROM probe ORDER BY rowid DESC LIMIT 1").get(),
+              ).toEqual({ value });
+            });
           }
         }),
       );
@@ -185,13 +193,11 @@ describe("prepareSqliteReadOnlyLocation", () => {
     "identifies $mode private cache allocation failure $code before backup or copying",
     async ({ code, empty, prepare }) => {
       const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-allocation-");
-      const databasePath = createTempDatabasePath();
+      const databasePath = createTempDatabasePath(
+        empty ? undefined : "CREATE TABLE probe (value TEXT);",
+      );
       if (empty) {
         fs.writeFileSync(databasePath, "");
-      } else {
-        const database = new sqlite.DatabaseSync(databasePath);
-        database.exec("CREATE TABLE probe (value TEXT);");
-        database.close();
       }
       const stagingRoot = path.join(cacheRoot, "openclaw");
       const allocationError = Object.assign(new Error("snapshot directory allocation failed"), {
@@ -230,9 +236,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     const stagingRoot = path.join(cacheRoot, "openclaw");
     fs.mkdirSync(stagingRoot, { mode: 0o700 });
     const databasePath = path.join(stagingRoot, "source.sqlite");
-    const database = new sqlite.DatabaseSync(databasePath);
-    database.exec("CREATE TABLE probe (value TEXT);");
-    database.close();
+    withDatabase(databasePath, (database) => database.exec("CREATE TABLE probe (value TEXT);"));
     const sourceError = Object.assign(new Error("source permission denied"), {
       code: "EACCES",
       path: databasePath,
@@ -281,14 +285,15 @@ describe("prepareSqliteReadOnlyLocation", () => {
       fs.closeSync(descriptor);
     }
 
-    const corruptSource = new sqlite.DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(() => corruptSource.prepare("PRAGMA quick_check;").get()).toThrow(
-        /database disk image is malformed/u,
-      );
-    } finally {
-      corruptSource.close();
-    }
+    withDatabase(
+      databasePath,
+      (corruptSource) => {
+        expect(() => corruptSource.prepare("PRAGMA quick_check;").get()).toThrow(
+          /database disk image is malformed/u,
+        );
+      },
+      true,
+    );
 
     await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
       const inProcessError = await prepareSqliteReadOnlyLocationInProcess(databasePath).catch(
@@ -490,15 +495,11 @@ describe("prepareSqliteReadOnlyLocation", () => {
 
     try {
       const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
-      const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-      try {
+      inspectSnapshot(prepared, (snapshot) => {
         expect(snapshot.prepare("SELECT value FROM before_reset").all()).toEqual([{ value: "A" }]);
         expect(snapshot.prepare("SELECT value FROM after_reset").all()).toEqual([{ value: "B" }]);
         expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      } finally {
-        snapshot.close();
-        expect(prepared.cleanup()).toBe(true);
-      }
+      });
       expect(injected).toBe(true);
       expect(fs.statSync(`${databasePath}-wal`).size).toBe(walSizeBeforeReset);
       expect(readLogicalFamily(databasePath)).toEqual(sourceAfterReset);
@@ -570,18 +571,14 @@ describe("prepareSqliteReadOnlyLocation", () => {
       expect(held.values).toEqual([held.commits + 1, held.commits]);
 
       const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
-      const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-      try {
+      inspectSnapshot(prepared, (snapshot) => {
         const values = snapshot
           .prepare("SELECT value FROM pair ORDER BY name")
           .all()
           .map((row) => (row as { value: number }).value);
         expect(values).toEqual([held.commits, held.commits]);
         expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      } finally {
-        snapshot.close();
-        expect(prepared.cleanup()).toBe(true);
-      }
+      });
       const progress = await writer.progress();
       expect(progress.commits).toBeGreaterThan(held.commits);
       expect(progress.transaction).toBe(false);
@@ -589,16 +586,17 @@ describe("prepareSqliteReadOnlyLocation", () => {
       expect(unfinished.transaction).toBe(true);
       expect(unfinished.values).toEqual([unfinished.commits + 1, unfinished.commits]);
       await writer.stop();
-      const source = new sqlite.DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(source.prepare("SELECT value FROM pair ORDER BY name").all()).toEqual([
-          { value: unfinished.commits },
-          { value: unfinished.commits },
-        ]);
-        expect(source.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      } finally {
-        source.close();
-      }
+      withDatabase(
+        databasePath,
+        (source) => {
+          expect(source.prepare("SELECT value FROM pair ORDER BY name").all()).toEqual([
+            { value: unfinished.commits },
+            { value: unfinished.commits },
+          ]);
+          expect(source.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+        },
+        true,
+      );
     } finally {
       await writer.stop();
     }
@@ -622,14 +620,10 @@ describe("prepareSqliteReadOnlyLocation", () => {
     }) as typeof fs.statSync);
 
     const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
-    const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-    try {
+    inspectSnapshot(prepared, (snapshot) => {
       expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "ok" }]);
       expect(injected).toBe(true);
-    } finally {
-      snapshot.close();
-      expect(prepared.cleanup()).toBe(true);
-    }
+    });
   });
 
   it("copies an orphan SHM privately without creating a source WAL", async () => {
@@ -646,10 +640,9 @@ describe("prepareSqliteReadOnlyLocation", () => {
     const beforeEntries = fs.readdirSync(path.dirname(databasePath)).toSorted();
 
     const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
-    const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-    expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "committed" }]);
-    snapshot.close();
-    expect(prepared.cleanup()).toBe(true);
+    inspectSnapshot(prepared, (snapshot) => {
+      expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "committed" }]);
+    });
 
     expect(fs.existsSync(`${databasePath}-wal`)).toBe(false);
     expect(fs.readFileSync(`${databasePath}-shm`)).toEqual(orphanShm);
@@ -688,8 +681,7 @@ it.each([
       expect(writer.pid).not.toBe(process.pid);
 
       const prepared = await prepare(databasePath);
-      const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-      try {
+      inspectSnapshot(prepared, (snapshot) => {
         expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
           integrity_check: "ok",
         });
@@ -699,10 +691,7 @@ it.each([
         expect(
           snapshot.prepare("SELECT COUNT(*) AS count FROM writes").get()?.count,
         ).toBeGreaterThan(0);
-      } finally {
-        snapshot.close();
-        expect(prepared.cleanup()).toBe(true);
-      }
+      });
       expect((await writer.progress()).commits).toBeGreaterThan(ready.commits);
     } finally {
       await writer.stop();

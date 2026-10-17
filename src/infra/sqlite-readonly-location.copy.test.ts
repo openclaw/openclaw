@@ -29,7 +29,31 @@ function createFixture(bytes: Buffer) {
   const sourcePath = path.join(sourceRoot, "source.sqlite");
   const stagingRoot = tempDirs.make("openclaw-readonly-copy-staging-");
   fs.writeFileSync(sourcePath, bytes, { mode: 0o600 });
-  return { sourcePath, sourceRoot, stagingRoot };
+  return {
+    sourcePath,
+    sourceRoot,
+    stagingRoot,
+    prepare: () => prepareSqliteReadOnlyLocationSyncInProcess(sourcePath, stagingRoot),
+  };
+}
+
+function withDatabase<T>(
+  location: string,
+  inspect: (db: import("node:sqlite").DatabaseSync) => T,
+  readOnly = true,
+): T {
+  const database = new (requireNodeSqlite().DatabaseSync)(location, { readOnly });
+  try {
+    return inspect(database);
+  } finally {
+    database.close();
+  }
+}
+
+function createDatabaseFixture(sql: string) {
+  const fixture = createFixture(Buffer.alloc(0));
+  withDatabase(fixture.sourcePath, (db) => db.exec(sql), false);
+  return fixture;
 }
 
 function patternedBytes(size: number): Buffer {
@@ -47,7 +71,7 @@ function expectSnapshot(
 ): void {
   let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSyncInProcess> | undefined;
   try {
-    prepared = prepareSqliteReadOnlyLocationSyncInProcess(fixture.sourcePath, fixture.stagingRoot);
+    prepared = fixture.prepare();
     expect(fs.readFileSync(prepared.location).equals(expected)).toBe(true);
     if (process.platform !== "win32") {
       expect(fs.statSync(prepared.location).mode & 0o777).toBe(0o600);
@@ -77,11 +101,8 @@ function afterFirstCopy(operation: () => void): () => boolean {
 }
 
 function createWalActivationFixture() {
-  const fixture = createFixture(Buffer.alloc(0));
+  const fixture = createDatabaseFixture("PRAGMA journal_mode=WAL; PRAGMA user_version=7;");
   const sqlite = requireNodeSqlite();
-  const seed = new sqlite.DatabaseSync(fixture.sourcePath);
-  seed.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=7;");
-  seed.close();
   const activatedPath = path.join(fixture.sourceRoot, "activated.sqlite");
   const activated = new sqlite.DatabaseSync(activatedPath);
   activated.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=8;");
@@ -181,10 +202,7 @@ describe("stable read-only snapshot copies", () => {
   it.skipIf(process.platform === "win32").each(["-journal", "-wal"])(
     "preserves an admitted %s alias and retries its retargeted inode",
     (suffix) => {
-      const fixture = createFixture(Buffer.alloc(0));
-      const source = new (requireNodeSqlite().DatabaseSync)(fixture.sourcePath);
-      source.exec("PRAGMA user_version=7;");
-      source.close();
+      const fixture = createDatabaseFixture("PRAGMA user_version=7;");
       const bytes = fs.readFileSync(fixture.sourcePath);
       const alias = fixture.sourcePath + suffix;
       const original = path.join(fixture.sourceRoot, "original-sidecar");
@@ -240,9 +258,7 @@ describe("stable read-only snapshot copies", () => {
         });
       }
       const wait = vi.spyOn(Atomics, "wait");
-      expect(() =>
-        prepareSqliteReadOnlyLocationSyncInProcess(fixture.sourcePath, fixture.stagingRoot),
-      ).toThrow(error);
+      expect(fixture.prepare).toThrow(error);
       expect(injected).toBe(true);
       expect(wait).not.toHaveBeenCalled();
       expect(fs.readFileSync(original)).toEqual(patternedBytes(4099));
@@ -272,9 +288,7 @@ describe("stable read-only snapshot copies", () => {
         return open(pathname, flags, mode);
       });
       const wait = vi.spyOn(Atomics, "wait");
-      expect(() =>
-        prepareSqliteReadOnlyLocationSyncInProcess(fixture.sourcePath, fixture.stagingRoot),
-      ).toThrow(FsSafeError);
+      expect(fixture.prepare).toThrow(FsSafeError);
       expect(injected).toBe(true);
       expect(wait).not.toHaveBeenCalled();
       expect(fs.readFileSync(original)).toEqual(bytes);
@@ -301,9 +315,11 @@ describe("stable read-only snapshot copies", () => {
       const fixture =
         mode === "raw-copy" ? createWalActivationFixture().fixture : createFixture(Buffer.alloc(0));
       if (mode === "online-backup") {
-        const seed = new (requireNodeSqlite().DatabaseSync)(fixture.sourcePath);
-        seed.exec("CREATE TABLE probe (value TEXT);");
-        seed.close();
+        withDatabase(
+          fixture.sourcePath,
+          (seed) => seed.exec("CREATE TABLE probe (value TEXT);"),
+          false,
+        );
         const open = fs.openSync.bind(fs);
         const fsync = fs.fsyncSync.bind(fs);
         const snapshotDescriptors = new Set<number>();
@@ -385,26 +401,28 @@ describe("stable read-only snapshot copies", () => {
       fs.writeFileSync(fixture.sourcePath + suffix, content);
     }
     const before = snapshotSqliteFamily(fixture.sourcePath);
-    const prepared = prepareSqliteReadOnlyLocationSyncInProcess(
-      fixture.sourcePath,
-      fixture.stagingRoot,
-    );
+    const prepared = fixture.prepare();
     try {
       // The consumer, not snapshot preparation, owns catalog diagnostics and repair.
-      const snapshot = new sqlite.DatabaseSync(prepared.location);
-      try {
-        expect(() => snapshot.prepare("SELECT * FROM probe")).toThrow(/malformed database schema/u);
-        snapshot.enableDefensive?.(false);
-        snapshot.exec(`
+      withDatabase(
+        prepared.location,
+        (snapshot) => {
+          expect(() => snapshot.prepare("SELECT * FROM probe")).toThrow(
+            /malformed database schema/u,
+          );
+          snapshot.enableDefensive?.(false);
+          snapshot.exec(`
           PRAGMA writable_schema = ON;
           UPDATE sqlite_schema SET sql = 'CREATE INDEX probe_index ON probe(value)'
             WHERE name = 'probe_index';
           PRAGMA writable_schema = RESET;
         `);
-        expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "preserved" }]);
-      } finally {
-        snapshot.close();
-      }
+          expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([
+            { value: "preserved" },
+          ]);
+        },
+        false,
+      );
       expect(snapshotSqliteFamily(fixture.sourcePath)).toEqual(before);
     } finally {
       expect(prepared.cleanup()).toBe(true);
@@ -413,7 +431,6 @@ describe("stable read-only snapshot copies", () => {
   });
 
   it("captures a bounded committed WAL prefix while later commits append", () => {
-    const prepare = prepareSqliteReadOnlyLocationSyncInProcess;
     const fixture = createFixture(Buffer.alloc(0));
     const sqlite = requireNodeSqlite();
     const writer = new sqlite.DatabaseSync(fixture.sourcePath);
@@ -503,7 +520,7 @@ describe("stable read-only snapshot copies", () => {
         }
       });
 
-      prepared = prepare(fixture.sourcePath, fixture.stagingRoot);
+      prepared = fixture.prepare();
       expect(appendedDuringCopy).toBe(true);
       expect(appendedAfterCopy).toBeGreaterThan(0);
       expect(shortReads.source).toBeGreaterThan(0);
@@ -512,8 +529,7 @@ describe("stable read-only snapshot copies", () => {
       expect(copiedWalWriters.size).toBe(0);
       expect(fs.statSync(`${prepared.location}-wal`).size).toBe(capturedWalBytes);
       expect(fs.statSync(walPath).size).toBeGreaterThan(capturedWalBytes);
-      const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-      try {
+      withDatabase(prepared.location, (snapshot) => {
         expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
           integrity_check: "ok",
         });
@@ -523,9 +539,7 @@ describe("stable read-only snapshot copies", () => {
         expect(snapshot.prepare("SELECT length(data) AS bytes FROM payload").get()).toEqual({
           bytes: MIB + 37,
         });
-      } finally {
-        snapshot.close();
-      }
+      });
       expect(snapshotSqliteFamily(fixture.sourcePath)).toEqual(sourceAfterWrites);
     } finally {
       if (prepared) {
@@ -566,15 +580,11 @@ describe("stable read-only snapshot copies", () => {
         }
       });
 
-      prepared = prepareSqliteReadOnlyLocationSyncInProcess(
-        fixture.sourcePath,
-        fixture.stagingRoot,
-      );
+      prepared = fixture.prepare();
       expect(commits).toBe(1);
       expect(fs.statSync(walPath).size).toBe(walBytes);
       expect(fs.statSync(`${prepared.location}-wal`).size).toBeLessThan(walBytes);
-      const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-      try {
+      withDatabase(prepared.location, (snapshot) => {
         expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
           integrity_check: "ok",
         });
@@ -584,9 +594,7 @@ describe("stable read-only snapshot copies", () => {
         expect(snapshot.prepare("SELECT length(data) AS bytes FROM payload").get()).toEqual({
           bytes: MIB,
         });
-      } finally {
-        snapshot.close();
-      }
+      });
       expect(snapshotSqliteFamily(fixture.sourcePath)).toEqual(sourceAfterWrites);
     } finally {
       if (prepared) {
@@ -598,7 +606,6 @@ describe("stable read-only snapshot copies", () => {
   });
 
   it("rejects a reset WAL paired with checkpoint-restored main bytes during native copying", async () => {
-    const prepare = prepareSqliteReadOnlyCopyInProcess;
     const fixture = createFixture(Buffer.alloc(0));
     const sqlite = requireNodeSqlite();
     const writer = new sqlite.DatabaseSync(fixture.sourcePath);
@@ -652,11 +659,10 @@ describe("stable read-only snapshot copies", () => {
         },
       });
 
-      prepared = await prepare(fixture.sourcePath, fixture.stagingRoot);
+      prepared = await prepareSqliteReadOnlyCopyInProcess(fixture.sourcePath, fixture.stagingRoot);
       expect(reset).toBe(true);
       expect(restored).toBe(true);
-      const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-      try {
+      withDatabase(prepared.location, (snapshot) => {
         expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
           integrity_check: "ok",
         });
@@ -667,9 +673,7 @@ describe("stable read-only snapshot copies", () => {
             )
             .get(),
         ).toEqual({ left_value: "A", right_value: "A" });
-      } finally {
-        snapshot.close();
-      }
+      });
       expect(snapshotSqliteFamily(fixture.sourcePath)).toEqual(sourceAfterWrites);
     } finally {
       if (prepared) {
@@ -822,9 +826,7 @@ describe("stable read-only snapshot copies", () => {
     });
 
     try {
-      expect(() =>
-        prepareSqliteReadOnlyLocationSyncInProcess(fixture.sourcePath, fixture.stagingRoot),
-      ).toThrow(closeError);
+      expect(fixture.prepare).toThrow(closeError);
       expect(injected).toBe(true);
       for (const descriptor of sourcesAtFailure) {
         expect(() => fs.fstatSync(descriptor)).toThrowError(
@@ -844,18 +846,11 @@ describe("stable read-only snapshot copies", () => {
   });
 
   it("snapshots a fixed 16 MiB database when staging can write one complete copy", () => {
-    const fixture = createFixture(Buffer.alloc(0));
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(fixture.sourcePath);
-    try {
-      database.exec(`
+    const fixture = createDatabaseFixture(`
         PRAGMA journal_mode = DELETE;
         CREATE TABLE probe (payload BLOB NOT NULL);
         INSERT INTO probe VALUES (zeroblob(${16 * MIB}));
       `);
-    } finally {
-      database.close();
-    }
     const bytes = fs.readFileSync(fixture.sourcePath);
     const descriptors = new Set<number>();
     const open = fs.openSync.bind(fs);
@@ -906,14 +901,11 @@ describe("stable read-only snapshot copies", () => {
     );
 
     expectSnapshot(fixture, bytes, (location) => {
-      const snapshot = new sqlite.DatabaseSync(location, { readOnly: true });
-      try {
+      withDatabase(location, (snapshot) => {
         expect(snapshot.prepare("SELECT length(payload) AS bytes FROM probe").get()).toEqual({
           bytes: 16 * MIB,
         });
-      } finally {
-        snapshot.close();
-      }
+      });
     });
     expect(written).toBeLessThanOrEqual(bytes.length);
     expect(descriptors.size).toBe(0);

@@ -30,6 +30,14 @@ function withDatabase<T>(filename: string, operation: (db: DatabaseSync) => T): 
   }
 }
 
+function expectRow(db: DatabaseSync, sql: string, expected: unknown) {
+  expect(db.prepare(sql).get()).toEqual(expected);
+}
+
+function expectRows(db: DatabaseSync, sql: string, expected: unknown[]) {
+  expect(db.prepare(sql).all()).toEqual(expected);
+}
+
 function fixture(encoding = "UTF-8") {
   const directory = tempDirs.make("openclaw-scoped-migration-");
   const sourcePath = path.join(directory, "agent.sqlite");
@@ -120,7 +128,7 @@ describe("table-scoped migration snapshots", () => {
     withDatabase(f.sourcePath, (db) => {
       db.exec("UPDATE selected SET label = 'after restore'");
       db.exec("INSERT INTO Keyed VALUES ('preserved')");
-      expect(db.prepare("SELECT value FROM untouched ORDER BY id").all()).toEqual([
+      expectRows(db, "SELECT value FROM untouched ORDER BY id", [
         { value: "original child" },
         { value: "mixed-case trigger ran" },
         { value: "Unicode trigger ran" },
@@ -143,16 +151,14 @@ describe("table-scoped migration snapshots", () => {
       mutate(f);
       restoreScopedMigrationSnapshot({ ...f, assertCurrent: () => {} });
       withDatabase(f.sourcePath, (db) => {
-        expect(
-          db
-            .prepare(
-              "SELECT typeof(value) AS type, hex(value) AS bytes FROM loose WHERE rowid >= 914 ORDER BY rowid",
-            )
-            .all(),
-        ).toEqual([
-          { type: "text", bytes: malformed },
-          { type: "text", bytes: nul },
-        ]);
+        expectRows(
+          db,
+          "SELECT typeof(value) AS type, hex(value) AS bytes FROM loose WHERE rowid >= 914 ORDER BY rowid",
+          [
+            { type: "text", bytes: malformed },
+            { type: "text", bytes: nul },
+          ],
+        );
       });
     },
   );
@@ -176,38 +182,26 @@ describe("table-scoped migration snapshots", () => {
         payload: new Uint8Array([0, 255]),
         doubled: 18014398509481986n,
       });
-      expect(db.prepare("SELECT rowid, value FROM loose").all()).toEqual([
-        { rowid: 913, value: "old row" },
-      ]);
-      expect(db.prepare("SELECT hex(value) AS value FROM keyed WHERE key = 'one'").get()).toEqual({
-        value: "1234",
-      });
-      expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-        schema_version: 26,
-      });
-      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 26 });
-      expect(db.prepare("SELECT * FROM sqlite_stat1 ORDER BY tbl, idx").all()).toEqual(statistics);
-      expect(
-        db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'added_later'").get(),
-      ).toBeUndefined();
-      expect(db.prepare("SELECT value FROM untouched ORDER BY id").all()).toEqual([
+      expectRows(db, "SELECT rowid, value FROM loose", [{ rowid: 913, value: "old row" }]);
+      expectRow(db, "SELECT hex(value) AS value FROM keyed WHERE key = 'one'", { value: "1234" });
+      expectRow(db, "SELECT schema_version FROM schema_meta", { schema_version: 26 });
+      expectRow(db, "PRAGMA user_version", { user_version: 26 });
+      expectRows(db, "SELECT * FROM sqlite_stat1 ORDER BY tbl, idx", statistics);
+      expectRow(db, "SELECT 1 FROM sqlite_master WHERE name = 'added_later'", undefined);
+      expectRows(db, "SELECT value FROM untouched ORDER BY id", [
         { value: "original child" },
         { value: "trigger ran" },
         { value: "later independent write" },
       ]);
-      expect(
-        db
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE name IN ('selected_amount', 'selected_update') ORDER BY name",
-          )
-          .all(),
-      ).toEqual([{ name: "selected_amount" }, { name: "selected_update" }]);
+      expectRows(
+        db,
+        "SELECT name FROM sqlite_master WHERE name IN ('selected_amount', 'selected_update') ORDER BY name",
+        [{ name: "selected_amount" }, { name: "selected_update" }],
+      );
     });
     withDatabase(f.backupPath, (db) => {
-      expect(
-        db.prepare("SELECT name FROM sqlite_master WHERE name = 'untouched'").get(),
-      ).toBeUndefined();
-      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      expectRow(db, "SELECT name FROM sqlite_master WHERE name = 'untouched'", undefined);
+      expectRow(db, "PRAGMA integrity_check", { integrity_check: "ok" });
     });
   });
 
@@ -218,11 +212,9 @@ describe("table-scoped migration snapshots", () => {
     withDatabase(f.backupPath, (db) => db.exec("UPDATE data_0 SET c1 = NULL"));
     expect(() => restoreScopedMigrationSnapshot({ ...f, assertCurrent: () => {} })).toThrow();
     withDatabase(f.sourcePath, (db) => {
-      expect(db.prepare("SELECT label FROM selected").get()).toEqual({ label: "after" });
-      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 27 });
-      expect(db.prepare("SELECT value FROM added_later").get()).toEqual({
-        value: "migration output",
-      });
+      expectRow(db, "SELECT label FROM selected", { label: "after" });
+      expectRow(db, "PRAGMA user_version", { user_version: 27 });
+      expectRow(db, "SELECT value FROM added_later", { value: "migration output" });
     });
   });
 
@@ -235,8 +227,8 @@ describe("table-scoped migration snapshots", () => {
     });
     expect(() => restoreScopedMigrationSnapshot({ ...f, assertCurrent: () => {} })).toThrow();
     withDatabase(f.sourcePath, (db) => {
-      expect(db.prepare("SELECT count(*) AS count FROM untouched").get()).toEqual({ count: 3 });
-      expect(db.prepare("SELECT label FROM selected").get()).toEqual({ label: "after" });
+      expectRow(db, "SELECT count(*) AS count FROM untouched", { count: 3 });
+      expectRow(db, "SELECT label FROM selected", { label: "after" });
     });
   });
 
@@ -277,10 +269,8 @@ describe("table-scoped migration snapshots", () => {
       "AUTOINCREMENT table loose",
     );
     withDatabase(f.sourcePath, (db) => {
-      expect(db.prepare("SELECT id FROM loose").get()).toEqual({ id: 1 });
-      expect(db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'loose'").get()).toEqual({
-        seq: 1,
-      });
+      expectRow(db, "SELECT id FROM loose", { id: 1 });
+      expectRow(db, "SELECT seq FROM sqlite_sequence WHERE name = 'loose'", { seq: 1 });
     });
   });
 
@@ -317,21 +307,17 @@ describe("table-scoped migration snapshots", () => {
         UPDATE sqlite_stat1 SET rowid = 9007199254740993, stat = CAST(X'${malformedStat}' AS TEXT)
           WHERE idx = 'selected_amount';
       `);
-        expect(db.prepare("SELECT stat FROM sqlite_stat1 WHERE tbl = 'untouched'").get()).toEqual({
-          stat: "3",
-        });
+        expectRow(db, "SELECT stat FROM sqlite_stat1 WHERE tbl = 'untouched'", { stat: "3" });
         return readStatistics(db);
       });
       restoreScopedMigrationSnapshot({ ...f, assertCurrent: () => {} });
       withDatabase(f.sourcePath, (db) => {
-        expect(db.prepare("SELECT label FROM selected").get()).toEqual({ label: "before" });
+        expectRow(db, "SELECT label FROM selected", { label: "before" });
         expect(readStatistics(db)).toEqual(statistics);
-        expect(
-          db
-            .prepare("SELECT hex(stat) AS bytes FROM sqlite_stat1 WHERE idx = 'selected_amount'")
-            .get(),
-        ).toEqual({ bytes: malformedStat });
-        expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+        expectRow(db, "SELECT hex(stat) AS bytes FROM sqlite_stat1 WHERE idx = 'selected_amount'", {
+          bytes: malformedStat,
+        });
+        expectRow(db, "PRAGMA integrity_check", { integrity_check: "ok" });
       });
     },
   );

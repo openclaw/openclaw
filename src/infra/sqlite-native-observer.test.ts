@@ -20,6 +20,16 @@ function open(location = ":memory:") {
   return db;
 }
 
+function expectNativeBehavior(
+  exercise: (db: ReturnType<typeof open>, observed: boolean) => unknown,
+) {
+  const native = new (requireNodeSqlite().DatabaseSync)(":memory:");
+  databases.push(native);
+  const db = open();
+  expect(exercise(db, true)).toEqual(exercise(native, false));
+  expect(hasPendingSqliteNativeExecution(db)).toBe(false);
+}
+
 it.each(["exec", "all"] as const)(
   "retains custody across %s callbacks and preserves a native error",
   (method) => {
@@ -160,9 +170,7 @@ it("keeps an opaque batch fenced without treating its tentative tail as committe
 it.each(["get", "iterate"] as const)(
   "preserves native undefined and trailing bindings in %s",
   (method) => {
-    const native = new (requireNodeSqlite().DatabaseSync)(":memory:");
-    databases.push(native);
-    const exercise = (db: typeof native) => {
+    expectNativeBehavior((db) => {
       const called: unknown[][] = [];
       db.function("callback", (first, second) => {
         called.push([first, second]);
@@ -186,17 +194,12 @@ it.each(["get", "iterate"] as const)(
         outcome = error instanceof Error ? error.message : error;
       }
       return { called, outcome };
-    };
-    const db = open();
-    expect(exercise(db)).toEqual(exercise(native));
-    expect(hasPendingSqliteNativeExecution(db)).toBe(false);
+    });
   },
 );
 
 it("preserves native cursor behavior when an invalidated iterator is stepped", () => {
-  const native = new (requireNodeSqlite().DatabaseSync)(":memory:");
-  databases.push(native);
-  const exercise = (db: typeof native) => {
+  expectNativeBehavior((db, observed) => {
     const statement = db.prepare("SELECT 1 AS value UNION ALL SELECT 2");
     const first = statement.iterate();
     first.next();
@@ -208,24 +211,21 @@ it("preserves native cursor behavior when an invalidated iterator is stepped", (
     } catch (error) {
       stale = error instanceof Error ? error.message : error;
     }
-    if (db !== native) {
+    if (observed) {
       expect(hasPendingSqliteNativeExecution(db)).toBe(true);
     }
     const next = second.next();
     first.return?.();
-    if (db !== native) {
+    if (observed) {
       expect(hasPendingSqliteNativeExecution(db)).toBe(true);
     }
     second.return?.();
     return { stale, next };
-  };
-  expect(exercise(open())).toEqual(exercise(native));
+  });
 });
 
 it("preserves a recoverable native row-conversion failure without losing the next row", () => {
-  const native = new (requireNodeSqlite().DatabaseSync)(":memory:");
-  databases.push(native);
-  const exercise = (db: typeof native) => {
+  expectNativeBehavior((db) => {
     const rows = db.prepare("SELECT 9007199254740992 AS value UNION ALL SELECT 2").iterate();
     const results: unknown[] = [];
     for (let step = 0; step < 2; step++) {
@@ -237,8 +237,5 @@ it("preserves a recoverable native row-conversion failure without losing the nex
     }
     rows.return?.();
     return results;
-  };
-  const db = open();
-  expect(exercise(db)).toEqual(exercise(native));
-  expect(hasPendingSqliteNativeExecution(db)).toBe(false);
+  });
 });
