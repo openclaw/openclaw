@@ -104,50 +104,42 @@ describe("qa suite summary helpers", () => {
     }
   });
 
-  it.each([["failure and skip", readQaSuiteFailedOrSkippedScenarioCountFromFile]] as const)(
-    "rejects zero-execution summaries in the %s gate",
-    async (_name, reader) => {
-      for (const summary of [
-        {
-          counts: { total: 0, passed: 0, failed: 0, skipped: 0 },
-          scenarios: [],
-        },
-        { counts: { failed: 0, skipped: 0 }, scenarios: [] },
-        { counts: { failed: 0, skipped: 0 }, entries: [] },
-        { counts: { failed: 0, skipped: 0 } },
-      ]) {
-        await expect(readSummary(summary, reader)).rejects.toThrow(
-          "did not include any executed scenarios",
-        );
-      }
-    },
-  );
+  it("rejects zero-execution summaries in the failure and skip gate", async () => {
+    for (const summary of [
+      {
+        counts: { total: 0, passed: 0, failed: 0, skipped: 0 },
+        scenarios: [],
+      },
+      { counts: { failed: 0, skipped: 0 }, scenarios: [] },
+      { counts: { failed: 0, skipped: 0 }, entries: [] },
+      { counts: { failed: 0, skipped: 0 } },
+    ]) {
+      await expect(
+        readSummary(summary, readQaSuiteFailedOrSkippedScenarioCountFromFile),
+      ).rejects.toThrow("did not include any executed scenarios");
+    }
+  });
 
   it.each([
     {
       name: "unaccounted total",
       summary: {
-        counts: { total: 2, passed: 1, failed: 0, skipped: 0 },
-        scenarios: [{ status: "pass" }],
+        ...passed,
+        counts: { ...passed.counts, total: 2 },
       },
     },
     {
       name: "positive counts without their claimed scenario rows",
       summary: {
-        counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
+        ...passed,
         scenarios: [],
       },
     },
+    {
+      name: "claimed pass over observed skips",
+      summary: { ...passed, scenarios: [{ name: "never executed", status: "skip" }] },
+    },
   ])("rejects complete suite accounting with $name", async ({ summary }) => {
-    await expectBoth(summary, { code: "summary_counts_invalid" });
-  });
-
-  it("rejects a claimed pass that contradicts observed skipped-only scenarios", async () => {
-    const summary = {
-      counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
-      scenarios: [{ name: "never executed", status: "skip" }],
-    };
-
     await expectBoth(summary, { code: "summary_counts_invalid" });
   });
 
@@ -236,9 +228,7 @@ describe("qa suite summary helpers", () => {
   it("rejects unsupported timeout evidence alongside complete counts", async () => {
     await expectBoth(
       { ...passed, entries: [{ result: { status: "timeout" } }] },
-      {
-        code: "summary_counts_invalid",
-      },
+      { code: "summary_counts_invalid" },
     );
   });
 
@@ -264,18 +254,17 @@ describe("qa suite summary helpers", () => {
   });
 
   it("uses the larger failure signal when counts and scenarios disagree", async () => {
-    await expect(
-      readSummary(
-        { counts: { failed: 0 }, scenarios: [{ status: "pass" }, { status: "fail" }] },
-        readQaSuiteFailedScenarioCountFromFile,
-      ),
-    ).resolves.toBe(1);
-    await expect(
-      readSummary(
-        { counts: { failed: 3 }, scenarios: [{ status: "pass" }, { status: "fail" }] },
-        readQaSuiteFailedScenarioCountFromFile,
-      ),
-    ).resolves.toBe(3);
+    for (const [failed, expected] of [
+      [0, 1],
+      [3, 3],
+    ]) {
+      await expect(
+        readSummary(
+          { counts: { failed }, scenarios: [{ status: "pass" }, { status: "fail" }] },
+          readQaSuiteFailedScenarioCountFromFile,
+        ),
+      ).resolves.toBe(expected);
+    }
   });
 
   it("rejects unsupported summary shapes", async () => {

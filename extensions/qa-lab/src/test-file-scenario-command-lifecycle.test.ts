@@ -4,7 +4,6 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
@@ -44,6 +43,8 @@ function spawnReal(...args: Parameters<NonNullable<typeof actualSpawn.value>>) {
   }
   return actualSpawn.value(...args);
 }
+
+const sourcePath = (relative: string) => fileURLToPath(new URL(relative, import.meta.url));
 
 function runScript(root: string, script: string, onOutput?: Parameters<typeof runCommand>[1]) {
   return runQaScenarioCommandLifecycle({
@@ -146,15 +147,9 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
         signal,
       );
       const startedAt = Date.now();
-      const deadline = new AbortController();
       const result = await withinTest(
-        Promise.race([
-          pending,
-          sleep(1_500, undefined, { signal: deadline.signal }).then(() => {
-            throw new Error("command did not settle after process-group cleanup");
-          }),
-        ]).finally(() => deadline.abort()),
-        signal,
+        pending,
+        AbortSignal.any([signal, AbortSignal.timeout(1_500)]),
       );
 
       expect(Date.now() - startedAt).toBeLessThan(1_500);
@@ -213,23 +208,19 @@ describe.skipIf(process.platform === "win32")("qa scenario command real POSIX li
     // Keep the real SDK helper implementations without unrelated barrel startup or SQL assets.
     await esbuild({
       alias: {
-        "openclaw/plugin-sdk/process-runtime": fileURLToPath(
-          new URL("../../../src/shared/pid-alive.ts", import.meta.url),
-        ),
-        "openclaw/plugin-sdk/text-utility-runtime": fileURLToPath(
-          new URL("../../../packages/normalization-core/src/utf16-slice.ts", import.meta.url),
+        "openclaw/plugin-sdk/process-runtime": sourcePath("../../../src/shared/pid-alive.ts"),
+        "openclaw/plugin-sdk/text-utility-runtime": sourcePath(
+          "../../../packages/normalization-core/src/utf16-slice.ts",
         ),
       },
       bundle: true,
-      entryPoints: [
-        fileURLToPath(new URL("./test-file-scenario-command-lifecycle.ts", import.meta.url)),
-      ],
+      entryPoints: [sourcePath("./test-file-scenario-command-lifecycle.ts")],
       format: "esm",
       outfile: bundlePath,
       platform: "node",
       target: "node22",
       // The plugin package tsconfig targets built SDK declarations; this fixture runs from source.
-      tsconfig: fileURLToPath(new URL("../../../tsconfig.json", import.meta.url)),
+      tsconfig: sourcePath("../../../tsconfig.json"),
     });
     const moduleUrl = pathToFileURL(bundlePath).href;
     let descendant: Socket | undefined;
@@ -317,6 +308,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
 
   beforeEach(() => {
     vi.useFakeTimers();
+    setQaScenarioCommandCleanupTimings({ killGraceMs: 20, forceSettleMs: 10 });
     spawnMock.mockReset();
     spawnSyncMock.mockReset();
     for (const method of ["once", "on"] as const) {
@@ -344,6 +336,7 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
     parentHandlers.clear();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("preserves the exact close result and removes parent handlers", async () => {
@@ -382,12 +375,10 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
 
   it("preserves the Windows taskkill timeout lifecycle", async () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    const originalSystemRoot = process.env.SystemRoot;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    process.env.SystemRoot = "C:\\Windows";
+    vi.stubEnv("SystemRoot", "C:\\Windows");
     spawnSyncMock.mockReturnValue({ status: 0 });
     createChild(12345);
-    setQaScenarioCommandCleanupTimings({ killGraceMs: 20, forceSettleMs: 10 });
     try {
       const resultPromise = runCommand(100);
       await vi.advanceTimersByTimeAsync(130);
@@ -402,17 +393,11 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
       if (platformDescriptor) {
         Object.defineProperty(process, "platform", platformDescriptor);
       }
-      if (originalSystemRoot === undefined) {
-        delete process.env.SystemRoot;
-      } else {
-        process.env.SystemRoot = originalSystemRoot;
-      }
     }
   });
 
   it("escalates timed-out commands and preserves the timeout result", async () => {
     const child = createChild();
-    setQaScenarioCommandCleanupTimings({ killGraceMs: 20, forceSettleMs: 10 });
     keepProcessGroupAliveUntilKill();
 
     const resultPromise = runCommand(100);
@@ -446,7 +431,6 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
     "re-raises a parent signal when the command is $phase without changing its outcome",
     async ({ phase, result }) => {
       const child = createChild();
-      setQaScenarioCommandCleanupTimings({ killGraceMs: 20, forceSettleMs: 10 });
       keepProcessGroupAliveUntilKill();
 
       const resultPromise = runCommand(100);

@@ -27,6 +27,9 @@ const harness = createScenarioRunnerTestHarness();
 const makeTempRepo = (prefix: string) => harness.makeTempRepo(prefix);
 type RunOptions = Parameters<typeof runQaTestFileScenarios>[0];
 type PrepareOptions = Parameters<typeof prepareDockerE2eEnvironment>[0];
+type ScriptExecution = Extract<RunOptions["scenarios"][number]["execution"], { kind: "script" }>;
+const packageInfo = { name: "openclaw", version: "2026.8.1", sha256: "b".repeat(64) };
+const registryInfo = { candidateVersion: "2026.8.1", manifestSha256: "c".repeat(64) };
 
 function candidateManifest(repoRoot?: string, registry = false, packageName = "candidate.tgz") {
   return {
@@ -35,22 +38,19 @@ function candidateManifest(repoRoot?: string, registry = false, packageName = "c
     sourceSha: "a".repeat(40),
     candidate: repoRoot
       ? {
-          package: {
-            path: path.join(repoRoot, packageName),
-            name: "openclaw",
-            version: "2026.8.1",
-            sha256: "b".repeat(64),
-          },
-          registry: registry
-            ? {
-                dir: path.join(repoRoot, "registry"),
-                candidateVersion: "2026.8.1",
-                manifestSha256: "c".repeat(64),
-              }
-            : null,
+          package: { ...packageInfo, path: path.join(repoRoot, packageName) },
+          registry: registry ? { ...registryInfo, dir: path.join(repoRoot, "registry") } : null,
         }
       : null,
   };
+}
+
+function scriptScenario(id: string, file: string, execution: Partial<ScriptExecution> = {}) {
+  const scenario = makeTestFileScenario("script", file);
+  if (scenario.execution.kind !== "script") {
+    throw new Error("expected script scenario");
+  }
+  return { ...scenario, id, execution: { ...scenario.execution, ...execution } };
 }
 
 function prepare(
@@ -121,10 +121,6 @@ it("prepares the exact Docker lane union in a sanitized bound environment", asyn
   const outputDir = path.join(repoRoot, "out");
   const packagePath = path.join(repoRoot, "openclaw.tgz");
   const registryDir = path.join(repoRoot, "registry");
-  const onboardingScenario = makeTestFileScenario("script", "scripts/e2e/qa-cli-onboarding.mjs");
-  if (onboardingScenario.execution.kind !== "script") {
-    throw new Error("expected script scenario");
-  }
   const runCommand = vi.fn(async (command: QaScenarioCommandExecution) => {
     expect(command.env).toMatchObject({
       KEEP_ME: "yes",
@@ -153,10 +149,9 @@ it("prepares the exact Docker lane union in a sanitized bound environment", asyn
       makeDockerE2eScenario("one", "gateway-network"),
       makeDockerE2eScenario("duplicate", "gateway-network"),
       makeDockerE2eScenario("two", "openai-chat-tools"),
-      {
-        ...onboardingScenario,
-        execution: { ...onboardingScenario.execution, dockerLane: "onboard" },
-      },
+      scriptScenario("scenario-script", "scripts/e2e/qa-cli-onboarding.mjs", {
+        dockerLane: "onboard",
+      }),
     ],
   });
 
@@ -187,18 +182,22 @@ it("retains immutable prepared Docker receipts without claiming installed or run
     });
   const env = await prepareCandidate();
   const first = captured[0]!;
+  const runPrepared = (options: Partial<RunOptions>) =>
+    run(repoRoot, {
+      env,
+      envMode: "replace",
+      preparedDockerEvidence: first,
+      scenarios: [scenario],
+      failFast: true,
+      ...options,
+    });
   const firstPath = resolveQaArtifactPath(repoRoot, repoRoot, first.receipt.artifact.path);
   const original = await fs.readFile(firstPath);
   await prepareCandidate();
   expect(captured[1]?.receipt.artifact.path).not.toBe(first.receipt.artifact.path);
   expect(await fs.readFile(firstPath)).toEqual(original);
   expect(createHash("sha256").update(original).digest("hex")).toBe(first.receipt.artifact.sha256);
-  const result = await run(repoRoot, {
-    env,
-    envMode: "replace",
-    preparedDockerEvidence: first,
-    scenarios: [scenario],
-    failFast: true,
+  const result = await runPrepared({
     runCommand: async () => ({ exitCode: 0, stdout: "completed", stderr: "" }),
   });
   expect(result.results[0]).toMatchObject({ scenario: { id: "one" }, status: "pass" });
@@ -222,36 +221,25 @@ it("retains immutable prepared Docker receipts without claiming installed or run
     accountRef: null,
     proofClass: null,
   });
-  const launch = {
-    ...first.receipt.identity,
-    source: { ref: "a".repeat(40), integrity: null },
-    package: null,
-  };
   for (const mismatch of ["package", "source"] as const) {
     const runCommand = vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" }));
     const owner = createQaEvidenceInvocation({
       scenarios: [scenario],
       channel: null,
       launch: {
-        ...launch,
-        source: {
-          ...launch.source,
-          ref: mismatch === "source" ? "c".repeat(40) : launch.source.ref,
-        },
+        ...first.receipt.identity,
+        source: { ref: (mismatch === "source" ? "c" : "a").repeat(40), integrity: null },
+        package: null,
       },
     });
     await expect(
-      run(repoRoot, {
+      runPrepared({
         outputDir: path.join(repoRoot, mismatch),
         env: {
           ...env,
           ...(mismatch === "package" ? { OPENCLAW_CURRENT_PACKAGE_SHA256: "d".repeat(64) } : {}),
         },
-        envMode: "replace",
-        preparedDockerEvidence: first,
         evidenceAnchors: owner.anchors,
-        scenarios: [scenario],
-        failFast: true,
         runCommand,
       }),
     ).rejects.toThrow(
@@ -357,28 +345,23 @@ describe("qa test file scenario runner", () => {
   it("prioritizes serial native work while preserving catalog-ordered mixed evidence", async () => {
     const repoRoot = await makeTempRepo("qa-script-docker-priority-");
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "native-priority");
-    const makeScriptScenario = (id: string, timeoutMs: number) => {
-      const scenario = makeTestFileScenario("script", `scripts/${id}.ts`);
-      if (scenario.execution.kind !== "script") {
-        throw new Error("expected script scenario");
-      }
-      return { ...scenario, id, execution: { ...scenario.execution, timeoutMs } };
-    };
-    const dockerScenario = makeDockerE2eScenario("long-docker", "gateway-network");
-    if (dockerScenario.execution.kind !== "script") {
-      throw new Error("expected Docker script scenario");
-    }
-    const scenarios = [
-      makeScriptScenario("short-script", 1_000),
-      { ...dockerScenario, execution: { ...dockerScenario.execution, timeoutMs: 3_000 } },
-      makeScriptScenario("long-script-a", 3_000),
-      makeScriptScenario("long-script-b", 3_000),
-      {
-        ...dockerScenario,
-        id: "short-docker",
-        execution: { ...dockerScenario.execution, timeoutMs: 1_000 },
-      },
+    const schedule: [string, number][] = [
+      ["short-script", 1_000],
+      ["long-docker", 3_000],
+      ["long-script-a", 3_000],
+      ["long-script-b", 3_000],
+      ["short-docker", 1_000],
     ];
+    const scenarios = schedule.map(([id, timeoutMs]) => {
+      return scriptScenario(
+        id,
+        id.endsWith("docker") ? "test/e2e/qa-lab/runtime/docker-e2e-lane.ts" : `scripts/${id}.ts`,
+        {
+          timeoutMs,
+          ...(id.endsWith("docker") ? { args: ["--lane", "gateway-network"] } : {}),
+        },
+      );
+    });
     const executionOrder: string[] = [];
     const output: string[] = [];
     const progress: string[] = [];

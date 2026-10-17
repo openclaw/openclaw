@@ -11,6 +11,8 @@ import {
 function createMessages(state = createQaBusState()) {
   return {
     state,
+    cursor: () =>
+      state.getSnapshot().messages.filter((message) => message.direction === "outbound").length,
     outbound: (text: string, extra: Partial<Parameters<typeof state.addOutboundMessage>[0]> = {}) =>
       state.addOutboundMessage({
         to: "dm:qa-operator",
@@ -30,38 +32,34 @@ function createMessages(state = createQaBusState()) {
 }
 
 describe("qa suite transport helpers", () => {
-  it("fails success-only waitForOutboundMessage calls when internal coordination text leaks", async () => {
+  it.each([
+    [
+      "internal coordination text",
+      "QA_LEAK_OK",
+      "checking thread context; then post a tight progress reply here.\nQA_LEAK_OK",
+      "checking thread context",
+    ],
+    [
+      "failed status with equals syntax",
+      "QA-RESTART-OK",
+      "status=FAILED\nerror=Could not parse services",
+      "Could not parse services",
+    ],
+  ])("fails success-only waits on %s", async (_name, marker, text, error) => {
     const { state, outbound } = createMessages();
     const pending = waitForOutboundMessage(
       state,
-      (candidate) => candidate.text.includes("QA_LEAK_OK"),
+      (candidate) => candidate.text.includes(marker),
       5_000,
     );
-
-    outbound("checking thread context; then post a tight progress reply here.\nQA_LEAK_OK");
-
-    await expect(pending).rejects.toThrow("checking thread context");
-  });
-
-  it("fails success-only waits when a model reports a failed status with equals syntax", async () => {
-    const { state, outbound } = createMessages();
-    const pending = waitForOutboundMessage(
-      state,
-      (candidate) => candidate.text.includes("QA-RESTART-OK"),
-      5_000,
-    );
-
-    outbound("status=FAILED\nerror=Could not parse services");
-
-    await expect(pending).rejects.toThrow("Could not parse services");
+    outbound(text);
+    await expect(pending).rejects.toThrow(error);
   });
 
   it("checks no-outbound waits from the supplied outbound cursor", async () => {
-    const { state, outbound } = createMessages();
+    const { state, outbound, cursor } = createMessages();
     outbound("previous scenario reply");
-    const sinceIndex = state
-      .getSnapshot()
-      .messages.filter((message) => message.direction === "outbound").length;
+    const sinceIndex = cursor();
 
     await expect(waitForNoOutbound(state, 1, { sinceIndex })).resolves.toBeUndefined();
 
@@ -120,10 +118,7 @@ describe("qa suite transport helpers", () => {
       10,
     );
 
-    outbound(
-      '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
-      { isError: true },
-    );
+    outbound('⚠️ No API key found for provider "openai".', { isError: true });
 
     await expect(pending).rejects.toThrow('No API key found for provider "openai".');
   });
@@ -151,11 +146,9 @@ describe("qa suite transport helpers", () => {
   });
 
   it("applies account filtering after the global outbound cursor", async () => {
-    const { state, outbound } = createMessages();
+    const { state, outbound, cursor } = createMessages();
     outbound("previous account reply", { accountId: "other" });
-    const sinceIndex = state
-      .getSnapshot()
-      .messages.filter((message) => message.direction === "outbound").length;
+    const sinceIndex = cursor();
     const expected = outbound("done", { accountId: "default" });
 
     await expect(

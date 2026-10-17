@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
-import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
+import { readQaScenarioPack } from "./scenario-catalog.js";
 import {
   runQaTestFileScenarios,
   type QaScenarioCommandExecution,
@@ -178,50 +178,40 @@ describe("qa test file scenario runner", () => {
     );
   });
 
-  it("rejects a passing Playwright report for an unrelated test file", async () => {
-    const result = await runPlaywright(
-      {},
-      {
-        passed: 1,
-        testFilePath: "extensions/qa-lab/src/unrelated.test.ts",
-      },
-      "unrelated test passed\n",
-    );
-    expectFailed(result, expect.stringContaining("requested test file"));
-  });
-
-  it("rejects a passing Playwright report when the requested test file does not exist", async () => {
-    const result = await runPlaywright(
-      {},
-      { createRequestedTestFile: false, passed: 1 },
-      "missing test reportedly passed\n",
-    );
-    expectFailed(result, expect.stringContaining("existing requested test file"));
-  });
-
-  it("rejects a passing Playwright report that misses the requested test name", async () => {
-    const result = await runPlaywright(
-      {
-        scenarios: [
-          makeTestFileScenario("playwright", playwrightPath, "required visual assertion"),
-        ],
-      },
-      { passed: 1, testName: "unrelated visual assertion" },
-      "unrelated assertion passed\n",
-    );
-    expectFailed(result, expect.stringContaining("requested test name"));
-  });
-
-  it("records invalid Playwright test-name patterns as failed scenario evidence", async () => {
-    const result = await runPlaywright(
-      {
-        scenarios: [makeTestFileScenario("playwright", playwrightPath, "[")],
-      },
-      { passed: 1, testName: "executed visual assertion" },
-      "visual assertion passed\n",
-    );
-    expectFailed(result, expect.stringContaining("invalid requested test name pattern"));
-  });
+  it.each<{ failure: string; report: ReportOptions; pattern?: string; stdout: string }>([
+    {
+      failure: "requested test file",
+      report: { passed: 1, testFilePath: "extensions/qa-lab/src/unrelated.test.ts" },
+      stdout: "unrelated test passed\n",
+    },
+    {
+      failure: "existing requested test file",
+      report: { passed: 1, createRequestedTestFile: false },
+      stdout: "missing test reportedly passed\n",
+    },
+    {
+      failure: "requested test name",
+      report: { passed: 1, testName: "unrelated visual assertion" },
+      pattern: "required visual assertion",
+      stdout: "unrelated assertion passed\n",
+    },
+    {
+      failure: "invalid requested test name pattern",
+      report: { passed: 1, testName: "executed visual assertion" },
+      pattern: "[",
+      stdout: "visual assertion passed\n",
+    },
+  ])(
+    "records invalid $failure as failed Playwright evidence",
+    async ({ failure, report, pattern, stdout }) => {
+      const result = await runPlaywright(
+        { scenarios: [makeTestFileScenario("playwright", playwrightPath, pattern)] },
+        report,
+        stdout,
+      );
+      expectFailed(result, expect.stringContaining(failure));
+    },
+  );
 
   it("does not reuse a prior passing Playwright report when the next child writes none", async () => {
     const repoRoot = await makeTempRepo("qa-playwright-stale-vitest-report-");
@@ -293,18 +283,9 @@ describe("QA native Vitest scenario routing", () => {
     const repoRoot = await fs.realpath(await makeTempRepo("openclaw-qa-vitest-e2e-routing-"));
     const commands: QaScenarioCommandExecution[] = [];
     const testPath = "extensions/ollama/src/node-inference.paired-node.e2e.test.ts";
-    const scenario: QaSeedScenarioWithSource = {
+    const scenario = {
+      ...makeTestFileScenario("vitest", testPath),
       id: "ollama-paired-node-inference",
-      title: "Ollama paired-node inference",
-      surface: "models",
-      category: "agent-runtime.local-and-self-hosted-providers",
-      coverage: { primary: [], secondary: ["gateway.remote-host-commands"] },
-      objective: "Run local inference through an authenticated paired Gateway node.",
-      successCriteria: ["The real Gateway routes inference to its paired node."],
-      docsRefs: ["docs/providers/ollama.md"],
-      codeRefs: [testPath],
-      sourcePath: "qa/scenarios/models/ollama-paired-node-inference.yaml",
-      execution: { kind: "vitest", path: testPath },
     };
 
     const result = await runQaTestFileScenarios({

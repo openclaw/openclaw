@@ -2,7 +2,7 @@ import { syncBuiltinESMExports } from "node:module";
 import timersPromises from "node:timers/promises";
 import { promisify } from "node:util";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QaSuiteInfraError } from "./errors.js";
 import {
   applyConfig,
@@ -17,6 +17,10 @@ import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const writeGatewayRestartIntentSyncMock = vi.hoisted(() => vi.fn());
+const baseUrl = "http://127.0.0.1:43123";
+let env: QaSuiteRuntimeEnv;
+let gatewayCall: ReturnType<typeof mockGateway>;
+let waitReady: ReturnType<typeof vi.fn<(params: unknown) => Promise<void>>>;
 
 vi.mock("openclaw/plugin-sdk/qa-runtime", () => ({
   writeGatewayRestartIntentSync: writeGatewayRestartIntentSyncMock,
@@ -25,37 +29,23 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+beforeEach(() => {
+  gatewayCall = mockGateway();
+  waitReady = vi.fn(async () => {});
+  env = {
+    gateway: { baseUrl, call: gatewayCall },
+    transport: { waitReady },
+    providerMode: "mock-openai",
+    primaryModel: "openai/gpt-5.6-luna",
+    alternateModel: "openai/gpt-5.6-luna-mini",
+  } as unknown as QaSuiteRuntimeEnv;
+});
+
 afterEach(() => {
   fetchWithSsrFGuardMock.mockReset();
   writeGatewayRestartIntentSyncMock.mockReset();
   vi.useRealTimers();
 });
-
-function createRestartSettleEnv(waitReady: (params: unknown) => Promise<void>) {
-  return {
-    gateway: { baseUrl: "http://127.0.0.1:43123" },
-    transport: { waitReady },
-  } as unknown as Pick<QaSuiteRuntimeEnv, "gateway" | "transport">;
-}
-
-function createConfigMutationEnv(
-  gatewayCall: (method: string, params: unknown, options: unknown) => Promise<unknown>,
-) {
-  const waitReady = vi.fn(async (_params: { gateway: unknown; timeoutMs: number }) => {});
-  const env = {
-    gateway: {
-      baseUrl: "http://127.0.0.1:43123",
-      call: gatewayCall,
-    },
-    transport: {
-      waitReady,
-    },
-    providerMode: "mock-openai",
-    primaryModel: "openai/gpt-5.6-luna",
-    alternateModel: "openai/gpt-5.6-luna-mini",
-  } as unknown as QaSuiteRuntimeEnv;
-  return { env, waitReady };
-}
 
 function mockGateway(config: Record<string, unknown> = {}) {
   return vi.fn(async (method: string) => {
@@ -72,8 +62,20 @@ function mockHealthyResponse() {
   return release;
 }
 
-function streamResponse(cancel: () => void) {
-  return new Response(new ReadableStream<Uint8Array>({ cancel }));
+function guardedStream(events: string[], name: string, release: () => Promise<void>) {
+  return {
+    response: new Response(
+      new ReadableStream<Uint8Array>({
+        cancel() {
+          events.push(`${name}:cancel`);
+        },
+      }),
+    ),
+    release: async () => {
+      events.push(`${name}:release`);
+      await release();
+    },
+  };
 }
 
 describe("qa suite gateway helpers", () => {
@@ -81,28 +83,20 @@ describe("qa suite gateway helpers", () => {
     const readinessError = new Error(
       'telegram account "sut" did not become ready; last check error: proxy returned 502',
     );
-    const failedEnv = createRestartSettleEnv(async () => {
-      throw readinessError;
-    });
-
-    const failure = await waitForTransportReady(failedEnv, 1_234).catch((error: unknown) => error);
+    waitReady.mockRejectedValueOnce(readinessError);
+    const failure = await waitForTransportReady(env, 1_234).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(QaSuiteInfraError);
     expect(failure).toMatchObject({
       name: "QaSuiteInfraError",
       code: "transport_ready_timeout",
       cause: readinessError,
+      message: expect.stringContaining(readinessError.message),
     });
-    expect(failure).toMatchObject({ message: expect.stringContaining(readinessError.message) });
 
     const typedError = new QaSuiteInfraError("gateway_ready_timeout", "gateway stayed down");
-    await expect(
-      waitForTransportReady(
-        createRestartSettleEnv(async () => {
-          throw typedError;
-        }),
-      ),
-    ).rejects.toBe(typedError);
+    waitReady.mockRejectedValueOnce(typedError);
+    await expect(waitForTransportReady(env)).rejects.toBe(typedError);
   });
 
   it("forces an authenticated restart even when the config patch was already applied", async () => {
@@ -110,8 +104,9 @@ describe("qa suite gateway helpers", () => {
     const release = mockHealthyResponse();
     writeGatewayRestartIntentSyncMock.mockReturnValue(true);
     const patch = { tools: { codeMode: { enabled: false } } };
-    const gatewayCall = mockGateway({ gateway: { auth: { token: "keep-me" } }, ...patch });
-    const { env, waitReady } = createConfigMutationEnv(gatewayCall);
+    gatewayCall.mockImplementation(
+      mockGateway({ gateway: { auth: { token: "keep-me" } }, ...patch }),
+    );
     const runtimeEnv = { OPENCLAW_STATE_DIR: "/isolated/qa-gateway" };
     env.gateway.runtimeEnv = runtimeEnv;
     const restartAfterStateMutation = vi.fn();
@@ -169,8 +164,6 @@ describe("qa suite gateway helpers", () => {
 
   it("does not signal a restart when the immediate drain intent cannot be persisted", async () => {
     writeGatewayRestartIntentSyncMock.mockReturnValue(false);
-    const gatewayCall = mockGateway();
-    const { env, waitReady } = createConfigMutationEnv(gatewayCall);
 
     await expect(
       restartGatewayWithConfigPatch({ env, patch: { tools: { codeMode: { enabled: true } } } }),
@@ -184,10 +177,15 @@ describe("qa suite gateway helpers", () => {
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
-  it("bounds stalled suite gateway JSON response bodies", async () => {
+  it.each(["JSON body", "gateway health"] as const)("bounds a stalled %s request", async (kind) => {
     vi.useFakeTimers();
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockImplementation(async ({ timeoutMs }: { timeoutMs: number }) => {
+      if (kind === "gateway health") {
+        return await new Promise((_, reject) => {
+          setTimeout(() => reject(new Error("request timed out")), timeoutMs);
+        });
+      }
       let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
       const response = new Response(
         new ReadableStream<Uint8Array>({
@@ -202,15 +200,20 @@ describe("qa suite gateway helpers", () => {
       return { response, release };
     });
 
-    const request = fetchJson("http://127.0.0.1:43123/config", 1_000);
-    const rejection = expect(request).rejects.toThrow("request timed out");
+    const request =
+      kind === "JSON body"
+        ? fetchJson(`${baseUrl}/config`, 1_000)
+        : waitForGatewayHealthy(env, 1_000);
+    const rejection = expect(request).rejects.toThrow(
+      kind === "JSON body" ? "request timed out" : "timed out after 1000ms",
+    );
 
     await vi.advanceTimersByTimeAsync(1_000);
     await rejection;
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({ timeoutMs: 1_000 }),
     );
-    expect(release).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(kind === "JSON body" ? 1 : 0);
   });
 
   it("cancels failed suite gateway JSON response bodies before releasing their guard", async () => {
@@ -250,29 +253,14 @@ describe("qa suite gateway helpers", () => {
       const events: string[] = [];
       const released = createDeferred<void>();
       fetchWithSsrFGuardMock
-        .mockResolvedValueOnce({
-          response: streamResponse(() => {
-            events.push("first:cancel");
-          }),
-          release: async () => {
-            events.push("first:release");
+        .mockResolvedValueOnce(
+          guardedStream(events, "first", async () => {
             throw new Error("release failed");
-          },
-        })
-        .mockResolvedValueOnce({
-          response: streamResponse(() => {
-            events.push("second:cancel");
           }),
-          release: async () => {
-            events.push("second:release");
-            await released.promise;
-          },
-        });
+        )
+        .mockResolvedValueOnce(guardedStream(events, "second", () => released.promise));
       let ready = false;
-      const readiness = waitForGatewayHealthy(
-        { gateway: { baseUrl: "http://127.0.0.1:43123" } } as never,
-        1_000,
-      ).then(() => {
+      const readiness = waitForGatewayHealthy(env, 1_000).then(() => {
         ready = true;
       });
 
@@ -309,29 +297,7 @@ describe("qa suite gateway helpers", () => {
     }
   });
 
-  it("bounds a hung gateway health request by the remaining readiness deadline", async () => {
-    vi.useFakeTimers();
-    fetchWithSsrFGuardMock.mockImplementation(
-      async ({ timeoutMs }: { timeoutMs: number }) =>
-        await new Promise((_, reject) => {
-          setTimeout(() => reject(new Error("request timed out")), timeoutMs);
-        }),
-    );
-
-    const readiness = waitForGatewayHealthy(
-      { gateway: { baseUrl: "http://127.0.0.1:43123" } } as never,
-      1_000,
-    );
-    const rejection = expect(readiness).rejects.toThrow("timed out after 1000ms");
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    await rejection;
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 1_000 }),
-    );
-  });
-
-  it("skips config mutations that would not change the snapshot", async () => {
+  it.each(["unchanged snapshot", "prototype keys"])("skips cleanup writes for %s", async (kind) => {
     const config = {
       tools: { profile: "coding" },
       agents: {
@@ -339,46 +305,38 @@ describe("qa suite gateway helpers", () => {
       },
       meta: { updatedAt: "2026-04-25T10:00:00.000Z" },
     };
-    const gatewayCall = vi.fn(async (method: string) => {
+    gatewayCall.mockImplementation(async (method: string) => {
       if (method === "config.get") {
         return { hash: "hash-1", config };
       }
       throw new Error(`unexpected ${method}`);
     });
-    const { env } = createConfigMutationEnv(gatewayCall);
 
-    await expect(
-      patchConfig({ env, patch: { tools: { deny: null } }, restartDelayMs: 0 }),
-    ).resolves.toEqual({ ok: true, noop: true });
-    await expect(
-      applyConfig({
-        env,
-        nextConfig: { tools: config.tools, agents: config.agents },
-        restartDelayMs: 0,
-      }),
-    ).resolves.toEqual({ ok: true, noop: true });
-    expect(gatewayCall).toHaveBeenCalledTimes(2);
-  });
-
-  it("ignores prototype keys in cleanup config patches", async () => {
-    const config = { tools: { profile: "coding" } };
-    const gatewayCall = vi.fn(async () => ({ hash: "hash-1", config }));
-    const { env } = createConfigMutationEnv(gatewayCall);
-    const patch = JSON.parse(
-      '{"tools":{"profile":"coding"},"__proto__":{"polluted":true},"constructor":{"polluted":true},"prototype":{"polluted":true}}',
-    ) as Record<string, unknown>;
-
+    const patch =
+      kind === "unchanged snapshot"
+        ? { tools: { deny: null } }
+        : (JSON.parse(
+            '{"tools":{"profile":"coding"},"__proto__":{"polluted":true},"constructor":{"polluted":true},"prototype":{"polluted":true}}',
+          ) as Record<string, unknown>);
     await expect(patchConfig({ env, patch, restartDelayMs: 0 })).resolves.toEqual({
       ok: true,
       noop: true,
     });
-    expect(gatewayCall).toHaveBeenCalledOnce();
+    if (kind === "unchanged snapshot") {
+      await expect(
+        applyConfig({
+          env,
+          nextConfig: { tools: config.tools, agents: config.agents },
+          restartDelayMs: 0,
+        }),
+      ).resolves.toEqual({ ok: true, noop: true });
+    }
+    expect(gatewayCall).toHaveBeenCalledTimes(kind === "unchanged snapshot" ? 2 : 1);
   });
 
   it("does not wait for a deferred restart beyond the mutation timeout", async () => {
     mockHealthyResponse();
-    const gatewayCall = mockGateway({ tools: {} });
-    const { env, waitReady } = createConfigMutationEnv(gatewayCall);
+    gatewayCall.mockImplementation(mockGateway({ tools: {} }));
 
     await patchConfig({
       env,
@@ -396,9 +354,7 @@ describe("qa suite gateway helpers", () => {
     vi.useFakeTimers();
     mockHealthyResponse();
     fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("restart boundary"));
-    const waitReady = vi.fn(async () => {});
-
-    const settling = waitForConfigRestartSettle(createRestartSettleEnv(waitReady), 500, 5_000);
+    const settling = waitForConfigRestartSettle(env, 500, 5_000);
 
     await vi.advanceTimersByTimeAsync(1_250);
     await settling;
