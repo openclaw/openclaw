@@ -134,6 +134,18 @@ describe("skills workshop cli", () => {
     expect(mocks.callGateway.mock.calls[0]?.[0].params).toStrictEqual(params);
   });
 
+  it("rejects an explicitly blank --version instead of restoring the newest version", async () => {
+    mocks.callGateway.mockResolvedValue({ change });
+
+    await expect(
+      runCli(["skills", "workshop", "restore", "release-notes", "--version", ""]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.restoreWorkshopSkill).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.error.mock.calls[0]?.[0]).toContain("--version must not be blank");
+  });
+
   it("renders learned skills, archived skills, and changes as text", async () => {
     mocks.callGateway.mockResolvedValueOnce({
       agentId: "main",

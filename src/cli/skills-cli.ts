@@ -754,6 +754,9 @@ export function registerSkillsCli(program: Command) {
             command,
             (resolved) => {
               const value = archive ? opts.reason : opts.version;
+              if (!archive && value === "") {
+                throw new Error("--version must not be blank");
+              }
               return callSkillsWorkshop<SkillsWorkshopChangeResult>(
                 resolved,
                 method,
