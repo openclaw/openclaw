@@ -26,11 +26,12 @@ import { requestChatAbort } from "./chat-abort-request.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { createChatErrorState } from "./chat-error-state.ts";
+import { projectChatFields } from "./chat-field-projection.ts";
 import {
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
   CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
 } from "./chat-history-events.ts";
-import { setChatError } from "./chat-history-state.ts";
+import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { projectChatOutboxQueue } from "./chat-outbox-projection.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -671,5 +672,6 @@ export function createPageState(
     invalidateImageLightbox(state);
     renderLifecycle.invalidate();
   };
+  projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
   return projectChatRun(projectChatOutboxQueue(state));
 }

@@ -64,7 +64,7 @@ type ChatHistoryPaneRequests = {
     }
   >;
   historyLoad: ChatHistoryLoadState;
-  acceptedHistory?: Extract<ChatHistoryLoadState, { phase: "committed" }>;
+  acceptedHistory: Extract<ChatHistoryLoadState, { phase: "committed" }> | undefined;
   initialSnapshotHydration?: InitialChatSnapshotHydration;
 };
 
@@ -90,6 +90,7 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
       subscriptionGeneration: 0,
       syncRetries: new Map(),
       historyLoad: { phase: "idle" },
+      acceptedHistory: undefined,
     };
     chatHistoryPaneRequests.set(owner, requests);
   }
@@ -225,7 +226,6 @@ export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState 
       startup: load.startup,
     };
     state.chatLoading = true;
-    state.requestUpdate?.();
   }
   return requests.historyLoad;
 }
@@ -344,7 +344,7 @@ export function resetChatHistoryProjection(state: ChatState, agentId?: string): 
   // A destructive reset keeps the session key, so invalidate both the old
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
-  delete requests.acceptedHistory;
+  requests.acceptedHistory = undefined;
   setChatHistoryLoad(state, { phase: "idle" });
   state.chatLoading = false;
   const scope = readChatSessionProjectionScope(state, { agentId });
