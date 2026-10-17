@@ -23,9 +23,9 @@ afterAll(() => {
 
 it("renders multiline flowchart labels and both directions as a passive SVG image", async () => {
   const source = `flowchart LR
-G["Gateway:<br/>lifecycle"]
-W[Work]
-S[State]
+G["Gateway: channels, admission,<br/>approvals and lifecycle"]
+W["Bounded warm executors:<br/>session loops and runtime processing"]
+S["Canonical state owner:<br/>ordered, fenced commits"]
 G <-->|Commands and compact events| W
 W --> S
 G --> S`;

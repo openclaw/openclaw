@@ -275,7 +275,18 @@ find /tmp -type f
   ],
   [
     "preserves presentation when text scrubs empty",
-    { text: "commentary: hidden", presentation: { title: "Action required", blocks: [] } },
+    {
+      text: "commentary: hidden",
+      presentation: {
+        title: "Action required",
+        blocks: [
+          {
+            type: "buttons" as const,
+            buttons: [{ label: "Approve", value: "approve", style: "primary" as const }],
+          },
+        ],
+      },
+    },
     undefined,
   ],
   ["preserves code-fenced examples of tool-call labels", { text: codeExample }, codeExample],
