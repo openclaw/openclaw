@@ -92,7 +92,7 @@ function startBash(script: string, env: Record<string, string | undefined> = {})
 }
 
 function killFixturePid(pid: number) {
-  if (pid > 1) {
+  if (Math.abs(pid) > 1) {
     try {
       process.kill(pid, "SIGKILL");
     } catch {}
@@ -110,9 +110,7 @@ function killFixturePids(...markers: string[]) {
 async function closeBashFixture(fixture: ReturnType<typeof startBash>) {
   const { child } = fixture;
   if (child.exitCode === null && child.signalCode === null && child.pid) {
-    try {
-      process.kill(-child.pid, "SIGKILL");
-    } catch {}
+    killFixturePid(-child.pid);
   }
   await fixture.closed;
 }
@@ -151,20 +149,6 @@ async function fixtureReadyBeforeSettlement(marker: string, operation: PromiseLi
   ]);
 }
 
-function runHelper(payload: string) {
-  return runSourcedHelper(
-    [
-      `openclaw_e2e_eval_test_state_from_b64 ${shellQuote(payload)}`,
-      'printf "value=%s" "${OPENCLAW_E2E_INSTANCE_TEST:-unset}"',
-    ].join("; "),
-    null,
-  );
-}
-
-function base64(script: string): string {
-  return execFileSync("base64", { input: script, encoding: "utf8" }).replace(/\s+/gu, "");
-}
-
 function shellTestEnv(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     HOME: process.env.HOME ?? os.tmpdir(),
@@ -178,15 +162,6 @@ function shellTestEnv(overrides: Record<string, string | undefined>): NodeJS.Pro
     }
   }
   return env;
-}
-
-function withTempDir<T>(prefix: string, run: (tempDir: string) => T): T {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  try {
-    return run(tempDir);
-  } finally {
-    fs.rmSync(tempDir, { force: true, recursive: true });
-  }
 }
 
 function runBash(
@@ -246,18 +221,6 @@ function expectShellSuccess(result: ReturnType<typeof spawnSync>) {
   );
 }
 
-function writePackageFixture(packagePath: string): void {
-  withTempDir("openclaw-e2e-package-", (root) => {
-    const packageDir = path.join(root, "package");
-    fs.mkdirSync(packageDir);
-    fs.writeFileSync(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({ name: "openclaw-e2e-fixture", version: "0.0.0" }),
-    );
-    execFileSync("tar", ["-czf", packagePath, "-C", root, "package"]);
-  });
-}
-
 function createPackageInstallFixture(
   tempDir: string,
   {
@@ -274,7 +237,13 @@ function createPackageInstallFixture(
     redactorPath: path.join(tempDir, "redactor.mjs"),
     timeoutArgsPath: path.join(tempDir, "timeout-args.txt"),
   };
-  writePackageFixture(fixture.packagePath);
+  const packageRoot = tempDirs.make("openclaw-e2e-package-");
+  fs.mkdirSync(path.join(packageRoot, "package"));
+  fs.writeFileSync(
+    path.join(packageRoot, "package/package.json"),
+    JSON.stringify({ name: "openclaw-e2e-fixture", version: "0.0.0" }),
+  );
+  execFileSync("tar", ["-czf", fixture.packagePath, "-C", packageRoot, "package"]);
   fs.writeFileSync(
     fixture.redactorPath,
     "export const redactSensitiveText = (value) => value;\n",
@@ -327,24 +296,8 @@ function writeFakeTimeout(filePath: string, supportsKillAfter: boolean): void {
     `  exit ${supportsKillAfter ? 0 : 1}`,
     "fi",
     'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
-    'while [ "$#" -gt 0 ]; do',
-    '  case "$1" in',
-    "    --)",
-    "      shift",
-    "      break",
-    "      ;;",
-    "    -k|--kill-after)",
-    "      shift 2",
-    "      ;;",
-    "    --kill-after=*|-*)",
-    "      shift",
-    "      ;;",
-    "    *)",
-    "      shift",
-    "      break",
-    "      ;;",
-    "  esac",
-    "done",
+    'case "$1" in --kill-after=*) shift ;; esac',
+    "shift",
     'exec "$@"',
   ]);
 }
@@ -370,21 +323,60 @@ function expectNpmInstallObserved(argsPath: string, expectedArgs: string, prefix
   ).toBe(true);
 }
 
+function timedCommandFixture(command: string, timeout: string, output: string[] = []) {
+  const root = tempDirs.make("openclaw-e2e-command-");
+  const executable = path.join(root, command);
+  const timeoutArgs = path.join(root, "timeout-args.txt");
+  const commandArgs = path.join(root, "command-args.txt");
+  writeTimeoutDispatcher(
+    root,
+    command === "openclaw" ? executable : command,
+    "OPENCLAW_TEST_COMMAND_BIN",
+  );
+  writeBashExecutable(executable, [
+    ...(command === "script" ? ['if [ "${1:-}" = "--version" ]; then exit 0; fi'] : []),
+    'printf "%s\\n" "$*" >"$OPENCLAW_TEST_COMMAND_ARGS"',
+    ...output,
+  ]);
+  return {
+    root,
+    executable,
+    run(lines: string[], env: Record<string, string> = {}) {
+      return runBashWithHelper(
+        lines,
+        {
+          PATH: `${root}:${hostPath}`,
+          OPENCLAW_E2E_COMMAND_TIMEOUT: timeout,
+          OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgs,
+          OPENCLAW_TEST_COMMAND_ARGS: commandArgs,
+          OPENCLAW_TEST_COMMAND_BIN: executable,
+          ...env,
+        },
+        undefined,
+        "; ",
+      );
+    },
+    expectArgs(timed: string, direct: string) {
+      expect({
+        timed: fs.readFileSync(timeoutArgs, "utf8").trim(),
+        direct: fs.readFileSync(commandArgs, "utf8").trim(),
+      }).toEqual({ timed, direct });
+    },
+  };
+}
+
 describe("scripts/lib/openclaw-e2e-instance.sh", () => {
-  it("fails when the test-state payload is not valid base64", () => {
-    const result = runHelper("@@@");
-
+  it.each([
+    ["invalid base64", "@@@", "Invalid OpenClaw test-state base64 payload"],
+    ["empty script", Buffer.from("\n").toString("base64"), "decoded to an empty script"],
+  ])("rejects test-state payload: %s", (_name, payload, error) => {
+    const result = runSourcedHelper(
+      `openclaw_e2e_eval_test_state_from_b64 ${shellQuote(payload)}; printf "value=%s" "\${OPENCLAW_E2E_INSTANCE_TEST:-unset}"`,
+      null,
+    );
     expect(result.status).not.toBe(0);
     expect(result.stdout).not.toContain("value=");
-    expect(result.stderr).toContain("Invalid OpenClaw test-state base64 payload");
-  });
-
-  it("fails when the test-state payload decodes to an empty script", () => {
-    const result = runHelper(base64("\n"));
-
-    expect(result.status).not.toBe(0);
-    expect(result.stdout).not.toContain("value=");
-    expect(result.stderr).toContain("decoded to an empty script");
+    expect(result.stderr).toContain(error);
   });
 
   it("reads positive integer env values without treating decimal input as durations", () => {
@@ -463,71 +455,36 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     );
   });
 
-  it("probes /readyz on the explicit gateway port", () => {
+  it.each([
+    ["explicit", "[gateway] ready\n", "23456"],
+    ["ready-log", "[gateway] ready ws://127.0.0.1:23456\nunrelated localhost:9999\n", ""],
+  ])("probes /readyz on the %s port", (_source, log, port) => {
     const tempDir = tempDirs.make("openclaw-e2e-readyz-port-");
     const logPath = path.join(tempDir, "gateway.log");
     const probePath = path.join(tempDir, "probe-url.txt");
     const result = runGatewayReadyFixture([
-      `openclaw_e2e_probe_http() { printf "%s\\n" "$1" >${shellQuote(probePath)}; return 0; }`,
-      `printf '[gateway] ready\\n' >${shellQuote(logPath)}`,
-      `openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2 23456`,
+      `openclaw_e2e_probe_http() { printf '%s' "$1" >${shellQuote(probePath)}; [[ "$1" = "http://127.0.0.1:23456/readyz" ]]; }`,
+      `printf '%s' ${shellQuote(log)} >${shellQuote(logPath)}`,
+      `openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2 ${shellQuote(port)}`,
     ]);
-
     expectShellSuccess(result);
-    expect(fs.readFileSync(probePath, "utf8").trim()).toBe("http://127.0.0.1:23456/readyz");
+    expect(result.error).toBeUndefined();
+    expect(fs.readFileSync(probePath, "utf8")).toBe("http://127.0.0.1:23456/readyz");
   });
 
+  const readyJson = '{"ready":true}';
+  const legacyMode = "legacy-ready-log-ok";
   it.for([
-    [
-      "accepts the current listener marker",
-      "http server listening",
-      true,
-      "strict",
-      200,
-      '{"ready":true}',
-      0,
-    ],
-    [
-      "accepts the March listening marker",
-      "listening on",
-      true,
-      "legacy-ready-log-ok",
-      503,
-      "{}",
-      0,
-    ],
-    ["rejects a closed legacy ready listener", "ready", false, "legacy-ready-log-ok", 503, "{}", 1],
-    ["rejects the March marker in strict mode", "listening on", true, "strict", 200, "{}", 1],
-    [
-      "accepts modern readiness without a ready marker",
-      "starting",
-      true,
-      "strict",
-      200,
-      '{"ready":true}',
-      0,
-    ],
-    ["rejects a generic response after a ready marker", "ready", true, "strict", 200, "{}", 1],
-    [
-      "rejects unready JSON despite HTTP success",
-      "starting",
-      true,
-      "strict",
-      200,
-      '{"ready":false}',
-      1,
-    ],
-    [
-      "rejects ready JSON despite HTTP failure",
-      "starting",
-      true,
-      "strict",
-      503,
-      '{"ready":true}',
-      1,
-    ],
-  ] as const)("%s", async (row, { signal }) => {
-    const [_label, marker, listening, mode, statusCode, body, expectedStatus] = row;
+    ["current listener", "http server listening", true, "strict", 200, readyJson, 0],
+    ["March listener", "listening on", true, legacyMode, 503, "{}", 0],
+    ["closed legacy listener", "ready", false, legacyMode, 503, "{}", 1],
+    ["March marker rejected in strict mode", "listening on", true, "strict", 200, "{}", 1],
+    ["modern readiness without marker", "starting", true, "strict", 200, readyJson, 0],
+    ["generic response after ready marker", "ready", true, "strict", 200, "{}", 1],
+    ["unready JSON despite HTTP success", "starting", true, "strict", 200, '{"ready":false}', 1],
+    ["ready JSON despite HTTP failure", "starting", true, "strict", 503, readyJson, 1],
+  ] as const)("readiness: %s", async (row, { signal }) => {
+    const [_name, marker, listening, mode, statusCode, body, expectedStatus] = row;
     const tempDir = tempDirs.make("openclaw-e2e-readyz-legacy-");
     const logPath = path.join(tempDir, "gateway.log");
     const portPath = path.join(tempDir, "port.txt");
@@ -588,48 +545,19 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     }
   });
 
-  it("wraps package installs with the configured timeout", () => {
-    const tempDir = tempDirs.make("openclaw-e2e-instance-");
-    const fixture = createPackageInstallFixture(tempDir);
+  it.each([
+    ["timeout", true],
+    ["timeout", false],
+    ["gtimeout", true],
+  ] as const)("wraps installs with %s (kill-after=%s)", (timeout, killAfter) => {
+    const tempDir = tempDirs.make("openclaw-e2e-install-");
+    const fixture = createPackageInstallFixture(tempDir, { timeout, killAfter });
     const result = runPackageInstall(fixture);
-
     expectShellSuccess(result);
     expect(result.stdout).toContain("Installing fixture package...");
     expect(result.stdout).toContain("Installed fixture package.");
     expect(fs.readFileSync(fixture.timeoutArgsPath, "utf8").trim()).toBe(
-      `--kill-after=30s 42s npm install -g --prefix ${fixture.prefixPath} ${fixture.packagePath} --no-fund --no-audit`,
-    );
-    expectNpmInstallObserved(
-      fixture.npmArgsPath,
-      `install -g --prefix ${fixture.prefixPath} ${fixture.packagePath} --no-fund --no-audit`,
-      fixture.prefixPath,
-    );
-  });
-
-  it("falls back to plain timeout when kill-after is unavailable", () => {
-    const tempDir = tempDirs.make("openclaw-e2e-instance-plain-timeout-");
-    const fixture = createPackageInstallFixture(tempDir, { killAfter: false });
-    const result = runPackageInstall(fixture);
-
-    expectShellSuccess(result);
-    expect(fs.readFileSync(fixture.timeoutArgsPath, "utf8").trim()).toBe(
-      `42s npm install -g --prefix ${fixture.prefixPath} ${fixture.packagePath} --no-fund --no-audit`,
-    );
-    expectNpmInstallObserved(
-      fixture.npmArgsPath,
-      `install -g --prefix ${fixture.prefixPath} ${fixture.packagePath} --no-fund --no-audit`,
-      fixture.prefixPath,
-    );
-  });
-
-  it("uses gtimeout when GNU timeout is not on PATH", () => {
-    const tempDir = tempDirs.make("openclaw-e2e-instance-gtimeout-");
-    const fixture = createPackageInstallFixture(tempDir, { timeout: "gtimeout" });
-    const result = runPackageInstall(fixture);
-
-    expectShellSuccess(result);
-    expect(fs.readFileSync(fixture.timeoutArgsPath, "utf8").trim()).toBe(
-      `--kill-after=30s 42s npm install -g --prefix ${fixture.prefixPath} ${fixture.packagePath} --no-fund --no-audit`,
+      `${killAfter ? "--kill-after=30s " : ""}42s npm install -g --prefix ${fixture.prefixPath} ${fixture.packagePath} --no-fund --no-audit`,
     );
     expectNpmInstallObserved(
       fixture.npmArgsPath,
@@ -925,11 +853,7 @@ openclaw_e2e_stop_process ${trackedPid}`,
       );
     } finally {
       killFixturePids(childPidPath, parentPidPath);
-      if (trackedPid > 1) {
-        try {
-          process.kill(-trackedPid, "SIGKILL");
-        } catch {}
-      }
+      killFixturePid(-trackedPid);
       killFixturePid(trackedPid);
       for (const command of [starter, stopper]) {
         if (command) {
@@ -1028,56 +952,21 @@ openclaw_e2e_stop_process ${trackedPid}`,
     expect(result.status).toBe(0);
   });
 
-  it("derives the readiness port only from gateway ready log lines", () => {
-    const tempDir = tempDirs.make("openclaw-e2e-readyz-port-");
-    const logPath = path.join(tempDir, "gateway.log");
-    const probePath = path.join(tempDir, "probe-url.txt");
-    const result = runGatewayReadyFixture([
-      `openclaw_e2e_probe_http() { printf '%s' "$1" >${shellQuote(probePath)}; [[ "$1" = "http://127.0.0.1:23456/readyz" ]]; }`,
-      `printf '[gateway] ready ws://127.0.0.1:23456\\nunrelated localhost:9999\\n' >${shellQuote(logPath)}`,
-      `openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2`,
-    ]);
-
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(0);
-    expect(fs.readFileSync(probePath, "utf8")).toBe("http://127.0.0.1:23456/readyz");
-  });
-
   it("wraps logged OpenClaw E2E commands with the configured timeout", () => {
-    const tempDir = tempDirs.make("openclaw-e2e-instance-run-logged-");
-    const logLabel = path.basename(tempDir);
-    const logDir = path.join(tempDir, "logs");
-    const logPathFile = path.join(tempDir, "log-path.txt");
-    const timeoutArgsPath = path.join(tempDir, "timeout-args.txt");
-    const commandArgsPath = path.join(tempDir, "command-args.txt");
-    writeTimeoutDispatcher(tempDir, "fixture-command", "OPENCLAW_TEST_COMMAND_BIN");
-    writeBashExecutable(path.join(tempDir, "fixture-command"), [
-      'printf "%s\\n" "$*" >"$OPENCLAW_TEST_COMMAND_ARGS"',
-      'printf "fixture output\\n"',
-    ]);
-
-    const result = runBashWithHelper(
+    const fixture = timedCommandFixture("fixture-command", "17s", ['printf "fixture output\\n"']);
+    const logLabel = path.basename(fixture.root);
+    const logDir = path.join(fixture.root, "logs");
+    const logPathFile = path.join(fixture.root, "log-path.txt");
+    const result = fixture.run(
       [
         `openclaw_e2e_run_logged ${shellQuote(logLabel)} fixture-command one two`,
         `printf "%s" "$OPENCLAW_E2E_LAST_LOG_PATH" > ${shellQuote(logPathFile)}`,
       ],
-      {
-        PATH: `${tempDir}:${hostPath}`,
-        OPENCLAW_E2E_LOG_DIR: logDir,
-        OPENCLAW_E2E_COMMAND_TIMEOUT: "17s",
-        OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
-        OPENCLAW_TEST_COMMAND_ARGS: commandArgsPath,
-        OPENCLAW_TEST_COMMAND_BIN: path.join(tempDir, "fixture-command"),
-      },
-      undefined,
-      "; ",
+      { OPENCLAW_E2E_LOG_DIR: logDir },
     );
 
     expect(result.status).toBe(0);
-    expect(fs.readFileSync(timeoutArgsPath, "utf8").trim()).toBe(
-      "--kill-after=30s 17s fixture-command one two",
-    );
-    expect(fs.readFileSync(commandArgsPath, "utf8").trim()).toBe("one two");
+    fixture.expectArgs("--kill-after=30s 17s fixture-command one two", "one two");
     const logPath = fs.readFileSync(logPathFile, "utf8");
     expect(logPath.startsWith(`${logDir}${path.sep}`)).toBe(true);
     expect(path.basename(logPath)).toMatch(new RegExp(`^openclaw-${logLabel}\\..+\\.log$`, "u"));
@@ -1085,31 +974,21 @@ openclaw_e2e_stop_process ${trackedPid}`,
   });
 
   it("redacts logged command failures before replay with initialized stdin", () => {
-    const tempDir = tempDirs.make("openclaw-e2e-instance-run-log-redact-");
-    const redactorPath = path.join(tempDir, "redactor.mjs");
+    const fixture = timedCommandFixture("fixture-command", "300s", [
+      'for ((i = 0; i < 120; i += 1)); do printf "%02000d\\n" 0; done',
+      'printf "actionable failure fixture-secret\\n"',
+      "exit 23",
+    ]);
+    const redactorPath = path.join(fixture.root, "redactor.mjs");
     fs.writeFileSync(
       redactorPath,
       'void process.stdin;\nexport const redactSensitiveText = (value) => value.replaceAll("fixture-secret", "***");\n',
       "utf8",
     );
-    writeFakeTimeout(path.join(tempDir, "timeout"), true);
-    writeBashExecutable(path.join(tempDir, "fixture-command"), [
-      'for ((i = 0; i < 120; i += 1)); do printf "%02000d\\n" 0; done',
-      'printf "actionable failure fixture-secret\\n"',
-      "exit 23",
-    ]);
-
-    const result = runBashWithHelper(
-      ["openclaw_e2e_run_logged redacted-failure fixture-command"],
-      {
-        PATH: `${tempDir}${path.delimiter}${hostPath}`,
-        OPENCLAW_E2E_LOG_DIR: path.join(tempDir, "logs"),
-        OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
-        OPENCLAW_TEST_TIMEOUT_ARGS: path.join(tempDir, "timeout-args.txt"),
-      },
-      undefined,
-      "; ",
-    );
+    const result = fixture.run(["openclaw_e2e_run_logged redacted-failure fixture-command"], {
+      OPENCLAW_E2E_LOG_DIR: path.join(fixture.root, "logs"),
+      OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
+    });
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("actionable failure ***");
@@ -1148,69 +1027,30 @@ openclaw_e2e_stop_process ${trackedPid}`,
   });
 
   it("wraps package-installed OpenClaw CLI calls with the configured timeout", () => {
-    const tempDir = tempDirs.make("openclaw-e2e-instance-openclaw-cli-");
-    const timeoutArgsPath = path.join(tempDir, "timeout-args.txt");
-    const commandArgsPath = path.join(tempDir, "openclaw-args.txt");
-    writeTimeoutDispatcher(tempDir, path.join(tempDir, "openclaw"), "OPENCLAW_TEST_OPENCLAW_BIN");
-    writeBashExecutable(path.join(tempDir, "openclaw"), [
-      'printf "%s\\n" "$*" >"$OPENCLAW_TEST_COMMAND_ARGS"',
+    const fixture = timedCommandFixture("openclaw", "23s");
+    const result = fixture.run([
+      "openclaw_e2e_enable_openclaw_cli_timeout",
+      "openclaw_e2e_enable_openclaw_cli_timeout",
+      "openclaw plugins list --json",
     ]);
 
-    const result = runBashWithHelper(
-      [
-        "openclaw_e2e_enable_openclaw_cli_timeout",
-        "openclaw_e2e_enable_openclaw_cli_timeout",
-        "openclaw plugins list --json",
-      ],
-      {
-        PATH: `${tempDir}:${hostPath}`,
-        OPENCLAW_E2E_COMMAND_TIMEOUT: "23s",
-        OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
-        OPENCLAW_TEST_COMMAND_ARGS: commandArgsPath,
-        OPENCLAW_TEST_OPENCLAW_BIN: path.join(tempDir, "openclaw"),
-      },
-      undefined,
-      "; ",
-    );
-
     expect(result.status).toBe(0);
-    expect(fs.readFileSync(timeoutArgsPath, "utf8").trim()).toBe(
-      `--kill-after=30s 23s ${path.join(tempDir, "openclaw")} plugins list --json`,
+    fixture.expectArgs(
+      `--kill-after=30s 23s ${fixture.executable} plugins list --json`,
+      "plugins list --json",
     );
-    expect(fs.readFileSync(commandArgsPath, "utf8").trim()).toBe("plugins list --json");
   });
 
   it("wraps interactive PTY scripts with the configured timeout", () => {
-    const tempDir = tempDirs.make("openclaw-e2e-instance-pty-timeout-");
-    const timeoutArgsPath = path.join(tempDir, "timeout-args.txt");
-    const scriptArgsPath = path.join(tempDir, "script-args.txt");
-    const logPath = path.join(tempDir, "pty.log");
-    writeTimeoutDispatcher(tempDir, "script", "OPENCLAW_TEST_SCRIPT_BIN");
-    writeBashExecutable(path.join(tempDir, "script"), [
-      'if [ "${1:-}" = "--version" ]; then exit 0; fi',
-      'printf "%s\\n" "$*" >"$OPENCLAW_TEST_SCRIPT_ARGS"',
+    const fixture = timedCommandFixture("script", "31s");
+    const logPath = path.join(fixture.root, "pty.log");
+    const result = fixture.run([
+      `openclaw_e2e_run_script_with_pty ${shellQuote("node /tmp/entry onboard")} ${shellQuote(logPath)}`,
     ]);
 
-    const result = runBashWithHelper(
-      [
-        `openclaw_e2e_run_script_with_pty ${shellQuote("node /tmp/entry onboard")} ${shellQuote(logPath)}`,
-      ],
-      {
-        PATH: `${tempDir}:${hostPath}`,
-        OPENCLAW_E2E_COMMAND_TIMEOUT: "31s",
-        OPENCLAW_TEST_TIMEOUT_ARGS: timeoutArgsPath,
-        OPENCLAW_TEST_SCRIPT_ARGS: scriptArgsPath,
-        OPENCLAW_TEST_SCRIPT_BIN: path.join(tempDir, "script"),
-      },
-      undefined,
-      "; ",
-    );
-
     expect(result.status).toBe(0);
-    expect(fs.readFileSync(timeoutArgsPath, "utf8").trim()).toBe(
+    fixture.expectArgs(
       `--kill-after=30s 31s script -q -f -c node /tmp/entry onboard ${logPath}`,
-    );
-    expect(fs.readFileSync(scriptArgsPath, "utf8").trim()).toBe(
       `-q -f -c node /tmp/entry onboard ${logPath}`,
     );
   });
