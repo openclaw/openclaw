@@ -1,5 +1,5 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -80,8 +80,15 @@ function createDeferredIsolatedRun() {
   };
 }
 
+const services: CronService[] = [];
+function stopServices() {
+  for (const cron of services.splice(0)) {
+    cron.stop();
+  }
+}
+
 function createService(storePath: string, deps: Partial<CronServiceDeps> = {}) {
-  return createCronServiceWithStateForTest({
+  const service = createCronServiceWithStateForTest({
     scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
@@ -91,6 +98,20 @@ function createService(storePath: string, deps: Partial<CronServiceDeps> = {}) {
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
   });
+  services.push(service.cron);
+  return service;
+}
+
+function clockedService(storePath: string, now: number, deps: Partial<CronServiceDeps> = {}) {
+  const clock = createGatewaySchedulerClock(now);
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const enqueueSystemEvent = deps.enqueueSystemEvent ?? vi.fn();
+  return {
+    clock,
+    scheduler,
+    enqueueSystemEvent,
+    ...createService(storePath, { ...deps, scheduler, enqueueSystemEvent }),
+  };
 }
 
 async function readResponsiveCronSnapshot(cron: CronService) {
@@ -138,12 +159,11 @@ function systemEventJob(id: string, schedule: CronJob["schedule"]) {
 }
 
 describe("CronService read ops while job is running", () => {
+  afterEach(stopServices);
   it("publishes the scheduler's next run after a cached list and status read", async () => {
     const now = Date.parse("2026-09-30T12:00:00.000Z");
-    const clock = createGatewaySchedulerClock(now);
-    const scheduler = createTestGatewayScheduler(clock.clock);
     const store = await makeStorePath();
-    const { cron, state } = createService(store.storePath, { scheduler });
+    const { cron, state, clock, scheduler } = clockedService(store.storePath, now);
     try {
       await cron.start();
       const job = await cron.add(
@@ -176,7 +196,6 @@ describe("CronService read ops while job is running", () => {
     } finally {
       cron.stop();
       await scheduler.stop();
-      await store.cleanup();
     }
   });
 
@@ -222,7 +241,6 @@ describe("CronService read ops while job is running", () => {
     } finally {
       maintenance.mockRestore();
       cron.stop();
-      await store.cleanup();
     }
   });
 
@@ -251,7 +269,6 @@ describe("CronService read ops while job is running", () => {
     } finally {
       maintenance.mockRestore();
       cron.stop();
-      await store.cleanup();
     }
   });
 
@@ -267,19 +284,14 @@ describe("CronService read ops while job is running", () => {
         return { status: "ok" };
       },
     });
-    try {
-      await cron.start();
-      await cron.listPage();
-      await expect(cron.run("first", "force")).resolves.toEqual({ ok: true, ran: true });
-      const page = await cron.listPage();
-      expect(page.jobs.map((job) => job.id)).toEqual(["first", "sibling"]);
-      expect(page.jobs[0]?.state.lastStatus).toBe("ok");
-      expect((await cron.status()).jobs).toBe(2);
-    } finally {
-      cron.stop();
-      sibling.stop();
-      await store.cleanup();
-    }
+
+    await cron.start();
+    await cron.listPage();
+    await expect(cron.run("first", "force")).resolves.toEqual({ ok: true, ran: true });
+    const page = await cron.listPage();
+    expect(page.jobs.map((job) => job.id)).toEqual(["first", "sibling"]);
+    expect(page.jobs[0]?.state.lastStatus).toBe("ok");
+    expect((await cron.status()).jobs).toBe(2);
   });
 
   it.each([
@@ -346,7 +358,6 @@ describe("CronService read ops while job is running", () => {
         cron.stop();
         restarted?.stop();
         await isolatedRun.settle(run);
-        await store.cleanup();
       }
     },
   );
@@ -360,63 +371,55 @@ describe("CronService read ops while job is running", () => {
       runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
       startupDeferredMissedAgentJobDelayMs: 120_000,
     });
-    try {
-      await writeCronStoreSnapshot({
-        storePath: store.storePath,
-        jobs: [
-          {
-            ...futureJob("startup-catchup", nowMs - 86_400_000),
-            schedule: { kind: "at", at: new Date(nowMs - 60_000).toISOString() },
-            delivery: { mode: "none" },
-            state: { nextRunAtMs: nowMs - 60_000 },
-          },
-        ],
-      });
-      await cron.start();
-      expect(isolatedRun.runIsolatedAgentJob).not.toHaveBeenCalled();
 
-      const jobs = await readResponsiveCronSnapshot(cron);
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [
+        {
+          ...futureJob("startup-catchup", nowMs - 86_400_000),
+          schedule: { kind: "at", at: new Date(nowMs - 60_000).toISOString() },
+          delivery: { mode: "none" },
+          state: { nextRunAtMs: nowMs - 60_000 },
+        },
+      ],
+    });
+    await cron.start();
+    expect(isolatedRun.runIsolatedAgentJob).not.toHaveBeenCalled();
 
-      expect(jobs[0]?.state.lastStatus).toBeUndefined();
-      expect(jobs[0]?.state.runningAtMs).toBeUndefined();
-      expect(jobs[0]?.state.nextRunAtMs).toBe(nowMs + 120_000);
-    } finally {
-      cron.stop();
-      await store.cleanup();
-    }
+    const jobs = await readResponsiveCronSnapshot(cron);
+
+    expect(jobs[0]?.state.lastStatus).toBeUndefined();
+    expect(jobs[0]?.state.runningAtMs).toBeUndefined();
+    expect(jobs[0]?.state.nextRunAtMs).toBe(nowMs + 120_000);
   });
 });
 
 describe("CronService", () => {
+  afterEach(stopServices);
   it("keeps sibling writes visible when separately loaded services mutate and run jobs", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const { cron: cronA } = createService(store.storePath, { enqueueSystemEvent });
     const { cron: cronB } = createService(store.storePath);
-    try {
-      await cronA.status();
-      await cronB.status();
-      const addJob = (service: CronService, id: string) =>
-        service.add(systemEventJob(id, { kind: "every", everyMs: 60_000 }));
-      await addJob(cronA, "first-cached-service-job");
-      await addJob(cronB, "second-cached-service-job");
-      expect((await loadCronStore(store.storePath)).jobs.map((job) => job.id)).toEqual([
-        "first-cached-service-job",
-        "second-cached-service-job",
-      ]);
-      await cronB.update("first-cached-service-job", {
-        payload: { kind: "systemEvent", text: "updated by sibling" },
-      });
-      await expect(cronA.run("first-cached-service-job", "force")).resolves.toEqual({
-        ok: true,
-        ran: true,
-      });
-      expect(enqueueSystemEvent).toHaveBeenCalledWith("updated by sibling", expect.anything());
-    } finally {
-      cronA.stop();
-      cronB.stop();
-      await store.cleanup();
-    }
+
+    await cronA.status();
+    await cronB.status();
+    const addJob = (service: CronService, id: string) =>
+      service.add(systemEventJob(id, { kind: "every", everyMs: 60_000 }));
+    await addJob(cronA, "first-cached-service-job");
+    await addJob(cronB, "second-cached-service-job");
+    expect((await loadCronStore(store.storePath)).jobs.map((job) => job.id)).toEqual([
+      "first-cached-service-job",
+      "second-cached-service-job",
+    ]);
+    await cronB.update("first-cached-service-job", {
+      payload: { kind: "systemEvent", text: "updated by sibling" },
+    });
+    await expect(cronA.run("first-cached-service-job", "force")).resolves.toEqual({
+      ok: true,
+      ran: true,
+    });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("updated by sibling", expect.anything());
   });
 
   it("avoids duplicate runs across lexical aliases of one store", async () => {
@@ -424,14 +427,13 @@ describe("CronService", () => {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-    const clockA = createGatewaySchedulerClock(Date.parse("2025-12-13T00:00:00.000Z"));
-    const clockB = createGatewaySchedulerClock(clockA.clock.now());
-
+    const now = Date.parse("2025-12-13T00:00:00.000Z");
     const deps = { enqueueSystemEvent, requestHeartbeat, runIsolatedAgentJob };
-    const { cron: cronA, state: stateA } = createService(store.storePath, {
-      scheduler: createTestGatewayScheduler(clockA.clock),
-      ...deps,
-    });
+    const {
+      cron: cronA,
+      state: stateA,
+      clock: clockA,
+    } = clockedService(store.storePath, now, deps);
 
     await cronA.start();
     const atMs = Date.parse("2025-12-13T00:00:01.000Z");
@@ -442,10 +444,11 @@ describe("CronService", () => {
 
     const aliasedStorePath = `${path.dirname(store.storePath)}/../${path.basename(path.dirname(store.storePath))}/${path.basename(store.storePath)}`;
 
-    const { cron: cronB, state: stateB } = createService(aliasedStorePath, {
-      scheduler: createTestGatewayScheduler(clockB.clock),
-      ...deps,
-    });
+    const {
+      cron: cronB,
+      state: stateB,
+      clock: clockB,
+    } = clockedService(aliasedStorePath, now, deps);
 
     await cronB.start();
     expect((await cronStoreModule.loadCronStore(aliasedStorePath)).jobs).toHaveLength(1);
@@ -461,30 +464,15 @@ describe("CronService", () => {
 
     cronA.stop();
     cronB.stop();
-    await store.cleanup();
   });
 
   it("re-arms a stale service after a missing remove reloads an earlier job", async () => {
     const store = await makeStorePath();
-    const createState = () => {
-      const clock = createGatewaySchedulerClock(Date.parse("2025-12-13T00:00:00.000Z"));
-      const enqueueSystemEvent = vi.fn();
-      const state = createCronServiceState({
-        scheduler: createTestGatewayScheduler(clock.clock),
-        storePath: store.storePath,
-        cronEnabled: true,
-        log: noopLogger,
-        enqueueSystemEvent,
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      });
-      return { state, enqueueSystemEvent, clock };
-    };
-    const stale = createState();
-    const writer = createState();
+    const baseMs = Date.parse("2025-12-13T00:00:00.000Z");
+    const stale = clockedService(store.storePath, baseMs);
+    const writer = clockedService(store.storePath, baseMs);
     await readStatus(stale.state);
     await readStatus(writer.state);
-    const baseMs = Date.parse("2025-12-13T00:00:00.000Z");
     const addAtJob = (state: ReturnType<typeof createCronServiceState>, id: string, atMs: number) =>
       add(state, systemEventJob(id, { kind: "at", at: new Date(atMs).toISOString() }));
 
@@ -507,7 +495,6 @@ describe("CronService", () => {
     await onTimer(stale.state);
 
     expect(stale.enqueueSystemEvent).toHaveBeenCalledWith("earlier-job", expect.any(Object));
-    await store.cleanup();
   });
 });
 
@@ -523,6 +510,7 @@ function recurringJob(id: string, nowMs: number, nextRunAtMs: number): CronJob {
 }
 
 describe("cron wakes during active execution", () => {
+  afterEach(stopServices);
   it("runs later due work while an earlier scheduled run is still executing", async ({
     signal,
   }) => {

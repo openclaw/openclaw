@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeCronJobCommits } from "../../test/helpers/cron/runtime-mutation.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
@@ -10,7 +10,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import type { CronEventInput } from "./event-source.js";
+import type { CronEventInput, CronEventRunOptions } from "./event-source.js";
 import { CronService } from "./service.js";
 import {
   createCronServiceWithStateForTest,
@@ -30,6 +30,8 @@ import type { CronJob, CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-event-source-" });
 
+const services: CronService[] = [];
+
 async function fixture(overrides: Partial<CronServiceDeps> = {}) {
   const { storePath } = await makeStorePath();
   const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
@@ -47,6 +49,7 @@ async function fixture(overrides: Partial<CronServiceDeps> = {}) {
     runIsolatedAgentJob,
     ...overrides,
   });
+  services.push(cron);
   await cron.start();
   const input: CronJobCreate = {
     name: "event handler",
@@ -102,6 +105,14 @@ async function fixture(overrides: Partial<CronServiceDeps> = {}) {
   return { cron, state, job, input, queue, claim, storePath, runIsolatedAgentJob };
 }
 
+type EventFixture = Awaited<ReturnType<typeof fixture>>;
+function runEvent(f: EventFixture, options: CronEventRunOptions) {
+  return f.cron.runEvent(f.job.id, options);
+}
+async function finishEvent(f: EventFixture, options: CronEventRunOptions) {
+  await waitForEventRun(f.cron, await runEvent(f, options));
+}
+
 async function waitForEventRun(
   cron: CronService,
   result: Awaited<ReturnType<CronService["runEvent"]>>,
@@ -135,6 +146,12 @@ function interceptActivation(cron: CronService, jobs: CronJob[], beforeCommit: (
 }
 
 describe("event automation durable admission", () => {
+  afterEach(async () => {
+    for (const cron of services.splice(0)) {
+      cron.stop();
+      await cron.waitForIdle();
+    }
+  });
   it("atomically transfers ingress to one receipt, preserving instructions and creator policy while busy", async () => {
     const started = createDeferredCore();
     const finish = createDeferredCore();
@@ -154,7 +171,7 @@ describe("event automation durable admission", () => {
     try {
       const payload = { text: "original event" };
       const first = await f.claim("first", f.job, payload);
-      const run = f.cron.runEvent(f.job.id, first.options);
+      const run = runEvent(f, first.options);
       payload.text = "caller mutation must not enter the turn";
       const receipt = await run;
       expect(receipt.kind).toBe("transferred");
@@ -178,17 +195,17 @@ describe("event automation durable admission", () => {
         },
       });
       const second = await f.claim("second");
-      expect(await f.cron.runEvent(f.job.id, second.options)).toEqual({
+      expect(await runEvent(f, second.options)).toEqual({
         kind: "pending",
         reason: "busy",
       });
       expect(await f.queue.listClaims()).toMatchObject([{ attempts: 0 }]);
       finish.resolve();
       await waitForEventRun(f.cron, receipt);
-      expect(
-        await f.cron.runEvent(f.job.id, { ...first.options, payload: { text: "original event" } }),
-      ).toEqual({ kind: "invalidated" });
-      await waitForEventRun(f.cron, await f.cron.runEvent(f.job.id, second.options));
+      expect(await runEvent(f, { ...first.options, payload: { text: "original event" } })).toEqual({
+        kind: "invalidated",
+      });
+      await finishEvent(f, second.options);
       expect(calls).toHaveLength(2);
       const persisted = (await loadCronStore(f.storePath)).jobs[0];
       expect(persisted?.state.nextRunAtMs).toBeUndefined();
@@ -196,75 +213,66 @@ describe("event automation durable admission", () => {
       expect(persisted?.payload).toEqual(f.job.payload);
     } finally {
       finish.resolve();
-      await f.cron.waitForIdle();
-      f.cron.stop();
     }
   });
 
   it("keeps untransferred event claims out of the scheduler's unguarded drain", async () => {
     const f = await fixture();
-    try {
-      const { event, options } = await f.claim("scheduler-event");
-      const transferred = vi.fn();
-      const requested = await locked(f.state, () =>
-        commitCronRunRequests(f.state, [f.job], {
-          source: "manual",
-          mode: "if-enabled",
-          event: { input: event, claim: options.claim },
-          commitGuard: options.commitGuard,
-          onEventTransferred: transferred,
-        }),
-      );
-      expect(requested).toHaveLength(1);
-      expect(getCronRunQueueRequests(f.state)).toEqual([]);
-      expect(getCronRunQueueRequests(f.state, { includePendingEvents: true })).toMatchObject([
-        { receiptId: requested[0]!.runReceipt.receiptId, event: { input: event } },
-      ]);
-      // Exercise the native scheduler composition, not just its host projection.
-      const scheduled = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
-        type: "cron.schedulerTick",
-        input: {
-          storeKey: cronStoreKey(f.storePath),
-          nowMs: Date.now(),
-          requests: getCronRunQueueRequests(f.state),
-        },
-      });
-      expect(scheduled.launches).toEqual([]);
-      expect(transferred).not.toHaveBeenCalled();
-      expect(f.runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect(await f.queue.listClaims()).toMatchObject([
-        { id: event.eventId, claim: { token: options.claim.token } },
-      ]);
-      await drainCronRunQueue(f.state);
-      await requested[0]!.completion;
-      expect(transferred).toHaveBeenCalledOnce();
-      expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
-      expect(await f.queue.enqueue(event.eventId, event)).toMatchObject({ kind: "completed" });
-    } finally {
-      f.cron.stop();
-      await f.cron.waitForIdle();
-    }
+
+    const { event, options } = await f.claim("scheduler-event");
+    const transferred = vi.fn();
+    const requested = await locked(f.state, () =>
+      commitCronRunRequests(f.state, [f.job], {
+        source: "manual",
+        mode: "if-enabled",
+        event: { input: event, claim: options.claim },
+        commitGuard: options.commitGuard,
+        onEventTransferred: transferred,
+      }),
+    );
+    expect(requested).toHaveLength(1);
+    expect(getCronRunQueueRequests(f.state)).toEqual([]);
+    expect(getCronRunQueueRequests(f.state, { includePendingEvents: true })).toMatchObject([
+      { receiptId: requested[0]!.runReceipt.receiptId, event: { input: event } },
+    ]);
+    // Exercise the native scheduler composition, not just its host projection.
+    const scheduled = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
+      type: "cron.schedulerTick",
+      input: {
+        storeKey: cronStoreKey(f.storePath),
+        nowMs: Date.now(),
+        requests: getCronRunQueueRequests(f.state),
+      },
+    });
+    expect(scheduled.launches).toEqual([]);
+    expect(transferred).not.toHaveBeenCalled();
+    expect(f.runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(await f.queue.listClaims()).toMatchObject([
+      { id: event.eventId, claim: { token: options.claim.token } },
+    ]);
+    await drainCronRunQueue(f.state);
+    await requested[0]!.completion;
+    expect(transferred).toHaveBeenCalledOnce();
+    expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
+    expect(await f.queue.enqueue(event.eventId, event)).toMatchObject({ kind: "completed" });
   });
 
   it("admits a full 256-KiB webhook body plus adapter metadata while independently bounding payload and metadata", async () => {
     const f = await fixture();
-    try {
-      const body = JSON.stringify({ data: "x".repeat(262_133) });
-      expect(Buffer.byteLength(body, "utf8")).toBe(262_144);
-      const payload = { bindingId: "adapter-binding", event: JSON.parse(body) };
-      const { options } = await f.claim("max-wire-event", f.job, payload);
-      await waitForEventRun(f.cron, await f.cron.runEvent(f.job.id, options));
-      expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
-      await expect(
-        f.cron.runEvent(f.job.id, { ...options, payload: "x".repeat(1_048_576) }),
-      ).rejects.toThrow("oversized automation event");
-      await expect(
-        f.cron.runEvent(f.job.id, { ...options, eventId: "x".repeat(65_536) }),
-      ).rejects.toThrow("oversized automation event");
-      expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
-    } finally {
-      f.cron.stop();
-    }
+
+    const body = JSON.stringify({ data: "x".repeat(262_133) });
+    expect(Buffer.byteLength(body, "utf8")).toBe(262_144);
+    const payload = { bindingId: "adapter-binding", event: JSON.parse(body) };
+    const { options } = await f.claim("max-wire-event", f.job, payload);
+    await finishEvent(f, options);
+    expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
+    await expect(runEvent(f, { ...options, payload: "x".repeat(1_048_576) })).rejects.toThrow(
+      "oversized automation event",
+    );
+    await expect(runEvent(f, { ...options, eventId: "x".repeat(65_536) })).rejects.toThrow(
+      "oversized automation event",
+    );
+    expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
   });
 
   it.each(["partition lock", "store load"] as const)(
@@ -298,7 +306,7 @@ describe("event automation durable admission", () => {
             });
           onTestFinished(() => delayed.mockRestore());
         }
-        eventRun = f.cron.runEvent(f.job.id, options);
+        eventRun = runEvent(f, options);
         const outcome = eventRun.then(
           (result) => ({ result }),
           (error: unknown) => ({ error }),
@@ -324,8 +332,6 @@ describe("event automation durable admission", () => {
       } finally {
         release.resolve();
         await Promise.allSettled([updating, eventRun, restarting]);
-        f.cron.stop();
-        await f.cron.waitForIdle();
       }
     },
   );
@@ -333,123 +339,112 @@ describe("event automation durable admission", () => {
   it("keeps paused work pending and fences disable/enable and same-definition A-B-A sources", async () => {
     const cronConfig = { triggers: { enabled: true } };
     const f = await fixture({ cronConfig });
-    try {
-      const { options } = await f.claim("fenced");
-      await f.cron.add({
-        ...f.input,
-        name: "unrelated timer",
-        schedule: { kind: "every", everyMs: 60_000 },
-      });
-      expect((await f.cron.listPage({ scheduleKind: "event" })).jobs.map((job) => job.id)).toEqual([
-        f.job.id,
-      ]);
-      const snapshots = await f.cron.readEventSources("mcp-events");
-      snapshots[0]!.options.server = "mutated";
-      expect((await f.cron.readEventSources("mcp-events"))[0]?.options.server).toBe("test");
-      expect(await f.cron.readEventSources("another-plugin")).toEqual([]);
-      f.cron.pauseScheduling();
-      expect((await f.cron.readEventSources("mcp-events"))[0]?.enabled).toBe(true);
-      expect(await f.cron.runEvent(f.job.id, options)).toEqual({
-        kind: "pending",
-        reason: "paused",
-      });
-      f.cron.resumeScheduling();
-      cronConfig.triggers.enabled = false;
-      expect(await f.cron.runEvent(f.job.id, options)).toEqual({
-        kind: "pending",
-        reason: "paused",
-      });
-      await expect(f.cron.add({ ...f.input, name: "blocked source" })).rejects.toThrow(
-        "cron.triggers.enabled: false",
-      );
-      cronConfig.triggers.enabled = true;
-      f.cron.stop();
-      await f.cron.waitForIdle();
-      expect(await f.cron.runEvent(f.job.id, options)).toEqual({
-        kind: "pending",
-        reason: "stopped",
-      });
-      expect(await f.queue.listClaims()).toMatchObject([{ attempts: 0 }]);
-      await f.cron.start();
-      const equivalent = await f.cron.update(f.job.id, {
-        schedule: {
-          kind: "event",
-          source: "mcp-events",
-          options: { arguments: { b: 2, a: 1 }, name: "changed", server: "test" },
-        },
-      });
-      expect(equivalent.state.sourceIdentity).toBe(f.job.state.sourceIdentity);
-      await f.cron.update(f.job.id, { enabled: false });
-      await f.cron.update(f.job.id, { enabled: true });
-      expect(await f.cron.runEvent(f.job.id, options)).toEqual({ kind: "invalidated" });
-      const before = await f.cron.readJob(f.job.id);
-      await f.cron.update(f.job.id, {
-        schedule: { kind: "event", source: "mcp-events", options: { server: "B" } },
-      });
-      const restored = await f.cron.update(f.job.id, { schedule: f.input.schedule });
-      expect(restored.state.sourceIdentity).not.toBe(before?.state.sourceIdentity);
-      expect(f.runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect(await f.queue.listClaims()).toHaveLength(1);
-    } finally {
-      f.cron.stop();
-    }
-  });
 
-  it("rolls back activation when ingress transfer fails, leaving the original payload recoverable", async () => {
-    const f = await fixture();
-    const db = openOpenClawStateDatabase().db;
-    try {
-      const { event, options } = await f.claim("rollback-event");
-      db.exec(
-        "CREATE TRIGGER reject_event_transfer BEFORE UPDATE OF status ON channel_ingress_events WHEN NEW.event_id = 'rollback-event' AND NEW.status = 'completed' BEGIN SELECT RAISE(ABORT, 'event transfer blocked'); END;",
-      );
-      await expect(f.cron.runEvent(f.job.id, options)).rejects.toThrow("event transfer blocked");
-      expect(f.runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect((await f.queue.listClaims())[0]?.payload).toEqual(event);
-      expect((await f.cron.readJob(f.job.id))?.state.queuedAtMs).toBeUndefined();
-      expect((await f.cron.readJob(f.job.id))?.state.runningAtMs).toBeUndefined();
-      db.exec("DROP TRIGGER reject_event_transfer");
-      await waitForEventRun(f.cron, await f.cron.runEvent(f.job.id, options));
-      expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
-    } finally {
-      db.exec("DROP TRIGGER IF EXISTS reject_event_transfer");
-      await f.cron.waitForIdle();
-      f.cron.stop();
-    }
-  });
-
-  it("rolls back the receipt and ingress together when source authority closes at activation commit", async () => {
-    const f = await fixture();
-    const { event, options } = await f.claim("commit-revoked");
-    let revoke = false;
-    const admission = interceptActivation(f.cron, [f.job], () => {
-      revoke = true;
+    const { options } = await f.claim("fenced");
+    await f.cron.add({
+      ...f.input,
+      name: "unrelated timer",
+      schedule: { kind: "every", everyMs: 60_000 },
     });
-    try {
-      await expect(
-        f.cron.runEvent(f.job.id, {
-          ...options,
-          commitGuard() {
-            if (revoke) {
-              throw new Error("source retired at activation commit");
-            }
-          },
-        }),
-      ).rejects.toThrow("source retired at activation commit");
-      expect(f.runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect((await f.queue.listClaims())[0]?.payload).toEqual(event);
-      const job = await f.cron.readJob(f.job.id);
-      expect(job?.state.queuedAtMs).toBeUndefined();
-      expect(job?.state.runningAtMs).toBeUndefined();
-      admission.mockRestore();
-      await waitForEventRun(f.cron, await f.cron.runEvent(f.job.id, options));
-      expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
-    } finally {
-      admission.mockRestore();
-      f.cron.stop();
-      await f.cron.waitForIdle();
-    }
+    expect((await f.cron.listPage({ scheduleKind: "event" })).jobs.map((job) => job.id)).toEqual([
+      f.job.id,
+    ]);
+    const snapshots = await f.cron.readEventSources("mcp-events");
+    snapshots[0]!.options.server = "mutated";
+    expect((await f.cron.readEventSources("mcp-events"))[0]?.options.server).toBe("test");
+    expect(await f.cron.readEventSources("another-plugin")).toEqual([]);
+    f.cron.pauseScheduling();
+    expect((await f.cron.readEventSources("mcp-events"))[0]?.enabled).toBe(true);
+    expect(await runEvent(f, options)).toEqual({
+      kind: "pending",
+      reason: "paused",
+    });
+    f.cron.resumeScheduling();
+    cronConfig.triggers.enabled = false;
+    expect(await runEvent(f, options)).toEqual({
+      kind: "pending",
+      reason: "paused",
+    });
+    await expect(f.cron.add({ ...f.input, name: "blocked source" })).rejects.toThrow(
+      "cron.triggers.enabled: false",
+    );
+    cronConfig.triggers.enabled = true;
+    f.cron.stop();
+    await f.cron.waitForIdle();
+    expect(await runEvent(f, options)).toEqual({
+      kind: "pending",
+      reason: "stopped",
+    });
+    expect(await f.queue.listClaims()).toMatchObject([{ attempts: 0 }]);
+    await f.cron.start();
+    const equivalent = await f.cron.update(f.job.id, {
+      schedule: {
+        kind: "event",
+        source: "mcp-events",
+        options: { arguments: { b: 2, a: 1 }, name: "changed", server: "test" },
+      },
+    });
+    expect(equivalent.state.sourceIdentity).toBe(f.job.state.sourceIdentity);
+    await f.cron.update(f.job.id, { enabled: false });
+    await f.cron.update(f.job.id, { enabled: true });
+    expect(await runEvent(f, options)).toEqual({ kind: "invalidated" });
+    const before = await f.cron.readJob(f.job.id);
+    await f.cron.update(f.job.id, {
+      schedule: { kind: "event", source: "mcp-events", options: { server: "B" } },
+    });
+    const restored = await f.cron.update(f.job.id, { schedule: f.input.schedule });
+    expect(restored.state.sourceIdentity).not.toBe(before?.state.sourceIdentity);
+    expect(f.runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(await f.queue.listClaims()).toHaveLength(1);
   });
+
+  it.each(["ingress transfer", "source authority"] as const)(
+    "rolls back receipt and ingress when %s fails at activation commit",
+    async (boundary) => {
+      const f = await fixture();
+      const { event, options } = await f.claim("rollback-event");
+      const db = openOpenClawStateDatabase().db;
+      const error =
+        boundary === "ingress transfer"
+          ? "event transfer blocked"
+          : "source retired at activation commit";
+      let revoke = false;
+      let restore: () => void;
+      if (boundary === "ingress transfer") {
+        db.exec(
+          "CREATE TRIGGER reject_event_transfer BEFORE UPDATE OF status ON channel_ingress_events WHEN NEW.event_id = 'rollback-event' AND NEW.status = 'completed' BEGIN SELECT RAISE(ABORT, 'event transfer blocked'); END;",
+        );
+        restore = () => db.exec("DROP TRIGGER IF EXISTS reject_event_transfer");
+      } else {
+        const admission = interceptActivation(f.cron, [f.job], () => {
+          revoke = true;
+        });
+        restore = () => admission.mockRestore();
+      }
+      try {
+        await expect(
+          runEvent(f, {
+            ...options,
+            commitGuard() {
+              if (revoke) {
+                throw new Error(error);
+              }
+            },
+          }),
+        ).rejects.toThrow(error);
+        expect(f.runIsolatedAgentJob).not.toHaveBeenCalled();
+        expect((await f.queue.listClaims())[0]?.payload).toEqual(event);
+        const job = await f.cron.readJob(f.job.id);
+        expect(job?.state.queuedAtMs).toBeUndefined();
+        expect(job?.state.runningAtMs).toBeUndefined();
+        restore();
+        await finishEvent(f, options);
+        expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
+      } finally {
+        restore();
+      }
+    },
+  );
 
   it("does not cancel or dead-letter another source when one event guard fails at batch commit", async () => {
     const f = await fixture();
@@ -544,51 +539,45 @@ describe("event automation durable admission", () => {
       for (const drain of drains) {
         drain.dispose();
       }
-      f.cron.stop();
-      await f.cron.waitForIdle();
     }
   });
 
   it("rejects changed payloads, foreign plugin claims, and source revocation before activation", async () => {
     const f = await fixture();
-    try {
-      const { event, options } = await f.claim("guarded-event");
-      expect(
-        await f.cron.runEvent(f.job.id, { ...options, payload: { instructions: "changed" } }),
-      ).toEqual({ kind: "invalidated" });
-      const foreign = createChannelIngressQueue<CronEventInput>({
-        channelId: "another-plugin",
-        accountId: f.job.id,
-      });
-      await foreign.enqueue("guarded-event", event);
-      const claim = await foreign.claim("guarded-event");
-      if (!claim) {
-        throw new Error("missing foreign claim");
-      }
-      expect(
-        await f.cron.runEvent(f.job.id, {
-          ...options,
-          claim: { queueName: claim.queueName, id: claim.id, token: claim.claim.token },
-        }),
-      ).toEqual({ kind: "invalidated" });
-      await expect(
-        f.cron.runEvent(f.job.id, {
-          ...options,
-          commitGuard() {
-            if (f.cron.getJob(f.job.id)?.state.queuedAtMs !== undefined) {
-              throw new Error("source revoked after reservation");
-            }
-          },
-        }),
-      ).rejects.toThrow("source revoked after reservation");
-      expect(f.runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect((await f.queue.listClaims())[0]?.payload).toEqual(event);
-      await waitForEventRun(f.cron, await f.cron.runEvent(f.job.id, options));
-      expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
-    } finally {
-      await f.cron.waitForIdle();
-      f.cron.stop();
+
+    const { event, options } = await f.claim("guarded-event");
+    expect(await runEvent(f, { ...options, payload: { instructions: "changed" } })).toEqual({
+      kind: "invalidated",
+    });
+    const foreign = createChannelIngressQueue<CronEventInput>({
+      channelId: "another-plugin",
+      accountId: f.job.id,
+    });
+    await foreign.enqueue("guarded-event", event);
+    const claim = await foreign.claim("guarded-event");
+    if (!claim) {
+      throw new Error("missing foreign claim");
     }
+    expect(
+      await runEvent(f, {
+        ...options,
+        claim: { queueName: claim.queueName, id: claim.id, token: claim.claim.token },
+      }),
+    ).toEqual({ kind: "invalidated" });
+    await expect(
+      runEvent(f, {
+        ...options,
+        commitGuard() {
+          if (f.cron.getJob(f.job.id)?.state.queuedAtMs !== undefined) {
+            throw new Error("source revoked after reservation");
+          }
+        },
+      }),
+    ).rejects.toThrow("source revoked after reservation");
+    expect(f.runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect((await f.queue.listClaims())[0]?.payload).toEqual(event);
+    await finishEvent(f, options);
+    expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
   });
 
   it("rejects a replaced ingress claim after reservation without consuming its successor", async () => {
@@ -609,7 +598,7 @@ describe("event automation durable admission", () => {
     let pending: ReturnType<CronService["runEvent"]> | undefined;
     try {
       const { options } = await f.claim("replaced-claim");
-      pending = f.cron.runEvent(f.job.id, options);
+      pending = runEvent(f, options);
       await awaitGateBeforeSettlement(
         reserved.promise,
         pending,
@@ -636,52 +625,41 @@ describe("event automation durable admission", () => {
         },
       ]);
       expect((await f.cron.readJob(f.job.id))?.state.queuedAtMs).toBeUndefined();
-      await waitForEventRun(
-        f.cron,
-        await f.cron.runEvent(f.job.id, {
-          ...options,
-          claim: { ...options.claim, token: successor.claim.token },
-        }),
-      );
+      await finishEvent(f, {
+        ...options,
+        claim: { ...options.claim, token: successor.claim.token },
+      });
       expect(f.runIsolatedAgentJob).toHaveBeenCalledOnce();
     } finally {
       release.resolve();
       stopObserving();
       await Promise.allSettled([editing, pending]);
-      await f.cron.waitForIdle();
-      f.cron.stop();
-      await f.cron.waitForIdle();
     }
   });
 
   it("records authenticated creator authority even when operator input omits toolsAllow", async () => {
     const f = await fixture();
-    try {
-      const owner = { sessionKey: "agent:main:creator", accountId: "creator-account" };
-      const policy = {
-        version: 1 as const,
-        mode: "account" as const,
-        ownerSessionKey: owner.sessionKey,
-        ownerAccountId: owner.accountId,
-      };
-      const created = await f.cron.add(
-        {
-          ...f.input,
-          name: "account event",
-          owner,
-          payload: { kind: "agentTurn", message: "Keep creator policy." },
-        },
-        { scheduledToolPolicy: policy },
-      );
-      const persisted = (await loadCronStore(f.storePath)).jobs.find(
-        (job) => job.id === created.id,
-      );
-      expect(persisted?.payload.toolsAllow).toEqual(["*"]);
-      expect(persisted?.scheduledToolPolicy).toEqual(policy);
-      expect(persisted?.owner).toMatchObject(owner);
-      expect(created.state.nextRunAtMs).toBeUndefined();
-    } finally {
-      f.cron.stop();
-    }
+
+    const owner = { sessionKey: "agent:main:creator", accountId: "creator-account" };
+    const policy = {
+      version: 1 as const,
+      mode: "account" as const,
+      ownerSessionKey: owner.sessionKey,
+      ownerAccountId: owner.accountId,
+    };
+    const created = await f.cron.add(
+      {
+        ...f.input,
+        name: "account event",
+        owner,
+        payload: { kind: "agentTurn", message: "Keep creator policy." },
+      },
+      { scheduledToolPolicy: policy },
+    );
+    const persisted = (await loadCronStore(f.storePath)).jobs.find((job) => job.id === created.id);
+    expect(persisted?.payload.toolsAllow).toEqual(["*"]);
+    expect(persisted?.scheduledToolPolicy).toEqual(policy);
+    expect(persisted?.owner).toMatchObject(owner);
+    expect(created.state.nextRunAtMs).toBeUndefined();
   });
 });
