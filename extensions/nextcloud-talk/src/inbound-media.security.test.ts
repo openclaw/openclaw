@@ -395,7 +395,11 @@ describe("nextcloud-talk inbound media security", () => {
       replyPipeline?: unknown;
       replyOptions?: { skillFilter?: string[]; disableBlockStreaming?: boolean };
       record?: { onRecordError?: unknown };
-      delivery?: { preparePayload?: unknown; deliver?: unknown; onError?: unknown };
+      delivery?: {
+        preparePayload?: unknown;
+        deliverWithProviderMessageSending?: unknown;
+        onError?: unknown;
+      };
     };
     expect(request.accountId).toBe("default");
     expect(request.route).toEqual({
@@ -413,7 +417,7 @@ describe("nextcloud-talk inbound media security", () => {
     expect(request.delivery).toEqual(
       expect.objectContaining({
         preparePayload: expect.any(Function),
-        deliver: expect.any(Function),
+        deliverWithProviderMessageSending: expect.any(Function),
         onError: expect.any(Function),
       }),
     );

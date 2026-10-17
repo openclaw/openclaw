@@ -1,6 +1,7 @@
 import {
   createChannelInboundEnvelopeBuilderAsync,
   formatInboundMediaUnavailableText,
+  type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   channelIngressRoutes,
@@ -22,7 +23,6 @@ import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
   createChannelPairingController,
-  deliverFormattedTextWithAttachments,
   logInboundDrop,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -318,6 +318,14 @@ export async function handleNextcloudTalkInbound(params: {
         : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
     );
     return;
+  }
+
+  if (message.attachment) {
+    const { isNextcloudTalkOutboundFileEcho } = await import("./outbound-media.js");
+    if (await isNextcloudTalkOutboundFileEcho({ account, message, signal: ingressAbortSignal })) {
+      runtime.log?.("nextcloud-talk: ignored own outbound file share");
+      return;
+    }
   }
 
   let stagedMedia: { path: string; contentType?: string } | undefined;
@@ -624,19 +632,23 @@ export async function handleNextcloudTalkInbound(params: {
                 ...payload,
                 text: sanitizeAssistantVisibleText(payload.text),
               },
-        deliver: async (payload) => {
-          const visibleReplySent = await deliverFormattedTextWithAttachments({
+        deliverWithProviderMessageSending: async (payload, info) => {
+          const { deliverNextcloudTalkReply } = await import("./reply.js");
+          return await deliverNextcloudTalkReply({
+            cfg: config as OpenClawConfig,
+            accountId: account.accountId,
+            agentId: route.agentId,
+            ctxPayload,
             payload,
-            send: async ({ text, replyToId }) => {
-              await sendMessageNextcloudTalk(roomToken, text, {
-                cfg: config,
-                accountId: account.accountId,
-                replyTo: replyToId,
-              });
-              statusSink?.({ lastOutboundAt: Date.now() });
-            },
+            info,
+            to: roomToken,
+            signal: ingressAbortSignal,
           });
-          return { visibleReplySent };
+        },
+        onDelivered: (_payload, _info, result) => {
+          if (result?.visibleReplySent) {
+            statusSink?.({ lastOutboundAt: Date.now() });
+          }
         },
         onError: (err, info) => {
           runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
@@ -656,7 +668,7 @@ export async function handleNextcloudTalkInbound(params: {
           runtime.error?.(`nextcloud-talk: failed updating session meta: ${String(err)}`);
         },
       },
-    } satisfies Parameters<typeof core.channel.inbound.dispatch>[0];
+    } satisfies ChannelInboundTurnPlan<"provider_message_sending">;
     // Dispatch owns accepted media even if its downstream processing rejects.
     mediaHandedOff = true;
     await core.channel.inbound.dispatch(dispatchParams);
