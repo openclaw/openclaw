@@ -4,6 +4,10 @@ import type { MatrixQaObservedEvent, MatrixQaRoomEvent } from "./events.js";
 import { mockMatrixQaHttp } from "./http.test-support.js";
 import { createMatrixQaRoomObserver, primeMatrixQaRoom } from "./sync.js";
 
+const defaultRoomId = "!room:matrix-qa.test";
+const baseUrl = "http://127.0.0.1:28008/";
+afterEach(() => vi.restoreAllMocks());
+
 function message(
   eventId: string,
   body: string,
@@ -19,7 +23,7 @@ function message(
 
 function syncResponse(
   events: MatrixQaRoomEvent[],
-  roomId = "!room:matrix-qa.test",
+  roomId = defaultRoomId,
   nextBatch = "next-batch-2",
 ) {
   return Response.json({
@@ -35,44 +39,34 @@ function makeObserver(
 ) {
   mockMatrixQaHttp(fetchImpl);
   return createMatrixQaRoomObserver({
-    baseUrl: "http://127.0.0.1:28008/",
+    baseUrl,
     observedEvents,
     since: "start-batch",
     accessToken,
   });
 }
 
-function eventWait(eventId: string, roomId = "!room:matrix-qa.test", timeoutMs = 1_000) {
+function eventWait(eventId: string, roomId = defaultRoomId, timeoutMs = 1_000) {
   return {
     predicate: (event: MatrixQaObservedEvent) => event.eventId === eventId,
     roomId,
     timeoutMs,
   };
 }
-const missingEvent = { predicate: () => false, roomId: "!room:matrix-qa.test", timeoutMs: 1_000 };
+const missingEvent = { predicate: () => false, roomId: defaultRoomId, timeoutMs: 1_000 };
 
 describe("matrix sync helpers", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   it("primes the Matrix sync cursor without recording observed events", async () => {
     const fetchImpl: typeof fetch = async () => Response.json({ next_batch: "primed-sync-cursor" });
 
     mockMatrixQaHttp(fetchImpl);
-
-    await expect(
-      primeMatrixQaRoom({
-        accessToken: "token",
-        baseUrl: "http://127.0.0.1:28008/",
-      }),
-    ).resolves.toBe("primed-sync-cursor");
+    await expect(primeMatrixQaRoom({ accessToken: "token", baseUrl })).resolves.toBe(
+      "primed-sync-cursor",
+    );
   });
 
   it("lets a second wait reuse later same-batch events without another /sync", async () => {
-    let calls = 0;
-    const fetchImpl: typeof fetch = async () => {
-      calls += 1;
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
       return syncResponse([
         message("$preview", "preview", {
           msgtype: "m.notice",
@@ -92,7 +86,7 @@ describe("matrix sync helpers", () => {
           "m.relates_to": { rel_type: "m.replace", event_id: "$preview" },
         }),
       ]);
-    };
+    });
     const observedEvents: MatrixQaObservedEvent[] = [];
     const observer = makeObserver(fetchImpl, observedEvents, "token");
 
@@ -112,15 +106,13 @@ describe("matrix sync helpers", () => {
         relType: "m.thread",
       },
     });
-    expect(calls).toBe(1);
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("keeps independent cursors for events observed while polling another room", async () => {
-    let calls = 0;
-    const fetchImpl: typeof fetch = async () => {
-      calls += 1;
-      return syncResponse([message("$main-reply", "main reply")], "!main:matrix-qa.test");
-    };
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      syncResponse([message("$main-reply", "main reply")], "!main:matrix-qa.test"),
+    );
     const observer = makeObserver(fetchImpl, [], "token");
 
     const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(1);
@@ -139,22 +131,20 @@ describe("matrix sync helpers", () => {
     await expect(
       observer.waitForRoomEvent(eventWait("$main-reply", "!main:matrix-qa.test")),
     ).resolves.toMatchObject({ event: { eventId: "$main-reply" } });
-    expect(calls).toBe(1);
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("shares one in-flight /sync poll across concurrent waits", async () => {
-    let calls = 0;
     const fetchStarted = createDeferred<void>();
     const fetchCanComplete = createDeferred<void>();
-    const fetchImpl: typeof fetch = async () => {
-      calls += 1;
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
       fetchStarted.resolve();
       await fetchCanComplete.promise;
       return syncResponse([
         message("$reply", "reply"),
         message("$notice", "notice", { msgtype: "m.notice" }),
       ]);
-    };
+    });
     const observer = makeObserver(fetchImpl, [], "token");
 
     const waits = Promise.all([
@@ -171,7 +161,7 @@ describe("matrix sync helpers", () => {
     expect(notice).toEqual({
       event: {
         kind: "notice",
-        roomId: "!room:matrix-qa.test",
+        roomId: defaultRoomId,
         eventId: "$notice",
         sender: "@sut:matrix-qa.test",
         type: "m.room.message",
@@ -181,17 +171,16 @@ describe("matrix sync helpers", () => {
       matched: true,
       since: "next-batch-2",
     });
-    expect(calls).toBe(1);
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("treats its own long-poll deadline as empty and recovers on the next wait", async () => {
     let now = 0;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     const expiredSignal = AbortSignal.abort(
       new DOMException("The operation was aborted due to timeout", "TimeoutError"),
     );
-    const timeoutSpy = vi
-      .spyOn(AbortSignal, "timeout")
+    vi.spyOn(AbortSignal, "timeout")
       .mockReturnValueOnce(expiredSignal)
       .mockReturnValue(new AbortController().signal);
     let calls = 0;
@@ -201,28 +190,18 @@ describe("matrix sync helpers", () => {
         now = 1;
         throw init?.signal instanceof AbortSignal ? init.signal.reason : expiredSignal.reason;
       }
-      return syncResponse(
-        [message("$recovered", "recovered")],
-        "!room:matrix-qa.test",
-        "recovered-batch",
-      );
+      return syncResponse([message("$recovered", "recovered")], defaultRoomId, "recovered-batch");
     };
     const observer = makeObserver(fetchImpl);
 
-    try {
-      await expect(
-        observer.waitForOptionalRoomEvent(eventWait("$missing", "!room:matrix-qa.test", 1)),
-      ).resolves.toEqual({ matched: false, since: "start-batch" });
-
-      now = 2;
-      await expect(observer.waitForRoomEvent(eventWait("$recovered"))).resolves.toMatchObject({
-        event: { eventId: "$recovered" },
-        since: "recovered-batch",
-      });
-    } finally {
-      nowSpy.mockRestore();
-      timeoutSpy.mockRestore();
-    }
+    await expect(
+      observer.waitForOptionalRoomEvent(eventWait("$missing", defaultRoomId, 1)),
+    ).resolves.toEqual({ matched: false, since: "start-batch" });
+    now = 2;
+    await expect(observer.waitForRoomEvent(eventWait("$recovered"))).resolves.toMatchObject({
+      event: { eventId: "$recovered" },
+      since: "recovered-batch",
+    });
     expect(calls).toBe(2);
   });
 
@@ -245,7 +224,7 @@ describe("matrix sync helpers", () => {
 
   it("preserves response-body failures raised after its long-poll deadline fires", async () => {
     const deadline = new AbortController();
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
     const bodyError = new Error("late Matrix response body failure");
     const observer = makeObserver(
       async () =>
@@ -259,10 +238,6 @@ describe("matrix sync helpers", () => {
         ),
     );
 
-    try {
-      await expect(observer.waitForOptionalRoomEvent(missingEvent)).rejects.toBe(bodyError);
-    } finally {
-      timeoutSpy.mockRestore();
-    }
+    await expect(observer.waitForOptionalRoomEvent(missingEvent)).rejects.toBe(bodyError);
   });
 });

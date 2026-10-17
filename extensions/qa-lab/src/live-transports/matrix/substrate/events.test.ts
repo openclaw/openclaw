@@ -6,15 +6,22 @@ import {
 } from "./events.js";
 
 const roomId = "!room:matrix-qa.test";
+const sender = "@sut:matrix-qa.test";
+
+function message(content: Record<string, unknown>, envelope: Partial<MatrixQaRoomEvent> = {}) {
+  return { event_id: "$event", sender, type: "m.room.message", ...envelope, content };
+}
 
 function expectEvent(
-  event: MatrixQaRoomEvent,
-  expected: Pick<MatrixQaObservedEvent, "eventId"> & Partial<MatrixQaObservedEvent>,
+  content: Record<string, unknown>,
+  expected: Partial<MatrixQaObservedEvent>,
+  envelope: Partial<MatrixQaRoomEvent> = {},
 ) {
-  expect(normalizeMatrixQaObservedEvent(roomId, event)).toEqual({
+  expect(normalizeMatrixQaObservedEvent(roomId, message(content, envelope))).toEqual({
+    eventId: "$event",
     kind: "message",
     roomId,
-    sender: "@sut:matrix-qa.test",
+    sender,
     type: "m.room.message",
     ...expected,
   });
@@ -24,28 +31,17 @@ describe("matrix observed event normalization", () => {
   it("normalizes message events with thread metadata", () => {
     expectEvent(
       {
-        event_id: "$event",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        origin_server_ts: 1_700_000_000_000,
-        content: {
-          body: "hello",
-          msgtype: "m.text",
-          "m.mentions": {
-            user_ids: ["@sut:matrix-qa.test"],
-          },
-          "m.relates_to": {
-            rel_type: "m.thread",
-            event_id: "$root",
-            is_falling_back: true,
-            "m.in_reply_to": {
-              event_id: "$driver",
-            },
-          },
+        body: "hello",
+        msgtype: "m.text",
+        "m.mentions": { user_ids: [sender] },
+        "m.relates_to": {
+          rel_type: "m.thread",
+          event_id: "$root",
+          is_falling_back: true,
+          "m.in_reply_to": { event_id: "$driver" },
         },
       },
       {
-        eventId: "$event",
         originServerTs: 1_700_000_000_000,
         body: "hello",
         msgtype: "m.text",
@@ -55,36 +51,36 @@ describe("matrix observed event normalization", () => {
           inReplyToId: "$driver",
           isFallingBack: true,
         },
-        mentions: {
-          userIds: ["@sut:matrix-qa.test"],
-        },
+        mentions: { userIds: [sender] },
       },
+      { origin_server_ts: 1_700_000_000_000 },
     );
   });
 
   it.each([
     {
       name: "preview edit",
-      content: {
-        "m.relates_to": { rel_type: "m.replace", event_id: "$draft" },
-        "m.new_content": { body: "preview", "org.matrix.msc4357.live": {} },
-      },
+      newContent: { body: "preview", "org.matrix.msc4357.live": {} },
+      outerContent: {},
       live: true,
     },
     {
       name: "final edit",
-      content: {
-        "org.matrix.msc4357.live": {},
-        "m.relates_to": { rel_type: "m.replace", event_id: "$draft" },
-        "m.new_content": { body: "final" },
-      },
+      newContent: { body: "final" },
+      outerContent: { "org.matrix.msc4357.live": {} },
       live: undefined,
     },
-  ])("preserves the live marker only on $name", ({ content, live }) => {
-    const event = normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+  ])("preserves the live marker only on $name", ({ newContent, outerContent, live }) => {
+    const event = normalizeMatrixQaObservedEvent(roomId, {
       event_id: "$event",
       type: "m.room.message",
-      content: { body: "preview", msgtype: "m.text", ...content },
+      content: {
+        body: "preview",
+        msgtype: "m.text",
+        ...outerContent,
+        "m.relates_to": { rel_type: "m.replace", event_id: "$draft" },
+        "m.new_content": newContent,
+      },
     });
     expect(event?.live).toBe(live);
   });
@@ -92,202 +88,134 @@ describe("matrix observed event normalization", () => {
   it("normalizes Matrix reaction events with target metadata", () => {
     expectEvent(
       {
+        "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" },
+      },
+      {
+        eventId: "$reaction",
+        kind: "reaction",
+        sender: "@driver:matrix-qa.test",
+        type: "m.reaction",
+        originServerTs: 1_700_000_000_000,
+        relatesTo: { eventId: "$msg", relType: "m.annotation" },
+        reaction: { eventId: "$msg", key: "👍" },
+      },
+      {
         event_id: "$reaction",
         sender: "@driver:matrix-qa.test",
         type: "m.reaction",
         origin_server_ts: 1_700_000_000_000,
-        content: {
-          "m.relates_to": {
-            rel_type: "m.annotation",
-            event_id: "$msg",
-            key: "👍",
-          },
-        },
-      },
-      {
-        kind: "reaction",
-        eventId: "$reaction",
-        sender: "@driver:matrix-qa.test",
-        type: "m.reaction",
-        originServerTs: 1_700_000_000_000,
-        relatesTo: {
-          eventId: "$msg",
-          relType: "m.annotation",
-        },
-        reaction: {
-          eventId: "$msg",
-          key: "👍",
-        },
       },
     );
   });
 
-  it("records command presence without deriving a preview from raw approval text", () => {
-    const commandText = `printf ${"A".repeat(300)}`;
+  const approval = {
+    allowedDecisions: ["allow-once", "deny"],
+    state: "pending",
+    type: "approval.request",
+    version: 1,
+  };
+  it.each([
+    {
+      name: "command presence without a preview of raw approval text",
+      eventId: "$approval",
+      body: "React here: ✅ Allow once, ❌ Deny",
+      metadata: { id: "approval-1", kind: "exec", commandText: "printf " + "A".repeat(300) },
+      summary: { id: "approval-1", kind: "exec", hasCommandText: true },
+    },
+    {
+      name: "plugin approval metadata fields",
+      eventId: "$plugin-approval",
+      body: "Plugin approval required",
+      metadata: {
+        id: "plugin:approval-1",
+        kind: "plugin",
+        agentId: "qa",
+        pluginId: "qa-plugin",
+        severity: "medium",
+        toolName: "qa_tool",
+      },
+      summary: {
+        id: "plugin:approval-1",
+        kind: "plugin",
+        agentId: "qa",
+        pluginId: "qa-plugin",
+        severity: "medium",
+        toolName: "qa_tool",
+      },
+    },
+  ] as const)("summarizes $name", ({ eventId, body, metadata, summary }) => {
     expectEvent(
       {
-        event_id: "$approval",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        content: {
-          body: "React here: ✅ Allow once, ❌ Deny",
-          msgtype: "m.text",
-          "com.openclaw.approval": {
-            allowedDecisions: ["allow-once", "deny"],
-            commandText,
-            id: "approval-1",
-            kind: "exec",
-            state: "pending",
-            type: "approval.request",
-            version: 1,
-          },
-        },
-      },
-      {
-        eventId: "$approval",
-        body: "React here: ✅ Allow once, ❌ Deny",
+        body,
         msgtype: "m.text",
-        approval: {
-          allowedDecisions: ["allow-once", "deny"],
-          hasCommandText: true,
-          id: "approval-1",
-          kind: "exec",
-          state: "pending",
-          type: "approval.request",
-          version: 1,
-        },
+        "com.openclaw.approval": { ...structuredClone(approval), ...metadata },
       },
+      { eventId, body, msgtype: "m.text", approval: { ...approval, ...summary } },
+      { event_id: eventId },
     );
   });
 
-  it("summarizes Matrix plugin approval metadata fields", () => {
-    expectEvent(
-      {
-        event_id: "$plugin-approval",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        content: {
-          body: "Plugin approval required",
-          msgtype: "m.text",
-          "com.openclaw.approval": {
-            agentId: "qa",
-            allowedDecisions: ["allow-once", "deny"],
-            id: "plugin:approval-1",
-            kind: "plugin",
-            pluginId: "qa-plugin",
-            severity: "medium",
-            state: "pending",
-            toolName: "qa_tool",
-            type: "approval.request",
-            version: 1,
-          },
-        },
-      },
-      {
-        eventId: "$plugin-approval",
-        body: "Plugin approval required",
-        msgtype: "m.text",
-        approval: {
-          agentId: "qa",
-          allowedDecisions: ["allow-once", "deny"],
-          id: "plugin:approval-1",
-          kind: "plugin",
-          pluginId: "qa-plugin",
-          severity: "medium",
-          state: "pending",
-          toolName: "qa_tool",
-          type: "approval.request",
-          version: 1,
-        },
-      },
-    );
-  });
-
-  it("normalizes Matrix image messages with attachment metadata", () => {
-    expectEvent(
-      {
-        event_id: "$image",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        content: {
-          body: "Protocol note: generated the QA lighthouse image successfully.",
-          filename: "qa-lighthouse.png",
-          msgtype: "m.image",
-        },
-      },
-      {
-        eventId: "$image",
+  it.each([
+    {
+      name: "explicit filename and caption",
+      content: {
         body: "Protocol note: generated the QA lighthouse image successfully.",
-        msgtype: "m.image",
-        attachment: {
-          kind: "image",
-          caption: "Protocol note: generated the QA lighthouse image successfully.",
-          filename: "qa-lighthouse.png",
-        },
+        filename: "qa-lighthouse.png",
       },
-    );
-  });
-
-  it("treats filename-like Matrix media bodies as attachment filenames", () => {
+      attachment: {
+        kind: "image",
+        caption: "Protocol note: generated the QA lighthouse image successfully.",
+        filename: "qa-lighthouse.png",
+      },
+    },
+    {
+      name: "filename-like body",
+      content: { body: "qa-lighthouse.png" },
+      attachment: { kind: "image", filename: "qa-lighthouse.png" },
+    },
+  ] as const)("normalizes image messages with $name", ({ content, attachment }) => {
     expectEvent(
-      {
-        event_id: "$image",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        content: {
-          body: "qa-lighthouse.png",
-          msgtype: "m.image",
-        },
-      },
-      {
-        eventId: "$image",
-        body: "qa-lighthouse.png",
-        msgtype: "m.image",
-        attachment: {
-          kind: "image",
-          filename: "qa-lighthouse.png",
-        },
-      },
+      { ...content, msgtype: "m.image" },
+      { eventId: "$image", body: content.body, msgtype: "m.image", attachment },
+      { event_id: "$image" },
     );
   });
 
   it("normalizes membership events with explicit membership kind", () => {
     expectEvent(
+      { membership: "leave" },
+      {
+        eventId: "$membership",
+        kind: "membership",
+        sender: "@driver:matrix-qa.test",
+        stateKey: sender,
+        type: "m.room.member",
+        membership: "leave",
+      },
       {
         event_id: "$membership",
         sender: "@driver:matrix-qa.test",
-        state_key: "@sut:matrix-qa.test",
+        state_key: sender,
         type: "m.room.member",
-        content: {
-          membership: "leave",
-        },
-      },
-      {
-        kind: "membership",
-        eventId: "$membership",
-        sender: "@driver:matrix-qa.test",
-        stateKey: "@sut:matrix-qa.test",
-        type: "m.room.member",
-        membership: "leave",
       },
     );
   });
 
   it("classifies Matrix redactions without needing raw event inspection", () => {
     expectEvent(
+      {},
+      {
+        eventId: "$redaction",
+        kind: "redaction",
+        sender: "@driver:matrix-qa.test",
+        type: "m.room.redaction",
+        redactsEventId: "$reaction",
+      },
       {
         event_id: "$redaction",
         redacts: "$reaction",
         sender: "@driver:matrix-qa.test",
         type: "m.room.redaction",
-        content: {},
-      },
-      {
-        kind: "redaction",
-        eventId: "$redaction",
-        sender: "@driver:matrix-qa.test",
-        type: "m.room.redaction",
-        redactsEventId: "$reaction",
       },
     );
   });
