@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
+import type { Compilable } from "kysely";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -104,9 +105,7 @@ function search(
     agentId: "main",
     env: env(),
     query,
-    ...(options.limit !== undefined ? { limit: options.limit } : {}),
-    ...(options.sessionKeys ? { sessionKeys: options.sessionKeys } : {}),
-    ...(options.match ? { match: options.match } : {}),
+    ...options,
   });
 }
 
@@ -134,16 +133,8 @@ function agentKysely() {
   const database = openOpenClawAgentDatabase({ agentId: "main", env: env() });
   return {
     db: database.db,
-    kysely: getNodeSqliteKysely<
-      Pick<
-        OpenClawAgentKyselyDatabase,
-        | "session_transcript_active_events"
-        | "session_transcript_fts"
-        | "session_transcript_fts_rows"
-        | "session_transcript_index_state"
-        | "transcript_events"
-      >
-    >(database.db),
+    kysely: getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db),
+    run: <Row>(query: Compilable<Row>) => executeSqliteQuerySync(database.db, query).rows,
   };
 }
 
@@ -500,18 +491,14 @@ describe("searchSessionTranscripts", () => {
   it("hides dirty search rows after their transcript is gone while preserving other sessions", async () => {
     await appendUserMessage("stale", "agent:main:stale", "hidden needle");
     await appendUserMessage("current", "agent:main:current", "visible needle");
-    const { db, kysely } = agentKysely();
-    executeSqliteQuerySync(
-      db,
+    const { db, kysely, run } = agentKysely();
+    run(
       kysely
         .updateTable("session_transcript_index_state")
         .set({ needs_rebuild: 1 })
         .where("session_id", "=", "stale"),
     );
-    executeSqliteQuerySync(
-      db,
-      kysely.deleteFrom("transcript_events").where("session_id", "=", "stale"),
-    );
+    run(kysely.deleteFrom("transcript_events").where("session_id", "=", "stale"));
 
     // A retained window can hold stale FTS rows even when no hot transcript needs reconciliation.
     expect(listSessionsNeedingTranscriptIndexReconcile(db)).toEqual([]);
@@ -533,15 +520,14 @@ describe("searchSessionTranscripts", () => {
 
   it("preserves stale FTS rows until a replaced transcript is reconciled after commit", async () => {
     await appendUserMessage("session-1", "agent:main:main", "obsolete branch text");
-    const { db, kysely } = agentKysely();
+    const { kysely, run } = agentKysely();
     const indexedRows = () =>
-      executeSqliteQuerySync(
-        db,
+      run(
         kysely
           .selectFrom("session_transcript_fts")
           .select(["message_id", "text"])
           .where("session_id", "=", "session-1"),
-      ).rows;
+      );
     const originalIndexedRows = indexedRows();
     expect(originalIndexedRows).toEqual([
       expect.objectContaining({ text: "obsolete branch text" }),
@@ -559,13 +545,12 @@ describe("searchSessionTranscripts", () => {
 
     expect(indexedRows()).toEqual(originalIndexedRows);
     expect(
-      executeSqliteQuerySync(
-        db,
+      run(
         kysely
           .selectFrom("session_transcript_index_state")
           .select("needs_rebuild")
           .where("session_id", "=", "session-1"),
-      ).rows,
+      ),
     ).toEqual([{ needs_rebuild: 1 }]);
     expect(isSessionTranscriptIndexReconcileRunning({ agentId: "main", env: env() })).toBe(true);
     expect(search("obsolete")).toMatchObject({ hits: [], indexing: true });
@@ -645,37 +630,33 @@ describe("searchSessionTranscripts", () => {
   it("detects missing, dirty, lagging, and unclassified transcript projections", async () => {
     await appendUserMessage("session-0", "agent:main:sibling", "indexed sibling");
     await appendUserMessage("session-1", "agent:main:main", "indexed message");
-    const { db, kysely } = agentKysely();
+    const { db, kysely, run } = agentKysely();
     const pending = () => listSessionsNeedingTranscriptIndexReconcile(db);
+    const update = (values: { needs_rebuild: number; indexed_seq?: number }) =>
+      run(
+        kysely
+          .updateTable("session_transcript_index_state")
+          .set(values)
+          .where("session_id", "=", "session-1"),
+      );
+    const expectPending = () => {
+      expect(pending()).toEqual(["session-1"]);
+      expect(search("indexed").indexing).toBe(true);
+    };
 
     expect(pending()).toEqual([]);
     expect(search("indexed").indexing).toBe(false);
     expect(search("indexed").hits).toHaveLength(2);
 
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .updateTable("session_transcript_index_state")
-        .set({ needs_rebuild: 1 })
-        .where("session_id", "=", "session-1"),
-    );
-    expect(pending()).toEqual(["session-1"]);
-    expect(search("indexed").indexing).toBe(true);
+    update({ needs_rebuild: 1 });
+    expectPending();
     await waitForSearchReconcile("indexed");
 
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .updateTable("session_transcript_index_state")
-        .set({ indexed_seq: -1, needs_rebuild: 0 })
-        .where("session_id", "=", "session-1"),
-    );
-    expect(pending()).toEqual(["session-1"]);
-    expect(search("indexed").indexing).toBe(true);
+    update({ indexed_seq: -1, needs_rebuild: 0 });
+    expectPending();
     await waitForSearchReconcile("indexed");
 
-    executeSqliteQuerySync(
-      db,
+    run(
       kysely
         .updateTable("session_transcript_active_events")
         .set({ context_eligible: null })
@@ -689,18 +670,14 @@ describe("searchSessionTranscripts", () => {
     await waitForSearchReconcile("indexed");
     expect(search("indexed", { sessionKeys: ["agent:main:sibling"] }).indexing).toBe(false);
 
-    executeSqliteQuerySync(
-      db,
-      kysely.deleteFrom("session_transcript_index_state").where("session_id", "=", "session-1"),
-    );
-    expect(pending()).toEqual(["session-1"]);
-    expect(search("indexed").indexing).toBe(true);
+    run(kysely.deleteFrom("session_transcript_index_state").where("session_id", "=", "session-1"));
+    expectPending();
   });
 
   it("sweeps orphaned index rows even when transcript watermarks are current", async () => {
     await appendUserMessage("session-1", "agent:main:main", "anchor row");
     await appendUserMessage("session-2", "agent:main:sibling", "anchor sibling");
-    const { db, kysely } = agentKysely();
+    const { db, kysely, run } = agentKysely();
     // Simulate derived rows left by an out-of-band writer with foreign keys disabled.
     db.exec(`
       PRAGMA foreign_keys = OFF;
@@ -731,13 +708,12 @@ describe("searchSessionTranscripts", () => {
     );
 
     const ghostRows = () =>
-      executeSqliteQuerySync(
-        db,
+      run(
         kysely
           .selectFrom("session_transcript_fts")
           .select("message_id")
           .where("session_id", "=", "session-ghost"),
-      ).rows.length;
+      ).length;
     expect(ghostRows()).toBe(1);
     expect(search("anchor").indexing).toBe(false);
     await reconcileSessionTranscriptIndexes({ agentId: "main", env: env() });

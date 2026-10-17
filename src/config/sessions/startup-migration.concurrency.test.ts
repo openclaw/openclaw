@@ -110,8 +110,14 @@ function seedFleet(env: NodeJS.ProcessEnv, invalidFirst = false) {
   return { agentIds, cfg };
 }
 
+type HeldRequest = { agentId: string; release: () => void };
+function releaseHeld(requests: HeldRequest[]) {
+  while (requests.length > 0) {
+    requests[0]!.release();
+  }
+}
+
 function gateFirstCertificationPerTask() {
-  type HeldRequest = { agentId: string; release: () => void };
   const tasks: Array<{
     worker: Worker;
     agentId: string;
@@ -122,7 +128,18 @@ function gateFirstCertificationPerTask() {
   const heldReleases: HeldRequest[] = [];
   let bypass = false;
   let requestHeld = createDeferredCore();
-  const notifyHeld = () => {
+  const hold = (requests: HeldRequest[], agentId: string, post: () => void) => {
+    const request = {
+      agentId,
+      release: () => {
+        const index = requests.indexOf(request);
+        if (index !== -1) {
+          requests.splice(index, 1);
+          post();
+        }
+      },
+    };
+    requests.push(request);
     requestHeld.resolve();
     requestHeld = createDeferredCore();
   };
@@ -146,35 +163,17 @@ function gateFirstCertificationPerTask() {
     let gated = false;
     port.postMessage = (message: unknown, transferList) => {
       const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
-      if (
-        !bypass &&
-        typeof message === "object" &&
-        message !== null &&
-        "type" in message &&
-        message.type === "release"
-      ) {
-        const release: HeldRequest = {
-          agentId,
-          release: () => {
-            const index = heldReleases.indexOf(release);
-            if (index !== -1) {
-              heldReleases.splice(index, 1);
-              postMessage(message, options);
-            }
-          },
-        };
-        heldReleases.push(release);
-        notifyHeld();
+      const post = () => postMessage(message, options);
+      if (typeof message !== "object" || message === null || !("type" in message)) {
+        post();
         return;
       }
-      if (
-        gated ||
-        typeof message !== "object" ||
-        message === null ||
-        !("type" in message) ||
-        message.type !== "canonical-validation"
-      ) {
-        postMessage(message, options);
+      if (!bypass && message.type === "release") {
+        hold(heldReleases, agentId, post);
+        return;
+      }
+      if (gated || message.type !== "canonical-validation") {
+        post();
         return;
       }
       if (
@@ -189,21 +188,10 @@ function gateFirstCertificationPerTask() {
       gated = true;
       expect(message.databaseOptions.agentId).toBe(agentId);
       if (bypass) {
-        postMessage(message, options);
+        post();
         return;
       }
-      const request: HeldRequest = {
-        agentId: observed.agentId,
-        release: () => {
-          const index = held.indexOf(request);
-          if (index !== -1) {
-            held.splice(index, 1);
-            postMessage(message, options);
-          }
-        },
-      };
-      held.push(request);
-      notifyHeld();
+      hold(held, agentId, post);
     };
   };
   return {
@@ -229,12 +217,8 @@ function gateFirstCertificationPerTask() {
     },
     releaseAll: () => {
       bypass = true;
-      while (held.length > 0) {
-        held[0]!.release();
-      }
-      while (heldReleases.length > 0) {
-        heldReleases[0]!.release();
-      }
+      releaseHeld(held);
+      releaseHeld(heldReleases);
     },
   };
 }
@@ -310,17 +294,13 @@ it("reuses two workers while closing each database task before runtime handoff",
           expect([...observer.workers].every((worker) => worker.threadId > 0)).toBe(true);
           expect(gate.held).toHaveLength(waveSize);
         }
-        while (gate.held.length > 0) {
-          gate.held[0]!.release();
-        }
+        releaseHeld(gate.held);
         await gate.waitFor("release", waveSize, startup);
         expect(gate.heldReleases).toHaveLength(waveSize);
         // Even a closed database cannot free the task until its parent releases the close owner.
         expect(gate.tasks).toHaveLength(admitted);
         expect(consumed).toHaveLength(admitted - waveSize);
-        while (gate.heldReleases.length > 0) {
-          gate.heldReleases[0]!.release();
-        }
+        releaseHeld(gate.heldReleases);
         const handoffWave = handoffWaves[waveIndex];
         if (handoffWave) {
           await Promise.race([handoffWave.promise, startup]);

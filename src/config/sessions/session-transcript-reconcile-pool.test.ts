@@ -42,6 +42,31 @@ vi.mock("node:worker_threads", async () =>
 
 const observer = useReconcileWorkerObserver();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type DatabaseOptions = Parameters<typeof reconcile>[0];
+
+function fixture(name: string) {
+  const stateDir = tempDirs.make(`openclaw-reconcile-${name}-`);
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  setRuntimeConfigSnapshot({});
+  return { stateDir, env, options: { agentId: "main", env } };
+}
+
+async function openDirtyDatabase(options: DatabaseOptions & { env: NodeJS.ProcessEnv }) {
+  await closeDatabase(resolveOpenClawAgentSqlitePath(options));
+  const database = openDatabase(options);
+  const nativeLeases = readAgentDatabaseLeaseIds(database.path, options.env);
+  expect(nativeLeases).toHaveLength(1);
+  database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
+  return { database, nativeLeases };
+}
+
+function expectPool(snapshot: Partial<ReturnType<typeof poolSnapshot>>) {
+  expect(poolSnapshot()).toMatchObject(snapshot);
+}
+
+async function expectReconciled(options: DatabaseOptions, reconciledSessions: number) {
+  await expect(reconcile(options)).resolves.toEqual({ reconciledSessions });
+}
 
 function holdPlanFinish(
   task: Parameters<NonNullable<typeof observer.onTask>>[0],
@@ -89,9 +114,7 @@ async function cleanup(stateDir: string) {
 }
 
 it("closes a queued admission without dispatching it after shutdown", async () => {
-  const stateDir = tempDirs.make("openclaw-reconcile-queued-admission-");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  setRuntimeConfigSnapshot({});
+  const { stateDir, env } = fixture("queued-admission");
   const database = openDatabase({ agentId: "main", env });
   const resume = createDeferredCore();
   const queued = createDeferredCore();
@@ -175,26 +198,19 @@ function observeCanonicalWriterLeases() {
 }
 
 it("reconciles a dirty projection while the parent retains serving Gateway ownership", async () => {
-  const stateDir = tempDirs.make("openclaw-reconcile-parent-owner-");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const options = { agentId: "main", env };
+  const { stateDir, env, options } = fixture("parent-owner");
   const canonical = observeCanonicalWriterLeases();
   let owner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
   try {
-    setRuntimeConfigSnapshot({});
     await seed(options, "parent-owner", "synthetic ownership");
     // Seeding may retain a worker writer; this fixture starts with only its native handle.
-    await closeDatabase(resolveOpenClawAgentSqlitePath(options));
-    const database = openDatabase(options);
-    const nativeLeases = readAgentDatabaseLeaseIds(database.path, env);
-    expect(nativeLeases).toHaveLength(1);
+    const { database, nativeLeases } = await openDirtyDatabase(options);
     let plannerLeaseId: string | undefined;
     observer.onTask = ({ input }) => {
       if (input.mode === "disk" && input.path === database.path) {
         plannerLeaseId = input.leaseId;
       }
     };
-    database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
     owner = acquireGatewayStateOwner({
       databasePath: openOpenClawStateDatabase({ env }).path,
       payload: {
@@ -205,9 +221,7 @@ it("reconciles a dirty projection while the parent retains serving Gateway owner
         role: "gateway",
       },
     });
-    await expect(reconcile(options)).resolves.toEqual({
-      reconciledSessions: 1,
-    });
+    await expectReconciled(options, 1);
     owner.assertCurrent();
     const canonicalLeaseId = expectDefined(
       canonical.leases.get(database.path),
@@ -235,8 +249,7 @@ it("reconciles a dirty projection while the parent retains serving Gateway owner
 it.each(["complete", "native-exit"] as const)(
   "drains active and queued reconciliation through %s before retiring its lifecycle",
   async (ending) => {
-    const stateDir = tempDirs.make("openclaw-reconcile-pool-close-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const { stateDir, env } = fixture("pool-close");
     const targets = ["active", "queued", "next"].map((agentId) => ({ agentId, env }));
     const paused = createDeferredCore();
     let releaseAcknowledgement: (() => void) | undefined;
@@ -248,7 +261,6 @@ it.each(["complete", "native-exit"] as const)(
     const plannerLeases = new Map<string, string>();
     let operations: Promise<PromiseSettledResult<unknown>[]> | undefined;
     try {
-      setRuntimeConfigSnapshot({});
       for (const options of targets) {
         await seed(
           options,
@@ -257,12 +269,8 @@ it.each(["complete", "native-exit"] as const)(
           options.agentId,
           `agent:${options.agentId}:lifecycle`,
         );
-        await closeDatabase(resolveOpenClawAgentSqlitePath(options));
-        const database = openDatabase(options);
-        const baseline = readAgentDatabaseLeaseIds(database.path, env);
-        expect(baseline).toHaveLength(1);
+        const { database, nativeLeases: baseline } = await openDirtyDatabase(options);
         nativeLeases.set(database.path, baseline);
-        database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
       }
       await closePool();
       observer.onTask = (task) => {
@@ -285,10 +293,7 @@ it.each(["complete", "native-exit"] as const)(
       operations = Promise.allSettled([direct, waitForReconcile(targets[1]!)]);
       await paused.promise;
       await vi.waitFor(() => {
-        expect(poolSnapshot()).toMatchObject({
-          workers: 1,
-          activeTasks: 1,
-        });
+        expectPool({ workers: 1, activeTasks: 1 });
       });
       const activePath = openDatabase(targets[0]!).path;
       const canonicalLeaseId = expectDefined(
@@ -327,11 +332,7 @@ it.each(["complete", "native-exit"] as const)(
       expect(modes.toSorted()).toEqual(
         ending === "native-exit" ? ["disk", "disk", "release"] : ["disk", "disk"],
       );
-      expect(poolSnapshot()).toMatchObject({
-        workers: 0,
-        activeTasks: 0,
-        pendingTasks: 0,
-      });
+      expectPool({ workers: 0, activeTasks: 0, pendingTasks: 0 });
       for (const options of targets.slice(0, 2)) {
         const database = openDatabase(options);
         const actual = readAgentDatabaseLeaseIds(database.path, env);
@@ -353,13 +354,8 @@ it.each(["complete", "native-exit"] as const)(
       observer.onTask = ({ worker }) => {
         expect(worker.threadId).not.toBe(threadId);
       };
-      await expect(reconcile(targets[2]!)).resolves.toEqual({
-        reconciledSessions: 1,
-      });
-      expect(poolSnapshot()).toMatchObject({
-        workers: 1,
-        workersCreated: 1,
-      });
+      await expectReconciled(targets[2]!, 1);
+      expectPool({ workers: 1, workersCreated: 1 });
       await drainGlobalSingletonLifecycleState("restart");
       expect(poolSnapshot().workers).toBe(0);
     } finally {
@@ -375,9 +371,7 @@ it.each(["complete", "native-exit"] as const)(
 it.each(["complete", "native-exit", "pool-timeout"] as const)(
   "joins transcript lease settlement before closing an agent (%s)",
   async (ending) => {
-    const stateDir = tempDirs.make("openclaw-reconcile-agent-close-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const options = { agentId: "main", env };
+    const { stateDir, env, options } = fixture("agent-close");
     const paused = createDeferredCore();
     const events: string[] = [];
     let releaseAcknowledgement: (() => void) | undefined;
@@ -386,7 +380,6 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
     let closing: Promise<boolean> | undefined;
     let closeSpy: { mockRestore(): void } | undefined;
     try {
-      setRuntimeConfigSnapshot({});
       await seed(options, "settlement", "retained bytes");
       const orphanSessionId = "deferred-orphan";
       if (ending === "complete") {
@@ -497,9 +490,7 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
           content: { count: 1 },
         });
         observer.onTask = undefined;
-        await expect(reconcile(options)).resolves.toEqual({
-          reconciledSessions: 0,
-        });
+        await expectReconciled(options, 0);
         expect(orphanRows()).toEqual({
           index: { count: 0 },
           identities: { count: 0 },
@@ -518,16 +509,13 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
 );
 
 it("revokes scheduled reconciliation before its first disk admission", async () => {
-  const stateDir = tempDirs.make("openclaw-reconcile-delayed-admission-");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const options = { agentId: "main", env };
+  const { stateDir, env, options } = fixture("delayed-admission");
   const resume = createDeferredCore();
   const originalRun = runOperation;
   const pool = await import("./session-transcript-reconcile-pool.js");
   let closing: Promise<boolean> | undefined;
   let completion: Promise<void> | undefined;
   try {
-    setRuntimeConfigSnapshot({});
     await seed(options, "delayed", "retained bytes");
     const database = openDatabase(options);
     database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();

@@ -37,17 +37,35 @@ const scope = {
   storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
 };
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
+const database = { agentId: scope.agentId, path: scope.storePath };
+const initialSessionEntry = { sessionId, updatedAt: 1, incognito: true };
+type TurnOptions = Omit<SqliteSessionTurnOptions, "expectedSessionId" | "sessionFile">;
+const turn = (options: TurnOptions) => ({
+  expectedSessionId: sessionId,
+  sessionFile: "synthetic-session.jsonl",
+  config: {},
+  ...options,
+});
+const user = (content: string, idempotencyKey?: string) => ({
+  role: "user",
+  content,
+  ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
+});
+const appended = (message: unknown, fresh = true, extra = {}) =>
+  expect.objectContaining({ appended: fresh, message, ...extra });
+const missing = (result: Promise<unknown>) =>
+  expect(result).rejects.toMatchObject({ code: "INCOGNITO_SESSION_MISSING" });
 const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
 
 afterEach(() => {
   for (const owner of owners.splice(0)) {
     owner.close();
   }
-  memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
+  memorySessionActorOwners.closeDatabase(database);
 });
 
 async function fixture(boundAuthority = authority) {
-  const owner = createMemorySessionActorOwner({ agentId: scope.agentId, path: scope.storePath });
+  const owner = createMemorySessionActorOwner(database);
   owners.push(owner);
   const actor = await owner.acquire(
     { database: owner.identity, sessionKey },
@@ -57,21 +75,14 @@ async function fixture(boundAuthority = authority) {
   const initialized = await storage.mutate(
     {
       type: "session.metadata.initialize",
-      input: { scope, entry: { sessionId, updatedAt: 1, incognito: true } },
+      input: { scope, entry: initialSessionEntry },
     },
     authority,
   );
   expect(initialized.kind).toBe("committed");
-  const append = (options: Omit<SqliteSessionTurnOptions, "expectedSessionId" | "sessionFile">) =>
-    runWithSessionActorStorage(
-      { actor, authority: boundAuthority, agentId: scope.agentId, path: scope.storePath },
-      () =>
-        appendExpectedSessionTranscriptTurn(scope, {
-          expectedSessionId: sessionId,
-          sessionFile: "synthetic-session.jsonl",
-          config: {},
-          ...options,
-        }),
+  const append = (options: TurnOptions) =>
+    runWithSessionActorStorage({ actor, authority: boundAuthority, ...database }, () =>
+      appendExpectedSessionTranscriptTurn(scope, turn(options)),
     );
   const history = async () => {
     const read = await storage.read(
@@ -88,13 +99,13 @@ async function fixture(boundAuthority = authority) {
 
 describe("memory actor transcript turn binding", () => {
   it("preserves raw events and duplicate results through the unbound writer without bypassing authority", async () => {
-    await appendExpectedSessionTranscriptTurn(scope, {
-      expectedSessionId: sessionId,
-      sessionFile: "synthetic-session.jsonl",
-      config: {},
-      initialSessionEntry: { sessionId, updatedAt: 1, incognito: true },
-      messages: [{ eventId: "raw-user", message: { role: "user", content: "Input" } }],
-    });
+    await appendExpectedSessionTranscriptTurn(
+      scope,
+      turn({
+        initialSessionEntry,
+        messages: [{ eventId: "raw-user", message: user("Input") }],
+      }),
+    );
     const events = [
       {
         type: "custom",
@@ -125,45 +136,26 @@ describe("memory actor transcript turn binding", () => {
       }),
     ).rejects.toThrow("Event authority ended");
     expect(await loadSessionTranscriptEvents(scope)).toEqual(before);
-    memorySessionActorOwners.closeSession(
-      { agentId: scope.agentId, path: scope.storePath },
-      sessionKey,
-    );
-    await expect(
-      appendPreparedTranscriptEvent(scope, { type: "custom", id: "closed" }, () => {}),
-    ).rejects.toMatchObject({ code: "INCOGNITO_SESSION_MISSING" });
+    memorySessionActorOwners.closeSession(database, sessionKey);
+    await missing(appendPreparedTranscriptEvent(scope, { type: "custom", id: "closed" }, () => {}));
     expect(await loadSessionTranscriptEvents(scope)).toEqual([]);
   });
 
   it("acquires an unbound incognito owner for turns and notifications without recreating closed sessions", async () => {
-    const options = {
-      expectedSessionId: sessionId,
-      sessionFile: "synthetic-session.jsonl",
-      config: {},
-      messages: [{ message: { role: "user", content: "First input", idempotencyKey: "first" } }],
-    };
-    await expect(appendExpectedSessionTranscriptTurn(scope, options)).rejects.toMatchObject({
-      code: "INCOGNITO_SESSION_MISSING",
-    });
-    expect(
-      memorySessionActorOwners.read({ agentId: scope.agentId, path: scope.storePath }),
-    ).toBeUndefined();
+    const options = turn({ messages: [{ message: user("First input", "first") }] });
+    await missing(appendExpectedSessionTranscriptTurn(scope, options));
+    expect(memorySessionActorOwners.read(database)).toBeUndefined();
     const created = await appendExpectedSessionTranscriptTurn(scope, {
       ...options,
-      initialSessionEntry: { sessionId, updatedAt: 1, incognito: true },
+      initialSessionEntry,
     });
-    expect(created.appendedMessages).toEqual([
-      expect.objectContaining({ appended: true, message: options.messages[0]!.message }),
-    ]);
+    expect(created.appendedMessages).toEqual([appended(options.messages[0]!.message)]);
     const followup = await appendExpectedSessionTranscriptTurn(scope, {
       ...options,
-      messages: [{ message: { role: "user", content: "Follow-up", idempotencyKey: "follow-up" } }],
+      messages: [{ message: user("Follow-up", "follow-up") }],
     });
     expect(followup.appendedMessages).toEqual([
-      expect.objectContaining({
-        appended: true,
-        message: expect.objectContaining({ content: "Follow-up" }),
-      }),
+      appended(expect.objectContaining({ content: "Follow-up" })),
     ]);
     const notified = vi.fn();
     const unsubscribe = onInternalSessionTranscriptUpdate(notified);
@@ -176,16 +168,9 @@ describe("memory actor transcript turn binding", () => {
         }),
       );
       notified.mockClear();
-      memorySessionActorOwners.closeSession(
-        { agentId: scope.agentId, path: scope.storePath },
-        sessionKey,
-      );
-      await expect(publishTranscriptUpdate(scope)).rejects.toMatchObject({
-        code: "INCOGNITO_SESSION_MISSING",
-      });
-      await expect(appendExpectedSessionTranscriptTurn(scope, options)).rejects.toMatchObject({
-        code: "INCOGNITO_SESSION_MISSING",
-      });
+      memorySessionActorOwners.closeSession(database, sessionKey);
+      await missing(publishTranscriptUpdate(scope));
+      await missing(appendExpectedSessionTranscriptTurn(scope, options));
       expect(notified).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
@@ -194,19 +179,14 @@ describe("memory actor transcript turn binding", () => {
 
   it("preserves both simultaneous transcript appends", async () => {
     const { append, history } = await fixture();
-    const messages = [
-      { role: "user", content: "First concurrent input" },
-      { role: "user", content: "Second concurrent input" },
-    ];
+    const messages = [user("First concurrent input"), user("Second concurrent input")];
     const results = await Promise.allSettled(
       messages.map((message) => append({ messages: [{ message }] })),
     );
     expect(results).toEqual(
       messages.map((message) => ({
         status: "fulfilled",
-        value: expect.objectContaining({
-          appendedMessages: [expect.objectContaining({ appended: true, message })],
-        }),
+        value: expect.objectContaining({ appendedMessages: [appended(message)] }),
       })),
     );
     expect(
@@ -216,7 +196,7 @@ describe("memory actor transcript turn binding", () => {
 
   it("prepares fresh input once and publishes the same canonical bytes on retry", async () => {
     const { actor, owner, append, history } = await fixture();
-    const original = { role: "user", content: "Original", idempotencyKey: "input-1" };
+    const original = user("Original", "input-1");
     const accepted = { ...original, content: "Prepared input" };
     const prepareMessage = vi.fn(async () => accepted);
     const onMessageCommitted = vi.fn();
@@ -227,17 +207,11 @@ describe("memory actor transcript turn binding", () => {
       onCommittedSource,
     };
     const first = await append(options);
-    expect(first.appendedMessages).toEqual([
-      expect.objectContaining({ appended: true, message: accepted }),
-    ]);
+    expect(first.appendedMessages).toEqual([appended(accepted)]);
     const before = await history();
     const retry = await append(options);
     expect(retry.appendedMessages).toEqual([
-      expect.objectContaining({
-        appended: false,
-        message: accepted,
-        messageId: first.appendedMessages[0]!.messageId,
-      }),
+      appended(accepted, false, { messageId: first.appendedMessages[0]!.messageId }),
     ]);
     expect(prepareMessage).toHaveBeenCalledOnce();
     expect(onMessageCommitted).toHaveBeenCalledTimes(2);
@@ -255,8 +229,8 @@ describe("memory actor transcript turn binding", () => {
 
   it("prepares a Goal turn from its memory owner and replays the receipt without another append", async () => {
     const { actor, append, history } = await fixture();
-    const options: Omit<SqliteSessionTurnOptions, "expectedSessionId" | "sessionFile"> = {
-      messages: [{ message: { role: "user", content: "Start", idempotencyKey: "goal-input" } }],
+    const options: TurnOptions = {
+      messages: [{ message: user("Start", "goal-input") }],
       sessionTurnMutation: {
         kind: "goal",
         runId: "goal-run",
@@ -276,9 +250,7 @@ describe("memory actor transcript turn binding", () => {
     });
     const goalId = first.sessionTurnMutationResult!.result.goalId;
     expect(first.appendedMessages[0]?.message).toMatchObject({
-      __openclaw: {
-        intent: { kind: "session-goal-start", goalId, operationId: "goal-start" },
-      },
+      __openclaw: { intent: { kind: "session-goal-start", goalId, operationId: "goal-start" } },
     });
     const before = await history();
     const retry = await append(options);
@@ -310,14 +282,14 @@ describe("memory actor transcript turn binding", () => {
       const prepareMessage = vi.fn(async () => {
         await Promise.resolve();
         current = false;
-        return { role: "user", content: "Must not persist", idempotencyKey: "revoked" };
+        return user("Must not persist", "revoked");
       });
       const onMessageCommitted = vi.fn();
       await expect(
         append({
           messages: [
             {
-              message: { role: "user", content: "Original", idempotencyKey: "revoked" },
+              message: user("Original", "revoked"),
               preparation: { prepareMessage, ...(revoked === "source" ? { source } : {}) },
             },
           ],
