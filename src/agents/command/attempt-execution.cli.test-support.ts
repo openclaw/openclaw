@@ -18,6 +18,7 @@ import { buildCliMcpGrantContext } from "../cli-runner/mcp-grant-context.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
+import { createCompletionHandoff } from "./attempt-execution.announce.test-support.js";
 import type { runAgentAttempt } from "./attempt-execution.js";
 
 export function resetCliAttemptFixtureDatabases(suiteRoot: string): void {
@@ -79,13 +80,7 @@ export function createCliImageCapabilityPlugins(model: string) {
 export type RunAgentAttemptParams = Parameters<typeof runAgentAttempt>[0];
 export type RunAgentAttemptOverrides = Omit<
   Partial<RunAgentAttemptParams>,
-  | "agentDir"
-  | "modelRoutingProvenance"
-  | "opts"
-  | "runContext"
-  | "sessionEntry"
-  | "sessionKey"
-  | "workspaceDir"
+  "opts" | "runContext"
 > & {
   agentDir: RunAgentAttemptParams["agentDir"];
   modelRoutingProvenance?: ModelFallbackAttemptProvenance;
@@ -230,35 +225,14 @@ export async function runTrustedClaudeCompletionForTest({
     body: "A background task finished. Process the completion update now.",
     runId: "run-cli-trusted-announce",
     opts: {
-      trustedInternalHandoff: {
-        kind: "subagent-completion",
+      ...createCompletionHandoff({
         sourceSessionKey: trustedChildSessionKey,
         sourceSessionId: trustedChildEntry.sessionId,
         targetSessionKey: trustedSessionKey,
         targetSessionId: sessionEntry.sessionId,
         provider: "claude-cli",
         model: "opus",
-      },
-      inputProvenance: {
-        kind: "inter_session",
-        sourceSessionKey: trustedChildSessionKey,
-        sourceChannel: "internal",
-        sourceTool: "subagent_announce",
-      },
-      internalEvents: [
-        {
-          type: "task_completion",
-          source: "subagent",
-          childSessionKey: trustedChildSessionKey,
-          childSessionId: trustedChildEntry.sessionId,
-          announceType: "subagent task",
-          taskLabel: "review",
-          status: "ok",
-          statusLabel: "completed",
-          result: "child output",
-          replyInstruction: "Relay this completion.",
-        },
-      ],
+      }),
       runtimeContextFragments: [{ kind: "conversation-data", text: "supplemental context" }],
     },
     messageChannel: "telegram",
@@ -272,23 +246,15 @@ export async function runTrustedClaudeCompletionForTest({
     terminalReplyExpectation: "required",
   });
   expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  const fragment = (kind: string, text: unknown) => ({ kind, text });
   expect(run.runtimeContextFragments).toEqual([
-    {
-      kind: "runtime-instruction",
-      text: "A background task completed. Keep internal details private and use its result to reply in your normal assistant voice.",
-    },
-    {
-      kind: "conversation-data",
-      text: expect.stringContaining("child output"),
-    },
-    {
-      kind: "runtime-instruction",
-      text: "Relay this completion.",
-    },
-    {
-      kind: "conversation-data",
-      text: "supplemental context",
-    },
+    fragment(
+      "runtime-instruction",
+      "A background task completed. Keep internal details private and use its result to reply in your normal assistant voice.",
+    ),
+    fragment("conversation-data", expect.stringContaining("child output")),
+    fragment("runtime-instruction", "Relay this completion."),
+    fragment("conversation-data", "supplemental context"),
   ]);
   expect(run.trustedInternalHandoff?.sourceSessionKey).toBe(trustedChildSessionKey);
   const context = buildCliMcpGrantContext({

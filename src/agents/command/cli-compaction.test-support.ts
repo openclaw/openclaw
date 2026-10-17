@@ -46,69 +46,37 @@ export const resolveContextEngineFromRegistry = contextEngineRegistry.resolveCon
 export const resolveCliBackendConfig = cliBackends.resolveCliBackendConfig;
 export const recordCliCompactionInStoreImpl = sessionStoreModule.recordCliCompactionInStore;
 
+const installSpies = {
+  openSessionManager: () => vi.spyOn(SessionManager, "openAsync"),
+  ensureContextEnginesInitialized: () =>
+    vi.spyOn(contextEngineInit, "ensureContextEnginesInitialized"),
+  resolveContextEngine: () => vi.spyOn(contextEngineRegistry, "resolveContextEngine"),
+  createPreparedEmbeddedAgentSettingsManager: () =>
+    vi.spyOn(agentProjectSettings, "createPreparedEmbeddedAgentSettingsManager"),
+  applyAgentAutoCompactionGuard: () => vi.spyOn(agentSettings, "applyAgentAutoCompactionGuard"),
+  shouldPreemptivelyCompactBeforePrompt: () =>
+    vi.spyOn(preemptiveCompaction, "shouldPreemptivelyCompactBeforePrompt"),
+  resolveLiveToolResultMaxChars: () =>
+    vi.spyOn(toolResultTruncation, "resolveLiveToolResultMaxChars"),
+  runContextEngineMaintenance: () =>
+    vi.spyOn(contextEngineMaintenance, "runContextEngineMaintenance"),
+  acquirePreparedModelRuntime: () =>
+    vi.spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime"),
+  ensureSelectedAgentHarnessPlugin: () =>
+    vi.spyOn(harnessRuntimePlugin, "ensureSelectedAgentHarnessPlugin"),
+  maybeCompactAgentHarnessSession: () =>
+    vi.spyOn(harnessCompaction, "maybeCompactAgentHarnessSession"),
+  resolveCliBackendConfig: () => vi.spyOn(cliBackends, "resolveCliBackendConfig"),
+  recordCliCompactionInStore: () => vi.spyOn(sessionStoreModule, "recordCliCompactionInStore"),
+};
+
 export function setCliCompactionTestDeps(overrides: CliCompactionTestDeps): void {
-  if (overrides.openSessionManager) {
-    vi.spyOn(SessionManager, "openAsync").mockImplementation(overrides.openSessionManager);
-  }
-  if (overrides.ensureContextEnginesInitialized) {
-    vi.spyOn(contextEngineInit, "ensureContextEnginesInitialized").mockImplementation(
-      overrides.ensureContextEnginesInitialized,
-    );
-  }
-  if (overrides.resolveContextEngine) {
-    vi.spyOn(contextEngineRegistry, "resolveContextEngine").mockImplementation(
-      overrides.resolveContextEngine,
-    );
-  }
-  if (overrides.createPreparedEmbeddedAgentSettingsManager) {
-    vi.spyOn(agentProjectSettings, "createPreparedEmbeddedAgentSettingsManager").mockImplementation(
-      overrides.createPreparedEmbeddedAgentSettingsManager,
-    );
-  }
-  if (overrides.applyAgentAutoCompactionGuard) {
-    vi.spyOn(agentSettings, "applyAgentAutoCompactionGuard").mockImplementation(
-      overrides.applyAgentAutoCompactionGuard,
-    );
-  }
-  if (overrides.shouldPreemptivelyCompactBeforePrompt) {
-    vi.spyOn(preemptiveCompaction, "shouldPreemptivelyCompactBeforePrompt").mockImplementation(
-      overrides.shouldPreemptivelyCompactBeforePrompt,
-    );
-  }
-  if (overrides.resolveLiveToolResultMaxChars) {
-    vi.spyOn(toolResultTruncation, "resolveLiveToolResultMaxChars").mockImplementation(
-      overrides.resolveLiveToolResultMaxChars,
-    );
-  }
-  if (overrides.runContextEngineMaintenance) {
-    vi.spyOn(contextEngineMaintenance, "runContextEngineMaintenance").mockImplementation(
-      overrides.runContextEngineMaintenance,
-    );
-  }
-  if (overrides.acquirePreparedModelRuntime) {
-    vi.spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
-      overrides.acquirePreparedModelRuntime,
-    );
-  }
-  if (overrides.ensureSelectedAgentHarnessPlugin) {
-    vi.spyOn(harnessRuntimePlugin, "ensureSelectedAgentHarnessPlugin").mockImplementation(
-      overrides.ensureSelectedAgentHarnessPlugin,
-    );
-  }
-  if (overrides.maybeCompactAgentHarnessSession) {
-    vi.spyOn(harnessCompaction, "maybeCompactAgentHarnessSession").mockImplementation(
-      overrides.maybeCompactAgentHarnessSession,
-    );
-  }
-  if (overrides.resolveCliBackendConfig) {
-    vi.spyOn(cliBackends, "resolveCliBackendConfig").mockImplementation(
-      overrides.resolveCliBackendConfig,
-    );
-  }
-  if (overrides.recordCliCompactionInStore) {
-    vi.spyOn(sessionStoreModule, "recordCliCompactionInStore").mockImplementation(
-      overrides.recordCliCompactionInStore,
-    );
+  const replacements: Record<string, unknown> = overrides;
+  for (const [name, install] of Object.entries(installSpies)) {
+    const replacement = replacements[name];
+    if (typeof replacement === "function") {
+      install().mockImplementation((...args: unknown[]) => replacement(...args));
+    }
   }
 }
 
@@ -116,10 +84,7 @@ export function buildContextEngine(params: {
   compactCalls: Array<Parameters<ContextEngine["compact"]>[0]>;
 }): ContextEngine {
   return {
-    info: {
-      id: "legacy",
-      name: "Legacy Context Engine",
-    },
+    info: { id: "legacy", name: "Legacy Context Engine" },
     async ingest() {
       return { ingested: false };
     },
@@ -146,33 +111,33 @@ export const systemCompactionHost = {
 } satisfies Parameters<typeof runCliTurnCompactionLifecycle>[1];
 
 async function writeSessionFile(params: { sessionFile: string; sessionId: string }) {
-  // The lifecycle compacts canonical OpenClaw session JSONL, so tests write the
-  // same session/message envelope the real store appends.
+  // Match the canonical transcript envelope used by the lifecycle.
   await fs.mkdir(path.dirname(params.sessionFile), { recursive: true });
   await fs.writeFile(
     params.sessionFile,
     [
-      JSON.stringify({
+      {
         type: "session",
         version: CURRENT_SESSION_VERSION,
         id: params.sessionId,
         timestamp: new Date(0).toISOString(),
         cwd: path.dirname(params.sessionFile),
-      }),
-      JSON.stringify({
+      },
+      {
         type: "message",
         message: { role: "user", content: "old ask", timestamp: 1 },
-      }),
-      JSON.stringify({
+      },
+      {
         type: "message",
         message: {
           role: "assistant",
           content: [{ type: "text", text: "old answer" }],
           timestamp: 2,
         },
-      }),
-      "",
-    ].join("\n"),
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n") + "\n",
     "utf-8",
   );
 }
@@ -315,16 +280,18 @@ export async function prepareContextSuccessorScenario(params: {
   suffix: string;
   tmpDir: string;
 }) {
+  const suffix = `cli-successor-${params.suffix}`;
   return prepareCompactionScenario({
-    suffix: `cli-successor-${params.suffix}`,
+    suffix,
     tmpDir: params.tmpDir,
     contextEngine: () => ({
       ...buildContextEngine({ compactCalls: [] }),
       async compact() {
-        const sessionKey = `agent:main:cli-successor-${params.suffix}`;
-        const sessionId = `session-cli-successor-${params.suffix}`;
-        const storePath = path.join(params.tmpDir, `cli-successor-${params.suffix}.sqlite`);
-        return params.result({ sessionId, sessionKey, storePath });
+        return params.result({
+          sessionId: `session-${suffix}`,
+          sessionKey: `agent:main:${suffix}`,
+          storePath: path.join(params.tmpDir, `${suffix}.sqlite`),
+        });
       },
     }),
     recordCliCompactionInStore: vi.fn(
