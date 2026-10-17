@@ -3,6 +3,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureSqliteDatabaseAdmissions,
@@ -70,6 +74,24 @@ function reconstructionRow(db: DatabaseSync) {
 }
 
 const readFiles = (files: string[]) => files.map((file) => fs.readFileSync(file));
+const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
+const journalRow = (db: DatabaseSync, agentId: string) =>
+  db.prepare("SELECT * FROM agent_deletion_journal WHERE agent_id = ?").get(agentId);
+
+function makeState(prefix: string, canonical = true) {
+  const directory = tempDirs.make(prefix);
+  const stateDir = canonical ? fs.realpathSync.native(directory) : directory;
+  const env = { OPENCLAW_STATE_DIR: stateDir };
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  return { stateDir, env };
+}
+
+function configFor(workspace?: string): OpenClawConfig {
+  return {
+    agents: { entries: { main: workspace ? { workspace } : {} } },
+    plugins: { enabled: false },
+  };
+}
 
 afterEach(async () => {
   try {
@@ -105,9 +127,8 @@ it.each([
 ] as const)(
   "quarantines unusable %s %s history (%s, complete=%s, archiveBlocked=%s) without touching stores",
   async (agentId, column, raw, complete, archiveBlocked) => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("doctor-unreadable-journal-") };
-    vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } }, plugins: { enabled: false } };
+    const { env } = makeState("doctor-unreadable-journal-", false);
+    const cfg = configFor();
     const healthy = legacyDatabase("main", env);
     const pathname = legacyDatabase(agentId, env);
     const lockPath = `${pathname}.reindex-lock.sqlite`;
@@ -151,12 +172,8 @@ it.each([
     state.db
       .prepare(`UPDATE agent_deletion_journal SET ${column} = ? WHERE agent_id = ?`)
       .run(raw, agentId);
-    const original = state.db
-      .prepare("SELECT * FROM agent_deletion_journal WHERE agent_id = ?")
-      .get(agentId);
-    const valid = state.db
-      .prepare("SELECT * FROM agent_deletion_journal WHERE agent_id = 'valid'")
-      .get();
+    const original = journalRow(state.db, agentId);
+    const valid = journalRow(state.db, "valid");
     const before = fs.readFileSync(pathname);
     const externalBefore = externalPath ? fs.readFileSync(externalPath) : undefined;
     const recoveryDir = path.join(env.OPENCLAW_STATE_DIR, "agents", agentId, "recovery");
@@ -167,9 +184,7 @@ it.each([
     const result = await repairJournal(preflight, env);
     if (archiveBlocked) {
       expect(result.warnings.join("\n")).toContain("Could not save deletion recovery receipt");
-      expect(
-        state.db.prepare("SELECT * FROM agent_deletion_journal WHERE agent_id = ?").get(agentId),
-      ).toEqual(original);
+      expect(journalRow(state.db, agentId)).toEqual(original);
       expect(fs.readFileSync(pathname)).toEqual(before);
       expect(fs.readFileSync(recoveryDir, "utf8")).toBe("preserved obstruction");
       const next = await prepareDoctorDatabasePreflight({ cfg });
@@ -200,13 +215,9 @@ it.each([
         entries: expect.arrayContaining([expect.objectContaining({ agentId })]),
       });
     } else {
-      expect(
-        state.db.prepare("SELECT * FROM agent_deletion_journal WHERE agent_id = ?").get(agentId),
-      ).toBeUndefined();
+      expect(journalRow(state.db, agentId)).toBeUndefined();
     }
-    expect(
-      state.db.prepare("SELECT * FROM agent_deletion_journal WHERE agent_id = 'valid'").get(),
-    ).toEqual(valid);
+    expect(journalRow(state.db, "valid")).toEqual(valid);
     expect(
       runOpenClawStateWriteTransaction(
         (database) => completeAgentDeletionJournalInDatabase(database, "valid", "valid-deletion"),
@@ -240,13 +251,8 @@ it.each([
 ])(
   "reconstructs with a receipt and keeps %s stores held on the next Doctor pass",
   async (location) => {
-    const stateDir = fs.realpathSync.native(tempDirs.make("doctor-journal-recovery-"));
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: { workspace: path.join(stateDir, "workspace") } } },
-      plugins: { enabled: false },
-    };
+    const { stateDir, env } = makeState("doctor-journal-recovery-");
+    const cfg = configFor(path.join(stateDir, "workspace"));
     const stores = ["main", "retired"].map((agentId) => legacyDatabase(agentId, env));
     const lockPath = `${stores[0]}.reindex-lock.sqlite`;
     using lock = new DatabaseSync(lockPath);
@@ -281,7 +287,7 @@ it.each([
     }
     const configPath = path.join(stateDir, "openclaw.json");
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-    fs.writeFileSync(configPath, JSON.stringify(cfg));
+    writeJson(configPath, cfg);
     db.close();
     if (lostState) {
       for (const suffix of ["", "-wal", "-shm"]) {
@@ -297,8 +303,8 @@ it.each([
       expect(refused.warnings.join("\n")).toContain(
         "ownership configuration could not be verified",
       );
-      const unchanged = new DatabaseSync(statePath, { readOnly: true });
-      try {
+      {
+        using unchanged = new DatabaseSync(statePath, { readOnly: true });
         expect(
           unchanged
             .prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'")
@@ -311,11 +317,9 @@ it.each([
             )
             .all(),
         ).toEqual([]);
-      } finally {
-        unchanged.close();
       }
-      stores.forEach((file, index) => expect(fs.readFileSync(file)).toEqual(bytes[index]));
-      fs.writeFileSync(configPath, JSON.stringify(cfg));
+      expect(readFiles(stores)).toEqual(bytes);
+      writeJson(configPath, cfg);
       const stale = await repairJournal(incomplete, env);
       expect(stale.changes).toEqual([]);
       expect(stale.warnings.join("\n")).toContain("ownership configuration could not be verified");
@@ -354,14 +358,12 @@ it.each([
       const leaseId = claimOpenClawAgentDatabaseLease({ agentId, env, path: stores[index]! });
       releaseOpenClawAgentDatabaseLease(leaseId, { env }, "read-only");
     }
-    stores.forEach((file, index) => expect(fs.readFileSync(file)).toEqual(bytes[index]));
+    expect(readFiles(stores)).toEqual(bytes);
   },
 );
 
 it("keeps deletion history unavailable when only canonical SQLite sidecars survive", async () => {
-  const stateDir = fs.realpathSync.native(tempDirs.make("doctor-journal-sidecars-"));
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const { stateDir, env } = makeState("doctor-journal-sidecars-");
   const agentDir = path.join(stateDir, "agents", "retired", "agent");
   fs.mkdirSync(agentDir, { recursive: true });
   const sidecars = ["-wal", "-shm", "-journal"].map((suffix) =>
@@ -399,13 +401,10 @@ it.each([
 ])(
   "preserves %s credential artifacts after journal reconstruction without main state",
   async (location) => {
-    const stateDir = fs.realpathSync.native(tempDirs.make("doctor-held-artifacts-"));
-    const env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: stateDir };
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const cfg: OpenClawConfig = {
-      agents: { entries: { main: {} } },
-      plugins: { enabled: false },
-    };
+    const state = makeState("doctor-held-artifacts-");
+    const { stateDir } = state;
+    const env: NodeJS.ProcessEnv = state.env;
+    const cfg = configFor();
     const usesCustomDirectory = location === "configured-new-owner" || location === "env-selected";
     const customAgentDirectory = tempDirs.make("doctor-held-agent-directory-");
     const retiredPath = legacyDatabase(
@@ -429,31 +428,21 @@ it.each([
     const agentDir = path.dirname(retiredPath);
     const catalogPath = path.join(agentDir, "models.json");
     const authPath = path.join(agentDir, "auth-profiles.json");
-    const auth = JSON.stringify({
-      version: 1,
-      profiles: {
-        "fixture:default": {
-          type: "api_key",
-          provider: "fixture",
-          key: "synthetic-held-credential",
+    const auth = createAuthProfileStoreFixture({
+      "fixture:default": createApiKeyCredential("fixture", "synthetic-held-credential"),
+    });
+    writeJson(authPath, auth);
+    writeJson(path.join(customDirectory, "auth-profiles.json"), auth);
+    writeJson(catalogPath, {
+      providers: {
+        fixture: {
+          api: "openai-completions",
+          baseUrl: "https://example.invalid/v1",
+          apiKey: "synthetic-held-credential",
+          models: [],
         },
       },
     });
-    fs.writeFileSync(authPath, auth);
-    fs.writeFileSync(path.join(customDirectory, "auth-profiles.json"), auth);
-    fs.writeFileSync(
-      catalogPath,
-      JSON.stringify({
-        providers: {
-          fixture: {
-            api: "openai-completions",
-            baseUrl: "https://example.invalid/v1",
-            apiKey: "synthetic-held-credential",
-            models: [],
-          },
-        },
-      }),
-    );
     const authPaths = [authPath];
     const aliasArtifacts: string[] = [];
     if (location === "hardlinked-owner") {
@@ -470,13 +459,10 @@ it.each([
         provider: "openai-codex",
         id: "0123456789abcdef0123456789abcdef",
       };
-      fs.writeFileSync(
+      writeJson(
         secondAuth,
-        JSON.stringify({
-          version: 1,
-          profiles: {
-            [profileId]: { type: "oauth", provider: ref.provider, oauthRef: ref },
-          },
+        createAuthProfileStoreFixture({
+          [profileId]: { type: "oauth", provider: ref.provider, oauthRef: ref },
         }),
       );
       fs.copyFileSync(catalogPath, secondCatalog);
@@ -485,7 +471,7 @@ it.each([
     }
     const configPath = path.join(stateDir, "openclaw.json");
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-    fs.writeFileSync(configPath, JSON.stringify(cfg));
+    writeJson(configPath, cfg);
     closeOpenClawStateDatabaseForTest();
     const statePath = resolveOpenClawStateSqlitePath(env);
     const database = new DatabaseSync(statePath);
@@ -498,11 +484,13 @@ it.each([
     const initial = await prepareDoctorDatabasePreflight();
     const reconstruction = await repairJournal(initial, env);
     expect(reconstruction.changes.join("\n")).toContain("recorded a Doctor receipt");
-    const state = openOpenClawStateDatabase({ env });
-    expect(state.db.prepare("SELECT count(*) AS count FROM agent_deletion_journal").get()).toEqual({
+    const databaseState = openOpenClawStateDatabase({ env });
+    expect(
+      databaseState.db.prepare("SELECT count(*) AS count FROM agent_deletion_journal").get(),
+    ).toEqual({
       count: 0,
     });
-    const source = reconstructionRow(state.db);
+    const source = reconstructionRow(databaseState.db);
     expect(JSON.parse(String(source?.report_json)).held).toEqual(
       expect.arrayContaining([
         {
@@ -517,7 +505,7 @@ it.each([
     ).not.toBe(true);
     if (location === "configured-new-owner") {
       cfg.agents = { entries: { main: { agentDir: customAgentDirectory } } };
-      fs.writeFileSync(path.join(stateDir, "openclaw.json"), JSON.stringify(cfg));
+      writeJson(configPath, cfg);
     } else if (location === "env-selected") {
       env.OPENCLAW_AGENT_DIR = customAgentDirectory;
       vi.stubEnv("OPENCLAW_AGENT_DIR", customAgentDirectory);

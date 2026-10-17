@@ -4,6 +4,10 @@ import { DatabaseSync } from "node:sqlite";
 import { stripVTControlCharacters } from "node:util";
 import { afterAll, beforeAll, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -38,29 +42,18 @@ const CHILD_TIMEOUT_MS = 60_000;
 function seedHistoricalDatabase(pathname: string, agentId?: string): void {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
   using database = new DatabaseSync(pathname);
-  database.exec("BEGIN;");
   // Exact schema bytes from v2026.7.35, before deletion history existed.
-  database.exec(
-    fs.readFileSync(
-      new URL(
-        `../../test/fixtures/sqlite/openclaw-${agentId ? "agent" : "state"}-schema-v1.sql`,
-        import.meta.url,
-      ),
-      "utf8",
-    ),
-  );
-  database.exec("PRAGMA user_version = 1;");
-  if (agentId) {
-    database
-      .prepare("INSERT INTO schema_meta VALUES ('primary', 'agent', 1, ?, NULL, 1, 1)")
-      .run(agentId);
-  } else {
-    database
-      .prepare("INSERT INTO schema_meta VALUES ('primary', 'global', 1, NULL, NULL, 1, 1)")
-      .run();
-  }
+  const fixture = `../../test/fixtures/sqlite/openclaw-${agentId ? "agent" : "state"}-schema-v1.sql`;
+  const schema = fs.readFileSync(new URL(fixture, import.meta.url), "utf8");
+  database.exec(`BEGIN;\n${schema}\nPRAGMA user_version = 1;`);
+  database
+    .prepare("INSERT INTO schema_meta VALUES ('primary', ?, 1, ?, NULL, 1, 1)")
+    .run(agentId ? "agent" : "global", agentId ?? null);
   database.exec("COMMIT;");
 }
+
+const writeJson = (pathname: string, value: unknown) =>
+  fs.writeFileSync(pathname, JSON.stringify(value));
 
 function readDatabase<T>(pathname: string, read: (database: DatabaseSync) => T): T {
   using database = new DatabaseSync(pathname, { readOnly: true });
@@ -172,27 +165,20 @@ it.for(["current", "historical-v1", "lost-journal"] as const)(
     // Custom session stores are inspected before repair without being registered by runtime opens.
     seedHistoricalDatabase(customDatabasePath, "main");
     for (const [index, agentId] of agentIds.entries()) {
-      fs.writeFileSync(
+      writeJson(
         path.join(path.dirname(agentDatabasePaths[index]!), "auth-profiles.json"),
-        JSON.stringify({
-          version: 1,
-          profiles: {
-            [`anthropic:${agentId}`]: {
-              type: "api_key",
-              provider: "anthropic",
-              key: `synthetic-${agentId}-credential`,
-            },
-          },
+        createAuthProfileStoreFixture({
+          [`anthropic:${agentId}`]: createApiKeyCredential(
+            "anthropic",
+            `synthetic-${agentId}-credential`,
+          ),
         }),
       );
     }
     const sessionId = "historical-session";
-    fs.writeFileSync(
-      path.join(sessionDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:history": { sessionId, label: "Preserved session", updatedAt: 1000 },
-      }),
-    );
+    writeJson(path.join(sessionDir, "sessions.json"), {
+      "agent:main:history": { sessionId, label: "Preserved session", updatedAt: 1000 },
+    });
     fs.writeFileSync(
       path.join(sessionDir, `${sessionId}.jsonl`),
       [
@@ -215,18 +201,15 @@ it.for(["current", "historical-v1", "lost-journal"] as const)(
     );
     const port = await acquireTestPortBlock({ offsets: [0] });
     try {
-      fs.writeFileSync(
-        configPath,
-        JSON.stringify({
-          ...(sharedState === "lost-journal" ? { plugins: { enabled: false } } : {}),
-          agents:
-            sharedState === "lost-journal"
-              ? { ownership: "explicit", entries: { main: {}, worker: {} } }
-              : { list: [{ id: "main", default: true }, { id: "worker" }] },
-          gateway: { mode: "local", port: port.port },
-          session: { store: path.join(sessionDir, "sessions.json") },
-        }),
-      );
+      writeJson(configPath, {
+        ...(sharedState === "lost-journal" ? { plugins: { enabled: false } } : {}),
+        agents:
+          sharedState === "lost-journal"
+            ? { ownership: "explicit", entries: { main: {}, worker: {} } }
+            : { list: [{ id: "main", default: true }, { id: "worker" }] },
+        gateway: { mode: "local", port: port.port },
+        session: { store: path.join(sessionDir, "sessions.json") },
+      });
       const agentDatabaseBytes = databasePaths.map((pathname) => fs.readFileSync(pathname));
       const args = [
         "doctor",
@@ -235,9 +218,11 @@ it.for(["current", "historical-v1", "lost-journal"] as const)(
         ...(sharedState === "lost-journal" ? [] : ["--yes"]),
         "--no-workspace-suggestions",
       ];
-      const first = await fixtures.track(
-        runBuiltRuntime(runtimeRoot, env, args, CHILD_TIMEOUT_MS, { onTestFinished }),
-      );
+      const runDoctor = () =>
+        fixtures.track(
+          runBuiltRuntime(runtimeRoot, env, args, CHILD_TIMEOUT_MS, { onTestFinished }),
+        );
+      const first = await runDoctor();
       const output = stripVTControlCharacters(`${first.stdout}\n${first.stderr}`);
       if (sharedState === "lost-journal") {
         expect(first.code, output).toBe(1);
@@ -331,9 +316,7 @@ it.for(["current", "historical-v1", "lost-journal"] as const)(
         expect.objectContaining({ message: { role: "user", content: "Preserved history" } }),
       );
 
-      const second = await fixtures.track(
-        runBuiltRuntime(runtimeRoot, env, args, CHILD_TIMEOUT_MS, { onTestFinished }),
-      );
+      const second = await runDoctor();
       const repeatedOutput = `${second.stdout}\n${second.stderr}`;
       expect(second.code, repeatedOutput).toBe(0);
       expect(repeatedOutput).not.toMatch(
