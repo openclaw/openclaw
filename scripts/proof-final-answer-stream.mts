@@ -241,7 +241,9 @@ try {
   const child = spawn(
     process.execPath,
     [
-      path.join(process.cwd(), "scripts/run-node.mjs"),
+      "--import",
+      "tsx",
+      path.join(process.cwd(), "src/entry.ts"),
       "agent",
       "exec",
       "Return the streamed content exactly.",
@@ -305,7 +307,7 @@ try {
       `OpenClaw agent exec did not meet the final-answer stream contract: ${JSON.stringify(observations)}`,
     );
   }
-  console.log("entrypoint: openclaw agent exec via scripts/run-node.mjs");
+  console.log("entrypoint: openclaw agent exec via src/entry.ts");
   console.log("provider: one local OpenAI Responses SSE request");
   console.log("phase: final_answer");
   console.log(
