@@ -142,7 +142,6 @@ function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
     return false;
   }
-  // Vite injects this development script outside the application's rendered DOM.
   return Boolean(document.querySelector('script[src*="/@vite/client"]'));
 }
 

@@ -8,10 +8,12 @@ import { createNavigationPreferencesFixture } from "../test-helpers/application-
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
+import type { ShellOwnedElements } from "./app-shell-lazy-view.tsx";
 import type { ApplicationContext } from "./context.ts";
 import { handleNavDrawerKeydown } from "./navigation-surface.ts";
 
 type ShellNavigationState = {
+  elements: ShellOwnedElements;
   runtime: { context: ApplicationContext };
   handleNativeToggleSidebar: () => void;
   handleNativeOpenSearch: () => void;
@@ -297,10 +299,16 @@ describe("OpenClaw native shell", () => {
       const openPalette = vi.fn();
       const togglePalette = vi.fn();
       const shell = createShellOwner() as unknown as ShellNavigationState;
-      Object.defineProperty(shell, "commandPalette", {
-        configurable: true,
-        value: { openPalette, togglePalette },
-      });
+      shell.elements.commandPalette = Object.assign(
+        document.createElement("openclaw-command-palette"),
+        {
+          custodianAvailable: false,
+          desktopAvailable: false,
+          isOpen: false,
+          openPalette,
+          togglePalette,
+        },
+      );
       shell.runtime = {
         context: nativeSessionContext(navigate, "agent/a", { scopes: [scope] }),
       };
