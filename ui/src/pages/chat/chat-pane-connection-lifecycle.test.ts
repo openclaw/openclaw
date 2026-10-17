@@ -13,7 +13,7 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { chatHistoryRequests } from "./chat-history-state.ts";
+import { chatHistoryRequests, getChatHistoryLoadState } from "./chat-history-state.ts";
 import { applyChatAgentsList, loadChatHistory } from "./chat-history.ts";
 import { makeRequestMock } from "./chat-host.test-support.ts";
 import {
@@ -284,6 +284,35 @@ describe("chat pane connection lifecycle", () => {
 
     expect(chatHistoryRequests(state).historyLoad.phase).toBe("pending-connection");
     expect(state.chatLoading).toBe(true);
+  });
+
+  it("admits startup history before hello when no transcript is cached", async () => {
+    const request = createReconnectRequest({ messages: [] });
+    const client = createTestGatewayClient(request);
+    const { pane, state } = createTestChatPane({ client });
+    const connected = pane.context.gateway.snapshot;
+    state.connected = false;
+    state.client = null;
+    state.chatMessages = [];
+
+    pane.applyGatewaySnapshot({
+      ...connected,
+      client,
+      phase: "connecting",
+      hello: null,
+    });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(getChatHistoryLoadState(state)).toMatchObject({
+      phase: "pending-connection",
+      sessionKey: state.sessionKey,
+      startup: true,
+    });
+    expect(state.chatLoading).toBe(true);
+
+    state.currentSessionId = "cached-session";
+    expect(state.chatLoading).toBe(true);
+    expect(getChatHistoryLoadState(state).phase).toBe("pending-connection");
   });
 
   it("notifies the owning shell after a pane leaves its DOM subtree", async () => {
