@@ -611,7 +611,9 @@ export function readSessionRowDatabaseFacts(
                 hasBoard:
                   selected.row.session_key === sessionKey && selected.row.board_present === 1,
                 transcriptPreview: storedTranscript?.lastMessagePreview,
-                transcriptAssistantMessage: storedTranscript?.lastAssistantMessage,
+                transcriptAssistantMessage: storedTranscript
+                  ? storedTranscript.lastAssistantMessage
+                  : "unknown",
                 transcriptTerminalModel: storedTranscript?.terminalModel,
               };
               if (readSessionActivitySummary(entry)) {
