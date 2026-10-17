@@ -43,7 +43,6 @@ import {
   commitRequesterSettleWakeMutation,
   isCurrentRequesterSettleWakeBatch,
 } from "./subagent-registry-requester-wake-mutation.js";
-import { settleOrReportRequesterWake } from "./subagent-registry-requester-wake-owner-changed.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { captureRequesterSettleRunIdentity } from "./subagent-requester-settle-identity.js";
 import {
@@ -485,22 +484,14 @@ export function scheduleRequesterSettleWake(
                     ) {
                       return false;
                     }
-                    const settle = () =>
-                      completeRequesterSettleWakeBatch(
-                        context,
-                        members,
-                        stateContext,
-                        episode,
-                        rearmGeneration,
-                        outcome,
-                      );
-                    // A delivered outcome is never reported: it is a sent result, not a stuck wake.
-                    // A wake with no outcome only consumes an obsolete wake and has no owner-changed
-                    // condition left to repeat.
-                    const committed =
-                      outcome && !outcome.delivered
-                        ? await settleOrReportRequesterWake(context, episode, members, settle)
-                        : await settle();
+                    const committed = await completeRequesterSettleWakeBatch(
+                      context,
+                      members,
+                      stateContext,
+                      episode,
+                      rearmGeneration,
+                      outcome,
+                    );
                     if (committed) {
                       onCommitted?.();
                     }
