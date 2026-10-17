@@ -3,6 +3,7 @@ import { FailoverError } from "../agents/failover-error.js";
 import * as simpleCompletionExecution from "../agents/simple-completion-execution.js";
 import * as simpleCompletionRuntime from "../agents/simple-completion-runtime.js";
 import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
@@ -12,6 +13,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
+import { transcriptMessage } from "../config/sessions/transcript-message.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -115,19 +117,14 @@ describe("utility completion with an unavailable implicit harness", () => {
     runtimeMocks.runEmbeddedAttempt.mockReset();
     // Keep routing and the built-in zero-tool execution real; isolate only auth and transport.
     vi.spyOn(simpleCompletionRuntime, "prepareSimpleCompletionModel").mockImplementation(
-      async (params) => ({
-        model: {
-          provider: params.provider,
-          id: params.modelId,
-          name: "Utility fixture",
+      async ({ provider, modelId: id }) => ({
+        model: makeProviderModelFixture({
+          provider,
+          id,
           api: "openai-responses",
           baseUrl: "https://api.openai.com/v1",
           reasoning: true,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 32_768,
-          maxTokens: 16_384,
-        },
+        }),
         auth: { apiKey: "synthetic-utility-key", mode: "api-key", source: "test" },
       }),
     );
@@ -143,11 +140,9 @@ describe("utility completion with an unavailable implicit harness", () => {
   it.each([false, true])(
     "publishes the observer digest without inheriting session harness state: fallback=%s",
     async (fallback) => {
-      if (fallback) {
-        useFallbacks();
-      }
       const transport = transportReply('{"headline":"Checking the fix","health":"on-track"}');
       if (fallback) {
+        useFallbacks();
         transport.mockRejectedValueOnce(
           new FailoverError("Fixture server unavailable", { reason: "server_error" }),
         );
@@ -190,20 +185,15 @@ describe("utility completion with an unavailable implicit harness", () => {
   it.each(["direct", "backup", "exhausted"] as const)(
     "preserves Activity recap behavior through the utility chain: %s",
     async (outcome) => {
-      if (outcome !== "direct") {
-        useFallbacks();
-      }
       const text = "Finished checking the requested fix.";
       const transport = transportReply(text);
+      const rejected = new FailoverError("Fixture credentials rejected", { reason: "auth" });
       if (outcome !== "direct") {
-        transport.mockRejectedValueOnce(
-          new FailoverError("Fixture credentials rejected", { reason: "auth" }),
-        );
+        useFallbacks();
+        transport.mockRejectedValueOnce(rejected);
       }
       if (outcome === "exhausted") {
-        transport.mockRejectedValue(
-          new FailoverError("Fixture credentials rejected", { reason: "auth" }),
-        );
+        transport.mockRejectedValue(rejected);
       }
       const target = { key: "agent:main:recap", agentId: "main" };
       const scope = { sessionKey: target.key, agentId: target.agentId, sessionId: "recap-session" };
@@ -215,11 +205,7 @@ describe("utility completion with an unavailable implicit harness", () => {
       });
       await persistSessionTranscriptTurn(scope, {
         messages: [
-          {
-            eventId: "message-1",
-            parentId: null,
-            message: { role: "user", content: "Check the fix." },
-          },
+          transcriptMessage("message-1", null, { role: "user", content: "Check the fix." }),
         ],
         touchSessionEntry: false,
       });

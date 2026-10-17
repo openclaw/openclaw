@@ -90,6 +90,28 @@ function historicalWindowIds(
     .map((event) => event.id);
 }
 
+function projectedMessage(entry: Event) {
+  if (entry.type === "message") {
+    return entry.message;
+  }
+  const timed = { timestamp: Date.parse(timestamp) };
+  if (entry.type === "custom_message") {
+    return {
+      ...timed,
+      role: "custom",
+      customType: entry.customType,
+      content: entry.content,
+      display: true,
+    };
+  }
+  return {
+    ...timed,
+    role: "system",
+    __openclaw: { kind: entry.type },
+    content: [{ type: "text", text: entry.type === "compaction" ? "Compaction" : "Reset" }],
+  };
+}
+
 describe("session transcript reader marker projection", () => {
   let storePath: string;
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -244,6 +266,7 @@ describe("session transcript reader marker projection", () => {
     "projects $name boundaries through every SQLite history read",
     async ({ name, events, expectedIds, hiddenIds }) => {
       const scope = await writeTranscript(`reader-${name}`, events);
+      const around = (messageId: string) => readAround(scope, { messageId, maxMessages: 10 });
       const full = await readFull(scope, {
         mode: "full",
         reason: `${name} boundary projection test`,
@@ -270,17 +293,29 @@ describe("session transcript reader marker projection", () => {
       expect(messageIds(recent.messages)).toEqual(expectedIds.slice(-2));
       expect(recent.totalMessages).toBe(expectedIds.length);
       expect(await readCount(scope)).toBe(expectedIds.length);
-      for (const [index, id] of expectedIds.entries()) {
+      for (const entry of events) {
+        const { id } = entry;
+        const index = expectedIds.indexOf(id);
+        const byId = await readById(scope, id);
+        const anchored = await around(id);
+        expect(await readMatching(scope, id)).toEqual(index < 0 ? [] : [full[index]]);
+        if (index < 0) {
+          if (hiddenIds.includes(id)) {
+            expect(byId).toMatchObject({ found: false });
+            expect(anchored).toMatchObject({ found: false, messages: [] });
+          } else {
+            const historicalIds = historicalWindowIds(events, id, hiddenIds);
+            expect(byId).toMatchObject({ found: true, message: { __openclaw: { id } } });
+            expect(anchored).toMatchObject({ found: true, totalMessages: historicalIds.length });
+            expect(messageIds(anchored.messages)).toEqual(historicalIds);
+            expect(messageIds(anchored.messages)).not.toEqual(expectedIds);
+          }
+          continue;
+        }
         const page = await readPage(scope, {
           maxMessages: 1,
           offset: expectedIds.length - index - 1,
         });
-        const byId = await readById(scope, id);
-        const anchored = await readAround(scope, {
-          messageId: id,
-          maxMessages: 10,
-        });
-        expect(await readMatching(scope, id)).toEqual([full[index]]);
         expect(messageIds(page.messages)).toEqual([id]);
         expect(page.totalMessages).toBe(expectedIds.length);
         expect(byId).toMatchObject({
@@ -288,27 +323,7 @@ describe("session transcript reader marker projection", () => {
           seq: index + 1,
           message: { __openclaw: { id, seq: index + 1 } },
         });
-        const entry = events.find((event) => event.id === id)!;
-        expect(byId.message).toMatchObject(
-          entry.type === "message"
-            ? entry.message
-            : entry.type === "custom_message"
-              ? {
-                  role: "custom",
-                  customType: entry.customType,
-                  content: entry.content,
-                  display: true,
-                  timestamp: Date.parse(timestamp),
-                }
-              : {
-                  role: "system",
-                  content: [
-                    { type: "text", text: entry.type === "compaction" ? "Compaction" : "Reset" },
-                  ],
-                  timestamp: Date.parse(timestamp),
-                  __openclaw: { kind: entry.type },
-                },
-        );
+        expect(byId.message).toMatchObject(projectedMessage(entry));
         if (entry.type === "compaction") {
           expect(full[index]).toMatchObject({
             __openclaw: { tokensBefore: 100, tokensAfter: 25 },
@@ -316,31 +331,6 @@ describe("session transcript reader marker projection", () => {
         }
         expect(anchored).toMatchObject({ found: true, totalMessages: expectedIds.length });
         expect(messageIds(anchored.messages)).toEqual(expectedIds);
-      }
-      for (const { id } of events.filter((event) => !expectedIds.includes(event.id))) {
-        expect(await readMatching(scope, id)).toEqual([]);
-        if (hiddenIds.includes(id)) {
-          expect(await readById(scope, id)).toMatchObject({ found: false });
-          expect(
-            await readAround(scope, {
-              messageId: id,
-              maxMessages: 10,
-            }),
-          ).toMatchObject({ found: false, messages: [] });
-          continue;
-        }
-        const historicalIds = historicalWindowIds(events, id, hiddenIds);
-        expect(await readById(scope, id)).toMatchObject({
-          found: true,
-          message: { __openclaw: { id } },
-        });
-        const anchored = await readAround(scope, {
-          messageId: id,
-          maxMessages: 10,
-        });
-        expect(anchored).toMatchObject({ found: true, totalMessages: historicalIds.length });
-        expect(messageIds(anchored.messages)).toEqual(historicalIds);
-        expect(messageIds(anchored.messages)).not.toEqual(expectedIds);
       }
     },
   );
