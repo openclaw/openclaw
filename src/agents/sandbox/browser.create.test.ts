@@ -47,7 +47,7 @@ const bridgeMocks = vi.hoisted(() => ({
   stopBrowserBridgeServer: vi.fn(),
 }));
 
-const runtimeMocks = vi.hoisted(() => ({ log: vi.fn() }));
+const runtimeMocks = vi.hoisted(() => ({ log: vi.fn(), error: vi.fn() }));
 
 async function createDockerMock() {
   const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
@@ -879,4 +879,217 @@ describe("sandbox browser lifecycle", () => {
     );
     expect(updateBrowserRegistry.mock.calls.at(-1)?.[1]).toBe(assertCurrent);
   });
+});
+
+describe("sandbox browser failed start cleanup", () => {
+  const removeCalls = () =>
+    dockerMocks.execDocker.mock.calls.filter(
+      ([args]) => args[0] === "rm" && args[1] === "-f" && args[2] === browserName,
+    );
+  const dockerCallIndex = (command: string) =>
+    dockerMocks.execDocker.mock.calls.findIndex(([args]) => args[0] === command);
+  /** Layers one command override on top of the suite's default Docker behavior. */
+  const overrideDockerCommand = (
+    command: string,
+    handler: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>,
+  ) => {
+    const base = expectDefined(
+      dockerMocks.execDocker.getMockImplementation(),
+      "docker mock implementation",
+    );
+    dockerMocks.execDocker.mockImplementation(async (args: string[]) =>
+      args[0] === command ? await handler(args) : await base(args),
+    );
+  };
+  const failBridgeStartup = () =>
+    bridgeMocks.startBrowserBridgeServer.mockRejectedValueOnce(
+      new Error("plugin runtime is not active"),
+    );
+  /** Every CDP readiness request answers "not ready"; resolves once the first one is sent. */
+  const failCdpProbe = () => {
+    const probed = createDeferredCore();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      probed.resolve();
+      return { ok: false, body: { cancel: vi.fn().mockResolvedValue(undefined) } } as never;
+    });
+    return probed.promise;
+  };
+  const hungRemovalFailed = `Removing the hung container failed; remove it with \`docker rm -f ${browserName}\`.`;
+
+  it.each([
+    { stage: "bridge startup", error: "plugin runtime is not active", fail: failBridgeStartup },
+    {
+      stage: "CDP port mapping",
+      error: "Failed to resolve CDP port mapping",
+      fail: () => dockerMocks.readDockerPort.mockResolvedValue(null),
+    },
+    {
+      stage: "docker start",
+      error: "synthetic docker start failure",
+      fail: () =>
+        overrideDockerCommand("start", async () => {
+          throw new Error("synthetic docker start failure");
+        }),
+    },
+    {
+      stage: "registry publication",
+      error: "synthetic registry publication failure",
+      fail: () =>
+        registryMocks.updateBrowserRegistry.mockRejectedValueOnce(
+          new Error("synthetic registry publication failure"),
+        ),
+    },
+  ])("removes a container this attempt created when $stage fails", async ({ error, fail }) => {
+    fail();
+
+    await expect(ensureTestSandboxBrowser()).rejects.toThrow(error);
+
+    expect(removeCalls()).toHaveLength(1);
+    expect(dockerCallIndex("rm")).toBeGreaterThan(dockerCallIndex("create"));
+    expect(BROWSER_BRIDGES.has(scopeKey)).toBe(false);
+    expect(runtimeMocks.error).not.toHaveBeenCalled();
+  });
+
+  it("keeps a pre-existing running container when bridge startup fails", async () => {
+    await ensureTestSandboxBrowser();
+    reuseCreatedBrowser();
+    dockerMocks.execDocker.mockClear();
+    failBridgeStartup();
+
+    // A changed evaluate policy forces a bridge restart against the existing container.
+    await expect(ensureTestSandboxBrowser({ evaluateEnabled: false })).rejects.toThrow(
+      "plugin runtime is not active",
+    );
+
+    expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create")).toBeUndefined();
+    expect(removeCalls()).toHaveLength(0);
+  });
+
+  it("keeps a managed-workspace container that was reserved before allocation", async () => {
+    failBridgeStartup();
+
+    await expect(
+      ensureTestSandboxBrowser({ withWorkspace: async (run) => await run() }),
+    ).rejects.toThrow("plugin runtime is not active");
+
+    expect(registryMocks.updateBrowserRegistry.mock.calls[0]?.[0]).toMatchObject({
+      containerName: browserName,
+      cdpPort: 0,
+    });
+    expect(removeCalls()).toHaveLength(0);
+  });
+
+  it("keeps a published container when a later check fails", async () => {
+    let published = false;
+    registryMocks.updateBrowserRegistry.mockImplementationOnce(async () => {
+      published = true;
+    });
+    const assertCurrent = vi.fn(() => {
+      if (published) {
+        throw new Error("synthetic custody loss after publication");
+      }
+    });
+
+    await expect(ensureTestSandboxBrowser({ assertCurrent })).rejects.toThrow(
+      "synthetic custody loss after publication",
+    );
+
+    expect(registryMocks.updateBrowserRegistry).toHaveBeenCalledOnce();
+    expect(removeCalls()).toHaveLength(0);
+  });
+
+  it.each([
+    {
+      removal: "exits non-zero",
+      detail: "synthetic docker rm failure",
+      rm: async () => ({ stdout: "", stderr: "synthetic docker rm failure", code: 1 }),
+    },
+    {
+      removal: "throws",
+      detail: "synthetic docker daemon failure",
+      rm: async (): Promise<never> => {
+        throw new Error("synthetic docker daemon failure");
+      },
+    },
+  ])(
+    "reports a removal that $removal and still surfaces the startup error",
+    async ({ detail, rm }) => {
+      overrideDockerCommand("rm", rm);
+      failBridgeStartup();
+
+      await expect(ensureTestSandboxBrowser()).rejects.toThrow("plugin runtime is not active");
+
+      expect(removeCalls()).toHaveLength(1);
+      expect(runtimeMocks.error).toHaveBeenCalledWith(
+        expect.stringContaining(`failed to remove ${browserName}`),
+      );
+      expect(runtimeMocks.error).toHaveBeenCalledWith(expect.stringContaining(detail));
+    },
+  );
+
+  it("treats an already-removed container as cleaned up", async () => {
+    overrideDockerCommand("rm", async () => ({
+      stdout: "",
+      stderr: `Error response from daemon: No such container: ${browserName}`,
+      code: 1,
+    }));
+    failBridgeStartup();
+
+    await expect(ensureTestSandboxBrowser()).rejects.toThrow("plugin runtime is not active");
+
+    expect(removeCalls()).toHaveLength(1);
+    expect(runtimeMocks.error).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { late: false, removal: "succeeds", code: 0, message: "has been forcefully removed." },
+    { late: false, removal: "fails", code: 1, message: hungRemovalFailed },
+    { late: true, removal: "succeeds", code: 0, message: "has been forcefully removed." },
+    { late: true, removal: "fails", code: 1, message: hungRemovalFailed },
+  ])(
+    "removes a hung container once after the CDP timeout (late attach=$late) and reports that removal $removal",
+    async ({ late, code, message }) => {
+      const cfg = buildConfig(false);
+      cfg.browser.autoStartTimeoutMs = 50;
+      const failRemoval = () =>
+        overrideDockerCommand("rm", async () => ({
+          stdout: "",
+          stderr: code === 0 ? "" : "synthetic docker rm failure",
+          code,
+        }));
+      let attach: (() => Promise<unknown>) | undefined;
+      if (late) {
+        // The bridge calls back after startup returned, as a real late attach does.
+        await ensureTestSandboxBrowser({ cfg });
+        const callback = expectDefined(
+          bridgeMocks.startBrowserBridgeServer.mock.calls[0]?.[0].onEnsureAttachTarget,
+          "bridge attach callback",
+        );
+        attach = () => callback({});
+        dockerMocks.execDocker.mockClear();
+      } else {
+        bridgeMocks.startBrowserBridgeServer.mockImplementationOnce(async (params) => {
+          await params.onEnsureAttachTarget?.({});
+          throw new Error("probe completed before bridge creation");
+        });
+      }
+      failRemoval();
+      const probed = failCdpProbe();
+      // Hold the startup deadline clock until the first readiness probe, then run it out.
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      try {
+        const outcome = expect(
+          attach ? attach() : ensureTestSandboxBrowser({ cfg }),
+        ).rejects.toThrow(message);
+        await Promise.race([probed, outcome]);
+        await vi.advanceTimersByTimeAsync(cfg.browser.autoStartTimeoutMs);
+        await outcome;
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(removeCalls()).toHaveLength(1);
+      expect(runtimeMocks.error).toHaveBeenCalledTimes(code);
+    },
+  );
 });

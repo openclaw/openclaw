@@ -1,0 +1,2 @@
+# Sandbox browser: remove a container created by a failed startup before registry publication, keep reserved/published/pre-existing ones, and report removal failures.
+213
