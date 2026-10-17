@@ -188,7 +188,8 @@ export async function validatePackagePluginInstallSource(params: {
       ...(ocManifestResult.ok && ocManifestResult.manifest.setup
         ? { setup: ocManifestResult.manifest.setup }
         : {}),
-      hasRuntimeDependencies: hasPackageRuntimeDependencies(manifest),
+      // The installed host is linked separately; npm owns required third-party peers.
+      hasRuntimeDependencies: hasPackageRuntimeDependencies(manifest, ["openclaw"]),
       peerDependencies: hostDependency ? { openclaw: hostDependency.spec } : {},
     },
   };

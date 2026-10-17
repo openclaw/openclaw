@@ -108,6 +108,8 @@ function writeHookPackManifest(params: {
   hooks: string[];
   packageName?: string;
   dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
   extensions?: string[];
 }) {
   fs.writeFileSync(
@@ -120,6 +122,8 @@ function writeHookPackManifest(params: {
         ...(params.extensions ? { extensions: params.extensions } : {}),
       },
       ...(params.dependencies ? { dependencies: params.dependencies } : {}),
+      ...(params.optionalDependencies ? { optionalDependencies: params.optionalDependencies } : {}),
+      ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
     }),
     "utf-8",
   );
@@ -129,12 +133,16 @@ function writeHookPackFiles(params: {
   pkgDir: string;
   packageName?: string;
   dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
 }) {
   writeHookPackManifest({
     pkgDir: params.pkgDir,
     packageName: params.packageName,
     hooks: ["./hooks/one-hook"],
     dependencies: params.dependencies,
+    optionalDependencies: params.optionalDependencies,
+    peerDependencies: params.peerDependencies,
   });
   const hookDir = path.join(params.pkgDir, "hooks", "one-hook");
   writeHookFixture(
@@ -254,15 +262,24 @@ describe("installHooksFromPath", () => {
     }
   });
 
-  it("installs dependencies with lifecycle scripts disabled", async () => {
-    const { pkgDir, hooksDir } = makePackage("@openclaw/test-hooks", { "left-pad": "1.3.0" });
+  it.each(["dependencies", "optionalDependencies", "peerDependencies"] as const)(
+    "installs %s with lifecycle scripts disabled",
+    async (dependencyField) => {
+      const pkgDir = makeTempDir();
+      const hooksDir = path.join(makeTempDir(), "hooks");
+      writeHookPackFiles({
+        pkgDir,
+        packageName: "@openclaw/test-hooks",
+        [dependencyField]: { "left-pad": "1.3.0" },
+      });
 
-    const run = runCommandWithTimeoutMock;
-    await expectInstallUsesIgnoreScripts({
-      run,
-      install: async () => await installHooksFromPath({ path: pkgDir, hooksDir }),
-    });
-  });
+      const run = runCommandWithTimeoutMock;
+      await expectInstallUsesIgnoreScripts({
+        run,
+        install: async () => await installHooksFromPath({ path: pkgDir, hooksDir }),
+      });
+    },
+  );
 
   it("preserves the declared OpenClaw dependency during update", async () => {
     const { pkgDir, hooksDir } = makePackage("@openclaw/test-hooks", { openclaw: ">=2026.4.5" });
