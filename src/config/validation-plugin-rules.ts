@@ -31,7 +31,10 @@ import {
   hasChannelDmPolicyDependencyWarningCandidates,
   normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
-import { collectHeartbeatOwnerWarnings, collectRedactPatternWarnings } from "./validation-core.js";
+import {
+  collectConfigValidationWarnings,
+  collectRedactPatternWarnings,
+} from "./validation-core.js";
 import { validateProviderModelParams } from "./validation-model-params.js";
 import {
   formatChannelConfigIssueMessage,
@@ -135,7 +138,10 @@ export function validatePreparedConfigWithPlugins(
   const deferredPluginIds = new Set(
     opts.deferredPluginMigrations?.map(({ pluginId }) => normalizePluginId(pluginId)),
   );
-  warnings.push(...collectHeartbeatOwnerWarnings(config), ...collectRedactPatternWarnings(config));
+  warnings.push(
+    ...collectConfigValidationWarnings(config),
+    ...collectRedactPatternWarnings(config),
+  );
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
 
   let compatPluginIds: ReadonlySet<string> | null = null;
