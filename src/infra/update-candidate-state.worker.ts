@@ -61,6 +61,7 @@ async function snapshotCandidateState(): Promise<unknown> {
       return readUpdatePhysicalDatabaseGenerations(input.paths, input.pluginOwners);
     }
     case "inventory": {
+      const { resolveDatabaseFamilyEngines } = await import("./database-engine/registry.js");
       const { databases, ...inventory } = await readUpdateCandidateStateInventoryInProcess({
         ...input,
         onProgress: createUpdateStateInspectionReporter(
@@ -72,7 +73,9 @@ async function snapshotCandidateState(): Promise<unknown> {
         ...inventory,
         databases: [...databases],
         // PostgreSQL snapshots retain portable exports alongside their private copies.
-        ...(input.config.database?.engine !== "postgres"
+        // External stores still follow the global engine when built-in families override it.
+        ...(input.config.database?.engine !== "postgres" &&
+        !Object.values(resolveDatabaseFamilyEngines(input.config)).includes("postgres")
           ? { snapshotSpace: "single-generation" }
           : {}),
       };

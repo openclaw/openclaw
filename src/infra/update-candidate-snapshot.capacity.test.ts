@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/config.js";
 import * as diskSpace from "./disk-space.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
@@ -152,23 +153,53 @@ it("keeps the larger allowance when the candidate omits the copy capability", as
   expect(await databaseHashes(f.files)).toEqual(before);
 });
 
-it("keeps the larger allowance for PostgreSQL portable exports", async () => {
-  const f = await fixture();
-  await materializeUpdateCandidateStateWorker(f.root);
-  const before = await databaseHashes(f.files);
-  availableSpace(100 * 1024 ** 2);
-  await expect(
-    prepareUpdateCandidateRehearsal({
+it.each([
+  ["global", { database: { engine: "postgres" } }],
+  ["mixed-workboard", { database: { families: { workboard: { engine: "postgres" } } } }],
+  [
+    "global with SQLite built-in overrides",
+    {
+      database: {
+        engine: "postgres",
+        families: {
+          state: { engine: "sqlite" },
+          agent: { engine: "sqlite" },
+          workboard: { engine: "sqlite" },
+          logbook: { engine: "sqlite" },
+          "team-reports": { engine: "sqlite" },
+        },
+      },
+    },
+  ],
+] satisfies Array<[string, OpenClawConfig]>)(
+  "keeps the larger allowance for %s PostgreSQL portable exports",
+  async (_selection, config) => {
+    const f = await fixture();
+    await materializeUpdateCandidateStateWorker(f.root);
+    const before = await databaseHashes(f.files);
+    availableSpace(100 * 1024 ** 2);
+    const rehearsal = prepareUpdateCandidateRehearsal({
       config: {
+        ...config,
         database: {
-          engine: "postgres",
+          ...config.database,
           postgres: { connection: "postgresql://fixture:fixture@127.0.0.1:1/snapshot_fixture" },
         },
       },
       stateDir: f.stateDir,
       candidateRoot: f.root,
       env: {},
-    }),
-  ).rejects.toMatchObject({ capacity: { reason: "snapshot-capacity-insufficient" } });
-  expect(await databaseHashes(f.files)).toEqual(before);
-});
+    });
+    try {
+      await expect(rehearsal).rejects.toMatchObject({
+        capacity: { reason: "snapshot-capacity-insufficient" },
+      });
+    } finally {
+      await rehearsal.then(
+        (result) => result.cleanup(),
+        () => {},
+      );
+    }
+    expect(await databaseHashes(f.files)).toEqual(before);
+  },
+);
