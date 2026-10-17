@@ -4,7 +4,10 @@ import {
 } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type { DmPolicy } from "openclaw/plugin-sdk/config-contracts";
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
-import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
+import {
+  buildTelegramInboundDebounceConversationKey,
+  buildTelegramInboundDebounceKey,
+} from "./bot-handlers.debounce-key.js";
 import {
   createTelegramInboundBuffers,
   type TelegramDebounceEntry,
@@ -36,11 +39,7 @@ import {
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
-import {
-  buildTelegramGroupPeerId,
-  getTelegramTextParts,
-  resolveTelegramPrimaryMedia,
-} from "./bot/helpers.js";
+import { getTelegramTextParts, resolveTelegramPrimaryMedia } from "./bot/helpers.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import { isTelegramControlLaneText } from "./sequential-key.js";
 
@@ -239,7 +238,7 @@ export function createTelegramInboundProcessing({
         : [];
       return { kind: "ready", allMedia };
     };
-    const conversationKey = buildTelegramGroupPeerId(chatId, threadSpec);
+    const conversationKey = buildTelegramInboundDebounceConversationKey({ chatId, threadSpec });
     const debounceLane = resolveTelegramDebounceLane(msg);
     const debounceSenderId = senderId || (msg.from?.id != null ? String(msg.from.id) : "");
     const debounceKey = debounceSenderId
