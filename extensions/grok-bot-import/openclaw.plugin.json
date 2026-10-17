@@ -1,0 +1,36 @@
+{
+  "id": "grok-bot-import",
+  "categories": [
+    "integrations"
+  ],
+  "name": "Grok Bot Import",
+  "enabledByDefault": true,
+  "description": "Convert Grok Bot recipes, shared bots, and your hosted bot roster into Claws.",
+  "skills": [
+    "./skills"
+  ],
+  "cliCommands": [
+    {
+      "name": "grok-bot",
+      "description": "Discover and import Grok bots as Claws",
+      "hasSubcommands": true
+    }
+  ],
+  "activation": {
+    "onStartup": false,
+    "onCommands": [
+      "grok-bot"
+    ]
+  },
+  "commandAliases": [
+    {
+      "name": "grok-bot",
+      "kind": "cli"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

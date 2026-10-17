@@ -1,0 +1,27 @@
+{
+  "name": "@openclaw/grok-bot-import",
+  "version": "2026.10.4",
+  "private": true,
+  "description": "Import Grok Bot recipes and hosted bots as portable Claws",
+  "type": "module",
+  "dependencies": {
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.10.4"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
