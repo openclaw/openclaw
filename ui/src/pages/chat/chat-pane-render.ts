@@ -72,7 +72,11 @@ import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
   private readonly notify = () => this.invalidate();
 
-  readProviderReviewState() {
+  get realtimeTalk() {
+    return this.state?.realtimeTalk;
+  }
+
+  readState() {
     return this.state;
   }
 
@@ -199,8 +203,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       );
     // Avoid flashing view-only while metadata loads; failed lookups still explain the gate.
     const catalogDisabledReason =
-      catalogKey && !this.catalogLoading && this.catalogSession?.canContinue !== true
-        ? this.catalogHost?.kind === "node"
+      catalogKey &&
+      !this.history.catalogLoading &&
+      this.history.catalogSession?.canContinue !== true
+        ? this.history.catalogHost?.kind === "node"
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
         : null;
@@ -229,7 +235,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       queue: state.chatQueue,
     });
     const historyHasMore = catalogKey
-      ? Boolean(this.catalogCursor)
+      ? Boolean(this.history.catalogCursor)
       : state.chatHistoryPagination.hasMore;
     const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
       getSnapshot: () => this.context.gateway.snapshot,
@@ -327,7 +333,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       !providerPaused &&
       sessionDisabledBanner?.kind !== "composer-replacement" &&
       (catalogKey
-        ? this.catalogSession?.canContinue === true
+        ? this.history.catalogSession?.canContinue === true
         : !disabledReason &&
           !(selectedSessionArchived || restartRecoveryTombstoned || placementComposer.blocksSend));
     const composerAvailability = {
@@ -377,7 +383,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       // Recovery can temporarily withhold the first turn after history loaded empty.
       // Keep its pane loading until startup can display the retained message again.
       loading: catalogKey
-        ? this.catalogLoading
+        ? this.history.catalogLoading
         : (!state.connected && !state.currentSessionId) ||
           state.chatLoading ||
           (!runActive && pendingReason !== null && placementStartup === null),
@@ -433,14 +439,20 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         isCurrent: () => this.state === state,
       }),
       historyPagination:
-        historyHasMore || this.loadingOlder
+        historyHasMore || this.history.loadingOlder
           ? {
               hasMore: historyHasMore,
-              loading: this.loadingOlder || (catalogKey ? this.catalogLoading : state.chatLoading),
+              loading:
+                this.history.loadingOlder ||
+                (catalogKey ? this.history.catalogLoading : state.chatLoading),
               onShowEarlier: () => void this.loadOlderMessages(),
             }
           : undefined,
-      ...projectChatPaneTranscript(state, catalog ? this.catalogMessages : null, projectionRunId),
+      ...projectChatPaneTranscript(
+        state,
+        catalog ? this.history.catalogMessages : null,
+        projectionRunId,
+      ),
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
@@ -466,17 +478,18 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       modelCatalog: state.chatModelCatalog,
       modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
       queue: state.chatQueue,
-      realtimeTalkActive: state.realtimeTalkActive,
-      realtimeTalkStatus: state.realtimeTalkStatus,
-      realtimeTalkDetail: state.realtimeTalkDetail,
-      realtimeTalkInputNotice: state.realtimeTalkInputNotice,
-      realtimeTalkInputLevel: state.realtimeTalkInputLevel,
-      realtimeTalkConversation: state.realtimeTalkConversationState.entries,
-      realtimeTalkVideoStream: state.realtimeTalkVideoStream,
-      realtimeTalkCameraDevices: state.realtimeTalkCameraDevices,
-      realtimeTalkVideoCapable: state.realtimeTalkVideoCapable,
-      realtimeTalkVideoPending: state.realtimeTalkVideoPending,
-      realtimeTalkCameraError: state.realtimeTalkCameraError,
+      getQueue: () => state.chatQueue,
+      realtimeTalkActive: state.realtimeTalk.snapshot.realtimeTalkActive,
+      realtimeTalkStatus: state.realtimeTalk.snapshot.realtimeTalkStatus,
+      realtimeTalkDetail: state.realtimeTalk.snapshot.realtimeTalkDetail,
+      realtimeTalkInputNotice: state.realtimeTalk.snapshot.realtimeTalkInputNotice,
+      realtimeTalkInputLevel: state.realtimeTalk.snapshot.realtimeTalkInputLevel,
+      realtimeTalkConversation: state.realtimeTalk.snapshot.realtimeTalkConversationState.entries,
+      realtimeTalkVideoStream: state.realtimeTalk.snapshot.realtimeTalkVideoStream,
+      realtimeTalkCameraDevices: state.realtimeTalk.snapshot.realtimeTalkCameraDevices,
+      realtimeTalkVideoCapable: state.realtimeTalk.snapshot.realtimeTalkVideoCapable,
+      realtimeTalkVideoPending: state.realtimeTalk.snapshot.realtimeTalkVideoPending,
+      realtimeTalkCameraError: state.realtimeTalk.snapshot.realtimeTalkCameraError,
       connected: state.connected,
       offline: gatewaySnapshot.offlineStable,
       gatewayClient: state.client,
@@ -568,7 +581,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       // so an active follow lock stays pinned to the latest message.
       onAssistantAttachmentLoaded: () => scheduleChatScroll(state),
       getDraft: () => state.chatMessage,
-      onRequestUpdate: state.requestUpdate,
+      mediaOwner: state,
       onHistoryKeydown: state.handleChatInputHistoryKey,
       onSlashIntent: () => refreshChatCommands(state),
       onSlashCommand: nativeConversation
@@ -592,7 +605,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         latestFailedRunId: () =>
           chatFailureRunId(state.chatRunError, selectedChatSessionRow(state)),
       }),
-      onUseSystemDefaultMicrophone: state.realtimeTalkUseSystemDefault ?? undefined,
+      onUseSystemDefaultMicrophone:
+        state.realtimeTalk.snapshot.realtimeTalkUseSystemDefault ?? undefined,
       onToggleRealtimeTalk: () => (providerPaused ? undefined : void state.toggleRealtimeTalk()),
       onToggleRealtimeCamera: () => void state.toggleRealtimeTalkCamera(),
       onSwitchRealtimeCamera: () => void state.switchRealtimeTalkCamera(),
@@ -602,11 +616,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       },
       onDismissRealtimeTalkError: () => {
         dismissRealtimeTalkError(state);
-        state.requestUpdate?.();
       },
       onDismissRealtimeTalkInputNotice: () => {
-        state.realtimeTalkInputNotice = null;
-        state.requestUpdate?.();
+        state.realtimeTalk.update({ realtimeTalkInputNotice: null });
       },
       ...sessionActionCallbacks,
       onQueueRemove: state.removeQueuedMessage,
@@ -679,7 +691,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         ? undefined
         : {
             read: () => this.composerCapabilities.dialogView(this.context, state, selectedSession),
-            revision: {},
           },
       layout: this.renderChatPaneLayout({
         state,

@@ -43,7 +43,7 @@ export async function installHistoryPaginationProbe(
       const pane = element as HTMLElement & {
         state: { chatMessages: unknown[] };
         loadingOlder: boolean;
-        requestUpdate: (...args: unknown[]) => void;
+        render: (...args: unknown[]) => unknown;
         updateComplete: Promise<boolean>;
       };
       const client = application.gateway.snapshot.client;
@@ -134,15 +134,17 @@ export async function installHistoryPaginationProbe(
         }
         return promise;
       };
-      const originalUpdate = pane.requestUpdate;
-      pane.requestUpdate = function (...args) {
-        originalUpdate.apply(this, args);
+      const originalRender = pane.render;
+      pane.render = function (...args) {
+        const result = originalRender.apply(this, args);
+        // Sample publication when the pane consumes the history, then fence its DOM commit.
         if (pane.state.chatMessages.length >= count && sample.marks.published === undefined) {
           sample.marks.published = performance.now();
           void pane.updateComplete.then(() => {
             sample.marks.paneUpdateComplete = performance.now();
           });
         }
+        return result;
       };
       const wheel = () => {
         sample.marks.wheel ??= performance.now();
@@ -212,7 +214,7 @@ export async function installHistoryPaginationProbe(
           mutations.disconnect();
           resize.disconnect();
           client.request = originalRequest;
-          pane.requestUpdate = originalUpdate;
+          pane.render = originalRender;
           thread.removeEventListener("wheel", wheel, true);
           thread.removeEventListener("scroll", scrolled);
           return sample;

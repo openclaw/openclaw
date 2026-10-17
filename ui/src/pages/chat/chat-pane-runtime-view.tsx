@@ -2,8 +2,10 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  getOwner,
   onCleanup,
   onSettled,
+  runWithOwner,
   Show,
   untrack,
 } from "solid-js";
@@ -17,43 +19,37 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { projectTheme } from "../../lib/reactive/theme.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { ChatComposerCapabilityDialogs } from "./chat-composer-capability-host.tsx";
+import { projectChatFields } from "./chat-field-projection.ts";
+import { chatGoalOperations } from "./chat-goals.ts";
 import { PaneLayout } from "./chat-pane-layout-view.tsx";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
+import { lazySidebarElements } from "./chat-pane-sidebar-layout.ts";
 import {
   ChatProviderReviewDialog,
   createChatProviderReview,
   type ChatProviderReviewOwner,
 } from "./chat-provider-review-controller.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
+import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
 import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 
 /** One Solid owner publishes, mounts, and retires the synchronous pane runtime. */
 export function createChatPaneView(runtime: ChatPaneRuntime) {
+  const viewOwner = getOwner();
+  projectChatFields(runtime.swarm);
   const [ready, setReady] = createSignal(false);
-  const [revision, setRevision] = createSignal(0);
+  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   let disposed = false;
-  let publicationQueued = false;
   let complete: (() => void) | undefined;
   let previousInputs:
     | Pick<ChatPaneRuntime, "sessionKey" | "inputRegion" | "draft" | "focusComposer">
     | undefined;
   let focusPending = false;
-
-  function publish() {
-    if (disposed || !publicationQueued) {
-      return;
-    }
-    runtime.refreshBoardSubscriptions();
-    publicationQueued = false;
-    setRevision((value) => value + 1);
-    if (runtime.presented && document.visibilityState !== "hidden") {
-      notifyRenderLifecycleForTest(runtime.element, "invalidate");
-    }
-  }
 
   runtime.invalidate = () => {
     if (disposed || !runtime.isConnected) {
@@ -64,20 +60,20 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         complete = () => resolve(true);
       });
     }
-    if (!publicationQueued) {
-      publicationQueued = true;
-      // Domain mutations stay synchronous; rendering retains its microtask boundary.
-      queueMicrotask(publish);
+    runtime.refreshBoardSubscriptions();
+    // Solid batches this with field publications; a second microtask would render twice.
+    setRevision((value) => value + 1);
+    if (runtime.presented && document.visibilityState !== "hidden") {
+      notifyRenderLifecycleForTest(runtime.element, "invalidate");
     }
   };
 
   onSettled(() => {
     if (!runtime.isConnected) {
-      runtime.start();
+      // Startup creates projections that belong to this retained view, outside the settled callback.
+      runWithOwner(viewOwner, () => runtime.start());
     }
     runtime.invalidate();
-    // Drain startup before mounting children, as the previous pane lifecycle did.
-    publish();
     setReady(true);
   });
   onCleanup(() => {
@@ -99,7 +95,8 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     };
     previousInputs = next;
     focusPending ||= changes.focusComposer;
-    runtime.chatState.prepareRender();
+    // Persistence/scroll bookkeeping samples state; it is not a render dependency.
+    untrack(() => runtime.chatState.prepareRender());
     runtime.synchronizeInputs(changes);
   }
   function commitRender() {
@@ -116,7 +113,29 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   function MountedPane() {
     const context = runtime.context;
     const gateway = projectGateway(context.gateway);
+    const theme = projectTheme(context.theme);
+    // Startup attaches one host for this mounted pane's lifetime.
+    const state = runtime.readState();
+    const workspace = state && projectOwner(sessionWorkspaceForHost(state), (owner) => owner.state);
+    const composerCapabilities = projectOwner(runtime.composerCapabilities, (owner) => owner);
+    const realtimeOwner = createMemo(() => {
+      revision();
+      return runtime.realtimeTalk;
+    });
+    const realtime = createMemo(() => {
+      const owner = realtimeOwner();
+      return owner && projectOwner(owner, (source) => source.snapshot);
+    });
     const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
+    const goals = state && projectOwner(chatGoalOperations(state), (owner) => owner);
+    const resources = projectOwner(runtime.activeSessionResources, (owner) => owner);
+    const discussion = projectOwner(runtime.sessionDiscussion, (owner) => owner.snapshot);
+    const transcript = projectOwner(runtime.transcript, (owner) => owner);
+    const companion = projectOwner(runtime.sessionCompanionThreads, (owner) => owner);
+    const swarm = createMemo(() => {
+      const hydrator = runtime.swarm.hydrator;
+      return hydrator ? projectOwner(hydrator, (owner) => owner) : undefined;
+    });
     const boardProvider = createMemo(() => {
       revision();
       return runtime.subscribedBoardProvider;
@@ -170,6 +189,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       runtime.context.plugins,
       runtime.context.navigation,
       nativeGatewaysCapability(),
+      lazySidebarElements,
     ].map((source) => source && projectOwner(source, (capability) => capability));
     onSettled(() => installChatComposerPickerDismissal(runtime.element.ownerDocument));
     // Relative labels tick only while this retained pane is presented.
@@ -180,7 +200,17 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       read: () => {
         revision();
         progress.read();
+        composerCapabilities.read();
+        realtime()?.read();
         projects.read();
+        theme.preferences.read();
+        workspace?.read();
+        goals?.read();
+        resources.read();
+        discussion.read();
+        transcript.read();
+        companion.read();
+        swarm()?.read();
         board().forEach((source) => source.read());
         i18nRevision();
         sources.forEach((source) => source?.read());
@@ -191,7 +221,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const frame = createMemo(() => lifecycle.snapshot());
     const providerReview: ChatProviderReviewOwner = createChatProviderReview({
       source: () => frame().providerReviewSource,
-      readState: () => runtime.readProviderReviewState(),
+      readState: () => runtime.readState(),
     });
     // Commit transcript geometry and control the browser timer after Solid publishes the frame.
     createEffect(

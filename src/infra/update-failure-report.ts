@@ -144,8 +144,8 @@ export async function submitUpdateFailureReport(
   const cleanRetiredArtifacts = (receipt: UpdateFailureReportSweepReceipt, keepCurrent: boolean) =>
     cleanRetiredUpdateFailureReportArtifacts(prepared, receipt, stateEnv, keepCurrent, context);
   const cleanOwnedArtifact = async (receipt: UpdateFailureReportSweepReceipt): Promise<boolean> => {
-    if (receipt.artifactSweep && !(await cleanRetiredArtifacts(receipt, false))) {
-      return false;
+    if (receipt.artifactSweep) {
+      await cleanRetiredArtifacts(receipt, false);
     }
     const ownedPrepared = bindSavedReportArtifact(
       prepared,
@@ -287,14 +287,7 @@ export async function submitUpdateFailureReport(
     await cleanPreparation(existingReceipt);
   }
   if (existingReceipt?.status === "retryable" && existingReceipt.replacementReady === true) {
-    if (!(await cleanRetiredArtifacts(existingReceipt, false))) {
-      const currentReceipt = await readUpdateFailureReportReceipt(
-        prepared.attemptId,
-        stateEnv,
-        context,
-      );
-      return resultFromExistingReceipt(currentReceipt, prepared);
-    }
+    await cleanRetiredArtifacts(existingReceipt, false);
   }
 
   const reservationId = randomUUID();

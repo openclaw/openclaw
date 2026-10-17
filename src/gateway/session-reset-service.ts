@@ -12,7 +12,6 @@ import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manag
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { rebindDurableAcpSessionMetaAfterReset } from "../acp/runtime/session-meta-reset.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { clearBootstrapSnapshotOnSessionBoundary } from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { readRegistryWorktree } from "../agents/worktrees/registry-read.js";
@@ -1012,10 +1011,6 @@ async function performPreparedGatewaySessionReset({
               }).catch(reportLifecycleCleanupError),
             );
           }
-          clearBootstrapSnapshotOnSessionBoundary({
-            boundaryAppended: resetBoundaryAppended,
-            sessionKey: target.canonicalKey,
-          });
           if (createdNewEntry) {
             await recordSessionCreated(cfg, {
               sessionKey: target.canonicalKey,

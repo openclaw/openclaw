@@ -131,6 +131,21 @@ it.each([
     { provider: "openrouter", model: "anthropic/claude-haiku-4.5" },
   ],
   [
+    "does not inherit transcript authorship as an inference model",
+    { runtimeProvider: "openclaw", runtimeModel: "command" },
+    null,
+  ],
+  [
+    "does not infer a provider for a qualified transcript model",
+    { runtimeModel: "openclaw/command" },
+    null,
+  ],
+  [
+    "retains provider models whose name matches a transcript artifact",
+    { runtimeProvider: "cohere", runtimeModel: "command" },
+    { provider: "cohere", model: "command" },
+  ],
+  [
     "ignores malformed persisted metadata instead of throwing",
     {
       runtimeProvider: { provider: "openai" },

@@ -455,7 +455,8 @@ jobs:
           npm_config_cache: ${{ runner.temp }}/openclaw-desktop-npm-cache
           # Cold Windows declarations can exceed the package builder's 45-minute default.
           OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS: "3600000"
-        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        # Favor packaging speed for validation; release installers keep the default compression.
+        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles nsis --config '{"bundle":{"createUpdaterArtifacts":false,"windows":{"nsis":{"compression":"zlib"}}}}'
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

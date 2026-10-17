@@ -17,6 +17,7 @@ packages/agent-core/package.json
 packages/agent-core/src/harness/env/kill-tree.ts
 packages/agent-core/src/harness/messages.ts
 packages/agent-core/src/harness/session/tool-result-pairing.ts
+packages/agent-core/src/harness/session/transcript-model.ts
 packages/agent-core/src/operator-messages.ts
 packages/gateway-client/package.json
 packages/gateway-client/src/timeouts.ts
@@ -940,7 +941,6 @@ src/infra/dotenv-global-core.ts
 src/infra/dotenv-global.ts
 src/infra/dotenv.ts
 src/infra/ed25519-signature.ts
-src/infra/env-log.runtime.ts
 src/infra/env.ts
 src/infra/errno.ts
 src/infra/child-runtime-viability.ts
@@ -1861,6 +1861,7 @@ src/state/openclaw-agent-db-registry.read.ts
 src/state/openclaw-agent-db-registry.ts
 src/state/openclaw-agent-db-registry.worker.ts
 src/state/openclaw-agent-db-resources.ts
+src/state/openclaw-agent-db-schema-admission.ts
 src/state/openclaw-agent-db-schema-compatibility.ts
 src/state/openclaw-agent-db-schema-helpers.ts
 src/state/openclaw-agent-db-schema-read.ts
@@ -1887,6 +1888,7 @@ src/state/openclaw-agent-execution-scope.ts
 src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
+src/state/openclaw-agent-memory-revision-migration.ts
 src/state/openclaw-agent-message-tool-outcome-schema.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
@@ -1905,6 +1907,7 @@ src/state/openclaw-agent-session-snapshots-schema.ts
 src/state/openclaw-agent-session-transcript-archive-schema.ts
 src/state/openclaw-agent-standing-intents-schema.ts
 src/state/openclaw-agent-storage-schema.ts
+src/state/openclaw-agent-trajectory-storage-migration.ts
 src/state/openclaw-agent-transcript-fts-schema-source.ts
 src/state/openclaw-agent-transcript-fts-schema.ts
 src/state/openclaw-agent-transcript-payload-migration.ts
@@ -2194,6 +2197,7 @@ src/config/sessions/session-accessor.sqlite-read.ts
 src/config/sessions/session-accessor.sqlite-sharing-acquisition.ts
 src/config/sessions/session-accessor.sqlite-transcript-parent.ts
 src/config/sessions/session-accessor.sqlite-transcript-state.ts
+src/config/sessions/session-accessor.sqlite-transcript-state.queries.ts
 src/config/sessions/session-accessor.sqlite-transcript-stats.ts
 src/config/sessions/session-accessor.sqlite-transcript-watermark.ts
 src/config/sessions/session-canonical-validation.ts

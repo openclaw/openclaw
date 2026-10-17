@@ -7,7 +7,6 @@ import {
   SESSION_SIDEBAR_ROW_FIELDS,
 } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
-import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
@@ -24,16 +23,16 @@ import {
 } from "./session-identity-projection.js";
 import { retainSessionListBaseMiss } from "./session-list-diagnostics.js";
 import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
+import type { SessionListView } from "./session-list-view-cache.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
-  hasSidebarBaseline,
   prepareSessionRowPublicationView,
-  retainSidebarRows,
   type PublicationView,
 } from "./session-row-publication.js";
+import { registerSessionRowEncoding, serializeSessionRow } from "./session-row-serialization.js";
 import {
   authorizeIncognitoSessionTarget,
   authorizeSessionAgentRun,
@@ -69,7 +68,6 @@ function toProjectedSessionSharingTarget(record: records.MaterializedRow): Sessi
   };
 }
 
-const encodings = new WeakMap<GatewaySessionRow, string>();
 /** Immutable row identities own field preparation; fact indexes stay response-local. */
 function createSessionRowFactSharing<T extends GatewaySessionRow>() {
   const prepared = new WeakMap<T, [string, Partial<T>][]>();
@@ -189,16 +187,6 @@ export function shareSidebarSessionRows(
   return shared;
 }
 
-/** Only the immutable presentation is encoded; recipient-specific list wrappers stay private. */
-export function serializeSessionRow(row: GatewaySessionRow): string {
-  let encoded = encodings.get(row);
-  if (encoded === undefined) {
-    encoded = JSON.stringify(row);
-    encodings.set(row, encoded);
-  }
-  return encoded;
-}
-
 /** Sharing decisions remain recipient-local; only their identical presented results are reused. */
 export function prepareSessionRowPublication(
   projection: SessionRowProjection,
@@ -265,7 +253,7 @@ export function prepareProjectedSessionPresentation(
   const profileId = profile
     ? projectSessionParticipant({ type: "profile", id: profile.id }, profiles).identity.id
     : undefined;
-  const listView = (opts: SessionsListParams, selection = false) => {
+  const listView = (opts: SessionsListParams, selection = false): SessionListView => {
     const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
     if (selection) {
       delete query.rowMode;
@@ -279,24 +267,7 @@ export function prepareProjectedSessionPresentation(
       presentFastMode("ultrafast"),
       Object.entries(query).toSorted(([left], [right]) => left.localeCompare(right)),
     ]);
-    const lists = publicationState?.lists;
-    let view = lists?.get(key);
-    if (!view) {
-      view = {};
-      // A revision can receive arbitrary paging/search queries; retain bounded recent views.
-      if (lists && lists.size >= 32) {
-        const evicted = lists.values().next().value!;
-        lists.delete(lists.keys().next().value!);
-        if (hasSidebarBaseline(evicted)) {
-          emitTrustedDiagnosticEvent({
-            type: "sessions.list.baseline.retired",
-            cause: "view-evicted",
-          });
-        }
-      }
-      lists?.set(key, view);
-    }
-    return view;
+    return publicationState?.lists.get(key) ?? { key, refs: 0, bytes: 0, historyRefs: 0 };
   };
   const viewer = (value: SessionSharingTarget, sharingRole = sharing.roleForTarget(value)) => ({
     visibility: resolveSessionVisibility(value.entry),
@@ -565,7 +536,7 @@ export function prepareProjectedSessionPresentation(
       // Publish the wire snapshot and its bytes together; mutable source aliases stay private.
       const encoded = JSON.stringify(row);
       const snapshot = freezeJsonSnapshot(row);
-      encodings.set(snapshot, encoded);
+      registerSessionRowEncoding(snapshot, encoded);
       views?.set(signature, snapshot);
       return projectModels(snapshot, views, signature);
     }
@@ -609,7 +580,7 @@ export function prepareProjectedSessionPresentation(
       }
       if (!view.selection) {
         const { entries, ownerSessionProfiles, ...facets } = select(
-          (view.partitions ??= new WeakMap()),
+          publicationState?.lists.partitions(view),
         );
         Object.freeze(entries);
         view.selection = Object.freeze({
@@ -619,6 +590,7 @@ export function prepareProjectedSessionPresentation(
         });
         view.selectedAt = now;
         view.activityExpiresAt = view.selection.activityExpiresAt;
+        publicationState?.lists.update(view);
       }
       return view.selection;
     },
@@ -634,11 +606,8 @@ export function prepareProjectedSessionPresentation(
       // Sidebar replies encode the fact-packed rows in shareSidebarSessionRows.
       if (opts.rowMode !== "sidebar") {
         registerSerializedJsonArray(rows, rows.map(serializeSessionRow));
-      } else if (previous) {
-        view.rowHistory = retainSidebarRows(previous, view.rowHistory);
       }
-      view.rows = rows;
-      view.sidebar = opts.rowMode === "sidebar";
+      publicationState?.lists.setRows(view, rows, opts.rowMode === "sidebar");
       return { sessions: rows, rowHistory: view.rowHistory };
     },
     snapshot(query: records.Lookup, options: PresentationOptions = {}) {

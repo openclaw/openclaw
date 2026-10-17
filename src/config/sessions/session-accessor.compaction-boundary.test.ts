@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, expect, it, vi } from "vitest";
+import { afterAll, expect, it, onTestFinished, vi } from "vitest";
 import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import {
   withSessionCompactionPersistenceAsync,
@@ -122,6 +122,14 @@ it.each([false, true])(
       incognito ? "dashboard:incognito-successive-compactions" : "successive-compactions",
       "successive-compactions",
     );
+    if (incognito) {
+      onTestFinished(() => {
+        memorySessionActorOwners.closeDatabase({
+          agentId: scope.agentId,
+          path: resolveIncognitoOpenClawAgentSqlitePath(scope),
+        });
+      });
+    }
     const { manager, compact } = await seedCompaction(scope, incognito ? { incognito: true } : {});
     await compact();
     await upsertSessionEntryCore(scope, {

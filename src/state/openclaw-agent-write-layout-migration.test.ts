@@ -5,10 +5,16 @@ import { restoreDoctorMigrationBackup } from "../commands/doctor-migration-backu
 import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
 import { createScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import {
+  AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import { getOpenClawAgentMigrationSchema } from "./openclaw-agent-db-schema-helpers.js";
-import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import {
+  ensureOpenClawAgentDatabaseSchema,
+  ensureOpenClawAgentSchema,
+} from "./openclaw-agent-db-schema.js";
 import {
   assertOpenClawMigrationWitnessPreserved,
   captureOpenClawMigrationWitness,
@@ -24,8 +30,6 @@ const schemaV27 = fs.readFileSync(
 const scope = [
   "memory_entry_origins",
   "schema_meta",
-  "session_nodes",
-  "session_reactions",
   "session_windows",
   "sqlite_stat1",
   "sqlite_stat4",
@@ -159,18 +163,19 @@ describe("agent write layout migration", () => {
           database.setAuthorizer((action, name, value) =>
             action === constants.SQLITE_PRAGMA &&
             name === "user_version" &&
-            value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
+            value === String(AGENT_WRITE_LAYOUT_SCHEMA_VERSION)
               ? constants.SQLITE_DENY
               : constants.SQLITE_OK,
           );
         }
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
           const migrate = () =>
-            ensureOpenClawAgentDatabaseSchema(database, {
-              agentId: "main",
-              env: state.env,
-              path: pathname,
-            });
+            ensureOpenClawAgentSchema(
+              database,
+              "main",
+              pathname,
+              AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
+            );
           await assertSqliteMigrationScopePreserved(database, scope, () => {
             if (outcome === "rollback") {
               expect(migrate).toThrow(/authoriz/u);
@@ -205,7 +210,7 @@ describe("agent write layout migration", () => {
         ).toEqual(identities);
         expect(database.prepare("SELECT * FROM session_windows").all()).toEqual(windows);
         expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-        const expectedVersion = outcome === "rollback" ? 27 : OPENCLAW_AGENT_SCHEMA_VERSION;
+        const expectedVersion = outcome === "rollback" ? 27 : AGENT_WRITE_LAYOUT_SCHEMA_VERSION;
         expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(expectedVersion);
         expect(
           database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
@@ -281,7 +286,7 @@ describe("agent write layout migration", () => {
         resolveSchemaMigrationBackupTables({
           kind: "agent",
           foundVersion: 27,
-          supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+          supportedVersion: AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
         }),
       ).toEqual(scope);
       await withAgentDatabaseMaintenanceLease({ env: state.env }, async (lease) => {
@@ -291,11 +296,7 @@ describe("agent write layout migration", () => {
           tables: scope,
           beforePublish: () => lease.assertOwned(),
         });
-        ensureOpenClawAgentDatabaseSchema(database, {
-          agentId: "main",
-          env: state.env,
-          path: pathname,
-        });
+        ensureOpenClawAgentSchema(database, "main", pathname, AGENT_WRITE_LAYOUT_SCHEMA_VERSION);
       });
       database.exec("UPDATE cache_entries SET blob = X'BEEF' WHERE scope = 'unrelated'");
       await assertSqliteMigrationScopePreserved(database, scope, () =>

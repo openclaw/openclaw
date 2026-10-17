@@ -2690,6 +2690,23 @@ or deduplication still precedes marker settlement. Failed event recording leaves
 the marker available for the next check. Schemas, stored bytes, retention, provider
 contracts, and update behavior are unchanged; no migration is required.
 
+## Trajectory payload compression
+
+The trajectory writer worker prepares Brotli quality 3 payloads before its
+existing transaction. Values of at least 1 KiB compress only when they save
+at least 64 bytes and 10%; values larger than 256 KiB remain text. New rows store
+a codec marker and exact logical UTF-8 size alongside compressed bytes. Bounded
+decoding preserves original strings without JSON reserialization. Narrow SQL
+projections decode inside SQLite so diagnostics do not transfer full event bodies.
+
+The schema migration keeps old text rows intact and replaces the retention index
+expression with `COALESCE(event_utf8_bytes, octet_length(event_json))`. This keeps
+retention indexed and leaves logical history limits unchanged. There is no eager
+conversion or new worker request. Native PostgreSQL uses raw JSON text and TOAST;
+engine ports decode compressed SQLite rows before copying them. See
+[trajectory payload storage](/reference/database-schemas/agent-schema-history#trajectory-payload-storage)
+for migration and rollback details.
+
 ## Trajectory retention covering index
 
 The accepted trajectory retention design keeps stored runtime events in the
@@ -2877,6 +2894,28 @@ upgrade can report the pending unknown outcome. Rollback does not alter history,
 execute commands, or require a database restore. The maintainer-authorized
 restart-continuity repair accepts this narrowly scoped durability change; owner
 and separate-Gateway-process tests cover lifecycle cleanup and restart handoff.
+
+## Memory index batch revisions
+
+Agent schema 31 removes the six row revision triggers on `memory_index_sources`
+and `memory_index_chunks`. The publication and Forget writers advance
+`memory_index_state.revision` once inside each transaction that changes the
+index, including source refresh, replacement, deletion, reset, shadow publication,
+and purge. Readers cannot observe committed index rows with a previous revision;
+rollback discards both the row changes and the revision advance. Revision values
+identify index changes, not the number of affected rows.
+
+The migration does not rewrite memory content, embeddings, source identities, or
+the current revision. SQLite and PostgreSQL advance together. PostgreSQL also
+retires the two obsolete revision trigger functions, while retaining vector and
+full-text projection triggers. Historical admission and rollback keep the old
+trigger definitions. Fresh and shadow memory stores use the same writer-owned
+revision contract.
+
+The declared SQLite backup covers the source and chunk tables and schema metadata.
+Other retained tables and planner statistics stay unchanged. Older binaries
+require the verified pre-upgrade backup and matching schema; manually lowering
+version markers cannot restore their revision-update contract.
 
 ## Review checkpoint for material changes
 

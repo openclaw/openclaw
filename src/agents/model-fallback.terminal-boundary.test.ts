@@ -140,6 +140,9 @@ it("records a CLI max-turn stop before provider policy can replace it with a ret
       },
       provider: "fixture-provider",
       model: "fixture-model",
+      classifyErrorCode: () => {
+        throw new Error("terminal stops must bypass backend error classification");
+      },
     });
     assert(error instanceof FailoverError);
     throw error;

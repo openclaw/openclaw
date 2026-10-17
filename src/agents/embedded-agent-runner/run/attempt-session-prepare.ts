@@ -610,6 +610,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     config: attempt.config,
     contextWindowTokens: attempt.contextTokenBudget,
     inputProvenance: attempt.inputProvenance,
+    privateCompletion: attempt.privateCompletion,
     preparedUserTurnMessage,
     preparedUserTurnTranscriptRecorder: preparedUserTurnMessage
       ? attempt.userTurnTranscriptRecorder

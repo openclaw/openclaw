@@ -47,6 +47,7 @@ import type { StoreSchema } from "./contract.js";
 import { openEngineStore } from "./open.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
 import type { PortDescriptor } from "./port-descriptor.js";
+import { postgresCatalogQuery, readPostgresCatalog } from "./postgres-catalog.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 import { statePortProvider } from "./state-port.js";
 
@@ -151,7 +152,6 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     reads.retire.mockImplementation(worker.retireIdleOpenClawStateReadWorkers);
     reads.capture.mockImplementation(() => ({
       own: () => () => {},
-      service() {},
       createTransport: (command) =>
         createMockStateReadSource({
           read: async (source) => reads.decode(await readInProcess(command, source)),
@@ -589,9 +589,13 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
       }
     },
   );
-  it.each([false, true])(
-    "keeps the real agent v27→current rollback exact (foreign write: %s)",
-    async (foreignWrite) => {
+  it.each([
+    [27, false],
+    [27, true],
+    [30, false],
+  ] as const)(
+    "keeps the real agent v%s→current rollback exact (foreign write: %s)",
+    async (sourceVersion, foreignWrite) => {
       // The preceding foreign-write case deliberately retains the candidate state schema.
       closeOpenClawStateDatabaseForTest();
       await client.query(`DROP INDEX IF EXISTS "${namespace}".idx_doctor_future`);
@@ -603,18 +607,63 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
       const updateEnv: NodeJS.ProcessEnv = { ...env, OPENCLAW_CONFIG_PATH: configPath };
       vi.stubEnv("OPENCLAW_STATE_DIR", updateEnv.OPENCLAW_STATE_DIR);
       vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-      const agentPath = path.join(env.OPENCLAW_STATE_DIR!, `agent-${foreignWrite}.sqlite`);
+      const agentPath = path.join(
+        env.OPENCLAW_STATE_DIR!,
+        `agent-${sourceVersion}-${foreignWrite}.sqlite`,
+      );
       const candidate = { ...agentEngineSchema };
-      const migration = candidate.postgresMigrations!.find((step) => step.version === 28)!;
+      const migration = candidate.postgresMigrations!.find(
+        (step) => step.version === sourceVersion + 1,
+      )!;
       const installed: StoreSchema = {
         ...candidate,
-        version: 27,
+        version: sourceVersion,
         postgres: migration.fromSchema.postgres,
         postgresMigrations: [],
       };
+      // The reference anchor must stay outside the update backup's state inventory.
+      const referenceRoot = dirs.make("doctor-pg-agent-reference-");
+      const targetNamespace = withEngineStoreAdmission(() => {
+        using anchor = openNodeSqliteDatabase(path.join(referenceRoot, "agent.sqlite"));
+        const engine = openEngineStore({
+          anchor,
+          schema: candidate,
+          input: { connection: connection!, schemaPrefix: "doctor_fixture" },
+          inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: false }),
+          prepareAnchor() {},
+          openSqlite() {
+            throw new Error("Expected PostgreSQL");
+          },
+        });
+        try {
+          return getPostgresPhysicalFacts(engine)!.namespace;
+        } finally {
+          engine.close();
+        }
+      });
+      namespaces.add(targetNamespace);
+      // Fingerprints include namespace-qualified definitions; compare catalogs after relocation.
+      const readAgentCatalog = async (schema: string) =>
+        readPostgresCatalog(
+          (await client.query(postgresCatalogQuery(schema, true))).rows[0].catalog,
+        )
+          .map((fact) => JSON.stringify(fact).replaceAll(schema, "fixture_namespace"))
+          .toSorted();
+      const targetAgentCatalog = await readAgentCatalog(targetNamespace);
+      // Build the actual historical layout; dropping current columns would leave
+      // PostgreSQL attribute-number holes and change the later migration catalog.
       let agentNamespace = withEngineStoreAdmission(() => {
         using anchor = openNodeSqliteDatabase(agentPath);
-        const engine = openAgentEngineStore(anchor, "main", agentPath);
+        const engine = openEngineStore({
+          anchor,
+          schema: installed,
+          input: { connection: connection!, schemaPrefix: "doctor_fixture" },
+          inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: false }),
+          prepareAnchor() {},
+          openSqlite() {
+            throw new Error("Expected PostgreSQL");
+          },
+        });
         try {
           return getPostgresPhysicalFacts(engine)!.namespace;
         } finally {
@@ -622,29 +671,12 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
         }
       });
       namespaces.add(agentNamespace);
-      const targetAgentFingerprint = (
-        await client.query(`SELECT fingerprint FROM "${agentNamespace}".openclaw_schema_meta`)
-      ).rows[0].fingerprint;
       await client.query(`
-        ALTER FUNCTION "${agentNamespace}".openclaw_transcript_navigation_check(text)
-          CALLED ON NULL INPUT RESET search_path;
-        DROP INDEX "${agentNamespace}".idx_agent_session_windows_conversation;
-        CREATE INDEX idx_agent_session_windows_conversation
-          ON "${agentNamespace}".session_windows
-            (primary_conversation_id NULLS FIRST, updated_at DESC NULLS LAST, session_id NULLS FIRST)
-          WHERE primary_conversation_id IS NOT NULL;
-        CREATE INDEX idx_agent_transcript_event_parent
-          ON "${agentNamespace}".transcript_event_identities
-            (session_id NULLS FIRST, parent_id NULLS FIRST) WHERE parent_id IS NOT NULL;
-        CREATE INDEX idx_agent_session_nodes_last_interaction_at
-          ON "${agentNamespace}".session_nodes
-            (last_interaction_at DESC NULLS LAST, session_key ASC NULLS FIRST);
-        CREATE INDEX idx_agent_session_reactions_message
-          ON "${agentNamespace}".session_reactions
-            (session_key ASC NULLS FIRST, session_id ASC NULLS FIRST, message_id ASC NULLS FIRST);
-        UPDATE "${agentNamespace}".openclaw_schema_meta
-          SET version = 27, fingerprint = NULL, ddl_hash = NULL, server_major = NULL;
-        UPDATE "${agentNamespace}".schema_meta SET schema_version = 27;
+        INSERT INTO "${agentNamespace}".schema_meta
+          VALUES ('primary', 'agent', ${sourceVersion}, 'main', NULL, 1, 1);
+        INSERT INTO "${agentNamespace}".session_key_contract (id, main_key, updated_at)
+          VALUES (1, 'main', 0);
+        INSERT INTO "${agentNamespace}".memory_index_state VALUES (1, 0);
         INSERT INTO "${agentNamespace}".session_nodes
           (session_key, current_session_id, entry_json, updated_at)
           VALUES ('agent:main:main', 'session', '{"sessionId":"session"}', 1);
@@ -664,7 +696,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
         using anchor = openNodeSqliteDatabase(agentPath);
         publishSqliteDatabaseSchemaChange(anchor);
       }
-      expect(admit(installed, agentPath)?.version).toBe(27);
+      expect(admit(installed, agentPath)?.version).toBe(sourceVersion);
       const { runId } = createUpdateRun({ trigger: "cli", origin: {} }, { env: updateEnv });
       withEngineStoreAdmission(() => {
         runOpenClawStateWriteTransaction(
@@ -713,28 +745,39 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           indexdef: indexdef.replaceAll(agentNamespace, "fixture_namespace"),
         }));
       const beforeIndexes = await readIndexes();
-      expect(beforeIndexes).toEqual([
-        {
-          indexname: "idx_agent_session_nodes_last_interaction_at",
-          indexdef:
-            "CREATE INDEX idx_agent_session_nodes_last_interaction_at ON fixture_namespace.session_nodes USING btree (last_interaction_at DESC NULLS LAST, session_key NULLS FIRST)",
-        },
-        {
-          indexname: "idx_agent_session_reactions_message",
-          indexdef:
-            "CREATE INDEX idx_agent_session_reactions_message ON fixture_namespace.session_reactions USING btree (session_key NULLS FIRST, session_id NULLS FIRST, message_id NULLS FIRST)",
-        },
-        {
-          indexname: "idx_agent_session_windows_conversation",
-          indexdef:
-            "CREATE INDEX idx_agent_session_windows_conversation ON fixture_namespace.session_windows USING btree (primary_conversation_id NULLS FIRST, updated_at DESC NULLS LAST, session_id NULLS FIRST) WHERE (primary_conversation_id IS NOT NULL)",
-        },
-        {
-          indexname: "idx_agent_transcript_event_parent",
-          indexdef:
-            "CREATE INDEX idx_agent_transcript_event_parent ON fixture_namespace.transcript_event_identities USING btree (session_id NULLS FIRST, parent_id NULLS FIRST) WHERE (parent_id IS NOT NULL)",
-        },
-      ]);
+      expect(beforeIndexes).toEqual(
+        sourceVersion === 27
+          ? [
+              {
+                indexname: "idx_agent_session_nodes_last_interaction_at",
+                indexdef:
+                  "CREATE INDEX idx_agent_session_nodes_last_interaction_at ON fixture_namespace.session_nodes USING btree (last_interaction_at DESC NULLS LAST, session_key NULLS FIRST)",
+              },
+              {
+                indexname: "idx_agent_session_reactions_message",
+                indexdef:
+                  "CREATE INDEX idx_agent_session_reactions_message ON fixture_namespace.session_reactions USING btree (session_key NULLS FIRST, session_id NULLS FIRST, message_id NULLS FIRST)",
+              },
+              {
+                indexname: "idx_agent_session_windows_conversation",
+                indexdef:
+                  "CREATE INDEX idx_agent_session_windows_conversation ON fixture_namespace.session_windows USING btree (primary_conversation_id NULLS FIRST, updated_at DESC NULLS LAST, session_id NULLS FIRST) WHERE (primary_conversation_id IS NOT NULL)",
+              },
+              {
+                indexname: "idx_agent_transcript_event_parent",
+                indexdef:
+                  "CREATE INDEX idx_agent_transcript_event_parent ON fixture_namespace.transcript_event_identities USING btree (session_id NULLS FIRST, parent_id NULLS FIRST) WHERE (parent_id IS NOT NULL)",
+              },
+            ]
+          : [
+              {
+                indexname: "idx_agent_session_windows_conversation",
+                indexdef:
+                  "CREATE INDEX idx_agent_session_windows_conversation ON fixture_namespace.session_windows USING btree (primary_conversation_id NULLS FIRST) WHERE (primary_conversation_id IS NOT NULL)",
+              },
+            ],
+      );
+      const beforeNavigation = await readNavigationFunction();
       const lock = await acquireGatewayLock({
         env: updateEnv,
         allowInTests: true,
@@ -748,7 +791,10 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
         try {
           saved = await lock!.run(() =>
             createUpdateDatabaseBackup({
-              backupRoot: path.join(env.OPENCLAW_STATE_DIR!, `agent-capture-${foreignWrite}`),
+              backupRoot: path.join(
+                env.OPENCLAW_STATE_DIR!,
+                `agent-capture-${sourceVersion}-${foreignWrite}`,
+              ),
               stateDir: env.OPENCLAW_STATE_DIR!,
               config,
               env: updateEnv,
@@ -762,12 +808,12 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
             using image = openNodeSqliteDatabase(
               path.join(agentBackup.exportDirectory!, "database.sqlite"),
             );
-            expect(image.prepare("PRAGMA user_version").get()?.user_version).toBe(27);
+            expect(image.prepare("PRAGMA user_version").get()?.user_version).toBe(sourceVersion);
             expect(
               image
                 .prepare("SELECT wr FROM pragma_table_list WHERE name = 'memory_entry_origins'")
                 .get()?.wr,
-            ).toBe(0);
+            ).toBe(sourceVersion < 28 ? 0 : 1);
             expect(
               image.prepare("SELECT entry_key, origin_class FROM memory_entry_origins").all(),
             ).toEqual([{ entry_key: "retained-memory", origin_class: "owner" }]);
@@ -824,13 +870,8 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           expect(result.warnings).toEqual([]);
           closeOpenClawStateDatabaseForTest();
           expect(await readAgent()).toEqual([{ value_json: '"after"' }]);
-          expect(
-            (
-              await client.query(
-                `SELECT version, fingerprint FROM "${agentNamespace}".openclaw_schema_meta`,
-              )
-            ).rows,
-          ).toEqual([{ version: String(candidate.version), fingerprint: targetAgentFingerprint }]);
+          expect(admit(candidate, agentPath)?.version).toBe(candidate.version);
+          expect(await readAgentCatalog(agentNamespace)).toEqual(targetAgentCatalog);
           expect(await readAllocation()).toEqual([{ last_value: "72", is_called: true }]);
           expect(await readNavigationFunction()).toEqual([
             { proisstrict: true, proconfig: ["search_path=pg_catalog"] },
@@ -894,7 +935,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           (await client.query(`SELECT version FROM "${agentNamespace}".openclaw_schema_meta`)).rows,
         ).toEqual([{ version: String(installed.version) }]);
         expect(await readAllocation()).toEqual([{ last_value: "71", is_called: true }]);
-        expect(await readNavigationFunction()).toEqual([{ proisstrict: false, proconfig: null }]);
+        expect(await readNavigationFunction()).toEqual(beforeNavigation);
         expect(await readIndexes()).toEqual(beforeIndexes);
         expect(
           (
@@ -909,7 +950,12 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
             )
           ).rows,
         ).toEqual([{ entry_key: "retained-memory", origin_class: "owner" }]);
-        expect(admit(installed, agentPath)?.version).toBe(27);
+        expect(admit(installed, agentPath)?.version).toBe(sourceVersion);
+        await client.query(`INSERT INTO "${agentNamespace}".memory_index_sources (path, source, hash, mtime, size)
+            VALUES ('restored.md', 'memory', 'hash', 1, 1);`);
+        expect(
+          (await client.query(`SELECT revision FROM "${agentNamespace}".memory_index_state`)).rows,
+        ).toEqual([{ revision: "1" }]);
       } finally {
         Object.assign(agentEngineSchema, candidate);
         vi.unstubAllEnvs();

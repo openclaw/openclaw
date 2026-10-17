@@ -25,17 +25,21 @@ import { resolveSpeechTextLimit } from "../../lib/speech-playback.ts";
 import { requestChatAbort } from "./chat-abort-request.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
+import { projectChatErrors } from "./chat-error-projection.ts";
 import { createChatErrorState } from "./chat-error-state.ts";
+import { projectChatFields } from "./chat-field-projection.ts";
 import {
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
   CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
 } from "./chat-history-events.ts";
-import { setChatError } from "./chat-history-state.ts";
+import { chatHistoryRequests, setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { projectChatOutboxQueue } from "./chat-outbox-projection.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
+import { projectChatRun } from "./chat-run-projection.ts";
 import {
   moveQueuedChatMessage,
   resumeStoredChatOutboxes,
@@ -244,6 +248,7 @@ export function createPageState(
     browserPanelAvailable: false,
     assistantAgentId: context.agentSelection.state.selectedId,
     sessionKey: initialSessionKey,
+    currentSessionId: undefined,
     chatLoading: false,
     chatHistoryPagination: { hasMore: false },
     chatSending: false,
@@ -267,6 +272,7 @@ export function createPageState(
     chatStreamStartedAt: null,
     chatRunStartup: null,
     chatRunError: null,
+    chatReplyTarget: null,
     agentsError: null,
     chatStreamSegments: [],
     chatReasoning: null,
@@ -669,5 +675,21 @@ export function createPageState(
     invalidateImageLightbox(state);
     renderLifecycle.invalidate();
   };
-  return state;
+  projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
+  return projectChatFields(projectChatErrors(projectChatRun(projectChatOutboxQueue(state))), [
+    "chatSending",
+    "chatLoading",
+    "chatHistoryPagination",
+    "chatDisplayedLeafEntryId",
+    "chatBranches",
+    "chatBranchesSessionKey",
+    "chatBranchesConnectionEpoch",
+    "currentSessionId",
+    "chatGoalDraftMode",
+    "chatReplyTarget",
+    "chatNewMessagesBelow",
+    "chatReadingHistory",
+    "chatFollowLocked",
+    "chatUserNearBottom",
+  ]);
 }

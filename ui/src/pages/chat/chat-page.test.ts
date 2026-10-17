@@ -13,6 +13,7 @@ vi.mock("./chat-pane.tsx", async () => {
 });
 
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { mobileNavLayoutMediaQuery } from "../../app/mobile-nav-layout.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-toggle-contract.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
@@ -189,11 +190,56 @@ describe("chat page split layout host", () => {
 
         expect(pane.onboarding).toBe(onboarding);
         expect(pane.mergedChrome).toBe(!onboarding);
+
+        container.className = onboarding ? "shell" : "shell shell--onboarding";
+        page.data = { ...page.data };
+        await settleChatPage(page);
+        expect(paneAt(page)).toBe(pane);
+        expect(pane.onboarding).toBe(!onboarding);
+        expect(pane.mergedChrome).toBe(onboarding);
       } finally {
         view.unmount();
       }
     },
   );
+
+  it("updates mobile chrome independently of the narrow layout breakpoint", async () => {
+    const navigationMedia = Object.assign(new EventTarget(), { matches: false });
+    const viewportMedia = Object.assign(new EventTarget(), { matches: false });
+    const matchMedia = window.matchMedia;
+    vi.stubGlobal("matchMedia", (query: string) =>
+      query === mobileNavLayoutMediaQuery()
+        ? navigationMedia
+        : query === "(max-width: 1099px)"
+          ? viewportMedia
+          : matchMedia(query),
+    );
+    const { page } = await mountPage();
+    const pane = paneAt(page);
+    expect(pane.narrow).toBe(false);
+    expect(pane.mergedChrome).toBe(false);
+
+    navigationMedia.matches = true;
+    navigationMedia.dispatchEvent(new Event("change"));
+    await settleChatPage(page);
+
+    expect(paneAt(page)).toBe(pane);
+    expect(pane.narrow).toBe(false);
+    expect(pane.mergedChrome).toBe(true);
+
+    navigationMedia.matches = false;
+    navigationMedia.dispatchEvent(new Event("change"));
+    await settleChatPage(page);
+    expect(pane.mergedChrome).toBe(false);
+
+    viewportMedia.matches = true;
+    navigationMedia.matches = true;
+    viewportMedia.dispatchEvent(new Event("change"));
+    await settleChatPage(page);
+    expect(pane.narrow).toBe(true);
+    expect(pane.mergedChrome).toBe(true);
+    expect(paneAt(page)).toBe(pane);
+  });
 
   it("updates a retained pane label on a live locale change", async () => {
     onTestFinished(captureI18nStateForTesting());

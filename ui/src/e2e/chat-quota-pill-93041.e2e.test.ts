@@ -209,7 +209,6 @@ type ChatPane = HTMLElement & {
     assistantName?: string;
     assistantAvatar?: string | null;
     chatAvatarUrl?: string | null;
-    requestUpdate?: () => void;
     modelAuthStatusError?: string | null;
     modelAuthStatusResult?: {
       ts?: number;
@@ -477,7 +476,6 @@ suite.define(() => {
           pane.state.assistantName = "Main Agent";
           pane.state.assistantAvatar = "M";
           pane.state.chatAvatarUrl = "https://example.test/main-avatar.png";
-          pane.state.requestUpdate?.();
         }
       }, visiblePaneSelector);
       await setSelectedAgent(page, "Work");

@@ -25,12 +25,12 @@ import {
   resolveSessionPendingInputAppend,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
 import { readCommittedTranscriptMessageSequence } from "./session-accessor.sqlite-transcript-sequences.js";
 import {
   readTranscriptContextStateInTransaction,
   readTranscriptContextVersionInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
 import type { ResolvedSessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";

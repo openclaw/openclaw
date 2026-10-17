@@ -705,6 +705,12 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(payload).toBeDefined();
     return payload ?? {};
   }
+  it("sends an explicit null reasoning summary", async () => {
+    expect(
+      await capturePayload(context, { reasoningEffort: "medium", reasoningSummary: null }),
+    ).toMatchObject({ reasoning: { effort: "medium", summary: null } });
+  });
+
   it("keeps tool controls when a tool schema is usable", async () => {
     const payload = await capturePayload({
       ...context,

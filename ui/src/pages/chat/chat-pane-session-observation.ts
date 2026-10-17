@@ -139,9 +139,9 @@ function applyObservedChatSessionRow(
   if (row.providerReview) {
     holdProviderReviewQueuedInputs(state, row.key, row.agentId ?? selectedAgentId);
     if (
-      state.realtimeTalkSession ||
-      state.realtimeTalkActive ||
-      state.realtimeTalkUseSystemDefault
+      state.realtimeTalk.snapshot.realtimeTalkSession ||
+      state.realtimeTalk.snapshot.realtimeTalkActive ||
+      state.realtimeTalk.snapshot.realtimeTalkUseSystemDefault
     ) {
       stopChatRealtimeTalk(state, { preserveConversation: true });
     }
@@ -358,10 +358,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
               refreshRunner.refresh();
               return;
             }
-            this.activeSessionResources.reconcileObservation({
-              requestUpdate: () => this.invalidate(),
-              updated: () => this.updateComplete,
-            });
+            this.activeSessionResources.reconcileObservation();
           }
         },
         onEvent: (event, result) => {

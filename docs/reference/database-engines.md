@@ -765,6 +765,13 @@ engine does not add PostgreSQL support to an unported store.
 
 ## Observe database work
 
+PostgreSQL read snapshots use read-only repeatable-read transactions. Transactions
+that may write acquire the store's advisory lock before reading. Committed typed
+writes invalidate only their declared replica scopes; raw writes and schema
+changes invalidate the whole store. Empty commits leave replica revisions
+unchanged, so unrelated reads can reuse their cached snapshots.
+A PostgreSQL function that writes rows and is called through SELECT must be classified unscoped.
+
 The engine boundary publishes Node.js `diagnostics_channel` events on
 `openclaw.database.statement` and `openclaw.database.request`. Subscriptions are
 isolate-local: statement events are emitted in the database worker, and request

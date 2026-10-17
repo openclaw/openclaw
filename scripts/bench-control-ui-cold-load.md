@@ -73,33 +73,31 @@ active canonical run; live messages and deltas advance its history receipt befor
 publishing the event, so later history reads retain the same messages and stream. Capture ends after all frames
 arrive and the planned 20-second stream plus 750 ms have elapsed; busy sessions
 need not become idle. `plannedWindowMs` and the observed `elapsedMs` distinguish
-the planned window from delayed delivery on a loaded host. Its `run-N.live.json` records Lit
-updates and bounded `requestUpdate` scheduling stacks per event label, plus DOM
+the planned window from delayed delivery on a loaded host. Its `run-N.live.json` records
+observed Solid owner calls and bounded lifecycle scheduling stacks per event label, plus DOM
 snapshots of the affected rows, chat viewers, and streaming text; `run-N.live.png`
 shows the synthetic final state. Row attachment and viewport visibility distinguish
 an absent row from a rendered row below the fold.
 
 For the Solid sidebar, `solidSidebar.lifecycle` separately counts owner
-`requestUpdate` invalidations and `prepareRender`/`commitRender` projection lifecycle
+`invalidate` calls and `prepareRender`/`commitRender` projection lifecycle
 passes. Bounded owner and session-data origin stacks identify their callers. These
 are not full Solid render counts: fine-grained bindings update independently. The
 init probe captures the existing host-to-owner WeakMap registration, restores that
 tap immediately, and restores the owner wrappers at the end of the live phase.
-A missing Solid owner fails the capture instead of reporting zero work. Lit tags
-retain their original per-tag `performUpdate` counters; zero Lit updates for a
-ported Solid tag are a measurement gap, not a performance improvement.
+A missing sidebar or pane owner fails the capture instead of reporting zero work.
 
-`solidChat` counts every page/pane owner request, owner publication, actual
-projection `render` read, pane prepare/commit, and page after-commit call separately.
-Each projection pass retains the pending producer stacks and request IDs, including
-requests coalesced by the owner. IDs remain attached to their publication batch,
-so a request that drives an early projection and a later queued publication is
-visible on both passes. Unattributed passes and remaining pending producers are
-explicit. Existing lifecycle hook notifications distinguish owner facts from
-element invalidation/commit notifications; their combined count is not a DOM
-commit count. The probe preserves and restores the hook's complete descriptor,
-including the existing test adapter's accessor, along with all owner methods.
-These are projection/lifecycle counts, not all fine-grained Solid binding work.
+`solidChat` counts the pane runtime's actual `render` calls and existing lifecycle
+hook notifications. Each render retains any explicit lifecycle invalidation IDs
+and scheduling stacks received since the preceding render. Unattributed renders
+and remaining pending producers are explicit; domain mutations and fine-grained
+bindings can update without a whole-pane render or lifecycle invalidation.
+Owner and element notifications remain separate, so their combined count is not
+a DOM commit count. The probe preserves and restores the hook's complete
+descriptor, including the test adapter's accessor, and the pane render method.
+Page snapshot computations and fine-grained Solid bindings are explicitly listed
+as unmeasured. Use source-mapped CPU profiles for those paths; a missing counter
+is not evidence of zero work. The retired Lit counters are no longer emitted.
 
 Live updates are attributed to the most recently delivered event label. Paced
 refreshes and clock-driven presence updates may finish during a later event's
@@ -112,11 +110,11 @@ focused browser contracts with updated authoritative mock responses for that pro
 Each invocation keeps its exact Git head and dirty-tree inventory, raw Chrome trace,
 CPU profile, settled screenshot, and JSON summary in a fresh timestamped directory.
 It measures renderer-main-thread task interval union, long tasks, layouts with
-JavaScript stacks, Lit updates per tag, source-mapped CPU self-time hotspots,
+JavaScript stacks, observed Solid lifecycle calls, source-mapped CPU self-time hotspots,
 Solid flush self/inclusive sampled time, and RPC request/response bytes. The top
 20 CPU entries retain browser/GC overhead alongside source-attributed call sites.
 A reload settles after all scheduled fixture events and outstanding RPCs complete,
-then 750 ms with no wire, Lit, or captured Solid sidebar lifecycle activity. That quiet interval is measurement padding,
+then 750 ms with no wire or captured Solid lifecycle activity. That quiet interval is measurement padding,
 not part of a correctness test.
 
 Filmstrip frames come from Chrome tracing. Significant changes compare consecutive
@@ -135,7 +133,7 @@ measured results must be reported separately from private deployment evidence.
 ## Source-mapped CPU attribution
 
 Use `--cpu-profile --live-events --untraced` to collect separate reload and live
-profiles without the additional timeline trace. CPU mode leaves the legacy
+profiles without the additional timeline trace. CPU mode leaves the
 owner-method and animation-frame wrappers disabled (`ownerProbes: false`,
 `solidChat`/`solidSidebar` absent as `null`); source stacks supply the attribution.
 This also lets live replay run after renderer owners have been replaced by native

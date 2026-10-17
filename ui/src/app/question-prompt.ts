@@ -9,6 +9,7 @@ import type {
   QuestionAnswers,
   QuestionResolvedEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { registerListener } from "../../../src/shared/listeners.js";
 import { GatewayRequestError, type GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -58,11 +59,13 @@ export type QuestionPrompt = Pick<
 type QuestionPromptState = QuestionClientResolutionOwner & {
   ownerClient: QuestionClient | null;
   prompts: Map<string, QuestionPrompt>;
+  readonly snapshot: QuestionPrompt[];
   unmatchedResolutions: Map<string, QuestionResolvedEvent>;
   revision: number;
   expiryTimer: ReturnType<typeof globalThis.setTimeout> | null;
   refreshRetryTimer: ReturnType<typeof globalThis.setTimeout> | null;
   onChange: () => void;
+  subscribe: (listener: () => void) => () => void;
 };
 
 const REFRESH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
@@ -178,17 +181,31 @@ function parseQuestionResolvedEvent(payload: unknown): QuestionResolvedEvent | n
   return null;
 }
 
-export function createQuestionPromptState(onChange: () => void): QuestionPromptState {
+export function createQuestionPromptState(onChange: () => void = () => {}): QuestionPromptState {
+  const listeners = new Set<() => void>();
+  let snapshot: QuestionPrompt[] = [];
   const state: QuestionPromptState = {
     client: null,
     ownerClient: null,
     clientGeneration: 0,
     prompts: new Map(),
+    get snapshot() {
+      return snapshot;
+    },
     unmatchedResolutions: new Map(),
     revision: 0,
     expiryTimer: null,
     refreshRetryTimer: null,
-    onChange,
+    onChange: () => {
+      snapshot = [...state.prompts.values()].toSorted(
+        (left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id),
+      );
+      onChange();
+      for (const listener of listeners) {
+        listener();
+      }
+    },
+    subscribe: (listener) => registerListener(listeners, listener),
     onQuestionResolution: (resolution) => recordQuestionResolution(state, resolution),
   };
   return state;
@@ -661,7 +678,5 @@ export async function cancelQuestionPrompt(state: QuestionPromptState, id: strin
 }
 
 export function listQuestionPrompts(state: QuestionPromptState): QuestionPrompt[] {
-  return [...state.prompts.values()].toSorted(
-    (left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id),
-  );
+  return state.snapshot;
 }

@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
+import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loadSettings } from "../../app/settings.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { sessionProgressCardsForGateway } from "../../lib/session-progress-cards.ts";
 import {
   createGatewayHarness,
@@ -24,6 +26,7 @@ import {
   nativeHistoryMessage,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
 import {
@@ -66,7 +69,7 @@ function mountPane(
     ChatPaneRuntime,
   ) as unknown as TestChatPane;
   panes.push(pane);
-  vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
+  vi.spyOn(pane, "invalidate").mockImplementation(() => undefined);
   const context = createInitializationContext(
     createGatewayBrowserClientFixture({
       offlineRecoveryScope: "test-recovery-scope",
@@ -216,11 +219,20 @@ describe("first chat startup snapshot ordering", () => {
       const network = createDeferred<ChatHistoryResult>();
       const snapshot = { ...stored, widgetHeights: { "inline-widget": 420 } };
       const paints: unknown[][] = [];
-      h.state.requestUpdate = () => {
-        if (h.state.chatMessages.length) {
-          paints.push(h.state.chatMessages);
-        }
-      };
+      const dispose = createRoot((stop) => {
+        const run = projectOwner(chatRunPresentation(h.state), (owner) => owner.values);
+        createEffect(
+          () => run.read().chatMessages,
+          (messages) => {
+            if (messages?.length) {
+              paints.push(messages);
+            }
+          },
+        );
+        return stop;
+      });
+      onTestFinished(dispose);
+      flush();
       h.request.mockReturnValueOnce(network.promise);
       h.connect();
       const loading = h.start();
@@ -243,6 +255,7 @@ describe("first chat startup snapshot ordering", () => {
         network.resolve(fresh);
       }
       await loading;
+      flush();
       expect(paints.length).toBeGreaterThan(0);
       expect(paints.every((messages) => messages === paints[0])).toBe(true);
       expect(h.state.chatMessages).toBe(paints[0]);

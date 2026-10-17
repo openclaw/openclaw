@@ -49,8 +49,8 @@ it("counts each retirement event once across invalidations and bounded evictions
       present().list([], opts);
       state = { ...state, revision: {} };
       present();
-      await expectCauses(["projection-revision"]);
-      for (const cause of ["projection-revision", "config", "identity"] as const) {
+      await expectCauses([]);
+      for (const cause of ["config", "identity"] as const) {
         present().list([row], opts);
         present().list([row], { ...opts, limit: 2 });
         if (cause === "identity") {
@@ -87,7 +87,7 @@ it("counts each retirement event once across invalidations and bounded evictions
           await expectCauses(["history-evicted"]);
         }
       }
-      for (let limit = 1; limit <= 32; limit++) {
+      for (let limit = 1; limit <= 512; limit++) {
         present().list([row], { ...opts, limit });
       }
       await expectCauses(["view-evicted"]);
@@ -146,7 +146,7 @@ it("does not count selection-only or non-sidebar views as retired baselines", as
         present();
       }
       populate();
-      for (let limit = 1; limit <= 33; limit++) {
+      for (let limit = 1; limit <= 513; limit++) {
         present().list([], { rowMode: "compact", limit });
       }
       projection.dispose();
