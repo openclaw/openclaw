@@ -4,6 +4,8 @@ import { revalidatePublishedSecurityClearance } from "../../scripts/github/guard
 const head = "a".repeat(40);
 const rolloutCommit = "b".repeat(40);
 const ciFailure = "CI must complete successfully; review updates automatically";
+const mergedPull = { state: "closed", merged: true, maintainer_can_modify: false };
+const securityVeto = { description: "PR #7: A maintainer must approve the current PR revision" };
 const ciProjections: [string, string][] = [
   ["failure", ciFailure],
   ["success", "CI and applicable security review requirements passed"],
@@ -30,7 +32,7 @@ function fixture(needsApproval = false, projectionState = "failure", projection 
   const state = {
     currentPull: structuredClone(pullRequest),
     rollout: "enforced" as "enforced" | "grandfathered" | "inactive",
-    role: "maintain",
+    role: needsApproval ? "maintain" : "write",
     afterPermission: () => {},
   };
   const notice = (marker: string) => ({
@@ -45,11 +47,13 @@ function fixture(needsApproval = false, projectionState = "failure", projection 
     updated_at: "2026-09-27T11:30:00Z",
     html_url: "https://github.com/openclaw/openclaw/pull/7#issuecomment-11",
   };
-  const comments = [
-    notice("<!-- openclaw:dependency-graph-guard -->"),
-    notice("<!-- openclaw:security-sensitive-guard -->"),
-    approval,
-  ];
+  const comments = needsApproval
+    ? [
+        notice("<!-- openclaw:dependency-graph-guard -->"),
+        notice("<!-- openclaw:security-sensitive-guard -->"),
+        approval,
+      ]
+    : [];
   const status = (id: number, context: string, description: string, result = "success") => ({
     id,
     context,
@@ -106,19 +110,11 @@ function fixture(needsApproval = false, projectionState = "failure", projection 
     issuePath,
     api: {
       async request(path: string, options?: unknown) {
-        if (options) {
-          throw new Error("Admission must not publish");
-        }
-        const read = routes[path];
-        if (!read) {
-          throw new Error(`Unexpected request: ${path}`);
-        }
-        return read();
+        expect(options, "Admission must not publish").toBeUndefined();
+        return routes[path]?.() ?? Promise.reject(new Error(`Unexpected request: ${path}`));
       },
       async paginate(path: string) {
-        if (path !== `${issuePath}/comments`) {
-          throw new Error(`Unexpected pagination: ${path}`);
-        }
+        expect(path).toBe(`${issuePath}/comments`);
         return comments;
       },
     },
@@ -150,10 +146,6 @@ it.each<Projection>([
   ["grandfathered", "failure", ciFailure, false],
 ])("revalidates %s/%s (%s), approval=%s", async (mode, state, description, required) => {
   const f = fixture(required, state, description);
-  if (!required) {
-    f.comments.length = 0;
-    f.state.role = "write";
-  }
   f.state.rollout = mode;
   if (mode !== "enforced") {
     f.statuses.splice(0, 2);
@@ -185,13 +177,7 @@ it.each<Mutation>([
   ["role lost", "state", { role: "write" }],
   ["head", "head", { sha: "d".repeat(40) }, "Superseded", true],
   ["rollout", "state", { rollout: "grandfathered" }, "rollout changed", true],
-  [
-    "merged",
-    "pull",
-    { state: "closed", merged: true, maintainer_can_modify: false },
-    "eligibility changed",
-    true,
-  ],
+  ["merged", "pull", mergedPull, "eligibility changed", true],
 ])("refuses %s approval authority", async (_name, target, patch, error, duringRead) => {
   const f = fixture(true);
   const mutate = () => {
@@ -217,11 +203,7 @@ it.each<[string, "dependency" | "combined", StatusPatch, ("missing" | "duplicate
   ["foreign creator", "combined", { creator: { login: "another-bot", type: "Bot" } }],
   ["stale projection", "combined", { created_at: "2026-09-27T11:59:00Z" }],
   ["foreign PR", "combined", { description: `PR #8: ${ciFailure}` }],
-  [
-    "security veto",
-    "combined",
-    { description: "PR #7: A maintainer must approve the current PR revision" },
-  ],
+  ["security veto", "combined", securityVeto],
   [
     "security pending",
     "combined",

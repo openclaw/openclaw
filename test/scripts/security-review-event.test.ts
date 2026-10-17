@@ -44,6 +44,8 @@ const associationsPath = `${prefix}/commits/${head}/pulls?per_page=100&page=1`;
 const branchPath = `${prefix}/pulls?state=open&head=contributor%3Afeature&per_page=100&page=1`;
 const get = (path: string) => ({ path, method: "GET" });
 const reply = (body: unknown) => ({ body });
+const reviewEntry = (pr = 42, sha = head) => ({ pr, head: sha });
+const creator = (login = "github-actions[bot]", type = "Bot") => ({ creator: { login, type } });
 const changedPull = (number = 42, sha = head) => ({
   ...pullRequest,
   number,
@@ -55,7 +57,7 @@ function recordedPullRequest(number: number) {
     context: "openclaw/ci-gate",
     description: `PR #${number}: Checking security review`,
     state: "pending",
-    creator: { login: "github-actions[bot]", type: "Bot" },
+    ...creator(),
   };
 }
 
@@ -108,7 +110,7 @@ type Options = {
   expected?: Expected;
 };
 type Selection = { pr: number; head: string }[];
-type Expected = { status?: number; include?: Selection; publications?: number };
+type Expected = { status?: number; include?: Selection; posts?: number; truncated?: boolean };
 
 function evaluate(options: Options = {}) {
   const expected = options.expected ?? {};
@@ -197,18 +199,22 @@ globalThis.fetch = async (url, options = {}) => {
     output: existsSync(outputFile) ? readFileSync(outputFile, "utf8") : "",
     waits: trace.filter(({ method }) => method === "WAIT").map(({ delay }) => delay!),
     requests,
+    paths: requests.map(({ path }) => path),
     published: trace.filter(({ method }) => method === "POST"),
     statusRequests: requests.filter(({ path }) => path?.includes("/statuses?")),
     listingRequests: requests.filter(({ path }) => path?.includes("/workflows/ci.yml/runs")),
   };
   expect(evaluated.status, evaluated.error).toBe(expected.status ?? 0);
-  const include = expected.include ?? [{ pr: 42, head }];
+  const include = expected.include ?? [reviewEntry()];
   expect(evaluated.published).toHaveLength(
-    expected.publications ?? (evaluated.status === 0 ? include.length : 0),
+    expected.posts ?? (evaluated.status === 0 ? include.length : 0),
   );
   expect(evaluated.published.every(({ hadOutput }) => !hadOutput)).toBe(true);
   if (evaluated.status === 0) {
     expect(evaluated.matrix).toEqual({ include });
+    expect(evaluated.output).toBe(
+      `matrix=${JSON.stringify({ include })}\nhas-prs=${include.length > 0}\ntruncated=${expected.truncated ?? false}\n`,
+    );
     if (include.length) {
       expect(evaluated.published.slice(-include.length)).toMatchObject(
         include.map(({ pr, head: sha }) => pendingPublication(pr, sha)),
@@ -270,7 +276,7 @@ describe("automatic security review event resolution", () => {
   it("resolves the fresh head after a failed pending status before scheduling review", () => {
     const nextHead = otherHead;
     const result = pullEvent({
-      expected: { include: [{ pr: 42, head: nextHead }], publications: 2 },
+      expected: { include: [reviewEntry(42, nextHead)], posts: 2 },
       responses: {
         [pullPath()]: [reply(pullRequest), reply(changedPull(42, nextHead))],
         [publishPath()]: { status: 500, body: { message: "Server error" } },
@@ -281,14 +287,11 @@ describe("automatic security review event resolution", () => {
       `${prefix}/statuses/${head}`,
       `${prefix}/statuses/${nextHead}`,
     ]);
-    expect(result.output).toBe(
-      `matrix={"include":[{"pr":42,"head":"${nextHead}"}]}\nhas-prs=true\ntruncated=false\n`,
-    );
   });
 
   it("does not schedule a review job when its initial pending status cannot be recorded", () => {
     const result = pullEvent({
-      expected: { status: 1, publications: 1 },
+      expected: { status: 1, posts: 1 },
       responses: {
         [publishPath()]: { status: 403, body: { message: "Forbidden" } },
       },
@@ -301,7 +304,7 @@ describe("automatic security review event resolution", () => {
     { action: "edited", patch: { base: { ref: "release/1", repo: repository } } },
   ])("refreshes the remaining PR after a duplicate is $action", ({ action, patch }) => {
     const result = pullEvent({
-      expected: { include: [{ pr: 43, head }] },
+      expected: { include: [reviewEntry(43)] },
       action,
       pullRequest: patch,
       responses: {
@@ -309,12 +312,7 @@ describe("automatic security review event resolution", () => {
         [pullPath(43)]: reply({ ...pullRequest, number: 43 }),
       },
     });
-    expect(result.requests.map((request) => request.path)).toEqual([
-      pullPath(),
-      statusesPath(),
-      pullPath(43),
-      publishPath(),
-    ]);
+    expect(result.paths).toEqual([pullPath(), statusesPath(), pullPath(43), publishPath()]);
   });
 
   it("refreshes both the changed PR and PRs remaining on its previous head after a push", () => {
@@ -329,12 +327,7 @@ describe("automatic security review event resolution", () => {
         [pullPath(43)]: reply(changedPull(43)),
         [pullPath(44)]: reply(changedPull(44, "c".repeat(40))),
       },
-      expected: {
-        include: [
-          { pr: 42, head: nextHead },
-          { pr: 43, head },
-        ],
-      },
+      expected: { include: [reviewEntry(42, nextHead), reviewEntry(43)] },
     });
     expect(result.requests.filter((request) => request.path.includes("/commits/"))).toEqual([
       get(statusesPath(nextHead)),
@@ -349,7 +342,7 @@ describe("automatic security review event resolution", () => {
       pullRequest: { state: "closed" },
       responses: {
         [statusesPath()]: reply([
-          { ...recordedPullRequest(98), creator: { type: "User", login: "contributor" } },
+          { ...recordedPullRequest(98), ...creator("contributor", "User") },
           { ...recordedPullRequest(99), context: "unrelated/status" },
         ]),
       },
@@ -357,28 +350,24 @@ describe("automatic security review event resolution", () => {
     expect(result.requests).toHaveLength(2);
   });
 
-  it.each([
-    {
-      name: "recorded PR identities",
-      options: {
+  it.each<[string, string, Options]>([
+    [
+      "recorded PR identities",
+      statusesPath(),
+      {
         eventName: "pull_request_target",
         event: { action: "closed", pull_request: { number: 42 } },
         pullRequest: { state: "closed" },
       },
-      route: statusesPath(),
-    },
-    {
-      name: "commit associations",
-      options: { run: { pull_requests: [] } },
-      route: associationsPath,
-    },
-  ])("fails closed when $name cannot be read", ({ options, route }) => {
+    ],
+    ["commit associations", associationsPath, { run: { pull_requests: [] } }],
+  ])("fails closed when %s cannot be read", (_name, route, options) => {
     const result = evaluate({
       expected: { status: 1 },
       ...options,
       responses: { [route]: { status: 403, body: { message: "Forbidden" } } },
     });
-    expect(result.requests.at(-1)?.path).toBe(route);
+    expect(result.paths.at(-1)).toBe(route);
   });
 
   it.each<[string, string, boolean?, string?, boolean?]>([
@@ -396,7 +385,7 @@ describe("automatic security review event resolution", () => {
     (action, body, selection, previousBody, issueOnly = false) => {
       const selected = selection ?? true;
       const result = evaluate({
-        expected: { include: selected ? [{ pr: 42, head }] : [] },
+        expected: { include: selected ? [reviewEntry()] : [] },
         eventName: "issue_comment",
         event: {
           action,
@@ -435,12 +424,12 @@ describe("automatic security review event resolution", () => {
     { name: "fork association", changedRun: { pull_requests: [] }, associated: true },
   ])("reevaluates $name against the live head", ({ changedRun, associated }) => {
     const result = evaluate({ run: changedRun });
-    expect(result.requests.map((request) => request.path)).toEqual([
+    expect(result.paths).toEqual([
       `${prefix}/actions/runs/123`,
       `${prefix}/actions/workflows/ci.yml`,
-      ...(associated ? [`${prefix}/commits/${head}/pulls?per_page=100&page=1`] : []),
-      `${prefix}/pulls/42`,
-      `${prefix}/statuses/${head}`,
+      ...(associated ? [associationsPath] : []),
+      pullPath(),
+      publishPath(),
     ]);
     expect(result.requests.slice(0, -1).every((request) => request.method === "GET")).toBe(true);
   });
@@ -485,9 +474,7 @@ describe("automatic security review event resolution", () => {
           [branchPath]: reply([{ number: 42 }]),
         },
       });
-      expect(
-        result.requests.some((request) => request.path === `${prefix}/pulls?per_page=100&page=1`),
-      ).toBe(false);
+      expect(result.paths).not.toContain(`${prefix}/pulls?per_page=100&page=1`);
     },
   );
 });
@@ -529,12 +516,8 @@ describe("scheduled reconciliation", () => {
     statusCase("stale success", [gateStatus("success", at("23:30"))]),
     statusCase("pending after completion", [gateStatus("pending", at("23:41"))]),
     statusCase("foreign successes", [
-      gateStatus("success", at("23:45"), {
-        creator: { login: "foreign-bot[bot]", type: "Bot" },
-      }),
-      gateStatus("success", at("23:44"), {
-        creator: { login: "github-actions[bot]", type: "User" },
-      }),
+      gateStatus("success", at("23:45"), creator("foreign-bot[bot]")),
+      gateStatus("success", at("23:44"), creator("github-actions[bot]", "User")),
       gateStatus("pending", at("23:41")),
       gateStatus("success", at("23:20")),
     ]),
@@ -549,20 +532,15 @@ describe("scheduled reconciliation", () => {
         [statusesPath()]: reply(
           paged
             ? Array.from({ length: 100 }, () =>
-                gateStatus("success", at("23:45"), {
-                  creator: { login: "foreign-bot[bot]", type: "Bot" },
-                }),
+                gateStatus("success", at("23:45"), creator("foreign-bot[bot]")),
               )
             : statuses,
         ),
         ...(paged ? { [statusesPath(head, 2)]: reply(statuses) } : {}),
       },
-      { include: selected ? [{ pr: 42, head }] : [] },
+      { include: selected ? [reviewEntry()] : [] },
     );
     if (selected) {
-      expect(result.output).toBe(
-        `matrix={"include":[{"pr":42,"head":"${head}"}]}\nhas-prs=true\ntruncated=false\n`,
-      );
       expect(result.requests).toContainEqual(get(ciRunsPath));
     } else {
       expect(result.requests.some(({ path }) => path.includes("/pulls/"))).toBe(false);
@@ -593,34 +571,25 @@ describe("scheduled reconciliation", () => {
     expect(result.listingRequests).toEqual(Object.keys(responses).map(get));
   });
 
-  it.each([
-    { total: 0, sizes: [0], complete: true },
-    { total: 201, sizes: [100, 100, 0], complete: false },
-    { total: 150, sizes: Array.from({ length: 10 }, () => 100), complete: false },
-  ])(
-    "pages until short for total $total, sizes $sizes, complete $complete",
-    ({ total, sizes, complete }) => {
-      const responses = listingPages(sizes, total);
-      const result = scheduled(responses, { status: complete ? 0 : 1, include: [] });
-      expect(result.listingRequests).toEqual(Object.keys(responses).map(get));
-      if (!complete) {
-        expect(result.error).toContain("covered window does not advance");
-        return;
-      }
-      expect(result.statusRequests).toHaveLength(total === 0 ? 0 : 1);
-      expect(result.output).toContain("truncated=false\n");
-    },
-  );
+  it.each<[number, number[], boolean]>([
+    [0, [0], true],
+    [201, [100, 100, 0], false],
+    [150, Array.from({ length: 10 }, () => 100), false],
+  ])("pages total %i until a short page", (total, sizes, complete) => {
+    const responses = listingPages(sizes, total);
+    const result = scheduled(responses, { status: complete ? 0 : 1, include: [] });
+    expect(result.listingRequests).toEqual(Object.keys(responses).map(get));
+    if (!complete) {
+      expect(result.error).toContain("covered window does not advance");
+      return;
+    }
+    expect(result.statusRequests).toHaveLength(total === 0 ? 0 : 1);
+  });
 
   it("fails an overfull sub-ten-minute slice before status publication or matrix output", () => {
-    const ends = [
-      "2026-01-02T00:00:00.000Z",
-      "2026-01-01T22:00:00.000Z",
-      "2026-01-01T21:00:00.000Z",
-      "2026-01-01T20:30:00.000Z",
-      "2026-01-01T20:15:00.000Z",
-      "2026-01-01T20:07:30.000Z",
-    ];
+    const ends = ["00:00:00", "22:00:00", "21:00:00", "20:30:00", "20:15:00", "20:07:30"].map(
+      (time, index) => `2026-01-${index === 0 ? "02" : "01"}T${time}.000Z`,
+    );
     const listingPaths = ends.map(
       (end) =>
         `${prefix}/actions/workflows/ci.yml/runs?event=pull_request&status=completed&created=${encodeURIComponent(`2026-01-01T20:00:00.000Z..${end}`)}&per_page=100&page=1`,
@@ -673,14 +642,12 @@ describe("scheduled reconciliation", () => {
       );
     }
     const selected = candidates.slice(0, 100);
-    const include = selected.map((candidate) => ({
-      pr: candidate.pull_requests[0]!.number,
-      head: candidate.head_sha,
-    }));
-    const result = scheduled(responses, { include });
+    const include = selected.map(({ pull_requests, head_sha }) =>
+      reviewEntry(pull_requests[0]!.number, head_sha),
+    );
+    const result = scheduled(responses, { include, truncated: true });
     expect(result.statusRequests).toEqual(
       selected.map((candidate) => get(statusesPath(candidate.head_sha))),
     );
-    expect(result.output).toContain(`truncated=${count > 100}\n`);
   });
 });
