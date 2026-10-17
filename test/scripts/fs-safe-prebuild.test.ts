@@ -9,6 +9,14 @@ const { createTempDirAsync } = createScriptTestHarness();
 const NATIVE_NAME = "@openclaw/fs-safe-linux-x64-musl";
 const NATIVE_VERSION = "1.2.3";
 
+async function writeJson(file: string, value: unknown) {
+  await fs.writeFile(file, JSON.stringify(value));
+}
+
+async function expectAbsent(file: string) {
+  await expect(fs.access(file)).rejects.toHaveProperty("code", "ENOENT");
+}
+
 async function createFixture() {
   const packageRoot = await createTempDirAsync("openclaw-prebuild-");
   const fsSafeRoot = path.join(packageRoot, "node_modules", "@openclaw", "fs-safe");
@@ -26,34 +34,28 @@ async function createFixture() {
     await fs.copyFile(fileURLToPath(new URL(`../../${file}`, import.meta.url)), destination);
   }
   await fs.mkdir(fsSafeRoot, { recursive: true });
-  await fs.writeFile(
-    path.join(packageRoot, "package.json"),
-    JSON.stringify({
-      name: "openclaw",
-      type: "module",
-      dependencies: { "@openclaw/fs-safe": "1.2.3" },
-    }),
-  );
+  await writeJson(path.join(packageRoot, "package.json"), {
+    name: "openclaw",
+    type: "module",
+    dependencies: { "@openclaw/fs-safe": "1.2.3" },
+  });
   await fs.writeFile(path.join(packageRoot, ".openclaw-lifecycle-pending"), "pending\n");
-  await fs.writeFile(
-    path.join(fsSafeRoot, "package.json"),
-    JSON.stringify({
-      name: "@openclaw/fs-safe",
-      type: "module",
-      version: "1.2.3",
-      exports: {
-        ".": "./copy.js",
-        "./package.json": "./package.json",
-        "./config": "./config.js",
-        "./copy": "./copy.js",
-      },
-      optionalDependencies: {
-        "@openclaw/fs-safe-linux-x64-gnu": "1.2.4",
-        [NATIVE_NAME]: NATIVE_VERSION,
-        jszip: "^3.10.2",
-      },
-    }),
-  );
+  await writeJson(path.join(fsSafeRoot, "package.json"), {
+    name: "@openclaw/fs-safe",
+    type: "module",
+    version: "1.2.3",
+    exports: {
+      ".": "./copy.js",
+      "./package.json": "./package.json",
+      "./config": "./config.js",
+      "./copy": "./copy.js",
+    },
+    optionalDependencies: {
+      "@openclaw/fs-safe-linux-x64-gnu": "1.2.4",
+      [NATIVE_NAME]: NATIVE_VERSION,
+      jszip: "^3.10.2",
+    },
+  });
   await fs.writeFile(
     path.join(fsSafeRoot, "config.js"),
     `
@@ -121,20 +123,28 @@ async function createFixture() {
       encoding: "utf8",
       timeout: 30_000,
     });
+  const nativeRoot = path.join(fsSafeRoot, "node_modules", NATIVE_NAME);
+  const calls = async () => (await fs.readFile(callsPath, "utf8")).trim().split("\n");
+  const restore = (overrides: NodeJS.ProcessEnv = {}) => {
+    const result = run(overrides);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout, result.stderr).toContain(`restored ${NATIVE_NAME}@${NATIVE_VERSION}`);
+    return result;
+  };
   return {
     packageRoot,
     fsSafeRoot,
     run,
     callsPath,
     npmCli,
-    nativeRoot: path.join(fsSafeRoot, "node_modules", NATIVE_NAME),
+    nativeRoot,
+    calls,
+    restore,
   };
 }
 
 async function expectCompleted(fixture: Awaited<ReturnType<typeof createFixture>>) {
-  await expect(
-    fs.access(path.join(fixture.packageRoot, ".openclaw-lifecycle-pending")),
-  ).rejects.toHaveProperty("code", "ENOENT");
+  await expectAbsent(path.join(fixture.packageRoot, ".openclaw-lifecycle-pending"));
   expect(
     (await fs.readdir(fixture.packageRoot)).filter((entry) =>
       entry.startsWith(".openclaw-prebuild-"),
@@ -147,17 +157,12 @@ describe("packaged fs-safe prebuild restoration", () => {
     const fixture = await createFixture();
     const manifestPath = path.join(fixture.fsSafeRoot, "package.json");
     const before = await fs.readFile(manifestPath);
-    const result = fixture.run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain(`restored ${NATIVE_NAME}@${NATIVE_VERSION}`);
+    fixture.restore();
     expect(
       JSON.parse(await fs.readFile(path.join(fixture.nativeRoot, "package.json"), "utf8")),
     ).toMatchObject({ name: NATIVE_NAME, version: NATIVE_VERSION });
     expect(await fs.readFile(manifestPath)).toEqual(before);
-    const calls = (await fs.readFile(fixture.callsPath, "utf8"))
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as string[]);
+    const calls = (await fixture.calls()).map((line) => JSON.parse(line) as string[]);
     expect(calls).toHaveLength(1);
     expect(calls[0]).toEqual(
       expect.arrayContaining([
@@ -173,66 +178,57 @@ describe("packaged fs-safe prebuild restoration", () => {
     expect(calls[0]?.filter((arg) => arg.startsWith("@"))).toEqual([
       `${NATIVE_NAME}@${NATIVE_VERSION}`,
     ]);
-    await expect(fs.access(path.join(fixture.packageRoot, "other-install"))).rejects.toHaveProperty(
-      "code",
-      "ENOENT",
-    );
+    await expectAbsent(path.join(fixture.packageRoot, "other-install"));
     await expectCompleted(fixture);
     const healthy = fixture.run({ FIXTURE_NPM_FAIL: "1" });
     expect(healthy.status, healthy.stderr).toBe(0);
     expect(healthy.stderr).toBe("");
-    expect((await fs.readFile(fixture.callsPath, "utf8")).trim().split("\n")).toHaveLength(1);
+    expect(await fixture.calls()).toHaveLength(1);
   });
 
   it.each([
-    { name: "offline download", env: { FIXTURE_NPM_FAIL: "1" }, warning: "npm could not download" },
-    {
-      name: "wrong version",
-      env: { FIXTURE_WRONG_VERSION: "1" },
-      warning: "matching native package",
-    },
-    {
-      name: "unloadable download",
-      env: { FIXTURE_BROKEN_DOWNLOAD: "1" },
-      warning: "restored native binding",
-    },
-  ])("warns and completes lifecycle after $name", async ({ env, warning }) => {
-    const fixture = await createFixture();
-    const result = fixture.run(env);
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toContain(warning);
-    expect(result.stdout).not.toContain("restored");
-    await expect(fs.access(fixture.nativeRoot)).rejects.toHaveProperty("code", "ENOENT");
-    await expectCompleted(fixture);
-  });
-
-  it.each([
-    { name: "disabled native mode", env: { FS_SAFE_NATIVE_MODE: "off" }, warning: false },
-    { name: "unsupported platform", env: { FIXTURE_UNSUPPORTED: "1" }, warning: true },
-    {
-      name: "disabled postinstall",
-      env: { OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1" },
-      warning: false,
-    },
-    { name: "source checkout", warning: false, source: true },
-  ])("makes no npm request for $name", async ({ env, warning, source }) => {
-    const fixture = await createFixture();
-    if (source) {
-      for (const directory of [".git", "src", "extensions"]) {
-        await fs.mkdir(path.join(fixture.packageRoot, directory));
-      }
-    }
-    const result = fixture.run(env);
-    expect(result.status, result.stderr).toBe(0);
-    expect(Boolean(result.stderr)).toBe(warning);
-    await expect(fs.access(fixture.callsPath)).rejects.toHaveProperty("code", "ENOENT");
-    if (source) {
-      expect(result.stderr).toBe("");
-      await expect(fs.access(fixture.nativeRoot)).rejects.toHaveProperty("code", "ENOENT");
-    } else {
+    ["offline download", { FIXTURE_NPM_FAIL: "1" }, "npm could not download"],
+    ["wrong version", { FIXTURE_WRONG_VERSION: "1" }, "matching native package"],
+    ["unloadable download", { FIXTURE_BROKEN_DOWNLOAD: "1" }, "restored native binding"],
+  ] satisfies Array<[string, NodeJS.ProcessEnv, string]>)(
+    "warns and completes lifecycle after %s",
+    async (_name, env, warning) => {
+      const fixture = await createFixture();
+      const result = fixture.run(env);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).toContain(warning);
+      expect(result.stdout).not.toContain("restored");
+      await expectAbsent(fixture.nativeRoot);
       await expectCompleted(fixture);
-    }
-  });
+    },
+  );
+
+  it.each([
+    ["disabled native mode", { FS_SAFE_NATIVE_MODE: "off" }, false, false],
+    ["unsupported platform", { FIXTURE_UNSUPPORTED: "1" }, true, false],
+    ["disabled postinstall", { OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1" }, false, false],
+    ["source checkout", {}, false, true],
+  ] satisfies Array<[string, NodeJS.ProcessEnv, boolean, boolean]>)(
+    "makes no npm request for %s",
+    async (_name, env, warning, source) => {
+      const fixture = await createFixture();
+      if (source) {
+        for (const directory of [".git", "src", "extensions"]) {
+          await fs.mkdir(path.join(fixture.packageRoot, directory));
+        }
+      }
+      const result = fixture.run(env);
+      expect(result.status, result.stderr).toBe(0);
+      expect(Boolean(result.stderr)).toBe(warning);
+      await expectAbsent(fixture.callsPath);
+      if (source) {
+        expect(result.stderr).toBe("");
+        await expectAbsent(fixture.nativeRoot);
+      } else {
+        await expectCompleted(fixture);
+      }
+    },
+  );
 
   it("runs the PATH-selected npm CLI directly when deferred lifecycle has no npm_execpath", async () => {
     const fixture = await createFixture();
@@ -250,9 +246,7 @@ describe("packaged fs-safe prebuild restoration", () => {
     } else {
       await fs.symlink(directCli, path.join(bin, "npm"));
     }
-    const result = fixture.run({ npm_execpath: undefined, PATH: bin });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain(`restored ${NATIVE_NAME}@${NATIVE_VERSION}`);
+    fixture.restore({ npm_execpath: undefined, PATH: bin });
     await expectCompleted(fixture);
   });
 
@@ -265,10 +259,7 @@ describe("packaged fs-safe prebuild restoration", () => {
       const cli = path.join(npmRoot, "bin", "npm-cli.js");
       await fs.mkdir(bin);
       await fs.mkdir(path.dirname(cli), { recursive: true });
-      await fs.writeFile(
-        path.join(npmRoot, "package.json"),
-        JSON.stringify({ name: "npm", type: "module" }),
-      );
+      await writeJson(path.join(npmRoot, "package.json"), { name: "npm", type: "module" });
       const original = await fs.readFile(fixture.npmCli, "utf8");
       await fs.writeFile(
         cli,
@@ -284,10 +275,8 @@ describe("packaged fs-safe prebuild restoration", () => {
         `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(cli)} "$@"\n`,
         { mode: 0o755 },
       );
-      const result = fixture.run({ npm_execpath: undefined, PATH: bin });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout, result.stderr).toContain(`restored ${NATIVE_NAME}@${NATIVE_VERSION}`);
-      expect((await fs.readFile(fixture.callsPath, "utf8")).trim().split("\n")).toHaveLength(1);
+      fixture.restore({ npm_execpath: undefined, PATH: bin });
+      expect(await fixture.calls()).toHaveLength(1);
       await expectCompleted(fixture);
     },
   );
@@ -317,8 +306,8 @@ describe("packaged fs-safe prebuild restoration", () => {
       };
       expect(discovery.args).toEqual(["--version"]);
       expect(() => process.kill(discovery.pid, 0)).toThrow();
-      await expect(fs.access(fixture.callsPath)).rejects.toHaveProperty("code", "ENOENT");
-      await expect(fs.access(fixture.nativeRoot)).rejects.toHaveProperty("code", "ENOENT");
+      await expectAbsent(fixture.callsPath);
+      await expectAbsent(fixture.nativeRoot);
       await expectCompleted(fixture);
     },
   );
@@ -349,36 +338,33 @@ describe("packaged fs-safe prebuild restoration", () => {
   );
 
   it.each([
-    { name: "invalid native binary", main: "fs-safe-native.node", code: "invalid binary" },
-    {
-      name: "missing transitive module",
-      main: "index.cjs",
-      code: "require('missing-native-runtime');",
-    },
-    {
-      name: "missing transitive platform package",
-      main: "index.cjs",
-      code: "require('@openclaw/fs-safe-linux-x64-gnu');",
-    },
-    {
-      name: "native operation failure",
-      main: "index.cjs",
-      code: "module.exports.readCloneFileMetadata = () => { throw new Error('EIO'); };",
-    },
+    ["invalid native binary", "fs-safe-native.node", "invalid binary"],
+    ["missing transitive module", "index.cjs", "require('missing-native-runtime');"],
+    [
+      "missing transitive platform package",
+      "index.cjs",
+      "require('@openclaw/fs-safe-linux-x64-gnu');",
+    ],
+    [
+      "native operation failure",
+      "index.cjs",
+      "module.exports.readCloneFileMetadata = () => { throw new Error('EIO'); };",
+    ],
   ])(
-    "preserves an installed package after $name without retrying through npm",
-    async ({ main, code }) => {
+    "preserves an installed package after %s without retrying through npm",
+    async (_name, main, code) => {
       const fixture = await createFixture();
       await fs.mkdir(fixture.nativeRoot, { recursive: true });
-      await fs.writeFile(
-        path.join(fixture.nativeRoot, "package.json"),
-        JSON.stringify({ name: NATIVE_NAME, version: NATIVE_VERSION, main }),
-      );
+      await writeJson(path.join(fixture.nativeRoot, "package.json"), {
+        name: NATIVE_NAME,
+        version: NATIVE_VERSION,
+        main,
+      });
       await fs.writeFile(path.join(fixture.nativeRoot, main), code);
       const result = fixture.run();
       expect(result.status, result.stderr).toBe(0);
       expect(result.stderr).toContain("could not be loaded or used");
-      await expect(fs.access(fixture.callsPath)).rejects.toHaveProperty("code", "ENOENT");
+      await expectAbsent(fixture.callsPath);
       expect(await fs.readFile(path.join(fixture.nativeRoot, main), "utf8")).toBe(code);
       await expectCompleted(fixture);
     },

@@ -127,35 +127,24 @@ function successfulApi(
   } = {},
 ) {
   const calls: Array<{ body?: unknown; method: string; path: string }> = [];
-  let permissionRead = 0;
-  let pullRead = 0;
-  let mainRead = 0;
-  let ancestryRead = 0;
+  const permissions = options.permissions?.values();
+  const pulls = options.pulls?.values();
+  const mainShas = options.mainShas?.values();
+  const ancestries = options.ancestries?.values();
   let rerunRequested = false;
   const initialRun = options.initialRun ?? fixtureRun();
-  const rerun =
-    options.rerun ??
-    fixtureRun({
-      conclusion: "success",
-      run_attempt: 2,
-    });
+  const rerun = options.rerun ?? fixtureRun({ conclusion: "success", run_attempt: 2 });
   const api: GitHubApi = {
     request: vi.fn(async (method: string, path: string, body?: unknown) => {
       calls.push({ body, method, path });
       if (method === "GET" && path === "/collaborators/maintainer/permission") {
-        const permission = options.permissions?.[permissionRead] ?? "maintain";
-        permissionRead += 1;
-        return { permission };
+        return { permission: permissions?.next().value ?? "maintain" };
       }
       if (method === "GET" && path === "/pulls/128141") {
-        const pull = options.pulls?.[pullRead] ?? pullRequest();
-        pullRead += 1;
-        return pull;
+        return pulls?.next().value ?? pullRequest();
       }
       if (method === "GET" && path === `/compare/${landedSha}...${workflowSha}`) {
-        const ancestry = options.ancestries?.[ancestryRead] ?? landedAncestry();
-        ancestryRead += 1;
-        return ancestry;
+        return ancestries?.next().value ?? landedAncestry();
       }
       if (method === "GET" && path === "/actions/workflows/frv-proof-fixture.yml") {
         return {
@@ -166,9 +155,7 @@ function successfulApi(
         };
       }
       if (method === "GET" && path === "/git/ref/heads/main") {
-        const sha = options.mainShas?.[mainRead] ?? workflowSha;
-        mainRead += 1;
-        return { object: { sha }, ref: "refs/heads/main" };
+        return { object: { sha: mainShas?.next().value ?? workflowSha }, ref: "refs/heads/main" };
       }
       if (method === "POST" && path === "/actions/workflows/frv-proof-fixture.yml/dispatches") {
         return null;
@@ -195,9 +182,12 @@ function successfulApi(
   return { api, calls };
 }
 
-function runBroker(api: GitHubApi) {
-  return runProofBroker({ api, env: brokerEnv(), event: brokerEvent(), sleep: async () => {} });
+function runBroker(api: GitHubApi, env = brokerEnv(), event = brokerEvent()) {
+  return runProofBroker({ api, env, event, sleep: async () => {} });
 }
+
+const mutationCalls = (calls: Array<{ method: string }>) =>
+  calls.filter((call) => call.method !== "GET");
 
 describe("FRV proof broker request validation", () => {
   it("accepts only the exact two operator inputs", () => {
@@ -260,7 +250,7 @@ describe("FRV proof broker mutation boundary", () => {
         `/compare/${landedSha}...${workflowSha}`,
         "/git/ref/heads/main",
       ]);
-      expect(calls.filter((call) => call.method !== "GET")).toEqual([dispatch, rerunRequest]);
+      expect(mutationCalls(calls)).toEqual([dispatch, rerunRequest]);
       expect(calls.filter((call) => call.path === rerunRequest.path)).toHaveLength(1);
       const rerunIndex = calls.findIndex((call) => call.path === rerunRequest.path);
       expect(calls.slice(rerunIndex - 4, rerunIndex).map((call) => call.path)).toEqual([
@@ -404,48 +394,38 @@ describe("FRV proof broker mutation boundary", () => {
   });
 
   it("accepts a landed SHA identical to the trusted workflow SHA", async () => {
-    const identicalSha = workflowSha;
     const { api } = successfulApi({
-      pulls: [
-        pullRequest({ merge_commit_sha: identicalSha }),
-        pullRequest({ merge_commit_sha: identicalSha }),
-      ],
+      pulls: Array.from({ length: 2 }, () => pullRequest({ merge_commit_sha: workflowSha })),
     });
     let ancestryReads = 0;
-    await runProofBroker({
-      api: {
+    await runBroker(
+      {
         request: async (method, path, body) => {
-          if (method === "GET" && path === `/compare/${identicalSha}...${workflowSha}`) {
+          if (method === "GET" && path === `/compare/${workflowSha}...${workflowSha}`) {
             ancestryReads += 1;
             return {
               ahead_by: 0,
-              base_commit: { sha: identicalSha },
+              base_commit: { sha: workflowSha },
               behind_by: 0,
-              merge_base_commit: { sha: identicalSha },
+              merge_base_commit: { sha: workflowSha },
               status: "identical",
             };
           }
           return api.request(method, path, body);
         },
       },
-      env: brokerEnv(),
-      event: brokerEvent({ landed_sha: identicalSha }),
-      sleep: async () => {},
-    });
+      brokerEnv(),
+      brokerEvent({ landed_sha: workflowSha }),
+    );
     expect(ancestryReads).toBe(2);
   });
 
   it("does not adopt a fixture from a prior broker attempt", async () => {
     const { api, calls } = successfulApi();
-    await expect(
-      runProofBroker({
-        api,
-        env: brokerEnv({ GITHUB_RUN_ATTEMPT: "2" }),
-        event: brokerEvent(),
-        sleep: async () => {},
-      }),
-    ).rejects.toThrow(/timed out waiting/u);
-    expect(calls.filter((call) => call.method !== "GET")).toEqual([
+    await expect(runBroker(api, brokerEnv({ GITHUB_RUN_ATTEMPT: "2" }))).rejects.toThrow(
+      /timed out waiting/u,
+    );
+    expect(mutationCalls(calls)).toEqual([
       {
         body: {
           inputs: { correlation: "frv-proof-12345-2", operation: "noop" },
@@ -466,12 +446,7 @@ describe("FRV proof broker mutation boundary", () => {
         }),
         ...(observed ? {} : { rerun: fixtureRun() }),
       });
-      const result = runProofBroker({
-        api,
-        env: brokerEnv(),
-        event: brokerEvent(),
-        sleep: async () => {},
-      });
+      const result = runBroker(api);
       if (observed) {
         await expect(result).resolves.toMatchObject({ fixtureJobId: 888, fixtureRunAttempt: 2 });
       } else {

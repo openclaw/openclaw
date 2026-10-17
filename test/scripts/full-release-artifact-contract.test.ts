@@ -56,12 +56,104 @@ it.each([
 });
 
 const SHA = "a".repeat(40);
+const directories = useAutoCleanupTempDirTracker(afterEach);
+const releaseWorkflow = () =>
+  parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
+const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+const inventory = { packages: [], platforms: [] };
+function sourceProjection() {
+  return {
+    version: "2026.9.9",
+    packages: [{ name: "openclaw", version: "2026.9.9", targets: ["npm"] }],
+    platforms: [],
+  };
+}
+
+function sourceRequest(inputs: Record<string, string> = {}, env: NodeJS.ProcessEnv = {}) {
+  return publicationSourceRequest({
+    PUBLICATION_INPUTS_JSON: JSON.stringify({
+      ref: SHA,
+      release_profile: "full",
+      rerun_group: "all",
+      ...inputs,
+      trusted_workflow_json: publicationDispatchEnvelope(null, {
+        validationPurpose: "publish",
+        publicationSelection: {
+          route: "normal",
+          npmDistTag: "latest",
+          publishOpenclawNpm: true,
+          pluginPublishScope: "all-publishable",
+          plugins: [],
+        },
+      }),
+    }),
+    PUBLICATION_TOOLING_JSON: JSON.stringify({ fullRef: "refs/heads/main", sha: SHA }),
+    PUBLICATION_TARGET_CONTEXT: "release/2026.9.9",
+    PUBLICATION_TARGET_SHA: "b".repeat(40),
+    GITHUB_REPOSITORY: "openclaw/openclaw",
+    GITHUB_REF: "refs/heads/release-ci/test",
+    GITHUB_SHA: SHA,
+    GITHUB_RUN_ID: "123",
+    GITHUB_RUN_ATTEMPT: "1",
+    ...env,
+  });
+}
+
+function manifestWriterFixture(plan: unknown, drain: unknown = { children: {} }) {
+  const writer = releaseWorkflow().jobs.summary.steps.find(
+    (step: { name: string }) => step.name === "Write release validation manifest",
+  );
+  const directory = directories.make("release-manifest-");
+  const planPath = join(directory, "plan.json");
+  const drainPath = join(directory, "drain.json");
+  writeFileSync(planPath, serializeReleaseArtifact(plan));
+  writeFileSync(drainPath, serializeReleaseArtifact(drain));
+  return {
+    writer,
+    directory,
+    run(env: NodeJS.ProcessEnv) {
+      const result = spawnSync("bash", ["-c", writer.run], {
+        encoding: "utf8",
+        env: {
+          ...Object.fromEntries(Object.keys(writer.env).map((key) => [key, ""])),
+          PATH: process.env.PATH,
+          RUNNER_TEMP: directory,
+          RELEASE_EXECUTION_PLAN_PATH: planPath,
+          DIAGNOSTIC_DRAIN_PATH: drainPath,
+          ...env,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      return readFileSync(
+        join(directory, "full-release-validation/full-release-validation-manifest.json"),
+        "utf8",
+      );
+    },
+  };
+}
+
+function writerContext(
+  context: ReturnType<typeof registryBudgetFixture>["context"],
+): NodeJS.ProcessEnv {
+  return {
+    GITHUB_RUN_ID: context.runId,
+    GITHUB_RUN_ATTEMPT: context.runAttempt,
+    GITHUB_REF_NAME: context.workflowRef,
+    GITHUB_SHA: context.workflowSha,
+    GITHUB_REF: context.workflowFullRef,
+    GITHUB_REF_TYPE: context.workflowRefType,
+    TARGET_REF: context.targetRef,
+    RELEASE_PROFILE: context.releaseProfile,
+    RERUN_GROUP: context.rerunGroup,
+    RUN_RELEASE_SOAK: context.runReleaseSoak,
+  };
+}
 
 async function publicationWriterFixture(
   directory: string,
   identity: { sourceSha: string; workflowSha: string; workflowFullRef: string },
 ) {
-  const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+  const hash = digest;
   const repository = "openclaw/openclaw";
   const workflow = ".github/workflows/full-release-artifacts.yml";
   const producer = {
@@ -255,38 +347,9 @@ function registryEvidence(
   validationInputs: Record<string, string> = {},
 ) {
   const source = createPublicationSourceFact(
-    publicationSourceRequest({
-      PUBLICATION_INPUTS_JSON: JSON.stringify({
-        ref: SHA,
-        release_profile: "full",
-        rerun_group: "all",
-        ...validationInputs,
-        trusted_workflow_json: publicationDispatchEnvelope(null, {
-          validationPurpose: "publish",
-          publicationSelection: {
-            route: "normal",
-            npmDistTag: "latest",
-            publishOpenclawNpm: true,
-            pluginPublishScope: "all-publishable",
-            plugins: [],
-          },
-        }),
-      }),
-      PUBLICATION_TOOLING_JSON: JSON.stringify({ fullRef: "refs/heads/main", sha: SHA }),
-      PUBLICATION_TARGET_CONTEXT: "release/2026.9.9",
-      PUBLICATION_TARGET_SHA: "b".repeat(40),
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_REF: "refs/heads/release-ci/test",
-      GITHUB_SHA: SHA,
-      GITHUB_RUN_ID: runId,
-      GITHUB_RUN_ATTEMPT: "1",
-    }),
-    { packages: [], platforms: [] },
-    {
-      version: "2026.9.9",
-      packages: [{ name: "openclaw", version: "2026.9.9", targets: ["npm"] }],
-      platforms: [],
-    },
+    sourceRequest(validationInputs, { GITHUB_RUN_ID: runId }),
+    inventory,
+    sourceProjection(),
   );
   const started = "2026-09-13T14:00:00.000Z";
   const observations = createPublicationObservations(source, {
@@ -414,8 +477,6 @@ function registryBudgetFixture(warningCount = 0, validationInputs: Record<string
 }
 
 describe("retained publication admission", () => {
-  const directories = useAutoCleanupTempDirTracker(afterEach);
-
   it.each(["beta", "stable", "full"])(
     "writes fresh %s performance and Telegram evidence through the actual workflow command",
     async (releaseProfile) => {
@@ -431,15 +492,7 @@ describe("retained publication admission", () => {
         release_profile: releaseProfile,
       });
       expect(plan.evidenceReuse.requested).toBe(false);
-      const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
-      const writer = workflow.jobs.summary.steps.find(
-        (step: { name: string }) => step.name === "Write release validation manifest",
-      );
-      const directory = directories.make("publication-fresh-manifest-");
-      const planPath = join(directory, "plan.json");
-      const drainPath = join(directory, "drain.json");
-      writeFileSync(planPath, serializeReleaseArtifact(plan));
-      writeFileSync(drainPath, serializeReleaseArtifact({ children: {} }));
+      const { writer, directory, run } = manifestWriterFixture(plan);
       const inputs = {
         ...telegram,
         release_profile: releaseProfile,
@@ -469,37 +522,16 @@ describe("retained publication admission", () => {
           ),
         ]),
       );
-      const result = spawnSync("bash", ["-c", writer.run], {
-        encoding: "utf8",
-        env: {
-          ...Object.fromEntries(Object.keys(writer.env).map((key) => [key, ""])),
+      const manifest = JSON.parse(
+        run({
+          ...writerContext(context),
           ...selectedEnv,
-          PATH: process.env.PATH,
-          RUNNER_TEMP: directory,
-          GITHUB_RUN_ID: context.runId,
-          GITHUB_RUN_ATTEMPT: context.runAttempt,
-          GITHUB_REF_NAME: context.workflowRef,
-          GITHUB_SHA: context.workflowSha,
-          GITHUB_REF: context.workflowFullRef,
-          GITHUB_REF_TYPE: context.workflowRefType,
-          TARGET_REF: context.targetRef,
-          RERUN_GROUP: context.rerunGroup,
-          RUN_RELEASE_SOAK: context.runReleaseSoak,
-          RELEASE_EXECUTION_PLAN_PATH: planPath,
-          DIAGNOSTIC_DRAIN_PATH: drainPath,
           ...(await publicationWriterFixture(directory, {
             sourceSha: context.targetRef,
             workflowSha: context.workflowSha,
             workflowFullRef: context.workflowFullRef,
           })),
-        },
-      });
-      expect(result.status, result.stderr).toBe(0);
-      const manifest = JSON.parse(
-        readFileSync(
-          join(directory, "full-release-validation/full-release-validation-manifest.json"),
-          "utf8",
-        ),
+        }),
       );
       expect(manifest.releaseProfile).toBe(releaseProfile);
       expect(manifest.controls).toMatchObject({
@@ -574,45 +606,27 @@ describe("retained publication admission", () => {
     const { record } = registryEvidence();
     const admission = record.publicationAdmission;
     const first = admission.observations.npm[0]!;
-    if (fault === "missing-observation") {
-      admission.observations.npm = [];
-    }
-    if (fault === "extra-required") {
-      admission.observations.npm.push({ ...first, name: "unselected-package" });
-    }
-    if (fault === "empty-history" && first.outcome === "observed") {
-      first.state.hasVersionHistory = false;
-    }
-    if (fault === "extra-state-field" && first.outcome === "observed") {
-      Object.assign(first.state, { packageDir: "/private/synthetic/candidate" });
-    }
-    if (fault === "missing-state-field" && first.outcome === "observed") {
-      Reflect.deleteProperty(first.state, "hasVersionHistory");
-    }
-    if (fault === "future-observation") {
-      first.observedAt = "2026-09-13T14:00:03.000Z";
-    }
-    if (fault === "changed-content") {
-      admission.observations.plans.npm.warnings.push("changed");
-    }
-    if (fault === "source") {
-      admission.binding.sourceDigest = "d".repeat(64);
-    }
-    if (fault === "artifact-attempt") {
-      admission.binding.artifact.name = "full-release-publication-observations-123-2";
-    }
-    if (fault === "artifact-digest") {
-      admission.binding.artifact.digest = "c".repeat(64);
-    }
-    if (fault === "extra-binding-field") {
-      Object.assign(admission.binding, { publicationAuthorized: true });
-    }
-    if (fault === "missing-binding") {
-      Reflect.deleteProperty(admission, "binding");
-    }
-    if (fault === "deleted-contract") {
-      Reflect.deleteProperty(record, "publicationAdmissionContract");
-    }
+    assert(first.outcome === "observed");
+    const mutations: Record<string, () => unknown> = {
+      "missing-observation": () => (admission.observations.npm = []),
+      "extra-required": () =>
+        admission.observations.npm.push({ ...first, name: "unselected-package" }),
+      "empty-history": () => (first.state.hasVersionHistory = false),
+      "extra-state-field": () =>
+        Object.assign(first.state, { packageDir: "/private/synthetic/candidate" }),
+      "missing-state-field": () => Reflect.deleteProperty(first.state, "hasVersionHistory"),
+      "future-observation": () => (first.observedAt = "2026-09-13T14:00:03.000Z"),
+      "changed-content": () => admission.observations.plans.npm.warnings.push("changed"),
+      source: () => (admission.binding.sourceDigest = "d".repeat(64)),
+      "artifact-attempt": () =>
+        (admission.binding.artifact.name = "full-release-publication-observations-123-2"),
+      "artifact-digest": () => (admission.binding.artifact.digest = "c".repeat(64)),
+      "extra-binding-field": () =>
+        Object.assign(admission.binding, { publicationAuthorized: true }),
+      "missing-binding": () => Reflect.deleteProperty(admission, "binding"),
+      "deleted-contract": () => Reflect.deleteProperty(record, "publicationAdmissionContract"),
+    };
+    mutations[fault]!();
     expect(() =>
       validatePublicationAdmissionBinding(record, { publicationAdmissionContract: "1" }),
     ).toThrow(/publication|observation|registry/u);
@@ -860,42 +874,7 @@ describe("retained publication admission", () => {
         sourceManifest,
       },
     };
-    const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
-    const writer = workflow.jobs.summary.steps.find(
-      (step: { name: string }) => step.name === "Write release validation manifest",
-    );
-    const directory = directories.make("publication-retained-root-");
-    const planPath = join(directory, "plan.json");
-    const drainPath = join(directory, "drain.json");
-    writeFileSync(planPath, serializeReleaseArtifact(carried));
-    writeFileSync(drainPath, serializeReleaseArtifact({ children: {} }));
-    const result = spawnSync("bash", ["-c", writer.run], {
-      encoding: "utf8",
-      env: {
-        ...Object.fromEntries(Object.keys(writer.env).map((key) => [key, ""])),
-        PATH: process.env.PATH,
-        RUNNER_TEMP: directory,
-        GITHUB_RUN_ID: context.runId,
-        GITHUB_RUN_ATTEMPT: context.runAttempt,
-        GITHUB_REF_NAME: context.workflowRef,
-        GITHUB_SHA: context.workflowSha,
-        GITHUB_REF: context.workflowFullRef,
-        GITHUB_REF_TYPE: context.workflowRefType,
-        TARGET_REF: context.targetRef,
-        RELEASE_PROFILE: context.releaseProfile,
-        RERUN_GROUP: context.rerunGroup,
-        RUN_RELEASE_SOAK: context.runReleaseSoak,
-        RELEASE_EXECUTION_PLAN_PATH: planPath,
-        DIAGNOSTIC_DRAIN_PATH: drainPath,
-      },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    const manifest = JSON.parse(
-      readFileSync(
-        join(directory, "full-release-validation/full-release-validation-manifest.json"),
-        "utf8",
-      ),
-    );
+    const manifest = JSON.parse(manifestWriterFixture(carried).run(writerContext(context)));
     expect.soft(manifest.evidenceReuse.publication).toEqual(root.record);
     expect(manifest.publicationAdmission).toEqual(plan.publicationAdmission);
     expect(JSON.stringify(sourceManifest)).toBe(originalRoot);
@@ -1007,7 +986,7 @@ describe("retained publication admission", () => {
         .join("");
       writeFileSync(join(directory, "reusable-evidence.outputs"), retained);
       const output = join(directory, "outputs");
-      const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
+      const workflow = releaseWorkflow();
       const step = workflow.jobs.evidence_reuse.steps.find(
         (value: { id?: string }) => value.id === "find",
       );
@@ -1155,14 +1134,32 @@ function fullMatrixDecision(children = fullMatrixChildren()) {
   });
 }
 
-describe("full release artifact contract", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function readDecision(reader: string, bytes: string) {
+  const download = (args: string[]) => {
+    writeFileSync(join(args[args.indexOf("--dir") + 1]!, "full-release-decision.json"), bytes);
+  };
+  return reader === "dispatch helper"
+    ? tryReadReleaseDecision("123", 1, SHA, (_command, args) => {
+        download(args);
+        return { error: undefined, signal: null, status: 0, stderr: "", stdout: "" };
+      })
+    : tryReadReleaseDecisionArtifact(
+        { attempt: 1, headSha: SHA },
+        "123",
+        "openclaw/openclaw",
+        (args) => {
+          download(args);
+          return "";
+        },
+      );
+}
 
+describe("full release artifact contract", () => {
   function runDispatchWitness(event: unknown, rawEvent?: string) {
-    const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
+    const workflow = releaseWorkflow();
     const steps = workflow.jobs.resolve_target.steps;
     const writer = steps.find((step: { id?: string }) => step.id === "dispatch_witness");
-    const dir = tempDirs.make("full-release-dispatch-inputs-");
+    const dir = directories.make("full-release-dispatch-inputs-");
     const eventPath = join(dir, "event.json");
     writeFileSync(eventPath, rawEvent ?? JSON.stringify(event));
     const context = {
@@ -1250,7 +1247,7 @@ describe("full release artifact contract", () => {
   });
 
   it("binds every declared input and default independently of event key order", () => {
-    const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
+    const workflow = releaseWorkflow();
     const definitions = workflow.on.workflow_dispatch.inputs as Record<
       string,
       { default?: unknown }
@@ -1329,10 +1326,6 @@ describe("full release artifact contract", () => {
   ])(
     "writes all matrix evidence with reuse=$reuse source=$source without argv size limits",
     async ({ reuse, source }) => {
-      const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
-      const writer = workflow.jobs.summary.steps.find(
-        (entry: { name: string }) => entry.name === "Write release validation manifest",
-      );
       const children = fullMatrixChildren();
       const drain = fullMatrixDecision(children);
       const expectedChildren = Object.fromEntries(
@@ -1362,41 +1355,19 @@ describe("full release artifact contract", () => {
         ]),
       );
       expect(Buffer.byteLength(JSON.stringify(expectedChildren))).toBeGreaterThan(128 * 1024);
-      const request = publicationSourceRequest({
-        PUBLICATION_INPUTS_JSON: JSON.stringify({
-          ref: SHA,
-          release_profile: "full",
-          rerun_group: "all",
-          provider: "openai",
-          trusted_workflow_json: publicationDispatchEnvelope(null, {
-            validationPurpose: "publish",
-            publicationSelection: {
-              route: "normal",
-              npmDistTag: "latest",
-              publishOpenclawNpm: true,
-              pluginPublishScope: "all-publishable",
-              plugins: [],
-            },
+      const request = sourceRequest(
+        { provider: "openai" },
+        {
+          PUBLICATION_TOOLING_JSON: JSON.stringify({
+            fullRef: "refs/heads/main",
+            sha: "d".repeat(40),
           }),
-        }),
-        PUBLICATION_TOOLING_JSON: JSON.stringify({
-          fullRef: "refs/heads/main",
-          sha: "d".repeat(40),
-        }),
-        PUBLICATION_TARGET_CONTEXT: "release/2026.9.9",
-        PUBLICATION_TARGET_SHA: SHA,
-        GITHUB_REPOSITORY: "openclaw/openclaw",
-        GITHUB_REF: "refs/heads/release-ci/test",
-        GITHUB_SHA: "d".repeat(40),
-        GITHUB_RUN_ID: "124",
-        GITHUB_RUN_ATTEMPT: "1",
-      });
-      const inventory = { packages: [], platforms: [] };
-      const projection = {
-        version: "2026.9.9",
-        packages: [{ name: "openclaw", version: "2026.9.9", targets: ["npm"] }],
-        platforms: [],
-      };
+          PUBLICATION_TARGET_SHA: SHA,
+          GITHUB_SHA: "d".repeat(40),
+          GITHUB_RUN_ID: "124",
+        },
+      );
+      const projection = sourceProjection();
       const sourceAdmission = createPublicationSourceFact(request, inventory, projection);
       const oldSource = createPublicationSourceFact(
         {
@@ -1450,51 +1421,34 @@ describe("full release artifact contract", () => {
           sourceManifest,
         },
       };
-      const dir = tempDirs.make("full-release-manifest-");
-      const planPath = join(dir, "plan.json");
-      const drainPath = join(dir, "drain.json");
-      writeFileSync(planPath, serializeReleaseArtifact(plan));
-      writeFileSync(drainPath, serializeReleaseArtifact(drain));
-      const result = spawnSync("bash", ["-c", writer.run], {
-        encoding: "utf8",
-        env: {
-          ...Object.fromEntries(Object.keys(writer.env).map((key) => [key, ""])),
-          EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
-          PATH: process.env.PATH,
-          RUNNER_TEMP: dir,
-          GITHUB_RUN_ID: "124",
-          GITHUB_RUN_ATTEMPT: "2",
-          GITHUB_REF_NAME: "release-ci/test",
-          GITHUB_SHA: "d".repeat(40),
-          GITHUB_REF: "refs/heads/release-ci/test",
-          GITHUB_REF_TYPE: "branch",
-          TARGET_REF: SHA,
-          ...(source
-            ? {
-                TARGET_CONTEXT_REF: "release/2026.9.9",
-                PROVIDER: "openai",
-                ALLOW_UNRELEASED_CHANGELOG: "false",
-              }
-            : {}),
-          RELEASE_PROFILE: "full",
-          RERUN_GROUP: "all",
-          RUN_RELEASE_SOAK: "true",
-          RELEASE_EXECUTION_PLAN_PATH: planPath,
-          DIAGNOSTIC_DRAIN_PATH: drainPath,
-          ...(source
-            ? await publicationWriterFixture(dir, {
-                sourceSha: SHA,
-                workflowSha: "d".repeat(40),
-                workflowFullRef: "refs/heads/release-ci/test",
-              })
-            : {}),
-        },
+      const { directory: dir, run } = manifestWriterFixture(plan, drain);
+      const bytes = run({
+        EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
+        GITHUB_RUN_ID: "124",
+        GITHUB_RUN_ATTEMPT: "2",
+        GITHUB_REF_NAME: "release-ci/test",
+        GITHUB_SHA: "d".repeat(40),
+        GITHUB_REF: "refs/heads/release-ci/test",
+        GITHUB_REF_TYPE: "branch",
+        TARGET_REF: SHA,
+        ...(source
+          ? {
+              TARGET_CONTEXT_REF: "release/2026.9.9",
+              PROVIDER: "openai",
+              ALLOW_UNRELEASED_CHANGELOG: "false",
+            }
+          : {}),
+        RELEASE_PROFILE: "full",
+        RERUN_GROUP: "all",
+        RUN_RELEASE_SOAK: "true",
+        ...(source
+          ? await publicationWriterFixture(dir, {
+              sourceSha: SHA,
+              workflowSha: "d".repeat(40),
+              workflowFullRef: "refs/heads/release-ci/test",
+            })
+          : {}),
       });
-      expect(result.status, result.stderr).toBe(0);
-      const bytes = readFileSync(
-        join(dir, "full-release-validation/full-release-validation-manifest.json"),
-        "utf8",
-      );
       expect(Buffer.byteLength(bytes)).toBeLessThan(MAX_RELEASE_ARTIFACT_BYTES);
       const manifest = JSON.parse(bytes);
       if (source) {
@@ -1591,56 +1545,16 @@ describe("full release artifact contract", () => {
       const payload = fullMatrixDecision();
       const serialized = JSON.stringify(payload, null, 2);
       expect(Buffer.byteLength(serialized)).toBeGreaterThan(128 * 1024);
-      const download = (args: string[]) => {
-        writeFileSync(
-          join(args[args.indexOf("--dir") + 1]!, "full-release-decision.json"),
-          serialized,
-        );
-      };
-      const result =
-        reader === "dispatch helper"
-          ? tryReadReleaseDecision("123", 1, SHA, (_command, args) => {
-              download(args);
-              return { error: undefined, signal: null, status: 0, stderr: "", stdout: "" };
-            })
-          : tryReadReleaseDecisionArtifact(
-              { attempt: 1, headSha: SHA },
-              "123",
-              "openclaw/openclaw",
-              (args) => {
-                download(args);
-                return "";
-              },
-            );
-      expect(result).toEqual(payload);
+      expect(readDecision(reader, serialized)).toEqual(payload);
     },
   );
 
   it.each(["dispatch helper", "summary watcher"])(
     "%s rejects oversized evidence before parsing it",
     (reader) => {
-      const download = (args: string[]) => {
-        writeFileSync(
-          join(args[args.indexOf("--dir") + 1]!, "full-release-decision.json"),
-          " ".repeat(MAX_RELEASE_ARTIFACT_BYTES + 1),
-        );
-      };
-      expect(() =>
-        reader === "dispatch helper"
-          ? tryReadReleaseDecision("123", 1, SHA, (_command, args) => {
-              download(args);
-              return { error: undefined, signal: null, status: 0, stderr: "", stdout: "" };
-            })
-          : tryReadReleaseDecisionArtifact(
-              { attempt: 1, headSha: SHA },
-              "123",
-              "openclaw/openclaw",
-              (args) => {
-                download(args);
-                return "";
-              },
-            ),
-      ).toThrow("size limit");
+      expect(() => readDecision(reader, " ".repeat(MAX_RELEASE_ARTIFACT_BYTES + 1))).toThrow(
+        "size limit",
+      );
     },
   );
 });
