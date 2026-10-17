@@ -121,6 +121,10 @@ const loaders = {
   mcpOAuth: () => import("../agents/mcp-oauth-store.worker.js").then((m) => m.mcpOAuthOperations),
   legacyMcpOAuth: () =>
     import("../infra/state-migrations.mcp-oauth.worker.js").then((m) => m.legacyMcpOAuthOperations),
+  deferredSessionImport: () =>
+    import("../infra/deferred-plugin-session-source-recovery.worker.js").then(
+      (m) => m.deferredSessionImportOperations,
+    ),
   nativeHookRelay: () =>
     import("../agents/harness/native-hook-relay-store.worker.js").then(
       (m) => m.nativeHookRelayOperations,

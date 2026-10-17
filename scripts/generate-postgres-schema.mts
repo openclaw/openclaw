@@ -29,6 +29,10 @@ import {
   TASK_RUN_INDEX_RETIREMENT_V24_SQL,
   TASK_RUN_INDEX_REPLACEMENTS_V24,
 } from "../src/state/openclaw-state-db-schema-v24-indexes.ts";
+import {
+  STATE_WRITE_INDEX_RETIREMENT_V27_SQL,
+  withLegacyStateWriteIndexes,
+} from "../src/state/openclaw-state-db-schema-v27-indexes.ts";
 import { listOpenClawStateFeatureSchemas } from "../src/state/openclaw-state-feature-schema.ts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { formatGeneratedModule } from "./lib/format-generated-module.mts";
@@ -261,6 +265,35 @@ export async function generatePostgresSchemas(
       }
     }
     if (name === "state") {
+      const preWriteIndexesV27Sql: Record<string, string> = {};
+      let writeIndexesV27Sql = "";
+      if (root === ROOT) {
+        using historical = new DatabaseSync(":memory:");
+        historical.exec(
+          withLegacyStateWriteIndexes(
+            fs.readFileSync(path.join(root, "src/state/openclaw-state-schema.sql"), "utf8"),
+          ),
+        );
+        for (const item of catalog(historical, "").objects) {
+          if (
+            item.kind === "index" &&
+            item.sql &&
+            [
+              "idx_acp_replay_events_session_seq",
+              "idx_skill_usage_key",
+              "idx_state_leases_owner",
+            ].includes(item.name)
+          ) {
+            preWriteIndexesV27Sql[item.table] = item.sql;
+          }
+        }
+        assert.equal(Object.keys(preWriteIndexesV27Sql).length, 3);
+        const leaseIndex = data.objects.find(
+          (item) => item.kind === "index" && item.name === "idx_state_leases_owner",
+        );
+        assert.ok(leaseIndex?.sql);
+        writeIndexesV27Sql = `${STATE_WRITE_INDEX_RETIREMENT_V27_SQL}\n${leaseIndex.sql}`;
+      }
       if (root === ROOT) {
         for (const pending of pendingPromotion) {
           assert.ok(
@@ -318,6 +351,8 @@ export async function generatePostgresSchemas(
             {
               eagerSql: files["state.postgres.sql"],
               operatorRecoveryV25Sql: files["state-v24-v25.postgres.sql"],
+              preWriteIndexesV27Sql,
+              writeIndexesV27Sql,
               fragments: manifest.map(({ file, ...fragment }) => ({
                 ...fragment,
                 sql: files[file],

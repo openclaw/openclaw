@@ -123,7 +123,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
                 ) {
                   host.onToggleSidebar?.();
                 }
-                host.requestUpdate();
+                host.invalidate();
               }}
             >
               <Icon

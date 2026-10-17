@@ -316,11 +316,17 @@ export function createTranscriptIndexAppenderInTransaction(
   let persisted = initial !== undefined;
   let pendingUpdatedAt: number | undefined;
   const pendingActiveRows: PreparedSessionTranscriptProjection["activeRows"] = [];
+  const pendingFtsRows: TranscriptIndexEntry[] = [];
   const flushRows = () => {
     if (pendingActiveRows.length > 0) {
       insertActiveEvent ??= createActiveEventInserter(db, sessionId);
       insertActiveEvent(pendingActiveRows);
       pendingActiveRows.length = 0;
+    }
+    if (pendingFtsRows.length > 0) {
+      insertFts ??= createSessionTranscriptFtsInserter(db, sessionId);
+      insertFts(pendingFtsRows);
+      pendingFtsRows.length = 0;
     }
   };
   const markDirty = (current: SessionTranscriptProjectionState) => {
@@ -366,8 +372,7 @@ export function createTranscriptIndexAppenderInTransaction(
       return true;
     }
     if (append.ftsRow) {
-      insertFts ??= createSessionTranscriptFtsInserter(db, sessionId);
-      insertFts(append.ftsRow);
+      pendingFtsRows.push(append.ftsRow);
     }
     if (append.activeRow) {
       pendingActiveRows.push(append.activeRow);
@@ -533,11 +538,7 @@ export function replaceSessionTranscriptIndexSuffixInTransaction(
     ? params.next.activeRows
     : params.next.activeRows.slice(retainedCount);
   insertActive(rowsToInsert);
-  for (const row of rowsToInsert) {
-    if (row.ftsEntry) {
-      insertFts(row.ftsEntry);
-    }
-  }
+  insertFts(rowsToInsert.flatMap((row) => (row.ftsEntry ? [row.ftsEntry] : [])));
   createWatermarkWriter(
     db,
     sessionId,
@@ -561,6 +562,8 @@ function rebuildSessionTranscriptIndexInTransaction(db: EngineConnection, sessio
   deleteActiveEventRows(db, sessionId);
   const insertActive = createActiveEventInserter(db, sessionId);
   const pendingActiveRows: PreparedSessionTranscriptProjection["activeRows"] = [];
+  const insertFts = createSessionTranscriptFtsInserter(db, sessionId);
+  const pendingFtsRows: TranscriptIndexEntry[] = [];
   const projection = visitSessionTranscriptProjection(db, sessionId, {
     activeRow: (row) => {
       pendingActiveRows.push(row);
@@ -569,9 +572,16 @@ function rebuildSessionTranscriptIndexInTransaction(db: EngineConnection, sessio
         pendingActiveRows.length = 0;
       }
     },
-    ftsRow: createSessionTranscriptFtsInserter(db, sessionId),
+    ftsRow: (row) => {
+      pendingFtsRows.push(row);
+      if (pendingFtsRows.length === TRANSCRIPT_INSERT_BATCH_SIZE) {
+        insertFts(pendingFtsRows);
+        pendingFtsRows.length = 0;
+      }
+    },
   });
   insertActive(pendingActiveRows);
+  insertFts(pendingFtsRows);
   if (!projection) {
     return;
   }

@@ -73,6 +73,7 @@ it("pins an agent above the roster, preserves the other agents, and unpins throu
     expect(remounted.sidebar.querySelector("[data-pinned-agent]")).toBeNull();
     expect(agentIds(remounted.sidebar)).toEqual(["main", "recent", "working"]);
     expect(loadSettings().pinnedAgentIds).toEqual([]);
+    expect(document.activeElement).toBe(remounted.sidebar.querySelector('[data-agent-id="main"]'));
   });
 });
 

@@ -23,6 +23,7 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
+import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import {
   resolveSessionTranscriptReadFence,
   withSessionContextAdmission,
@@ -45,7 +46,10 @@ import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-tur
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
 import { cloneSessionModelContextEntries } from "./session-manager-codec.js";
-import { sessionManagerOpenTranscriptCohort } from "./session-manager-core.js";
+import {
+  sessionManagerOpenCompaction,
+  sessionManagerOpenTranscriptCohort,
+} from "./session-manager-core.js";
 import {
   sessionManagerReadInitialContext,
   sessionManagerReadTranscriptStart,
@@ -459,6 +463,31 @@ export class SessionManager extends SessionManagerBranching {
       undefined,
       prepared.snapshot.version,
     );
+  }
+
+  /** @internal Prepare legacy compaction without hydrating the same transcript again. */
+  static async [sessionManagerOpenCompaction](
+    target: SessionTranscriptRuntimeTarget,
+    options: { cwd?: string; signal?: AbortSignal } = {},
+  ) {
+    const hydration = prepareSessionTranscriptHydration(target, undefined, options.signal);
+    const prepared = await hydration.read({ compaction: true });
+    if (prepared.kind !== "full" || !prepared.compaction) {
+      throw new Error("Expected a prepared compaction transcript");
+    }
+    const entries = prepared.snapshot.events;
+    const header = findSessionTranscriptHeader(entries);
+    return {
+      ...prepared.compaction,
+      eventCount: entries.length,
+      sessionManager: new SessionManager(
+        options.cwd ?? header?.cwd ?? process.cwd(),
+        prepared.compaction.sessionTarget,
+        entries,
+        undefined,
+        prepared.snapshot.version,
+      ),
+    };
   }
 
   /** @deprecated Await openAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */

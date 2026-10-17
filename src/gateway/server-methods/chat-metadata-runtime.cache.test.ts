@@ -30,38 +30,30 @@ test("rejects a retired owner instead of retrying compact metadata indefinitely"
   }
 });
 
-test.each(["metadata", "startup"] as const)(
-  "projects each session's account provenance when %s reuses its catalog",
-  async (surface) => {
-    const harness = createChatMetadataHarness();
-    const read = async (source: "user" | "user-link") => {
-      const params = {
+test("projects each session's account provenance when metadata reuses its catalog", async () => {
+  const harness = createChatMetadataHarness();
+  try {
+    await harness.runtime.refresh();
+    for (const source of ["user", "user-link", "user"] as const) {
+      const metadata = await harness.runtime.read({
         agentId: "main",
         sessionEntry: {
           authProfileOverride: "test:shared",
           authProfileOverrideSource: source,
         },
-      };
-      return surface === "metadata"
-        ? await harness.runtime.read(params)
-        : (await harness.runtime.readStartup(params))?.metadata;
-    };
-    try {
-      await harness.runtime.refresh();
-      for (const source of ["user", "user-link", "user"] as const) {
-        expect((await read(source))?.accountSelection).toEqual({
-          kind: "shared",
-          authProfileId: "test:shared",
-          label: "test:shared",
-          source,
-        });
-      }
-      expect(harness.buildProjection).toHaveBeenCalledTimes(surface === "startup" ? 2 : 1);
-    } finally {
-      await harness.runtime.stop();
+      });
+      expect(metadata.accountSelection).toEqual({
+        kind: "shared",
+        authProfileId: "test:shared",
+        label: "test:shared",
+        source,
+      });
     }
-  },
-);
+    expect(harness.buildProjection).toHaveBeenCalledOnce();
+  } finally {
+    await harness.runtime.stop();
+  }
+});
 
 test.each(["neutral", "profile"] as const)(
   "releases session entries after caching a %s catalog",

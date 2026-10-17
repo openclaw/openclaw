@@ -1,4 +1,7 @@
-import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
+import {
+  asNullableRecord as recordOrNull,
+  isStringArray,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
@@ -319,11 +322,7 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
       clientRunId:
         recordString(event, "clientRunId") ?? recordString(source, "clientRunId") ?? null,
       hasActiveRun: typeof hasActiveRun === "boolean" ? hasActiveRun : null,
-      activeRunIds:
-        activeRunIds === null ||
-        (Array.isArray(activeRunIds) && activeRunIds.every((id) => typeof id === "string"))
-          ? activeRunIds
-          : undefined,
+      activeRunIds: activeRunIds === null || isStringArray(activeRunIds) ? activeRunIds : undefined,
       status:
         sessionRunStatus(recordValue(source, "status")) ??
         sessionRunStatus(recordValue(event, "status")),

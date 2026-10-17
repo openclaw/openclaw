@@ -1,7 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { BashExecutionMessage, CustomMessage } from "../../agents/sessions/messages.js";
 import type {
-  CommittedCompactionAppend,
+  CommittedCompactionBoundary,
   PreparedCompactionAppend,
 } from "../../agents/sessions/session-compaction-persistence.js";
 import type {
@@ -123,13 +123,12 @@ export type CompactionBoundaryOperations = {
       prepared: Omit<PreparedCompactionAppend, "scope"> & {
         scope: Omit<PreparedCompactionAppend["scope"], "env">;
       };
-      transcriptByteCompactionLatch: NonNullable<
-        InternalSessionEntry["transcriptByteCompactionLatch"]
-      >;
+      transcriptByteCompactionLatch: InternalSessionEntry["transcriptByteCompactionLatch"] | null;
+      tokensAfter?: number;
       initialWriterRunId?: string;
     };
     output: {
-      committed: CommittedCompactionAppend;
+      committed: CommittedCompactionBoundary;
       initialEntry?: InitialSessionEntryCommit;
       projectionNeedsReconcile: boolean;
     };

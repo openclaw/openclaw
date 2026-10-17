@@ -158,7 +158,7 @@ it("hides archived pages in the restored sidebar before live data arrives", asyn
       }),
     ]),
   });
-  host.requestUpdate();
+  host.invalidate();
   await host.updateComplete;
   expect(
     dom.present(
@@ -179,7 +179,7 @@ it("paints the restored roster and workspace in the first sidebar update", async
     mode: "roster",
     cards: [{ id: "main", name: "Harbor", mainKey: "agent:main:main", textAvatar: "⚓" }],
   });
-  host.requestUpdate();
+  host.invalidate();
   await host.updateComplete;
   expect(
     dom.present('aside[data-snapshot-state="cached"]', "openclaw-sidebar-agent-roster"),
@@ -242,7 +242,7 @@ it("keeps cached agent rows while the live roster settles", async () => {
     ],
     cards: [{ id: "main", name: "Harbor", mainKey: "agent:main:main", textAvatar: "⚓" }],
   });
-  host.requestUpdate();
+  host.invalidate();
   await host.updateComplete;
   const agentIds = () =>
     [...host.querySelectorAll(".sidebar-agent-roster__row[data-agent-id]")].map((row) =>

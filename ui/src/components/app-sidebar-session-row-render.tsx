@@ -493,6 +493,5 @@ export function renderSessionTree(params: {
     </div>
   );
 }
-export { renderSidebarSessionIndicators };
 const RecentSession = renderRecentSession;
 const SessionTree = renderSessionTree;

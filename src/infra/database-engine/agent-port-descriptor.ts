@@ -19,6 +19,7 @@ import {
   readExistingAgentSchemaMeta,
 } from "../../state/openclaw-agent-db-schema-helpers.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db-schema.js";
+import { withLegacyAgentPostgresIndexes } from "../../state/openclaw-agent-index-retirement-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 import { withLegacyAgentPostgresWriteLayout } from "../../state/openclaw-agent-write-layout-migration.js";
@@ -113,9 +114,13 @@ export async function loadAgentPortDescriptor(
     if (backup?.version === sourceVersion && backup.id === "agent") {
       return backup;
     }
-    // v27→28 changes only these indexes in PostgreSQL. Pin the shared table
-    // catalog to v28 so later DDL needs its own predecessor descriptor.
-    if (backup || OPENCLAW_AGENT_SCHEMA_VERSION !== 28 || sourceVersion !== 27) {
+    // v27→29 changes only indexes in PostgreSQL. Pin the shared table catalog
+    // so a later column change needs its own predecessor descriptor.
+    if (
+      backup ||
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 29 ||
+      (sourceVersion !== 27 && sourceVersion !== 28)
+    ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
       );
@@ -301,11 +306,21 @@ export async function loadAgentPortDescriptor(
           /^INSERT OR IGNORE INTO[^;]+;/gm,
           "",
         ),
-        postData: withLegacyAgentPostgresWriteLayout(descriptor.postData),
+        postData:
+          sourceVersion < 28
+            ? withLegacyAgentPostgresWriteLayout(
+                withLegacyAgentPostgresIndexes(descriptor.postData),
+              )
+            : withLegacyAgentPostgresIndexes(descriptor.postData),
         expectedCatalog: catalog.map((fact) =>
-          fact.table === "transcript_event_identities" && fact.kind === "indexes"
-            ? { table: fact.table, kind: fact.kind, value: 5 }
-            : fact,
+          fact.kind === "indexes" &&
+          (fact.table === "session_nodes" || fact.table === "session_reactions")
+            ? { table: fact.table, kind: fact.kind, value: Number(fact.value) + 1 }
+            : sourceVersion < 28 &&
+                fact.table === "transcript_event_identities" &&
+                fact.kind === "indexes"
+              ? { table: fact.table, kind: fact.kind, value: 5 }
+              : fact,
         ),
         inspectSqliteSource: undefined,
         migrateSqliteSource: undefined,

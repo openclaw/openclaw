@@ -142,6 +142,36 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 
 .new-session-page .agent-chat__welcome-identity-copy {
   gap: 6px;
+  max-width: 100%;
+}
+
+/* Reuse the existing agent menu at the identity, without a second small avatar. */
+.new-session-page .agent-chat__welcome-name {
+  max-width: 100%;
+  min-width: 0;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.new-session-page .agent-chat__welcome-name openclaw-agent-select {
+  max-width: 100%;
+}
+
+.new-session-page .agent-chat__welcome-name .agent-select--compact .agent-select__trigger {
+  max-width: 100%;
+  height: auto;
+  min-height: 44px;
+  padding: 0 8px;
+  color: inherit;
+  font: inherit;
+}
+
+.new-session-page .agent-chat__welcome-name .agent-select__label {
+  max-width: none;
+}
+
+.new-session-page .agent-chat__welcome-name .agent-select__trigger .agent-select__avatar {
+  display: none;
 }
 
 /* Draft block inside the centered welcome column; the welcome centers text,
@@ -307,9 +337,8 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   stroke-width: 1.7px;
 }
 
-/* Quiet chip row directly above the composer: the agent and place pickers
-   share one trigger treatment so the row reads as a single control
-   strip. Shared pickers own popup/listbox behavior. */
+/* Placement stays separate from the welcome identity. Shared pickers retain
+   their own popup, selection, and disabled-state behavior. */
 .new-session-page__triggers {
   display: flex;
   flex-wrap: wrap;
@@ -325,6 +354,50 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 
 span.new-session-page__select {
   position: relative;
+}
+
+/* One visual unit, two independent pickers. Never wrap the checkout away from
+   its repository; long labels shrink inside the pair instead. */
+.new-session-page__workspace {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.new-session-page__workspace--checkout {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.new-session-page__workspace > span.new-session-page__select {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* Keep a short repository name readable even beside a very long branch. */
+.new-session-page__workspace--checkout > span.new-session-page__select:first-of-type {
+  flex-shrink: 0;
+  max-width: 65%;
+}
+
+.new-session-page__workspace--checkout #new-session-checkout-trigger {
+  border-inline-start: 1px solid var(--border);
+}
+
+.new-session-page__workspace .new-session-page__trigger {
+  min-width: 0;
+  max-width: 100%;
+  border-radius: inherit;
+}
+
+.new-session-page__workspace .new-session-page__trigger-label {
+  min-width: 0;
+}
+
+.new-session-page__workspace > .new-session-page__menu-field {
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .new-session-page__hosted-workspace {
@@ -1250,6 +1323,10 @@ span.new-session-page__select {
     margin-block: 0;
     padding-inline: var(--chat-mobile-edge-inset);
     text-align: center;
+  }
+
+  .new-session-page .agent-chat__welcome-name {
+    font-size: 20px;
   }
 
   .new-session-page .agent-chat__welcome-identity-copy {

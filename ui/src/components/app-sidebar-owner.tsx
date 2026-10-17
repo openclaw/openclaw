@@ -19,7 +19,6 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import "./mcp-app-catalog.tsx";
 import "./sidebar-agent-card.tsx";
 import "./sidebar-attention.tsx";
-import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { renderAppSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
@@ -48,7 +47,6 @@ import {
 import { SessionOrganizer } from "./session-organizer.ts";
 import { SidebarAgentRoster, renderSidebarPinnedSession } from "./sidebar-agent-roster.tsx";
 import type { createSidebarScroll } from "./sidebar-context-controller.ts";
-import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
 import { createSidebarMenus } from "./sidebar-menus.tsx";
 import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { createSidebarPeople, SidebarPeoplePreferences } from "./sidebar-people.ts";
@@ -77,7 +75,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     return this.readNarration()?.observerDigests ?? this.emptyObserverDigests;
   }
 
-  override readonly sessionOrganizer = new SessionOrganizer(this, () => this.requestUpdate());
+  override readonly sessionOrganizer = new SessionOrganizer(this, () => this.invalidate());
   // Native sidebar custody outlives provider/view roots.
   private readonly menuRoot = runWithOwner(null, () =>
     createRoot((dispose) => ({
@@ -85,7 +83,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         host: this,
         element: this.hostElement,
         commit: () => {
-          this.requestUpdate();
+          this.invalidate();
           return this.updateComplete;
         },
       }),
@@ -94,7 +92,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   );
   override readonly sidebarMenus = this.menuRoot.menus;
   readonly disposeMenus = this.menuRoot.dispose;
-  readonly people = new SidebarPeoplePreferences(() => this.requestUpdate());
+  readonly people = new SidebarPeoplePreferences(() => this.invalidate());
   peopleView?: ReturnType<typeof createSidebarPeople>;
   // A connected host retains its pending boot read when Solid recreates the view.
   readonly snapshot = createSidebarSnapshot(this);
@@ -211,34 +209,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     ...args: ConstructorParameters<typeof AppSidebarSessionNavigationElement>
   ) {
     super(...args);
-    new SubscriptionsController(this)
-      .watch(
-        () => this.router,
-        (router, notify) => {
-          const stop = router.subscribeSelector(selectSidebarContext, notify, equalSidebarContext);
-          return () => {
-            stop();
-            this.contextualSidebar = undefined;
-          };
-        },
-        (router) => {
-          this.contextualSidebar = selectSidebarContext(router.getState());
-        },
-      )
-      .effect(
-        () => this.context?.chatSubmissions,
-        (submissions) => submissions.subscribeCreate(() => this.requestUpdate()),
-      )
-      .effect(
-        () => this.context?.agentIdentity,
-        (identity) => identity.subscribe(this.sessionData.requestSessionDataUpdate),
-      )
-      .watchStore(() => this.context?.theme)
-      .watchStore(() => this.context?.config)
-      .effect(
-        () => this.context?.plugins,
-        (plugins) => plugins.subscribe(this.sessionData.requestSessionDataUpdate),
-      );
   }
   get nativeGatewaySnapshot(): NativeGatewaysSnapshot | null {
     // SAFETY: The macOS dashboard injects its encoded gateway snapshot at this key; browsers leave it unset.
@@ -256,7 +226,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     (module) => {
       this.catalogRenderer = module.renderSessionCatalogGroups;
       if (this.isConnected) {
-        this.requestUpdate();
+        this.invalidate();
       }
     },
   );
@@ -378,7 +348,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         sectionId,
         limit,
       );
-      this.requestUpdate();
+      this.invalidate();
     } else {
       this.sessionData.setVisibleSessionLimit(sectionId, limit);
     }
@@ -391,7 +361,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   setCatalogProjectGrouping(next: CatalogProjectGrouping): void {
     storeSidebarCatalogGrouping(next);
     this.catalogProjectGrouping = next;
-    this.requestUpdate();
+    this.invalidate();
   }
 
   hideSessionCatalog(catalogId: string): void {

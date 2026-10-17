@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
 import { discoverRestartRecoveryStoreTargets } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import type { AgentToolGatewayRequestCaller } from "../agents/tools/in-process-gateway.js";
@@ -33,10 +33,6 @@ import {
 import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 
-function sessionKeyHash(key: string): string {
-  return createHash("sha256").update(key).digest("hex").slice(0, 16);
-}
-
 class SessionSendEndpointChangedError extends Error {
   constructor(
     endpoint: "source" | "target",
@@ -48,7 +44,7 @@ class SessionSendEndpointChangedError extends Error {
       `${message}: ${JSON.stringify({
         endpoint,
         reason: "endpoint-replaced",
-        sessionKeyHash: sessionKeyHash(expected.sessionKey),
+        sessionKeyHash: sha256HexPrefixCore(expected.sessionKey, 16),
         previousSessionId: expected.sessionId,
         currentSessionId: current.entry?.sessionId ?? null,
         previousGeneration: expected.lifecycleRevision ?? null,
@@ -232,7 +228,7 @@ export async function recoverSessionSendDeliveries(
                 // cancelled receipt, but do not create a misleading failure notice.
                 if (await discardSessionPendingInput(scope, input.runId, assertCurrent)) {
                   context.logGateway.debug(
-                    `Session delivery recovery cancelled: ${JSON.stringify({ reason: "endpoint-archived", endpoint: source.entry?.archivedAt ? "source" : "target", sessionKeyHash: sessionKeyHash(sessionKey), inputId: input.id })}`,
+                    `Session delivery recovery cancelled: ${JSON.stringify({ reason: "endpoint-archived", endpoint: source.entry?.archivedAt ? "source" : "target", sessionKeyHash: sha256HexPrefixCore(sessionKey, 16), inputId: input.id })}`,
                   );
                 }
                 return;
@@ -314,7 +310,7 @@ export async function recoverSessionSendDeliveries(
             ...new Set((getRetryAttemptErrors(error) ?? [error]).map(formatErrorMessageWithCode)),
           ];
           context.logGateway.warn(
-            `Session delivery recovery blocked after ${attempts} attempts: ${formatErrorMessageForDisplay(error, causes.join("; "))} ${JSON.stringify({ sessionKeyHash: sessionKeyHash(sessionKey), inputId: input.id, ageMs: Math.max(0, Date.now() - input.acceptedAt) })}`,
+            `Session delivery recovery blocked after ${attempts} attempts: ${formatErrorMessageForDisplay(error, causes.join("; "))} ${JSON.stringify({ sessionKeyHash: sha256HexPrefixCore(sessionKey, 16), inputId: input.id, ageMs: Math.max(0, Date.now() - input.acceptedAt) })}`,
           );
         }
       }

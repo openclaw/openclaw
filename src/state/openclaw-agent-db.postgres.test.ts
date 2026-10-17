@@ -206,7 +206,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     });
   });
 
-  it("migrates version 27 indexes while retaining rows, search and schema admission", async () => {
+  it("migrates version 27 indexes and navigation validation while retaining rows and search", async () => {
     const target = {
       agentId: "migration",
       sessionId: "migration-session",
@@ -289,6 +289,8 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       // Restore the historical catalog under exclusive fixture custody, including an unsealed marker.
       await client.query(`BEGIN;
         SET LOCAL search_path TO "${facts.namespace}";
+        ALTER FUNCTION openclaw_transcript_navigation_check(text)
+          CALLED ON NULL INPUT RESET search_path;
         DROP INDEX idx_agent_session_windows_conversation;
         CREATE INDEX idx_agent_session_windows_conversation
           ON session_windows(primary_conversation_id ASC NULLS FIRST,
@@ -297,6 +299,11 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
         CREATE INDEX idx_agent_transcript_event_parent
           ON transcript_event_identities(session_id ASC NULLS FIRST, parent_id ASC NULLS FIRST)
           WHERE parent_id IS NOT NULL;
+        CREATE INDEX idx_agent_session_nodes_last_interaction_at
+          ON session_nodes(last_interaction_at DESC NULLS LAST, session_key ASC NULLS FIRST);
+        CREATE INDEX idx_agent_session_reactions_message
+          ON session_reactions(session_key ASC NULLS FIRST,
+            session_id ASC NULLS FIRST, message_id ASC NULLS FIRST);
         UPDATE schema_meta SET schema_version = 27;
         UPDATE openclaw_schema_meta
           SET version = 27, fingerprint = NULL, ddl_hash = NULL, server_major = NULL;
@@ -337,14 +344,14 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       }
       const upgraded = withEngineStoreAdmission(() => owners.openOpenClawAgentDatabase(options));
       assert(isPostgresSqlConnection(upgraded.db));
-      expect(getPostgresPhysicalFacts(upgraded.db)?.version).toBe(28);
+      expect(getPostgresPhysicalFacts(upgraded.db)?.version).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
       withEngineStoreAdmission(() => {
         assertMemorySearch(upgraded.db);
         expect(
           upgraded.db
             .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
             .get(),
-        ).toEqual({ schema_version: 28 });
+        ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
         expect(
           upgraded.db
             .prepare(
@@ -352,7 +359,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
             )
             .get(),
         ).toEqual({
-          version: 28,
+          version: OPENCLAW_AGENT_SCHEMA_VERSION,
           fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
           ddl_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
           server_major: facts.capabilities.serverMajor,
@@ -360,7 +367,8 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       });
       const indexes = await client.query(
         `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1
-          AND indexname IN ('idx_agent_session_windows_conversation', 'idx_agent_transcript_event_parent')`,
+          AND indexname IN ('idx_agent_session_windows_conversation', 'idx_agent_transcript_event_parent',
+            'idx_agent_session_nodes_last_interaction_at', 'idx_agent_session_reactions_message')`,
         [facts.namespace],
       );
       expect(indexes.rows).toEqual([
@@ -368,6 +376,15 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
           indexname: "idx_agent_session_windows_conversation",
           indexdef: `CREATE INDEX idx_agent_session_windows_conversation ON ${facts.namespace}.session_windows USING btree (primary_conversation_id NULLS FIRST) WHERE (primary_conversation_id IS NOT NULL)`,
         },
+      ]);
+      const navigationFunction = await client.query(
+        `SELECT p.proisstrict, p.proconfig FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = $1 AND p.proname = 'openclaw_transcript_navigation_check'`,
+        [facts.namespace],
+      );
+      expect(navigationFunction.rows).toEqual([
+        { proisstrict: true, proconfig: ["search_path=pg_catalog"] },
       ]);
       expect(
         (
@@ -388,7 +405,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       await owners.closeOpenClawAgentDatabaseByPathAsync(database.path);
       retireSqliteDatabaseAdmissionForPath(database.path);
       const reopened = withEngineStoreAdmission(() => owners.openOpenClawAgentDatabase(options));
-      expect(getPostgresPhysicalFacts(reopened.db)?.version).toBe(28);
+      expect(getPostgresPhysicalFacts(reopened.db)?.version).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
       withEngineStoreAdmission(() => assertMemorySearch(reopened.db));
     } finally {
       withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(database.path));

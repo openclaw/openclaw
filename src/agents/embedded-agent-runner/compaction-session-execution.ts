@@ -113,8 +113,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
     const accountingRecorder = readCompactionAccountingRecorder(params.contextEngineRuntimeContext);
     const memoryTranscript = accountingRecorder?.memoryTranscript;
+    const preparedSession = accountingRecorder?.preparedSession;
     const sessionTarget =
       memoryTranscript?.sessionTarget ??
+      preparedSession?.sessionTarget ??
       (await resolveAgentRunSessionTarget({
         agentId: sessionAgentId,
         config: params.config,
@@ -133,6 +135,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
     const preparedSessionManager =
       memoryTranscript?.sessionManager ??
+      preparedSession?.sessionManager ??
       (await SessionManager.openAsync(sessionTarget, undefined, undefined, params.abortSignal));
     assertActive();
     const responsesApi =
@@ -149,7 +152,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       missingToolResultText: responsesApi ? "aborted" : undefined,
       allowedToolNames,
       withCompactionPersistence: params.transcriptByteCompactionPersistence,
-      withCompactionPersistenceAsync: params.transcriptByteCompactionPersistenceAsync,
+      withCompactionPersistenceAsync:
+        params.transcriptByteCompactionPersistenceAsync ??
+        accountingRecorder?.withCompactionPersistenceAsync,
     });
     compactionSessionManager = sessionManager;
     const recordUsage = accountingRecorder?.recordUsage

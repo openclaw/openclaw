@@ -84,7 +84,6 @@ function RouteError(props: RouteErrorProps) {
 
 function renderRouterOutlet(
   router: ApplicationRouter,
-  showPending: boolean,
   renderedMatch: ApplicationRouteMatch | undefined,
   retryContext?: ApplicationContext,
   presented = true,
@@ -102,7 +101,7 @@ function renderRouterOutlet(
     ? { router, retryContext, error: renderedMatch.error, routeId }
     : undefined;
   if (!renderedMatch.module) {
-    return { state: showPending && !error ? "loading" : "empty", error };
+    return { state: error ? "empty" : "loading", error };
   }
   const routeModule = renderedMatch.module;
   if (
@@ -375,11 +374,11 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
       }
       if (module?.retainOnNavigate && waiting) {
         if (renderedMatch?.routeId === "chat" && snapshot.settled?.routeId === "new-session") {
-          return renderRouterOutlet(router, snapshot.showPending, snapshot.settled, retryContext);
+          return renderRouterOutlet(router, snapshot.settled, retryContext);
         }
         return { state: "loading" };
       }
-      return renderRouterOutlet(router, snapshot.showPending, renderedMatch, retryContext);
+      return renderRouterOutlet(router, renderedMatch, retryContext);
     };
     const retainedValue = retainedGate.render(
       retainedKey,
@@ -387,8 +386,7 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
         retained
           ? {
               key: retainedKey,
-              render: (presented) =>
-                renderRouterOutlet(router, snapshot.showPending, retained, retryContext, presented),
+              render: (presented) => renderRouterOutlet(router, retained, retryContext, presented),
             }
           : null,
       () => (retainedRegion?.isConnected ? [retainedRegion] : []),

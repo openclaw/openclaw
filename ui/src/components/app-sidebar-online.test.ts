@@ -216,7 +216,7 @@ describe("sidebar people workload", () => {
 
   it("ignores heartbeat and offscreen watching packets while retaining visible activity and viewers", async () => {
     const { sidebar, gateway } = await mountWorkload();
-    const update = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "requestUpdate");
+    const update = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "invalidate");
     const heartbeat = presence().map((entry) =>
       Object.assign({}, entry, {
         ts: NOW + 1,
@@ -396,7 +396,7 @@ describe("sidebar people workload", () => {
     sidebar.setSessionOwnerFilter("cy");
     context.agentSelection.state.selectedId = "research";
     context.agentSelection.state.scopeId = "research";
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await settle(sidebar);
     pending.resolve(summary());
     await settle(sidebar);

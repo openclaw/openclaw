@@ -4,6 +4,10 @@ import type { FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
 import {
+  assertChildRuntimeAvailable,
+  observeChildRuntime,
+} from "../infra/child-runtime-viability.js";
+import {
   getDatabaseEngineInput,
   getDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
@@ -43,6 +47,7 @@ type ReaderProcess = {
   retired: boolean;
   closeBudgetMs: number;
   failure?: Error;
+  runtimeFailure?: Error;
 };
 
 export type AgentSchemaInspectionSnapshot = { pathname: string; identity: FileIdentityStat };
@@ -73,12 +78,14 @@ export function createAgentSchemaInspectionWorker() {
   let sequence = 0;
   const startReader = (timeoutMs: number): ReaderProcess => {
     const entry = resolveRuntimeProcessEntrypointUrl("agentSchemaInspection");
+    assertChildRuntimeAvailable();
     const child = fork(entry, [], {
       execArgv: resolveRuntimeWorkerArgv(entry).slice(0, -1),
       serialization: "advanced",
-      stdio: ["ignore", "ignore", "ignore", "ipc"],
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
     });
     processCount += 1;
+    const runtimeFailure = observeChildRuntime(child);
     const closed = createDeferredCore();
     const started: ReaderProcess = {
       child,
@@ -91,6 +98,7 @@ export function createAgentSchemaInspectionWorker() {
       retireReader(started);
     });
     child.once("close", () => {
+      started.runtimeFailure = runtimeFailure();
       started.retired = true;
       closed.resolve();
     });
@@ -330,7 +338,8 @@ export function createAgentSchemaInspectionWorker() {
           response.reject(
             signal?.aborted
               ? toStringifiedError(signal.reason)
-              : (failure ??
+              : (active.runtimeFailure ??
+                  failure ??
                   active.failure ??
                   (exitSignal === "SIGKILL"
                     ? sqliteInspectionTimeoutError(

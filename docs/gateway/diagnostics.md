@@ -378,7 +378,11 @@ The complete result is limited to 1 MiB. When the full graph exceeds that limit,
 the result contains `summary` instead of `profile`, with `truncated: true`,
 `originalNodeCount`, `sampleCount`, and `omittedSampleCount`. Each summary row
 contains a leaf-first `stack` of up to eight frames and its recorded `sampleCount`.
-Identical stacks are combined; the most sampled stacks come first, with at most
+If those frames contain no OpenClaw code, the nearest `openclaw:` caller toward
+the root is appended when available, for at most nine frames. `elidedFrameCount`
+counts frames skipped between the first eight frames and that appended caller;
+it is zero when there is no gap. Stacks with identical frames and elision counts
+are combined; the most sampled stacks come first, with at most
 128 rows within the same byte limit. These counts are samples, not exact CPU time.
 This preserves useful attribution during busy startup windows, when deep stacks
 and V8 deoptimization samples can enlarge the graph despite the sampling interval.

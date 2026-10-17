@@ -137,8 +137,8 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__input").first();
       const picker = composer.locator(".chat-controls__model-picker");
       const trigger = picker.locator("[data-chat-model-select]");
-      await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
       await trigger.click();
+      await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
       const codex = picker.locator('[data-chat-model-runtime="codex"]');
       const embedded = picker.locator('[data-chat-model-runtime="openclaw"]');
       await revealChatModelOption(codex);

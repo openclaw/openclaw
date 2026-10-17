@@ -73,6 +73,8 @@ export const UpdateDatabaseBackupSchema = z.object({
   missingPaths: z.array(z.string()),
   sourcePaths: z.array(z.string()),
   sourceGenerations: z.record(z.string(), z.string().nullable()),
+  /** Manual original images held under maintenance custody; never automatic rollback authority. */
+  originalCaptureSourcePaths: z.array(z.string()).optional(),
   databaseOwners: z
     .array(UpdateStateDatabaseOwnerSchema.and(z.object({ path: z.string() })))
     .optional(),
@@ -295,6 +297,8 @@ export async function createUpdateDatabaseBackupInProcess(
     inspectionPlan: InspectionPlan;
     /** Exact families admitted by the owning Doctor before launching this backup child. */
     excludedDatabasePaths?: readonly string[];
+    /** Source custody prepared by the parent only for manual original-state capture. */
+    originalCaptureSourcePaths?: readonly string[];
     onProgress?: (progress: UpdateStateInspectionProgress) => void;
   },
 ): Promise<UpdateDatabaseBackup> {
@@ -336,6 +340,9 @@ export async function createUpdateDatabaseBackupInProcess(
   const { readBackupEngine, capturePostgresBackup } =
     await import("../snapshot/database-backup.js");
   const engines = new Map(inventory.present.map((file) => [file, readBackupEngine(file)]));
+  const originalCaptureSources = new Set(
+    input.originalCaptureSourcePaths?.filter((file) => engines.get(file)?.engine === "sqlite"),
+  );
   if (
     [...engines.values()].some((engine) => engine.engine === "postgres") &&
     !input.postgresOffline &&
@@ -358,7 +365,8 @@ export async function createUpdateDatabaseBackupInProcess(
       input.stopped &&
       !identities.has(`${sourcePath}-journal`) &&
       (identities.get(`${sourcePath}-wal`)?.size ?? 0n) === 0n;
-    const before = input.stopped ? undefined : await readGeneration(sourcePath);
+    const retainGeneration = !input.stopped && !originalCaptureSources.has(sourcePath);
+    const before = retainGeneration ? await readGeneration(sourcePath) : undefined;
     const snapshot = stopped
       ? await createStoppedSqliteSnapshot({
           sourcePath,
@@ -390,8 +398,9 @@ export async function createUpdateDatabaseBackupInProcess(
       });
       postgres = { ...engine, exportDirectory };
     }
-    // Native restore uses its supervisor's stopped-state fence, not live-writer generations.
-    if (!input.stopped) {
+    // Automatic rollback keeps write attribution after custody ends. Manual original
+    // capture stays under its maintenance owner and never grants restore authority.
+    if (retainGeneration) {
       const after = await readGeneration(sourcePath);
       if (after !== undefined && before === after) {
         sourceGenerations[sourcePath] = after;
@@ -426,6 +435,9 @@ export async function createUpdateDatabaseBackupInProcess(
     missingPaths: inventory.missing,
     sourcePaths: inventory.sourcePaths,
     sourceGenerations,
+    ...(input.originalCaptureSourcePaths
+      ? { originalCaptureSourcePaths: [...originalCaptureSources] }
+      : {}),
     databaseOwners: inventory.databaseOwners,
     warnings,
     ...(input.pluginOwners ? { pluginOwners: input.pluginOwners } : {}),
@@ -435,6 +447,7 @@ export async function createUpdateDatabaseBackupInProcess(
 /** Retain raw, verified database files separately from the old package fingerprint. */
 export async function createUpdateDatabaseBackup({
   acquisition,
+  purpose,
   nodeRunner = process.execPath,
   timeoutMs,
   signal: callerSignal,
@@ -443,6 +456,8 @@ export async function createUpdateDatabaseBackup({
   ...input
 }: BackupInput & {
   acquisition?: UpdateRecoveryCaptureAcquisition;
+  /** Original-state evidence does not need generations while its owner retains every source. */
+  purpose?: "original-state";
   nodeRunner?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -526,6 +541,18 @@ export async function createUpdateDatabaseBackup({
         ...(additionalPaths ?? []),
         ...(additionalFiles ?? []),
       ].filter((file) => !rehearsal?.excludes(file));
+      let originalCaptureSourcePaths: string[] | undefined;
+      if (purpose === "original-state" && custody) {
+        const { isOpenClawAgentDatabaseOpen } = await import("../state/openclaw-agent-db.js");
+        originalCaptureSourcePaths = [
+          ...new Set(files.map(resolvePathViaExistingAncestorSync)),
+        ].filter(
+          (file) =>
+            maintenanceOwnerHasSourceCustody(scope, file) &&
+            !openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(file) &&
+            !isOpenClawAgentDatabaseOpen(file),
+        );
+      }
       rehearsal?.assertCurrent();
       const databases = custody
         ? await readUpdateStateDatabaseSizesInProcess(files, signal)
@@ -537,7 +564,12 @@ export async function createUpdateDatabaseBackup({
         await runUpdateStateInspectionWorker({
           ...worker,
           retryAdvice,
-          input: { ...capturedInput, mode: "database-backup", inspectionPlan },
+          input: {
+            ...capturedInput,
+            mode: "database-backup",
+            inspectionPlan,
+            originalCaptureSourcePaths,
+          },
           ...(custody ? { ioBudget: "deadline" as const } : {}),
           databases,
         }),

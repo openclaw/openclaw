@@ -22,6 +22,7 @@ const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
   "retained_plugin_source_index_rebuilt",
   "retained_plugin_receipt_superseded",
   "retained_empty_transcript_superseded",
+  "retained_missing_transcript_superseded",
   "retained_plugin_source_conflict",
   "transcript_archive_failed",
   "transcript_malformed",

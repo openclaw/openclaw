@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { tempWorkspace } from "@openclaw/fs-safe/temp";
+import { tempWorkspace, type TempWorkspace } from "@openclaw/fs-safe/temp";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { preparePostgresBackupDiscovery } from "../infra/backup-database-discovery.js";
@@ -23,6 +23,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
 import { spawnCommand } from "../process/exec-spawn.js";
+import { defaultRuntime } from "../runtime.js";
 import { BACKUP_RUN_ERROR_MAX_LENGTH } from "../state/backup-run-records.contract.js";
 import { readBackupEngine, readPostgresBackupFamily } from "./database-backup.js";
 import {
@@ -73,6 +74,22 @@ function redactGitBackupText(value: string): string {
 
 function sanitizeGitBackupDiagnostic(value: string): string {
   return truncateUtf16Safe(redactGitBackupText(value), GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH);
+}
+
+async function cleanupGitBackupWorkspace(workspace: TempWorkspace): Promise<void> {
+  let issue: string;
+  try {
+    const result = await workspace.cleanup();
+    if (result === "removed" || result === "missing") {
+      return;
+    }
+    issue = result;
+  } catch (error) {
+    issue = formatErrorMessage(error);
+  }
+  defaultRuntime.error(
+    `Warning: Git backup temporary files may remain under ${path.dirname(workspace.dir)}; cleanup failed: ${sanitizeGitBackupDiagnostic(issue)}`,
+  );
 }
 
 function formatGitBackupCommandResult(
@@ -266,7 +283,7 @@ async function commitGitBackup(params: {
     );
     return await requireGit(params.repositoryPath, ["rev-parse", "HEAD"], { env: params.env });
   } finally {
-    await indexWorkspace.cleanup();
+    await cleanupGitBackupWorkspace(indexWorkspace);
   }
 }
 
@@ -403,7 +420,7 @@ export async function createGitBackup(params: {
       await applyScopeUpdate(staging.dir, repositoryPath, update);
     }
   } finally {
-    await staging.cleanup().catch(() => undefined);
+    await cleanupGitBackupWorkspace(staging);
   }
   const commit = await commitGitBackup({
     repositoryPath,
@@ -520,10 +537,10 @@ async function materializeGitBackupRef(params: {
       commit,
       path: outputPath,
       manifest,
-      [Symbol.asyncDispose]: workspace[Symbol.asyncDispose],
+      [Symbol.asyncDispose]: async () => await cleanupGitBackupWorkspace(workspace),
     };
   } catch (error) {
-    await workspace.cleanup().catch(() => undefined);
+    await cleanupGitBackupWorkspace(workspace);
     throw error;
   }
 }
@@ -586,7 +603,7 @@ export async function verifyGitBackupRef(params: {
       commit: materialized.commit,
     };
   } finally {
-    await scratch.cleanup().catch(() => undefined);
+    await cleanupGitBackupWorkspace(scratch);
   }
 }
 

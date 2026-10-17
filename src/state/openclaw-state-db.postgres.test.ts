@@ -34,110 +34,152 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
+import { statePostgresRuntime } from "./postgres-schema.generated/runtime.js";
 import { ensureUserBackgroundSchema } from "./user-background.store.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type Result = { namespace: string; admissionId: string; catalogReads: number; threadId: number };
+const legacyWriteIndexesSql = `
+  DROP INDEX idx_state_leases_owner;
+  ${statePostgresRuntime.preWriteIndexesV27Sql.state_leases}
+  ${statePostgresRuntime.preWriteIndexesV27Sql.skill_usage}
+  ${statePostgresRuntime.preWriteIndexesV27Sql.acp_replay_events}
+`;
 
 describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
-  it("migrates version 25 metadata while preserving heads, lazy fragments and schema admission", async () => {
-    const directory = tempDirs.make("state-layout-postgres-");
-    const pathname = path.join(directory, "state.sqlite");
-    const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
-    const client = new pg.Client({ connectionString: connection });
-    await client.connect();
-    installDatabaseEngineSelection({
-      effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-      postgres: { connection: connection!, schemaPrefix: "state_layout_conformance" },
-    });
-    let namespace: string | undefined;
-    try {
-      const facts = withEngineStoreAdmission(() =>
-        runOpenClawStateWriteTransaction(({ db }) => {
-          ensureUserBackgroundSchema(options);
-          db.prepare(`INSERT INTO session_state_heads
+  it.each([25, 26])(
+    "migrates version %i indexes while preserving heads, leases, lazy fragments and schema admission",
+    async (previousVersion) => {
+      const directory = tempDirs.make("state-layout-postgres-");
+      const pathname = path.join(directory, "state.sqlite");
+      const options = { path: pathname, env: { ...process.env, OPENCLAW_STATE_DIR: directory } };
+      const client = new pg.Client({ connectionString: connection });
+      await client.connect();
+      installDatabaseEngineSelection({
+        effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+        postgres: { connection: connection!, schemaPrefix: "state_layout_conformance" },
+      });
+      let namespace: string | undefined;
+      try {
+        const facts = withEngineStoreAdmission(() =>
+          runOpenClawStateWriteTransaction(({ db }) => {
+            ensureUserBackgroundSchema(options);
+            db.prepare(`INSERT INTO session_state_heads
             (session_key, agent_id, last_sequence, pruned_max_sequence, updated_at)
             VALUES (?, ?, ?, ?, ?)`).run("shared-key", "main", 7, 3, 11);
-          db.prepare(`INSERT INTO session_state_heads
+            db.prepare(`INSERT INTO session_state_heads
             (session_key, agent_id, last_sequence, pruned_max_sequence, updated_at)
             VALUES (?, ?, ?, ?, ?)`).run("shared-key", "other", 19, 5, 23);
-          return getPostgresPhysicalFacts(db);
-        }, options),
-      );
-      if (!facts) {
-        throw new Error("State layout fixture did not select PostgreSQL");
-      }
-      namespace = facts.namespace;
-      const retained = await client.query(
-        `SELECT * FROM "${namespace}".session_state_heads ORDER BY agent_id`,
-      );
-      closeOpenClawStateDatabaseForTest();
-      retireSqliteDatabaseAdmissionForPath(pathname);
-      // v25 has the same PostgreSQL catalog; only its published versions differ.
-      await client.query(`BEGIN;
+            db.prepare(`INSERT INTO state_leases
+            (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
+            VALUES ('synthetic', 'retained', 'owner', 10000, 100, '{}', 100, 100)`).run();
+            return getPostgresPhysicalFacts(db);
+          }, options),
+        );
+        if (!facts) {
+          throw new Error("State layout fixture did not select PostgreSQL");
+        }
+        namespace = facts.namespace;
+        const retained = await client.query(
+          `SELECT * FROM "${namespace}".session_state_heads ORDER BY agent_id`,
+        );
+        const retainedLease = await client.query(
+          `SELECT * FROM "${namespace}".state_leases WHERE scope = 'synthetic'`,
+        );
+        const currentIndexes = await client.query(
+          `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1
+          AND tablename IN ('acp_replay_events', 'skill_usage', 'state_leases') ORDER BY indexname`,
+          [namespace],
+        );
+        closeOpenClawStateDatabaseForTest();
+        retireSqliteDatabaseAdmissionForPath(pathname);
+        // Restore the actual pre-v27 catalog before relabeling metadata.
+        await client.query(`BEGIN;
         SET LOCAL search_path TO "${namespace}";
-        UPDATE schema_meta SET schema_version = 25;
-        UPDATE config_machine_state SET value_json = '25'
+        ${legacyWriteIndexesSql}
+        UPDATE schema_meta SET schema_version = ${previousVersion};
+        UPDATE config_machine_state SET value_json = '${previousVersion}'
           WHERE state_key = 'state.schema.contentVersion';
         UPDATE openclaw_schema_meta
-          SET version = 25, fingerprint = NULL, ddl_hash = NULL, server_major = NULL;
+          SET version = ${previousVersion}, fingerprint = NULL, ddl_hash = NULL, server_major = NULL;
         COMMIT;`);
-      withEngineStoreAdmission(() => {
-        const upgraded = openOpenClawStateDatabase(options);
-        expect(getPostgresPhysicalFacts(upgraded.db)?.version).toBe(26);
-        expect(
-          upgraded.db
-            .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-            .get(),
-        ).toEqual({ schema_version: 26 });
-        expect(
-          upgraded.db
-            .prepare(
-              "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
-            )
-            .get(),
-        ).toEqual({ value_json: "26" });
-        expect(
-          upgraded.db
-            .prepare(
-              "SELECT version, fingerprint, ddl_hash, server_major FROM openclaw_schema_meta",
-            )
-            .get(),
-        ).toEqual({
-          version: 26,
-          fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
-          ddl_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
-          server_major: facts.capabilities.serverMajor,
+        withEngineStoreAdmission(() => {
+          const upgraded = openOpenClawStateDatabase(options);
+          expect(getPostgresPhysicalFacts(upgraded.db)?.version).toBe(
+            OPENCLAW_STATE_SCHEMA_VERSION,
+          );
+          expect(
+            upgraded.db
+              .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+              .get(),
+          ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+          expect(
+            upgraded.db
+              .prepare(
+                "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
+              )
+              .get(),
+          ).toEqual({ value_json: String(OPENCLAW_STATE_SCHEMA_VERSION) });
+          expect(
+            upgraded.db
+              .prepare(
+                "SELECT version, fingerprint, ddl_hash, server_major FROM openclaw_schema_meta",
+              )
+              .get(),
+          ).toEqual({
+            version: OPENCLAW_STATE_SCHEMA_VERSION,
+            fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+            ddl_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+            server_major: facts.capabilities.serverMajor,
+          });
         });
-      });
-      expect(
-        (await client.query(`SELECT * FROM "${namespace}".session_state_heads ORDER BY agent_id`))
-          .rows,
-      ).toEqual(retained.rows);
-      expect(
-        (await client.query(`SELECT * FROM "${namespace}".user_background_images`)).rows,
-      ).toEqual([]);
-      closeOpenClawStateDatabaseForTest();
-      retireSqliteDatabaseAdmissionForPath(pathname);
-      withEngineStoreAdmission(() => {
-        const reopened = openOpenClawStateDatabase(options);
-        expect(getPostgresPhysicalFacts(reopened.db)?.version).toBe(26);
-      });
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-      retireSqliteDatabaseAdmissionForPath(pathname);
-      resetDatabaseEngineSelectionForTest();
-      try {
-        if (namespace) {
-          await client.query(`DROP SCHEMA "${namespace}" CASCADE`);
-        }
+        expect(
+          (await client.query(`SELECT * FROM "${namespace}".session_state_heads ORDER BY agent_id`))
+            .rows,
+        ).toEqual(retained.rows);
+        expect(
+          (
+            await client.query(
+              `SELECT * FROM "${namespace}".state_leases WHERE scope = 'synthetic'`,
+            )
+          ).rows,
+        ).toEqual(retainedLease.rows);
+        expect(
+          (
+            await client.query(
+              `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1
+            AND tablename IN ('acp_replay_events', 'skill_usage', 'state_leases') ORDER BY indexname`,
+              [namespace],
+            )
+          ).rows,
+        ).toEqual(currentIndexes.rows);
+        expect(
+          (await client.query(`SELECT * FROM "${namespace}".user_background_images`)).rows,
+        ).toEqual([]);
+        closeOpenClawStateDatabaseForTest();
+        retireSqliteDatabaseAdmissionForPath(pathname);
+        withEngineStoreAdmission(() => {
+          const reopened = openOpenClawStateDatabase(options);
+          expect(getPostgresPhysicalFacts(reopened.db)?.version).toBe(
+            OPENCLAW_STATE_SCHEMA_VERSION,
+          );
+        });
       } finally {
-        await client.end();
+        closeOpenClawStateDatabaseForTest();
+        retireSqliteDatabaseAdmissionForPath(pathname);
+        resetDatabaseEngineSelectionForTest();
+        try {
+          if (namespace) {
+            await client.query(`DROP SCHEMA "${namespace}" CASCADE`);
+          }
+        } finally {
+          await client.end();
+        }
       }
-    }
-  });
+    },
+  );
 
   it("bootstraps, migrates authority metadata, retains lazy fragments, reuses admission and closes paired handles", async () => {
     const pathname = path.join(tempDirs.make("state-postgres-"), "state.sqlite");
@@ -196,7 +238,10 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       expect(cold.threadId).not.toBe(0);
       await client.query(`SET search_path = "${namespace}"`);
       await client.query(`BEGIN;
-        UPDATE openclaw_schema_meta SET version = 24 WHERE store = 'state';
+        ${legacyWriteIndexesSql}
+        UPDATE openclaw_schema_meta
+          SET version = 24, fingerprint = NULL, ddl_hash = NULL, server_major = NULL
+          WHERE store = 'state';
         UPDATE schema_meta SET schema_version = 24 WHERE meta_key = 'primary';
         UPDATE config_machine_state SET value_json = '24'
           WHERE state_key = 'state.schema.contentVersion';

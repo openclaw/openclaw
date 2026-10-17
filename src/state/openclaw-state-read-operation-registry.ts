@@ -10,15 +10,19 @@ import {
 
 const loaders = {
   worktrees: async () => {
-    const [registry, templates, pending] = await Promise.all([
+    const [
+      { worktreeReadOperations },
+      { worktreeTemplateReadOperations },
+      { pendingWorktreeReadOperations },
+    ] = await Promise.all([
       import("../agents/worktrees/registry-read.kernel.js"),
       import("../agents/worktrees/template-registry.worker.js"),
       import("../agents/worktrees/pending-slots.worker.js"),
     ]);
     return {
-      ...registry.worktreeReadOperations,
-      ...templates.worktreeTemplateReadOperations,
-      ...pending.pendingWorktreeReadOperations,
+      ...worktreeReadOperations,
+      ...worktreeTemplateReadOperations,
+      ...pendingWorktreeReadOperations,
     };
   },
   agentProvenance: () =>
@@ -29,6 +33,8 @@ const loaders = {
     ),
   githubPublications: () =>
     import("./github-publication.read.worker.js").then((m) => m.publicationReadOperations),
+  userGitHubConnections: () =>
+    import("./user-github-connections.worker.js").then((m) => m.userGitHubConnectionReadOperations),
   deviceIdentity: () =>
     import("../infra/device-identity.read.worker.js").then((m) => m.deviceIdentityReadOperations),
   stateBootstrap: () =>

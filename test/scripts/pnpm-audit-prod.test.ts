@@ -196,6 +196,31 @@ it.each<[string, string, string, Record<string, string[]>]>([
     },
   ],
   [
+    "audits bundled Mistral and its transitives without unrelated development dependencies",
+    `  .:
+    devDependencies:
+      '@mistralai/mistralai': {version: 3.0.0}
+  packages/ai:
+    devDependencies:
+      '@mistralai/mistralai': {version: 2.7.0}
+      build-tool: {version: 1.0.0}`,
+    `  '@mistralai/mistralai@2.7.0':
+    dependencies:
+      schema: 1.0.0
+    optionalDependencies:
+      telemetry: 2.0.0
+  schema@1.0.0: {}
+  telemetry@2.0.0: {}
+  '@mistralai/mistralai@3.0.0': {}
+  build-tool@1.0.0: {}
+`,
+    {
+      "@mistralai/mistralai": ["2.7.0"],
+      schema: ["1.0.0"],
+      telemetry: ["2.0.0"],
+    },
+  ],
+  [
     "resolves npm alias snapshots to the real package name",
     `  .:
     dependencies:

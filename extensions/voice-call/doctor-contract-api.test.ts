@@ -220,6 +220,7 @@ describe("voice-call doctor state migration", () => {
     await expect(migration.detectLegacyState(params)).resolves.toEqual({
       preview: [
         "- Voice Call SQLite schema: subagent recovery -> original operator authority required",
+        "- Voice Call SQLite schema: replay, skill usage, and lease writes -> smaller index maintenance",
         "- Voice Call SQLite schema: audit event ledger -> versioned message lifecycle schema",
         "- Voice Call SQLite schema: tables -> SQLite STRICT typing",
       ],
@@ -228,6 +229,7 @@ describe("voice-call doctor state migration", () => {
       changes: [
         "Migrated Voice Call SQLite audit event ledger -> versioned message lifecycle schema",
         "Replaced retained task indexes with ordered cron history indexes (v24)",
+        "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
         expect.stringMatching(
           /^Migrated Voice Call SQLite tables to SQLite STRICT typing \(\d+\)$/,
         ),

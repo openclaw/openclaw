@@ -2,7 +2,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { assert, describe, expect, it, vi } from "vitest";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
+import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
+import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import { createCliTimeoutError } from "../cli-runner/no-output-timeout-policy.js";
 import { FailoverError } from "../failover-error.js";
 import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
@@ -219,12 +221,12 @@ describe("createAgentCommandLifecycle", () => {
         yielded: true,
         replayInvalid: true,
         error: { message: `Authorization: Bearer ${secret}`, nested: { secret } },
-        terminalDelivery: {
+        terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot({
           status: "sent",
           resultCount: 2,
           errorMessage: secret,
           target: "private-target",
-        },
+        }),
         unsafeMetadata: { credential: secret },
       };
       const lifecycle = createLifecycle("terminal-owner");
@@ -496,12 +498,21 @@ describe("createAgentCommandLifecycle", () => {
     const lifecycle = createLifecycle("post-turn-delivery-owner");
     lifecycle.emitPostTurnError(new Error("delivery failed"), {
       metadata: {
-        terminalDelivery: {
+        terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot({
           status: "failed",
           resultCount: 0,
           errorMessage: secret,
+        }),
+        terminalReceipt: {
+          runId: "unrelated-receipt",
+          sessionId: "session",
+          turnId: "turn",
+          requested: { provider: "provider", model: "model" },
+          effective: { provider: "provider", model: "model", responseModel: "model" },
+          successfulToolNames: [],
+          rerouted: false,
+          terminalDisposition: "visible",
         },
-        terminalReceipt: { runId: "unrelated-receipt", secret },
         terminalReply: { disposition: "visible", text: secret },
         unsafeMetadata: { secret },
       },
@@ -549,8 +560,8 @@ describe("createAgentCommandLifecycle", () => {
         providerStarted: malicious,
         livenessState: malicious,
         replayInvalid: malicious,
-        terminalReceipt: malicious,
-        terminalDelivery: malicious,
+        terminalReceipt: normalizeAgentRunTerminalReceipt(malicious),
+        terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot(malicious),
         error: malicious,
         unknownMetadata: malicious,
       },

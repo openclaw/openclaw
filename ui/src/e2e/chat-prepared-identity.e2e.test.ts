@@ -1,4 +1,5 @@
 import type { ModelsSnapshotEvent } from "@openclaw/gateway-protocol";
+import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
@@ -20,6 +21,7 @@ const publication = {
 
 async function openPendingChat(page: Page) {
   const gateway = await installMockGateway(page, {
+    connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
     sessionKey,
     sessions: [{ key: sessionKey, kind: "direct", displayName: "Current title", updatedAt: 1 }],
     historyMessages: [{ role: "assistant", content: historyText }],
