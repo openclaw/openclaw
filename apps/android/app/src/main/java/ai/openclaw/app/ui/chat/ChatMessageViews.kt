@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatOutboxAttachment
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.OUTBOX_BRANCH_CHANGED_ERROR
@@ -27,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -38,6 +40,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -348,6 +351,7 @@ fun ChatTypingIndicatorBubble(
 fun ChatOutboxBubble(
   item: ChatOutboxItem,
   retryEnabled: Boolean = true,
+  loadImagePreview: suspend (ChatOutboxAttachment) -> ByteArray? = { null },
   onRetry: () -> Unit,
   onDelete: () -> Unit,
 ) {
@@ -387,15 +391,32 @@ fun ChatOutboxBubble(
     user = true,
     speaker = nativeString("You"),
   ) {
-    if (item.text.isNotBlank()) {
-      ChatMarkdown(text = item.text, textColor = ClawTheme.colors.text)
-    }
-    item.attachments.forEach { attachment ->
-      Text(
-        text = nativeString("📎 \${attachment.fileName}", attachment.fileName),
-        style = ClawTheme.type.caption,
-        color = ClawTheme.colors.textMuted,
-      )
+    // Same shape as the sent bubble: photo, the author's text (no "See attached."), voice row.
+    val parts = remember(item.text, item.attachments) { chatOutboxBubbleParts(item.text, item.attachments) }
+    parts.forEach { part ->
+      val content = part.content
+      val attachment = part.attachment
+      when {
+        content.type == "text" -> {
+          ChatMarkdown(text = content.text.orEmpty(), textColor = ClawTheme.colors.text)
+        }
+
+        attachment != null && content.type == "image" -> {
+          ChatOutboxImage(attachment = attachment, loadImagePreview = loadImagePreview)
+        }
+
+        content.isAudioAttachment() || content.isVideoAttachment() -> {
+          ChatMediaAttachmentLabel(content = content)
+        }
+
+        else -> {
+          Text(
+            text = nativeString("📎 \${attachment.fileName}", content.fileName.orEmpty()),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+      }
     }
     Row(
       verticalAlignment = Alignment.CenterVertically,
@@ -416,6 +437,42 @@ fun ChatOutboxBubble(
         ChatOutboxAction(label = nativeString("Delete"), borderColor = ClawTheme.colors.textMuted, onClick = onDelete)
       }
     }
+  }
+}
+
+/** Queued photo: a thumbnail from the stored outbox bytes when available, otherwise a "Photo" row. */
+@Composable
+private fun ChatOutboxImage(
+  attachment: ChatOutboxAttachment,
+  loadImagePreview: suspend (ChatOutboxAttachment) -> ByteArray?,
+) {
+  var image by remember(attachment.id) { mutableStateOf<ImageBitmap?>(null) }
+  val decodeDispatcher = LocalChatImageDecodeDispatcher.current
+  LaunchedEffect(attachment.id, decodeDispatcher) {
+    val bytes = runCatching { loadImagePreview(attachment) }.getOrNull() ?: return@LaunchedEffect
+    image = withContext(decodeDispatcher) { decodeImageBytes(bytes)?.asImageBitmap() }
+  }
+  val loaded = image
+  if (loaded != null) {
+    ChatImagePreview(image = loaded, description = nativeString("Photo"), stateKey = "outbox:${attachment.id}", compact = false)
+  } else {
+    ChatOutboxPhotoRow()
+  }
+}
+
+@Composable
+private fun ChatOutboxPhotoRow() {
+  Row(
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    Icon(
+      imageVector = Icons.Default.Image,
+      contentDescription = null,
+      modifier = Modifier.size(16.dp),
+      tint = ClawTheme.colors.textMuted,
+    )
+    Text(text = nativeString("Photo"), style = ClawTheme.type.body, color = ClawTheme.colors.text)
   }
 }
 

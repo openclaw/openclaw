@@ -21,6 +21,7 @@ import ai.openclaw.app.chat.ChatFastMode
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatMessageCost
+import ai.openclaw.app.chat.ChatOutboxAttachment
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -1047,6 +1048,7 @@ internal fun ChatScreen(
     loadSourceFavicon = viewModel::loadChatSourceFavicon,
     loadImageArtifact = viewModel::loadChatImageArtifact,
     loadMediaArtifact = viewModel::loadChatMediaArtifact,
+    loadOutboxImagePreview = viewModel::loadChatOutboxImagePreview,
     modifier = Modifier.fillMaxSize().imePadding(),
     tabletopPanes = tabletopPanes,
     features = features,
@@ -1765,6 +1767,7 @@ private fun ChatMessageList(
   loadSourceFavicon: suspend (GatewaySourcePreviewConfig, String) -> GatewayLoadedImage?,
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
   loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
+  loadOutboxImagePreview: suspend (ChatOutboxAttachment) -> ByteArray?,
   modifier: Modifier = Modifier,
   tabletopPanes: TabletopPaneBounds?,
   features: List<DisplayFeature>,
@@ -1914,6 +1917,7 @@ private fun ChatMessageList(
                     is ChatTimelineItem.OutboxCommand -> {
                       ChatOutboxBubble(
                         item = item.item,
+                        loadImagePreview = loadOutboxImagePreview,
                         onRetry = { onRetryOutbox(item.item.id) },
                         onDelete = { onDeleteOutbox(item.item.id) },
                       )
@@ -1922,6 +1926,7 @@ private fun ChatMessageList(
                     is ChatTimelineItem.RecoveryOutboxCommand -> {
                       ChatOutboxBubble(
                         item = item.item,
+                        loadImagePreview = loadOutboxImagePreview,
                         retryEnabled = false,
                         onRetry = { onRetryOutbox(item.item.id) },
                         onDelete = { onDeleteOutbox(item.item.id) },
@@ -2219,7 +2224,7 @@ internal fun ChatBubble(
       peerSenderLabel != null -> peerSenderLabel
       else -> null
     }
-  val displayableContent =
+  val visibleContent =
     content.filter { part ->
       when (part.type) {
         "text" -> {
@@ -2239,9 +2244,19 @@ internal fun ChatBubble(
         }
       }
     }
-  if (displayableContent.isEmpty()) return
+  // User turns keep one shape across composer, sent and transcribed states: attachments,
+  // the author's text without the "See attached." placeholder, then the voice transcript.
+  val attachmentMessage =
+    remember(visibleContent, isUser) {
+      if (isUser) splitChatAttachmentMessage(visibleContent) else ChatAttachmentMessageParts(visibleContent, null)
+    }
+  val displayableContent = attachmentMessage.content
+  val transcript = attachmentMessage.transcript
+  if (displayableContent.isEmpty() && transcript == null) return
 
   val messageText = chatMessagePlainText(displayableContent)
+  // Copy, Select text, Share and Reply act on what the bubble shows, transcript included.
+  val actionText = listOfNotNull(messageText.takeIf(String::isNotBlank), transcript).joinToString("\n\n")
   val reactionMessageId = entryId?.takeIf { !live && (isUser || normalizedRole == "assistant") }
   val canReact = reactionMessageId != null && onReact != null
   var reactionPickerOpen by remember(reactionMessageId, canReact) { mutableStateOf(false) }
@@ -2263,7 +2278,7 @@ internal fun ChatBubble(
     separateContent = true,
     messageActions = { modifier, body ->
       ChatMessageActionHost(
-        text = messageText,
+        text = actionText,
         onReply = onReplyMessage,
         showSessionActions = isUser && entryId != null && sessionActionsEnabled,
         onRewind = entryId?.let { value -> { onRewindMessage(value) } },
@@ -2294,6 +2309,7 @@ internal fun ChatBubble(
       }
     val groups = remember(orderedContent) { chatMessageContentGroups(orderedContent) }
     var imageOffset = 0
+    var transcriptShown = false
     caption?.let {
       Text(it, modifier = Modifier.padding(horizontal = CHAT_MESSAGE_TEXT_INSET_DP.dp), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     }
@@ -2358,7 +2374,16 @@ internal fun ChatBubble(
               }
             }
           }
+          if (transcript != null && !transcriptShown) {
+            transcriptShown = true
+            ChatVoiceTranscriptBlock(transcript = transcript, stateKey = messageId)
+          }
         }
+      }
+    }
+    if (transcript != null && !transcriptShown) {
+      ChatMessageTextSurface(isUser) {
+        ChatVoiceTranscriptBlock(transcript = transcript, stateKey = messageId)
       }
     }
     if (imageCount > CHAT_MESSAGE_IMAGE_WINDOW) {
@@ -2382,7 +2407,7 @@ internal fun ChatBubble(
     Column(Modifier.padding(horizontal = CHAT_MESSAGE_TEXT_INSET_DP.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
       if (messageId != null) {
         ChatSourcePreviews(sourcePreviews, sourcePreviewConfig, loadSourceFavicon)
-        ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = displayableContent, excludedUrls = sourcePreviews.flatMap { it.aliases }.toSet())
+        ChatMessageLinkPreview(messageId = messageId, role = normalizedRole, content = attachmentMessage.linkPreviewContent, excludedUrls = sourcePreviews.flatMap { it.aliases }.toSet())
       }
       disclosure()
       messageSpeech?.let { speech ->
@@ -2454,6 +2479,32 @@ private fun FullChatSpeechIndicator(
         color = ClawTheme.colors.textMuted,
       )
     }
+  }
+}
+
+/** Transcript of a voice note: a light quote under the voice row, collapsed only when tall. */
+@Composable
+internal fun ChatVoiceTranscriptBlock(
+  transcript: String,
+  stateKey: String?,
+) {
+  var expanded by rememberSaveable(stateKey, transcript) { mutableStateOf(false) }
+  val barColor = ClawTheme.colors.textMuted.copy(alpha = 0.35f)
+  Column(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .testTag("chat-voice-transcript")
+        .drawBehind { drawRect(barColor, size = Size(2.dp.toPx(), size.height)) }
+        .padding(start = 10.dp),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    ChatUserMessageText(
+      textParts = listOf(transcript),
+      plainText = transcript,
+      expanded = expanded,
+      onExpandedChange = { expanded = it },
+    )
   }
 }
 

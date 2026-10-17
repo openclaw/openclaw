@@ -829,4 +829,98 @@ class ChatMessageViewsTest {
       .filter { it.isTextSelectable && !it.onCheckIsTextEditor() }
       .toList()
   }
+
+  private fun queuedPhotoAndVoiceNote(): ChatOutboxItem =
+    ChatOutboxItem(
+      id = "outbox-media",
+      sessionKey = "main",
+      text = "See attached.",
+      thinkingLevel = "low",
+      createdAtMs = 0L,
+      status = ChatOutboxStatus.Queued,
+      retryCount = 0,
+      lastError = null,
+      ownerAgentId = "main",
+      attachments =
+        listOf(
+          ChatOutboxAttachment("photo-1", "image", "image/jpeg", "1000186721.jpg", null, 91_525L),
+          ChatOutboxAttachment("voice-1", "audio", "audio/mp4", "voice-note-b9526ed8-69ef-44d1-ad36-0123456789ab.m4a", 5_000L, 40_000L),
+        ),
+    )
+
+  @Test
+  fun queuedPhotoAndVoiceNoteRenderAsTypedRowsWithoutPlaceholderOrRawNames() {
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatOutboxBubble(queuedPhotoAndVoiceNote(), onRetry = {}, onDelete = {})
+      }
+    }
+
+    composeRule.onNodeWithText("Photo", useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onNodeWithText("Voice note", useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onNodeWithText("0:05", useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onNodeWithText("Queued — sends when reconnected", useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onAllNodesWithText("See attached.", substring = true, useUnmergedTree = true).assertCountEquals(0)
+    composeRule.onAllNodesWithText("voice-note-", substring = true, useUnmergedTree = true).assertCountEquals(0)
+    composeRule.onAllNodesWithText("📎", substring = true, useUnmergedTree = true).assertCountEquals(0)
+    val photoTop =
+      composeRule
+        .onNodeWithText("Photo", useUnmergedTree = true)
+        .fetchSemanticsNode()
+        .boundsInRoot.top
+    val voiceTop =
+      composeRule
+        .onNodeWithText("Voice note", useUnmergedTree = true)
+        .fetchSemanticsNode()
+        .boundsInRoot.top
+    assertTrue("photo row sits above the voice row", photoTop < voiceTop)
+  }
+
+  @Test
+  @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun queuedPhotoShowsAThumbnailFromStoredBytes() {
+    val bitmap = android.graphics.Bitmap.createBitmap(32, 24, android.graphics.Bitmap.Config.ARGB_8888)
+    bitmap.eraseColor(android.graphics.Color.RED)
+    val jpeg =
+      java.io
+        .ByteArrayOutputStream()
+        .also { bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it) }
+        .toByteArray()
+    val requested = mutableListOf<String>()
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatOutboxBubble(
+          queuedPhotoAndVoiceNote(),
+          loadImagePreview = { attachment ->
+            requested += attachment.id
+            jpeg
+          },
+          onRetry = {},
+          onDelete = {},
+        )
+      }
+    }
+
+    composeRule.waitUntil(5_000) { composeRule.onAllNodesWithText("Photo", useUnmergedTree = true).fetchSemanticsNodes().isEmpty() }
+    composeRule.onNode(hasContentDescription("Photo"), useUnmergedTree = true).assertExists()
+    composeRule.onNodeWithText("Voice note", useUnmergedTree = true).assertIsDisplayed()
+    assertEquals(listOf("photo-1"), requested)
+  }
+
+  @Test
+  fun queuedUserNamedAudioKeepsItsFileName() {
+    val item =
+      queuedPhotoAndVoiceNote().copy(
+        attachments = listOf(ChatOutboxAttachment("voice-2", "audio", "audio/x-m4a", "site-visit.m4a", 7_000L, 100_000L)),
+      )
+    composeRule.setContent {
+      ClawDesignTheme {
+        ChatOutboxBubble(item, onRetry = {}, onDelete = {})
+      }
+    }
+
+    composeRule.onNodeWithText("site-visit.m4a", useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onNodeWithText("0:07", useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onAllNodesWithText("See attached.", substring = true, useUnmergedTree = true).assertCountEquals(0)
+  }
 }
