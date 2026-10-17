@@ -105,19 +105,23 @@ async function createStartedRelaySession(
 
 type RelaySession = ReturnType<typeof createTalkTranscriptionRelaySession>;
 
-function sendAudio(session: RelaySession, audioBase64 = "AQI=") {
+function sendAudio(
+  session: Pick<RelaySession, "transcriptionSessionId">,
+  audioBase64 = "AQI=",
+  connId = "conn-1",
+) {
   sendTalkTranscriptionRelayAudio({
     transcriptionSessionId: session.transcriptionSessionId,
-    connId: "conn-1",
+    connId,
     audioBase64,
   });
 }
 
-function stop(session: RelaySession, discard = false) {
+function stop(session: RelaySession, options: { discard?: boolean; connId?: string } = {}) {
   return stopTalkTranscriptionRelaySession({
     transcriptionSessionId: session.transcriptionSessionId,
     connId: "conn-1",
-    discard,
+    ...options,
   });
 }
 
@@ -139,27 +143,6 @@ function findPayloadByType(events: BroadcastEvent[], type: string): Record<strin
   }
   expect(event.event).toBe("talk.event");
   return requireGatewayRecord(event.payload, `${type} payload`);
-}
-
-function findPayloadByTalkEventType(
-  events: BroadcastEvent[],
-  type: string,
-): Record<string, unknown> {
-  const event = events.find((candidate) => {
-    const payload = candidate.payload;
-    return isRecord(payload) && isRecord(payload.talkEvent) && payload.talkEvent.type === type;
-  });
-  if (!event) {
-    throw new Error(`expected talk event type ${type}`);
-  }
-  return requireGatewayRecord(event.payload, `${type} payload`);
-}
-
-function expectTalkEventFields(
-  payload: Record<string, unknown>,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
-  return expectRecordFields(payload.talkEvent, "talk event", expected);
 }
 
 describe("talk transcription gateway relay", () => {
@@ -216,7 +199,7 @@ describe("talk transcription gateway relay", () => {
         type,
         ...fields,
       });
-      expectTalkEventFields(payload, talkFields);
+      expectRecordFields(payload.talkEvent, "talk event", talkFields);
       return payload;
     };
     const ready = assertEvent(
@@ -361,7 +344,7 @@ describe("talk transcription gateway relay", () => {
     sttSession.close.mockImplementation(() => request?.onTranscript?.("discarded words"));
     sendAudio(session);
     try {
-      await stop(session, true);
+      await stop(session, { discard: true });
       expect(
         events.filter((event) => isRecord(event.payload) && event.payload.type === "transcript"),
       ).toEqual([]);
@@ -417,8 +400,11 @@ describe("talk transcription gateway relay", () => {
 
     expect(hasType(events, "ready")).toBe(false);
     request?.onTranscript?.("final provider transcript");
-    expect(findPayloadByTalkEventType(events, "transcript.done").text).toBe(
-      "final provider transcript",
+    expect(relayPayloads(events)).toContainEqual(
+      expect.objectContaining({
+        text: "final provider transcript",
+        talkEvent: expect.objectContaining({ type: "transcript.done" }),
+      }),
     );
     await vi.advanceTimersByTimeAsync(5_000);
     expect(findPayloadByType(events, "close").reason).toBe("completed");
@@ -439,12 +425,9 @@ describe("talk transcription gateway relay", () => {
     expect(
       events.filter((event) => isRecord(event.payload) && event.payload.type === "close"),
     ).toHaveLength(1);
-    expect(
-      events.some(
-        (event) =>
-          isRecord(event.payload) && event.payload.text === "disconnected provider transcript",
-      ),
-    ).toBe(false);
+    expect(relayPayloads(events).map(({ text }) => text)).not.toContain(
+      "disconnected provider transcript",
+    );
     expect(sttSession.close).toHaveBeenCalledOnce();
   });
 
@@ -465,12 +448,9 @@ describe("talk transcription gateway relay", () => {
         dropIfSlow: false,
       });
     }
-    expect(
-      events.some(
-        (event) =>
-          isRecord(event.payload) && event.payload.text === "transcript after provider error",
-      ),
-    ).toBe(false);
+    expect(relayPayloads(events).map(({ text }) => text)).not.toContain(
+      "transcript after provider error",
+    );
     expect(sttSession.close).toHaveBeenCalledOnce();
   });
 
@@ -562,14 +542,8 @@ describe("talk transcription gateway relay", () => {
       );
     } finally {
       slowSocket.bufferedAmount = 0;
-      await stopTalkTranscriptionRelaySession({
-        transcriptionSessionId: slowSession.transcriptionSessionId,
-        connId: "conn-slow",
-      });
-      await stopTalkTranscriptionRelaySession({
-        transcriptionSessionId: healthySession.transcriptionSessionId,
-        connId: "conn-healthy",
-      });
+      await stop(slowSession, { connId: "conn-slow" });
+      await stop(healthySession, { connId: "conn-healthy" });
     }
   });
 
@@ -608,24 +582,16 @@ describe("talk transcription gateway relay", () => {
       firstSession.transcriptionSessionId,
       secondSession.transcriptionSessionId,
     ]) {
-      expect(
-        events.some(
-          (event) =>
-            isRecord(event.payload) &&
-            event.payload.transcriptionSessionId === transcriptionSessionId &&
-            event.payload.type === "close" &&
-            isRecord(event.payload.talkEvent) &&
-            event.payload.talkEvent.type === "session.closed" &&
-            event.payload.talkEvent.final === true,
-        ),
-      ).toBe(true);
-      expect(() =>
-        sendTalkTranscriptionRelayAudio({
+      expect(relayPayloads(events)).toContainEqual(
+        expect.objectContaining({
           transcriptionSessionId,
-          connId: "conn-owner",
-          audioBase64: "AQI=",
+          type: "close",
+          talkEvent: expect.objectContaining({ type: "session.closed", final: true }),
         }),
-      ).toThrow("Unknown transcription Talk session");
+      );
+      expect(() => sendAudio({ transcriptionSessionId }, "AQI=", "conn-owner")).toThrow(
+        "Unknown transcription Talk session",
+      );
       expect(() => getUnifiedTalkSession(transcriptionSessionId)).toThrow("Unknown Talk session");
     }
     expect(
@@ -645,16 +611,9 @@ describe("talk transcription gateway relay", () => {
     await Promise.resolve();
     expect(events).toHaveLength(eventCountAfterClose);
 
-    sendTalkTranscriptionRelayAudio({
-      transcriptionSessionId: unrelatedSession.transcriptionSessionId,
-      connId: "conn-other",
-      audioBase64: "AQI=",
-    });
+    sendAudio(unrelatedSession, "AQI=", "conn-other");
     expect(unrelated.sendAudio).toHaveBeenCalledOnce();
-    await stopTalkTranscriptionRelaySession({
-      transcriptionSessionId: unrelatedSession.transcriptionSessionId,
-      connId: "conn-other",
-    });
+    await stop(unrelatedSession, { connId: "conn-other" });
     cleanupTalkConnection("conn-other", logGateway);
     expect(unrelated.close).toHaveBeenCalledOnce();
   });

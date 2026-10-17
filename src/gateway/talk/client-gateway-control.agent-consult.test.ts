@@ -589,49 +589,47 @@ describe("Talk client agent consult admission", () => {
     expect(mocks.consultRealtimeVoiceAgent).not.toHaveBeenCalled();
   });
 
-  it("rechecks retained caller authority at embedded-run admission", async () => {
-    let current = true;
-    const assertSourceCurrent = vi.fn(() => {
-      if (!current) {
-        throw new Error("Realtime voice session is not active");
+  it.each(["retained source", "owned run"] as const)(
+    "rechecks %s authority at embedded-run admission",
+    async (kind) => {
+      let current = true;
+      const assertSourceCurrent = vi.fn(() => {
+        if (!current) {
+          throw new Error("Realtime voice session is not active");
+        }
+      });
+      mocks.createOperationalRunInstanceRef.mockImplementationOnce((runId: string) => {
+        current = false;
+        return { instanceId: `instance:${runId}`, runId };
+      });
+      const runner =
+        kind === "retained source"
+          ? createConsultRunner({
+              runAuthority: {
+                retainRun: async () => ({ assertSourceCurrent, release: vi.fn() }),
+              } as never,
+            })
+          : createRunner(
+              vi.fn(async () => ({ release: vi.fn(), isCurrent: () => current })),
+              undefined,
+              { ownerConnId: "connection-owner" },
+            );
+      if (kind === "owned run") {
+        runner.runPrompt.adoptCompletionClaims();
       }
-    });
-    mocks.createOperationalRunInstanceRef.mockImplementationOnce((runId: string) => {
-      current = false;
-      return { instanceId: `instance:${runId}`, runId };
-    });
-
-    await expect(
-      createConsultRunner({
-        runAuthority: {
-          retainRun: async () => ({ assertSourceCurrent, release: vi.fn() }),
-        } as never,
-      }).runArgs({ question: "first task" }),
-    ).rejects.toThrow("not active");
-    expect(assertSourceCurrent).toHaveBeenCalledOnce();
-    expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
-  });
-
-  it("rechecks owned run identity at embedded-run admission", async () => {
-    let current = true;
-    mocks.createOperationalRunInstanceRef.mockImplementationOnce((runId: string) => {
-      current = false;
-      return { instanceId: `instance:${runId}`, runId };
-    });
-    const runner = createRunner(
-      vi.fn(async () => ({ release: vi.fn(), isCurrent: () => current })),
-      undefined,
-      {
-        ownerConnId: "connection-owner",
-      },
-    );
-    runner.runPrompt.adoptCompletionClaims();
-
-    await expect(runner.runPrompt({ prompt: "first task" })).rejects.toThrow(
-      "admission is no longer current",
-    );
-    expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
-  });
+      const run =
+        kind === "retained source"
+          ? runner.runArgs({ question: "first task" })
+          : runner.runPrompt({ prompt: "first task" });
+      await expect(run).rejects.toThrow(
+        kind === "retained source" ? "not active" : "admission is no longer current",
+      );
+      if (kind === "retained source") {
+        expect(assertSourceCurrent).toHaveBeenCalledOnce();
+      }
+      expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
+    },
+  );
 
   it("revokes admission immediately when the composite run signal aborts", async () => {
     const core = deferred<{ payloads: never[] }>();
@@ -647,32 +645,32 @@ describe("Talk client agent consult admission", () => {
     expect(mocks.close).toHaveBeenCalledOnce();
   });
 
-  it("closes admission when abort races with listener registration", async () => {
-    const controller = new AbortController();
-    mocks.prepareAgentRunAdmission.mockImplementationOnce(() => {
-      controller.abort(new Error("raced cancellation"));
-      return {
-        operationalRunInstance: { instanceId: "instance:run-talk", runId: "run-talk" },
-        admit: vi.fn(),
-        close: mocks.close,
-      };
-    });
-
-    await expect(
-      createRunner().runPrompt({ prompt: "check", signal: controller.signal }),
-    ).rejects.toThrow("raced cancellation");
-    expect(mocks.close).toHaveBeenCalledOnce();
-    expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
-  });
-
-  it("does not create admission for an already-aborted consult", async () => {
-    const controller = new AbortController();
-    controller.abort(new Error("already cancelled"));
-
-    await expect(
-      createRunner().runPrompt({ prompt: "check", signal: controller.signal }),
-    ).rejects.toThrow("already cancelled");
-    expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
-    expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
-  });
+  it.each(["already aborted", "listener registration"] as const)(
+    "rejects admission with cancellation at %s",
+    async (phase) => {
+      const controller = new AbortController();
+      const message = phase === "already aborted" ? "already cancelled" : "raced cancellation";
+      if (phase === "already aborted") {
+        controller.abort(new Error(message));
+      } else {
+        mocks.prepareAgentRunAdmission.mockImplementationOnce(() => {
+          controller.abort(new Error(message));
+          return {
+            operationalRunInstance: { instanceId: "instance:run-talk", runId: "run-talk" },
+            admit: vi.fn(),
+            close: mocks.close,
+          };
+        });
+      }
+      await expect(
+        createRunner().runPrompt({ prompt: "check", signal: controller.signal }),
+      ).rejects.toThrow(message);
+      if (phase === "already aborted") {
+        expect(mocks.prepareAgentRunAdmission).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.close).toHaveBeenCalledOnce();
+      }
+      expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
+    },
+  );
 });

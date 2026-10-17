@@ -4,6 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   activate,
   controlOptions,
+  createControlFixture,
   type ControlOwner,
 } from "./client-control-fixture.test-support.js";
 import {
@@ -47,15 +48,12 @@ describe("Talk client Gateway control owner", () => {
     "keeps Gateway-controlled browser Talk reusable after a %s response",
     async (status) => {
       const warn = vi.fn();
-      const closeProvider = vi.fn(async () => undefined);
-      const closeLogicalSession = vi.fn(async () => undefined);
       const talkEvents: Array<{ type: string; payload: unknown }> = [];
-      const owner = createOwner({
+      const { owner, closeProvider, closeLogicalSession } = createControlFixture({
         voiceSessionId: `voice-${status}`,
         providerId: "openai",
         connId: "conn-gateway",
         context: controlContext(warn, (event) => talkEvents.push(event)),
-        closeLogicalSession,
       });
       await activate(owner, closeProvider);
       responseEvent(owner, "response.created", "response-1");
@@ -112,22 +110,15 @@ describe("Talk client Gateway control owner", () => {
         }
         return result;
       });
-      const appendTranscript = vi.fn(
-        async (_entry: { entryId: string; role: "user" | "assistant"; text: string }) => undefined,
-      );
-      const closeLogicalSession = vi.fn(async () => undefined);
-      const closeProvider = vi.fn(async () => undefined);
-      const bridge = controlBridge();
-      const owner = createOwner({
-        voiceSessionId: "voice-gateway",
-        supportsToolCalls: true,
-        connId: "conn-gateway",
-        runToolAgentConsult: runAgentConsult,
-        runAgentConsult,
-        controlAgentRun,
-        appendTranscript,
-        closeLogicalSession,
-      });
+      const { owner, bridge, closeProvider, appendTranscript, closeLogicalSession } =
+        createControlFixture({
+          voiceSessionId: "voice-gateway",
+          supportsToolCalls: true,
+          connId: "conn-gateway",
+          runToolAgentConsult: runAgentConsult,
+          runAgentConsult,
+          controlAgentRun,
+        });
       owner.control.bindBridge(bridge);
       await activate(owner, closeProvider);
 
@@ -226,8 +217,7 @@ describe("Talk client Gateway control owner", () => {
             );
           }),
       );
-      const bridge = controlBridge();
-      const owner = createOwner({
+      const { owner, bridge } = createControlFixture({
         voiceSessionId: `voice-spoken-control-${entry}`,
         connId: `conn-spoken-control-${entry}`,
         runToolAgentConsult: runAgentConsult,
@@ -300,7 +290,7 @@ describe("Talk client Gateway control owner", () => {
       const backendSteer = vi.fn(async () => ({ text: "" }));
       let ownerInstalled = false;
       const runAgentConsult = Object.assign(
-        vi.fn(async (_args: unknown, _signal: AbortSignal, ready?: () => Promise<void>) => {
+        vi.fn<ConsultRunner>(async (_args, _signal, ready) => {
           ownerInstalled = true;
           try {
             await ready?.();
@@ -381,18 +371,14 @@ describe("Talk client Gateway control owner", () => {
     async (mode) => {
       const backend = vi.fn(async () => ({ text: "must not run" }));
       let replaceOwner = async () => {};
-      const runToolAgentConsult = vi.fn(
-        async (
-          _args: unknown,
-          _signal: AbortSignal,
-          assertCurrent?: () => void,
-        ): Promise<{ text: string }> => {
-          await Promise.resolve();
-          await replaceOwner();
-          assertCurrent?.();
-          return await backend();
-        },
-      );
+      const runToolAgentConsult = vi.fn<
+        Parameters<typeof createTalkClientGatewayControlOwner>[0]["runToolAgentConsult"]
+      >(async (_args, _signal, assertCurrent) => {
+        await Promise.resolve();
+        await replaceOwner();
+        assertCurrent?.();
+        return await backend();
+      });
       const runAgentConsult = Object.assign(
         vi.fn<ConsultRunner>(async (_args, _signal, ready, assertCurrent) => {
           await ready?.();

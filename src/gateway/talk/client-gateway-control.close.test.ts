@@ -2,21 +2,17 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
-import type { RealtimeVoiceBridge } from "../../talk/provider-types.js";
 import {
   activate,
   controlOptions,
+  createControlFixture,
   type ControlOwner,
 } from "./client-control-fixture.test-support.js";
 import {
   closeTalkClientGatewayControlSession,
   createTalkClientGatewayControlOwner,
 } from "./client-gateway-control.js";
-import {
-  sessionTarget,
-  controlContext,
-  controlBridge,
-} from "./client-gateway-control.test-support.js";
+import { sessionTarget, controlContext } from "./client-gateway-control.test-support.js";
 import { cleanupTalkConnection } from "./session-registry.js";
 
 describe("Talk client Gateway control teardown", () => {
@@ -30,16 +26,12 @@ describe("Talk client Gateway control teardown", () => {
       started.resolve();
       return await result.promise;
     });
-    const owner = createTalkClientGatewayControlOwner(
-      controlOptions({
-        voiceSessionId: "voice-delegation-detach",
-        sessionTarget,
-        connId: "conn-delegation-detach",
-        context: controlContext(),
-        runToolAgentConsult: runAgentConsult,
-        runAgentConsult,
-      }),
-    );
+    const { owner } = createControlFixture({
+      voiceSessionId: "voice-delegation-detach",
+      connId: "conn-delegation-detach",
+      runToolAgentConsult: runAgentConsult,
+      runAgentConsult,
+    });
     await activate(owner);
     const accepted = owner.runAgentConsult({
       prompt: "accepted task",
@@ -170,28 +162,21 @@ describe("Talk client Gateway control teardown", () => {
       runStarted.resolve();
       return await consult.promise;
     });
-    const appendTranscript = vi.fn(
-      async (_entry: { entryId: string; role: "user" | "assistant"; text: string }) => undefined,
-    );
-    const closeLogicalSession = vi.fn(async () => undefined);
-    const common = controlOptions({
-      voiceSessionId: "voice-replacement",
-      sessionTarget,
-      connId: "conn-replacement",
-      context: controlContext(),
-      runToolAgentConsult: runAgentConsult,
-      runAgentConsult,
+    const {
+      owner: first,
+      bridge: firstBridge,
+      closeProvider: closeFirst,
+      options: common,
       appendTranscript,
       closeLogicalSession,
+    } = createControlFixture({
+      voiceSessionId: "voice-replacement",
+      connId: "conn-replacement",
+      runToolAgentConsult: runAgentConsult,
+      runAgentConsult,
     });
-    const firstBridge = controlBridge();
-    const secondBridge = {
-      ...firstBridge,
-      submitToolResult: vi.fn(),
-    } satisfies RealtimeVoiceBridge;
-    const closeFirst = vi.fn(async () => undefined);
+    const secondBridge = { ...firstBridge, submitToolResult: vi.fn() };
     const closeSecond = vi.fn(async () => undefined);
-    const first = createTalkClientGatewayControlOwner(common);
     first.control.bindBridge(firstBridge);
     await activate(first, closeFirst);
     first.control.onTranscript?.("user", "first transport", true);
@@ -216,9 +201,10 @@ describe("Talk client Gateway control teardown", () => {
     expect(closeLogicalSession).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(appendTranscript).toHaveBeenCalledTimes(2));
     const entryIds = appendTranscript.mock.calls.map(([entry]) => entry.entryId);
-    expect(entryIds).toHaveLength(2);
-    expect(entryIds[0]).toMatch(/^gateway-[0-9a-f-]+-1$/);
-    expect(entryIds[1]).toMatch(/^gateway-[0-9a-f-]+-1$/);
+    expect(entryIds).toEqual([
+      expect.stringMatching(/^gateway-[0-9a-f-]+-1$/),
+      expect.stringMatching(/^gateway-[0-9a-f-]+-1$/),
+    ]);
     expect(entryIds[0]).not.toBe(entryIds[1]);
 
     consult.resolve({ text: "done" });
