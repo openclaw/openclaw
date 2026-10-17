@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { onAgentEventForRun } from "../infra/agent-events.js";
 
@@ -29,17 +29,34 @@ import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.j
 import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 
+type Subscription = ReturnType<typeof createSubscribedSessionHarness>["subscription"];
+type Delivery = ReturnType<typeof createReplyDelivery>;
+const pendingTasks: Array<{ resolve: () => void }> = [];
+const subscriptions: Subscription[] = [];
+const deliveries: Delivery[] = [];
+const listeners: Array<() => void> = [];
+function pending() {
+  const task = createDeferred();
+  pendingTasks.push(task);
+  return task;
+}
+function subscribe(params: Omit<SubscribeEmbeddedAgentSessionParams, "session">) {
+  const harness = createSubscribedSessionHarness(params);
+  subscriptions.push(harness.subscription);
+  return harness;
+}
 function createDelivery(params: Omit<SubscribeEmbeddedAgentSessionParams, "session">) {
   const { session } = createStubSessionHarness();
   const options = { ...params, session };
-  return createReplyDelivery({
+  const delivery = createReplyDelivery({
     params: options,
     state: createEmbeddedAgentSubscribeState(options),
     log: logger,
   });
+  deliveries.push(delivery);
+  return delivery;
 }
 
-type Subscription = ReturnType<typeof createSubscribedSessionHarness>["subscription"];
 const rawDrain = (subscription: Subscription) =>
   subscription.waitForPendingEvents({ includePartialReplies: false });
 function emitDeltas(emit: (event: unknown) => void, deltas = ["First", " second", " third"]) {
@@ -47,22 +64,7 @@ function emitDeltas(emit: (event: unknown) => void, deltas = ["First", " second"
     emitAssistantTextDelta({ emit, delta });
   }
 }
-async function closeSession(
-  subscription: Subscription,
-  ...pending: Array<{ resolve: () => void }>
-) {
-  for (const task of pending) {
-    task.resolve();
-  }
-  subscription.unsubscribe();
-  await subscription.waitForPendingEvents();
-}
-function append(
-  delivery: ReturnType<typeof createReplyDelivery>,
-  text: string,
-  delta: string,
-  phase?: "final_answer",
-) {
+function append(delivery: Delivery, text: string, delta: string, phase?: "final_answer") {
   delivery.emitAssistantStreamData(
     { text, delta, ...(phase ? { phase } : {}) },
     { emitPartialReply: true },
@@ -88,6 +90,19 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
+  afterEach(async () => {
+    pendingTasks.splice(0).forEach((task) => task.resolve());
+    for (const subscription of subscriptions.splice(0)) {
+      subscription.unsubscribe();
+      await subscription.waitForPendingEvents();
+    }
+    for (const delivery of deliveries.splice(0)) {
+      await delivery.waitForPendingEvents();
+      delivery.clearAssistantStream();
+    }
+    listeners.splice(0).forEach((off) => off());
+    vi.restoreAllMocks();
+  });
 
   it("paces cumulative preview reads and settles the exact last append", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -98,27 +113,22 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
         partials.push({ text: payload.text, delta: payload.delta });
       },
     });
-    try {
-      append(delivery, "A", "A");
-      clock.mockReturnValue(1_010);
-      append(delivery, "AB", "B");
-      expect(partials).toEqual(fragments(["A", "A"]));
-      clock.mockReturnValue(1_080);
-      append(delivery, "ABC", "C");
-      expect(partials).toEqual(fragments(["A", "A"], ["ABC", "BC"]));
-      append(delivery, "ABCD", "D");
-      await delivery.waitForPendingEvents();
-      expect(partials.at(-1)).toEqual({ text: "ABCD", delta: "D" });
-    } finally {
-      clock.mockRestore();
-      delivery.clearAssistantStream();
-    }
+    append(delivery, "A", "A");
+    clock.mockReturnValue(1_010);
+    append(delivery, "AB", "B");
+    expect(partials).toEqual(fragments(["A", "A"]));
+    clock.mockReturnValue(1_080);
+    append(delivery, "ABC", "C");
+    expect(partials).toEqual(fragments(["A", "A"], ["ABC", "BC"]));
+    append(delivery, "ABCD", "D");
+    await delivery.waitForPendingEvents();
+    expect(partials.at(-1)).toEqual({ text: "ABCD", delta: "D" });
   });
 
   it("joins a partial reply task created while terminal events settle", async () => {
-    const partial = createDeferred();
+    const partial = pending();
     const onPartialReply = vi.fn(() => partial.promise);
-    const { emit, subscription } = createSubscribedSessionHarness({
+    const { emit, subscription } = subscribe({
       runId: "run-partial-provider-failure",
       onBeforeTerminalDelivery: async () => undefined,
       onPartialReply,
@@ -141,9 +151,9 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
 
   it("contains and logs a rejected partial reply after unsubscribe", async () => {
     const callbackError = new Error("draft send rejected");
-    const partial = createDeferred();
+    const partial = pending();
     const onPartialReply = vi.fn(() => partial.promise);
-    const { emit, subscription } = createSubscribedSessionHarness({
+    const { emit, subscription } = subscribe({
       runId: "run-partial-rejection",
       onPartialReply,
     });
@@ -164,54 +174,50 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
   });
 
   it("queue-only drain coalesces a stalled partial and joins its latest successor", async () => {
-    const first = createDeferred();
-    const latest = createDeferred();
+    const first = pending();
+    const latest = pending();
     const onPartialReply = vi.fn(() => latest.promise).mockImplementationOnce(() => first.promise);
     const onAgentEvent = vi.fn();
-    const { emit, subscription } = createSubscribedSessionHarness({
+    const { emit, subscription } = subscribe({
       runId: "run-stalled-partial-callback",
       onPartialReply,
       onAgentEvent,
     });
-    try {
-      emitDeltas(emit);
-      let broadDrained = false;
-      const broadDrain = subscription.waitForPendingEvents().then(() => {
-        broadDrained = true;
-      });
-      // Timeout salvage joins only handlers that mutate the raw text buffer.
-      await rawDrain(subscription);
-      expect(broadDrained).toBe(false);
-      expect(onPartialReply).toHaveBeenCalledOnce();
-      expect(onPartialReply).toHaveBeenLastCalledWith(
-        expect.objectContaining({ text: "First", delta: "First" }),
-      );
-      expect(
-        onAgentEvent.mock.calls.filter(([event]) => event.stream === "assistant"),
-      ).toHaveLength(3);
+    emitDeltas(emit);
+    let broadDrained = false;
+    const broadDrain = subscription.waitForPendingEvents().then(() => {
+      broadDrained = true;
+    });
+    // Timeout salvage joins only handlers that mutate the raw text buffer.
+    await rawDrain(subscription);
+    expect(broadDrained).toBe(false);
+    expect(onPartialReply).toHaveBeenCalledOnce();
+    expect(onPartialReply).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "First", delta: "First" }),
+    );
+    expect(onAgentEvent.mock.calls.filter(([event]) => event.stream === "assistant")).toHaveLength(
+      3,
+    );
 
-      first.resolve();
-      await vi.waitFor(() => expect(onPartialReply).toHaveBeenCalledTimes(2));
-      expect(onPartialReply).toHaveBeenLastCalledWith(
-        expect.objectContaining({ text: "First second third", delta: " second third" }),
-      );
-      expect(broadDrained).toBe(false);
-      latest.resolve();
-      await broadDrain;
-      expect(broadDrained).toBe(true);
-    } finally {
-      await closeSession(subscription, first, latest);
-    }
+    first.resolve();
+    await vi.waitFor(() => expect(onPartialReply).toHaveBeenCalledTimes(2));
+    expect(onPartialReply).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "First second third", delta: " second third" }),
+    );
+    expect(broadDrained).toBe(false);
+    latest.resolve();
+    await broadDrain;
+    expect(broadDrained).toBe(true);
   });
 
   it("starts the latest partial before a nested tool without waiting for a stalled send", async () => {
-    const pending = createDeferred();
+    const partial = pending();
     const starts: string[] = [];
-    const { emit, subscription } = createSubscribedSessionHarness({
+    const { emit, subscription } = subscribe({
       runId: "run-partial-nested-tool",
       onPartialReply: (payload) => {
         starts.push(`partial:${payload.text}`);
-        return pending.promise;
+        return partial.promise;
       },
       onAgentEvent: (event) => {
         if (event.stream === "tool" && event.data.phase === "start") {
@@ -219,35 +225,31 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
         }
       },
     });
-    try {
-      emitDeltas(emit);
-      await rawDrain(subscription);
-      expect(starts).toEqual(["partial:First"]);
-      await subscription.runToolLifecycle({
-        toolName: "read",
-        toolCallId: "read-after-text",
-        args: { path: "/tmp/input" },
-        execute: async (onStart) => {
-          onStart();
-          return { content: [{ type: "text", text: "Read complete." }] };
-        },
-      });
-      await rawDrain(subscription);
-      expect(starts).toEqual(["partial:First", "partial:First second third", "tool"]);
-      emitAssistantTextDelta({ emit, delta: " fourth" });
-      await rawDrain(subscription);
-      expect(starts.at(-1)).toBe("partial:First second third fourth");
-    } finally {
-      await closeSession(subscription, pending);
-    }
+    emitDeltas(emit);
+    await rawDrain(subscription);
+    expect(starts).toEqual(["partial:First"]);
+    await subscription.runToolLifecycle({
+      toolName: "read",
+      toolCallId: "read-after-text",
+      args: { path: "/tmp/input" },
+      execute: async (onStart) => {
+        onStart();
+        return { content: [{ type: "text", text: "Read complete." }] };
+      },
+    });
+    await rawDrain(subscription);
+    expect(starts).toEqual(["partial:First", "partial:First second third", "tool"]);
+    emitAssistantTextDelta({ emit, delta: " fourth" });
+    await rawDrain(subscription);
+    expect(starts.at(-1)).toBe("partial:First second third fourth");
   });
 
   it("preserves both delta domains when a retired callback reenters an unemitted scope", async () => {
-    const first = createDeferred();
+    const first = pending();
     const partials: Array<{ text?: string; delta?: string }> = [];
     const bus: Array<{ text: unknown; delta: unknown }> = [];
     let canReenter = false;
-    const delivery: ReturnType<typeof createReplyDelivery> = createDelivery({
+    const delivery: Delivery = createDelivery({
       runId: "run-partial-reentrant-phase",
       onAgentEvent: (event) => {
         if (event.stream === "assistant") {
@@ -265,22 +267,17 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
         return undefined;
       },
     });
-    try {
-      append(delivery, "A", "A");
-      append(delivery, "AB", "B");
-      expect(partials).toEqual(fragments(["A", "A"]));
-      canReenter = true;
-      append(delivery, "ABC", "C", "final_answer");
-      expect(partials).toEqual(fragments(["A", "A"], ["AB", "B"], ["ABCD", "CD"]));
-      expect(bus).toEqual(partials);
-    } finally {
-      first.resolve();
-      await delivery.waitForPendingEvents();
-    }
+    append(delivery, "A", "A");
+    append(delivery, "AB", "B");
+    expect(partials).toEqual(fragments(["A", "A"]));
+    canReenter = true;
+    append(delivery, "ABC", "C", "final_answer");
+    expect(partials).toEqual(fragments(["A", "A"], ["AB", "B"], ["ABCD", "CD"]));
+    expect(bus).toEqual(partials);
   });
 
   it("keeps reasoning deltas coherent when partial delivery reenters", async () => {
-    const pending = createDeferred();
+    const partial = pending();
     const runId = "run-reasoning-reentrant-partial";
     const bus: Array<{ text: unknown; delta: unknown }> = [];
     const off = onAgentEventForRun(runId, (event) => {
@@ -288,13 +285,14 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
         bus.push({ text: event.data.text, delta: event.data.delta });
       }
     });
+    listeners.push(off);
     let calls = 0;
-    const { emit, subscription } = createSubscribedSessionHarness({
+    const { emit } = subscribe({
       runId,
       onPartialReply: () => {
         calls++;
         if (calls === 1) {
-          return pending.promise;
+          return partial.promise;
         }
         if (calls === 2) {
           emitThinking("AX", "X");
@@ -310,21 +308,16 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
         assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta, partial: message },
       });
     }
-    try {
-      emit({ type: "message_start", message: { role: "assistant", content: [] } });
-      emitThinking("A", "A");
-      emitDeltas(emit, ["a", "b", "<think>AB"]);
-      expect(calls).toBe(2);
-      expect(bus).toEqual(fragments(["A", "A"], ["AX", "X"], ["AB", "AB"]));
-    } finally {
-      await closeSession(subscription, pending);
-      off();
-    }
+    emit({ type: "message_start", message: { role: "assistant", content: [] } });
+    emitThinking("A", "A");
+    emitDeltas(emit, ["a", "b", "<think>AB"]);
+    expect(calls).toBe(2);
+    expect(bus).toEqual(fragments(["A", "A"], ["AX", "X"], ["AB", "AB"]));
   });
 
   it("starts the first partial once before a reentrant block reply", async () => {
     const starts: string[] = [];
-    const delivery: ReturnType<typeof createReplyDelivery> = createDelivery({
+    const delivery: Delivery = createDelivery({
       runId: "run-partial-reentrant-block",
       onAgentEvent: (event) => {
         if (event.stream === "assistant") {
@@ -344,57 +337,46 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
   });
 
   it("retires pending partials at a sanitized empty generic commentary boundary", async () => {
-    const pending = createDeferred();
+    const partial = pending();
     const partials: Array<{ text?: string; delta?: string }> = [];
     const onAgentEvent = vi.fn();
-    const { emit, subscription } = createSubscribedSessionHarness({
+    const { emit, subscription } = subscribe({
       runId: "run-commentary-boundary",
       onAgentEvent,
       onPartialReply: (payload) => {
         partials.push({ text: payload.text, delta: payload.delta });
-        return pending.promise;
+        return partial.promise;
       },
     });
-    const message = {
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "<think>hidden reasoning</think>",
-          textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
-        },
-      ],
-    };
+    const text = "<think>hidden reasoning</think>";
+    const textSignature = JSON.stringify({ v: 1, id: "commentary", phase: "commentary" });
+    const message = { role: "assistant", content: [{ type: "text", text, textSignature }] };
     const commentary = {
       type: "message_update",
       message,
       assistantMessageEvent: { type: "text_delta", delta: "", partial: message },
     };
-    try {
-      emit(commentary);
-      emitDeltas(emit);
-      await rawDrain(subscription);
-      expect(partials).toEqual(fragments(["First", "First"]));
+    emit(commentary);
+    emitDeltas(emit);
+    await rawDrain(subscription);
+    expect(partials).toEqual(fragments(["First", "First"]));
 
-      // Phase changes retire the old partial even if no new preamble is visible.
-      emit(commentary);
-      await rawDrain(subscription);
-      expect(partials).toEqual(
-        fragments(["First", "First"], ["First second third", " second third"]),
-      );
-      emitAssistantTextDelta({ emit, delta: " fourth" });
-      await rawDrain(subscription);
-      expect(partials.at(-1)).toEqual({
-        text: "First second third fourth",
-        delta: " fourth",
-      });
-      const preambleEvents = onAgentEvent.mock.calls.filter(
-        ([event]) => event.stream === "item" && event.data.kind === "preamble",
-      );
-      expect(preambleEvents).toHaveLength(0);
-    } finally {
-      await closeSession(subscription, pending);
-    }
+    // Phase changes retire the old partial even if no new preamble is visible.
+    emit(commentary);
+    await rawDrain(subscription);
+    expect(partials).toEqual(
+      fragments(["First", "First"], ["First second third", " second third"]),
+    );
+    emitAssistantTextDelta({ emit, delta: " fourth" });
+    await rawDrain(subscription);
+    expect(partials.at(-1)).toEqual({
+      text: "First second third fourth",
+      delta: " fourth",
+    });
+    const preambleEvents = onAgentEvent.mock.calls.filter(
+      ([event]) => event.stream === "item" && event.data.kind === "preamble",
+    );
+    expect(preambleEvents).toHaveLength(0);
   });
 });
 
@@ -423,7 +405,6 @@ describe("native reasoning projection", () => {
     try {
       const measurement = await measureNativeReasoningSubscription({ signal, runId });
       collectPrefixWork();
-      console.log("native-reasoning-work", JSON.stringify({ ...measurement, comparedPrefixChars }));
       expect(measurement.textMatches).toBe(true);
       expect(measurement.deltaMatches).toBe(true);
       expect(measurement.events).toBe(measurement.chunks);

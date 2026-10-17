@@ -39,40 +39,36 @@ function expectEvent(onAgentEvent: ReturnType<typeof vi.fn>, data: Record<string
 }
 
 describe("embedded lifecycle", () => {
-  it("keeps identity and the same observed start time on the bus and callback", () => {
+  it.each(["start", "end"] as const)("keeps identity on %s events", async (phase) => {
     emitAgentEventMock.mockClear();
     const onAgentEvent = vi.fn();
     const ctx = createContext(undefined, { onAgentEvent });
-    Object.assign(ctx.params, identity);
-    handleAgentStart(ctx);
-    expect(emitAgentEventMock).toHaveBeenCalledWith({
-      runId: "run-1",
-      sessionKey: "agent:main:main",
-      ...identity,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: expect.any(Number) },
-    });
-    expect(onAgentEvent).toHaveBeenCalledExactlyOnceWith({
-      stream: "lifecycle",
-      data: emitAgentEventMock.mock.calls[0]?.[0].data,
-    });
-  });
-  it("keeps the execution lifecycle generation on terminal events", async () => {
-    emitAgentEventMock.mockClear();
-    const ctx = createContext(undefined);
+    const terminal = phase === "end";
     Object.assign(ctx.params, {
-      lifecycleGeneration: "pre-restart-generation",
       ...identity,
+      ...(terminal ? { lifecycleGeneration: "pre-restart-generation" } : {}),
     });
-    await handleAgentEnd(ctx);
+    if (terminal) {
+      await handleAgentEnd(ctx);
+    } else {
+      handleAgentStart(ctx);
+    }
     expect(emitAgentEventMock).toHaveBeenCalledWith({
       runId: "run-1",
       sessionKey: "agent:main:main",
       ...identity,
-      lifecycleGeneration: "pre-restart-generation",
+      ...(terminal ? { lifecycleGeneration: "pre-restart-generation" } : {}),
       stream: "lifecycle",
-      data: expect.objectContaining({ phase: "end" }),
+      data: terminal
+        ? expect.objectContaining({ phase })
+        : { phase, startedAt: expect.any(Number) },
     });
+    if (!terminal) {
+      expect(onAgentEvent).toHaveBeenCalledExactlyOnceWith({
+        stream: "lifecycle",
+        data: emitAgentEventMock.mock.calls[0]?.[0].data,
+      });
+    }
   });
 
   it("omits raw HTML auth bodies from console diagnostics", async () => {
@@ -182,13 +178,7 @@ describe("embedded lifecycle", () => {
       lastToolError.toolName === "edit" ? "Received arguments" : "secret-token",
     );
   });
-  it.each<{
-    name: string;
-    stopReason?: string;
-    content?: unknown[];
-    state: Partial<EmbeddedAgentSubscribeContext["state"]>;
-    expected: Record<string, unknown>;
-  }>([
+  it.each([
     {
       name: "surfaces replay-invalid paused lifecycle end state when present",
       state: {
@@ -381,15 +371,12 @@ describe("embedded lifecycle", () => {
       const onAgentEvent = vi.fn(() => {
         order.push("event");
       });
+      const fail = () => {
+        order.push("before");
+        throw new Error("hook failed");
+      };
       const onBeforeLifecycleTerminal = vi.fn(() => {
-        if (kind === "throw") {
-          order.push("before");
-          throw new Error("hook failed");
-        }
-        return Promise.resolve().then(() => {
-          order.push("before");
-          throw new Error("hook failed");
-        });
+        return kind === "throw" ? fail() : Promise.resolve().then(fail);
       });
       await handleAgentEnd(createContext(undefined, { onAgentEvent, onBeforeLifecycleTerminal }));
       expect(order).toEqual(["before", "event"]);
