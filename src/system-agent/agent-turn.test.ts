@@ -57,11 +57,15 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../agents/embedded-agent.js", () => ({
+vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),
   runEmbeddedAgent: mocks.runEmbeddedAgent,
 }));
 
-vi.mock("../agents/cli-runner.js", () => ({ runCliAgent: vi.fn() }));
+vi.mock("../agents/cli-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/cli-runner.js")>()),
+  runCliAgent: vi.fn(),
+}));
 
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),

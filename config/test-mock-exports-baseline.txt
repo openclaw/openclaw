@@ -8542,7 +8542,6 @@
 ["src/status/status-plugin-health.runtime.test.ts","../channels/plugins/read-only.js","3711566fa2cbec2751a1fca84cce681e8cada28cd02b8eb7575245109e4df611",1]
 ["src/status/status-text.test.ts","./status-plugin-health.runtime.js","020e45cc9ad63a7f1a0b2cf3ab7893ed7b347118b31dbe4f847e6aad7595f8bf",1]
 ["src/status/status-text.test.ts","./status-plugin-health.runtime.js","3beaba7dc9bbfabf1a65a9844c912833d3f1eccb2acefdbdcd19a789ff330766",1]
-["src/system-agent/agent-turn.test.ts","../agents/embedded-agent.js","ae8fd432c0968bcd8062349a63c15f298725e68dc948942acdef7940e4cb3d4c",1]
 ["src/system-agent/chat-engine.test-support.ts","../wizard/setup.memory-import.js","15d3181aeb43e42a117ef8bba68eeae742b89972d4c2ecd00c640cd185fd4c86",1]
 ["src/system-agent/config-unset.test.ts","./audit.js","c377f4d40532f7bd061bf146146f5f9b0413ef8967a023cb80a366f98c1ed01c",1]
 ["src/system-agent/onboarding-welcome.test.ts","../commands/onboard-helpers.js","6316d1b016e8d1a2f9854bd149b40ec7a8db7163a79b013d57c47ad0e1e0ab04",1]

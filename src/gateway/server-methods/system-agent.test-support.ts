@@ -121,19 +121,20 @@ export function useSystemAgentGatewayTestFixture() {
     };
   }
 
-  beforeAll(async () => {
+  beforeAll(() => {
     pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot(verifiedConfig);
-    fixture = await pluginMetadataSnapshot.run(() =>
-      createSystemAgentVerifiedInferenceTestFixture(verifiedConfig),
-    );
   });
 
   afterAll(() => {
     fixture = undefined;
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     previousAppliedHash = getRuntimeConfigAppliedHash();
+    fixture = await expectDefined(
+      pluginMetadataSnapshot,
+      "metadata fixture was not initialized",
+    ).run(() => createSystemAgentVerifiedInferenceTestFixture(verifiedConfig));
     const ready = {
       ok: true,
       modelRef: "openai/gpt-5.5",

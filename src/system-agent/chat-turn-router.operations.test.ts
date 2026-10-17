@@ -32,7 +32,10 @@ import { SystemAgentOperationExitError } from "./operations-execution-helpers.js
 import { describeSystemAgentPersistentOperation } from "./operations.js";
 import { installSystemAgentClaudeCliBackendTestFixture } from "./system-agent.test-helpers.js";
 
-vi.mock("../agents/cli-runner.js", () => ({ runCliAgent: vi.fn() }));
+vi.mock("../agents/cli-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/cli-runner.js")>()),
+  runCliAgent: vi.fn(),
+}));
 
 function createRouterHarness(
   options: ConstructorParameters<typeof ChatTurnRouter>[0],

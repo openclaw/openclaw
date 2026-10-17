@@ -22,7 +22,10 @@ import {
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.test-support.js";
 
-vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
+vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),
+  runEmbeddedAgent: vi.fn(),
+}));
 
 async function driftFixture() {
   let config: OpenClawConfig = {

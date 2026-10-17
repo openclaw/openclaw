@@ -45,7 +45,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
+vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),
+  runEmbeddedAgent: vi.fn(),
+}));
 
 describe("system-agent terminal failure cleanup", () => {
   it.each([

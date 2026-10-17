@@ -54,7 +54,10 @@ const dispatch = vi.hoisted(() =>
   vi.fn<(params: RunEmbeddedAgentParams) => Promise<EmbeddedAgentRunResult>>(),
 );
 
-vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
+vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/embedded-agent.js")>()),
+  runEmbeddedAgent: vi.fn(),
+}));
 
 vi.mock("../../agents/embedded-agent-runner/cli-backend-dispatch.js", () => ({
   // This function is called inside run-orchestrator's admitted global-lane task.
