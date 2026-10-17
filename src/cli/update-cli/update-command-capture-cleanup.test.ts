@@ -39,6 +39,19 @@ function writeCapture(root: string, name: string, sealed: boolean, marked = true
   return directory;
 }
 
+function writeGenuineCapture(root: string, name: string, createdAt: string): string {
+  const directory = writeCapture(root, name, true);
+  const manifest = JSON.stringify({
+    kind: "update-recovery",
+    schemaVersion: 2,
+    runId: name,
+    createdAt,
+    generation: { kind: "baseline" },
+  });
+  fs.writeFileSync(path.join(directory, "manifest.json"), `${manifest}\n`);
+  return directory;
+}
+
 /** Finished updates, one failed baseline, the latest update, a live run, and unattributed entries. */
 async function withCaptureHistory(
   run: (captures: Record<string, string>, root: string) => Promise<void>,
@@ -86,6 +99,11 @@ async function withCaptureHistory(
     clock.mockRestore();
     captures.unattributed = writeCapture(root, "doctor-unrecorded", true);
     captures.unmarked = writeCapture(root, "c0ffee00-0000-4000-8000-000000000000", true, false);
+    captures.orphanRun = writeGenuineCapture(
+      root,
+      "bbbbbbbb-2222-3333-8444-555555555555",
+      "2026-10-13T10:00:00.000Z",
+    );
     closeOpenClawStateDatabaseForTest();
     await run(captures, root);
   });
@@ -119,6 +137,20 @@ async function runCleanup(options: { dryRun?: boolean; yes?: boolean }) {
   };
 }
 
+const genuineCaptureBytes = (name: string, createdAt: string) =>
+  Buffer.byteLength(UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT, "utf8") +
+  1000 +
+  Buffer.byteLength(
+    `${JSON.stringify({
+      kind: "update-recovery",
+      schemaVersion: 2,
+      runId: name,
+      createdAt,
+      generation: { kind: "baseline" },
+    })}\n`,
+    "utf8",
+  );
+
 const expectedPreview = (captures: Record<string, string>) => ({
   [captures.superseded!]: {
     outcome: "candidate",
@@ -151,6 +183,11 @@ const expectedPreview = (captures: Record<string, string>) => ({
     outcome: "protected",
     reason: "unmanifested-update-capture",
     bytes: 1003,
+  },
+  [captures.orphanRun!]: {
+    outcome: "protected",
+    reason: "orphan-update-capture",
+    bytes: genuineCaptureBytes("bbbbbbbb-2222-3333-8444-555555555555", "2026-10-13T10:00:00.000Z"),
   },
 });
 

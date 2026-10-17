@@ -37,6 +37,62 @@ function logicalBytes(directory: string): number {
   return bytes;
 }
 
+// Mirrors the standalone Doctor name pattern in doctor-capture-retention.ts: that
+// retention policy only recognizes `doctor-<uuid>` names, so a sealed genuine
+// manifest under any other name stays invisible without the orphan diagnostic below.
+// Doctor-shaped leftovers keep main's generic label and retention semantics.
+const STANDALONE_DOCTOR_CAPTURE_RUN_ID =
+  /^doctor-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readSealedUpdateRecoveryManifest(
+  directory: string,
+  runId: string,
+): { createdAt?: string } | undefined {
+  try {
+    if (fs.existsSync(path.join(directory, "manifest.json.partial"))) {
+      return undefined;
+    }
+    const parsed: unknown = JSON.parse(
+      fs.readFileSync(path.join(directory, "manifest.json"), "utf8"),
+    );
+    if (!isRecordLike(parsed)) {
+      return undefined;
+    }
+    if (parsed.kind !== "update-recovery" || parsed.runId !== runId) {
+      return undefined;
+    }
+    const createdAt: unknown = parsed.createdAt;
+    return {
+      createdAt: typeof createdAt === "string" ? createdAt : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Labels a sealed genuine capture with no ledger row and a non-Doctor name. Read-only. */
+function classifyOrphanUpdateCapture(
+  item: RecoveryCleanupArtifact,
+  directory: string,
+  runId: string,
+): void {
+  const manifest = readSealedUpdateRecoveryManifest(directory, runId);
+  if (!manifest) {
+    return;
+  }
+  const created = manifest.createdAt ? `; created ${manifest.createdAt}` : "";
+  item.reason = "orphan-update-capture";
+  item.detail =
+    `sealed update-recovery capture with no update-run ledger entry${created}. ` +
+    `No supported command retires unattributed captures yet.`;
+  item.consequence =
+    "Manual removal forfeits whatever rollback this capture still holds; verify the installation first.";
+}
+
 function classifyCapture(
   directory: string,
   run: UpdateRunRecord,
@@ -152,6 +208,9 @@ function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.Pro
         getUpdateRun(entry.name, { env: params.env });
       const doctor = standalone.get(directory);
       if (!run && !doctor) {
+        if (!STANDALONE_DOCTOR_CAPTURE_RUN_ID.test(entry.name)) {
+          classifyOrphanUpdateCapture(item, directory, entry.name);
+        }
         continue;
       }
       item.runs = [entry.name];
