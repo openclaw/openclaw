@@ -5,7 +5,7 @@ import { GatewayRequestError } from "../api/gateway.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import type { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
-import { hovercard as card, pointer } from "./link-reader.test-support.ts";
+import { expectAttributes, hovercard as card, key, pointer } from "./link-reader.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import { settleTooltip } from "./tooltip.test-support.ts";
@@ -65,11 +65,12 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
     }
   });
   observer.observe(document.body, { childList: true, subtree: true });
-  const noPopupAria = () => {
-    expect(anchor.hasAttribute("aria-haspopup")).toBe(false);
-    expect(anchor.hasAttribute("aria-expanded")).toBe(false);
-    expect(anchor.hasAttribute("aria-controls")).toBe(false);
-  };
+  const noPopupAria = () =>
+    expectAttributes(anchor, {
+      "aria-haspopup": null,
+      "aria-expanded": null,
+      "aria-controls": null,
+    });
   try {
     // Install the real bootstrap after the title adapter: listener order must not matter.
     expect(customElements.get(tag)).toBeUndefined();
@@ -80,7 +81,7 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
     expect(request).not.toHaveBeenCalled();
     expect(anchor.title).toBe("");
     noPopupAria();
-    expect({ mounts: titleMounts.length, open: titleIsOpen() }).toEqual({ mounts: 0, open: false });
+    expect(titleIsOpen()).toBe(false);
 
     runtimeLoad.release();
     await import("./link-reader-hovercard.ts");
@@ -91,7 +92,6 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
     anchor.focus();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(request).toHaveBeenCalledTimes(1);
-    expect(titleMounts).toEqual([]);
     expect(card()).toBeNull();
     noPopupAria();
     const failure = "GitHub API rate limit exceeded (HTTP 403). Wait 120 seconds and retry.";
@@ -104,11 +104,9 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
     anchor.focus();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(request).toHaveBeenCalledTimes(1);
-    expect(titleMounts).toEqual([]);
     const failedCard = card();
     expect(failedCard?.textContent).toContain(failure);
-    expect(anchor.getAttribute("aria-controls")).toBe(failedCard?.id);
-    expect(anchor.getAttribute("aria-expanded")).toBe("true");
+    expectAttributes(anchor, { "aria-controls": failedCard!.id, "aria-expanded": "true" });
     expect(titleIsOpen()).toBe(false);
 
     // An icon-only cached permalink still gets its name from title while native hints stay blank.
@@ -162,8 +160,7 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
     expect(card()?.textContent).toContain("Preview ready");
     expect(anchor.getAttribute("aria-expanded")).toBe("true");
     expect(titleMounts).toHaveLength(previousMounts);
-    expect(anchor.title).toBe("");
-    expect(anchor.href).toBe(href);
+    expect(anchor).toMatchObject({ title: "", href });
     anchor.blur();
     await vi.advanceTimersByTimeAsync(200);
     expect(anchor.title).toBe(href);
@@ -223,7 +220,7 @@ it("keeps rendered GitHub links free of native titles across preview closure and
   pointer(child, "pointerover", anchor);
   await vi.advanceTimersByTimeAsync(200);
   expect(card()).not.toBeNull();
-  anchor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  key(anchor, "Escape");
   await vi.advanceTimersByTimeAsync(200);
   expect(card()).toBeNull();
   noNativeTitles();

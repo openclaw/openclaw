@@ -10,10 +10,12 @@ import {
   cardPart,
   createLinkFixture,
   expectIncludes,
+  expectPreview,
   hover,
   hovercard,
   hovercardTestClock,
   leave,
+  leaveAndWait,
 } from "./link-reader.test-support.ts";
 
 const TAG = `test-github-seeded-hovercard-${crypto.randomUUID()}`;
@@ -79,8 +81,7 @@ describe("GitHub hovercards with authorized session details", () => {
     pending.resolve(details);
     await vi.advanceTimersByTimeAsync(0);
     expect(hovercard()).toBe(card);
-    expect(card?.textContent).toContain(details.title);
-    expect(card?.textContent).toContain("octocat");
+    expectIncludes(card, details.title, "octocat");
     expect(card?.textContent).not.toContain("Cached details");
     expect(card?.querySelector("time")).not.toBeNull();
     provider.remove();
@@ -136,8 +137,7 @@ describe("GitHub hovercards with authorized session details", () => {
     await provider.updateComplete;
     expect(document.activeElement).toBe(anchor);
     await hover(anchor);
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(hovercard()?.textContent).toContain(seed.title);
+    expectPreview(request, 1, seed.title);
     pending.reject(new Error("Unavailable"));
     await vi.advanceTimersByTimeAsync(0);
     expect(hovercard()?.textContent).toContain(seed.title);
@@ -154,19 +154,16 @@ describe("GitHub hovercards with authorized session details", () => {
     pending.reject(new GatewayRequestError({ code: "UNAVAILABLE", message }));
     await vi.advanceTimersByTimeAsync(0);
     expectIncludes(hovercard(), seed.title, "Cached details", message);
-    leave(anchor, document.body, false);
-    await vi.advanceTimersByTimeAsync(120);
+    await leaveAndWait(anchor, document.body, false);
     expect(hovercard()).toBeNull();
     await hover(anchor);
-    expectIncludes(hovercard(), seed.title, message);
-    expect(client.request).toHaveBeenCalledTimes(1);
+    expectPreview(client.request, 1, seed.title, message);
 
     leave(anchor, document.body, false);
     await vi.advanceTimersByTimeAsync(30_000);
     client.request.mockResolvedValue(details);
     await hover(anchor);
-    expect(client.request).toHaveBeenCalledTimes(2);
-    expect(hovercard()?.textContent).toContain(details.title);
+    expectPreview(client.request, 2, details.title);
     expect(hovercard()?.textContent).not.toContain(message);
   });
 
@@ -210,8 +207,7 @@ describe("GitHub hovercards with authorized session details", () => {
     provider.previewSeeds = [{ ...seed, metadata: undefined }];
     await hover(anchor);
     expect(hovercard()?.querySelectorAll(".link-reader-hovercard__metric")).toHaveLength(0);
-    leave(anchor, document.body, false);
-    await vi.advanceTimersByTimeAsync(120);
+    await leaveAndWait(anchor, document.body, false);
     anchor.href = "https://github.com/openclaw/openclaw/pull/99816";
     await hover(anchor);
     expect(client.request).toHaveBeenCalledTimes(2);

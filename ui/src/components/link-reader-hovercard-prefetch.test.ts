@@ -7,6 +7,7 @@ import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
 import { resolveLinkReaderTarget } from "./link-reader-target.ts";
 import {
   createLinkFixture,
+  expectPreview,
   hover,
   hovercard,
   hovercardTestClock,
@@ -158,15 +159,13 @@ describe("GitHub hovercard prefetch subscriptions", () => {
       } else {
         await hover(anchor);
       }
-      expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
-      expect(request).toHaveBeenCalledTimes(1);
+      expectPreview(request, 1, "Keep hover previews reachable");
       if (consumer === "hover") {
         firstScope.abort();
         leave(anchor, null);
         await vi.advanceTimersByTimeAsync(120);
         await hover(anchor);
-        expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
-        expect(request).toHaveBeenCalledTimes(1);
+        expectPreview(request, 1, "Keep hover previews reachable");
       }
     },
   );
@@ -181,8 +180,7 @@ describe("GitHub hovercard prefetch subscriptions", () => {
     client.connected = true;
     await warm();
     await hover(anchor);
-    expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
-    expect(request).toHaveBeenCalledTimes(1);
+    expectPreview(request, 1, "Keep hover previews reachable");
   });
 
   it.each(["agent", "client", "disconnect"])(
