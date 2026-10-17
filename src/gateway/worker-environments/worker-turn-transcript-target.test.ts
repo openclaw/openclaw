@@ -85,7 +85,7 @@ async function duringPublication(
   field: "kind" | "type",
   value: string,
   check: () => void,
-  write: () => Promise<void>,
+  write: () => Promise<unknown>,
 ) {
   let checked = false;
   const admission = probe.admission(workerAdmission, (request, grant, admit) => {
@@ -247,7 +247,7 @@ it("retains a logical-store worker transcript and refuses writer changes without
     await seedTranscript(target);
     using observer = observeSql();
     const incomingRpc = new AsyncResource("worker-transcript-rpc");
-    const withPendingReplacement = (check: () => void, write: () => Promise<void>) =>
+    const withPendingReplacement = (check: () => void, write: () => Promise<unknown>) =>
       duringPublication("kind", "session-entry-patch-committed", check, write);
     try {
       {
@@ -258,21 +258,20 @@ it("retains a logical-store worker transcript and refuses writer changes without
             expect(rollbackSource).toThrow(staleTranscript);
             throw rollback;
           },
-          async () => {
-            await expect(
+          () =>
+            expect(
               patchSessionEntryCore(target, () => ({ activeWriterRunId: "rolled-back-writer" })),
-            ).rejects.toThrow(rollback);
-          },
+            ).rejects.toThrow(rollback),
         );
         expect(rollbackSource).not.toThrow();
       }
       await using source = await prepareSource(target);
       source();
-      await withPendingReplacement(source, async () => {
-        await patchSessionEntryCore(target, () => ({ label: "same writer" }), {
+      await withPendingReplacement(source, () =>
+        patchSessionEntryCore(target, () => ({ label: "same writer" }), {
           workerGuard: { source },
-        });
-      });
+        }),
+      );
       source();
       await duringPublication("type", "participant", source, async () => {
         expect(
@@ -307,18 +306,14 @@ it("retains a logical-store worker transcript and refuses writer changes without
           const settlementTarget = { ...pinned, expectedWriterRunId: undefined };
           const resolveSettlement = () => resolveTarget(turnFor(settlementTarget));
           incomingRpc.runInAsyncScope(assertReceipt);
-          const effect = vi.fn(() => {
-            resolveTarget(turnFor(pinned));
-          });
+          const effect = () => resolveTarget(turnFor(pinned));
           effect();
           await withPendingReplacement(
             () => {
               expect(source).toThrow(staleTranscript);
               expect(effect).toThrow(staleTranscript);
             },
-            async () => {
-              await patchSessionEntryCore(target, () => ({ activeWriterRunId: "next-writer" }));
-            },
+            () => patchSessionEntryCore(target, () => ({ activeWriterRunId: "next-writer" })),
           );
           expect(effect).toThrow(staleTranscript);
           expect(source).toThrow(staleTranscript);

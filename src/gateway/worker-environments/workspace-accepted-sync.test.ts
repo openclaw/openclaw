@@ -45,18 +45,18 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 const ownFixture = (body: (context: TestContext) => Promise<void>) => (context: TestContext) =>
   lifetime.run(() => body(context));
 
-function createApplyGateRelease(gate: FileHandle) {
+function createGateRelease(gate: FileHandle, newline = false) {
   let releasing: Promise<void> | undefined;
-  return () => (releasing ??= gate.write("release").then(() => gate.close()));
+  return (message = "release") =>
+    (releasing ??= gate.write(message + (newline ? "\n" : "")).then(() => gate.close()));
 }
 const RECEIVER_ENTRY_PATH = workerWorkspaceRsyncReceiverEntryPath(BUNDLE_HASH);
-const RECEIVER_RELEASE_CLEANUP_MS = 10_000;
-const RECEIVER_TERMINATION_CLEANUP_MS = 1_000;
+const RECEIVER_CLEANUP_MS = { release: 10_000, termination: 1_000 };
 
-function observeApplyChild(
+function observeChild(
   child: ReturnType<typeof spawn>,
-  onReady: () => void,
-  testSignal: AbortSignal,
+  onReady?: () => void,
+  testSignal?: AbortSignal,
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null; stderr: string }> {
   if (!child.stderr) {
     throw new Error("fixture child has no stderr pipe");
@@ -64,7 +64,7 @@ function observeApplyChild(
   let stderr = "";
   const lines = createInterface({ input: child.stderr });
   lines.on("line", (line) => {
-    if (line === "openclaw-test:apply-ready") {
+    if (onReady && line === "openclaw-test:apply-ready") {
       onReady();
     } else {
       stderr += `${line}\n`;
@@ -75,12 +75,12 @@ function observeApplyChild(
     const onAbort = () => child.kill("SIGTERM");
     child.once("error", reject);
     child.once("close", (code, signal) => {
-      testSignal.removeEventListener("abort", onAbort);
+      testSignal?.removeEventListener("abort", onAbort);
       lines.close();
       resolve({ code, signal, stderr });
     });
-    testSignal.addEventListener("abort", onAbort, { once: true });
-    if (testSignal.aborted) {
+    testSignal?.addEventListener("abort", onAbort, { once: true });
+    if (testSignal?.aborted) {
       onAbort();
     }
   });
@@ -96,6 +96,10 @@ function result(overrides: Partial<SpawnResult> = {}): SpawnResult {
     termination: "exit",
     ...overrides,
   };
+}
+
+function commandFailure(operation: string, code = 255) {
+  return result({ code, stderr: `${operation} ${code === 255 ? "transport lost" : "rejected"}` });
 }
 
 const manifest = (content: string) => workspaceManifest({ "result.txt": content });
@@ -153,12 +157,11 @@ function commitCase(
 ) {
   return { name, outcome, expected, secondCommit, retry: outcome === "applied" };
 }
+type TransactionCall = { action: string; nonce: string } & Partial<
+  Pick<WorkerWorkspaceCommand, "transportRetry">
+>;
 function expectTransactions(
-  calls: Array<{
-    action: string;
-    nonce: string;
-    transportRetry?: WorkerWorkspaceCommand["transportRetry"];
-  }>,
+  calls: TransactionCall[],
   actions: string[],
   transportRetry?: WorkerWorkspaceCommand["transportRetry"],
 ) {
@@ -170,7 +173,6 @@ function expectTransactions(
 }
 
 function mockPublication(run: (action: string) => Promise<SpawnResult>, verifyManifest = false) {
-  const actions: string[] = [];
   const transactionCalls: Array<{ action: string; nonce: string }> = [];
   const publisher = createPublisher({
     runWorkspaceCommand: async (command) => {
@@ -178,13 +180,12 @@ function mockPublication(run: (action: string) => Promise<SpawnResult>, verifyMa
         return verifyManifest ? remoteManifestResult(command) : result();
       }
       const action = command.argv[3]!;
-      actions.push(action);
       transactionCalls.push({ action, nonce: command.argv[5]! });
       return action === "begin" ? result({ stdout: "/remote/staging\n" }) : run(action);
     },
   });
   return {
-    actions,
+    actions: () => transactionCalls.map(({ action }) => action),
     transactionCalls,
     publishing: publisher.publishAcceptedManifest(acceptedPublication),
   };
@@ -231,8 +232,7 @@ async function gatedApplyFixture(signal: AbortSignal, deadline = false) {
     fs.writeFile(path.join(workspace, "result.txt"), "worker\n"),
   ]);
   expect((await runCommandWithTimeout(["mkfifo", gate], { timeoutMs: 10_000 })).code).toBe(0);
-  const gateController = await fs.open(gate, "r+");
-  const releaseApply = createApplyGateRelease(gateController);
+  const releaseApply = createGateRelease(await fs.open(gate, "r+"));
   await fs.writeFile(
     preload,
     `const fs = require("node:fs");
@@ -270,14 +270,10 @@ Atomics.wait = function(waitArray, index, value, timeout) {
     OPENCLAW_TEST_GATE: gate,
     OPENCLAW_TEST_GATE_SOURCE: path.join(workspace, "result.txt"),
   };
-  const transactionCalls: Array<{
-    action: string;
-    nonce: string;
-    transportRetry: WorkerWorkspaceCommand["transportRetry"];
-  }> = [];
+  const transactionCalls: TransactionCall[] = [];
   const manifestCalls: Array<WorkerWorkspaceCommand["transportRetry"]> = [];
   let stagingRoot: string | undefined;
-  let applyExited: ReturnType<typeof observeApplyChild> | undefined;
+  let applyExited: ReturnType<typeof observeChild> | undefined;
   const runWorkspaceCommand = async (command: WorkerWorkspaceCommand): Promise<SpawnResult> => {
     signal.throwIfAborted();
     const transactionAction =
@@ -304,7 +300,7 @@ Atomics.wait = function(waitArray, index, value, timeout) {
         stdio: ["pipe", "pipe", "pipe"],
       });
       child.stdin.end(command.input);
-      applyExited = observeApplyChild(child, () => applyStarted.resolve(), signal);
+      applyExited = observeChild(child, () => applyStarted.resolve(), signal);
       await withinTest(
         awaitGateBeforeSettlement(
           applyStarted.promise,
@@ -437,7 +433,7 @@ describe("accepted workspace publication", () => {
         fs.writeFile(path.join(workspace, "result.txt"), "worker\n"),
       ]);
       expect((await runCommandWithTimeout(["mkfifo", gate], { timeoutMs: 10_000 })).code).toBe(0);
-      const gateController = await fs.open(gate, "r+");
+      const releaseReceiver = createGateRelease(await fs.open(gate, "r+"), true);
       await fs.writeFile(
         path.join(bin, "rsync"),
         '#!/bin/sh\nset -eu\nfor destination do :; done\nprintf "staged\\n" > "$destination/result.txt"\n( : > "$OPENCLAW_TEST_RECEIVER_MARKER"; read -r _ < "$OPENCLAW_TEST_RECEIVER_GATE"; printf "local\\n" > "$destination/result.txt" ) </dev/null >/dev/null 2>&1 &\nexit 0\n',
@@ -446,16 +442,7 @@ describe("accepted workspace publication", () => {
 
       const actions: string[] = [];
       let receiverChild: ReturnType<typeof spawn> | undefined;
-      let receiverExited: ReturnType<typeof observeApplyChild> | undefined;
-      let gateReleased = false;
-      const releaseReceiver = async (message: string) => {
-        if (gateReleased) {
-          return;
-        }
-        gateReleased = true;
-        await gateController.write(`${message}\n`);
-        await gateController.close();
-      };
+      let receiverExited: ReturnType<typeof observeChild> | undefined;
       const env = {
         ...process.env,
         HOME: home,
@@ -481,27 +468,13 @@ describe("accepted workspace publication", () => {
       const publisher = createPublisher({
         runWorkspaceCommand,
         runRsync: async (argvForSsh) => {
-          const argv = argvForSsh("ssh");
-          const boundary = await prepareLocalWorkspaceRsyncBoundary(home, argv);
+          const boundary = await prepareLocalWorkspaceRsyncBoundary(home, argvForSsh("ssh"));
           receiverChild = spawn(boundary.argv[0]!, boundary.argv.slice(1), {
             env,
             stdio: ["ignore", "ignore", "pipe"],
           });
-          const receiverStderr = receiverChild.stderr;
-          if (!receiverStderr) {
-            throw new Error("accepted staging receiver has no stderr pipe");
-          }
-          let stderr = "";
-          receiverStderr.setEncoding("utf8");
-          receiverStderr.on("data", (chunk: string) => {
-            stderr += chunk;
-          });
-          const closed = createDeferred<Awaited<ReturnType<typeof observeApplyChild>>>();
-          // Capture close at spawn so teardown can still join it after the test aborts.
-          receiverChild.once("close", (code, exitSignal) =>
-            closed.resolve({ code, signal: exitSignal, stderr }),
-          );
-          receiverExited = closed.promise;
+          // Subscribe at spawn so teardown can join it after the test aborts.
+          receiverExited = observeChild(receiverChild);
           await Promise.race([
             waitForFile(receiverMarker, signal),
             receiverExited.then(({ stderr: receiverError }) => {
@@ -546,7 +519,7 @@ describe("accepted workspace publication", () => {
         await releaseReceiver("cleanup").catch(() => undefined);
         if (receiverExited) {
           // Cleanup hang guard after release was signalled, not a readiness race.
-          await withinTest(receiverExited, AbortSignal.timeout(RECEIVER_RELEASE_CLEANUP_MS)).catch(
+          await withinTest(receiverExited, AbortSignal.timeout(RECEIVER_CLEANUP_MS.release)).catch(
             () => undefined,
           );
         }
@@ -556,7 +529,7 @@ describe("accepted workspace publication", () => {
             // Cleanup hang guard after SIGTERM, not a readiness race.
             await withinTest(
               receiverExited,
-              AbortSignal.timeout(RECEIVER_TERMINATION_CLEANUP_MS),
+              AbortSignal.timeout(RECEIVER_CLEANUP_MS.termination),
             ).catch(() => undefined);
           }
         }
@@ -651,7 +624,7 @@ describe("accepted workspace publication", () => {
   it("keeps an unobservable apply pending when settlement is unobservable", async () => {
     const { actions, publishing } = mockPublication(async (action) => {
       if (action === "apply") {
-        return result({ code: 255, stderr: "apply transport lost" });
+        return commandFailure("apply");
       }
       if (action === "settle") {
         throw new WorkerTunnelOwnerDisconnectedError();
@@ -668,19 +641,19 @@ describe("accepted workspace publication", () => {
       }),
       observationFailure: expect.any(WorkerTunnelOwnerDisconnectedError),
     });
-    expect(actions).toEqual(["begin", "apply", "settle"]);
+    expect(actions()).toEqual(["begin", "apply", "settle"]);
   });
 
   it.each([
     {
       name: "an ordinary observed failure",
-      apply: result({ code: 1, stderr: "apply rejected" }),
+      apply: commandFailure("apply", 1),
       settle: undefined,
       actions: ["begin", "apply", "rollback"],
     },
     {
       name: "settlement observes the begun phase",
-      apply: result({ code: 255, stderr: "apply transport lost" }),
+      apply: commandFailure("apply"),
       settle: settlement("begun"),
       actions: ["begin", "apply", "settle", "rollback"],
     },
@@ -698,13 +671,13 @@ describe("accepted workspace publication", () => {
       return result();
     });
     await expect(publishing).rejects.toThrow(/apply (?:rejected|transport lost)/u);
-    expect(actions).toEqual(expected);
+    expect(actions()).toEqual(expected);
   });
 
   it("keeps an ambiguous apply pending when settlement output is malformed", async () => {
     const { actions, publishing } = mockPublication(async (action) => {
       if (action === "apply") {
-        return result({ code: 255, stderr: "apply transport lost" });
+        return commandFailure("apply");
       }
       if (action === "settle") {
         return result({ stdout: '{"version":1,"outcome":"applied","extra":true}\n' });
@@ -712,25 +685,15 @@ describe("accepted workspace publication", () => {
       return result();
     });
     await expect(publishing).rejects.toBeInstanceOf(AcceptedWorkspacePublicationIndeterminateError);
-    expect(actions).toEqual(["begin", "apply", "settle"]);
+    expect(actions()).toEqual(["begin", "apply", "settle"]);
   });
 
   it.each([
     commitCase("committed phase", "committed", "success"),
     commitCase("applied phase; retry succeeds", "applied", "success"),
-    commitCase(
-      "retry is unobservable",
-      "applied",
-      "pending",
-      result({ code: 255, stderr: "retry transport lost" }),
-    ),
+    commitCase("retry is unobservable", "applied", "pending", commandFailure("retry")),
     commitCase("begun phase", "begun", "rollback"),
-    commitCase(
-      "retry is rejected",
-      "applied",
-      "rollback",
-      result({ code: 1, stderr: "retry rejected" }),
-    ),
+    commitCase("retry is rejected", "applied", "rollback", commandFailure("retry", 1)),
   ])(
     "handles an ambiguous commit when $name",
     async ({ outcome, retry, secondCommit, expected }) => {
@@ -738,9 +701,7 @@ describe("accepted workspace publication", () => {
       const { transactionCalls, publishing } = mockPublication(async (action) => {
         if (action === "commit") {
           commitCount += 1;
-          return commitCount === 1
-            ? result({ code: 255, stderr: "commit transport lost" })
-            : secondCommit;
+          return commitCount === 1 ? commandFailure("commit") : secondCommit;
         }
         return action === "settle" ? settlement(outcome) : result();
       }, true);
