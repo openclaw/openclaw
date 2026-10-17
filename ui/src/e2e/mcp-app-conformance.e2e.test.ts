@@ -6,7 +6,7 @@ import { createServer as createHttpServer, type Server as HttpServer } from "nod
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { Frame, Page } from "playwright";
-import { expect, inject, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   disposeAllSessionMcpRuntimes,
   setSessionMcpRuntimeScheduler,
@@ -31,11 +31,9 @@ import {
   createMcpAppTeardownRecorder,
   type McpAppFixtureEvent as FixtureEvent,
   observeMcpAppHttpResponses,
-  observeMcpAppNetwork,
+  observeMcpAppRequests,
   findAppFrame,
   mountControlUiHost,
-  recordMcpAppHost,
-  readMcpAppHistoryNavigation,
   requestStandaloneUrl,
   waitForText,
   waitForTextContaining,
@@ -49,7 +47,6 @@ import {
 } from "./mcp-app-timing.test-support.ts";
 
 const require = createRequire(import.meta.url);
-const { executablePath: chromiumExecutablePath } = inject("controlUiE2eChromium");
 const authValue = "test";
 const sessionKey = "agent:main:mcp-app-conformance";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -73,9 +70,23 @@ let fixtureHistoryUrl: string;
 let fixture: ReturnType<typeof createMcpAppFixtureControl>;
 let showFixture: (callId: string) => Promise<string>;
 
-async function writeProof(name: string, value: unknown) {
-  await fs.writeFile(path.join(proofDir, name), JSON.stringify(value, null, 2));
+async function capture(page: Page, name: string) {
+  if (captureUiProof) {
+    await page.screenshot({ path: path.join(proofDir, name + ".png") });
+  }
 }
+async function clickFor(app: Frame, button: string, output: string, text: string) {
+  await app.locator("#" + button).click();
+  await waitForTextContaining(app.locator("#" + output), text);
+}
+function viewLease() {
+  const lease = getMcpAppViewLease(viewId, runtime);
+  if (!lease) {
+    throw new Error("MCP App conformance view expired");
+  }
+  return lease;
+}
+
 async function expectBridge(app: Frame, contextSupported: boolean) {
   await waitForText(app.locator("#input"), '{"city":"Paris"}');
   await waitForTextContaining(app.locator("#result"), "initial-result");
@@ -84,18 +95,14 @@ async function expectBridge(app: Frame, contextSupported: boolean) {
   }
   await waitForTextContaining(app.locator("#capabilities"), "updateModelContext", contextSupported);
   await waitForText(app.locator("#ping"), "{}");
-  await app.locator("#list-tools").click();
-  await waitForTextContaining(app.locator("#tools"), "app_companion");
+  await clickFor(app, "list-tools", "tools", "app_companion");
   await waitForTextContaining(app.locator("#tools"), "model_only", false);
   await waitForText(app.locator("#isolation"), "isolated");
 }
 async function expectAppTools(app: Frame) {
-  await app.locator("#call-app").click();
-  await waitForTextContaining(app.locator("#app-tool"), "companion-called");
-  await app.locator("#call-model").click();
-  await waitForTextContaining(app.locator("#model-tool"), "denied:");
-  await app.locator("#read-resource").click();
-  await waitForTextContaining(app.locator("#resource"), "resource-ok");
+  await clickFor(app, "call-app", "app-tool", "companion-called");
+  await clickFor(app, "call-model", "model-tool", "denied:");
+  await clickFor(app, "read-resource", "resource", "resource-ok");
 }
 async function expectTheme(app: Frame, theme: "light" | "dark") {
   const [background, color, backgroundRgb, colorRgb] =
@@ -158,12 +165,6 @@ async function settleCleanup(step: string, cleanup: () => Promise<unknown>): Pro
     failures.push({ step, error: String(error) });
     return false;
   }
-}
-async function recordCleanup() {
-  if (proofDir) {
-    await writeProof("cleanup.json", { failures, terminalAtMs: Date.now() });
-  }
-  expect(failures).toEqual([]);
 }
 
 const suite = createControlUiE2eSuite({
@@ -355,12 +356,12 @@ const suite = createControlUiE2eSuite({
           fs.copyFile(fixtureEventsPath, path.join(proofDir, "fixture-events.jsonl")),
         );
       }
-      await recordCleanup();
+      expect(failures).toEqual([]);
     },
     release: async () => {
       // The suite joins setup and cases, then all required closes, before releasing selectors.
       await settleCleanup("fixture temp root", async () => state?.cleanup());
-      await recordCleanup();
+      expect(failures).toEqual([]);
     },
   },
 });
@@ -385,27 +386,8 @@ suite.define(() => {
         const teardownProof = createMcpAppTeardownRecorder(proofDir, fixtureEventsPath);
         const controlContext = await newProofContext();
         const controlPage = await controlContext.newPage();
-        const browserDiagnostics: string[] = [];
-        controlPage.on("console", (message) => {
-          browserDiagnostics.push(`console:${message.type()}:${message.text()}`);
-        });
-        controlPage.on("requestfailed", (request) => {
-          browserDiagnostics.push(`requestfailed:${request.url()}:${request.failure()?.errorText}`);
-        });
-        controlPage.on("response", (response) => {
-          if (response.url().includes("mcp-app-sandbox")) {
-            browserDiagnostics.push(`response:${response.status()}:${response.url()}`);
-          }
-        });
         await mountHost(controlPage);
-        let app: Frame;
-        try {
-          app = await findAppFrame(controlPage);
-        } catch (error) {
-          throw new Error(`${String(error)}; browser=${JSON.stringify(browserDiagnostics)}`, {
-            cause: error,
-          });
-        }
+        let app = await findAppFrame(controlPage);
         await expectBridge(app, true);
         await expectTheme(app, "dark");
         await controlPage.evaluate(() => {
@@ -416,11 +398,7 @@ suite.define(() => {
         });
         await expectTheme(app, "light");
         await expectAppTools(app);
-        if (captureUiProof) {
-          await controlPage.screenshot({
-            path: path.join(proofDir, "control-ui-resource-allowed.png"),
-          });
-        }
+        await capture(controlPage, "control-ui-resource-allowed");
         await app.locator("#update-context").click();
         await waitForText(app.locator("#context-update"), "accepted");
         await app.locator("#send-message").click();
@@ -436,10 +414,7 @@ suite.define(() => {
             controlPage.evaluate(() => Reflect.get(window, "mcpConformancePrompt") as string),
           )
           .toBe("summarize selection");
-        const currentView = getMcpAppViewLease(viewId, runtime);
-        if (!currentView) {
-          throw new Error("Conformance view expired before context inspection");
-        }
+        const currentView = viewLease();
         expect(getMcpAppModelContext(runtime, currentView)).toMatchObject({
           content: [{ type: "text", text: "selected item 42" }],
         });
@@ -512,31 +487,21 @@ suite.define(() => {
         await standalonePage.reload();
         app = await findAppFrame(standalonePage);
         await waitForTextContaining(app.locator("#result"), "initial-result");
-        await app.locator("#call-app").click();
-        await waitForTextContaining(app.locator("#app-tool"), "companion-called");
+        await clickFor(app, "call-app", "app-tool", "companion-called");
 
-        const activeView = getMcpAppViewLease(viewId, runtime);
-        if (!activeView) {
-          throw new Error("MCP App conformance view expired before revocation proof");
-        }
+        const activeView = viewLease();
         activeView.authorizeAppInteraction = async () => false;
 
         // The already-initialized App retains its capability snapshot, so the
         // authoritative request-time check must still withhold the resource.
-        await app.locator("#read-resource").click();
-        await waitForTextContaining(app.locator("#resource"), "denied:");
+        await clickFor(app, "read-resource", "resource", "denied:");
         await waitForTextContaining(app.locator("#resource"), "resource-ok", false);
-        if (captureUiProof) {
-          await standalonePage.screenshot({
-            path: path.join(proofDir, "standalone-resource-revoked.png"),
-          });
-        }
+        await capture(standalonePage, "standalone-resource-revoked");
 
         await standalonePage.reload();
         app = await findAppFrame(standalonePage);
         await waitForTextContaining(app.locator("#capabilities"), "serverResources", false);
-        await app.locator("#read-resource").click();
-        await waitForTextContaining(app.locator("#resource"), "denied:");
+        await clickFor(app, "read-resource", "resource", "denied:");
 
         const revokedControlPage = await controlContext.newPage();
         await mountHost(revokedControlPage);
@@ -546,13 +511,8 @@ suite.define(() => {
           "serverResources",
           false,
         );
-        await revokedControlApp.locator("#read-resource").click();
-        await waitForTextContaining(revokedControlApp.locator("#resource"), "denied:");
-        if (captureUiProof) {
-          await revokedControlPage.screenshot({
-            path: path.join(proofDir, "control-ui-resource-revoked.png"),
-          });
-        }
+        await clickFor(revokedControlApp, "read-resource", "resource", "denied:");
+        await capture(revokedControlPage, "control-ui-resource-revoked");
         await revokedControlPage.close();
 
         const tampered = `${absoluteStandaloneUrl.slice(0, -1)}${absoluteStandaloneUrl.endsWith("a") ? "b" : "a"}`;
@@ -562,20 +522,10 @@ suite.define(() => {
         await waitForText(tamperedPage.locator(".error"), "MCP App ticket was rejected");
         await tamperedPage.close();
 
-        const lease = getMcpAppViewLease(viewId, runtime);
-        if (!lease) {
-          throw new Error("MCP App view lease missing");
-        }
+        const lease = viewLease();
         lease.expiresAtMs = Date.now() - 1;
         await app.locator("#call-app").click();
         await waitForText(standalonePage.locator(".error"), "MCP App ticket was rejected");
-        await writeProof("bridge-conformance.json", {
-          test: "drives the authenticated Control UI and ticketed standalone bridges",
-          result: "passed",
-          completedAtMs: Date.now(),
-          sourceBoundary:
-            "real source-mounted component, Gateway and official App; not full dashboard",
-        });
       },
     });
   }, 90_000);
@@ -584,24 +534,7 @@ suite.define(() => {
     await suite.runScenario(context, {
       run: async (signal) => {
         signal.throwIfAborted();
-        const recordHost = recordMcpAppHost.bind(undefined, { proofDir, captureUiProof });
-        await writeProof("runtime.json", {
-          node: process.version,
-          chromium: suite.browser.version(),
-          executable: chromiumExecutablePath,
-          sourceBoundary:
-            "real Gateway/stdio/official App; source-mounted Control UI component, not full dashboard",
-        });
-        const diagnostics: Array<Record<string, unknown>> = [];
         const http = observeMcpAppHttpResponses(gatewayPort);
-        const cancellationResults: Array<Record<string, unknown>> = [];
-        const timingResults: Array<{
-          scenario: string;
-          output: string | null;
-          events: FixtureEvent[];
-          startedAtMs: number;
-          settledAtMs: number;
-        }> = [];
         try {
           await configureImmediate("timing-setup");
           viewId = await showFixture("timing-view");
@@ -613,7 +546,7 @@ suite.define(() => {
             await findAppFrame(controlPage);
             const standaloneUrl = await requestStandaloneUrl(controlPage, { sessionKey, viewId });
             const standalonePage = await standaloneContext.newPage();
-            observeMcpAppNetwork(standalonePage, "timing", diagnostics);
+            const requests = observeMcpAppRequests(standalonePage);
             await standalonePage.goto("http://127.0.0.1:" + gatewayPort + standaloneUrl);
             let app = await findAppFrame(standalonePage);
             // Each RPC stays below 10s; their composition must cross the former 15s HTTP cutoff.
@@ -623,31 +556,16 @@ suite.define(() => {
             await waitForText(app.locator("#arm-result"), "armed");
             // The real notification owns this transition. No catalog field is assigned.
             await expect.poll(() => runtime.peekCatalog()).toBeNull();
-            const timingStartedAtMs = Date.now();
-            diagnostics.push({
-              event: "timing-call-start",
-              atMs: timingStartedAtMs,
-              scenario: timingSpec.scenario,
-            });
             await app.locator("#call-app").click();
             await expect
               .poll(() => app.locator("#app-tool").textContent(), { timeout: 25_000 })
               .not.toBe("pending");
-            const settledAtMs = Date.now();
             const output = await app.locator("#app-tool").textContent();
             const timingEvents = await waitForMcpAppTimingEvents(
               fixture.readEvents,
               timingSpec.scenario,
             );
-            timingResults.push({
-              scenario: timingSpec.scenario,
-              output,
-              events: timingEvents,
-              startedAtMs: timingStartedAtMs,
-              settledAtMs,
-            });
-            await recordHost(standalonePage, timingSpec.scenario);
-            await writeProof("timing-results.json", timingResults);
+
             assertMcpAppTimingEvents(timingEvents, timingSpec);
             expect(output).toContain("companion-called");
             const initializations = (await fixture.readEvents()).filter(
@@ -669,11 +587,7 @@ suite.define(() => {
                 ? undefined
                 : path.join(tempRoot, spec.scenario + ".released");
               await fixture.configure({ ...spec, releasePath });
-              const startedAtMs = Date.now();
-              const networkStart = diagnostics.length;
               const httpStart = http.responses.length;
-              const observation: Record<string, unknown> = { scenario: spec.scenario, startedAtMs };
-              cancellationResults.push(observation);
               try {
                 await app
                   .locator(spec.action === "timeout" ? "#call-expiring" : "#call-app")
@@ -720,25 +634,14 @@ suite.define(() => {
                 // Chromium may omit requestfailed when navigation destroys the old document.
                 // Observe the exact Gateway response, not an unrelated teardown/control POST.
                 await expect.poll(() => response.destroyed).toBe(true);
-                observation.transport = {
-                  closed: response.destroyed,
-                  writableFinished: response.writableFinished,
-                };
                 expect(response.writableFinished).toBe(false);
               } finally {
                 if (releasePath) {
                   await fs.writeFile(releasePath, "released");
                 }
-                Object.assign(observation, {
-                  settledAtMs: Date.now(),
-                  network: diagnostics.slice(networkStart),
-                  events: await fixture.readEvents(spec.scenario),
-                  state: await recordHost(standalonePage, spec.scenario + "-after"),
-                });
-                await writeProof("cancellation-results.json", cancellationResults);
               }
               if (spec.action === "teardown" || spec.action === "pagehide") {
-                const reopenNetworkStart = diagnostics.length;
+                const reopenNetworkStart = requests.length;
                 const previousTimeOrigin = await standalonePage.evaluate(
                   () => performance.timeOrigin,
                 );
@@ -748,27 +651,20 @@ suite.define(() => {
                     ? await standalonePage.reload()
                     : await standalonePage.goto("http://127.0.0.1:" + gatewayPort + standaloneUrl);
                 const timeOrigin = await standalonePage.evaluate(() => performance.timeOrigin);
-                observation.reopen = { previousTimeOrigin, timeOrigin, status: response?.status() };
                 expect(response?.status()).toBe(200);
                 expect(timeOrigin).not.toBe(previousTimeOrigin);
                 app = await findAppFrame(standalonePage);
                 for (const pathname of ["/__openclaw__/mcp-app", "/__openclaw__/mcp-app/view"]) {
                   expect(
-                    diagnostics
+                    requests
                       .slice(reopenNetworkStart)
-                      .filter(
-                        (event) =>
-                          event.event === "request" &&
-                          event.method === "GET" &&
-                          event.pathname === pathname,
-                      ),
+                      .filter((event) => event.method === "GET" && event.pathname === pathname),
                   ).toHaveLength(1);
                 }
               }
               await configureImmediate(spec.scenario + "-control");
               const controlHttpStart = http.responses.length;
-              await app.locator("#call-app").click();
-              await waitForTextContaining(app.locator("#app-tool"), "companion-called");
+              await clickFor(app, "call-app", "app-tool", "companion-called");
               const controlResponses = http.responses.slice(controlHttpStart);
               expect(controlResponses).toHaveLength(1);
               expect(controlResponses[0]?.writableFinished).toBe(true);
@@ -777,12 +673,8 @@ suite.define(() => {
               expect(companionEvents(controlEvents, "response-written")).toHaveLength(1);
               // A subsequent real response is a causal barrier for the cancelled handler's late reply.
               const settledEvents = await fixture.readEvents(spec.scenario);
-              observation.events = settledEvents;
-              observation.afterControlAtMs = Date.now();
-              await writeProof("cancellation-results.json", cancellationResults);
               expect(companionEvents(settledEvents, "response-written")).toEqual([]);
               expect(companionEvents(settledEvents, "incoming")).toHaveLength(1);
-              await recordHost(standalonePage, spec.scenario + "-control");
             }
             expect(
               (await fixture.readEvents()).filter((event) => event.method === "initialize"),
@@ -792,35 +684,13 @@ suite.define(() => {
             // App documents stay uncached; the public versioned sandbox shell is immutable.
             const historyContext = await newProofContext();
             const historyPage = await historyContext.newPage();
-            const historyStates: Array<Record<string, unknown>> = [];
-            const historyObservations: Record<string, unknown> = {
-              mode: "ordinary-history",
-              bfcache: "unsupported-by-playwright; restoration unproven",
-              phase: "setup",
-              states: historyStates,
-              responses: [],
-            };
-            const recordHistory = async () => {
-              historyStates.push({
-                phase: historyObservations.phase,
-                ...(await readMcpAppHistoryNavigation(historyPage)),
-              });
-            };
             try {
-              await historyPage.addInitScript(() => {
-                const shown: Array<{ persisted: boolean; atMs: number }> = [];
-                Reflect.set(window, "mcpConformancePageShows", shown);
-                addEventListener("pageshow", (event) =>
-                  shown.push({ persisted: event.persisted, atMs: Date.now() }),
-                );
-              });
               const responses: Array<{
                 pathname: string;
                 version: string | null;
                 status: number;
                 cacheControl: string | undefined;
               }> = [];
-              historyObservations.responses = responses;
               historyPage.on("response", (response) => {
                 if (response.url().includes("mcp-app")) {
                   const url = new URL(response.url());
@@ -833,30 +703,20 @@ suite.define(() => {
                 }
               });
               await configureImmediate("history-forward");
-              historyObservations.phase = "initial-control";
               await historyPage.goto(fixtureHistoryUrl);
-              await recordHistory();
-              historyObservations.phase = "initial-app";
               await historyPage.goto("http://127.0.0.1:" + gatewayPort + standaloneUrl);
               await findAppFrame(historyPage);
-              await recordHistory();
-              historyObservations.phase = "back";
               await historyPage.goBack({ timeout: 15_000 });
               expect(historyPage.url()).toBe(fixtureHistoryUrl);
               await waitForText(historyPage.locator("p"), "History control");
-              await recordHistory();
-              historyObservations.phase = "forward";
               await historyPage.goForward({ timeout: 15_000 });
               const historyApp = await findAppFrame(historyPage);
-              await recordHistory();
-              historyObservations.phase = "returned-app-call";
               await historyApp.locator("#call-app").click();
               await waitForTextContaining(historyApp.locator("#app-tool"), "companion-called");
-              historyObservations.returnedApp = await recordHost(historyPage, "history-forward");
+
               const historyEvents = (await fixture.readEvents("history-forward")).filter(
                 (event) => event.tool === "app_companion",
               );
-              historyObservations.events = historyEvents;
               const historyCalls = historyEvents.filter((event) => event.event === "incoming");
               expect(historyCalls).toHaveLength(1);
               const historyCallId = historyCalls[0]?.id;
@@ -882,43 +742,17 @@ suite.define(() => {
                   cacheControl: "public, max-age=31536000, immutable",
                 });
               }
-              historyObservations.phase = "complete";
             } finally {
-              try {
-                await recordHistory().catch((error: unknown) => {
-                  historyObservations.observationError =
-                    error instanceof Error ? error.name : "unknown";
-                });
-                await writeProof("history-navigation.json", historyObservations);
-              } finally {
-                await suite.closeBrowserContext(historyContext);
-              }
+              await suite.closeBrowserContext(historyContext);
             }
           } finally {
-            await writeProof("timing-results.json", timingResults);
-            await Promise.allSettled(
-              standaloneContext
-                .pages()
-                .map((page, index) => recordHost(page, "timing-final-" + index)),
-            );
-            const closed = await Promise.allSettled([
+            await Promise.allSettled([
               suite.closeBrowserContext(controlContext),
               suite.closeBrowserContext(standaloneContext),
             ]);
-            for (const result of closed) {
-              if (result.status === "rejected") {
-                diagnostics.push({ event: "context-cleanup-error", error: String(result.reason) });
-              }
-            }
           }
-          expect(
-            timingResults.find((result) => result.scenario === "list8-call8")?.output,
-          ).toContain("companion-called");
         } finally {
           http.stop();
-          await writeProof("browser-diagnostics.json", diagnostics);
-          await writeProof("cancellation-results.json", cancellationResults);
-          await writeProof("timing-results.json", timingResults);
           await fs.copyFile(fixtureEventsPath, path.join(proofDir, "fixture-events.jsonl"));
         }
       },

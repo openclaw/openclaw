@@ -1,10 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { Locator, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   pauseVirtualClock,
@@ -19,13 +15,7 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not available at ${executablePath}`,
 });
 
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let proofDir: string;
-beforeEach(() => {
-  if (captureUiProof) {
-    proofDir = createControlUiE2eArtifactDir("control-ui-live-log-tail");
-  }
-});
+const viewport = { height: 800, width: 1_200 };
 
 function logLine(index: number, level = "info") {
   return JSON.stringify({
@@ -38,14 +28,6 @@ function logLine(index: number, level = "info") {
 const logLines = Array.from({ length: 200 }, (_, index) => logLine(index + 1));
 function tail(cursor: number, lines: string[], reset = false) {
   return { cursor, lines, reset, file: "/tmp/openclaw.log" };
-}
-async function capture(page: Page, name: string, target: Locator) {
-  if (captureUiProof) {
-    await writeFile(
-      path.join(proofDir, name),
-      await takeControlUiViewportScreenshot(page, page.locator(".logs-card"), [target]),
-    );
-  }
 }
 async function visibility(page: Page, value: "hidden" | "visible", repeats = 1) {
   await page.evaluate(
@@ -64,15 +46,10 @@ async function visibility(page: Page, value: "hidden" | "visible", repeats = 1) 
 
 suite.define(() => {
   it("pauses hidden log reads and catches up without overlapping a slow tail", async () => {
-    await suite.withPage({ viewport: { width: 1_200, height: 800 } }, async ({ page }) => {
+    await suite.withPage({ viewport }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "logs.tail": {
-            cursor: 1,
-            file: "/tmp/visible.log",
-            lines: ["initial"],
-            reset: true,
-          },
+          "logs.tail": tail(1, ["initial"], true),
         },
       });
       await page.clock.install();
@@ -91,11 +68,7 @@ suite.define(() => {
       expect(catchup.at(-1)?.params).toMatchObject({ cursor: 1 });
       await page.clock.runFor(6_000);
       expect(await gateway.getRequests("logs.tail")).toHaveLength(reads + 1);
-      await gateway.resolveDeferred("logs.tail", {
-        cursor: 2,
-        file: "/tmp/visible.log",
-        lines: ["resumed"],
-      });
+      await gateway.resolveDeferred("logs.tail", tail(2, ["resumed"]));
       await page.getByText("resumed", { exact: true }).waitFor();
       expect(await page.locator(".log-message").allTextContents()).toEqual(["initial", "resumed"]);
 
@@ -109,22 +82,11 @@ suite.define(() => {
   });
 
   it("returns to the newest line when auto-follow is re-enabled", async () => {
-    if (captureUiProof) {
-      await mkdir(path.join(proofDir, "video"), { recursive: true });
-    }
     await suite.withPage(
       {
         locale: "en-US",
         serviceWorkers: "block",
-        viewport: { height: 800, width: 1_200 },
-        ...(captureUiProof
-          ? {
-              recordVideo: {
-                dir: path.join(proofDir, "video"),
-                size: { height: 800, width: 1_200 },
-              },
-            }
-          : {}),
+        viewport,
       },
       async ({ page }) => {
         const pageErrors: string[] = [];
@@ -142,27 +104,22 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}logs`);
-        try {
-          await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length);
-        } finally {
-          await capture(page, "initial-tail.png", page.locator(".log-row").first());
-        }
-        expect((await gateway.getRequests("logs.tail"))[0]?.params).toEqual({
-          limit: 500,
-          maxBytes: 250_000,
-        });
+        await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length);
+        const limits = { limit: 500, maxBytes: 250_000 };
+        expect((await gateway.getRequests("logs.tail"))[0]?.params).toEqual(limits);
         await expect
           .poll(async () => (await gateway.getRequests("logs.tail")).length, { timeout: 5000 })
           .toBeGreaterThanOrEqual(2);
         expect((await gateway.getRequests("logs.tail"))[1]?.params).toEqual({
           cursor: logLines.length,
-          limit: 500,
-          maxBytes: 250_000,
+          ...limits,
         });
         await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length + 1);
         await page.locator(".log-row", { hasText: "log line 201" }).waitFor();
 
         const stream = page.locator(".log-stream");
+        const bottomGap = () =>
+          stream.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
         const autoFollow = page.getByRole("switch", { name: "Auto-follow", exact: true });
         await expect
           .poll(() => stream.evaluate((element) => element.scrollHeight - element.clientHeight))
@@ -179,18 +136,7 @@ suite.define(() => {
         await autoFollow.click();
         await expect.poll(() => autoFollow.isChecked()).toBe(true);
 
-        await expect
-          .poll(() =>
-            stream.evaluate(
-              (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
-            ),
-          )
-          .toBeLessThan(2);
-        await capture(
-          page,
-          "incremental-tail-and-autofollow.png",
-          stream.locator(".log-row", { hasText: "log line 201" }),
-        );
+        await expect.poll(bottomGap).toBeLessThan(2);
         expect(pageErrors).toEqual([]);
       },
     );
