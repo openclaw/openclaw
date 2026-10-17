@@ -123,6 +123,7 @@ describe("first-party mock export ratchet", () => {
     }
     const baseline = path.join(root, "config/test-mock-exports-baseline.txt");
     const readBaseline = () => fs.readFileSync(baseline, "utf8");
+    const entries = (text: string) => text.split("\n").filter((line) => line.startsWith("["));
     const file = path.join(root, "test/example.test.ts");
     const manifest = JSON.stringify({ name: "example", exports: { "./value": "./src/value.ts" } });
     write(path.join(root, "package.json"), manifest);
@@ -184,7 +185,7 @@ describe("first-party mock export ratchet", () => {
 
     const other = path.join(root, "test/new.test.ts");
     write(other, original);
-    const entry = approved.split("\n").find((line) => line.startsWith("["))!;
+    const entry = entries(approved)[0]!;
     fs.appendFileSync(
       baseline,
       entry.replace('"test/example.test.ts"', '"test/new.test.ts"') + "\n",
@@ -200,11 +201,7 @@ describe("first-party mock export ratchet", () => {
     write(file, "// mock-isolation: preserve a database-free fixture\n" + original);
     expect(main(root, ["--base", "HEAD"])).toBe(1);
     expect(main(root, ["--base", "HEAD", "--prune"])).toBe(0);
-    expect(
-      readBaseline()
-        .split("\n")
-        .filter((line) => line.startsWith("[")),
-    ).toEqual([]);
+    expect(entries(readBaseline())).toEqual([]);
     expect(main(root, ["--base", "HEAD"])).toBe(0);
     write(
       file,

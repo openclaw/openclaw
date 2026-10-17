@@ -1,4 +1,3 @@
-// Check Protocol Event Coverage tests cover gateway event extraction and drift comparison.
 import { describe, expect, it } from "vitest";
 import {
   compareEventCoverage,
@@ -11,24 +10,20 @@ import {
 
 const GATEWAY_LIST_FIXTURE = `
 export const GATEWAY_EVENTS = [
-  "connect.challenge",
-  "chat",
+  "connect.challenge", "chat", "session.message", "tick", "health",
   // comment noise
-  "session.message",
-  "tick",
-  "health",
-  "terminal.data",
-  "terminal.exit",
-  "presence",
-  "cron",
-  "shutdown",
-  GATEWAY_EVENT_UPDATE_AVAILABLE,
+  "terminal.data", "terminal.exit", "presence", "cron", "shutdown", GATEWAY_EVENT_UPDATE_AVAILABLE,
 ];
 `;
 
 const GATEWAY_CONSTANTS_FIXTURE = `
 export const GATEWAY_EVENT_UPDATE_AVAILABLE = "update.available" as const;
 `;
+const swiftConstants = extractSwiftStaticStringConstants(`
+      enum ApprovalBridge {
+        static let requestedKind = "exec.approval.requested"
+      }
+`);
 
 describe("extractGatewayEventNames", () => {
   it("collects literals and resolves identifiers", () => {
@@ -51,63 +46,45 @@ describe("extractGatewayEventNames", () => {
 
 describe("extractSwiftHandledEvents", () => {
   it("collects switch case literals and comparisons, skipping nested and non-event code", () => {
-    const constants = extractSwiftStaticStringConstants(`
-      enum SomeBridge {
-        static let requestedKind = "exec.approval.requested"
-      }
-    `);
     const source = `
       static func mapEventFrame(_ evt: EventFrame) -> Event? {
         switch evt.event {
-        case "tick":
-            return .tick
+        case "tick": return .tick
         case "chat", "session.message":
-            guard let payload = evt.payload else { return nil }
             switch payload.kind {
-            case "nested.ignored":
-                return nil
-            default:
-                return .chat
+            case "nested.ignored": return nil
+            default: return .chat
             }
-        case SomeBridge.requestedKind:
-            return .approval
-        default:
-            return nil
+        case ApprovalBridge.requestedKind: return .approval
+        default: return nil
         }
       }
       func other(_ status: String) {
         switch status {
-        case "ok", "completed":
-            break
-        default:
-            break
+        case "ok", "completed": break
+        default: break
         }
       }
       if evt.event == "connect.challenge" { return }
     `;
-    const handled = extractSwiftHandledEvents(source, constants);
-    const handledEvents = [...handled] as string[];
-    expect(
-      handledEvents.toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
-    ).toEqual(["chat", "connect.challenge", "exec.approval.requested", "session.message", "tick"]);
+    expect([...extractSwiftHandledEvents(source, swiftConstants)].toSorted()).toEqual([
+      "chat",
+      "connect.challenge",
+      "exec.approval.requested",
+      "session.message",
+      "tick",
+    ]);
   });
 
   it("does not resolve qualified constants inside quoted case labels", () => {
-    const constants = extractSwiftStaticStringConstants(`
-      enum ApprovalBridge {
-        static let requestedKind = "exec.approval.requested"
-      }
-    `);
     const handled = extractSwiftHandledEvents(
       `
         switch evt.event {
-        case "ApprovalBridge.requestedKind":
-          return .approval
-        default:
-          return nil
+        case "ApprovalBridge.requestedKind": return .approval
+        default: return nil
         }
       `,
-      constants,
+      swiftConstants,
     );
 
     expect(handled).toEqual(new Set(["ApprovalBridge.requestedKind"]));
@@ -132,9 +109,7 @@ describe("extractKotlinHandledEvents", () => {
     const source = `
       fun handleGatewayEvent(event: String, payloadJson: String?) {
         when (event) {
-          "tick" -> {
-            scope.launch { pollHealth() }
-          }
+          "tick" -> { scope.launch { pollHealth() } }
           "chat" -> {
             when (parseKind(payloadJson)) {
               "nested.ignored" -> return
@@ -190,8 +165,6 @@ describe("extractKotlinHandledEvents", () => {
   });
 
   it("ignores event literals outside handler function bodies", () => {
-    // Regression guard: predicate helpers that are not called from the
-    // dispatch path must not count as coverage (false negative for the gate).
     const source = `
       internal fun gatewayEventInvalidatesNodesDevices(event: String): Boolean = event == "node.pair.requested" || event == "node.pair.resolved"
       fun topLevelNotAHandler(event: String) {

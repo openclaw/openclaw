@@ -4,20 +4,19 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const CONTROL_UI_INDEX = "dist/control-ui/index.html";
 const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
 const CONTROL_UI_ASSETS = [
@@ -46,87 +45,80 @@ function chmodTreeWorldReadable(dir: string): void {
   }
 }
 
-function withPackedPackage(
-  inventory: readonly string[],
-  run: (fixture: { root: string; tarball: string }) => void,
-  options: { postinstall?: boolean } = {},
-): void {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-control-ui-package-inventory-"));
+function pack(inventory: readonly string[], options: { postinstall?: boolean } = {}) {
+  const root = tempDirs.make("openclaw-control-ui-package-inventory-");
   const packageRoot = join(root, "package");
   const write = (file: string, content: string) => writeFixtureFile(packageRoot, file, content);
-  try {
-    mkdirSync(packageRoot, { recursive: true });
-    write(
-      "package.json",
-      JSON.stringify({
-        name: "openclaw",
-        version: "2026.7.2",
-        type: "module",
-        scripts:
-          options.postinstall === false
-            ? undefined
-            : { postinstall: "node scripts/postinstall-bundled-plugins.mjs" },
-      }),
-    );
-    write(
-      "dist/postinstall-inventory.json",
-      JSON.stringify([...new Set([...inventory, CODE_MODE_WORKER_PATH])]),
-    );
-    write("dist/index.js", "export {};\n");
-    write(CODE_MODE_WORKER_PATH, "export {};\n");
-    write(
-      CONTROL_UI_INDEX,
-      '<!doctype html><script type="module" src="./assets/app.js"></script>\n',
-    );
-    for (const assetPath of CONTROL_UI_ASSETS) {
-      write(assetPath, "export {};\n");
-    }
-    write(".openclaw-lifecycle-pending", "pending\n");
-    for (const relativePath of WORKSPACE_TEMPLATE_PACK_PATHS) {
-      write(relativePath, `# ${relativePath}\n`);
-    }
-    for (const relativePath of [
-      "scripts/postinstall-bundled-plugins.mjs",
-      "scripts/lib/fs-safe-prebuild.mjs",
-      "scripts/windows-cmd-helpers.mjs",
-      "scripts/lib/package-lifecycle-marker.mjs",
-    ]) {
-      const destination = join(packageRoot, relativePath);
-      mkdirSync(dirname(destination), { recursive: true });
-      copyFileSync(resolve(relativePath), destination);
-    }
-    chmodTreeWorldReadable(packageRoot);
-
-    const packed = spawnSync(
-      "npm",
-      ["pack", "--ignore-scripts", "--json", "--pack-destination", root],
-      { cwd: packageRoot, encoding: "utf8", timeout: 30_000 },
-    );
-    expect(packed.status, packed.stderr || packed.error?.message).toBe(0);
-    // npm <=11 `pack --json` emits an array; npm 12 emits an object keyed by package name.
-    const parsed = JSON.parse(packed.stdout) as
-      | { filename: string }[]
-      | Record<string, { filename: string }>;
-    const packResult = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
-    const filename = packResult?.filename ?? "";
-    const tarball = join(root, filename);
-    expect(existsSync(tarball)).toBe(true);
-    run({ root, tarball });
-  } finally {
-    rmSync(root, { recursive: true, force: true });
+  mkdirSync(packageRoot, { recursive: true });
+  write(
+    "package.json",
+    JSON.stringify({
+      name: "openclaw",
+      version: "2026.7.2",
+      type: "module",
+      scripts:
+        options.postinstall === false
+          ? undefined
+          : { postinstall: "node scripts/postinstall-bundled-plugins.mjs" },
+    }),
+  );
+  write(
+    "dist/postinstall-inventory.json",
+    JSON.stringify([...new Set([...inventory, CODE_MODE_WORKER_PATH])]),
+  );
+  write("dist/index.js", "export {};\n");
+  write(CODE_MODE_WORKER_PATH, "export {};\n");
+  write(CONTROL_UI_INDEX, '<!doctype html><script type="module" src="./assets/app.js"></script>\n');
+  for (const assetPath of CONTROL_UI_ASSETS) {
+    write(assetPath, "export {};\n");
   }
+  write(".openclaw-lifecycle-pending", "pending\n");
+  for (const relativePath of WORKSPACE_TEMPLATE_PACK_PATHS) {
+    write(relativePath, `# ${relativePath}\n`);
+  }
+  for (const relativePath of [
+    "scripts/postinstall-bundled-plugins.mjs",
+    "scripts/lib/fs-safe-prebuild.mjs",
+    "scripts/windows-cmd-helpers.mjs",
+    "scripts/lib/package-lifecycle-marker.mjs",
+  ]) {
+    const destination = join(packageRoot, relativePath);
+    mkdirSync(dirname(destination), { recursive: true });
+    copyFileSync(resolve(relativePath), destination);
+  }
+  chmodTreeWorldReadable(packageRoot);
+
+  const packed = run("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", root], {
+    cwd: packageRoot,
+  });
+  expect(packed.status, packed.stderr || packed.error?.message).toBe(0);
+  // npm <=11 `pack --json` emits an array; npm 12 emits an object keyed by package name.
+  const parsed = JSON.parse(packed.stdout) as
+    | { filename: string }[]
+    | Record<string, { filename: string }>;
+  const packResult = Array.isArray(parsed) ? parsed[0] : Object.values(parsed)[0];
+  const filename = packResult?.filename ?? "";
+  const tarball = join(root, filename);
+  expect(existsSync(tarball)).toBe(true);
+  return { root, tarball };
+}
+
+function run(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+) {
+  return spawnSync(command, args, { encoding: "utf8", timeout: 30_000, ...options });
 }
 
 function checkPackedPackage(tarball: string) {
-  return spawnSync(process.execPath, [CHECK_SCRIPT, tarball], {
+  return run(process.execPath, [CHECK_SCRIPT, tarball], {
     env: preparedScriptWrapperEnv([
       [
         new URL("../../scripts/check-openclaw-package-tarball.mts", import.meta.url),
         resolveRuntimeWorkerUrl(scriptModuleEntrypoints.packageTarball),
       ],
     ]),
-    encoding: "utf8",
-    timeout: 30_000,
   });
 }
 
@@ -143,7 +135,7 @@ function installPackedPackage(root: string, tarball: string) {
     join(installRoot, "package.json"),
     `${JSON.stringify({ private: true }, null, 2)}\n`,
   );
-  const result = spawnSync(
+  const result = run(
     "npm",
     [
       "install",
@@ -157,8 +149,6 @@ function installPackedPackage(root: string, tarball: string) {
       tarball,
     ],
     {
-      encoding: "utf8",
-      timeout: 30_000,
       env: {
         ...process.env,
         HOME: home,
@@ -176,49 +166,35 @@ function installPackedPackage(root: string, tarball: string) {
 }
 
 describe("packaged Control UI postinstall inventory", () => {
-  it("proves actual npm postinstall deletes an omitted dashboard from a falsely accepted package", () => {
-    withPackedPackage(["dist/index.js"], ({ root, tarball }) => {
-      const validation = checkPackedPackage(tarball);
+  it.each([false, true])(
+    "validates inventory against actual postinstall UI survival: %s",
+    (survives) => {
+      const { root, tarball } = pack(["dist/index.js", ...(survives ? CONTROL_UI_FILES : [])]);
+      const result = checkPackedPackage(tarball);
       const installedPackageRoot = installPackedPackage(root, tarball);
       expect(existsSync(join(installedPackageRoot, "dist/index.js"))).toBe(true);
       for (const relativePath of CONTROL_UI_FILES) {
-        expect(existsSync(join(installedPackageRoot, relativePath))).toBe(false);
+        expect(existsSync(join(installedPackageRoot, relativePath))).toBe(survives);
       }
-
-      expect(validation.status, validation.stdout).not.toBe(0);
-      const validationErrors = validation.stderr.split(/\r?\n/u);
-      for (const relativePath of CONTROL_UI_FILES) {
-        expect
-          .soft(validationErrors)
-          .toContain(`postinstall inventory omits packaged dist file ${relativePath}`);
+      if (survives) {
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+        expect(existsSync(join(installedPackageRoot, CODE_MODE_WORKER_PATH))).toBe(true);
+      } else {
+        expect(result.status, result.stdout).not.toBe(0);
+        const errors = result.stderr.split(/\r?\n/u);
+        for (const relativePath of CONTROL_UI_FILES) {
+          expect
+            .soft(errors)
+            .toContain(`postinstall inventory omits packaged dist file ${relativePath}`);
+        }
       }
-    });
-  });
-
-  it("accepts a packaged dashboard whose complete UI survives postinstall", () => {
-    withPackedPackage(["dist/index.js", ...CONTROL_UI_FILES], ({ root, tarball }) => {
-      const result = checkPackedPackage(tarball);
-
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
-
-      const installedPackageRoot = installPackedPackage(root, tarball);
-      expect(existsSync(join(installedPackageRoot, CODE_MODE_WORKER_PATH))).toBe(true);
-      for (const relativePath of CONTROL_UI_FILES) {
-        expect(existsSync(join(installedPackageRoot, relativePath))).toBe(true);
-      }
-    });
-  });
+    },
+  );
 
   it("does not impose postinstall inventory rules on lifecycle-free archived fixtures", () => {
-    withPackedPackage(
-      ["dist/index.js"],
-      ({ tarball }) => {
-        const result = checkPackedPackage(tarball);
-
-        expect(result.status, result.stderr).toBe(0);
-      },
-      { postinstall: false },
-    );
+    const { tarball } = pack(["dist/index.js"], { postinstall: false });
+    const result = checkPackedPackage(tarball);
+    expect(result.status, result.stderr).toBe(0);
   });
 });

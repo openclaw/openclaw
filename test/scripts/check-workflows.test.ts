@@ -172,24 +172,20 @@ describe("check-workflows", () => {
     },
   );
 
-  it.each([
-    { mode: "bootstrap", code: 0, errors: [] },
-    {
-      mode: "old-python",
-      code: 1,
-      errors: ["python3 is 3.9.6", "pre-commit 4.6.2 requires Python >=3.10"],
-    },
-    {
-      mode: "missing-venv",
-      code: 1,
-      errors: [
+  it.each<[string, number, string[]]>([
+    ["bootstrap", 0, []],
+    ["old-python", 1, ["python3 is 3.9.6", "pre-commit 4.6.2 requires Python >=3.10"]],
+    [
+      "missing-venv",
+      1,
+      [
         "python venv unavailable",
         "missing pre-commit runtime for actionlint",
         "Python venv support for pre-commit 4.6.2",
       ],
-    },
-    { mode: "hook-failure", code: 13, errors: ["hook failed"] },
-  ])("handles $mode through the temporary Python runtime", ({ mode, code, errors }) => {
+    ],
+    ["hook-failure", 13, ["hook failed"]],
+  ])("handles %s through the temporary Python runtime", (mode, code, errors) => {
     const tempDir = makeTempDir(tempDirs, "check-workflows-");
     const binDir = path.join(tempDir, "bin");
     const markerPath = path.join(tempDir, "python.txt");
@@ -394,14 +390,10 @@ describe("check-workflows", () => {
 
   it("keeps installed startup measurement opt-in and binds the package independently from tooling", () => {
     const { workflow, probe, native } = readWindowsProbe();
-    expect(workflow.on.workflow_dispatch.inputs.installed_startup_package).toMatchObject({
-      default: "",
-      type: "string",
-    });
-    expect(workflow.on.workflow_dispatch.inputs.startup_node_version?.default).toBe("26.9.0");
-    expect(workflow.on.workflow_dispatch.inputs.installed_startup_cpu_diagnostic).toMatchObject({
-      default: false,
-      type: "boolean",
+    expect(workflow.on.workflow_dispatch.inputs).toMatchObject({
+      installed_startup_package: { default: "", type: "string" },
+      startup_node_version: { default: "26.9.0" },
+      installed_startup_cpu_diagnostic: { default: false, type: "boolean" },
     });
     const validation = findStep(probe, "startup_input", "id");
     expect(validation.env).toMatchObject({

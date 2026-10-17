@@ -59,7 +59,7 @@ type GatewaySummary = {
   peakUniqueWorkspaceMarkdownRegFds: number;
 };
 
-function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
+function runGatewayOwnershipFixture(scenario: OwnershipScenario, expectedStatus = 1) {
   const root = tempDirs.make("openclaw-fd-owner-");
   const preloadPath = path.join(root, "runtime.mjs");
   const journalPath = path.join(root, "journal.json");
@@ -306,6 +306,7 @@ function runGatewayOwnershipFixture(scenario: OwnershipScenario) {
     }
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.signal, result.stderr).toBeNull();
+    expect(result.status, result.stderr).toBe(expectedStatus);
     const journal = JSON.parse(fs.readFileSync(journalPath, "utf8")) as {
       samples: { pid: number; alive: boolean }[];
       signals: [number, string][];
@@ -360,19 +361,27 @@ function expectJoined(journal: ReturnType<typeof runGatewayOwnershipFixture>["jo
   expect(journal).toMatchObject({ closed: true, alive: false });
 }
 
+function parseEnv(env: Record<string, string>, args: string[] = []) {
+  return withEnv(
+    Object.fromEntries(
+      Object.entries(env).map(([key, value]) => [`OPENCLAW_MEMORY_FD_REPRO_${key}`, value]),
+    ),
+    () => parseArgs(args),
+  );
+}
+const ownedSamples = (length: number) =>
+  Array.from({ length }, () => ({ pid: OWNED_PID, alive: true }));
+
 describe("check-memory-fd-repro", () => {
   it("rejects loose numeric environment limits before generating files", () => {
     expect(
-      withEnv(
-        {
-          OPENCLAW_MEMORY_FD_REPRO_FILES: "17",
-          OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS: "0",
-          OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS: "0",
-          OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
-          OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
-        },
-        () => parseArgs([]),
-      ),
+      parseEnv({
+        FILES: "17",
+        MAX_WORKSPACE_REG_FDS: "0",
+        SAMPLE_DELAY_MS: "0",
+        SETTLE_DELAY_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
+        TIMEOUT_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
+      }),
     ).toMatchObject({
       fileCount: 17,
       invokeTimeoutMs: MAX_TIMER_TIMEOUT_MS,
@@ -381,37 +390,36 @@ describe("check-memory-fd-repro", () => {
       settleDelayMs: MAX_TIMER_TIMEOUT_MS,
     });
 
-    expect(() =>
-      withEnv({ OPENCLAW_MEMORY_FD_REPRO_FILES: "17files" }, () => parseArgs([])),
-    ).toThrow("OPENCLAW_MEMORY_FD_REPRO_FILES must be a non-negative integer");
-    expect(() =>
-      withEnv({ OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS: "1e3" }, () => parseArgs([])),
-    ).toThrow("OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS must be a non-negative integer");
+    expect(() => parseEnv({ FILES: "17files" })).toThrow(
+      "OPENCLAW_MEMORY_FD_REPRO_FILES must be a non-negative integer",
+    );
+    expect(() => parseEnv({ TIMEOUT_MS: "1e3" })).toThrow(
+      "OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS must be a non-negative integer",
+    );
   });
 
   it("lets explicit CLI numeric flags override malformed inherited env defaults", () => {
     expect(
-      withEnv(
+      parseEnv(
         {
-          OPENCLAW_MEMORY_FD_REPRO_FILES: "17files",
-          OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS: "4fds",
-          OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS: "1e3",
-          OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS: "soon",
-          OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS: "later",
+          FILES: "17files",
+          MAX_WORKSPACE_REG_FDS: "4fds",
+          TIMEOUT_MS: "1e3",
+          SAMPLE_DELAY_MS: "soon",
+          SETTLE_DELAY_MS: "later",
         },
-        () =>
-          parseArgs([
-            "--files",
-            "20",
-            "--max-workspace-reg-fds",
-            "4",
-            "--invoke-timeout-ms",
-            "1000",
-            "--sample-delay-ms",
-            "0",
-            "--settle-delay-ms",
-            "0",
-          ]),
+        [
+          "--files",
+          "20",
+          "--max-workspace-reg-fds",
+          "4",
+          "--invoke-timeout-ms",
+          "1000",
+          "--sample-delay-ms",
+          "0",
+          "--settle-delay-ms",
+          "0",
+        ],
       ),
     ).toMatchObject({
       fileCount: 20,
@@ -444,9 +452,7 @@ describe("check-memory-fd-repro", () => {
       fileCount: 20,
     });
 
-    expect(
-      withEnv({ OPENCLAW_MEMORY_FD_REPRO_FILES: "17" }, () => parseArgs(["--", "--unknown"])),
-    ).toMatchObject({
+    expect(parseEnv({ FILES: "17" }, ["--", "--unknown"])).toMatchObject({
       fileCount: 17,
     });
   });
@@ -572,8 +578,7 @@ describe("check-memory-fd-repro", () => {
     it.each(["foreign-ready", "exited-ready"] as const)(
       "never samples or signals an unrelated listener (%s)",
       (scenario) => {
-        const { result, journal, summary } = runGatewayOwnershipFixture(scenario);
-        expect(result.status, result.stderr).toBe(1);
+        const { journal, summary } = runGatewayOwnershipFixture(scenario);
         expect(journal.samples).toEqual([]);
         expect(journal.signals.some(([pid]) => Math.abs(pid) === FOREIGN_PID)).toBe(false);
         expect(summary?.passed).not.toBe(true);
@@ -583,7 +588,6 @@ describe("check-memory-fd-repro", () => {
 
     it("stops sampling when the launched process exits during measurement", () => {
       const { result, journal, summary } = runGatewayOwnershipFixture("replaced-during");
-      expect(result.status, result.stderr).toBe(1);
       expect(journal.samples).toEqual([{ pid: OWNED_PID, alive: true }]);
       expect(journal.signals.some(([pid]) => Math.abs(pid) === FOREIGN_PID)).toBe(false);
       expect(summary?.passed).not.toBe(true);
@@ -596,7 +600,6 @@ describe("check-memory-fd-repro", () => {
       (scenario) => {
         const { result, journal, summary } = runGatewayOwnershipFixture(scenario);
         const channel = scenario === "stdout-error" ? "stdout" : "stderr";
-        expect(result.status, result.stderr).toBe(1);
         expect(result.stderr).toContain(`injected Gateway ${channel} read EIO`);
         expect(result.stderr).not.toContain("Unhandled 'error' event");
         expect(journal.samples).toEqual([{ pid: OWNED_PID, alive: true }]);
@@ -624,12 +627,9 @@ describe("check-memory-fd-repro", () => {
         });
         expect(journal.guardFired).toBe(false);
         expect(journal.requestSettled).toBe(true);
-        expect(result.status, result.stderr).toBe(1);
         expect(result.stderr).toContain(diagnostic);
         expect(result.stderr).not.toContain("Unhandled 'error' event");
-        expect(journal.samples).toEqual(
-          Array.from({ length: count }, () => ({ pid: OWNED_PID, alive: true })),
-        );
+        expect(journal.samples).toEqual(ownedSamples(count));
         expect(journal.signals).toEqual([[-OWNED_PID, "SIGTERM"]]);
         expectJoined(journal);
         expect(journal.rootExists).toBe(false);
@@ -644,8 +644,7 @@ describe("check-memory-fd-repro", () => {
       "inherited-paths",
       "delayed-success",
     ] as const)("joins the launched process before publishing success (%s)", (scenario) => {
-      const { result, journal, summary, fixtureRoot } = runGatewayOwnershipFixture(scenario);
-      expect(result.status, result.stderr).toBe(0);
+      const { journal, summary, fixtureRoot } = runGatewayOwnershipFixture(scenario, 0);
       if (scenario === "inherited-paths") {
         expect(journal.events).toEqual(
           expect.arrayContaining(["isolated:index", "isolated:gateway"]),
@@ -659,9 +658,7 @@ describe("check-memory-fd-repro", () => {
             ? path.join(fixtureRoot, "inherited-source")
             : fixtureRoot,
       });
-      expect(journal.samples).toEqual(
-        Array.from({ length: 3 }, () => ({ pid: OWNED_PID, alive: true })),
-      );
+      expect(journal.samples).toEqual(ownedSamples(3));
       expect(journal.closed).toBe(true);
       expect(journal.events.indexOf("close")).toBeLessThan(journal.events.indexOf("summary"));
       expect(journal.rootExists).toBe(false);
@@ -669,8 +666,7 @@ describe("check-memory-fd-repro", () => {
     });
 
     it("fails report-only and retains inputs when the owned process cannot be joined", () => {
-      const { result, journal, summary } = runGatewayOwnershipFixture("ignored-stop");
-      expect(result.status, result.stderr).toBe(1);
+      const { journal, summary } = runGatewayOwnershipFixture("ignored-stop");
       expect(journal.alive).toBe(true);
       expect(journal.rootExists).toBe(true);
       expect(summary?.passed).not.toBe(true);
@@ -683,7 +679,6 @@ describe("check-memory-fd-repro", () => {
       "prints primary $primary and cleanup $cleanup failures",
       ({ primary, cleanup, scenario }) => {
         const { result, journal, summary } = runGatewayOwnershipFixture(scenario);
-        expect(result.status, result.stderr).toBe(1);
         expect(result.stderr).toContain(`measurement denied ${primary}`);
         expect(result.stderr).toContain(`workspace removal failed ${cleanup}`);
         expect(journal.closed).toBe(true);
@@ -729,7 +724,6 @@ describe("check-memory-fd-repro", () => {
       "retains a failed summary after owned cleanup fails (%s)",
       (scenario) => {
         const { result, journal, summary } = runGatewayOwnershipFixture(scenario);
-        expect(result.status, result.stderr).toBe(1);
         expectJoined(journal);
         expect(journal.samples).toHaveLength(3);
         expect(journal.events).toEqual(["close", "cleanup", "summary"]);
@@ -752,7 +746,6 @@ describe("check-memory-fd-repro", () => {
       const { result, journal, summary } = runGatewayOwnershipFixture(
         "completed-threshold-cleanup-report-error",
       );
-      expect(result.status, result.stderr).toBe(1);
       expectJoined(journal);
       expect(journal.samples).toHaveLength(3);
       expect(journal.events).toEqual(["close", "cleanup", "summary"]);
