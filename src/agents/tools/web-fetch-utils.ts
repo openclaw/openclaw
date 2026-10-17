@@ -26,6 +26,13 @@ const BLOCK_BREAK_TAGS = new Set([
   "tr",
   "ul",
   "ol",
+  "pre",
+  "blockquote",
+  "dl",
+  "dt",
+  "dd",
+  "figure",
+  "figcaption",
 ]);
 // Keep malformed nested markup from making end-of-document context unwind quadratic.
 // web_fetch favors bounded, auditable text over preserving deep broken HTML structure.
@@ -139,13 +146,22 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
   const root: RenderContext = { kind: "root", parts: [] };
   const stack: RenderContext[] = [root];
   const state: { title?: string } = {};
+  const preserved: string[] = [];
+  let preDepth = 0;
+  let rowCells = 0;
 
   for (let i = 0; i < html.length;) {
     const ch = html[i];
     if (ch !== "<") {
       const nextTag = html.indexOf("<", i);
       const end = nextTag === -1 ? html.length : nextTag;
-      appendText(stack, decodeEntities(html.slice(i, end)));
+      const value = decodeEntities(html.slice(i, end));
+      if (preDepth > 0) {
+        appendText(stack, `\0${preserved.length}\0`);
+        preserved.push(value);
+      } else {
+        appendText(stack, value.replaceAll("\0", "\0\0"));
+      }
       i = end;
       continue;
     }
@@ -190,7 +206,17 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
     if (token.closing) {
       if (kind) {
         closeThroughContext(stack, kind, state);
+      } else if (token.name === "pre") {
+        if (preDepth > 0) {
+          preDepth -= 1;
+          if (preDepth === 0) {
+            appendText(stack, "\n```\n");
+          }
+        }
       } else if (BLOCK_BREAK_TAGS.has(token.name)) {
+        if (token.name === "tr") {
+          rowCells = 0;
+        }
         appendText(stack, "\n");
       }
       continue;
@@ -207,6 +233,22 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
       appendText(stack, "\n");
       continue;
     }
+    if (token.name === "tr") {
+      if (rowCells > 0) {
+        appendText(stack, "\n");
+      }
+      rowCells = 0;
+    } else if (token.name === "td" || token.name === "th") {
+      if (rowCells > 0) {
+        appendText(stack, " | ");
+      }
+      rowCells += 1;
+    } else if (token.name === "pre" && !token.selfClosing) {
+      if (preDepth === 0) {
+        appendText(stack, "\n```\n");
+      }
+      preDepth += 1;
+    }
     if (!kind || token.selfClosing) {
       continue;
     }
@@ -222,13 +264,20 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
     pushContext(stack, context, state);
   }
 
+  if (preDepth > 0) {
+    appendText(stack, "\n```\n");
+  }
   while (stack.length > 1) {
     closeTopContext(stack, state);
   }
 
+  const restorePreserved = (value: string) =>
+    value.replace(/\0(?:\0|(\d+)\0)/g, (_match, index: string | undefined) =>
+      index === undefined ? "\0" : preserved[Number(index)]!,
+    );
   return {
-    text: normalizeWhitespace(root.parts.join("")),
-    title: state.title,
+    text: restorePreserved(normalizeWhitespace(root.parts.join(""))),
+    title: state.title === undefined ? undefined : restorePreserved(state.title),
   };
 }
 
