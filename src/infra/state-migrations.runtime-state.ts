@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import { asNullableRecord, asRecord } from "@openclaw/normalization-core/record-coerce";
@@ -112,7 +113,13 @@ export function migrateLegacyConfigHealth(params: {
   }
   let entries: LegacyConfigHealthEntry[];
   try {
-    entries = normalizeLegacyConfigHealthFile(JSON.parse(fs.readFileSync(sourcePath, "utf8")));
+    const sourceBytes = fs.readFileSync(sourcePath);
+    if (!isUtf8(sourceBytes)) {
+      throw new Error(
+        `Legacy config health state is not valid UTF-8: ${sourcePath}; source left unchanged. Convert a copy to valid UTF-8 and rerun "openclaw doctor".`,
+      );
+    }
+    entries = normalizeLegacyConfigHealthFile(JSON.parse(sourceBytes.toString("utf8")));
   } catch (error) {
     return {
       changes: [],

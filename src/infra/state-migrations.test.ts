@@ -3013,6 +3013,36 @@ describe("state migrations", () => {
     await expect(fs.readFile(archivedPath, "utf8")).resolves.toBe("existing archive");
   });
 
+  it("refuses a config health source that is not valid UTF-8", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const cfg = createConfig();
+    const configPath = path.join(stateDir, "openclaw.json");
+    const sourcePath = path.join(stateDir, "logs", "config-health.json");
+    // One undecodable byte inside a JSON string: lossy decoding still parses, so the
+    // migration must refuse before writing a row or retiring the source.
+    const sourceBytes = Buffer.concat([
+      Buffer.from(`{"entries":{"${configPath}":{"lastKnownGood":{"note":"caf`),
+      Buffer.from([0xe9]),
+      Buffer.from(`"}}}}`),
+    ]);
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, sourceBytes);
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: createEnv(stateDir),
+      homedir: () => root,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("Legacy config health state is not valid UTF-8");
+    expect(result.warnings[0]).toContain('rerun "openclaw doctor"');
+    await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBytes);
+    await expectMissingPath(`${sourcePath}.migrated`);
+  });
+
   it("leaves malformed legacy config health state in place", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
