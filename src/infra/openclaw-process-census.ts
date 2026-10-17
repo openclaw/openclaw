@@ -119,6 +119,7 @@ function processHoldsOpenClawArtifacts(
     }
     let scripts: Record<string, unknown> = {};
     if (typeof position !== "number") {
+      // Scriptless invocations do not use the standalone-script absence exception.
       const pkg = readProcessPackageIdentity(cwd, true);
       if (pkg.name === "openclaw") {
         return true;

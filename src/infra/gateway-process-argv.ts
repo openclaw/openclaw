@@ -51,6 +51,13 @@ export type OpenClawArgvClassification =
       reason: string;
     };
 
+/** Exhausted ENOENT lookup. Cleanup may treat this as a non-holder; other callers still fail closed. */
+const PACKAGE_IDENTITY_ABSENT = "OPENCLAW_PACKAGE_IDENTITY_ABSENT";
+
+function isAbsentPackageIdentity(error: unknown): boolean {
+  return extractErrorCode(error) === PACKAGE_IDENTITY_ABSENT;
+}
+
 /** Only absent nested manifests permit ancestor lookup; unreadable identities stay unresolved. */
 export function readProcessPackageIdentity(directory: string, searchParents = false) {
   for (let current = directory; ;) {
@@ -67,6 +74,15 @@ export function readProcessPackageIdentity(directory: string, searchParents = fa
       ) {
         current = parent;
         continue;
+      }
+      // Reaching the filesystem root with only missing manifests is absence,
+      // not an unreadable identity. A node_modules boundary or any other error
+      // stays unresolved so cleanup cannot treat it as a foreign process.
+      if (searchParents && extractErrorCode(error) === "ENOENT" && parent === current) {
+        throw Object.assign(new Error("package identity is absent"), {
+          code: PACKAGE_IDENTITY_ABSENT,
+          cause: error,
+        });
       }
       throw new Error("could not read package identity", { cause: error });
     }
@@ -266,6 +282,18 @@ export function classifyOpenClawEntrypointPath(
         }
       : { kind: "other" };
   } catch (error) {
+    // Cleanup of a readable standalone script may proceed when no manifest
+    // exists through the filesystem root. Known OpenClaw entrypoints, mutation
+    // admission, and unreadable or malformed manifests stay unresolved.
+    if (
+      opts.inspectPackage &&
+      !opts.requirePackageIdentity &&
+      !entry &&
+      !directory &&
+      isAbsentPackageIdentity(error)
+    ) {
+      return { kind: "other" };
+    }
     return {
       kind: "unclassified",
       cause: "package-identity",
