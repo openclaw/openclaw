@@ -99,7 +99,7 @@ it("serializes concurrent Settings builders with checkout artifact writers", asy
     'export * from "../../../../plugin-sdk/provider-usage.js"',
   );
 
-  // Vite bundles local config imports. Its preparer must still share the native launcher's owner.
+  // The real Vite CLI returns before its build finishes and bundles local config imports.
   const configPath = path.join(root, "vite.config.mts");
   const preparer = pathToFileURL(path.resolve("scripts/lib/prepare-control-ui-settings.mts")).href;
   fs.writeFileSync(
@@ -107,15 +107,53 @@ it("serializes concurrent Settings builders with checkout artifact writers", asy
     `import { prepareControlUiSettings } from ${JSON.stringify(preparer)};
 export default async () => { await prepareControlUiSettings(${JSON.stringify(root)}); return {}; };`,
   );
-  const launcher = path.join(root, "build.mts");
   fs.writeFileSync(
-    launcher,
-    `import { loadConfigFromFile } from "vite";
-await loadConfigFromFile({ command: "build", mode: "production" }, ${JSON.stringify(configPath)});`,
+    path.join(root, "index.html"),
+    '<script type="module" src="./extensions/fixture/browser.ts"></script>',
   );
   await withDistArtifactOwnership(root, () =>
-    promisify(execFile)(process.execPath, distArtifactEntryArgs(launcher), { cwd: root, signal }),
+    promisify(execFile)(
+      process.execPath,
+      distArtifactEntryArgs(
+        path.resolve("node_modules/vite/bin/vite.js"),
+        ["build", "--config", configPath, "--outDir", path.join(root, "ui-output")],
+        { native: true },
+      ),
+      { cwd: root, signal },
+    ),
   );
+  expect(fs.readFileSync(path.join(root, "ui-output/index.html"), "utf8")).toContain("/assets/");
+
+  const ownerUrl = pathToFileURL(path.resolve("scripts/lib/dist-artifact-ownership.mts")).href;
+  const buildAllUrl = pathToFileURL(path.resolve("scripts/build-all.mts")).href;
+  fs.mkdirSync(path.join(root, "scripts"));
+  fs.writeFileSync(
+    path.join(root, "scripts/ui.js"),
+    `import fs from "node:fs";
+import { withDistArtifactOwnership } from ${JSON.stringify(ownerUrl)};
+await withDistArtifactOwnership(process.cwd(), async () => fs.writeFileSync("ui-step-complete", "ok"));`,
+  );
+  const buildAll = path.join(root, "build-all.mts");
+  fs.writeFileSync(
+    buildAll,
+    `import { withDistArtifactOwnership } from ${JSON.stringify(ownerUrl)};
+import { runBuildAllSteps } from ${JSON.stringify(buildAllUrl)};
+const result = await withDistArtifactOwnership(process.cwd(), () => runBuildAllSteps("full", {
+  cacheEnabled: false,
+  env: { ...process.env, GIT_COMMIT: "${"a".repeat(40)}", OPENCLAW_BUILD_TIMESTAMP: "2026-10-17T00:00:00.000Z" },
+  steps: [{ label: "ui:build", args: ["scripts/ui.js", "build"] }],
+}));
+if (result.exitCode !== 0) throw new Error("UI build step failed");`,
+  );
+  await promisify(execFile)(
+    process.execPath,
+    ["--import", path.resolve("scripts/tsx.mjs"), buildAll],
+    {
+      cwd: root,
+      signal,
+    },
+  );
+  expect(fs.readFileSync(path.join(root, "ui-step-complete"), "utf8")).toBe("ok");
 });
 
 it("rebuilds browser assets without invalidating unchanged manifest inputs", () => {

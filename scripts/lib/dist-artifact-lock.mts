@@ -50,7 +50,8 @@ export async function runOwnedDistArtifactEntry(script: string, args: string[]) 
   inheritedOwner = owner;
   process.argv = [process.execPath, fileURLToPath(script), ...args];
   try {
-    await import(script);
+    // CLI modules can return before their asynchronous command finishes (notably Vite).
+    await activeOwner.run(owner, () => import(script));
   } catch (error) {
     throw retainUnjoinedDistArtifactWork(owner, error);
   } finally {
