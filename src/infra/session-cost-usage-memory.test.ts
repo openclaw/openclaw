@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type {
   SessionActor,
+  SessionActorAppend,
   SessionActorAuthority,
 } from "../config/sessions/session-actor-contract.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
@@ -53,14 +54,17 @@ const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const sessionKey = "agent:main:dashboard:incognito-usage";
 const sessionId = "usage-1";
 const env = { OPENCLAW_STATE_DIR: "/synthetic/phase-e-usage" };
+const usageBudget = (remainingBytes: number, metadataLimit = 1) => ({
+  remainingBytes,
+  metadataLimit,
+  pricingFingerprint: "fixture",
+});
+const resolveTargets = (
+  input: Omit<Parameters<typeof resolveMemorySessionTargetsInWorker>[0], "agentId">,
+) => resolveMemorySessionTargetsInWorker({ agentId: "main", ...input });
 afterEach(() => {
   memorySessionActorOwners.reset();
 });
-
-const getSnapshot = (
-  actor: SessionActor,
-  input: SessionActorMemoryUsageReads["session.usage.snapshot"]["input"],
-) => actor.storage!.read({ type: "session.usage.snapshot", input }, authority);
 
 async function commit<Key extends keyof SessionActorStorageWrites>(
   actor: SessionActor,
@@ -102,36 +106,24 @@ async function fixture(
     cost = { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 },
   ) => {
     const id = `assistant-${++next}`;
+    const message = {
+      messageJson: JSON.stringify({
+        role: "assistant",
+        content: "answer",
+        usage: { input, output: 2, cacheRead: 0, cacheWrite: 0, totalTokens: input + 2, cost },
+      }),
+      cwd: "/synthetic",
+      validateTurn: false,
+    };
+    const appendInput: Extract<SessionActorAppend, { kind: "metadata" }>["input"] = {
+      scope,
+      message,
+      event: { type: "message", id, parentId: null, timestamp: "2026-10-01T12:00:00.000Z" },
+      options: { appendIntent: "active-branch" },
+    };
     expect(
       await actor.appendTranscriptEvent(
-        {
-          commandId: id,
-          phaseId: "turn",
-          append: {
-            kind: "metadata",
-            input: {
-              scope,
-              event: { type: "message", id, parentId: null, timestamp: "2026-10-01T12:00:00.000Z" },
-              message: {
-                messageJson: JSON.stringify({
-                  role: "assistant",
-                  content: "answer",
-                  usage: {
-                    input,
-                    output: 2,
-                    cacheRead: 0,
-                    cacheWrite: 0,
-                    totalTokens: input + 2,
-                    cost,
-                  },
-                }),
-                cwd: "/synthetic",
-                validateTurn: false,
-              },
-              options: { appendIntent: "active-branch" },
-            },
-          },
-        },
+        { commandId: id, phaseId: "turn", append: { kind: "metadata", input: appendInput } },
         authority,
       ),
     ).toMatchObject({ kind: "committed" });
@@ -143,8 +135,13 @@ async function fixture(
     binding,
     append,
     sessionFile,
+    ...target,
     refresh: () => refreshUsage(binding),
     report: () => memoryReport({ binding, sessionFile }),
+    snapshot: (input: SessionActorMemoryUsageReads["session.usage.snapshot"]["input"]) =>
+      actor.storage!.read({ type: "session.usage.snapshot", input }, authority),
+    corpus: () =>
+      actor.storage!.read({ type: "session.corpus.list", input: { options: {} } }, authority),
   };
 }
 
@@ -152,7 +149,7 @@ async function cachedFixture(target = { sessionKey, sessionId }) {
   const cached = await fixture({}, target);
   await cached.append(5);
   await cached.refresh();
-  const [snapshot] = await getSnapshot(cached.actor, {
+  const [snapshot] = await cached.snapshot({
     sessionIds: [target.sessionId],
     includeRollupBodies: true,
   });
@@ -205,12 +202,16 @@ function memoryReport(
   cached: { binding: Parameters<typeof runSessionActorUsage>[0]; sessionFile: string },
   sessionFiles = [cached.sessionFile],
 ) {
-  return runUsage(cached.binding, {
+  return runUsage(cached.binding, sessionReport(sessionFiles));
+}
+
+function sessionReport(sessionFiles: string[], pricingFingerprint = "fixture") {
+  return {
     kind: "sessions",
-    pricingFingerprint: "fixture",
+    pricingFingerprint,
     sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
     dayBucket,
-  });
+  } as const;
 }
 
 describe("actor memory usage", () => {
@@ -284,13 +285,9 @@ describe("actor memory usage", () => {
       await writeRollup(next, paddedRollup(next.entry, 900 * 1024));
       sessionFiles.push(next.sessionFile);
     }
-    const snapshot = await getSnapshot(cached.actor, {
+    const snapshot = await cached.snapshot({
       includeRollupBodies: true,
-      reportBudget: {
-        remainingBytes: 32 * 1024 * 1024 - 40 * 256,
-        metadataLimit: 40,
-        pricingFingerprint: "fixture",
-      },
+      reportBudget: usageBudget(32 * 1024 * 1024 - 40 * 256, 40),
     });
     expect(
       snapshot.reduce(
@@ -336,9 +333,9 @@ describe("actor memory usage", () => {
         const encoded = encodeUsageCostRollup(cached.entry);
         await writeRollup(cached, { ...encoded, blob: new Uint8Array() });
       }
-      const snapshot = await getSnapshot(cached.actor, {
+      const snapshot = await cached.snapshot({
         includeRollupBodies: true,
-        reportBudget: { remainingBytes: 128, metadataLimit: 1, pricingFingerprint: "fixture" },
+        reportBudget: usageBudget(128),
       });
       if (mode === "valid") {
         expect(snapshot).toMatchObject([
@@ -398,20 +395,21 @@ describe("actor memory usage", () => {
         { role: "assistant", content: "answer", tokens: 7, cost: 0.03 },
       ]);
     }
-    expect(await refresh()).toEqual({ kind: "refresh", changed: true });
-    expect(await report()).toMatchObject({
-      kind: "sessions",
-      summaries: [{ input: 5, output: 2 }],
-      cacheStatus: { staleFiles: 0 },
-    });
-    await append(7);
-    expect(await report()).toMatchObject({ kind: "sessions", cacheStatus: { staleFiles: 1 } });
-    expect(await refresh()).toEqual({ kind: "refresh", changed: true });
-    expect(await report()).toMatchObject({
-      kind: "sessions",
-      summaries: [{ input: 12, output: 4 }],
-      cacheStatus: { staleFiles: 0 },
-    });
+    for (const [input, output] of [
+      [5, 2],
+      [12, 4],
+    ]) {
+      if (input === 12) {
+        await append(7);
+        expect(await report()).toMatchObject({ kind: "sessions", cacheStatus: { staleFiles: 1 } });
+      }
+      expect(await refresh()).toEqual({ kind: "refresh", changed: true });
+      expect(await report()).toMatchObject({
+        kind: "sessions",
+        summaries: [{ input, output }],
+        cacheStatus: { staleFiles: 0 },
+      });
+    }
     expect(await refresh()).toEqual({ kind: "refresh", changed: false });
   });
 
@@ -439,12 +437,10 @@ describe("actor memory usage", () => {
       kind: "refresh",
       changed: true,
     });
-    const cached = await runUsageCostWorker(prepared, {
-      kind: "sessions",
-      pricingFingerprint,
-      sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
-      dayBucket,
-    });
+    const cached = await runUsageCostWorker(
+      prepared,
+      sessionReport(sessionFiles, pricingFingerprint),
+    );
     expect(cached).toMatchObject({
       kind: "sessions",
       cacheStatus: { status: "fresh", cachedFiles: 2 },
@@ -454,10 +450,7 @@ describe("actor memory usage", () => {
     }
     expect(
       buildUsageOverview({
-        rows: [
-          { sessionKey, sessionId, sessionFile: first.sessionFile },
-          { ...secondTarget, sessionFile: second.sessionFile },
-        ].map((target, index) => ({
+        rows: [first, second].map((target, index) => ({
           key: target.sessionKey,
           sessionId: target.sessionId,
           agentId: "main",
@@ -482,67 +475,49 @@ describe("actor memory usage", () => {
       kind: "inventory",
       files: [],
     });
-    expect(
-      await runUsageCostWorker(prepared, {
-        kind: "sessions",
-        pricingFingerprint: "fixture",
-        sessions: [
-          {
-            sessionFile: formatSqliteSessionFileMarker({
-              agentId: "main",
-              storePath: databasePath,
-              sessionId,
-            }),
-          },
-        ],
-        dayBucket,
-      }),
-    ).toMatchObject({ kind: "sessions", summaries: [null] });
+    const file = formatSqliteSessionFileMarker({
+      agentId: "main",
+      storePath: databasePath,
+      sessionId,
+    });
+    expect(await runUsageCostWorker(prepared, sessionReport([file]))).toMatchObject({
+      kind: "sessions",
+      summaries: [null],
+    });
     expect(memorySessionActorOwners.list()).toEqual([]);
   });
 
   it("keeps captured corpus and usage bytes detached while later writes update new reads", async () => {
-    const { actor, binding, append, refresh } = await fixture();
+    const { binding, append, refresh, snapshot, corpus: readCorpus } = await fixture();
     await append(5);
     await refresh();
-    const store = actor.storage!;
     const snapshotInput = {
       includeEvents: true,
       includeRollupBodies: true,
-      reportBudget: {
-        remainingBytes: 1024 * 1024,
-        metadataLimit: 1,
-        pricingFingerprint: "fixture",
-      },
+      reportBudget: usageBudget(1024 * 1024),
     };
-    const before = await getSnapshot(actor, snapshotInput);
-    const corpus = await store.read(
-      { type: "session.corpus.list", input: { options: {} } },
-      authority,
-    );
+    const before = await snapshot(snapshotInput);
+    const corpus = await readCorpus();
     expect(corpus).toMatchObject([
       { sessionKey, sessionId, artifactKind: "active-session", sessionKind: "interactive" },
     ]);
     await append(7);
     await refresh();
-    const after = await getSnapshot(actor, snapshotInput);
+    const after = await snapshot(snapshotInput);
     expect(after[0]!.stats.eventCount).toBe(before[0]!.stats.eventCount + 1);
     expect(before[0]!.events?.some(({ eventJson }) => eventJson.includes("assistant-2"))).toBe(
       false,
     );
-    for (const [snapshot, input] of [
+    for (const [capture, input] of [
       [before, 5],
       [after, 12],
     ] as const) {
-      const rollup = snapshot[0]?.rollup;
+      const rollup = capture[0]?.rollup;
       const entry =
         rollup && decodeUsageCostRollup(rollup.valueJson, "fixture", rollup.blob ?? null);
       expect(Object.values(entry?.rollup.buckets ?? {})[0]?.totals.input).toBe(input);
     }
-    expect(
-      (await store.read({ type: "session.corpus.list", input: { options: {} } }, authority))[0]!
-        .contentRevision,
-    ).not.toBe(corpus[0]!.contentRevision);
+    expect((await readCorpus())[0]!.contentRevision).not.toBe(corpus[0]!.contentRevision);
     await expect(
       runUsage(binding, {
         kind: "inventory",
@@ -570,9 +545,7 @@ describe("actor memory usage", () => {
       params: { identity: { type: "profile", id: "profile-1" }, promptedAt: 2 },
     });
     await runWithSessionActorStorage(binding, async () => {
-      expect(
-        await resolveMemorySessionTargetsInWorker({ agentId: "main", participants: ["profile-1"] }),
-      ).toMatchObject([
+      expect(await resolveTargets({ participants: ["profile-1"] })).toMatchObject([
         {
           sessionId,
           channel: "slack",
@@ -591,13 +564,7 @@ describe("actor memory usage", () => {
         },
         authority,
       );
-      expect(
-        await resolveMemorySessionTargetsInWorker({
-          agentId: "main",
-          sessionIds: [sessionKey],
-          since: 10,
-        }),
-      ).toEqual([]);
+      expect(await resolveTargets({ sessionIds: [sessionKey], since: 10 })).toEqual([]);
     });
     const expected = await store.read({ type: "session.entry.read", input: {} }, authority);
     await commit(actor, "session.lifecycle.reset", {
@@ -609,19 +576,13 @@ describe("actor memory usage", () => {
       { assertCurrent() {}, assertReadable() {} },
     );
     await runWithSessionActorStorage({ ...binding, actor: current }, async () => {
-      expect(
-        await resolveMemorySessionTargetsInWorker({ agentId: "main", hookSources: ["webhook"] }),
-      ).toMatchObject([
+      expect(await resolveTargets({ hookSources: ["webhook"] })).toMatchObject([
         { sessionId: "usage-1", createdAt: 1 },
         { sessionId: "usage-2", createdAt: 20 },
       ]);
-      expect(
-        await resolveMemorySessionTargetsInWorker({
-          agentId: "main",
-          sessionIds: [sessionKey],
-          since: 10,
-        }),
-      ).toMatchObject([{ sessionId: "usage-2", createdAt: 20 }]);
+      expect(await resolveTargets({ sessionIds: [sessionKey], since: 10 })).toMatchObject([
+        { sessionId: "usage-2", createdAt: 20 },
+      ]);
     });
   });
 });
