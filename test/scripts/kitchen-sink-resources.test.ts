@@ -6,6 +6,22 @@ import {
 } from "../../scripts/e2e/lib/kitchen-sink-resources.mts";
 import type { GatewayResourceSnapshot } from "../../scripts/lib/gateway-bench-profile.js";
 
+const operations = (completed: number, failed = 0) => ({
+  attempted: completed + failed,
+  completed,
+  failed,
+});
+const memoryUsage = (value: number) => ({
+  rss: value,
+  heapTotal: value,
+  heapUsed: value,
+  external: value,
+  arrayBuffers: value,
+});
+function receipt(completed: number, failed = 0) {
+  return { status: failed ? "failed" : "exercised", operations: operations(completed, failed) };
+}
+
 function snapshot(step: number, memory = 100): GatewayResourceSnapshot {
   return {
     pid: 123,
@@ -13,13 +29,7 @@ function snapshot(step: number, memory = 100): GatewayResourceSnapshot {
     cpuEnvironment: { availableParallelism: 2, affinity: "0-1" },
     process: { user: step * 100, system: step * 10 },
     mainThread: { user: step * 50, system: step * 5 },
-    memory: {
-      rss: memory,
-      heapTotal: memory,
-      heapUsed: memory,
-      external: memory,
-      arrayBuffers: memory,
-    },
+    memory: memoryUsage(memory),
     runtime: { node: "26.0.0", platform: "linux", arch: "x64" },
     activeResources: { Timeout: 1 },
   };
@@ -50,7 +60,7 @@ describe("Kitchen Sink resource phase receipts", () => {
     if (!splitFirst) {
       expect(order).toEqual(["sample", "completed:0", "completed:1", "sample"]);
       expect(phase.status).toBe("exercised");
-      expect(phase.operations).toEqual({ attempted: 2, completed: 2, failed: 0 });
+      expect(phase.operations).toEqual(operations(2));
       expect(phase.processCpuMsPerCompletedOperation).toBeCloseTo(0.055);
       return;
     }
@@ -64,14 +74,12 @@ describe("Kitchen Sink resource phase receipts", () => {
     const [first, warm] = phase.breakdown!;
     expect(first).toMatchObject({
       name: "plugin-tool-first",
-      status: "exercised",
-      operations: { attempted: 1, completed: 1, failed: 0 },
+      ...receipt(1),
       memoryChangeBytes: { rss: -20 },
     });
     expect(warm).toMatchObject({
       name: "plugin-tool-warm",
-      status: "exercised",
-      operations: { attempted: 19, completed: 19, failed: 0 },
+      ...receipt(19),
       memoryChangeBytes: { rss: -10 },
     });
     expect(first!.after).toBe(midpoint);
@@ -79,11 +87,7 @@ describe("Kitchen Sink resource phase receipts", () => {
     expect(phase.before).toBe(before);
     expect(phase.after).toBe(after);
     expect(phase).toMatchObject(
-      summarizeResourcePhase("plugin-tool", before, after, {
-        attempted: 20,
-        completed: 20,
-        failed: 0,
-      }),
+      summarizeResourcePhase("plugin-tool", before, after, operations(20)),
     );
     expect(first!.processCpuMsPerCompletedOperation).toBeCloseTo(0.22);
     expect(warm!.processCpuMsPerCompletedOperation).toBeCloseTo(0.99 / 19);
@@ -120,8 +124,7 @@ describe("Kitchen Sink resource phase receipts", () => {
         Array.from({ length: failedIndex + 1 }, (_, index) => [index]),
       );
       expect(phase).toMatchObject({
-        status: "failed",
-        operations: { attempted: failedIndex + 1, completed: failedIndex, failed: 1 },
+        ...receipt(failedIndex, 1),
         processCpuMsPerCompletedOperation: null,
       });
       if (!splitFirst) {
@@ -134,73 +137,44 @@ describe("Kitchen Sink resource phase receipts", () => {
       expect(sample).toHaveBeenCalledTimes(failedIndex === 0 ? 2 : 3);
       expect(phase.breakdown).toHaveLength(failedIndex === 0 ? 1 : 2);
       if (failedIndex > 0) {
-        expect(phase.breakdown![0]).toMatchObject({
-          status: "exercised",
-          operations: { attempted: 1, completed: 1, failed: 0 },
-        });
+        expect(phase.breakdown![0]).toMatchObject(receipt(1));
       }
       expect(phase.breakdown!.at(-1)).toMatchObject({
         name: failedIndex === 0 ? "plugin-tool-first" : "plugin-tool-warm",
-        status: "failed",
-        operations: {
-          attempted: failedIndex === 0 ? 1 : failedIndex,
-          completed: Math.max(0, failedIndex - 1),
-          failed: 1,
-        },
+        ...receipt(Math.max(0, failedIndex - 1), 1),
       });
     },
   );
 
-  const invalidSamples: Array<[string, () => Promise<GatewayResourceSnapshot>]> = [
+  const malformed = snapshot(3);
+  malformed.memory.rss = Number.NaN;
+  const invalidSamples: Array<[string, () => Promise<GatewayResourceSnapshot>, boolean, boolean]> =
     [
-      "missing",
-      async () => {
-        throw new Error("sample unavailable");
-      },
-    ],
-    [
-      "malformed memory",
-      async () => {
-        const value = snapshot(3);
-        value.memory.rss = Number.NaN;
-        return value;
-      },
-    ],
-    ["changed PID", async () => ({ ...snapshot(3), pid: 999 })],
-    [
-      "changed CPU environment",
-      async () => ({
-        ...snapshot(3),
-        cpuEnvironment: { availableParallelism: 4, affinity: "0-3" },
-      }),
-    ],
-  ];
-  it.each([
-    ...invalidSamples.map(([name, invalidSample]) => ({
-      name,
-      invalidSample,
-      splitFirst: true,
-      final: false,
-    })),
-    {
-      name: "missing final",
-      invalidSample: async () => {
-        throw new Error("sample unavailable");
-      },
-      splitFirst: true,
-      final: true,
-    },
-    {
-      name: "child exited",
-      invalidSample: async () => {
-        throw new Error("child exited");
-      },
-      splitFirst: false,
-      final: true,
-    },
-  ])(
-    "preserves completed receipts after $name with splitFirst=$splitFirst, final=$final",
-    async ({ name, invalidSample, splitFirst, final }) => {
+      ["missing", unavailable, true, false],
+      ["malformed memory", async () => malformed, true, false],
+      ["changed PID", async () => ({ ...snapshot(3), pid: 999 }), true, false],
+      [
+        "changed CPU environment",
+        async () => ({
+          ...snapshot(3),
+          cpuEnvironment: { availableParallelism: 4, affinity: "0-3" },
+        }),
+        true,
+        false,
+      ],
+      ["missing final", unavailable, true, true],
+      [
+        "child exited",
+        async () => {
+          throw new Error("child exited");
+        },
+        false,
+        true,
+      ],
+    ];
+  it.each(invalidSamples)(
+    "preserves completed receipts after %s",
+    async (name, invalidSample, splitFirst, final) => {
       const before = snapshot(1);
       const midpoint = snapshot(2, 90);
       const count = splitFirst ? 20 : 2;
@@ -222,7 +196,7 @@ describe("Kitchen Sink resource phase receipts", () => {
       expect(sample).toHaveBeenCalledTimes(splitFirst && final ? 3 : 2);
       expect(phase).toMatchObject({
         status: "failed",
-        operations: { attempted: completed, completed, failed: 0 },
+        operations: operations(completed),
         after: null,
         cpu: null,
       });
@@ -238,16 +212,12 @@ describe("Kitchen Sink resource phase receipts", () => {
       if (final) {
         expect(phase.before).toBe(before);
         expect(phase.breakdown![0]).toEqual(
-          summarizeResourcePhase("plugin-tool-first", before, midpoint, {
-            attempted: 1,
-            completed: 1,
-            failed: 0,
-          }),
+          summarizeResourcePhase("plugin-tool-first", before, midpoint, operations(1)),
         );
         expect(phase.breakdown![1]).toMatchObject({
           name: "plugin-tool-warm",
           status: "failed",
-          operations: { attempted: 19, completed: 19, failed: 0 },
+          operations: operations(19),
           after: null,
           cpu: null,
         });
@@ -264,7 +234,7 @@ describe("Kitchen Sink resource phase receipts", () => {
   );
 
   it("preserves signed paired deltas without inventing an empty-host tool workload", () => {
-    const ops = { attempted: 2, completed: 2, failed: 0 };
+    const ops = operations(2);
     const empty = summarizeResourcePhase("neutral-rpc", snapshot(1, 100), snapshot(5, 120), ops);
     const enabled = summarizeResourcePhase("neutral-rpc", snapshot(6, 95), snapshot(8, 90), ops);
     const tools = { ...enabled, name: "plugin-tool" };
@@ -273,35 +243,18 @@ describe("Kitchen Sink resource phase receipts", () => {
         phase: "neutral-rpc",
         completedOperations: 2,
         wallMs: -2,
-        memoryEndBytes: {
-          rss: -30,
-          heapTotal: -30,
-          heapUsed: -30,
-          external: -30,
-          arrayBuffers: -30,
-        },
-        memoryGrowthBytes: {
-          rss: -25,
-          heapTotal: -25,
-          heapUsed: -25,
-          external: -25,
-          arrayBuffers: -25,
-        },
+        memoryEndBytes: memoryUsage(-30),
+        memoryGrowthBytes: memoryUsage(-25),
       }),
     ]);
     expect(compareResourcePhases([empty], [{ ...enabled, status: "failed" }])).toEqual([]);
-    expect(
-      compareResourcePhases(
-        [empty],
-        [{ ...enabled, operations: { attempted: 1, completed: 1, failed: 0 } }],
-      ),
-    ).toEqual([]);
+    expect(compareResourcePhases([empty], [{ ...enabled, operations: operations(1) }])).toEqual([]);
   });
 
   it("retains signed resource changes and rejects missing observations", () => {
     const before = { ...snapshot(1), activeResources: { Timeout: 2, TCPServerWrap: 1 } };
     const after = { ...snapshot(2), activeResources: { Timeout: 1, Immediate: 1 } };
-    const ops = { attempted: 0, completed: 0, failed: 0 };
+    const ops = operations(0);
     expect(summarizeResourcePhase("stop", before, after, ops).activeResourceChanges).toEqual({
       Immediate: 1,
       TCPServerWrap: -1,
@@ -311,12 +264,13 @@ describe("Kitchen Sink resource phase receipts", () => {
       summarizeResourcePhase(
         "stop",
         before,
-        {
-          ...after,
-          activeResources: { Timeout: Number.NaN },
-        },
+        { ...after, activeResources: { Timeout: Number.NaN } },
         ops,
       ),
     ).toThrow("invalid active-resource");
   });
 });
+
+async function unavailable(): Promise<GatewayResourceSnapshot> {
+  throw new Error("sample unavailable");
+}
