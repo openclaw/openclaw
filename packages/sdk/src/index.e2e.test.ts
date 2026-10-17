@@ -2,7 +2,7 @@ import type { AddressInfo } from "node:net";
 import net from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer, type WebSocket } from "ws";
+import { WebSocketServer } from "ws";
 import { installGatewayTestHooks, startServer } from "../../../src/gateway/test-helpers.js";
 import { emitAgentEvent } from "../../../src/infra/agent-events.js";
 import {
@@ -24,7 +24,29 @@ type FakeGateway = {
   close: () => Promise<void>;
 };
 
-const servers: WebSocketServer[] = [];
+const gateways = new Set<FakeGateway>();
+
+function createClient(url: string, token?: string) {
+  return new OpenClaw({
+    transport: new GatewayClientTransport({
+      url,
+      token,
+      deviceIdentity: null,
+      requestTimeoutMs: 2_000,
+    }),
+  });
+}
+
+async function withGateway(body: (oc: OpenClaw, gateway: FakeGateway) => Promise<void>) {
+  const gateway = await createFakeGateway();
+  const oc = createClient(gateway.url);
+  try {
+    await body(oc, gateway);
+  } finally {
+    await oc.close();
+    await gateway.close();
+  }
+}
 
 function expectJsonObject(value: unknown): JsonObject {
   expect(value && typeof value).toBe("object");
@@ -32,14 +54,18 @@ function expectJsonObject(value: unknown): JsonObject {
 }
 
 async function expectResponse(response: Promise<unknown>, fields: JsonObject) {
-  const value = expectJsonObject(await response);
-  for (const [key, expected] of Object.entries(fields)) {
-    expect(value[key]).toEqual(expected);
-  }
+  expect(expectJsonObject(await response)).toEqual(expect.objectContaining(fields));
 }
 
-function sendJson(socket: WebSocket, payload: JsonObject): void {
-  socket.send(JSON.stringify(payload));
+async function collectRun(events: AsyncIterable<OpenClawEvent>) {
+  const seen: OpenClawEvent[] = [];
+  for await (const event of events) {
+    seen.push(event);
+    if (event.type === "run.completed") {
+      break;
+    }
+  }
+  return seen;
 }
 
 async function reservePort(): Promise<number> {
@@ -56,72 +82,30 @@ async function reservePort(): Promise<number> {
 
 async function createFakeGateway(port = 0): Promise<FakeGateway> {
   const server = new WebSocketServer({ host: "127.0.0.1", port });
-  servers.push(server);
   await new Promise<void>((resolve) => {
     server.once("listening", resolve);
   });
   let seq = 1;
   const requests: FakeGatewayRequest[] = [];
   server.on("connection", (socket) => {
-    socket.binaryType = "nodebuffer";
-    sendJson(socket, {
+    const send = (frame: JsonObject) => socket.send(JSON.stringify(frame));
+    send({
       type: "event",
       event: "connect.challenge",
       seq: seq++,
       payload: { nonce: "sdk-e2e-nonce", ts: Date.now() },
     });
-
     socket.on("message", (raw) => {
       const frame = JSON.parse(rawDataToString(raw)) as FakeGatewayRequest;
       requests.push(frame);
       const reply = (payload: JsonObject): void => {
-        sendJson(socket, { type: "res", id: frame.id, ok: true, payload });
+        send({ type: "res", id: frame.id, ok: true, payload });
       };
-
       if (frame.method === "connect") {
         reply({
           type: "hello-ok",
           protocol: 1,
-          server: { version: "sdk-e2e", connId: "conn-sdk-e2e" },
-          features: {
-            methods: [
-              "agent",
-              "agent.wait",
-              "agent.identity.get",
-              "agents.create",
-              "agents.delete",
-              "agents.list",
-              "agents.update",
-              "connect",
-              "exec.approval.list",
-              "exec.approval.resolve",
-              "models.authStatus",
-              "models.list",
-              "sessions.abort",
-              "sessions.create",
-              "sessions.compact",
-              "sessions.list",
-              "sessions.patch",
-              "sessions.resolve",
-              "sessions.send",
-              "tools.catalog",
-              "tools.effective",
-              "tools.invoke",
-            ],
-            events: ["agent", "sessions.changed"],
-          },
-          snapshot: {
-            presence: [],
-            health: {},
-            stateVersion: { presence: 0, health: 0 },
-            uptimeMs: 1,
-          },
-          auth: { role: "operator", scopes: [] },
-          policy: {
-            maxPayload: 262144,
-            maxBufferedBytes: 262144,
-            tickIntervalMs: 30000,
-          },
+          policy: { tickIntervalMs: 30000 },
         });
         return;
       }
@@ -139,7 +123,7 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
             ["assistant", { delta: "hello from fake gateway" }],
             ["lifecycle", { phase: "end" }],
           ] as const) {
-            sendJson(socket, {
+            send({
               type: "event",
               event: "agent",
               seq: seq++,
@@ -201,84 +185,56 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
         return;
       }
 
-      sendJson(socket, {
+      send({
         type: "res",
         id: frame.id,
         ok: false,
-        error: { code: "UNKNOWN_METHOD", message: `unhandled fake Gateway method ${frame.method}` },
+        error: {
+          code: "UNKNOWN_METHOD",
+          message: `unhandled fake Gateway method ${frame.method}`,
+        },
       });
     });
   });
-
-  const { port: boundPort } = server.address() as AddressInfo;
-  return {
-    url: `ws://127.0.0.1:${boundPort}`,
+  const gateway: FakeGateway = {
+    url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}`,
     requests,
-    close: () => {
-      const index = servers.indexOf(server);
-      if (index >= 0) {
-        servers.splice(index, 1);
-      }
+    close: async () => {
+      gateways.delete(gateway);
       for (const socket of server.clients) {
         socket.terminate();
       }
-      return new Promise<void>((resolve, reject) => {
+      await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
     },
   };
+  gateways.add(gateway);
+  return gateway;
 }
 
 describe("OpenClaw SDK websocket e2e", () => {
-  afterEach(async () => {
-    await Promise.all(
-      servers.splice(0).map(
-        (server) =>
-          new Promise<void>((resolve) => {
-            for (const client of server.clients) {
-              client.terminate();
-            }
-            server.close(() => resolve());
-          }),
-      ),
-    );
-  });
+  afterEach(() => Promise.all([...gateways].map((gateway) => gateway.close())));
 
   it("runs an agent and streams normalized events over a Gateway websocket", async () => {
-    const gateway = await createFakeGateway();
-    const transport = new GatewayClientTransport({
-      url: gateway.url,
-      deviceIdentity: null,
-      requestTimeoutMs: 2_000,
-    });
-    const oc = new OpenClaw({ transport });
-    try {
+    await withGateway(async (oc) => {
       const agent = await oc.agents.get("main");
       const run = await agent.run({
         input: "say hello",
         sessionKey: "main",
         idempotencyKey: "sdk-e2e",
       });
-      const seenPromise = (async () => {
-        const seen: string[] = [];
-
-        for await (const event of run.events()) {
-          seen.push(event.type);
-          if (event.type === "run.completed") {
-            break;
-          }
-        }
-
-        return seen;
-      })();
-
+      const seenPromise = collectRun(run.events());
       const [seen, result] = await Promise.all([
         withTimeout(seenPromise, 2_000, { message: "timed out waiting for SDK run events" }),
         run.wait({ timeoutMs: 2_000 }),
       ]);
-
       expect(run.id).toBe("run-sdk-e2e");
-      expect(seen).toEqual(["run.started", "assistant.delta", "run.completed"]);
+      expect(seen.map((event) => event.type)).toEqual([
+        "run.started",
+        "assistant.delta",
+        "run.completed",
+      ]);
       expect(result).toMatchObject({
         runId: "run-sdk-e2e",
         sessionKey: "main",
@@ -288,22 +244,11 @@ describe("OpenClaw SDK websocket e2e", () => {
       });
       const cancelResult = expectJsonObject(await run.cancel());
       expect(cancelResult).toMatchObject({ abortedRunId: "run-sdk-e2e", status: "aborted" });
-    } finally {
-      await oc.close();
-      await gateway.close();
-    }
+    });
   });
 
   it("covers documented namespace helpers over a Gateway websocket", async () => {
-    const gateway = await createFakeGateway();
-    const transport = new GatewayClientTransport({
-      url: gateway.url,
-      deviceIdentity: null,
-      requestTimeoutMs: 2_000,
-    });
-    const oc = new OpenClaw({ transport });
-
-    try {
+    await withGateway(async (oc, gateway) => {
       await expectResponse(oc.agents.list(), { agents: [{ id: "main" }] });
       const agent = await oc.agents.get("main");
       await expectResponse(agent.identity({ sessionKey: "sdk-session" }), {
@@ -325,7 +270,6 @@ describe("OpenClaw SDK websocket e2e", () => {
         method: "agents.delete",
         params: { agentId: "sdk-agent" },
       });
-
       await expectResponse(oc.sessions.list(), { sessions: [{ key: "sdk-session" }] });
       const session = await oc.sessions.create({ key: "sdk-session", agentId: "main" });
       expect(session.key).toBe("sdk-session");
@@ -335,7 +279,6 @@ describe("OpenClaw SDK websocket e2e", () => {
       await expectResponse(session.abort(sessionRun.id), { abortedRunId: "run-session-e2e" });
       await expectResponse(session.patch({ label: "Renamed" }), { method: "sessions.patch" });
       await expectResponse(session.compact({ maxLines: 200 }), { method: "sessions.compact" });
-
       await expectResponse(oc.models.list(), { models: [{ id: "gpt-5.4" }] });
       await expectResponse(oc.models.status({ probe: false }), { providers: [] });
       await expectResponse(oc.tools.list(), { tools: [{ name: "shell" }] });
@@ -350,7 +293,6 @@ describe("OpenClaw SDK websocket e2e", () => {
       await expectResponse(oc.approvals.respond("approval-1", { decision: "allow-once" }), {
         ok: true,
       });
-
       expect(gateway.requests.map((request) => request.method)).toEqual([
         "connect",
         "agents.list",
@@ -377,15 +319,16 @@ describe("OpenClaw SDK websocket e2e", () => {
       const requestParams = new Map(
         gateway.requests.map((request) => [request.method, request.params]),
       );
-      expect(requestParams.get("agents.list")).toEqual({});
-      expect(requestParams.get("sessions.list")).toEqual({});
-      expect(requestParams.get("models.list")).toEqual({});
-      expect(requestParams.get("tools.catalog")).toEqual({});
-      expect(requestParams.get("exec.approval.list")).toEqual({});
-    } finally {
-      await oc.close();
-      await gateway.close();
-    }
+      for (const method of [
+        "agents.list",
+        "sessions.list",
+        "models.list",
+        "tools.catalog",
+        "exec.approval.list",
+      ]) {
+        expect(requestParams.get(method)).toEqual({});
+      }
+    });
   }, 10_000);
 
   it("retries after an initial websocket connection failure", async () => {
@@ -398,11 +341,9 @@ describe("OpenClaw SDK websocket e2e", () => {
       preauthHandshakeTimeoutMs: 200,
       requestTimeoutMs: 500,
     });
-
     const initialConnectError = await transport.connect().catch((error: unknown) => error);
     expect(initialConnectError).toBeInstanceOf(Error);
     expect(String(initialConnectError)).toMatch(/ECONNREFUSED/);
-
     const gateway = await createFakeGateway(port);
     try {
       await expect(transport.connect()).resolves.toBeUndefined();
@@ -419,80 +360,48 @@ describe("OpenClaw SDK real Gateway e2e", () => {
   it("streams real Gateway agent events and preserves late replay order", async () => {
     const token = "sdk-real-gateway-token";
     const started = await startServer(token, { controlUiEnabled: false });
-    const transport = new GatewayClientTransport({
-      url: `ws://127.0.0.1:${started.port}`,
-      token,
-      deviceIdentity: null,
-      requestTimeoutMs: 2_000,
-    });
-    const oc = new OpenClaw({ transport });
+    const oc = createClient(`ws://127.0.0.1:${started.port}`, token);
     const runId = "sdk-real-gateway-run";
     const replayRunId = "sdk-real-gateway-replay";
+    const sessionKey = "agent:main:dashboard:sdk-real-gateway";
+    const registerRun = (id: string) =>
+      registerAgentRunContext(id, { sessionKey, verboseLevel: "off" });
 
     try {
       await oc.connect();
-
-      registerAgentRunContext(runId, {
-        sessionKey: "agent:main:dashboard:sdk-real-gateway",
-        verboseLevel: "off",
-      });
-
+      registerRun(runId);
       const run = await oc.runs.get(runId);
-      const eventsPromise = (async () => {
-        const seen: OpenClawEvent[] = [];
-        for await (const event of run.events()) {
-          seen.push(event);
-          if (event.type === "run.completed") {
-            break;
-          }
-        }
-        return seen;
-      })();
-
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "start", startedAt: 111 },
-      });
-      emitAgentEvent({
-        runId,
-        stream: "assistant",
-        data: { delta: "hello from real gateway" },
-      });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "end", endedAt: 222 },
-      });
+      const eventsPromise = collectRun(run.events());
+      for (const [stream, data] of [
+        ["lifecycle", { phase: "start", startedAt: 111 }],
+        ["assistant", { delta: "hello from real gateway" }],
+        ["lifecycle", { phase: "end", endedAt: 222 }],
+      ] as const) {
+        emitAgentEvent({ runId, stream, data });
+      }
 
       const seen = await withTimeout(eventsPromise, 2_000, {
         message: "timed out waiting for real Gateway SDK events",
       });
-      expect(seen).toMatchObject([
-        {
-          type: "run.started",
-          sessionKey: "agent:main:dashboard:sdk-real-gateway",
-          data: { phase: "start" },
+      expect(seen).toMatchObject(
+        (
+          [
+            ["run.started", { phase: "start" }],
+            [
+              "assistant.delta",
+              { text: "hello from real gateway", delta: "hello from real gateway" },
+            ],
+            ["run.completed", { phase: "end" }],
+          ] as const
+        ).map(([type, data]) => ({
+          type,
+          data,
+          sessionKey,
           raw: { event: "agent" },
-        },
-        {
-          type: "assistant.delta",
-          sessionKey: "agent:main:dashboard:sdk-real-gateway",
-          data: { text: "hello from real gateway", delta: "hello from real gateway" },
-          raw: { event: "agent" },
-        },
-        {
-          type: "run.completed",
-          sessionKey: "agent:main:dashboard:sdk-real-gateway",
-          data: { phase: "end" },
-          raw: { event: "agent" },
-        },
-      ]);
+        })),
+      );
 
-      registerAgentRunContext(replayRunId, {
-        sessionKey: "agent:main:dashboard:sdk-real-gateway",
-        verboseLevel: "off",
-      });
+      registerRun(replayRunId);
       const observedReplay = (async () => {
         for await (const event of oc.events((eventLocal) => eventLocal.runId === replayRunId)) {
           if (expectJsonObject(event.raw?.payload).seq === 600) {
@@ -567,9 +476,7 @@ function readLiveTextDelta(data: unknown): string {
 }
 
 function expectArrayProperty(value: unknown, property: string): void {
-  expect(value && typeof value).toBe("object");
-  const record = value as Record<string, unknown>;
-  expect(Array.isArray(record[property])).toBe(true);
+  expect(Array.isArray(expectJsonObject(value)[property])).toBe(true);
 }
 
 liveGatewayDescribe("OpenClaw SDK live Gateway e2e", () => {
@@ -603,10 +510,7 @@ liveGatewayDescribe("OpenClaw SDK live Gateway e2e", () => {
             text += readLiveTextDelta(event.data);
           }
           if (
-            event.type === "run.completed" ||
-            event.type === "run.failed" ||
-            event.type === "run.cancelled" ||
-            event.type === "run.timed_out"
+            ["run.completed", "run.failed", "run.cancelled", "run.timed_out"].includes(event.type)
           ) {
             return { eventTypes, terminal: event.type, text };
           }

@@ -35,6 +35,25 @@ describe("SDK run reconciliation over reconnect", () => {
     };
   }
 
+  function sendChat(state: string, text?: string, extra?: Record<string, unknown>) {
+    gateway.sendEvent(gateway.socket(), "chat", chat(state, text, extra));
+  }
+
+  type Request = Parameters<NonNullable<Parameters<typeof gateway.setRequestHandler>[0]>>[1];
+  function respond(handler: (request: Request) => unknown) {
+    gateway.setRequestHandler((socket, request) => {
+      gateway.reply(socket, request.id, handler(request));
+    });
+  }
+
+  function completionWait(request: Request, waiting: { resolve: () => void }) {
+    if (request.params.timeoutMs === 0) {
+      return { runId: scope.runId, status: "timeout" };
+    }
+    waiting.resolve();
+    return undefined;
+  }
+
   async function expectNext(events: AsyncIterator<OpenClawEvent>, value: unknown) {
     await expect(events.next()).resolves.toMatchObject({ value });
   }
@@ -62,7 +81,6 @@ describe("SDK run reconciliation over reconnect", () => {
     oc = new OpenClaw({ transport });
     await oc.connect();
     return {
-      transport,
       aborted: aborted.promise,
       reconnect: async () => {
         await disconnected.promise;
@@ -76,7 +94,7 @@ describe("SDK run reconciliation over reconnect", () => {
   async function baseline(): Promise<AsyncIterator<OpenClawEvent>> {
     const events = oc.runEvents(scope.runId)[Symbol.asyncIterator]();
     const first = events.next();
-    gateway.sendEvent(gateway.socket(), "chat", chat("delta", "hello", { deltaText: "hello" }));
+    sendChat("delta", "hello", { deltaText: "hello" });
     await expect(first).resolves.toMatchObject({ value: { data: { text: "hello" } } });
     return events;
   }
@@ -87,30 +105,26 @@ describe("SDK run reconciliation over reconnect", () => {
       const outputText =
         mode === "accepted" ? "complete output" : `    ${"complete answer ".repeat(400)}\n`;
       const methods: string[] = [];
-      gateway.setRequestHandler((socket, request) => {
+      respond((request) => {
         methods.push(request.method);
-        gateway.reply(
-          socket,
-          request.id,
-          request.method === "chat.send"
-            ? { runId: scope.runId, status: "started" }
-            : request.method === "agent.wait"
-              ? {
-                  runId: scope.runId,
-                  status: "ok",
-                  endedAt: 123,
-                  terminalReply:
-                    mode === "accepted"
-                      ? { text: "clipped summary" }
-                      : { disposition: "visible", text: outputText.slice(0, 4_096) },
-                }
-              : {
-                  sessionId: "physical-session",
-                  messages: [
-                    { role: "assistant", content: outputText, __openclaw: { runId: scope.runId } },
-                  ],
-                },
-        );
+        return request.method === "chat.send"
+          ? { runId: scope.runId, status: "started" }
+          : request.method === "agent.wait"
+            ? {
+                runId: scope.runId,
+                status: "ok",
+                endedAt: 123,
+                terminalReply:
+                  mode === "accepted"
+                    ? { text: "clipped summary" }
+                    : { disposition: "visible", text: outputText.slice(0, 4_096) },
+              }
+            : {
+                sessionId: "physical-session",
+                messages: [
+                  { role: "assistant", content: outputText, __openclaw: { runId: scope.runId } },
+                ],
+              };
       });
       const connection = await connect();
       if (mode === "accepted") {
@@ -124,31 +138,23 @@ describe("SDK run reconciliation over reconnect", () => {
         mode === "accepted" ? oc.runEvents(scope.runId)[Symbol.asyncIterator]() : await baseline();
       const terminal = mode === "accepted" ? undefined : events.next();
       const socket = gateway.socket();
+      const sendGap = (event: string, payload: unknown, seq: number) => {
+        socket.send(JSON.stringify({ type: "event", event, payload, seq }));
+      };
       if (mode === "accepted") {
         socket.close();
       } else {
-        socket.send(
-          JSON.stringify({
-            type: "event",
-            seq: 3,
-            event: mode === "agent-lifecycle" ? "agent" : "chat",
-            payload:
-              mode === "agent-lifecycle"
-                ? { ...scope, stream: "lifecycle", data: { phase: "end" } }
-                : mode === "chat-final"
-                  ? chat("final", outputText)
-                  : chat("delta", undefined, { deltaText: " lost suffix" }),
-          }),
+        sendGap(
+          mode === "agent-lifecycle" ? "agent" : "chat",
+          mode === "agent-lifecycle"
+            ? { ...scope, stream: "lifecycle", data: { phase: "end" } }
+            : mode === "chat-final"
+              ? chat("final", outputText)
+              : chat("delta", undefined, { deltaText: " lost suffix" }),
+          3,
         );
         if (mode !== "chat-final") {
-          socket.send(
-            JSON.stringify({
-              type: "event",
-              event: "chat",
-              seq: 4,
-              payload: chat("final", outputText),
-            }),
-          );
+          sendGap("chat", chat("final", outputText), 4);
         }
       }
       const delivered = mode === "chat-final" ? await terminal : undefined;
@@ -180,10 +186,9 @@ describe("SDK run reconciliation over reconnect", () => {
       const waiting = createDeferred();
       gateway.setRequestHandler((socket, request) => {
         if (request.method === "agent.wait") {
-          if (request.params.timeoutMs === 0) {
-            gateway.reply(socket, request.id, { runId: scope.runId, status: "timeout" });
-          } else {
-            waiting.resolve();
+          const result = completionWait(request, waiting);
+          if (result) {
+            gateway.reply(socket, request.id, result);
           }
         } else {
           history.resolve(() => {
@@ -210,13 +215,8 @@ describe("SDK run reconciliation over reconnect", () => {
       gateway.socket().close();
       await connection.reconnect();
       const resolveHistory = await history.promise;
-      const socket = gateway.socket();
       if (mode === "newer-live-snapshot") {
-        gateway.sendEvent(
-          socket,
-          "chat",
-          chat("delta", "hello newer", { deltaText: "hello newer" }),
-        );
+        sendChat("delta", "hello newer", { deltaText: "hello newer" });
         await expectNext(events, { data: { text: "hello newer" } });
       }
       resolveHistory();
@@ -239,19 +239,15 @@ describe("SDK run reconciliation over reconnect", () => {
         });
       }
       if (mode !== "newer-live-snapshot") {
-        gateway.sendEvent(
-          socket,
-          "chat",
-          chat("delta", "hello recovered", { deltaText: "hello recovered" }),
-        );
+        sendChat("delta", "hello recovered", { deltaText: "hello recovered" });
         await expectNext(events, {
           data: { text: "hello recovered", delta: mode === "history" ? "" : " recovered" },
         });
       }
       const text = mode === "newer-live-snapshot" ? "hello newer suffix" : "hello recovered suffix";
-      gateway.sendEvent(socket, "chat", chat("delta", undefined, { deltaText: " suffix" }));
+      sendChat("delta", undefined, { deltaText: " suffix" });
       await expectNext(events, { data: { text, delta: " suffix" } });
-      gateway.sendEvent(socket, "chat", chat("final", text));
+      sendChat("final", text);
       await expectNext(events, { type: "run.completed", data: { outputText: text } });
       await connection.aborted;
       await events.return?.();
@@ -264,10 +260,9 @@ describe("SDK run reconciliation over reconnect", () => {
       const waiting = createDeferred();
       gateway.setRequestHandler((socket, request) => {
         if (request.method === "agent.wait") {
-          if (request.params.timeoutMs === 0) {
-            gateway.reply(socket, request.id, { runId: scope.runId, status: "timeout" });
-          } else {
-            waiting.resolve();
+          const result = completionWait(request, waiting);
+          if (result) {
+            gateway.reply(socket, request.id, result);
           }
         } else {
           gateway.reply(socket, request.id, {
@@ -347,39 +342,34 @@ describe("SDK run reconciliation over reconnect", () => {
     },
   );
 
-  function handleAcceptedRuns(waited: string[]) {
-    gateway.setRequestHandler((socket, request) => {
+  it("releases 150 accepted runs before their first output without inferring owners for other addresses", async () => {
+    const waited: string[] = [];
+    respond((request) => {
       if (request.method === "chat.send") {
-        gateway.reply(socket, request.id, {
+        return {
           runId: request.params.idempotencyKey,
           status: "started",
-        });
+        };
       } else if (request.method === "sessions.messages.unsubscribe") {
         const key = request.params.key;
-        gateway.reply(socket, request.id, {
+        return {
           key:
             key === "review"
               ? `agent:${request.params.agentId === "ops" ? "ops" : "main"}:review`
               : key,
           subscribed: false,
-        });
+        };
       } else if (request.method === "agent.wait") {
         waited.push(String(request.params.runId));
-        gateway.reply(socket, request.id, {
+        return {
           runId: request.params.runId,
           status: "ok",
           endedAt: 123,
           terminalReply: { disposition: "silent" },
-        });
-      } else {
-        gateway.reply(socket, request.id, {});
+        };
       }
+      return {};
     });
-  }
-
-  it("releases 150 accepted runs before their first output without inferring owners for other addresses", async () => {
-    const waited: string[] = [];
-    handleAcceptedRuns(waited);
     const connection = await connect();
     const targets = [
       { sessionKey: "review", agentId: "ops" },
@@ -422,9 +412,7 @@ describe("SDK run reconciliation over reconnect", () => {
     "preserves another agent's baseline when unsubscribing %s",
     async (key) => {
       const sessionKey = key === "unknown" ? "unknown" : "global";
-      gateway.setRequestHandler((socket, request) => {
-        gateway.reply(socket, request.id, { key: sessionKey, subscribed: false });
-      });
+      respond(() => ({ key: sessionKey, subscribed: false }));
       await connect();
       const events = oc.runEvents("research-run")[Symbol.asyncIterator]();
       const first = events.next();

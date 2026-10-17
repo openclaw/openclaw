@@ -56,42 +56,27 @@ function streamFrame(stream: string, run: number, seq: number, text?: string, de
 }
 
 describe("SDK streaming projections", () => {
-  it("does not surface raw chat projections alongside canonical assistant events", async () => {
-    const { oc } = fixture(
-      createRunEventFixture("run", "session", [
+  it.each<{
+    name: string;
+    live?: boolean;
+    frames: GatewayEvent[];
+    expected: Array<{ type: OpenClawEvent["type"]; data?: Record<string, unknown>; raw?: number }>;
+  }>([
+    {
+      name: "canonical assistant suppression of chat projections",
+      frames: [
         createAgentEvent("run", 1, 1, "lifecycle", { phase: "start" }),
         assistant(2, { delta: "hello" }),
         chat(3, "hello", "hello"),
         createAgentEvent("run", 4, 4, "lifecycle", { phase: "end" }),
         createChatEvent("run", "session", 5, "final", "hello", 5),
-      ]),
-    );
-    const run = await oc.runs.create({
-      input: "hello",
-      idempotencyKey: "run",
-      sessionKey: "session",
-    });
-    const seen: OpenClawEvent[] = [];
-    for await (const event of run.events()) {
-      seen.push(event);
-      if (event.type === "run.completed") {
-        break;
-      }
-    }
-    expect(seen.map((event) => event.type)).toEqual([
-      "run.started",
-      "assistant.delta",
-      "run.completed",
-    ]);
-    expect(seen.map((event) => event.raw?.event)).toEqual(["agent", "agent", "agent"]);
-  });
-
-  it.each<{
-    name: string;
-    live?: boolean;
-    frames: GatewayEvent[];
-    expected: Array<{ type: OpenClawEvent["type"]; data: Record<string, unknown> }>;
-  }>([
+      ],
+      expected: [
+        { type: "run.started", raw: 0 },
+        { type: "assistant.delta", raw: 1 },
+        { type: "run.completed", raw: 3 },
+      ],
+    },
     ...["reset", ""].map((replacement) => ({
       name: `chat replacement ${JSON.stringify(replacement)}`,
       frames: [
@@ -160,7 +145,7 @@ describe("SDK streaming projections", () => {
     }
     const iterator = events();
     for (const [index, value] of expected.entries()) {
-      const frame = frames[index];
+      const frame = frames[value.raw ?? index];
       if (!frame) {
         throw new Error(`Missing wire frame for expected event ${index}`);
       }
@@ -170,7 +155,9 @@ describe("SDK streaming projections", () => {
       }
       const result = await readEvent(next);
       expect(result.type).toBe(value.type);
-      expect(result.data).toEqual(value.data);
+      if (value.data !== undefined) {
+        expect(result.data).toEqual(value.data);
+      }
       expect(result.raw).toBe(frame);
     }
     expect(frames).toEqual(original);
