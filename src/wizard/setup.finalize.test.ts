@@ -252,7 +252,8 @@ vi.mock("../infra/container-environment.js", () => ({
   isContainerEnvironment,
 }));
 
-vi.mock("../commands/onboard-gateway-process.js", () => ({
+vi.mock("../commands/onboard-gateway-process.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/onboard-gateway-process.js")>()),
   startOnboardingGatewayProcess,
 }));
 

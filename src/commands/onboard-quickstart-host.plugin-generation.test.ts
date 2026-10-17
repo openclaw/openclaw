@@ -18,7 +18,8 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   readConfigFileSnapshot: mocks.readConfigSnapshot,
 }));
 // The child fixture reads real installed metadata; only the executable entry is substituted.
-vi.mock("../infra/openclaw-cli-invocation.js", () => ({
+vi.mock("../infra/openclaw-cli-invocation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-cli-invocation.js")>()),
   resolveCurrentOpenClawCliInvocation: mocks.invocation,
 }));
 vi.mock("./onboard-helpers.js", async (importOriginal) => ({
