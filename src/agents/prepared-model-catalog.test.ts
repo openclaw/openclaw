@@ -46,30 +46,30 @@ vi.mock("./prepared-model-runtime.js", async () => {
       snapshot: await mocks.acquireSnapshot(input),
       [Symbol.asyncDispose]: mocks.releaseSnapshot,
     }),
-    activateStandalonePreparedModelRuntime: (...args: unknown[]) => mocks.activateSnapshot(...args),
+    activateStandalonePreparedModelRuntime: mocks.activateSnapshot,
     acquireReadOnlyPreparedModelRuntime: async (input: Record<string, unknown>) => ({
       snapshot: await mocks.loadSnapshot({ ...input, readOnly: true }),
       [Symbol.asyncDispose]: mocks.releaseSnapshot,
     }),
-    getPreparedModelRuntimeSnapshot: (...args: unknown[]) => mocks.getSnapshot(...args),
-    loadPreparedModelRuntimeSnapshot: (...args: unknown[]) => mocks.loadSnapshot(...args),
+    getPreparedModelRuntimeSnapshot: mocks.getSnapshot,
+    loadPreparedModelRuntimeSnapshot: mocks.loadSnapshot,
     preparedModelRuntimeConfigsMatch: (left: object, right: object) =>
       JSON.stringify(left) === JSON.stringify(right),
-    prepareModelRuntimeSnapshot: (...args: unknown[]) => mocks.prepareSnapshot(...args),
+    prepareModelRuntimeSnapshot: mocks.prepareSnapshot,
     acquirePreparedModelRuntimeSnapshot: async (...args: unknown[]) => ({
       snapshot: await mocks.prepareSnapshot(...args),
       [Symbol.asyncDispose]: mocks.releasePublishedSnapshot,
     }),
-    refreshPreparedModelRuntimeCatalog: (...args: unknown[]) => mocks.refreshStaleCatalog(...args),
+    refreshPreparedModelRuntimeCatalog: mocks.refreshStaleCatalog,
   };
 });
 
 vi.mock("./prepared-model-runtime.full-catalog.js", () => ({
-  isPreparedModelCatalogFull: (...args: unknown[]) => mocks.isFullCatalog(...args),
+  isPreparedModelCatalogFull: mocks.isFullCatalog,
 }));
 
 vi.mock("./prepared-model-runtime.scoped-catalog.js", () => ({
-  prepareScopedReadOnlyModelCatalog: (...args: unknown[]) => mocks.prepareScopedCatalog(...args),
+  prepareScopedReadOnlyModelCatalog: mocks.prepareScopedCatalog,
 }));
 
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
@@ -90,36 +90,32 @@ import {
 } from "./prepared-model-runtime-auth.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.js";
 
+function catalog(id: string, name: string, provider = "test") {
+  return { entries: [{ provider, id, name }], routeVariants: [] };
+}
+
 const fullSnapshot = {
   config: mocks.config,
   catalogOwner: { agentId: "main", workspaceDir: "/tmp/prepared-model-catalog-workspace" },
   authModes: {},
   authStore: { version: 1, profiles: {} },
   metadataSnapshot: { index: { plugins: [] }, plugins: [] },
-  modelCatalog: { entries: [{ provider: "test", id: "full", name: "Full" }], routeVariants: [] },
+  modelCatalog: catalog("full", "Full"),
 };
 const readOnlySnapshot = {
   config: mocks.config,
-  modelCatalog: {
-    entries: [{ provider: "test", id: "read-only", name: "Read only" }],
-    routeVariants: [],
-  },
+  modelCatalog: catalog("read-only", "Read only"),
 };
 
 describe("prepared model catalog access", () => {
   beforeEach(() => {
     mocks.agentIds = ["main"];
     mocks.agentDirs.clear();
-    mocks.activateSnapshot.mockReset();
-    mocks.acquireSnapshot.mockReset();
-    mocks.getSnapshot.mockReset();
-    mocks.loadSnapshot.mockReset();
-    mocks.prepareSnapshot.mockReset();
-    mocks.prepareScopedCatalog.mockReset();
-    mocks.refreshStaleCatalog.mockReset();
-    mocks.isFullCatalog.mockReset();
-    mocks.releaseSnapshot.mockReset();
-    mocks.releasePublishedSnapshot.mockReset();
+    for (const mock of Object.values(mocks)) {
+      if (vi.isMockFunction(mock)) {
+        mock.mockReset();
+      }
+    }
   });
 
   it("retains a published owner while an explicitly requested catalog refresh fails", async () => {
@@ -233,58 +229,42 @@ describe("prepared model catalog access", () => {
     expect(mocks.prepareSnapshot).not.toHaveBeenCalled();
   });
 
-  it("reuses a published full generation for a provider-scoped read-only load", async () => {
-    mocks.prepareSnapshot.mockResolvedValue(fullSnapshot);
-    mocks.isFullCatalog.mockReturnValue(true);
-
-    await expect(
-      loadPreparedModelCatalogSnapshot({
-        readOnly: true,
-        providerDiscoveryProviderIds: ["anthropic"],
-      }),
-    ).resolves.toBe(fullSnapshot.modelCatalog);
-
-    expect(mocks.isFullCatalog).toHaveBeenCalledWith(fullSnapshot.modelCatalog);
-    expect(mocks.prepareScopedCatalog).not.toHaveBeenCalled();
-  });
-
-  it("builds a scoped catalog when the published generation is configured-only", async () => {
-    const scopedCatalog = {
-      entries: [{ provider: "anthropic", id: "claude", name: "Claude" }],
-      routeVariants: [],
-    };
-    mocks.prepareSnapshot.mockResolvedValue(readOnlySnapshot);
-    mocks.isFullCatalog.mockReturnValue(false);
-    mocks.prepareScopedCatalog.mockResolvedValue(scopedCatalog);
-
-    await expect(
-      loadPreparedModelCatalogSnapshot({
-        readOnly: true,
-        providerDiscoveryProviderIds: ["anthropic"],
-      }),
-    ).resolves.toBe(scopedCatalog);
-
-    expect(mocks.prepareSnapshot).toHaveBeenCalledTimes(2);
-    expect(mocks.prepareScopedCatalog).toHaveBeenCalledOnce();
-    expect(mocks.prepareScopedCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        readOnly: true,
-        workspaceDir: "/tmp/prepared-model-catalog-workspace",
-      }),
-      ["anthropic"],
-      "static",
-    );
-  });
+  it.each([true, false])(
+    "uses published full inventory or builds a scoped catalog (full=%s)",
+    async (full) => {
+      const scopedCatalog = catalog("claude", "Claude", "anthropic");
+      mocks.prepareSnapshot.mockResolvedValue(full ? fullSnapshot : readOnlySnapshot);
+      mocks.isFullCatalog.mockReturnValue(full);
+      if (!full) {
+        mocks.prepareScopedCatalog.mockResolvedValue(scopedCatalog);
+      }
+      await expect(
+        loadPreparedModelCatalogSnapshot({
+          readOnly: true,
+          providerDiscoveryProviderIds: ["anthropic"],
+        }),
+      ).resolves.toBe(full ? fullSnapshot.modelCatalog : scopedCatalog);
+      if (full) {
+        expect(mocks.isFullCatalog).toHaveBeenCalledWith(fullSnapshot.modelCatalog);
+        expect(mocks.prepareScopedCatalog).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.prepareSnapshot).toHaveBeenCalledTimes(2);
+        expect(mocks.prepareScopedCatalog).toHaveBeenCalledOnce();
+        expect(mocks.prepareScopedCatalog).toHaveBeenCalledWith(
+          expect.objectContaining({
+            readOnly: true,
+            workspaceDir: "/tmp/prepared-model-catalog-workspace",
+          }),
+          ["anthropic"],
+          "static",
+        );
+      }
+    },
+  );
 
   it("keeps read-only facts, cached full reads, and forced refreshes distinct", async () => {
-    const configuredCatalog = {
-      entries: [{ provider: "test", id: "configured", name: "Configured" }],
-      routeVariants: [],
-    };
-    const discoveredCatalog = {
-      entries: [{ provider: "test", id: "discovered", name: "Discovered" }],
-      routeVariants: [],
-    };
+    const configuredCatalog = catalog("configured", "Configured");
+    const discoveredCatalog = catalog("discovered", "Discovered");
     const { authStore, ...snapshotFacts } = fullSnapshot;
     setPreparedModelFullCatalogAuth(discoveredCatalog, {
       authStore,
@@ -364,10 +344,7 @@ describe("prepared model catalog access", () => {
   });
 
   it("defaults exact and published data reads to completed facts without acquisition", async () => {
-    const completedCatalog = {
-      entries: [{ provider: "test", id: "completed", name: "Completed" }],
-      routeVariants: [],
-    };
+    const completedCatalog = catalog("completed", "Completed");
     const snapshot = {
       ...fullSnapshot,
       readFullModelCatalog: vi.fn(() => completedCatalog),

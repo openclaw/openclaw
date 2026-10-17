@@ -15,7 +15,10 @@ import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js"
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { shortenHomePath } from "../utils.js";
 import {
   resolveSharedAuthStoreOwnership,
@@ -35,6 +38,7 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "./auth-profiles/sqlite.js";
 import { withEnvOnlyAuthProfileStore } from "./auth-profiles/store.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { formatModelCatalogAuthLabel } from "./model-catalog-auth-labels.js";
 import { withPreparedModelCatalogOwner } from "./prepared-model-catalog.js";
 import {
@@ -44,6 +48,24 @@ import {
 import { acquireReadOnlyPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
+
+type RuntimeLease = Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>>;
+
+function acquireStatic(input: PreparedModelRuntimeInput) {
+  return acquireReadOnlyPreparedModelRuntime(input, { catalogMode: "static" });
+}
+
+function persistProfiles(
+  state: OpenClawTestState,
+  profiles: AuthProfileStore["profiles"],
+  agentDir?: string,
+) {
+  runAuthProfileWriteTransaction(
+    agentDir,
+    (database) => writePersistedAuthProfileStoreRaw({ version: 1, profiles }, agentDir, database),
+    { env: state.env },
+  );
+}
 
 const selectedSource = vi.hoisted(() => ({
   input: undefined as PreparedModelRuntimeInput | undefined,
@@ -134,12 +156,12 @@ module.exports = {
           const entered = createDeferredCore();
           const resume = createDeferredCore();
           const failure = new Error("catalog projection failed");
-          let first: Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>> | undefined;
+          let first: RuntimeLease | undefined;
           let replacement: typeof first;
           let firstRelease: Promise<void> | undefined;
           let projection: Promise<string[]> | undefined;
           try {
-            first = await acquireReadOnlyPreparedModelRuntime(input, { catalogMode: "static" });
+            first = await acquireStatic(input);
             expect(connections).toHaveLength(1);
             const original = expectDefined(connections[0], "original provider registration");
             selectedSource.input = input;
@@ -175,9 +197,7 @@ module.exports = {
               firstRelease = first[Symbol.asyncDispose]();
               void firstRelease.catch(() => {});
             }
-            replacement = await acquireReadOnlyPreparedModelRuntime(input, {
-              catalogMode: "static",
-            });
+            replacement = await acquireStatic(input);
             expect(connections).toHaveLength(2);
             const successor = expectDefined(connections[1], "replacement provider registration");
             expect(original.database.isOpen).toBe(true);
@@ -272,7 +292,7 @@ it.each([false, true])("prepares scoped model auth and labels (env-only=%s)", as
       const publishedProfileIds = () =>
         Object.keys(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles ?? {});
       let observation: ReturnType<typeof observeMainThreadSql> | undefined;
-      let lease: Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>> | undefined;
+      let lease: RuntimeLease | undefined;
       try {
         if (envOnly) {
           prepareSharedAuthStoreOwnershipForNative(state.env);
@@ -288,33 +308,21 @@ it.each([false, true])("prepares scoped model auth and labels (env-only=%s)", as
           expect(publishedProfileIds()).toEqual([profileId]);
         } else {
           // Persist credentials without publishing the previous process's warm runtime view.
-          runAuthProfileWriteTransaction(
-            agentDir,
-            (database) =>
-              writePersistedAuthProfileStoreRaw(
-                { version: 1, profiles: { [profileId]: profile } },
-                agentDir,
-                database,
-              ),
-            { env: state.env },
-          );
+          persistProfiles(state, { [profileId]: profile }, agentDir);
           expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
           await closeOpenClawAgentDatabasesAsync(state.stateDir);
           observation = observeMainThreadSql({ includeClose: true });
         }
         const verify = async () => {
           observation?.calibrate();
-          lease = await acquireReadOnlyPreparedModelRuntime(
-            {
-              config,
-              agentId: "main",
-              agentDir,
-              inheritedAuthDir: agentDir,
-              workspaceDir: state.workspaceDir,
-              env: state.env,
-            },
-            { catalogMode: "static" },
-          );
+          lease = await acquireStatic({
+            config,
+            agentId: "main",
+            agentDir,
+            inheritedAuthDir: agentDir,
+            workspaceDir: state.workspaceDir,
+            env: state.env,
+          });
           const { snapshot } = lease;
           expect(snapshot.findConfiguredRuntimeModel(provider, modelId)).toMatchObject({
             provider,
@@ -391,28 +399,14 @@ it.each(["explicit root", "ambient changes after capture"] as const)(
             [ambient, "synthetic-ambient-key"],
             [selected, "synthetic-selected-key"],
           ] as const) {
-            runAuthProfileWriteTransaction(
-              undefined,
-              (database) =>
-                writePersistedAuthProfileStoreRaw(
-                  { version: 1, profiles: { [profileId]: { type: "api_key", provider, key } } },
-                  undefined,
-                  database,
-                ),
-              { env: state.env },
-            );
+            persistProfiles(state, { [profileId]: { type: "api_key", provider, key } });
             expect(resolveSharedAuthStoreOwnership(state.env)).toEqual({ location: "state-db" });
             const sharedPath = resolveSharedAuthStorePath(state.env);
             expect(getRuntimeAuthProfileStoreSnapshotAtDatabasePath(sharedPath)).toBeUndefined();
             await closeOpenClawStateDatabaseByPathAsync(sharedPath);
           }
           const agentDir = selected.agentDir("reader");
-          runAuthProfileWriteTransaction(
-            agentDir,
-            (database) =>
-              writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, agentDir, database),
-            { env: selected.env },
-          );
+          persistProfiles(selected, {}, agentDir);
           expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)).toBeUndefined();
           await closeOpenClawAgentDatabasesAsync(ambient.stateDir);
           await closeOpenClawAgentDatabasesAsync(selected.stateDir);
@@ -440,22 +434,17 @@ it.each(["explicit root", "ambient changes after capture"] as const)(
             },
             async () => {
               const observation = observeMainThreadSql({ includeClose: true });
-              let lease:
-                | Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>>
-                | undefined;
+              let lease: RuntimeLease | undefined;
               let pending: ReturnType<typeof acquireReadOnlyPreparedModelRuntime> | undefined;
               try {
                 observation.calibrate();
-                pending = acquireReadOnlyPreparedModelRuntime(
-                  {
-                    config: coldCatalogConfig(selected.workspaceDir, provider, modelId),
-                    agentId: "reader",
-                    agentDir,
-                    workspaceDir: selected.workspaceDir,
-                    env: selected.env,
-                  },
-                  { catalogMode: "static" },
-                ).then((acquired) => {
+                pending = acquireStatic({
+                  config: coldCatalogConfig(selected.workspaceDir, provider, modelId),
+                  agentId: "reader",
+                  agentDir,
+                  workspaceDir: selected.workspaceDir,
+                  env: selected.env,
+                }).then((acquired) => {
                   lease = acquired;
                   return acquired;
                 });

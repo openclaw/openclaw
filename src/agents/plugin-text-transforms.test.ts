@@ -3,6 +3,7 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
+  type AssistantMessageEvent,
   type Context,
   type Model,
   type ToolCall,
@@ -21,7 +22,6 @@ const model = {
 } as Model<"openai-responses">;
 
 function makeAssistantMessage(text: string): AssistantMessage {
-  // Output transform tests need a complete assistant message with visible text.
   return {
     role: "assistant",
     content: [{ type: "text", text }],
@@ -39,6 +39,31 @@ function makeAssistantMessage(text: string): AssistantMessage {
     },
     timestamp: 0,
   };
+}
+
+function streamEvents(...events: AssistantMessageEvent[]): StreamFn {
+  return () => {
+    const stream = createAssistantMessageEventStream();
+    queueMicrotask(() => {
+      for (const event of events) {
+        stream.push(event);
+      }
+      stream.end();
+    });
+    return stream;
+  };
+}
+
+async function collectEvents(stream: AsyncIterable<AssistantMessageEvent>) {
+  const events = [];
+  for await (const event of stream) {
+    events.push(event);
+  }
+  return events;
+}
+
+function runTransform(streamFn: StreamFn, context: Context) {
+  return Promise.resolve(streamFn(model, context, undefined));
 }
 
 function makeAssistantToolMessage(toolCall: ToolCall): AssistantMessage {
@@ -89,76 +114,51 @@ describe("plugin text transforms", () => {
         return stream;
       },
       input: [
-        {
-          from: /orchid mailbox/g,
-          to: "pine mailbox",
-        },
+        { from: /orchid mailbox/g, to: "pine mailbox" },
         { from: /red basket/g, to: "blue basket" },
       ],
     });
-    await Promise.resolve(
-      wrapped(
-        model,
+    await runTransform(wrapped, {
+      systemPrompt: "Use orchid mailbox inside north tower",
+      messages: [
         {
-          systemPrompt: "Use orchid mailbox inside north tower",
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: "Please use the red basket" },
-                { type: "image", url: "data:image/png;base64,abc" },
-              ],
-            },
+          role: "user",
+          content: [
+            { type: "text", text: "Please use the red basket" },
+            { type: "image", url: "data:image/png;base64,abc" },
           ],
-        } as Context,
-        undefined,
-      ),
-    );
+        },
+      ],
+    } as Context);
 
-    const context = capturedContext as unknown as {
-      systemPrompt: string;
-      messages: Array<{ content: unknown[] }>;
-    };
-
-    expect(context.systemPrompt).toBe("Use pine mailbox inside north tower");
-    const textContent = context.messages[0]?.content[0] as
-      | { type?: string; text?: string }
-      | undefined;
-    expect(textContent?.type).toBe("text");
-    expect(textContent?.text).toBe("Please use the blue basket");
-    const imageContent = context.messages[0]?.content[1] as
-      | { type?: string; url?: string }
-      | undefined;
-    expect(imageContent?.type).toBe("image");
-    expect(imageContent?.url).toBe("data:image/png;base64,abc");
+    expect(capturedContext?.systemPrompt).toBe("Use pine mailbox inside north tower");
+    expect(capturedContext?.messages[0]?.content).toEqual([
+      { type: "text", text: "Please use the blue basket" },
+      { type: "image", url: "data:image/png;base64,abc" },
+    ]);
   });
 
   it("wraps stream functions with inbound and outbound replacements", async () => {
-    // The wrapper mutates text-only blocks while preserving non-text content.
     let capturedContext: Context | undefined;
-    const baseStreamFn: StreamFn = (_model, context) => {
-      capturedContext = context;
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        const partial = makeAssistantMessage("blue basket on the right shelf");
-        stream.push({
-          type: "text_delta",
-          contentIndex: 0,
-          delta: "blue basket on the right shelf",
-          partial,
-        });
-        stream.push({
-          type: "done",
-          reason: "stop",
-          message: makeAssistantMessage("final blue basket on the right shelf"),
-        });
-        stream.end();
-      });
-      return stream;
-    };
+    const baseStreamFn = streamEvents(
+      {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "blue basket on the right shelf",
+        partial: makeAssistantMessage("blue basket on the right shelf"),
+      },
+      {
+        type: "done",
+        reason: "stop",
+        message: makeAssistantMessage("final blue basket on the right shelf"),
+      },
+    );
 
     const wrapped = wrapStreamFnTextTransforms({
-      streamFn: baseStreamFn,
+      streamFn: (...args) => {
+        capturedContext = args[1];
+        return baseStreamFn(...args);
+      },
       input: [{ from: /red basket/g, to: "blue basket" }],
       output: [
         { from: /blue basket/g, to: "red basket" },
@@ -166,27 +166,16 @@ describe("plugin text transforms", () => {
       ],
       transformSystemPrompt: false,
     });
-    const stream = await Promise.resolve(
-      wrapped(
-        model,
-        {
-          systemPrompt: "Keep red basket untouched here",
-          messages: [{ role: "user", content: "Use red basket" }],
-        } as Context,
-        undefined,
-      ),
-    );
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
+    const stream = await runTransform(wrapped, {
+      systemPrompt: "Keep red basket untouched here",
+      messages: [{ role: "user", content: "Use red basket" }],
+    } as Context);
+    const events = await collectEvents(stream);
     const result = await stream.result();
 
     expect(capturedContext?.systemPrompt).toBe("Keep red basket untouched here");
     expect(capturedContext?.messages).toEqual([{ role: "user", content: "Use blue basket" }]);
-    const firstEvent = events[0] as { type?: string; delta?: string } | undefined;
-    expect(firstEvent?.type).toBe("text_delta");
-    expect(firstEvent?.delta).toBe("red basket on the left shelf");
+    expect(events[0]).toMatchObject({ type: "text_delta", delta: "red basket on the left shelf" });
     expect(result.content).toEqual([{ type: "text", text: "final red basket on the left shelf" }]);
   });
 
@@ -208,67 +197,37 @@ describe("plugin text transforms", () => {
       arguments: { text: "[MASKED]" },
     };
     const partial = makeAssistantToolMessage(partialToolCall);
-    const baseStreamFn: StreamFn = (_model, _context) => {
-      const stream = createAssistantMessageEventStream();
-      queueMicrotask(() => {
-        stream.push({
-          type: "toolcall_delta",
-          contentIndex: 0,
-          delta: '{"query":"[MASKED]"}',
-          partial,
-        });
-        stream.push({
-          type: "toolcall_end",
-          contentIndex: 0,
-          toolCall: partialToolCall,
-          partial,
-        });
-        stream.push({
-          type: "done",
-          reason: "toolUse",
-          message: makeAssistantToolMessage(finalToolCall),
-        });
-        stream.end();
-      });
-      return stream;
-    };
+    const baseStreamFn = streamEvents(
+      { type: "toolcall_delta", contentIndex: 0, delta: '{"query":"[MASKED]"}', partial },
+      { type: "toolcall_end", contentIndex: 0, toolCall: partialToolCall, partial },
+      { type: "done", reason: "toolUse", message: makeAssistantToolMessage(finalToolCall) },
+    );
 
     const wrapped = wrapStreamFnTextTransforms({
       streamFn: baseStreamFn,
       output: [{ from: /\[MASKED\]/g, to: "John" }],
     });
-    const stream = await Promise.resolve(wrapped(model, {} as Context, undefined));
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
-
-    const deltaEvent = events.find((event) => event.type === "toolcall_delta") as
-      | { delta?: string; partial?: AssistantMessage }
-      | undefined;
-    // Raw JSON fragments are provider bytes and may split a replacement token.
-    // Structured arguments are the safe, canonical transform surface.
-    expect(deltaEvent?.delta).toBe('{"query":"[MASKED]"}');
-    expect(deltaEvent?.partial?.content[0]).toMatchObject({
+    const stream = await runTransform(wrapped, {} as Context);
+    const events = await collectEvents(stream);
+    const deltaEvent = events.find((event) => event.type === "toolcall_delta");
+    const expectedTool = {
       name: "search",
       arguments: {
         query: "John",
         nested: { note: "ask John again" },
         entries: ["John", 7],
       },
-    });
+    };
+    // Raw JSON fragments are provider bytes and may split a replacement token.
+    // Structured arguments are the safe, canonical transform surface.
+    expect(deltaEvent?.delta).toBe('{"query":"[MASKED]"}');
+    expect(deltaEvent?.partial?.content[0]).toMatchObject(expectedTool);
 
-    const endEvent = events.find((event) => event.type === "toolcall_end") as
-      | { toolCall?: { name?: string; arguments?: Record<string, unknown> } }
-      | undefined;
+    const endEvent = events.find((event) => event.type === "toolcall_end");
     // Tool name is preserved — only arguments are transformed to avoid
     // breaking tool routing by renaming a registered tool identifier.
-    expect(endEvent?.toolCall?.name).toBe("search");
-    expect(endEvent?.toolCall?.arguments).toEqual({
-      query: "John",
-      nested: { note: "ask John again" },
-      entries: ["John", 7],
-    });
+    expect(endEvent?.toolCall?.name).toBe(expectedTool.name);
+    expect(endEvent?.toolCall?.arguments).toEqual(expectedTool.arguments);
 
     const result = await stream.result();
     expect(result.content[0]).toMatchObject({
