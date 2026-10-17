@@ -7,11 +7,7 @@ import {
 } from "openclaw/plugin-sdk/memory-host-core";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
-import {
-  resolveMemoryWikiAgentConfig,
-  resolveMemoryWikiConfig,
-  type ResolvedMemoryWikiConfig,
-} from "./config.js";
+import { resolveMemoryWikiAgentConfig, resolveMemoryWikiConfig } from "./config.js";
 import { createWikiCorpusSupplement } from "./corpus-supplement.js";
 import { assertToolDetailsRecord, registerMemoryCoreTools } from "./memory-core.test-support.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -38,48 +34,40 @@ describe("agent-scoped memory-wiki tools", () => {
       search: { backend: "local", corpus: "wiki" },
     });
 
-    const agents: Array<{
-      id: string;
-      title: string;
-      sentinel: string;
-      config: ResolvedMemoryWikiConfig;
-      pagePath?: string;
-    }> = [
-      { id: "support", title: "Support Private Synthesis", sentinel: "SUPPORT_ONLY_7f3c21" },
-      { id: "marketing", title: "Marketing Private Synthesis", sentinel: "MARKETING_ONLY_8e4d62" },
-    ].map((agent) =>
-      Object.assign(agent, {
-        config: resolveMemoryWikiAgentConfig({ config: baseConfig, appConfig, agentId: agent.id }),
-      }),
-    );
-
-    for (const agent of agents) {
-      const result = await createWikiApplyTool(agent.config, appConfig).execute(
-        `apply-${agent.id}`,
-        {
-          op: "create_synthesis",
-          title: agent.title,
-          body: `Private synthesis marker: ${agent.sentinel}`,
-          sourceIds: [`source.${agent.id}`],
-        },
-      );
+    async function createAgent(id: string, title: string, sentinel: string) {
+      const config = resolveMemoryWikiAgentConfig({ config: baseConfig, appConfig, agentId: id });
+      const result = await createWikiApplyTool(config, appConfig).execute(`apply-${id}`, {
+        op: "create_synthesis",
+        title,
+        body: `Private synthesis marker: ${sentinel}`,
+        sourceIds: [`source.${id}`],
+      });
       const pagePath = assertToolDetailsRecord(result.details).pagePath;
       if (typeof pagePath !== "string") {
         throw new Error("Expected wiki_apply to return pagePath");
       }
-      agent.pagePath = pagePath;
+      return { id, sentinel, config, pagePath };
     }
+    const support = await createAgent(
+      "support",
+      "Support Private Synthesis",
+      "SUPPORT_ONLY_7f3c21",
+    );
+    const marketing = await createAgent(
+      "marketing",
+      "Marketing Private Synthesis",
+      "MARKETING_ONLY_8e4d62",
+    );
+    const pairs = [
+      [support, marketing],
+      [marketing, support],
+    ] as const;
 
-    expect(agents[0]?.config.vault.path).toBe(path.join(vaultParent, "support"));
-    expect(agents[1]?.config.vault.path).toBe(path.join(vaultParent, "marketing"));
-    expect(agents[0]?.config.vault.path).not.toBe(agents[1]?.config.vault.path);
+    expect(support.config.vault.path).toBe(path.join(vaultParent, "support"));
+    expect(marketing.config.vault.path).toBe(path.join(vaultParent, "marketing"));
+    expect(support.config.vault.path).not.toBe(marketing.config.vault.path);
 
-    for (const agent of agents) {
-      const foreignAgent = agents.find((candidate) => candidate.id !== agent.id);
-      if (!agent.pagePath || !foreignAgent?.pagePath) {
-        throw new Error("Expected both agent synthesis paths");
-      }
-
+    for (const [agent, foreignAgent] of pairs) {
       expect((await fs.stat(agent.config.vault.path)).isDirectory()).toBe(true);
       await expect(
         fs.readFile(path.join(agent.config.vault.path, agent.pagePath), "utf8"),
@@ -133,12 +121,7 @@ describe("agent-scoped memory-wiki tools", () => {
       );
       const memoryCoreTool = registerMemoryCoreTools(appConfig);
 
-      for (const agent of agents) {
-        const foreignAgent = agents.find((candidate) => candidate.id !== agent.id);
-        if (!agent.pagePath || !foreignAgent?.pagePath) {
-          throw new Error("Expected both agent synthesis paths");
-        }
-
+      for (const [agent, foreignAgent] of pairs) {
         const memorySearch = memoryCoreTool("memory_search", agent.id, "main");
         const ownMemorySearch = await memorySearch.execute(`memory-search-own-${agent.id}`, {
           query: agent.sentinel,

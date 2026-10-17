@@ -20,27 +20,27 @@ const appConfig = {
   agents: { entries: { main: {}, secondary: {} } },
 } as OpenClawConfig;
 
-async function writeBridgePage(params: {
-  rootDir: string;
-  slug: string;
-  title: string;
-  agentIds: string[];
-  marker: string;
-}): Promise<void> {
+async function writeBridgePage(
+  rootDir: string,
+  slug: string,
+  title: string,
+  agentIds: readonly string[],
+  marker: string,
+): Promise<void> {
   await fs.writeFile(
-    path.join(params.rootDir, "sources", `${params.slug}.md`),
+    path.join(rootDir, "sources", `${slug}.md`),
     renderWikiMarkdown({
       frontmatter: {
         pageType: "source",
-        id: `source.${params.slug}`,
-        title: params.title,
+        id: `source.${slug}`,
+        title,
         sourceType: "memory-bridge",
-        sourcePath: `/tmp/${params.slug}/MEMORY.md`,
+        sourcePath: `/tmp/${slug}/MEMORY.md`,
         bridgeRelativePath: "MEMORY.md",
-        bridgeWorkspaceDir: `/tmp/${params.slug}`,
-        bridgeAgentIds: params.agentIds,
+        bridgeWorkspaceDir: `/tmp/${slug}`,
+        bridgeAgentIds: agentIds,
       },
-      body: `# ${params.title}\n\n${params.marker}\n`,
+      body: `# ${title}\n\n${marker}\n`,
     }),
     "utf8",
   );
@@ -52,27 +52,13 @@ describe("memory-wiki corpus supplement visibility", () => {
       initialize: true,
       config: { vault: { scope: "global" } },
     });
-    await writeBridgePage({
-      rootDir,
-      slug: "secondary-private",
-      title: "Secondary Private",
-      agentIds: ["secondary"],
-      marker: "REDACTED-FOREIGN-MARKER",
-    });
-    await writeBridgePage({
-      rootDir,
-      slug: "main-private",
-      title: "Main Private",
-      agentIds: ["main"],
-      marker: "REDACTED-OWN-MARKER",
-    });
-    await writeBridgePage({
-      rootDir,
-      slug: "unowned-private",
-      title: "Unowned Private",
-      agentIds: [],
-      marker: "REDACTED-UNOWNED-MARKER",
-    });
+    for (const [slug, title, agentIds, marker] of [
+      ["secondary-private", "Secondary Private", ["secondary"], "REDACTED-FOREIGN-MARKER"],
+      ["main-private", "Main Private", ["main"], "REDACTED-OWN-MARKER"],
+      ["unowned-private", "Unowned Private", [], "REDACTED-UNOWNED-MARKER"],
+    ] as const) {
+      await writeBridgePage(rootDir, slug, title, agentIds, marker);
+    }
     const supplement = createWikiCorpusSupplement({
       getAppConfig: () => appConfig,
       resolveConfig: (agentId, currentAppConfig) =>

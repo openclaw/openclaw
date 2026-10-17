@@ -1,4 +1,3 @@
-// Memory Wiki tests cover apply plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -38,49 +37,21 @@ const synthesisInput = {
 };
 
 describe("applyMemoryWikiMutation", () => {
-  it("normalizes string confidence in wiki mutations", () => {
-    expect(
-      normalizeMemoryWikiMutationInput({
-        op: "create_synthesis",
-        ...synthesisInput,
-        confidence: "0.7",
-      }),
-    ).toMatchObject({ confidence: 0.7 });
-
-    expect(
-      normalizeMemoryWikiMutationInput({
-        op: "update_metadata",
-        lookup: "entity.alpha",
-        confidence: "0.4",
-      }),
-    ).toMatchObject({ confidence: 0.4 });
-  });
-
-  it("normalizes CLI-style wiki mutation operation aliases", () => {
-    expect(
-      normalizeMemoryWikiMutationInput({
-        op: "synthesis",
-        ...synthesisInput,
-      }),
-    ).toMatchObject({
-      op: "create_synthesis",
-      title: "Alpha Synthesis",
-    });
-
-    expect(
-      normalizeMemoryWikiMutationInput({
-        op: "metadata",
-        lookup: "entity.alpha",
-        sourceIds: ["source.alpha"],
-      }),
-    ).toMatchObject({
-      op: "update_metadata",
-      lookup: "entity.alpha",
-    });
+  it.each([
+    ["create_synthesis", { ...synthesisInput, confidence: "0.7" }, { confidence: 0.7 }],
+    ["update_metadata", { lookup: "entity.alpha", confidence: "0.4" }, { confidence: 0.4 }],
+    ["synthesis", synthesisInput, { op: "create_synthesis", title: "Alpha Synthesis" }],
+    [
+      "metadata",
+      { lookup: "entity.alpha", sourceIds: ["source.alpha"] },
+      { op: "update_metadata", lookup: "entity.alpha" },
+    ],
+  ] as const)("normalizes confidence and aliases for %s", (op, input, expected) => {
+    expect(normalizeMemoryWikiMutationInput({ op, ...input })).toMatchObject(expected);
   });
 
   it("creates synthesis pages with managed summary blocks and refreshed indexes", async () => {
-    const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-" });
+    const { rootDir, config } = await createVault();
 
     const metadata = {
       sourceIds: ["source.alpha", "source.beta"],
@@ -107,10 +78,12 @@ describe("applyMemoryWikiMutation", () => {
       },
     });
 
-    expect(result.changed).toBe(true);
-    expect(result.pagePath).toBe("syntheses/alpha-synthesis.md");
-    expect(result.pageId).toBe("synthesis.alpha-synthesis");
-    expect(result.compile.pageCounts.synthesis).toBe(1);
+    expect(result).toMatchObject({
+      changed: true,
+      pagePath: "syntheses/alpha-synthesis.md",
+      pageId: "synthesis.alpha-synthesis",
+      compile: { pageCounts: { synthesis: 1 } },
+    });
 
     const page = await fs.readFile(path.join(rootDir, result.pagePath), "utf8");
     const parsed = parseWikiMarkdown(page);
@@ -152,9 +125,7 @@ describe("applyMemoryWikiMutation", () => {
   ])(
     "rejects a malformed write target without replacing its metadata ($name) (#96125)",
     async ({ frontmatterLines, error }) => {
-      const { rootDir, config } = await createVault({
-        prefix: "memory-wiki-apply-invalid-target-",
-      });
+      const { rootDir, config } = await createVault();
       await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });
       const targetPath = path.join(rootDir, "syntheses", "conflicted.md");
       const original = `---\n${frontmatterLines.join("\n")}\n---\n\n# Conflicted\n\nKeep this body.`;
@@ -176,9 +147,7 @@ describe("applyMemoryWikiMutation", () => {
   );
 
   it("updates page metadata without overwriting existing human notes", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-apply-",
-    });
+    const { rootDir, config } = await createVault();
 
     const targetPath = await writeEntity(
       rootDir,
@@ -214,9 +183,11 @@ describe("applyMemoryWikiMutation", () => {
       },
     });
 
-    expect(result.changed).toBe(true);
-    expect(result.pagePath).toBe("entities/alpha.md");
-    expect(result.compile.pageCounts.entity).toBe(1);
+    expect(result).toMatchObject({
+      changed: true,
+      pagePath: "entities/alpha.md",
+      compile: { pageCounts: { entity: 1 } },
+    });
 
     const updated = await fs.readFile(targetPath, "utf8");
     const parsed = parseWikiMarkdown(updated);
@@ -238,9 +209,7 @@ describe("applyMemoryWikiMutation", () => {
   });
 
   it("preserves disjoint metadata updates from concurrent agent turns", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-apply-concurrent-",
-    });
+    const { rootDir, config } = await createVault();
     const targetPath = await writeEntity(rootDir, "Shared");
 
     await Promise.all(

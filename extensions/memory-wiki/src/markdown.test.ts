@@ -1,4 +1,3 @@
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   extractHumanNotesBlock,
@@ -10,11 +9,11 @@ import {
   toWikiPageSummary,
 } from "./markdown.js";
 
-function scanWikiLinkTargets(markdown: string, relativePath: string): string[] {
+function scanWikiLinkTargets(raw: string): string[] {
   const result = scanWikiPageSummary({
-    absolutePath: path.join("/tmp/wiki", relativePath),
-    relativePath,
-    raw: markdown,
+    absolutePath: "/tmp/wiki/entities/test.md",
+    relativePath: "entities/test.md",
+    raw,
   });
   if (result.status !== "valid") {
     throw new Error(`Expected valid wiki page scan, got ${result.status}`);
@@ -22,17 +21,14 @@ function scanWikiLinkTargets(markdown: string, relativePath: string): string[] {
   return result.page.linkTargets;
 }
 
-describe("slugifyWikiSegment", () => {
-  it("keeps ASCII behavior unchanged", () => {
-    expect(slugifyWikiSegment("hello world")).toBe("hello-world");
-    expect(slugifyWikiSegment("")).toBe("page");
-  });
-
-  it("retains combining marks so distinct titles do not collapse", () => {
-    expect(slugifyWikiSegment("किताब")).toBe("किताब");
-    expect(slugifyWikiSegment("कुतुब")).toBe("कुतुब");
-    expect(slugifyWikiSegment("कीताब")).toBe("कीताब");
-  });
+it.each([
+  ["hello world", "hello-world"],
+  ["", "page"],
+  ["किताब", "किताब"],
+  ["कुतुब", "कुतुब"],
+  ["कीताब", "कीताब"],
+])("slugifies %j without collapsing distinct combining marks", (input, expected) => {
+  expect(slugifyWikiSegment(input)).toBe(expected);
 });
 
 describe("human Notes blocks", () => {
@@ -61,6 +57,25 @@ describe("human Notes blocks", () => {
 
 describe("toWikiPageSummary", () => {
   it("normalizes agent-facing people wiki metadata", () => {
+    const relationships = [
+      {
+        targetId: "entity.alice",
+        targetTitle: "Alice",
+        kind: "collaborates-with",
+        weight: 0.7,
+        confidence: 0.6,
+        evidenceKind: "discrawl-stat",
+        privacyTier: "local-private",
+      },
+    ];
+    const evidence = [
+      {
+        kind: "maintainer-whois",
+        sourceId: "source.maintainers",
+        confidence: 0.8,
+        privacyTier: "local-private",
+      },
+    ];
     const raw = renderWikiMarkdown({
       frontmatter: {
         pageType: "entity",
@@ -75,40 +90,18 @@ describe("toWikiPageSummary", () => {
         lastRefreshedAt: "2026-04-29T00:00:00.000Z",
         personCard: {
           handles: ["@bgroux"],
-          socials: ["https://x.example/bgroux"],
           email: "brad@example.com",
-          timezone: "America/Chicago",
           lane: "Microsoft Teams",
-          askFor: ["Teams and Azure questions"],
-          avoidAskingFor: ["unrelated billing"],
           confidence: 0.8,
           privacyTier: "confirm-before-use",
-          lastRefreshedAt: "2026-04-28T00:00:00.000Z",
         },
-        relationships: [
-          {
-            targetId: "entity.alice",
-            targetTitle: "Alice",
-            kind: "collaborates-with",
-            weight: 0.7,
-            confidence: 0.6,
-            evidenceKind: "discrawl-stat",
-            privacyTier: "local-private",
-          },
-        ],
+        relationships,
         claims: [
           {
             id: "claim.brad.teams",
             text: "Brad is useful for Microsoft Teams routing.",
             confidence: 0.9,
-            evidence: [
-              {
-                kind: "maintainer-whois",
-                sourceId: "source.maintainers",
-                confidence: 0.8,
-                privacyTier: "local-private",
-              },
-            ],
+            evidence,
           },
         ],
       },
@@ -120,10 +113,6 @@ describe("toWikiPageSummary", () => {
       relativePath: "entities/brad.md",
       raw,
     });
-    if (!summary) {
-      throw new Error("expected wiki summary");
-    }
-
     expect(summary).toMatchObject({
       entityType: "person",
       canonicalId: "maintainer.brad-groux",
@@ -139,26 +128,9 @@ describe("toWikiPageSummary", () => {
         privacyTier: "confirm-before-use",
       }),
     });
-    expect(summary.relationships).toEqual([
-      {
-        targetId: "entity.alice",
-        targetTitle: "Alice",
-        kind: "collaborates-with",
-        weight: 0.7,
-        confidence: 0.6,
-        evidenceKind: "discrawl-stat",
-        privacyTier: "local-private",
-      },
-    ]);
-    expect(summary.claims[0]?.id).toBe("claim.brad.teams");
-    expect(summary.claims[0]?.evidence).toEqual([
-      {
-        kind: "maintainer-whois",
-        sourceId: "source.maintainers",
-        confidence: 0.8,
-        privacyTier: "local-private",
-      },
-    ]);
+    expect(summary?.relationships).toEqual(relationships);
+    expect(summary?.claims[0]?.id).toBe("claim.brad.teams");
+    expect(summary?.claims[0]?.evidence).toEqual(evidence);
   });
 
   it("reports and excludes sequence frontmatter roots from page scans", () => {
@@ -179,18 +151,17 @@ describe("toWikiPageSummary", () => {
   });
 });
 
-describe("scanWikiPageSummary linkTargets", () => {
-  it("accepts a closing fence longer than the opening fence (#97945)", () => {
-    const markdown =
-      "# Longer Close\n\n```scala\ndef handle(req: Request[A]): Future[Option[User]] = ???\n````\n\nProse: [[RealTarget]]";
-    const links = scanWikiLinkTargets(markdown, "entities/test.md");
-    expect(links).toEqual(["RealTarget"]);
-  });
-
-  it("does not leak [[…]] when a shorter fence-like line appears inside a longer fenced block (#97945)", () => {
-    const markdown =
-      "# Long Fence With Shorter Inner Line\n\n``````bash\nsome code\n```\n[[not-a-link]]\n``````\n\nAfter fence: [[RealPage]]";
-    const links = scanWikiLinkTargets(markdown, "entities/test.md");
-    expect(links).toEqual(["RealPage"]);
-  });
+it.each([
+  [
+    "longer closing fence",
+    "# Longer Close\n\n```scala\ndef handle(req: Request[A]): Future[Option[User]] = ???\n````\n\nProse: [[RealTarget]]",
+    "RealTarget",
+  ],
+  [
+    "shorter inner fence",
+    "# Long Fence With Shorter Inner Line\n\n``````bash\nsome code\n```\n[[not-a-link]]\n``````\n\nAfter fence: [[RealPage]]",
+    "RealPage",
+  ],
+])("excludes fenced link targets with a %s (#97945)", (_name, markdown, target) => {
+  expect(scanWikiLinkTargets(markdown)).toEqual([target]);
 });
