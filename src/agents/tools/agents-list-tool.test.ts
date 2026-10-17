@@ -78,31 +78,28 @@ describe("agents_list tool", () => {
     {
       selection: "a plain alias",
       primary: "fast",
-      alias: "fast",
       model: "openai/gpt-5.6-sol",
       agentRuntime: { id: "codex", source: "model" },
     },
     {
       selection: "an explicit provider with a colliding alias",
       primary: "clawrouter/openai/gpt-5.6",
-      alias: "clawrouter/openai/gpt-5.6",
       model: "clawrouter/openai/gpt-5.6",
       agentRuntime: { id: "auto", source: "implicit" },
     },
   ])(
     "reports canonical model and runtime for $selection",
-    async ({ primary, alias, model, agentRuntime }) => {
+    async ({ primary, model, agentRuntime }) => {
       // Alias expansion must not redirect an explicitly named registered provider.
       loadConfigMock.mockReturnValue({
         agents: {
           defaults: {
             model: {
               primary,
-              fallbacks: ["openai/gpt-5.6-luna"],
             },
             models: {
               "openai/gpt-5.6-sol": {
-                alias,
+                alias: primary,
                 agentRuntime: { id: "codex" },
               },
             },
