@@ -171,11 +171,13 @@ it cannot return a Promise, and a retained connection does not extend it.
 PostgreSQL rejects construction and SQL on the Gateway main thread outside that
 scope. The CLI entry records an immutable process role before state access;
 one-shot CLI and Doctor processes may use the synchronous PostgreSQL bridge.
-An unset role still refuses main-thread access. Gateway-capable interactive
-onboarding, `setup` (including `crestodian`), and bare-root launch use the Gateway
-role; non-interactive onboarding uses the one-shot role. The embedded Gateway
-entry also requires the Gateway role and refuses a process already classified
-as a one-shot.
+An unset role still refuses main-thread access. Interactive onboarding and
+`setup` (including `crestodian`) keep the CLI role through their prompts and
+local setup console. Any Gateway they start runs in a separate process with
+the Gateway role. The setup console supplies its own in-memory TUI backend;
+rendering an interactive console does not turn the CLI into a Gateway.
+Bare-root launch retains its conservative Gateway role. The embedded Gateway
+entry requires that role and refuses a process already classified as a one-shot.
 Each `openEngineStore` caller supplies `inspectSqlite()` with explicit
 `hasExistingData` and `hasEngineAnchor` facts; table-name prefixes cannot decide
 whether an engine switch is safe. See

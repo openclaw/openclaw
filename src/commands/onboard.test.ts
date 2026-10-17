@@ -107,6 +107,16 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: () => 18_789,
 }));
 
+vi.mock("./config-preflight-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config-preflight-snapshot.js")>()),
+  readConfigSnapshotBeforeEngineSelection: mocks.readConfigFileSnapshot,
+}));
+
+vi.mock("../cli/database-engine-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/database-engine-selection.js")>()),
+  prepareCliDatabaseEngine: async () => false,
+}));
+
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolvePluginProviders: mocks.resolvePluginProviders,
 }));

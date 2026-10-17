@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { readConfigFileSnapshotWithPluginMetadata } from "../config/config.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -13,13 +12,16 @@ import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plug
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runQuickstartForegroundGateway } from "./onboard-quickstart-host.js";
 
-const mocks = vi.hoisted(() => ({ readConfigSnapshot: vi.fn(), runGateway: vi.fn() }));
+const mocks = vi.hoisted(() => ({ readConfigSnapshot: vi.fn(), invocation: vi.fn() }));
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
   readConfigFileSnapshot: mocks.readConfigSnapshot,
 }));
-// mock-isolation: Gateway host initialization must not alter the plugin generation being tested.
-vi.mock("../cli/gateway-cli/run.js", () => ({ runGatewayCommand: mocks.runGateway }));
+// The child fixture reads real installed metadata; only the executable entry is substituted.
+vi.mock("../infra/openclaw-cli-invocation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-cli-invocation.js")>()),
+  resolveCurrentOpenClawCliInvocation: mocks.invocation,
+}));
 vi.mock("./onboard-helpers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
   waitForGatewayReachable: async () => ({ ok: false }),
@@ -99,20 +101,26 @@ it.each([false, true])(
             expect(withPluginCache(createPluginCache(), readMetadata).byPluginId.has("codex")).toBe(
               true,
             );
-            const inventories: boolean[] = [];
-            const readStartupConfig = async () => {
-              const read = await readConfigFileSnapshotWithPluginMetadata({ isolateEnv: true });
-              inventories.push(read.pluginMetadataSnapshot?.byPluginId.has("codex") ?? false);
-              return { config: read.snapshot.config };
-            };
-            mocks.readConfigSnapshot.mockImplementation(readStartupConfig);
-            mocks.runGateway.mockImplementation(async () => {
-              await readStartupConfig();
+            const inventoryPath = state.statePath("child-plugin-inventory.json");
+            const metadataUrl = new URL("../config/io.plugin-metadata.ts", import.meta.url).href;
+            const fixture = `
+              const { writeFile } = await import("node:fs/promises");
+              const { resolveConfigWidePluginMetadataSnapshot } = await import(${JSON.stringify(metadataUrl)});
+              const metadata = resolveConfigWidePluginMetadataSnapshot({
+                config: ${JSON.stringify(config)}, env: process.env, allowCurrent: false,
+              });
+              await writeFile(${JSON.stringify(inventoryPath)}, JSON.stringify([...metadata.byPluginId.keys()]));
+            `;
+            mocks.invocation.mockReturnValue({
+              command: process.execPath,
+              args: ["--import", "./scripts/tsx.mjs", "--input-type=module", "-e", fixture],
+              cwd: process.cwd(),
             });
+            mocks.readConfigSnapshot.mockResolvedValue({ config });
             await runQuickstartForegroundGateway({
               runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
             });
-            expect(inventories).toEqual([true, true]);
+            expect(JSON.parse(await fs.readFile(inventoryPath, "utf8"))).toContain("codex");
             expect(readMetadata().byPluginId.has("codex")).toBe(!pinnedCaller);
           };
           await (pinnedCaller

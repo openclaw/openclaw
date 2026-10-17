@@ -1,9 +1,11 @@
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { getFlagValue, hasFlag } from "./argv.js";
+import { getCommandPositionalsWithRootOptions, getFlagValue, hasFlag } from "./argv.js";
 import { resolveCliDatabaseProcessRole } from "./database-process-role.js";
 
 const OWNED_DATABASE_SELECTION = new Set([
-  // The process role includes embedded Gateways; final-target admission owns selection.
+  // Bare-root routing selects under its existing onboarding/TUI owner.
+  "",
+  // Gateway processes own their final-target admission and engine selection.
   "gateway",
   // These commands use no operator database.
   "help",
@@ -100,6 +102,20 @@ const OWNED_DATABASE_SELECTION = new Set([
 /** Select storage before stateful startup; true means Doctor completed a no-database report. */
 export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean> {
   const invocation = resolveCliArgvInvocation(argv);
+  // Recommendations accepts only --json before its subcommand. Other setup
+  // options can carry values that the early generic command path cannot classify.
+  const onboardSubcommand =
+    invocation.primary === "onboard"
+      ? getCommandPositionalsWithRootOptions(argv, {
+          commandPath: ["onboard"],
+          booleanFlags: ["--json"],
+          maxPositionals: 1,
+          mode: "command-path",
+        })?.[0]
+      : undefined;
+  const isSetupInvocation =
+    ["setup", "crestodian"].includes(invocation.primary ?? "") ||
+    (invocation.primary === "onboard" && onboardSubcommand !== "recommendations");
   let command = invocation.hasHelpOrVersion
     ? "help"
     : resolveCliDatabaseProcessRole(argv) === "gateway"
@@ -148,6 +164,19 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
   const readSnapshot = () =>
     readConfigSnapshotBeforeEngineSelection(process.env, { isolateEnv: false });
   let snapshot = await readSnapshot();
+  // Reset owns the old engine only through cleanup, then selects its fresh config.
+  if (isSetupInvocation && hasFlag(argv, "--reset")) {
+    return false;
+  }
+  if (
+    isSetupInvocation &&
+    snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID") &&
+    (await import("../config/paths.js")).resolveIsConfigReadOnly()
+  ) {
+    // Setup may check its TTY before the config guard; report the owner's immutable-file error.
+    const { createConfigMutationError } = await import("../config/config-write-guard.js");
+    throw createConfigMutationError({ configPath: snapshot.path });
+  }
   let doctorRecovery = false;
   const {
     createConfigReadError,
@@ -155,6 +184,48 @@ export async function prepareCliDatabaseEngine(argv: string[]): Promise<boolean>
     formatInvalidConfigDetails,
     isConfigReadFailure,
   } = await import("../config/io.invalid-config.js");
+  if (
+    isSetupInvocation &&
+    !hasFlag(argv, "--non-interactive") &&
+    !hasFlag(argv, "--json") &&
+    !isConfigReadFailure(snapshot) &&
+    snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
+  ) {
+    const [{ offerInvalidConfigRecovery }, { prepareDoctorEngineSelection }, { defaultRuntime }] =
+      await Promise.all([
+        import("./invalid-config-recovery.js"),
+        import("../commands/doctor-engine-selection.js"),
+        import("../runtime.js"),
+      ]);
+    defaultRuntime.error(
+      createInvalidConfigError(snapshot.path, formatInvalidConfigDetails(snapshot.issues)).message,
+    );
+    const recovered = await offerInvalidConfigRecovery({
+      runtime: defaultRuntime,
+      runDoctor: async () => {
+        // No database is authoritative until file-only Doctor recovery resolves the target.
+        snapshot = await prepareDoctorEngineSelection({
+          argv: ["node", "openclaw", "doctor", "--fix"],
+          snapshot,
+          readSnapshot,
+        });
+      },
+      retry: async () => {
+        if (isConfigReadFailure(snapshot)) {
+          throw createConfigReadError(snapshot);
+        }
+        if (snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")) {
+          throw createInvalidConfigError(
+            snapshot.path,
+            formatInvalidConfigDetails(snapshot.issues),
+          );
+        }
+      },
+    });
+    if (!recovered) {
+      defaultRuntime.exit(1);
+    }
+  }
   if (
     invocation.primary === "doctor" &&
     snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")

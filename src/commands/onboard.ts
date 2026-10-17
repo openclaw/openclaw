@@ -6,7 +6,7 @@
  */
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import { resolveGatewayPort } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, isValidEnvSecretRefId } from "../config/types.secrets.js";
@@ -586,85 +586,113 @@ export async function setupWizardCommand(
 
   const runSetupAfterOptionalReset = async () => {
     if (normalizedOpts.reset) {
-      const snapshot = await readConfigFileSnapshot();
-      const baseConfig = snapshot.sourceConfig ?? (snapshot.valid ? snapshot.config : {});
+      const [
+        { readConfigSnapshotBeforeEngineSelection },
+        { resolveDatabaseEngineSelection },
+        { withDatabaseEngineSelection },
+      ] = await Promise.all([
+        import("./config-preflight-snapshot.js"),
+        import("../infra/database-engine/config.js"),
+        import("../infra/database-engine/context.js"),
+      ]);
+      const snapshot = await readConfigSnapshotBeforeEngineSelection(process.env, {
+        isolateEnv: false,
+      });
       const resetScope: ResetScope = normalizedOpts.resetScope ?? "config+creds+sessions";
-      // Every reset scope removes the config file. Validate setup against the
-      // empty config and requested/default workspace that dispatch will see.
-      const setupBaseConfig: OpenClawConfig = {};
-      const setupWorkspaceDir = resolveUserPath(normalizedOpts.workspace ?? DEFAULT_WORKSPACE);
-      const configuredWorkspace: unknown =
-        normalizedOpts.workspace ?? baseConfig.agents?.defaults?.workspace;
-      if (
-        resetScope === "full" &&
-        normalizedOpts.workspace === undefined &&
-        snapshot.exists &&
-        !snapshot.valid &&
-        // A snapshot always carries a sourceConfig object (empty on failure), so
-        // only readError distinguishes "config could not be read" from "config
-        // parsed but configures no workspace", where the default is correct.
-        snapshot.readError !== undefined
-      ) {
-        reject(
-          "Cannot determine the configured workspace from an unreadable config. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
+      const reset = async () => {
+        const baseConfig = snapshot.sourceConfig ?? (snapshot.valid ? snapshot.config : {});
+        // Every reset scope removes the config file. Validate setup against the
+        // empty config and requested/default workspace that dispatch will see.
+        const setupBaseConfig: OpenClawConfig = {};
+        const setupWorkspaceDir = resolveUserPath(normalizedOpts.workspace ?? DEFAULT_WORKSPACE);
+        const configuredWorkspace: unknown =
+          normalizedOpts.workspace ?? baseConfig.agents?.defaults?.workspace;
+        if (
+          resetScope === "full" &&
+          normalizedOpts.workspace === undefined &&
+          snapshot.exists &&
+          !snapshot.valid &&
+          // A snapshot always carries a sourceConfig object (empty on failure), so
+          // only readError distinguishes "config could not be read" from "config
+          // parsed but configures no workspace", where the default is correct.
+          snapshot.readError !== undefined
+        ) {
+          reject(
+            "Cannot determine the configured workspace from an unreadable config. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
+          );
+          return false;
+        }
+        if (
+          resetScope === "full" &&
+          configuredWorkspace !== undefined &&
+          (typeof configuredWorkspace !== "string" || !configuredWorkspace.trim())
+        ) {
+          reject(
+            "Configured workspace is invalid. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
+          );
+          return false;
+        }
+        // Non-full scopes never touch the workspace, so the fallback is only an
+        // inert handleReset argument when an invalid config contains bad data.
+        const workspaceDir = resolveUserPath(
+          typeof configuredWorkspace === "string" && configuredWorkspace.trim()
+            ? configuredWorkspace
+            : DEFAULT_WORKSPACE,
         );
+        if (
+          !(await validateResetAuthChoice({
+            opts: normalizedOpts,
+            runtime,
+            baseConfig: setupBaseConfig,
+            discoveryConfig: baseConfig,
+            workspaceDir: setupWorkspaceDir,
+            resetScope,
+          }))
+        ) {
+          return false;
+        }
+        if (
+          normalizedOpts.nonInteractive &&
+          (normalizedOpts.mode ?? "local") !== "remote" &&
+          !(await applyNonInteractiveGatewayConfig({
+            nextConfig: setupBaseConfig,
+            opts: normalizedOpts,
+            runtime,
+            defaultPort: resolveGatewayPort(setupBaseConfig),
+          }))
+        ) {
+          return false;
+        }
+        if (
+          normalizedOpts.importFrom ||
+          normalizedOpts.importSource ||
+          normalizedOpts.importSecrets ||
+          normalizedOpts.flow === "import"
+        ) {
+          reject(
+            "Migration import cannot be combined with --reset because provider input must be planned before any state is removed. Run the import without --reset.",
+          );
+          return false;
+        }
+        // Reset is deliberately the final pre-dispatch step: no rejectable option
+        // checks may run after user state has moved to Trash.
+        await handleReset(resetScope, workspaceDir, runtime);
+        return true;
+      };
+      // Config-only recovery must work even when the old database credential is unavailable.
+      const resetComplete =
+        resetScope === "config"
+          ? await reset()
+          : await withDatabaseEngineSelection(
+              await resolveDatabaseEngineSelection(snapshot.config, process.env),
+              reset,
+            );
+      if (!resetComplete) {
         return;
       }
-      if (
-        resetScope === "full" &&
-        configuredWorkspace !== undefined &&
-        (typeof configuredWorkspace !== "string" || !configuredWorkspace.trim())
-      ) {
-        reject(
-          "Configured workspace is invalid. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
-        );
-        return;
-      }
-      // Non-full scopes never touch the workspace, so the fallback is only an
-      // inert handleReset argument when an invalid config contains bad data.
-      const workspaceDir = resolveUserPath(
-        typeof configuredWorkspace === "string" && configuredWorkspace.trim()
-          ? configuredWorkspace
-          : DEFAULT_WORKSPACE,
-      );
-      if (
-        !(await validateResetAuthChoice({
-          opts: normalizedOpts,
-          runtime,
-          baseConfig: setupBaseConfig,
-          discoveryConfig: baseConfig,
-          workspaceDir: setupWorkspaceDir,
-          resetScope,
-        }))
-      ) {
-        return;
-      }
-      if (
-        normalizedOpts.nonInteractive &&
-        (normalizedOpts.mode ?? "local") !== "remote" &&
-        !(await applyNonInteractiveGatewayConfig({
-          nextConfig: setupBaseConfig,
-          opts: normalizedOpts,
-          runtime,
-          defaultPort: resolveGatewayPort(setupBaseConfig),
-        }))
-      ) {
-        return;
-      }
-      if (
-        normalizedOpts.importFrom ||
-        normalizedOpts.importSource ||
-        normalizedOpts.importSecrets ||
-        normalizedOpts.flow === "import"
-      ) {
-        reject(
-          "Migration import cannot be combined with --reset because provider input must be planned before any state is removed. Run the import without --reset.",
-        );
-        return;
-      }
-      // Reset is deliberately the final pre-dispatch step: no rejectable option
-      // checks may run after user state has moved to Trash.
-      await handleReset(resetScope, workspaceDir, runtime);
+      // Cleanup's scoped source is gone; install only the post-reset process target.
+      const { prepareCliDatabaseEngine } = await import("../cli/database-engine-selection.js");
+      await prepareCliDatabaseEngine(["node", "openclaw", "onboard"]);
     }
 
     await runSetup(normalizedOpts, runtime);

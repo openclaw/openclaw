@@ -623,7 +623,9 @@ main-thread access. One-shot CLI dispatch selects the engine after profile, dote
 and config-directed path routing, before commands read shared state. Help, version,
 log retrieval, package authoring, and database-only connection repairs remain usable
 without database credentials. Gateway processes retain their final-target admission
-owner, including interactive onboarding that can start an embedded Gateway.
+owner. Interactive onboarding selects storage before its state work and starts
+any temporary or foreground Gateway in a separate process; neither process
+changes roles during setup.
 Updater admission and recovery commands retain their context, receipt, or explicit
 path selection. QA fixtures, database tooling, and agent execution likewise keep
 their existing target owners.
