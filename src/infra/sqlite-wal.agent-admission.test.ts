@@ -87,15 +87,14 @@ it.each(["keep", "close", "replace"] as const)(
           initialPeriodicWork.push(Promise.resolve(periodic()));
           initialPeriodicWork.push(Promise.resolve(periodic()));
           initialPeriodicWork.push(Promise.resolve(periodic()));
-          expect(vacuumCalls()).toHaveLength(0);
-          expect(checkpointCalls()).toHaveLength(0);
+          expect([vacuumCalls(), checkpointCalls()]).toEqual([[], []]);
           expect(freePages()).toBe(before);
           if (retirement !== "keep") {
             expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
             if (retirement === "replace") {
               const replacement = openOpenClawAgentDatabase(options);
               expect(replacement.db.isOpen).toBe(true);
-              expect(replacement.db === database.db).toBe(false);
+              expect(replacement.db).not.toBe(database.db);
             }
           }
         } finally {
@@ -112,25 +111,19 @@ it.each(["keep", "close", "replace"] as const)(
           }
         }
         if (retirement === "keep") {
-          expect(vacuumCalls()).toEqual([]);
-          expect(checkpointCalls()).toEqual([]);
           expect(database.walMaintenance.health).toMatchObject({
             state: "complete",
             warning: false,
           });
-          const reclaimed = before - freePages();
-          expect(reclaimed).toBe(512);
+          expect(before - freePages()).toBe(512);
           expect(foregroundFreePages).toBeGreaterThan(before - 512);
           expect(foregroundFreePages).toBeLessThan(before);
           const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
           try {
-            reader.exec("BEGIN");
-            reader.prepare("SELECT COUNT(*) FROM cache_entries").get();
-            database.db
-              .prepare(
-                "INSERT INTO cache_entries(scope,key,blob,updated_at) VALUES('wal-proof','held',zeroblob(4096),1)",
-              )
-              .run();
+            reader.exec("BEGIN; SELECT COUNT(*) FROM cache_entries;");
+            database.db.exec(
+              "INSERT INTO cache_entries(scope,key,blob,updated_at) VALUES('wal-proof','held',zeroblob(4096),1)",
+            );
             const heldFreePages = freePages();
             for (const expectedState of ["blocked", "blocked", "complete"] as const) {
               if (expectedState === "complete") {
@@ -158,13 +151,11 @@ it.each(["keep", "close", "replace"] as const)(
               await runOpenClawAgentWriteAdmission(options, () => undefined);
             }
             expect(checkpointCalls()).toEqual([]);
-            expect(vacuumCalls()).toEqual([]);
           } finally {
             reader.close();
           }
-        } else {
-          expect(vacuumCalls()).toEqual([]);
         }
+        expect(vacuumCalls()).toEqual([]);
       } finally {
         unobserve();
       }
