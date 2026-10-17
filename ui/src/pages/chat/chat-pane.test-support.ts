@@ -139,7 +139,11 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   sessionSnapshotStore?: SessionSnapshotStore;
   chatState: Pick<
     ReturnType<typeof createChatState<ChatPageHost>>,
-    "attach" | "composerPersistence" | "createRenderLifecycle" | "requestBackgroundUpdate"
+    | "attach"
+    | "composerDraft"
+    | "composerPersistence"
+    | "createRenderLifecycle"
+    | "requestBackgroundUpdate"
   >;
   context: ApplicationContext;
   state: ChatPageHost;

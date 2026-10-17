@@ -476,7 +476,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     // Payload-store entries and their object URLs are reclaimed only by
     // explicit release; clearing the array alone strands them for the tab.
     releaseChatAttachmentPayloads(state.chatAttachments);
-    state.chatAttachments = [];
+    this.chatState.attachmentInputProps(state).onAttachmentsChange([]);
     state.chatLoading = true;
     void this.loadCatalogSession(key, false);
   }
