@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NormalizePluginId } from "../config-normalization-shared.js";
 import type { DeclaredProviderOwnerIndex } from "../provider-owner-index.js";
 
@@ -10,6 +11,7 @@ export type PluginRuntimeLoadContextState = {
   loaderCacheIdentity?: Readonly<{ requestKey: string; resolvedKey: string }>;
   preferBuiltPluginArtifacts?: boolean;
   declaredProviderOwners: DeclaredProviderOwnerIndex;
+  rawConfig: OpenClawConfig;
 };
 
 // Keep private config/env out of diagnostic traversal while registry spreads

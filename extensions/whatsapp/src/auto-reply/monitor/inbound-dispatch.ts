@@ -37,6 +37,7 @@ import type {
 } from "../deliver-reply.js";
 import { createWhatsAppReplyTransportContext } from "../deliver-reply.js";
 import { markWhatsAppVisibleDeliveryError } from "../util.js";
+import { resolveWebMonitorConfigSnapshot } from "./config.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
 import type { updateLastRouteInBackground } from "./last-route.js";
@@ -551,7 +552,7 @@ export function createWhatsAppReplyPlan(params: {
 }) {
   const conversationId = params.conversationId;
   const statusReactionController = params.statusReactionController ?? null;
-  const textLimit = resolveTextChunkLimit(params.cfg, "whatsapp");
+  const textLimit = resolveTextChunkLimit(params.cfg, "whatsapp", params.route.accountId);
   const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);
   const tableMode = resolveMarkdownTableMode({
     cfg: params.cfg,
@@ -695,6 +696,8 @@ export function createWhatsAppReplyPlan(params: {
         return false;
       }
       return {
+        prepareRuntimeHandoff: (cfg) =>
+          resolveWebMonitorConfigSnapshot({ cfg, accountId: params.route.accountId }).cfg,
         to: conversationId,
         replyToId: resolveWhatsAppDurableReplyToId({
           context: params.context,
