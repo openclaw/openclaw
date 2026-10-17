@@ -679,8 +679,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
               stageCreatedInput: true,
             });
           } else {
-            const { handleDirectExternalChatSend } = await loadChatSendExternalEntry();
-            await handleDirectExternalChatSend(sendOptions);
+            const { handleCreatedSessionChatSend } = await loadChatSendExternalEntry();
+            await handleCreatedSessionChatSend(sendOptions, sessionCreation.via === "spawn");
           }
         });
       },

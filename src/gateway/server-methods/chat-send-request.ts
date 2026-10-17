@@ -96,6 +96,7 @@ export function normalizeChatSendRequest(params: {
   params: Record<string, unknown>;
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
+  agentAuthoredInput?: true;
   goalResume?: SessionGoalOperation & { action: "resume" };
   restartResume?: SessionRestartResume;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
@@ -205,7 +206,10 @@ export function normalizeChatSendRequest(params: {
 
   const hasGoalOperation = params.goalResume !== undefined || p.intent !== undefined;
   const commandInterpretationSuppressed =
-    suppressCommandInterpretation || hasGoalOperation || providerReview !== undefined;
+    suppressCommandInterpretation ||
+    params.agentAuthoredInput === true ||
+    hasGoalOperation ||
+    providerReview !== undefined;
   // This text comes from the current provider review, not a browser-supplied command.
   const inboundMessage = p.intent || providerReview ? p.message : sanitizedMessageResult.message;
   const systemInputProvenance = params.goalResume

@@ -51,3 +51,16 @@ export function handleDirectExternalChatSend(
 ): Promise<void> {
   return handleChatSend(options, onAdmissionOwned, externalAuthorityAdmission);
 }
+
+/** Created sessions keep their creator's authority; a spawned child's opening task is agent prose. */
+export function handleCreatedSessionChatSend(
+  options: GatewayRequestHandlerOptions,
+  spawned: boolean,
+): Promise<void> {
+  return handleChatSend(
+    options,
+    undefined,
+    externalAuthorityAdmission,
+    spawned ? { agentAuthoredInput: true } : undefined,
+  );
+}

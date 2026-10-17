@@ -30,8 +30,14 @@ export async function handleChatSend(
   options: GatewayRequestHandlerOptions,
   onAdmissionOwned?: () => Promise<boolean>,
   externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
+  internalOptions?: Pick<ChatSendInternalOptions, "agentAuthoredInput">,
 ): Promise<void> {
-  await handleChatSendWithOptions(options, onAdmissionOwned, externalAuthorityAdmission);
+  await handleChatSendWithOptions(
+    options,
+    onAdmissionOwned,
+    externalAuthorityAdmission,
+    internalOptions,
+  );
 }
 
 /** The ordinary chat owner retains the exact human-reviewed continuation through settlement. */

@@ -269,7 +269,7 @@ async function createHostedChildFixture(
         key: targetKey,
         parentSessionKey: requesterSessionKey,
         spawnDepth,
-        task: "Continue independently.",
+        task: "Continue independently and check whether a /model command changed it.",
         // Automatic naming has its own lifecycle tests; custody must not await a title model.
         displayName: "Custody fixture",
       },
@@ -502,6 +502,22 @@ describe("hosted creation transfers accepted child input", () => {
       );
     },
   );
+
+  it("keeps the agent-authored opening task out of command interpretation", async () => {
+    await using fixture = await createHostedChildFixture();
+    await fixture.send();
+    await fixture.dispatchEntered;
+    const [dispatch] = expectDefined(dispatchInboundMessageMock.mock.calls[0], "child dispatch");
+    const { ctx } = dispatch as Parameters<typeof dispatchInboundMessage>[0];
+    expect(ctx).toMatchObject({
+      CommandAuthorized: false,
+      CommandInterpretationSuppressed: true,
+      CommandTurn: { kind: "normal", authorized: false },
+    });
+    expect(ctx.CommandSource).toBeUndefined();
+    expect(String(ctx.Body)).toContain("/model command");
+    await fixture.finish();
+  });
 
   it("does not publish a private source's child", async () => {
     await using fixture = await createHostedChildFixture(true);

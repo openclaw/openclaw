@@ -329,6 +329,19 @@ describe("normalizeChatSendRequest", () => {
     });
   });
 
+  it("keeps agent-authored task text out of command interpretation without admin scope", async () => {
+    const result = await normalizeChatSendRequest({
+      params: validParams({ message: "/stop and check whether a /model command changed it" }),
+      client: humanClient(),
+      agentAuthoredInput: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: { suppressCommandInterpretation: true, stopCommand: false, turnKind: "main" },
+    });
+  });
+
   it("requires capable copilot runs to carry explicit tool bindings", async () => {
     expect(
       await normalizeChatSendRequest({ params: validParams(), client: copilotClient() }),

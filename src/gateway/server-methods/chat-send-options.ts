@@ -11,6 +11,8 @@ export type ChatSendInternalOptions = {
   trustedSystemInput?: boolean;
   /** The creation owner has validated an agent-authored opening turn and its source authority. */
   stageCreatedInput?: true;
+  /** An agent wrote this input as task prose; slash text must not select commands or directives. */
+  agentAuthoredInput?: true;
   transcript?: Parameters<typeof createGatewayChatUserTurnController>[0]["transcript"];
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   toolsAllow?: string[];

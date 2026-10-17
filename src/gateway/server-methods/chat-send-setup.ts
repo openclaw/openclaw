@@ -36,6 +36,7 @@ export async function prepareAndAdmitChatSend(
   onAdmissionOwned?: () => Promise<boolean>,
   options?: {
     trustedSystemInput?: boolean;
+    agentAuthoredInput?: true;
     isDirectExternalUser?: boolean;
     goalResume?: SessionGoalOperation & { action: "resume" };
     restartResume?: SessionRestartResume;
@@ -61,6 +62,7 @@ export async function prepareAndAdmitChatSend(
     params,
     client,
     ...(options?.trustedSystemInput ? { trustedSystemInput: true } : {}),
+    ...(options?.agentAuthoredInput ? { agentAuthoredInput: true } : {}),
     ...(options?.goalResume ? { goalResume: options.goalResume } : {}),
     ...(options?.restartResume ? { restartResume: options.restartResume } : {}),
     ...(options?.providerReviewAcknowledgment
