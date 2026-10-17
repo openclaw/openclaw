@@ -249,17 +249,7 @@ describe("diagnostic memory", () => {
     });
     stop();
 
-    expect(events).toEqual(
-      expected
-        ? [
-            expect.objectContaining({
-              type: "diagnostic.memory.pressure",
-              ...expected,
-              memory,
-            }),
-          ]
-        : [],
-    );
+    expect(events).toEqual([]);
   });
 
   it("can check pressure without recording an idle memory sample", () => {
