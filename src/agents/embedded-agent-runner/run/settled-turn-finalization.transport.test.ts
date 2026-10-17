@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
 import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 import { Type } from "typebox";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -43,6 +44,8 @@ function toLlmMessages(items: AgentMessage[]): Message[] {
 }
 
 function responseEvents(first: boolean): Record<string, unknown>[] {
+  const text = "Note saved once.";
+  const position = { output_index: 0 };
   const item = first
     ? {
         type: "function_call",
@@ -57,33 +60,24 @@ function responseEvents(first: boolean): Record<string, unknown>[] {
         id: "msg_final",
         role: "assistant",
         status: "completed",
-        content: [{ type: "output_text", text: "Note saved once.", annotations: [] }],
+        content: [{ type: "output_text", text, annotations: [] }],
       };
   return [
     {
       type: "response.output_item.added",
-      output_index: 0,
+      ...position,
       item: { ...item, status: "in_progress", ...(!first ? { content: [] } : {}) },
     },
     ...(!first
-      ? [
-          {
-            type: "response.output_text.delta",
-            item_id: item.id,
-            output_index: 0,
-            content_index: 0,
-            delta: "Note saved once.",
-          },
-          {
-            type: "response.output_text.done",
-            item_id: item.id,
-            output_index: 0,
-            content_index: 0,
-            text: "Note saved once.",
-          },
-        ]
+      ? ["delta", "done"].map((phase) =>
+          Object.assign(
+            { type: `response.output_text.${phase}`, item_id: item.id, content_index: 0 },
+            position,
+            phase === "delta" ? { delta: text } : { text },
+          ),
+        )
       : []),
-    { type: "response.output_item.done", output_index: 0, item },
+    { type: "response.output_item.done", ...position, item },
     {
       type: "response.completed",
       response: {
@@ -127,26 +121,12 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
       requests.push(JSON.parse(body));
       if (requests.length === 2) {
         if (failure === "terminated") {
-          // Close a valid response body before completion so the real client fails.
           response.writeHead(200, {
             "content-type": "text/event-stream",
             "cache-control": "no-store",
           });
-          response.write(
-            `data: ${JSON.stringify({
-              type: "response.output_item.added",
-              output_index: 0,
-              item: {
-                type: "message",
-                id: "msg_cut",
-                role: "assistant",
-                status: "in_progress",
-                content: [],
-              },
-            })}\n\n`,
-            () => {
-              response.destroy();
-            },
+          response.write(`data: ${JSON.stringify(responseEvents(false)[0])}\n\n`, () =>
+            response.destroy(),
           );
           return;
         }
@@ -279,11 +259,9 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
       settledTurnFinalizationContext: { source: "openclaw-transcript" },
     });
     const input = createSettledFinalizationTestInput(attempt, await admission.admit("embedded"));
-    input.terminalBase.runParams.trigger = "user";
-    input.terminalBase.runParams.config = {};
-    input.terminalBase.provider = model.provider;
-    input.terminalBase.model = model.id;
-    input.terminalBase.activeErrorContext = { provider: model.provider, model: model.id };
+    const modelIdentity = { provider: model.provider, model: model.id };
+    Object.assign(input.terminalBase.runParams, { trigger: "user", config: {} });
+    Object.assign(input.terminalBase, modelIdentity, { activeErrorContext: modelIdentity });
     input.finalization.modelApi = model.api;
     Object.assign(input.finalization.preparedAttempt, resolved, {
       model,
@@ -344,12 +322,8 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
     for (const socket of sockets.clients) {
       socket.terminate();
     }
-    await new Promise<void>((resolve, reject) => {
-      sockets.close((error) => (error ? reject(error) : resolve()));
-    });
+    await promisify(sockets.close.bind(sockets))();
     server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await promisify(server.close.bind(server))();
   }
 });

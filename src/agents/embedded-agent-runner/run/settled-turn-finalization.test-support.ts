@@ -143,13 +143,13 @@ export function projectSettledProviderFailureAttempt(
   if (!assistant) {
     throw new Error("Missing failed assistant");
   }
+  const transcript = { sessionIdUsed: base.sessionIdUsed, messagesSnapshot: base.messagesSnapshot };
   const settled: Parameters<typeof completeEmbeddedAttemptResult>[1] = {
     promptError: null,
     promptErrorSource: null,
     timedOutDuringCompaction: false,
     compactionOccurredThisAttempt: false,
-    sessionIdUsed: base.sessionIdUsed,
-    messagesSnapshot: base.messagesSnapshot,
+    ...transcript,
     lastAssistant: assistant,
     currentAttemptAssistant: assistant,
     currentAttemptCompletedAssistant: assistant,
@@ -162,9 +162,8 @@ export function projectSettledProviderFailureAttempt(
     preflightRecovery: undefined,
     contextBudgetStatus: undefined,
     yieldAborted: false,
-    sessionIdUsed: base.sessionIdUsed,
+    ...transcript,
     sessionFileUsed: undefined,
-    messagesSnapshot: base.messagesSnapshot,
   };
   const subscription = {
     assistantTexts: base.assistantTexts,

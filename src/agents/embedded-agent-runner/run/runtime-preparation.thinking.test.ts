@@ -26,12 +26,12 @@ import type { ResolvedProviderAuth } from "../../model-auth.js";
 import { prepareModelRunCapabilities } from "../../model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { createEmptyPreparedModelRuntimeFixture } from "../model.fixture.test-support.js";
 import { createEmptyAgentDiscoveryStores } from "../model.js";
 import { resolveBundledStaticCatalogModel } from "../model.static-catalog.js";
 import { prepareEmbeddedRunRuntime } from "./runtime.js";
 
-// Credential acquisition and native process installation are outside this network-free
-// composition. Route planning, model resolution, auth commit, and the overlay remain real.
+// Keep route planning/auth commit real; isolate credential acquisition and native installation.
 vi.mock("../../model-auth.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../model-auth.js")>()),
   getApiKeyForModelCore: async ({
@@ -120,22 +120,14 @@ describe("selected route thinking metadata at runtime preparation", () => {
     }
     platformModel = model;
     preparedModelRuntime = {
-      catalogOwner: undefined,
-      agentDir: state.agentDir(),
+      ...createEmptyPreparedModelRuntimeFixture({
+        agentDir: state.agentDir(),
+        config,
+        metadataSnapshot,
+        createStores: createEmptyAgentDiscoveryStores,
+      }),
       workspaceDir: root,
-      activeProjectKeys: [],
-      config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
-      metadataSnapshot,
       pluginRegistry,
-      allowGatewaySubagentBinding: false,
-      modelCatalog: { entries: [], routeVariants: [] },
-      configuredRuntimeModels: [],
-      findConfiguredRuntimeModel: () => undefined,
-      inlineProviderModels: [],
-      createStores: createEmptyAgentDiscoveryStores,
     };
     await state.writeAuthProfiles({
       version: 1,
@@ -230,11 +222,14 @@ describe("selected route thinking metadata at runtime preparation", () => {
     );
     try {
       const { effectiveModel, activePreparedAuthPlan } = runtime.snapshot();
+      const platform = route === "platform";
       expect(activePreparedAuthPlan.modelRoute?.authRequirement).toBe(
-        route === "platform" ? "api-key" : "subscription",
+        platform ? "api-key" : "subscription",
       );
-      expect(effectiveModel.baseUrl).toBe(route === "platform" ? PLATFORM : SUBSCRIPTION);
-      expect(effectiveModel.thinkingLevelMap?.off).toBe(route === "platform" ? "none" : null);
+      expect(effectiveModel).toMatchObject({
+        baseUrl: platform ? PLATFORM : SUBSCRIPTION,
+        thinkingLevelMap: { off: platform ? "none" : null },
+      });
       const efforts = effectiveModel.compat?.supportedReasoningEfforts ?? [];
       if (modelThinkingCapability) {
         expect(modelThinkingCapability.route).toBeUndefined();
@@ -246,7 +241,7 @@ describe("selected route thinking metadata at runtime preparation", () => {
           ),
         );
       }
-      if (route === "platform") {
+      if (platform) {
         expect(efforts).toContain("none");
       } else {
         expect(efforts).not.toContain("none");
