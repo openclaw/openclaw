@@ -81,7 +81,6 @@ it.each([
 ] as const)(
   "handles Control UI status %s (transfer: %s; ownership lost: %s)",
   async (status, transfers, losesOwnership) => {
-    // The canonical main-session path queues the replacement before adoption, without discovery.
     await using fixture = await claimFixture("agent:main:main", {
       restartRecoveryDeliveryRequestFingerprint: losesOwnership ? undefined : "request-fingerprint",
       status,
@@ -124,7 +123,7 @@ it.each([
 
 it("tracks a channel claim after retiring an aborted Control UI predecessor", async () => {
   setRuntimeConfigSnapshot({});
-  onTestFinished(() => clearRuntimeConfigSnapshot());
+  onTestFinished(clearRuntimeConfigSnapshot);
   const sourceTurnId = "channel-turn";
   await using fixture = await claimFixture(
     "agent:main:telegram:group:chat",

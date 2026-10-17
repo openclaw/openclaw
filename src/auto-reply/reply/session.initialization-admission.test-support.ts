@@ -54,13 +54,12 @@ function initialize(
   scope: Scope,
   admitted: Awaited<ReturnType<typeof admit>>,
   body: string,
-  from: string,
   reset?: { mode: "idle"; idleMinutes: number },
 ) {
   return runWithReplyOperationLifecycleAdmission(admitted.operation, () =>
     initSessionState({
       cfg: { session: { store: scope.storePath, ...(reset ? { reset } : {}) } },
-      ctx: telegramTurn(scope.sessionKey, body, from),
+      ctx: telegramTurn(scope.sessionKey, body, "initialization-user"),
       replyOperation: admitted.operation,
     }),
   );
@@ -94,12 +93,7 @@ export function registerSessionInitializationAdmissionTests({
       }
       await using admitted = await admit(scope, originalId, kind !== "created");
       const previousReader = getReplyOperationSessionReader(admitted.operation);
-      const initialized = await initialize(
-        scope,
-        admitted,
-        kind === "created" ? "hello" : "/new",
-        "handoff-user",
-      );
+      const initialized = await initialize(scope, admitted, kind === "created" ? "hello" : "/new");
       expect(initialized.sessionEntry.lifecycleRevision).not.toBe("before-initialization");
       expect(initialized.sessionId === originalId).toBe(
         kind === "same-id" || kind === "reset-before-read",
@@ -179,7 +173,7 @@ export function registerSessionInitializationAdmissionTests({
       let initialization: ReturnType<typeof initSessionState> | undefined;
       let closing: ReturnType<typeof waitForReplyRunSuccessorAdmission> | undefined;
       try {
-        initialization = initialize(scope, admitted, "/new", "close-user");
+        initialization = initialize(scope, admitted, "/new");
         void initialization.catch(() => {});
         await withinTest(
           awaitGateBeforeSettlement(
@@ -240,7 +234,7 @@ export function registerSessionInitializationAdmissionTests({
     await using admitted = await admit(scope, sessionId, false);
     const separateHeaderPhase = vi.spyOn(lifecycleReads, "resolveSessionLifecycleTimestampsAsync");
     onTestFinished(() => separateHeaderPhase.mockRestore());
-    const initialized = await initialize(scope, admitted, "hello", "header-user", {
+    const initialized = await initialize(scope, admitted, "hello", {
       mode: "idle",
       idleMinutes: 60,
     });

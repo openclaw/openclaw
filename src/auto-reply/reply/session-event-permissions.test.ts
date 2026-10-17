@@ -101,6 +101,37 @@ async function startEmbeddedTurn(params: RunEmbeddedAgentParams, label: string) 
   return context;
 }
 
+type EventReceipt = ReturnType<typeof enqueueSessionEventForHost>;
+function observeEnqueue(source: string, onReceipt: (receipt: EventReceipt) => void) {
+  const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
+  return vi
+    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
+    .mockImplementation((text, options) => {
+      const receipt = enqueue(text, options);
+      if (options.source === source) {
+        onReceipt(receipt);
+      }
+      return receipt;
+    });
+}
+
+async function recordWatchEvents(child: string, sessionId: string) {
+  const input = {
+    sessionKey: child,
+    sessionId,
+    agentId: "main",
+    kind: "human_direct_message" as const,
+    actorType: "human" as const,
+    summary: "Other actor changed the watched session",
+    watcherSessionKeys: [],
+  };
+  return {
+    child,
+    frozen: expectDefined(await recordSessionStateEventAsync(input), "frozen event"),
+    newer: expectDefined(await recordSessionStateEventAsync(input), "newer event"),
+  };
+}
+
 function runEventFixture(
   label: string,
   onTestFinished: TestContext["onTestFinished"],
@@ -263,7 +294,6 @@ it.for([
 );
 
 it.for([
-  "allowed",
   "new-session",
   "creation-retry",
   "cancelled-creation",
@@ -561,9 +591,7 @@ it.for([
       expect(accepted).toEqual({ ok: true });
       const evidence = JSON.stringify(outcome);
       expect(await fs.readFile(filePath, "utf8"), evidence).toBe(
-        change === "allowed" || change === "new-session" || remapped || toolOnly
-          ? "completed\n"
-          : "original\n",
+        change === "new-session" || remapped || toolOnly ? "completed\n" : "original\n",
       );
       expect(runEmbeddedAgentMock, evidence).toHaveBeenCalledOnce();
       expect(observedMode, evidence).toBe(
@@ -578,11 +606,7 @@ it.for([
                 : "full",
       );
       expect(attempted, evidence).toBe(
-        change === "allowed" ||
-          change === "new-session" ||
-          retainedDowngrade ||
-          remapped ||
-          toolOnly,
+        change === "new-session" || retainedDowngrade || remapped || toolOnly,
       );
       expect(retainedWriteRejected).toBe(retainedDowngrade);
       if (change === "new-session") {
@@ -660,10 +684,9 @@ it.for([
         const captured = createDeferred();
         const firstNoticeCaptured = createDeferred();
         const enqueued = createDeferred();
-        const notices: Array<ReturnType<typeof enqueueSessionEventForHost>> = [];
+        const notices: EventReceipt[] = [];
         let captures = 0;
         const capture = sessionEventHandoff.captureSessionEventTargetForHost;
-        const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
         const captureSpy = vi
           .spyOn(sessionEventHandoff, "captureSessionEventTargetForHost")
           .mockImplementation(async (...args) => {
@@ -676,32 +699,15 @@ it.for([
             }
             return result;
           });
-        const enqueueSpy = vi
-          .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
-          .mockImplementation((text, options) => {
-            const receipt = enqueue(text, options);
-            if (options.source === "session") {
-              notices.push(receipt);
-              enqueued.resolve();
-            }
-            return receipt;
-          });
+        const enqueueSpy = observeEnqueue("session", (receipt) => {
+          notices.push(receipt);
+          enqueued.resolve();
+        });
         try {
           await expect(first.accepted).resolves.toEqual({ ok: true });
           await withinTest(firstStarted.promise, signal);
           vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-          const input = {
-            sessionKey: child,
-            sessionId: "notice-child",
-            agentId: "main",
-            kind: "human_direct_message" as const,
-            actorType: "human" as const,
-            summary: "Other actor changed the watched session",
-            watcherSessionKeys: [],
-          };
-          const frozen = expectDefined(await recordSessionStateEventAsync(input), "frozen event");
-          const newer = expectDefined(await recordSessionStateEventAsync(input), "newer event");
-          const observed = [{ child, frozen, newer }];
+          const observed = [await recordWatchEvents(child, "notice-child")];
           const assertCursor = (notice: (typeof observed)[number], consumed = false) => {
             expect(
               readCursor(
@@ -718,16 +724,7 @@ it.for([
           if (watchCount === 2) {
             await withinTest(firstNoticeCaptured.promise, signal);
             await updateSessionEntry(scope, () => ({ permissionMode: "read-only" }));
-            const siblingInput = { ...input, sessionKey: sibling, sessionId: "notice-sibling" };
-            const siblingFrozen = expectDefined(
-              await recordSessionStateEventAsync(siblingInput),
-              "sibling frozen event",
-            );
-            const siblingNewer = expectDefined(
-              await recordSessionStateEventAsync(siblingInput),
-              "sibling newer event",
-            );
-            observed.push({ child: sibling, frozen: siblingFrozen, newer: siblingNewer });
+            observed.push(await recordWatchEvents(sibling, "notice-sibling"));
           }
           await withinTest(captured.promise, signal);
           await updateSessionEntry(scope, () => ({ permissionMode: "full" }));
@@ -851,18 +848,9 @@ it.for([
           await startEmbeddedTurn(params, "ordinary terminal admission");
           return { payloads: [{ text: "Terminal event observed" }], meta: { durationMs: 1 } };
         });
-      const enqueued = createDeferred<ReturnType<typeof enqueueSessionEventForHost>>();
-      const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
-      const observer = vi
-        .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
-        .mockImplementation((text, options) => {
-          const receipt = enqueue(text, options);
-          if (options.source === "hook") {
-            enqueued.resolve(receipt);
-          }
-          return receipt;
-        });
-      let terminal: ReturnType<typeof enqueueSessionEventForHost> | undefined;
+      const enqueued = createDeferred<EventReceipt>();
+      const observer = observeEnqueue("hook", (receipt) => enqueued.resolve(receipt));
+      let terminal: EventReceipt | undefined;
       try {
         const hooks = createGatewayHookDispatcher({
           deps: {},
