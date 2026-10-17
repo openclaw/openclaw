@@ -25,6 +25,7 @@ import {
   getSessionBindingService,
   inspectRuntimeConversationBindingRoute,
   resolveRuntimeConversationBindingRouteAsync,
+  type RuntimeConversationBindingRouteResult,
 } from "../../plugin-sdk/conversation-binding-runtime.js";
 import {
   createReplyDispatcher,
@@ -54,15 +55,14 @@ vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
 let state: OpenClawTestState;
 let cfg: ReturnType<typeof withFullRuntimeReplyConfig>;
 const adapters: SessionBindingAdapter[] = [];
+const channel = { channel: "webchat", accountId: "default" };
 const conversation: ConversationRef = {
-  channel: "webchat",
-  accountId: "default",
+  ...channel,
   conversationId: "room",
 };
 const baseRoute = {
   agentId: "main",
-  channel: "webchat",
-  accountId: "default",
+  ...channel,
   sessionKey: "global",
   mainSessionKey: "agent:main:main",
   lastRoutePolicy: "session" as const,
@@ -92,7 +92,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   for (const adapter of adapters.splice(0).toReversed()) {
-    unregisterSessionBindingAdapter({ channel: "webchat", accountId: "default", adapter });
+    unregisterSessionBindingAdapter({ ...channel, adapter });
   }
   await state?.cleanup();
   clearRuntimeConfigSnapshot();
@@ -107,8 +107,7 @@ function registerAdapter(
   overrides: Partial<SessionBindingAdapter> = {},
 ) {
   const adapter: SessionBindingAdapter = {
-    channel: "webchat",
-    accountId: "default",
+    ...channel,
     listBySession: () => {
       const binding = lookup(conversation);
       return binding ? [binding] : [];
@@ -131,8 +130,7 @@ function makeContext(
   target?: string,
 ) {
   return buildChannelInboundEventContext({
-    channel: "webchat",
-    accountId: "default",
+    ...channel,
     messageId: String(native ?? "binding"),
     from: "synthetic-user",
     sender: { id: "synthetic-user" },
@@ -202,11 +200,14 @@ it.each([
   const entered = createDeferred();
   const release = createDeferred();
   let pending = false;
+  const pause = () => {
+    pending = false;
+    entered.resolve();
+    return release.promise;
+  };
   const read = async (ref: ConversationRef) => {
     if (pending && !duringTouch && (!childChange || ref.conversationId === "room")) {
-      pending = false;
-      entered.resolve();
-      await release.promise;
+      await pause();
     }
     return lookup(ref);
   };
@@ -215,25 +216,18 @@ it.each([
     inspectByConversationAsync: read,
     touchAsync: async () => {
       if (pending && duringTouch) {
-        pending = false;
-        entered.resolve();
-        await release.promise;
+        await pause();
       }
     },
     ...(childChange
       ? {
-          bind: async ({
-            targetSessionKey,
-            targetKind,
-            conversation: boundConversation,
-            metadata,
-          }: Parameters<NonNullable<SessionBindingAdapter["bind"]>>[0]) => {
+          bind: async (params: Parameters<NonNullable<SessionBindingAdapter["bind"]>>[0]) => {
             const childBinding = {
               ...binding,
-              targetSessionKey,
-              targetKind,
-              conversation: boundConversation,
-              metadata,
+              targetSessionKey: params.targetSessionKey,
+              targetKind: params.targetKind,
+              conversation: params.conversation,
+              metadata: params.metadata,
             };
             bindings.set("child", childBinding);
             return childBinding;
@@ -242,25 +236,22 @@ it.each([
       : {}),
   });
   const buildContext = async () => {
-    const childRoute = childChange
-      ? await resolveRuntimeConversationBindingRouteAsync({
-          route: baseRoute,
-          conversation: childRequest,
-        })
-      : undefined;
-    const route = childRoute
-      ? childRoute.bindingRecord
-        ? childRoute.route
-        : (
-            await resolveRuntimeConversationBindingRouteAsync({
-              route: childRoute.route,
-              conversation,
-            })
-          ).route
-      : inspectRuntimeConversationBindingRoute({
-          route: baseRoute,
-          inspection: await getSessionBindingService().inspectByConversationAsync(conversation),
-        }).route;
+    let route: RuntimeConversationBindingRouteResult["route"];
+    if (childChange) {
+      const child = await resolveRuntimeConversationBindingRouteAsync({
+        route: baseRoute,
+        conversation: childRequest,
+      });
+      route = child.bindingRecord
+        ? child.route
+        : (await resolveRuntimeConversationBindingRouteAsync({ route: child.route, conversation }))
+            .route;
+    } else {
+      route = inspectRuntimeConversationBindingRoute({
+        route: baseRoute,
+        inspection: await getSessionBindingService().inspectByConversationAsync(conversation),
+      }).route;
+    }
     return makeContext({
       ...route,
       routeSessionKey: route.sessionKey,
@@ -271,12 +262,8 @@ it.each([
   };
   const options = {
     turnAdoptionLifecycle: {
-      onAdopted: async () => {
-        observed.events.push("adopted");
-      },
-      onAbandoned: () => {
-        observed.events.push("abandoned");
-      },
+      onAdopted: async () => void observed.events.push("adopted"),
+      onAbandoned: () => void observed.events.push("abandoned"),
     },
   };
   let ctx = await buildContext();

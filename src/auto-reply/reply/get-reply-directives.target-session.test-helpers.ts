@@ -85,10 +85,9 @@ export async function expectContinueResult(
   if (value.kind !== "continue") {
     throw new Error(`expected continue result, got ${value.kind}`);
   }
-  const levels =
-    Object.hasOwn(fields, "resolvedThinkLevel") || Object.hasOwn(fields, "resolvedReasoningLevel")
-      ? await value.result.resolveModelLevels()
-      : {};
+  const levels = Object.hasOwn(fields, "resolvedReasoningLevel")
+    ? await value.result.resolveModelLevels()
+    : {};
   const result = { ...value.result, ...levels };
   for (const [key, expected] of Object.entries(fields)) {
     expect(result[key as keyof typeof result]).toEqual(expected);
@@ -137,9 +136,6 @@ export function parseInlineDirectivesForTargetSessionTest(body: string) {
       reasoningLevel: "stream",
       rawReasoningLevel: "stream",
     };
-  }
-  if (normalized === "/trace on") {
-    return { ...base, cleaned: "", hasTraceDirective: true, traceLevel: "on", rawTraceLevel: "on" };
   }
   return base;
 }

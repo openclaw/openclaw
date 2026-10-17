@@ -286,11 +286,9 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(result).toMatchObject({ text: "model status" });
     expectNativePayload(result, "model status");
     expect(mocks.handleCommands).toHaveBeenCalledOnce();
-    expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
-    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
-      sessionKey,
-      workspaceDir: state.workspaceDir,
-    });
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionKey, workspaceDir: state.workspaceDir }),
+    );
     expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20)).events).toContainEqual(
       expect.objectContaining({
         kind: "created",

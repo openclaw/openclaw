@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as sandboxRuntime from "../../agents/sandbox.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
+import type { ReplyPayload } from "../types.js";
 import { applyMixedDirectives } from "./directive-handling.mixed-inline.test-helpers.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -103,37 +104,43 @@ async function runRuntimePolicyDirective(
   >("./directive-handling.impl.js");
   using runtime = vi.spyOn(sandboxRuntime, "resolveSandboxRuntimeStatusAsync");
   const sessionEntry = { sessionId: "runtime-policy", updatedAt: 1 };
-  const outcome = await handleDirectiveOnly({
-    ...params,
-    directives: parseInlineSessionDirectives("/elevated on"),
-    sessionEntry,
-    sessionStore: { [params.sessionKey]: sessionEntry },
-    elevatedEnabled: false,
-    elevatedAllowed: false,
-    defaultProvider: "openai",
-    defaultModel: "gpt-5.5",
-    provider: "openai",
-    model: "gpt-5.5",
-    initialModelLabel: "openai/gpt-5.5",
-    formatModelSwitchEvent: (label) => label,
-    aliasIndex: { byAlias: new Map(), byKey: new Map() },
-    allowedModelKeys: new Set(),
-    allowedModelCatalog: [],
-    resetModelOverride: false,
-  }).then(
-    (reply) => ({ kind: "reply" as const, reply }),
-    (error: unknown) => ({ kind: "error" as const, error }),
-  );
-  expect(runtime).toHaveBeenCalledOnce();
-  const result = runtime.mock.results[0];
-  if (result?.type !== "return") {
-    throw new Error("Directive runtime classification did not return");
+  try {
+    return await handleDirectiveOnly({
+      ...params,
+      directives: parseInlineSessionDirectives("/elevated on"),
+      sessionEntry,
+      sessionStore: { [params.sessionKey]: sessionEntry },
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.5",
+      initialModelLabel: "openai/gpt-5.5",
+      formatModelSwitchEvent: (label) => label,
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      allowedModelKeys: new Set(),
+      allowedModelCatalog: [],
+      resetModelOverride: false,
+    });
+  } finally {
+    expect(runtime).toHaveBeenCalledOnce();
+    const result = runtime.mock.results[0];
+    expect(result?.type).toBe("return");
+    if (result?.type === "return") {
+      expect(await result.value).toMatchObject(expectedRuntime);
+    }
   }
-  expect(await result.value).toMatchObject(expectedRuntime);
-  if (outcome.kind === "error") {
-    throw outcome.error;
-  }
-  return outcome.reply;
+}
+
+function expectRejectedDirective(
+  result: Awaited<ReturnType<typeof applyInlineDirectiveOverrides>>,
+  typing: ReturnType<typeof createMockTypingController>,
+  reply: ReplyPayload,
+  preRunRejection = "session-directive-rejected",
+) {
+  expect(result).toEqual({ kind: "reply", reply, preRunRejection });
+  expect(typing.cleanup).toHaveBeenCalledOnce();
 }
 
 describe("applyInlineDirectiveOverrides", () => {
@@ -333,12 +340,12 @@ describe("applyInlineDirectiveOverrides", () => {
         effectiveModelDirective: directives.rawModelDirective,
       });
 
-      expect(result).toEqual({
-        kind: "reply",
-        reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
-        preRunRejection: "model-selection-locked",
-      });
-      expect(typing.cleanup).toHaveBeenCalledOnce();
+      expectRejectedDirective(
+        result,
+        typing,
+        { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
+        "model-selection-locked",
+      );
       expect(mocks.handleDirective).not.toHaveBeenCalled();
       expect(mocks.applyModelSelection).not.toHaveBeenCalled();
       expect(mocks.systemEvent).toHaveBeenCalledWith(expected, {
@@ -369,12 +376,7 @@ describe("applyInlineDirectiveOverrides", () => {
       }),
     );
 
-    expect(result).toEqual({
-      kind: "reply",
-      reply: { text: errorText, isError: true },
-      preRunRejection: "session-directive-rejected",
-    });
-    expect(typing.cleanup).toHaveBeenCalledOnce();
+    expectRejectedDirective(result, typing, { text: errorText, isError: true });
     expect(mocks.handleDirective).toHaveBeenCalledOnce();
   });
 
@@ -392,12 +394,7 @@ describe("applyInlineDirectiveOverrides", () => {
       allowedModels: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
     });
 
-    expect(result).toEqual({
-      kind: "reply",
-      reply: { text: 'Unexpected argument "extra" for /model.' },
-      preRunRejection: "session-directive-rejected",
-    });
-    expect(typing.cleanup).toHaveBeenCalledOnce();
+    expectRejectedDirective(result, typing, { text: 'Unexpected argument "extra" for /model.' });
     expect(mocks.applyModelSelection).not.toHaveBeenCalled();
     expect(mocks.handleDirective).not.toHaveBeenCalled();
   });

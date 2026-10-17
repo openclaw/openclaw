@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   shouldHandle: vi.fn(),
   listForWorkspace: vi.fn(),
 }));
+const modelRef = { provider: "anthropic", model: "claude-opus-4-6" };
 
 const directiveModel: ModelDefinitionConfig = {
   id: "claude-opus-4-6",
@@ -90,7 +91,7 @@ function configWithModelAlias(alias: string, agentId?: string): OpenClawConfig {
 }
 
 function createAliasIndex(): ModelAliasIndex {
-  const alias = { alias: "fable", ref: { provider: "anthropic", model: "claude-opus-4-6" } };
+  const alias = { alias: "fable", ref: modelRef };
   return {
     byAlias: new Map([["fable", alias]]),
     byKey: new Map([["anthropic/claude-opus-4-6", ["fable"]]]),
@@ -139,48 +140,44 @@ async function resolveModelDirective(params: {
       },
     },
   });
-  const ambientPolicy = vi
+  using ambientPolicy = vi
     .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")
     .mockImplementation(() => {
       throw new Error("Directive fixture attempted ambient model-policy discovery.");
     });
-  try {
-    const result = await withPluginMetadataSnapshotScope(
-      directiveMetadata,
-      () =>
-        resolveReplyDirectives(
-          replyDirectiveParams({
-            ctx: buildTestCtx({
-              Body: agentText,
-              CommandBody: body,
-              CommandAuthorized: authorized,
-              Provider: surface,
-              Surface: surface,
-            }),
-            cfg,
-            agentCfg: params.agentCfg ?? {},
-            opts: params.opts,
-            sessionCtx,
-            sessionEntry,
-            sessionStore: { [sessionKey]: sessionEntry },
-            sessionKey,
-            storePath: undefined,
-            triggerBodyNormalized: body,
-            commandAuthorized: authorized,
-            defaultProvider: "anthropic",
-            defaultModel: "claude-opus-4-6",
-            aliasIndex: createAliasIndex(),
-            provider: "anthropic",
-            model: "claude-opus-4-6",
-            preparedModelCatalog: preparedDirectiveCatalog,
+  const result = await withPluginMetadataSnapshotScope(
+    directiveMetadata,
+    () =>
+      resolveReplyDirectives(
+        replyDirectiveParams({
+          ctx: buildTestCtx({
+            Body: agentText,
+            CommandBody: body,
+            CommandAuthorized: authorized,
+            Provider: surface,
+            Surface: surface,
           }),
-        ),
-      { config: cfg, trustConfigIdentity: true },
-    );
-    return { result, sessionEntry, sessionCtx };
-  } finally {
-    ambientPolicy.mockRestore();
-  }
+          cfg,
+          agentCfg: params.agentCfg ?? {},
+          opts: params.opts,
+          sessionCtx,
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionKey,
+          storePath: undefined,
+          triggerBodyNormalized: body,
+          commandAuthorized: authorized,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-opus-4-6",
+          aliasIndex: createAliasIndex(),
+          ...modelRef,
+          preparedModelCatalog: preparedDirectiveCatalog,
+        }),
+      ),
+    { config: cfg, trustConfigIdentity: true },
+  );
+  expect(ambientPolicy).not.toHaveBeenCalled();
+  return { result, sessionEntry, sessionCtx };
 }
 
 describe("reply directive resolution", () => {
@@ -216,12 +213,10 @@ describe("reply directive resolution", () => {
         opts: streaming ? { disableBlockStreaming: false } : undefined,
       });
       const resolved = continued(result);
-      const delivered: ReplyPayload[] = [];
+      const onBlockReply = vi.fn<(payload: ReplyPayload) => void>();
       const onPartialReply = vi.fn();
       const handleBlockReply = createBlockReplyDeliveryHandler({
-        onBlockReply: (payload) => {
-          delivered.push(payload);
-        },
+        onBlockReply,
         normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
         applyReplyToMode: (payload) => payload,
         typingSignals: createTypingSignaler({
@@ -263,7 +258,10 @@ describe("reply directive resolution", () => {
         emit({ type: "message_end", message });
         await subscription.waitForPendingEvents();
         expect(
-          delivered.map((payload) => ({ text: payload.text ?? "", mediaUrl: payload.mediaUrl })),
+          onBlockReply.mock.calls.map(([payload]) => ({
+            text: payload.text ?? "",
+            mediaUrl: payload.mediaUrl,
+          })),
         ).toEqual(
           streaming
             ? [
@@ -281,37 +279,34 @@ describe("reply directive resolution", () => {
     },
   );
 
-  it("routes model scope at the full reply boundary: /think high/fable now", async () => {
-    const { result, sessionEntry, sessionCtx } = await resolveModelDirective({
+  it.each([
+    {
       body: "/think high/fable now",
-    });
-    expect(continued(result)).toMatchObject({
-      directives: {
-        cleaned: "now",
+      cleaned: "now",
+      expected: {
         hasThinkDirective: true,
         thinkLevel: "high",
-        hasModelDirective: true,
         rawModelDirective: "fable",
       },
-      cleanedBody: "now",
-    });
-    expect(sessionCtx.Body).toBe("now");
-    expect(sessionEntry).toEqual(createSessionEntry());
-  });
-
-  it("routes an agent-local model alias shorthand as a model directive", async () => {
-    const { result, sessionCtx } = await resolveModelDirective({
+    },
+    {
       body: "/localfast",
       cfg: configWithModelAlias("localfast", "main"),
-    });
-
-    expect(continued(result).directives).toMatchObject({
-      hasModelDirective: true,
-      rawModelDirective: "localfast",
       cleaned: "",
-    });
-    expect(sessionCtx.Body).toBe("");
-  });
+      expected: { rawModelDirective: "localfast" },
+    },
+  ])(
+    "routes model aliases at the full reply boundary: $body",
+    async ({ cleaned, expected, ...params }) => {
+      const { result, sessionEntry, sessionCtx } = await resolveModelDirective(params);
+      expect(continued(result)).toMatchObject({
+        directives: { cleaned, hasModelDirective: true, ...expected },
+        cleanedBody: cleaned,
+      });
+      expect(sessionCtx.Body).toBe(cleaned);
+      expect(sessionEntry).toEqual(createSessionEntry());
+    },
+  );
 
   it("rejects invalid skill references before applying model directives", async () => {
     const skillCommands = Array.from({ length: 9 }, (_, index) => ({
@@ -375,8 +370,7 @@ describe("reply directive resolution", () => {
     expect(resolved.directives).toEqual(clearInlineDirectives(body));
     expect(resolved).toMatchObject({
       cleanedBody: agentText,
-      provider: "anthropic",
-      model: "claude-opus-4-6",
+      ...modelRef,
     });
     expect(sessionCtx).toMatchObject({
       agentText,
@@ -390,8 +384,7 @@ describe("reply directive resolution", () => {
           params.authorized === false
             ? expect.objectContaining({ hasModelDirective: false })
             : clearInlineDirectives(body),
-        provider: "anthropic",
-        model: "claude-opus-4-6",
+        ...modelRef,
       }),
     );
     expect(sessionEntry).toEqual(createSessionEntry());

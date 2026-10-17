@@ -170,11 +170,9 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     for (const mock of Object.values(mocks)) {
       mock.mockReset();
     }
-    vi.mocked(resolveDefaultModelMock).mockReset();
-    vi.mocked(runPreparedReplyMock).mockReset();
     vi.mocked(resolveModelRefFromStringMock).mockImplementation(resolveModelRefFromString);
 
-    vi.mocked(resolveDefaultModelMock).mockReturnValue({
+    vi.mocked(resolveDefaultModelMock).mockReset().mockReturnValue({
       defaultProvider: "openai",
       defaultModel: "gpt-5.5",
       aliasIndex: emptyAliasIndex(),
@@ -185,7 +183,7 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       cleanedBody: (params as { cleanedBody?: string }).cleanedBody ?? "hello",
       abortedLastRun: false,
     }));
-    vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
+    vi.mocked(runPreparedReplyMock).mockReset().mockResolvedValue({ text: "ok" });
   });
 
   it("does not start a primary probe after cancellation while its thinking catalog is pending", async () => {

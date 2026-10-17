@@ -68,40 +68,31 @@ describe("sender-owned directive projection", () => {
       commandText: "Please /help continue",
       expected: "<@BOT> (Bek (Ops)) Please\ncontinue\n[slack attachment unavailable]",
     },
-  ])("$name", ({ rawText, commandSourceText, commandText, expected, isGroup = true }) => {
-    const preparedSource = commandSourceText ?? rawText;
+    {
+      name: "rejects prepared metadata that does not reconstruct the command body",
+      rawText: "unrelated sender text",
+      commandSourceText: "<@BOT> (Bek (Ops)) different /help text",
+      commandText: "Please /help continue",
+      agentText: "[Forwarded message]\nPlease /help continue",
+      expected: "[Forwarded message]\nPlease /help continue",
+      rejected: true,
+    },
+  ])("$name", (testCase) => {
+    const { rawText, commandText, expected } = testCase;
+    const isGroup = testCase.isGroup !== false;
     const ctx = buildTestCtx({
       Provider: "slack",
       Surface: "slack",
       ChatType: isGroup ? "channel" : "direct",
       CommandBody: commandText,
       RawBody: rawText,
-      BodyForAgent: rawText,
+      BodyForAgent: testCase.agentText ?? rawText,
       CommandAuthorized: true,
-      ChannelContext: { chat: { commandSourceText: preparedSource } },
+      ChannelContext: { chat: { commandSourceText: testCase.commandSourceText ?? rawText } },
     });
     const result = route(ctx, { isGroup, wasMentioned: true });
-    expect(result.inlineCommand).toBe("/help");
+    expect(result.inlineCommand).toBe(testCase.rejected ? undefined : "/help");
     expect(result.cleanedBody).toBe(expected);
-  });
-
-  it("rejects prepared channel metadata that does not reconstruct the command body", () => {
-    const agentText = "[Forwarded message]\nPlease /help continue";
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      ChatType: "channel",
-      CommandBody: "Please /help continue",
-      RawBody: "unrelated sender text",
-      BodyForAgent: agentText,
-      CommandAuthorized: true,
-      ChannelContext: {
-        chat: { commandSourceText: "<@BOT> (Bek (Ops)) different /help text" },
-      },
-    });
-    const result = route(ctx, { isGroup: true, wasMentioned: true });
-    expect(result.inlineCommand).toBeUndefined();
-    expect(result.cleanedBody).toBe(agentText);
   });
 
   const forwardedStatus = "Please summarize\n[Forwarded message]\n/status marker";

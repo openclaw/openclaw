@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
@@ -33,10 +34,7 @@ let resolveModelRefFromStringMock: typeof import("../../agents/model-selection.j
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 
 async function observeReplySelection(
-  fixture: Pick<
-    turn.TurnModelDifferentialFixture,
-    "name" | "ctx" | "child" | "parent" | "heartbeat" | "locked" | "modelByChannel"
-  >,
+  fixture: Omit<turn.TurnModelDifferentialFixture, "expected">,
   sessionKey: string,
 ): Promise<turn.TurnModelSelectionVerdict> {
   const storePath = path.join(state.sessionsDir("main"), "sessions.json");
@@ -90,10 +88,10 @@ async function observeReplySelection(
       : undefined,
     cfg,
   );
-  const selected = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
-  if (!selected) {
-    throw new Error(`reply path did not prepare a run for ${fixture.name}`);
-  }
+  const selected = expectDefined(
+    vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0],
+    `reply path did not prepare a run for ${fixture.name}`,
+  );
   return turn.turnModelVerdict(
     { provider: selected.provider, model: selected.model },
     fixture.locked ? "locked" : undefined,
