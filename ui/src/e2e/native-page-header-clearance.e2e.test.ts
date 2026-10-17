@@ -174,8 +174,14 @@ suite.define(() => {
           return heading && intro ? Math.abs(heading.x - intro.x) : Infinity;
         })
         .toBeLessThanOrEqual(1);
-      const heading = (await title.boundingBox())!;
-      const intro = (await subtitle.boundingBox())!;
+      // A viewport change can move the header between separate boundingBox calls.
+      const { heading, intro } = await header.evaluate((element) => {
+        const box = (selector: string): Box => {
+          const rect = element.querySelector(selector)!.getBoundingClientRect();
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        };
+        return { heading: box(".page-title"), intro: box(".page-subtitle") };
+      });
       expect(intro.y).toBeGreaterThanOrEqual(heading.y + heading.height);
       expect(intro.y - heading.y - heading.height).toBeLessThanOrEqual(8);
       if (native) {
