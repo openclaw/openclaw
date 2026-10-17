@@ -39,10 +39,19 @@ function scheduleReply(events: ReturnType<typeof createChatEvents>, text: string
   }, 0);
 }
 
-function consultRequest(onStart: () => void, wait?: () => unknown) {
-  return vi.fn(async (method: string) => {
+type ConsultParams = Parameters<typeof submitRealtimeTalkConsult>[0];
+function consultContext(client: object, overrides: Partial<ConsultParams["ctx"]> = {}) {
+  return { client, sessionKey: "agent:main:main", callbacks: {}, ...overrides } as never;
+}
+function consultFixture(
+  onStart: (events: ReturnType<typeof createChatEvents>) => void,
+  wait?: () => unknown,
+) {
+  const events = createChatEvents();
+  const submit = vi.fn();
+  const request = vi.fn(async (method: string) => {
     if (method === "talk.client.toolCall") {
-      onStart();
+      onStart(events);
       return consultRun;
     }
     if (method === "agent.wait" && wait) {
@@ -50,19 +59,36 @@ function consultRequest(onStart: () => void, wait?: () => unknown) {
     }
     throw new Error(`unexpected request: ${method}`);
   });
+  return {
+    request,
+    submit,
+    start: (options: Partial<Pick<ConsultParams, "args" | "emitTalkEvent">> = {}) =>
+      submitRealtimeTalkConsult({
+        ctx: consultContext({ request, addEventListener: events.addEventListener }),
+        callId: "call-1",
+        args: { question: "Check status" },
+        submit,
+        ...options,
+      }),
+  };
 }
 
-type ConsultOptions = Omit<
-  Parameters<typeof submitRealtimeTalkConsult>[0],
-  "ctx" | "callId" | "args"
-> & { args?: unknown };
-function startConsult(client: object, options: ConsultOptions) {
-  return submitRealtimeTalkConsult({
-    ctx: { client, sessionKey: "agent:main:main", callbacks: {} } as never,
-    callId: "call-1",
-    args: { question: "Check status" },
-    ...options,
-  });
+function steeringFixture(suppressed = false) {
+  const request = vi.fn(async () => ({
+    ok: true,
+    mode: "steer",
+    sessionKey: "agent:main:main",
+    active: true,
+    queued: true,
+    message: "Got it. I steered the active run.",
+    speak: !suppressed,
+    show: true,
+    suppress: suppressed,
+  }));
+  return {
+    request,
+    ctx: consultContext({ request, addEventListener: vi.fn() }),
+  };
 }
 
 describe("RealtimeTalkSession consult handoff", () => {
@@ -116,13 +142,7 @@ describe("RealtimeTalkSession consult handoff", () => {
     const controller = new AbortController();
 
     const consult = submitRealtimeTalkConsult({
-      ctx: {
-        client: { request },
-        sessionKey: "agent:main:main",
-        voiceSessionId: "voice-1",
-        flushTranscriptWrites,
-        callbacks: {},
-      } as never,
+      ctx: consultContext({ request }, { voiceSessionId: "voice-1", flushTranscriptWrites }),
       callId: "call-1",
       args: { question: "Check status" },
       submit,
@@ -159,11 +179,7 @@ describe("RealtimeTalkSession consult handoff", () => {
       const controller = new AbortController();
 
       const consult = submitRealtimeTalkConsult({
-        ctx: {
-          client: { request },
-          sessionKey: "main",
-          callbacks: {},
-        } as never,
+        ctx: consultContext({ request }, { sessionKey: "main" }),
         callId: "call-1",
         args: { question: "Check status" },
         submit,
@@ -184,37 +200,41 @@ describe("RealtimeTalkSession consult handoff", () => {
     },
   );
 
-  it("waits past the old empty-final grace window for delayed source-reply final text", async () => {
-    vi.useFakeTimers();
-    const events = createChatEvents();
-    const request = consultRequest(
-      () => {
-        scheduleReply(events, "The slow source reply wins.");
-      },
-      () => new Promise(() => {}),
-    );
-    const submit = vi.fn();
-
-    const consult = startConsult(
-      { request, addEventListener: events.addEventListener },
-      { submit },
-    );
-
-    await vi.advanceTimersByTimeAsync(251);
-    expect(submit).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(50);
-    await consult;
-
-    expect(submit).toHaveBeenCalledWith("call-1", {
-      result: "The slow source reply wins.",
-    });
-  });
+  it.each([
+    {
+      when: "pending",
+      text: "The slow source reply wins.",
+      checkpoint: 251,
+      remaining: 50,
+      wait: () => new Promise(() => {}),
+    },
+    {
+      when: "completed first",
+      text: "The source reply beats the fallback.",
+      checkpoint: 0,
+      remaining: 300,
+      wait: () => ({ runId: "run-1", status: "ok" }),
+    },
+  ])(
+    "keeps delayed source text when the empty-final wait is $when",
+    async ({ text, checkpoint, remaining, wait }) => {
+      vi.useFakeTimers();
+      const { submit, start } = consultFixture((events) => scheduleReply(events, text), wait);
+      const consult = start();
+      if (checkpoint) {
+        await vi.advanceTimersByTimeAsync(checkpoint);
+        expect(submit).not.toHaveBeenCalled();
+      }
+      await vi.advanceTimersByTimeAsync(remaining);
+      await consult;
+      expect(submit).toHaveBeenCalledExactlyOnceWith("call-1", { result: text });
+    },
+  );
 
   it("keeps source-reply final text when the empty-final wait completes later", async () => {
-    const events = createChatEvents();
     const waitResult = createDeferred<{ runId: string; status: "ok" }>();
-    const request = consultRequest(
-      () => {
+    const { request, submit, start } = consultFixture(
+      (events) => {
         setImmediate(() => {
           events.final();
           setImmediate(() => {
@@ -224,9 +244,8 @@ describe("RealtimeTalkSession consult handoff", () => {
       },
       () => waitResult.promise,
     );
-    const submit = vi.fn();
 
-    await startConsult({ request, addEventListener: events.addEventListener }, { submit });
+    await start();
     waitResult.resolve({ runId: "run-1", status: "ok" });
     await Promise.resolve();
 
@@ -240,46 +259,16 @@ describe("RealtimeTalkSession consult handoff", () => {
     });
   });
 
-  it("keeps source-reply final text when the empty-final wait completes first", async () => {
-    vi.useFakeTimers();
-    const events = createChatEvents();
-    const request = consultRequest(
-      () => {
-        scheduleReply(events, "The source reply beats the fallback.");
-      },
-      () => ({ runId: "run-1", status: "ok" }),
-    );
-    const submit = vi.fn();
-
-    const consult = startConsult(
-      { request, addEventListener: events.addEventListener },
-      { submit },
-    );
-
-    await vi.advanceTimersByTimeAsync(300);
-    await consult;
-
-    expect(submit).toHaveBeenCalledTimes(1);
-    expect(submit).toHaveBeenCalledWith("call-1", {
-      result: "The source reply beats the fallback.",
-    });
-  });
-
   it("submits the no-text fallback after an empty final and completed Gateway run", async () => {
     vi.useFakeTimers();
-    const events = createChatEvents();
-    const request = consultRequest(
-      () => {
+    const { request, submit, start } = consultFixture(
+      (events) => {
         window.setTimeout(() => events.final(), 0);
       },
       () => ({ runId: "run-1", status: "ok" }),
     );
-    const submit = vi.fn();
 
-    const consult = startConsult(
-      { request, addEventListener: events.addEventListener },
-      { submit },
-    );
+    const consult = start();
 
     await vi.advanceTimersByTimeAsync(499);
     expect(submit).not.toHaveBeenCalled();
@@ -310,25 +299,22 @@ describe("RealtimeTalkSession consult handoff", () => {
       expected: "aborted by operator",
     },
   ])("submits $expected from terminal empty-final waits", async ({ waitResult, expected }) => {
-    const events = createChatEvents();
-    const request = consultRequest(
-      () => {
+    const { submit, start } = consultFixture(
+      (events) => {
         setImmediate(() => {
           events.final();
         });
       },
       () => waitResult,
     );
-    const submit = vi.fn();
 
-    await startConsult({ request, addEventListener: events.addEventListener }, { submit });
+    await start();
 
     expect(submit).toHaveBeenCalledWith("call-1", { error: expected });
   });
 
   it("emits Talk progress from chat tool events while waiting for the consult result", async () => {
-    const events = createChatEvents();
-    const request = consultRequest(() => {
+    const { start } = consultFixture((events) => {
       setImmediate(() => {
         events.emit({
           runId: "run-1",
@@ -340,10 +326,7 @@ describe("RealtimeTalkSession consult handoff", () => {
     });
     const emitTalkEvent = vi.fn();
 
-    await startConsult(
-      { request, addEventListener: events.addEventListener },
-      { args: { question: "Check files" }, submit: vi.fn(), emitTalkEvent },
-    );
+    await start({ args: { question: "Check files" }, emitTalkEvent });
 
     expect(emitTalkEvent).toHaveBeenCalledWith({
       type: "tool.progress",
@@ -353,25 +336,12 @@ describe("RealtimeTalkSession consult handoff", () => {
   });
 
   it("routes active consult steering through Gateway control endpoints", async () => {
-    const request = vi.fn(async () => ({
-      ok: true,
-      mode: "steer",
-      sessionKey: "agent:main:main",
-      active: true,
-      queued: true,
-      message: "Got it. I steered the active run.",
-      speak: true,
-      show: true,
-      suppress: false,
-    }));
+    const { request, ctx } = steeringFixture(false);
+
     const emitTalkEvent = vi.fn();
 
     await steerRealtimeTalkActiveConsult({
-      ctx: {
-        client: { request, addEventListener: vi.fn() },
-        sessionKey: "agent:main:main",
-        callbacks: {},
-      } as never,
+      ctx,
       text: "use the safer path",
       emitTalkEvent,
     });
@@ -423,25 +393,12 @@ describe("RealtimeTalkSession consult handoff", () => {
   });
 
   it("speaks legacy suppressed steer acknowledgements instead of leaving voice silent", async () => {
-    const request = vi.fn(async () => ({
-      ok: true,
-      mode: "steer",
-      sessionKey: "agent:main:main",
-      active: true,
-      queued: true,
-      message: "Got it. I steered the active run.",
-      speak: false,
-      show: true,
-      suppress: true,
-    }));
+    const { ctx } = steeringFixture(true);
+
     const speakControlResult = vi.fn();
 
     await steerRealtimeTalkActiveConsult({
-      ctx: {
-        client: { request, addEventListener: vi.fn() },
-        sessionKey: "agent:main:main",
-        callbacks: {},
-      } as never,
+      ctx,
       text: "use the safer path",
       speakControlResult,
     });

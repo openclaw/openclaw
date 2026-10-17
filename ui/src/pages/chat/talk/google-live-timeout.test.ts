@@ -10,10 +10,7 @@ import {
 import { GoogleLiveRealtimeTalkTransport } from "./google-live.ts";
 
 const SETUP_TIMEOUT_MS = 30_000;
-async function beginTransport(transport: GoogleLiveRealtimeTalkTransport): Promise<{
-  start: Promise<"ready" | "cancelled">;
-  socket: ReturnType<typeof latestWebSocket>;
-}> {
+async function beginTransport(transport: GoogleLiveRealtimeTalkTransport) {
   const start = transport.start();
   await vi.advanceTimersByTimeAsync(0);
   return { start, socket: latestWebSocket() };
@@ -23,10 +20,7 @@ describe("Google Live setup timeout", () => {
   installGoogleLiveTestFixture();
   beforeEach(() => vi.useFakeTimers());
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
-  });
+  afterEach(() => vi.useRealTimers());
 
   it("times out an open socket that never completes Google setup", async () => {
     const onStatus = vi.fn();

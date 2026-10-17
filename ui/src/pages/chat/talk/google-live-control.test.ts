@@ -106,38 +106,28 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
     expect(getGoogleLiveToolOwnerState(transport).pendingCalls.has("call-control")).toBe(false);
   });
 
-  it("sends spoken active-control acknowledgements through Google Live", async () => {
-    const { client, transport, ws } = await startActiveControlFixture({
-      mode: "status",
-      message: "OpenClaw is working in read (running).",
-    });
-
-    await sendControl({ client, ws }, "status");
-    const sent = ws.sent.map((payload) => JSON.parse(payload));
-    expect(sent).toContainEqual({
-      realtimeInput: {
-        text: expect.stringContaining('Status: "OpenClaw is working in read (running)."'),
-      },
-    });
-    transport.stop();
-  });
-
-  it("replaces queued output with a spoken active-control steering acknowledgement in Google Live", async () => {
-    const { client, transport, ws } = await startActiveControlFixture({
+  it.each([
+    { mode: "status", text: "status", message: "OpenClaw is working in read (running)." },
+    {
       mode: "steer",
-      queued: true,
+      text: "actually focus on WebUI",
       message: "Got it. I steered the active run.",
-    });
-
-    await sendControl({ client, ws }, "actually focus on WebUI");
-    const sent = ws.sent.map((payload) => JSON.parse(payload));
-    expect(sent).toContainEqual({
-      realtimeInput: {
-        text: expect.stringContaining('Status: "Got it. I steered the active run."'),
-      },
-    });
-    transport.stop();
-  });
+    },
+  ])(
+    "speaks $mode acknowledgements after interrupting queued audio",
+    async ({ mode, text, message }) => {
+      const { client, transport, ws } = await startActiveControlFixture({
+        mode,
+        message,
+        ...(mode === "steer" ? { queued: true } : {}),
+      });
+      await sendControl({ client, ws }, text);
+      expect(ws.messages).toContainEqual({
+        realtimeInput: { text: expect.stringContaining(`Status: "${message}"`) },
+      });
+      transport.stop();
+    },
+  );
 
   it("interrupts queued output when active-control cancel is suppressed in Google Live", async () => {
     const { client, transport, ws } = await startActiveControlFixture({

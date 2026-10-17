@@ -99,13 +99,28 @@ async function startTransport(
   return ws;
 }
 
+async function expectDescribeView(
+  ws: ReturnType<typeof latestWebSocket>,
+  id: string,
+  response: object,
+) {
+  ws.emitJson({
+    toolCall: { functionCalls: [{ id, name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, args: {} }] },
+  });
+  await Promise.resolve();
+  expect(ws.messages).toContainEqual({
+    toolResponse: {
+      functionResponses: [{ id, name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, response }],
+    },
+  });
+}
+
 describe("Google Live Video Talk", () => {
   installGoogleLiveTestFixture();
   beforeEach(() => vi.useFakeTimers());
 
   afterEach(() => {
     vi.useRealTimers();
-    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -148,25 +163,7 @@ describe("Google Live Video Talk", () => {
         512 * 1024,
       );
     }
-    ws.emitJson({
-      toolCall: {
-        functionCalls: [
-          { id: "call-camera", name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, args: {} },
-        ],
-      },
-    });
-    await Promise.resolve();
-    expect(ws.messages).toContainEqual({
-      toolResponse: {
-        functionResponses: [
-          {
-            id: "call-camera",
-            name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
-            response: { ok: true, cameraStreamActive: true },
-          },
-        ],
-      },
-    });
+    await expectDescribeView(ws, "call-camera", { ok: true, cameraStreamActive: true });
     expect(getUserMedia).toHaveBeenNthCalledWith(1, {
       audio: {
         autoGainControl: true,
@@ -189,28 +186,7 @@ describe("Google Live Video Talk", () => {
     await transport.setVideoEnabled(false);
     expect(videoStop).toHaveBeenCalledOnce();
     expect(audioStop).not.toHaveBeenCalled();
-    ws.emitJson({
-      toolCall: {
-        functionCalls: [
-          { id: "call-ended-camera", name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, args: {} },
-        ],
-      },
-    });
-    await Promise.resolve();
-    expect(ws.messages).toContainEqual({
-      toolResponse: {
-        functionResponses: [
-          {
-            id: "call-ended-camera",
-            name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
-            response: {
-              ok: false,
-              error: "camera is off",
-            },
-          },
-        ],
-      },
-    });
+    await expectDescribeView(ws, "call-ended-camera", { ok: false, error: "camera is off" });
 
     const sentBeforeStop = ws.messages.length;
     transport.stop();
