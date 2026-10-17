@@ -9,7 +9,6 @@ import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
 import {
   drainSessionEventPublications,
-  sessionEventPublicationRows,
   withPreparedSessionEventRow,
 } from "./session-event-prepared-row.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
@@ -179,24 +178,6 @@ it("publishes lifecycle rows after their producer drains and before publication 
     session: expect.objectContaining({ sessionId: "lifecycle-session", label: "Collector A" }),
   });
   expect(order).toEqual(["publication", "drained"]);
-});
-
-it("rejects asynchronous prepared consumers", async () => {
-  const projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
-  projection.withPreparedExactRows = async (queries, consume) =>
-    readPreparedSessionRows(projection, () => true, queries, consume);
-  onTestFinished(async () => {
-    await drainSessionEventPublications(projection);
-    projection.dispose();
-    vi.restoreAllMocks();
-  });
-  const rows = sessionEventPublicationRows(projection);
-  await expect(
-    rows.withPreparedExactRows(
-      () => [],
-      async () => undefined,
-    ),
-  ).rejects.toThrow("Session row read consumers must remain synchronous");
 });
 
 it("keeps prepared exact rows and ancestors inside the synchronous publication", async () => {

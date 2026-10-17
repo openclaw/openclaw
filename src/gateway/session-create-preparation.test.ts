@@ -55,12 +55,17 @@ const receiptOf = (created: Created, entry = created.entry) => ({
 });
 const preparedRoot = (sessionRoot: string, spawnedCwd?: string) =>
   vi.fn(async () => ({ ok: true as const, value: { sessionRoot, spawnedCwd } }));
+const unavailable = (message: string) => ({
+  ok: false,
+  error: { code: "UNAVAILABLE", message: expect.stringContaining(message) },
+});
 async function setupCreationTarget(key: string, sessionRoot?: string, requestKey = key) {
-  const common = { key: requestKey };
-  const first = await createSession({ ...common, sessionRoot });
+  const create = (params: Omit<Parameters<typeof createSession>[0], "key"> = {}) =>
+    createSession({ key: requestKey, ...params });
+  const first = await create({ sessionRoot });
   assert(first.ok);
   const target = await resolveGatewaySessionStoreTargetInWorker({ cfg: {}, key });
-  return { common, first, target, scope: scopeOf({ ...target, key }) };
+  return { create, first, target, scope: scopeOf({ ...target, key }) };
 }
 
 it.each(["caller", "database"] as const)(
@@ -68,74 +73,72 @@ it.each(["caller", "database"] as const)(
   (retired) =>
     withState({}, async (state) => {
       const store = repositoryWorkspaces.getSessionRepositoryWorkspaceStore();
-      const selectStore = vi
-        .spyOn(repositoryWorkspaces, "getSessionRepositoryWorkspaceStore")
-        .mockReturnValue(store);
+      using spies = new DisposableStack();
+      spies.use(
+        vi.spyOn(repositoryWorkspaces, "getSessionRepositoryWorkspaceStore").mockReturnValue(store),
+      );
       const create = store.create.bind(store);
       let current = true;
-      const createTarget = vi.spyOn(store, "create").mockImplementationOnce(async (input) => {
-        const created = await create(input);
-        const artifact = store.artifactPath(created.workspaceId);
-        await fs.mkdir(artifact, { recursive: true });
-        await fs.writeFile(path.join(artifact, "retained-owner"), "accepted target");
-        if (retired === "database") {
-          await closeOpenClawStateDatabaseByPathAsync(store.path);
-        } else {
-          current = false;
-        }
-        return created;
-      });
-      try {
-        const owner = { agentId: "main", sessionKey: "agent:main:creation-compensation" };
-        const result = await prepareSessionRepositoryWorkspace(
-          { url: "https://github.com/openclaw/fixture.git" },
-          {
-            runSetupScript: false,
-            assertCurrent: () => {
-              if (!current) {
-                throw new Error("creation caller revoked");
-              }
-            },
+      spies.use(
+        vi.spyOn(store, "create").mockImplementationOnce(async (input) => {
+          const created = await create(input);
+          const artifact = store.artifactPath(created.workspaceId);
+          await fs.mkdir(artifact, { recursive: true });
+          await fs.writeFile(path.join(artifact, "retained-owner"), "accepted target");
+          if (retired === "database") {
+            await closeOpenClawStateDatabaseByPathAsync(store.path);
+          } else {
+            current = false;
+          }
+          return created;
+        }),
+      );
+      const owner = { agentId: "main", sessionKey: "agent:main:creation-compensation" };
+      const result = await prepareSessionRepositoryWorkspace(
+        { url: "https://github.com/openclaw/fixture.git" },
+        {
+          runSetupScript: false,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("creation caller revoked");
+            }
           },
-        )({
-          agentId: owner.agentId,
-          key: owner.sessionKey,
-          storePath: state.path("sessions.sqlite"),
+        },
+      )({
+        agentId: owner.agentId,
+        key: owner.sessionKey,
+        storePath: state.path("sessions.sqlite"),
+      });
+      assert(result.ok && result.value.rollback && result.value.repositoryWorkspaceId);
+      const workspaceId = result.value.repositoryWorkspaceId;
+      const persisted = await store.get(workspaceId);
+      expect(persisted).toMatchObject({ workspaceId, ...owner });
+      if (retired === "database") {
+        await expect(result.value.rollback()).rejects.toBeInstanceOf(
+          StateDatabaseReadAdmissionInvalidatedError,
+        );
+        expect(await store.get(workspaceId)).toEqual(persisted);
+        expect(
+          await fs.readFile(path.join(store.artifactPath(workspaceId), "retained-owner"), "utf8"),
+        ).toBe("accepted target");
+      } else {
+        await result.value.rollback();
+        expect(await store.get(workspaceId)).toBeUndefined();
+        await expect(fs.stat(store.artifactPath(workspaceId))).rejects.toMatchObject({
+          code: "ENOENT",
         });
-        assert(result.ok && result.value.rollback && result.value.repositoryWorkspaceId);
-        const workspaceId = result.value.repositoryWorkspaceId;
-        const persisted = await store.get(workspaceId);
-        expect(persisted).toMatchObject({ workspaceId, ...owner });
-        if (retired === "database") {
-          await expect(result.value.rollback()).rejects.toBeInstanceOf(
-            StateDatabaseReadAdmissionInvalidatedError,
-          );
-          expect(await store.get(workspaceId)).toEqual(persisted);
-          expect(
-            await fs.readFile(path.join(store.artifactPath(workspaceId), "retained-owner"), "utf8"),
-          ).toBe("accepted target");
-        } else {
-          await result.value.rollback();
-          expect(await store.get(workspaceId)).toBeUndefined();
-          await expect(fs.stat(store.artifactPath(workspaceId))).rejects.toMatchObject({
-            code: "ENOENT",
-          });
-        }
-        assert(result.value.withCommit);
-        const commit = vi.fn(async (assertSourceCurrent: () => void) => assertSourceCurrent());
-        const publication = result.value.withCommit(commit);
-        if (retired === "database") {
-          await expect(publication).rejects.toBeInstanceOf(
-            StateDatabaseReadAdmissionInvalidatedError,
-          );
-        } else {
-          await expect(publication).rejects.toThrow("creation caller revoked");
-        }
-        expect(commit).not.toHaveBeenCalled();
-      } finally {
-        createTarget.mockRestore();
-        selectStore.mockRestore();
       }
+      assert(result.value.withCommit);
+      const commit = vi.fn(async (assertSourceCurrent: () => void) => assertSourceCurrent());
+      const publication = result.value.withCommit(commit);
+      if (retired === "database") {
+        await expect(publication).rejects.toBeInstanceOf(
+          StateDatabaseReadAdmissionInvalidatedError,
+        );
+      } else {
+        await expect(publication).rejects.toThrow("creation caller revoked");
+      }
+      expect(commit).not.toHaveBeenCalled();
     }),
 );
 
@@ -154,7 +157,8 @@ it.each([
       const key = "agent:main:main";
       const originalRoot = state.path("original");
       const destination = state.path("worktree");
-      const { common, first, scope } = await setupCreationTarget(key, originalRoot, "main");
+      const { create, first, scope } = await setupCreationTarget(key, originalRoot, "main");
+      const original = { sessionId: first.entry.sessionId, sessionRoot: originalRoot };
       const transcriptScope = { ...scope, sessionId: first.entry.sessionId };
       for (const message of [
         { role: "user", content: "Keep this conversation when moving the workspace." },
@@ -194,26 +198,19 @@ it.each([
       const prepareLifecycle = preparedRoot(destination, destination);
       try {
         expect(
-          await createSession({
-            ...common,
-            ...(binding
+          await create(
+            binding
               ? { [binding]: binding === "execNode" ? "selected-node" : destination }
-              : { prepareLifecycle }),
-          }),
-        ).toMatchObject({
-          ok: false,
-          error: { code: "UNAVAILABLE", message: expect.stringContaining("still active") },
-        });
+              : { prepareLifecycle },
+          ),
+        ).toMatchObject(unavailable("still active"));
         expect(prepareLifecycle).not.toHaveBeenCalled();
-        expect(loadSessionEntry(scope)).toMatchObject({
-          sessionId: first.entry.sessionId,
-          sessionRoot: originalRoot,
-        });
+        expect(loadSessionEntry(scope)).toMatchObject(original);
         expect(onInterrupt).not.toHaveBeenCalled();
         expect(admission?.isActive() ?? isEmbeddedAgentRunActive(first.entry.sessionId)).toBe(true);
-        expect(await createSession({ ...common, sessionRoot: originalRoot })).toMatchObject({
+        expect(await create({ sessionRoot: originalRoot })).toMatchObject({
           ok: true,
-          entry: { sessionId: first.entry.sessionId, sessionRoot: originalRoot },
+          entry: original,
         });
       } finally {
         admission?.release();
@@ -221,7 +218,7 @@ it.each([
           clearActiveEmbeddedRun(first.entry.sessionId, handle, key);
         }
       }
-      expect(await createSession({ ...common, prepareLifecycle })).toMatchObject({
+      expect(await create({ prepareLifecycle })).toMatchObject({
         ok: true,
         entry: {
           sessionId: first.entry.sessionId,
@@ -236,7 +233,7 @@ it.each([
 it("rejects a target identity change while waiting for lifecycle custody", () =>
   withState({}, async (state) => {
     const key = "agent:main:workspace-drift";
-    const { common, first, target, scope } = await setupCreationTarget(key);
+    const { create, first, target, scope } = await setupCreationTarget(key);
     const entered = createDeferredCore();
     const rotate = createDeferredCore();
     const mutation = runExclusiveSessionLifecycleMutation("create", {
@@ -251,8 +248,7 @@ it("rejects a target identity change while waiting for lifecycle custody", () =>
     await entered.promise;
     const prepareLifecycle = preparedRoot(state.path("worktree"));
     const lifecycleAdmission = createDeferredCore();
-    const adoption = createSession({
-      ...common,
+    const adoption = create({
       prepareLifecycle,
       onPhase: (phase) => {
         if (phase === "lifecycleAdmission") {
@@ -261,17 +257,10 @@ it("rejects a target identity change while waiting for lifecycle custody", () =>
       },
     });
     try {
-      await awaitGateBeforeSettlement(
-        lifecycleAdmission.promise,
-        adoption,
-        "Session adoption settled before lifecycle admission",
-      );
+      await awaitGateBeforeSettlement(lifecycleAdmission.promise, adoption, "lifecycle admission");
       rotate.resolve();
       await mutation;
-      expect(await adoption).toMatchObject({
-        ok: false,
-        error: { code: "UNAVAILABLE", message: expect.stringContaining("changed before") },
-      });
+      expect(await adoption).toMatchObject(unavailable("changed before"));
       expect(prepareLifecycle).not.toHaveBeenCalled();
       expect(loadSessionEntry(scope)?.sessionId).toBe("replacement-session");
     } finally {
@@ -287,16 +276,13 @@ it.each(["commit", "rollback"] as const)(
       const key = "agent:main:workspace-target";
       const originalRoot = state.path("original");
       const destination = state.path("worktree");
-      const { common, first, target, scope } = await setupCreationTarget(key, originalRoot);
-      expect(
-        (await createSession({ ...common, key: "agent:main:sibling", label: "Taken" })).ok,
-      ).toBe(true);
+      const { create, first, target, scope } = await setupCreationTarget(key, originalRoot);
+      expect((await createSession({ key: "agent:main:sibling", label: "Taken" })).ok).toBe(true);
       const entered = createDeferredCore();
       const proceed = createDeferredCore();
       const rollingBack = createDeferredCore();
       const finishRollback = createDeferredCore();
-      const creation = createSession({
-        ...common,
+      const creation = create({
         ...(outcome === "rollback" ? { label: "Taken" } : {}),
         prepareLifecycle: async () => {
           entered.resolve();
@@ -313,11 +299,7 @@ it.each(["commit", "rollback"] as const)(
           };
         },
       });
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        creation,
-        "Creation completed before preparation",
-      );
+      await awaitGateBeforeSettlement(entered.promise, creation, "workspace preparation");
       const observedRoots: Array<string | undefined> = [];
       const queued = beginSessionWorkAdmission({
         scope: target.storePath,
@@ -336,11 +318,7 @@ it.each(["commit", "rollback"] as const)(
         expect(observedRoots).toEqual([]);
         proceed.resolve();
         if (outcome === "rollback") {
-          await awaitGateBeforeSettlement(
-            rollingBack.promise,
-            creation,
-            "Creation completed before rollback",
-          );
+          await awaitGateBeforeSettlement(rollingBack.promise, creation, "workspace rollback");
           expect(observedRoots).toEqual([]);
         }
         finishRollback.resolve();

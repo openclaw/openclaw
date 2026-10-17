@@ -14,7 +14,6 @@ import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js
 import { closeAgentWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { buildUsageOverview } from "../shared/usage-overview.js";
 import type { SessionCostUsagePublication } from "../shared/usage-types.js";
 import {
   createAgentDatabaseInspectionRefusal,
@@ -68,6 +67,10 @@ const fresh = (totalTokens: number, totalCost?: number) => ({
   totals: { totalTokens, ...(totalCost === undefined ? {} : { totalCost }) },
   cacheStatus: { status: "fresh" },
 });
+const sessionFresh = (totalTokens: number) => ({
+  summaries: [{ totalTokens }],
+  cacheStatus: { status: "fresh" },
+});
 const timestamp = Date.parse("2026-09-18T12:00:00Z");
 const mainConfig = () => ({ agents: { entries: { main: {} } } });
 
@@ -75,9 +78,11 @@ function observeProjection(config: Parameters<typeof costWindow>[0]) {
   const publications: SessionCostUsagePublication[] = [];
   const offUsage = onSessionCostUsageUpdated((event) => publications.push(event));
   const warn = vi.fn();
-  const lifetime = startSessionCostUsageProjectionLifetime({ getConfig: () => config, warn });
+  const lifetime = startProjection(config, warn);
   return { publications, offUsage, warn, lifetime };
 }
+const startProjection = (config: Parameters<typeof costWindow>[0], warn = vi.fn()) =>
+  startSessionCostUsageProjectionLifetime({ getConfig: () => config, warn });
 
 function seedUsage(name: string, agentId = "main", key = name) {
   const target = { agentId, sessionKey: `agent:${agentId}:${key}`, sessionId: name };
@@ -219,10 +224,7 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
       .spyOn(agentList, "listGatewayAgentsBasic")
       .mockResolvedValue({ ...roster, agents: [] });
     const refresh = vi.spyOn(aggregation, "refreshCostUsageCacheForAgent");
-    const lifetime = startSessionCostUsageProjectionLifetime({
-      getConfig: () => config,
-      warn: vi.fn(),
-    });
+    const lifetime = startProjection(config);
     const sessions = [
       {
         sessionId: target.sessionId,
@@ -232,29 +234,13 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
         }),
       },
     ];
-    const overview = async () => {
-      const cached = await cacheRuntime.loadSessionCostSummariesFromCache({
+    const summaries = () =>
+      cacheRuntime.loadSessionCostSummariesFromCache({
         config,
         agentId: target.agentId,
         sessions,
         requestRefresh: false,
       });
-      return {
-        ...buildUsageOverview({
-          rows: [
-            {
-              key: target.sessionKey,
-              agentId: target.agentId,
-              usage: cached.summaries[0] ?? null,
-              computing: cached.summaries[0] ? undefined : true,
-            },
-          ],
-          options: {},
-          dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-        }),
-        cacheStatus: cached.cacheStatus,
-      };
-    };
     vi.useFakeTimers();
     try {
       const cost = () =>
@@ -271,14 +257,14 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
       await append("assistant", 30);
       expect(refresh).not.toHaveBeenCalled();
       expect((await cost()).totals.totalTokens).toBe(60);
-      expect(await overview()).toMatchObject({
-        ...fresh(60),
-        aggregates: { messages: { user: 1, assistant: 3 } },
+      expect(await summaries()).toMatchObject({
+        ...sessionFresh(60),
+        summaries: [{ totalTokens: 60, messageCounts: { user: 1, assistant: 3 } }],
       });
       expect(refresh).toHaveBeenCalledTimes(1);
 
       await append("assistant", 40, "file-only");
-      expect(await overview()).toMatchObject(fresh(100));
+      expect(await summaries()).toMatchObject(sessionFresh(100));
       expect(refresh).toHaveBeenCalledTimes(2);
 
       await append("assistant", 50);
@@ -290,14 +276,11 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
       listAgents.mockRestore();
       const recovered = createDeferred();
       const offUsage = onSessionCostUsageUpdated(() => recovered.resolve());
-      const restarted = startSessionCostUsageProjectionLifetime({
-        getConfig: () => config,
-        warn: vi.fn(),
-      });
+      const restarted = startProjection(config);
       try {
         await withinTest(recovered.promise, signal);
         await refresh.mock.results.at(-1)?.value;
-        expect(await overview()).toMatchObject(fresh(150));
+        expect(await summaries()).toMatchObject(sessionFresh(150));
         await removeUsage(target, config, await readSessionEntryInWorker(target), true);
         expect((await cost()).totals.totalTokens).toBe(0);
       } finally {
