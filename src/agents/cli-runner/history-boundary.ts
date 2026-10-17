@@ -63,10 +63,9 @@ export async function prepareCliHistoryBoundary(
 
 /** Compaction may rewrite a covered transcript, but cannot establish account provenance. */
 export async function prepareCliHistoryCompactionBoundary(
-  source: SessionTranscriptRuntimeTarget,
+  target: SessionTranscriptRuntimeTarget,
   assertActive: () => void,
 ): Promise<(() => Promise<void>) | undefined> {
-  const target = { ...source, storePath: resolveSessionTranscriptDatabasePath(source) };
   const assertCurrent = composeSessionSourceAssertion([
     assertActive,
     captureOwnedTranscriptWriteAssertion(target),
