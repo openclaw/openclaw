@@ -967,6 +967,8 @@ export function createConfigPage(
       lobsterPetVisits: settings.lobsterPetVisits ?? UI_APPEARANCE_DEFAULTS.lobsterPetVisits,
       sessionDeleteConfirm:
         settings.sessionDeleteConfirm ?? UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm,
+      archiveShortcutEnabled:
+        settings.archiveShortcutEnabled ?? UI_APPEARANCE_DEFAULTS.archiveShortcutEnabled,
       lobsterPetSounds: settings.lobsterPetSounds ?? UI_APPEARANCE_DEFAULTS.lobsterPetSounds,
       lobsterdexHref: pathForRoute("lobsterdex", context.basePath),
       onOpenLobsterdex: () => context.navigate("lobsterdex"),

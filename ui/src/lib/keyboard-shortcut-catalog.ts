@@ -86,19 +86,37 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
 // chatSendShortcut preference, so their displayed chords swap together.
 const SEND_PREFERENCE_ENTRY_IDS = new Set(["sendMessage", "startNewSession"]);
 
+// Hidden when the device-local Archive preference is off. The chat pane's runtime
+// guard owns the actual blocking; the overlay just stays truthful about it.
+const ARCHIVE_PREFERENCE_ENTRY_IDS = new Set(["archiveSession"]);
+
 export function resolveKeyboardShortcutSections(
   sendShortcut: "enter" | "modifier-enter" = "enter",
+  options: { archiveShortcutEnabled?: boolean } = {},
 ): readonly KeyboardShortcutSection[] {
-  if (sendShortcut !== "modifier-enter") {
-    return KEYBOARD_SHORTCUT_SECTIONS;
+  const archiveShortcutEnabled = options.archiveShortcutEnabled !== false;
+  // Only the composer's own preference may relabel the Send hints; an Archive
+  // opt-out hides its row but must never rewrite chords that still fire as Enter.
+  const usesModifiedEnter = sendShortcut === "modifier-enter";
+  if (usesModifiedEnter) {
+    return KEYBOARD_SHORTCUT_SECTIONS.map((section) =>
+      keyboardShortcutSection(
+        section.id,
+        section.entries
+          .filter((entry) => archiveShortcutEnabled || !ARCHIVE_PREFERENCE_ENTRY_IDS.has(entry.id))
+          .map((entry) =>
+            SEND_PREFERENCE_ENTRY_IDS.has(entry.id)
+              ? keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.modifiedEnter)
+              : entry,
+          ),
+      ),
+    );
   }
   return KEYBOARD_SHORTCUT_SECTIONS.map((section) =>
     keyboardShortcutSection(
       section.id,
-      section.entries.map((entry) =>
-        SEND_PREFERENCE_ENTRY_IDS.has(entry.id)
-          ? keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.modifiedEnter)
-          : entry,
+      section.entries.filter(
+        (entry) => archiveShortcutEnabled || !ARCHIVE_PREFERENCE_ENTRY_IDS.has(entry.id),
       ),
     ),
   );

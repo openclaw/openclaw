@@ -16,6 +16,7 @@ import "./modal-dialog.ts";
 
 type DialogProps = {
   sendShortcut: ChatSendShortcut;
+  archiveShortcutEnabled: boolean;
   newSessionHost?: ShellNewSessionHost;
   isOpen: boolean;
 };
@@ -87,7 +88,11 @@ export const KeyboardShortcutsDialog = defineSolidBridge<DialogProps, DialogMeth
               </button>
             </header>
             <div class="body">
-              <For each={resolveKeyboardShortcutSections(props.sendShortcut)}>
+              <For
+                each={resolveKeyboardShortcutSections(props.sendShortcut, {
+                  archiveShortcutEnabled: props.archiveShortcutEnabled,
+                })}
+              >
                 {(section) => (
                   <section>
                     <h3>{t(section.label)}</h3>
@@ -119,6 +124,7 @@ export const KeyboardShortcutsDialog = defineSolidBridge<DialogProps, DialogMeth
   {
     properties: {
       sendShortcut: { default: "enter", attribute: false },
+      archiveShortcutEnabled: { default: true, attribute: false },
       newSessionHost: { default: undefined, attribute: false },
       isOpen: { default: false, attribute: false },
     },

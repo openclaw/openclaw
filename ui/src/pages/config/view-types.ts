@@ -71,6 +71,8 @@ type AppearancePreferences = Required<
     | "chatSendShortcut"
     | "catalogOpenTarget"
     | "composerHoldToRecord"
+    // Device-local opt-out for the direct Archive chord; browser collision only.
+    | "archiveShortcutEnabled"
   >
 > &
   Pick<UiSettings, "chatMessageMaxWidth" | "chatFollowUpMode" | "openLinksInControlUiBrowser">;

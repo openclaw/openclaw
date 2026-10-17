@@ -251,6 +251,43 @@ describe("keyboard shortcut catalog presentation", () => {
     }
   });
 
+  it("drops the Archive row when this browser disables the direct chord", () => {
+    const archiveEntries = (options: { archiveShortcutEnabled?: boolean }) =>
+      resolveKeyboardShortcutSections("enter", options)
+        .flatMap((section) => section.entries)
+        .filter((entry) => entry.id === "archiveSession");
+    const chatEntryIds = (options: { archiveShortcutEnabled?: boolean }) =>
+      resolveKeyboardShortcutSections("enter", options)
+        .find((section) => section.id === "chat")
+        ?.entries.map((entry) => entry.id);
+
+    expect(archiveEntries({})).toHaveLength(1);
+    expect(archiveEntries({ archiveShortcutEnabled: true })).toHaveLength(1);
+    expect(archiveEntries({ archiveShortcutEnabled: false })).toHaveLength(0);
+    // Only the Archive row is hidden; the rest of the Chat section stays.
+    expect(chatEntryIds({ archiveShortcutEnabled: false })).toContain("sendMessage");
+    expect(chatEntryIds({ archiveShortcutEnabled: false })).not.toContain("archiveSession");
+  });
+
+  it("keeps the Send hints truthful for both composer preferences with Archive disabled", () => {
+    const sendChords = (sendShortcut: "enter" | "modifier-enter") =>
+      resolveKeyboardShortcutSections(sendShortcut, { archiveShortcutEnabled: false })
+        .flatMap((section) => section.entries)
+        .filter((entry) => entry.id === "startNewSession" || entry.id === "sendMessage")
+        .map((entry) => [entry.id, entry.combos] as const);
+
+    // Enter stays the runtime send key, so the hints must keep showing plain Enter
+    // even though the Archive opt-out takes the mapper's non-fast path.
+    expect(sendChords("enter")).toEqual([
+      ["startNewSession", [KEYBOARD_SHORTCUT_COMBOS.sendMessage]],
+      ["sendMessage", [KEYBOARD_SHORTCUT_COMBOS.sendMessage]],
+    ]);
+    expect(sendChords("modifier-enter")).toEqual([
+      ["startNewSession", [KEYBOARD_SHORTCUT_COMBOS.modifiedEnter]],
+      ["sendMessage", [KEYBOARD_SHORTCUT_COMBOS.modifiedEnter]],
+    ]);
+  });
+
   it("gives every section and shortcut a resolvable label and at least one real chord", () => {
     for (const section of resolveKeyboardShortcutSections()) {
       expect(t(section.label), section.label).not.toBe(section.label);

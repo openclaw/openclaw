@@ -14,7 +14,10 @@ type LocalToggle =
   | "sidebarLiveActivity"
   | "sessionDeleteConfirm"
   | "lobsterPetVisits"
-  | "lobsterPetSounds";
+  | "lobsterPetSounds"
+  // Device-local: the direct Archive chord collides with a browser's own shortcuts
+  // on some browsers, so opting out stays per-browser and out of the synced prefs.
+  | "archiveShortcutEnabled";
 
 export function LocalToggleRow(props: {
   config: ConfigProps;

@@ -145,6 +145,9 @@ export function ShellLazyOverlays(props: {
       <Show when={!props.nativeEmbed && state().shortcutsDefined}>
         <openclaw-keyboard-shortcuts-dialog
           prop:sendShortcut={state().sendShortcut}
+          prop:archiveShortcutEnabled={
+            props.host.context?.theme.settings.archiveShortcutEnabled !== false
+          }
           prop:newSessionHost={props.host}
         />
       </Show>
