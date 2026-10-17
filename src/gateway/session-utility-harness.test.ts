@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../agents/failover-error.js";
-import * as simpleCompletionExecution from "../agents/simple-completion-execution.js";
-import * as simpleCompletionRuntime from "../agents/simple-completion-runtime.js";
+import * as execution from "../agents/simple-completion-execution.js";
+import * as runtime from "../agents/simple-completion-runtime.js";
 import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -48,6 +48,7 @@ vi.mock("../agents/embedded-agent-runner/run/attempt.js", () => ({
 describe("utility completion with an unavailable implicit harness", () => {
   let state: OpenClawTestState;
   let config: OpenClawConfig;
+  let dispose: (() => void | Promise<void>) | undefined;
   const completionPrompt = {
     systemPrompt: "Return a short reply.",
     prompt: "Check the fix.",
@@ -74,7 +75,7 @@ describe("utility completion with an unavailable implicit harness", () => {
   };
   const transportReply = (text: string) =>
     vi
-      .spyOn(simpleCompletionExecution, "completeWithPreparedSimpleCompletionModel")
+      .spyOn(execution, "completeWithPreparedSimpleCompletionModel")
       .mockResolvedValue(
         makeAssistantMessageFixture({ stopReason: "stop", content: [{ type: "text", text }] }),
       );
@@ -83,12 +84,10 @@ describe("utility completion with an unavailable implicit harness", () => {
     maxTokens: number,
     fallback: boolean,
   ) => {
-    expect(transport).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({ tools: [] }),
-        options: expect.objectContaining({ maxTokens, temperature: 0.2, reasoning: "off" }),
-      }),
-    );
+    expect(transport.mock.calls[0]?.[0]).toMatchObject({
+      context: { tools: [] },
+      options: { maxTokens, temperature: 0.2, reasoning: "off" },
+    });
     expect(runtimeMocks.runEmbeddedAttempt).not.toHaveBeenCalled();
     expect(transport.mock.calls.map(([request]) => request.model.id)).toEqual(
       fallback ? ["gpt-5.4-mini", "utility-backup"] : ["gpt-5.4-mini"],
@@ -96,6 +95,7 @@ describe("utility completion with an unavailable implicit harness", () => {
   };
 
   beforeEach(async () => {
+    dispose = undefined;
     state = await createOpenClawTestState({ scenario: "minimal" });
     config = {
       agents: {
@@ -116,7 +116,7 @@ describe("utility completion with an unavailable implicit harness", () => {
     });
     runtimeMocks.runEmbeddedAttempt.mockReset();
     // Keep routing and the built-in zero-tool execution real; isolate only auth and transport.
-    vi.spyOn(simpleCompletionRuntime, "prepareSimpleCompletionModel").mockImplementation(
+    vi.spyOn(runtime, "prepareSimpleCompletionModel").mockImplementation(
       async ({ provider, modelId: id }) => ({
         model: makeProviderModelFixture({
           provider,
@@ -131,10 +131,14 @@ describe("utility completion with an unavailable implicit harness", () => {
   });
 
   afterEach(async () => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    resetSessionObserverEventSequence();
-    await state.cleanup();
+    try {
+      await dispose?.();
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      resetSessionObserverEventSequence();
+      await state.cleanup();
+    }
   });
 
   it.each([false, true])(
@@ -159,26 +163,23 @@ describe("utility completion with an unavailable implicit harness", () => {
           agentHarnessId: "openclaw",
         })),
       });
-      try {
-        startAndAddToolNotes(observer.observer);
-        await vi.advanceTimersByTimeAsync(12_000);
-        await vi.dynamicImportSettled();
-        await flushObserver();
+      dispose = () => observer.observer.dispose();
+      startAndAddToolNotes(observer.observer);
+      await vi.advanceTimersByTimeAsync(12_000);
+      await vi.dynamicImportSettled();
+      await flushObserver();
 
-        expect(observer.completeModel).toHaveBeenCalledOnce();
-        await expect(observer.completeModel.mock.results[0]?.value).resolves.toMatchObject({
-          owner: { kind: "harness", id: "openclaw" },
-        });
-        expect(observer.broadcastToConnIds).toHaveBeenCalledWith(
-          "session.observer",
-          expect.objectContaining({ headline: "Checking the fix", health: "on-track" }),
-          expect.any(Set),
-          expect.anything(),
-        );
-        expectBuiltInCompletion(transport, 300, fallback);
-      } finally {
-        observer.observer.dispose();
-      }
+      expect(observer.completeModel).toHaveBeenCalledOnce();
+      await expect(observer.completeModel.mock.results[0]?.value).resolves.toMatchObject({
+        owner: { kind: "harness", id: "openclaw" },
+      });
+      expect(observer.broadcastToConnIds).toHaveBeenCalledWith(
+        "session.observer",
+        expect.objectContaining({ headline: "Checking the fix", health: "on-track" }),
+        expect.any(Set),
+        expect.anything(),
+      );
+      expectBuiltInCompletion(transport, 300, fallback);
     },
   );
 
@@ -218,36 +219,33 @@ describe("utility completion with an unavailable implicit harness", () => {
         onChanged: vi.fn(),
         completeModel: complete,
       });
-      try {
-        await recaps.ensure(target, await readSessionEntryReadOnlyInWorker(scope));
-        await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
-        if (outcome === "exhausted") {
-          await expect(complete.mock.results[0]?.value).rejects.toThrow();
-        } else {
-          await expect(complete.mock.results[0]?.value).resolves.toMatchObject({
-            owner: { kind: "harness", id: "openclaw" },
-          });
-        }
-        await vi.waitFor(() => {
-          const entry = loadSessionEntryReadOnly(scope);
-          expect(
-            projectSessionActivitySummary({
-              ...target,
-              cfg: config,
-              entry,
-              watermark: readSessionTranscriptWatermark(scope),
-            }),
-          ).toMatchObject(
-            outcome === "exhausted" ? { state: "unavailable" } : { state: "current", text },
-          );
-          if (outcome === "exhausted") {
-            expect(entry?.activitySummary).toBeUndefined();
-          }
+      dispose = () => recaps.dispose();
+      await recaps.ensure(target, await readSessionEntryReadOnlyInWorker(scope));
+      await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce());
+      if (outcome === "exhausted") {
+        await expect(complete.mock.results[0]?.value).rejects.toThrow();
+      } else {
+        await expect(complete.mock.results[0]?.value).resolves.toMatchObject({
+          owner: { kind: "harness", id: "openclaw" },
         });
-        expectBuiltInCompletion(transport, 240, outcome !== "direct");
-      } finally {
-        await recaps.dispose();
       }
+      await vi.waitFor(() => {
+        const entry = loadSessionEntryReadOnly(scope);
+        expect(
+          projectSessionActivitySummary({
+            ...target,
+            cfg: config,
+            entry,
+            watermark: readSessionTranscriptWatermark(scope),
+          }),
+        ).toMatchObject(
+          outcome === "exhausted" ? { state: "unavailable" } : { state: "current", text },
+        );
+        if (outcome === "exhausted") {
+          expect(entry?.activitySummary).toBeUndefined();
+        }
+      });
+      expectBuiltInCompletion(transport, 240, outcome !== "direct");
     },
   );
 
@@ -288,7 +286,7 @@ describe("utility completion with an unavailable implicit harness", () => {
       [Symbol.asyncDispose]: release,
     });
     const builtInTransport = vi
-      .spyOn(simpleCompletionExecution, "completeWithPreparedSimpleCompletionModel")
+      .spyOn(execution, "completeWithPreparedSimpleCompletionModel")
       .mockRejectedValue(new Error("Unexpected built-in utility completion"));
     const prepared = await prepare();
 
@@ -327,7 +325,7 @@ describe("utility completion with an unavailable implicit harness", () => {
           ...(source === "request override" ? { agentHarnessRuntimeOverride: "codex" } : {}),
         }),
       ).rejects.toThrow('Agent harness runtime "codex" is unavailable');
-      expect(simpleCompletionRuntime.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(runtime.prepareSimpleCompletionModel).not.toHaveBeenCalled();
       expect(runtimeMocks.runEmbeddedAttempt).not.toHaveBeenCalled();
     },
   );

@@ -56,20 +56,20 @@ async function readIds(result: Promise<readonly unknown[] | { messages: readonly
   return messageIds("messages" in value ? value.messages : value);
 }
 
-function event(
-  id: string,
-  parentId: string | null,
-  role: string,
-  content: unknown,
-  fields: Record<string, unknown> = {},
-) {
-  return {
-    type: "message" as const,
-    id,
-    parentId,
-    timestamp: "2026-10-11T00:00:00.000Z",
-    message: { role, content, ...fields },
-  };
+type ReadScope = Parameters<typeof readSummary>[0];
+const usage = (scope: ReadScope) => readSummary(scope, { kind: "usage" });
+const artifacts = (scope: ReadScope, sessionKey = scope.sessionKey) =>
+  readArtifacts(scope, { kind: "list", sessionKey });
+
+async function expectEmptyOverview(scope: ReadScope, sessionKey = scope.sessionKey) {
+  expect([await usage(scope), await artifacts(scope, sessionKey)]).toEqual([
+    { kind: "usage", usage: null },
+    { kind: "list", artifacts: [] },
+  ]);
+}
+
+function event(id: string, parentId: string | null, message: Record<string, unknown>) {
+  return { type: "message" as const, id, parentId, timestamp: "2026-10-11T00:00:00.000Z", message };
 }
 
 async function fixture(sessionId = "one", agentId = "main", announce = false) {
@@ -82,14 +82,16 @@ async function fixture(sessionId = "one", agentId = "main", announce = false) {
     readSessionActorStorageResult(await storage.mutate(operation, authority));
   const transcriptEvents = [
     { type: "session", id: sessionId, version: 3, cwd: "/synthetic" },
-    event(
-      "user",
-      null,
-      "user",
-      "Question",
-      announce ? { provenance: { kind: "inter_session", sourceTool: "subagent_announce" } } : {},
-    ),
-    event("answer", "user", "assistant", `Answer ${sessionId}`, {
+    event("user", null, {
+      role: "user",
+      content: "Question",
+      ...(announce
+        ? { provenance: { kind: "inter_session", sourceTool: "subagent_announce" } }
+        : {}),
+    }),
+    event("answer", "user", {
+      role: "assistant",
+      content: `Answer ${sessionId}`,
       usage: { input: 10, output: 2 },
     }),
   ];
@@ -104,7 +106,8 @@ async function fixture(sessionId = "one", agentId = "main", announce = false) {
   return {
     owner,
     scope,
-    binding: { actor, authority, agentId, path: storePath },
+    run: <T>(callback: () => T) =>
+      runWithSessionActorStorage({ actor, authority, agentId, path: storePath }, callback),
     append: (next: unknown) => append({ event: JSON.stringify(next) }),
     appendMessage: (...args: Parameters<typeof event>) => {
       const { message, ...envelope } = event(...args);
@@ -127,11 +130,9 @@ it("reads current conversation bindings from the selected owner's catalog", asyn
     deliveryTarget: "reef:peer-a",
   })!;
   for (const target of [root, other]) {
-    await runWithSessionActorStorage(target.binding, () =>
-      registerConversationAddresses(target.scope, [identity], 100),
-    );
+    await target.run(() => registerConversationAddresses(target.scope, [identity], 100));
   }
-  await runWithSessionActorStorage(root.binding, async () => {
+  await root.run(async () => {
     for (const target of [root, other]) {
       expect(await readBinding(target.scope, identity.conversationRef)).toEqual({
         channel: "reef",
@@ -154,22 +155,20 @@ it("reads current conversation bindings from the selected owner's catalog", asyn
 });
 
 it("serves queued writes through pages, exact reads, accounting, summaries, and artifacts", async () => {
-  const { binding, scope, append, appendMessage } = await fixture();
-  await runWithSessionActorStorage(binding, async () => {
+  const { run, scope, append, appendMessage } = await fixture();
+  await run(async () => {
     expect(await readCount(scope)).toBe(2);
-    expect(await readSummary(scope, { kind: "usage" })).toMatchObject({
+    expect(await usage(scope)).toMatchObject({
       usage: { inputTokens: 10, outputTokens: 2 },
     });
-    const writing = appendMessage(
-      "next",
-      "answer",
-      "assistant",
-      [
+    const writing = appendMessage("next", "answer", {
+      role: "assistant",
+      content: [
         { type: "text", text: "New answer" },
         { type: "file", fileName: "report.txt", mimeType: "text/plain", data: "aGVsbG8=" },
       ],
-      { usage: { input: 20, output: 3 } },
-    );
+      usage: { input: 20, output: 3 },
+    });
     expect(await readIds(readRecent(scope, { maxMessages: 1 }))).toEqual(["next"]);
     await writing;
     expect({
@@ -204,12 +203,10 @@ it("serves queued writes through pages, exact reads, accounting, summaries, and 
       "answer",
       "next",
     ]);
-    expect(await readSummary(scope, { kind: "usage" })).toMatchObject({
+    expect(await usage(scope)).toMatchObject({
       usage: { inputTokens: 30, outputTokens: 5 },
     });
-    expect(
-      await readArtifacts(scope, { kind: "list", sessionKey: scope.sessionKey }),
-    ).toMatchObject({
+    expect(await artifacts(scope)).toMatchObject({
       kind: "list",
       artifacts: [{ title: "report.txt", type: "file", messageSeq: 3 }],
     });
@@ -231,13 +228,7 @@ it("serves queued writes through pages, exact reads, accounting, summaries, and 
         { type: "file", fileName: "display-only.txt", mimeType: "text/plain", data: "aGVsbG8=" },
       ],
     });
-    expect([
-      await readSummary(scope, { kind: "usage" }),
-      await readArtifacts(scope, { kind: "list", sessionKey: scope.sessionKey }),
-    ]).toEqual([
-      { kind: "usage", usage: null },
-      { kind: "list", artifacts: [] },
-    ]);
+    await expectEmptyOverview(scope);
   });
 });
 
@@ -245,7 +236,7 @@ it("reads sibling and cross-agent windows while absent history stays absent", as
   const root = await fixture();
   const sibling = await fixture("two");
   const other = await fixture("three", "helper");
-  await runWithSessionActorStorage(root.binding, async () => {
+  await root.run(async () => {
     for (const target of [sibling, other]) {
       const scope = { ...target.scope, sessionKey: undefined };
       expect(await readById(scope, "answer")).toMatchObject({
@@ -271,39 +262,41 @@ it("reads sibling and cross-agent windows while absent history stays absent", as
       messages: [],
       totalMessages: 0,
     });
-    expect([
-      await readSummary(missing, { kind: "usage" }),
-      await readArtifacts(missing, { kind: "list", sessionKey: root.scope.sessionKey }),
-    ]).toEqual([
-      { kind: "usage", usage: null },
-      { kind: "list", artifacts: [] },
-    ]);
+    await expectEmptyOverview(missing, root.scope.sessionKey);
     expect(root.owner.listSessions(authority)).toHaveLength(before);
   });
 });
 
 it("hides out-of-page coordination errors and reveals output after an in-process human steer", async () => {
-  const { binding, scope, appendMessage } = await fixture();
-  await appendMessage("coordination-input", "answer", "user", "Internal coordination", {
+  const { run, scope, appendMessage } = await fixture();
+  await appendMessage("coordination-input", "answer", {
+    role: "user",
+    content: "Internal coordination",
     idempotencyKey: "coordination:user",
     provenance: { kind: "inter_session", sourceTool: "sessions_send", sourceRole: "subagent" },
   });
-  await appendMessage("coordination-error", "coordination-input", "assistant", [], {
+  await appendMessage("coordination-error", "coordination-input", {
+    role: "assistant",
+    content: [],
     stopReason: "error",
     errorMessage: "Internal failure",
     __openclaw: { runId: "coordination" },
   });
-  await runWithSessionActorStorage(binding, async () => {
+  await run(async () => {
     const hidden = await readById(scope, "coordination-error", {
       historyVisibility: {},
     });
     expect(hidden).toEqual({ found: false, oversized: false, historyHidden: true });
     const before = await readSessionHistorySnapshotAsync({ target: scope, limit: 1 });
     expect(messageIds(before.history.messages)).toEqual(["answer"]);
-    await appendMessage("human-steer", "coordination-error", "user", "Show me the result", {
+    await appendMessage("human-steer", "coordination-error", {
+      role: "user",
+      content: "Show me the result",
       __openclaw: { steerTargetRunId: "coordination" },
     });
-    await appendMessage("visible-result", "human-steer", "assistant", "Visible result", {
+    await appendMessage("visible-result", "human-steer", {
+      role: "assistant",
+      content: "Visible result",
       __openclaw: { runId: "coordination" },
     });
     const after = await readSessionHistorySnapshotAsync({ target: scope, limit: 1 });
@@ -312,8 +305,8 @@ it("hides out-of-page coordination errors and reveals output after an in-process
 });
 
 it("preserves exact-message visibility and cancellation at the Gateway reader boundary", async () => {
-  const { binding, scope } = await fixture("announce", "main", true);
-  await runWithSessionActorStorage(binding, async () => {
+  const { run, scope } = await fixture("announce", "main", true);
+  await run(async () => {
     expect(
       await readById(scope, "answer", {
         historyVisibility: { sessionStartedAt: Date.parse("2026-10-11T00:01:00.000Z") },
@@ -329,7 +322,7 @@ it("preserves exact-message visibility and cancellation at the Gateway reader bo
 it("reads unbound Gateway transcript state after an in-process append without creating missing owners", async () => {
   const target = await fixture();
   expect(await readCount(target.scope)).toBe(2);
-  await target.appendMessage("next", "answer", "user", "Next question");
+  await target.appendMessage("next", "answer", { role: "user", content: "Next question" });
   expect(await readCount(target.scope)).toBe(3);
   expect(await readById(target.scope, "next")).toMatchObject({ found: true });
   expect(readSessionTitleFieldsFromTranscript(target.scope)).toMatchObject({

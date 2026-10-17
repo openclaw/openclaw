@@ -63,9 +63,32 @@ function customMessage(id: string, display: unknown, customType = "run-failed-be
 }
 
 type Event = ReturnType<typeof message | typeof compaction | typeof reset | typeof customMessage>;
-function scenario(name: string, events: Event[], expectedIds: string[], hiddenIds: string[] = []) {
-  return { name, events, expectedIds, hiddenIds };
-}
+type Scenario = [name: string, events: Event[], visible: string, hidden?: string];
+const ids = (text: string) => text.split(" ");
+const old = message("old");
+const oldSummary = compaction("old-summary", "old");
+const oldReset = reset("old-reset");
+const emptyReset = reset("reset");
+const keptUser = message("kept-user");
+const keptAssistant = message("kept-assistant", "assistant");
+const keptReset = reset("reset", "kept-user");
+const fresh = message("fresh");
+const freshSummary = compaction("fresh-summary", "fresh");
+const after = message("after", "assistant");
+const before = message("before");
+const summary = compaction("summary", "before");
+const compactedPast = [old, oldSummary];
+const freshTurn = [fresh, freshSummary];
+const resetSummaries = [
+  compaction("fresh-summary", "reset"),
+  compaction("newest-summary", "reset"),
+];
+const keptSummaries = [
+  compaction("fresh-summary", "kept-user"),
+  compaction("newest-summary", "kept-user"),
+];
+const middleTurn = [message("middle"), compaction("middle-summary", "middle")];
+const orphan = message("orphan-tool", "toolResult");
 
 function messageIds(messages: unknown[]) {
   return messages.map((entry) => (entry as { __openclaw: { id: string } })["__openclaw"].id);
@@ -162,8 +185,8 @@ describe("session transcript reader marker projection", () => {
     expect(result).toMatchObject({ totalMessages: 2, truncated: false });
   });
 
-  test.each([
-    scenario(
+  test.each<Scenario>([
+    [
       "displayed-custom-messages",
       [
         message("user"),
@@ -176,95 +199,63 @@ describe("session transcript reader marker projection", () => {
         compaction("summary", "user"),
         customMessage("after-summary", true),
       ],
-      ["user", "notice", "summary", "after-summary"],
-      ["hidden", "missing-display", "numeric-display", "string-display", "runtime-context"],
-    ),
-    scenario(
+      "user notice summary after-summary",
+      "hidden missing-display numeric-display string-display runtime-context",
+    ],
+    [
       "custom-messages-across-resets",
       [
         message("old-user"),
         customMessage("old-notice", true),
         customMessage("old-hidden", false),
-        reset("old-reset"),
+        oldReset,
         message("middle-user"),
         customMessage("middle-notice", true),
         reset("reset", "middle-user"),
         customMessage("fresh-notice", true),
       ],
-      ["middle-user", "reset", "fresh-notice"],
-      ["old-hidden"],
-    ),
-    scenario(
-      "compaction",
-      [message("before"), compaction("summary", "before"), message("after", "assistant")],
-      ["before", "summary", "after"],
-    ),
-    scenario(
+      "middle-user reset fresh-notice",
+      "old-hidden",
+    ],
+    ["compaction", [before, summary, after], "before summary after"],
+    [
       "reset",
-      [
-        message("old"),
-        message("kept-user"),
-        message("kept-assistant", "assistant"),
-        reset("reset", "kept-user"),
-        message("post-reset", "assistant"),
-      ],
-      ["kept-user", "kept-assistant", "reset", "post-reset"],
-    ),
-    scenario(
+      [old, keptUser, keptAssistant, keptReset, message("post-reset", "assistant")],
+      "kept-user kept-assistant reset post-reset",
+    ],
+    [
       "reset-then-compaction",
-      [
-        message("old"),
-        compaction("old-summary", "old"),
-        reset("reset"),
-        message("fresh"),
-        compaction("fresh-summary", "fresh"),
-      ],
-      ["reset", "fresh", "fresh-summary"],
-    ),
-    scenario(
+      [...compactedPast, emptyReset, ...freshTurn],
+      "reset fresh fresh-summary",
+    ],
+    [
       "empty-reset-adjacent-compactions",
-      [
-        message("old"),
-        compaction("old-summary", "old"),
-        reset("reset"),
-        compaction("fresh-summary", "reset"),
-        compaction("newest-summary", "reset"),
-      ],
-      ["reset", "fresh-summary", "newest-summary"],
-    ),
-    scenario(
+      [...compactedPast, emptyReset, ...resetSummaries],
+      "reset fresh-summary newest-summary",
+    ],
+    [
       "kept-reset-adjacent-compactions",
-      [
-        message("old"),
-        compaction("old-summary", "old"),
-        message("kept-user"),
-        message("orphan-tool", "toolResult"),
-        message("kept-assistant", "assistant"),
-        reset("reset", "kept-user"),
-        compaction("fresh-summary", "kept-user"),
-        compaction("newest-summary", "kept-user"),
-      ],
-      ["kept-user", "kept-assistant", "reset", "fresh-summary", "newest-summary"],
-    ),
-    scenario(
+      [...compactedPast, keptUser, orphan, keptAssistant, keptReset, ...keptSummaries],
+      "kept-user kept-assistant reset fresh-summary newest-summary",
+    ],
+    [
       "repeated-resets",
       [
-        message("old"),
-        compaction("old-summary", "old"),
-        reset("old-reset"),
-        message("middle"),
-        compaction("middle-summary", "middle"),
-        reset("reset"),
-        message("fresh"),
-        compaction("fresh-summary", "fresh"),
+        ...compactedPast,
+        oldReset,
+        ...middleTurn,
+        emptyReset,
+        ...freshTurn,
         compaction("newest-summary", "fresh"),
-        message("after", "assistant"),
+        after,
       ],
-      ["reset", "fresh", "fresh-summary", "newest-summary", "after"],
-    ),
+      "reset fresh fresh-summary newest-summary after",
+    ],
   ])(
-    "projects $name boundaries through every SQLite history read",
-    async ({ name, events, expectedIds, hiddenIds }) => {
+    "projects %s boundaries through every SQLite history read",
+    async (name, events, visible, hidden) => {
+      const expectedIds = ids(visible);
+      const hiddenIds = hidden ? ids(hidden) : [];
       const scope = await writeTranscript(`reader-${name}`, events);
       const around = (messageId: string) => readAround(scope, { messageId, maxMessages: 10 });
       const full = await readFull(scope, {
