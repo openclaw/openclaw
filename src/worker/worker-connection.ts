@@ -237,11 +237,13 @@ export class WorkerConnection {
   }
 
   private async connectUntilReady(): Promise<WorkerHelloOk> {
-    const startedAt = Date.now();
+    // Use the monotonic clock so NTP adjustments or manual system-clock changes
+    // cannot stretch or shrink the admission deadline window.
+    const startedAt = performance.now();
     let attempt = 0;
     let lastFailure: Error | undefined;
     while (!this.isTerminal()) {
-      let remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
+      let remainingMs = this.admissionDeadlineMs - (performance.now() - startedAt);
       if (remainingMs <= 0) {
         throw this.failAdmissionDeadline(attempt, lastFailure);
       }
@@ -258,7 +260,7 @@ export class WorkerConnection {
         } catch (error) {
           throw this.isTerminal() ? this.terminalError() : toStructuredErrorObject(error);
         }
-        remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
+        remainingMs = this.admissionDeadlineMs - (performance.now() - startedAt);
         if (remainingMs <= 0) {
           throw this.failAdmissionDeadline(attempt, lastFailure);
         }
