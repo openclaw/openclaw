@@ -4,14 +4,10 @@ import type { CodeModeNamespaceDescriptor } from "./code-mode-namespaces.js";
 import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "./code-mode.js";
 import {
   createHeadlessCodeModeHarness,
+  expectToolCalls,
   resetCodeModeTestState,
   testing,
 } from "./code-mode.test-support.js";
-import {
-  createToolSearchCatalogRef,
-  registerHeadlessToolSearchCatalog,
-  type ToolSearchToolContext,
-} from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 function fakeTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool {
@@ -40,6 +36,63 @@ function expectFailed(result: CodeModeHeadlessResult) {
   return result;
 }
 
+async function complete(
+  tools: AnyAgentTool[],
+  code: string,
+  options: Omit<Parameters<typeof runCodeModeScriptHeadless>[0], "ctx" | "code">,
+) {
+  return expectCompleted(
+    await runCodeModeScriptHeadless({
+      ctx: createHeadlessCodeModeHarness(tools),
+      code,
+      ...options,
+    }),
+  );
+}
+
+function triggerNamespace(
+  entries: Extract<CodeModeNamespaceDescriptor["scope"], { kind: "object" }>["entries"],
+  id = "cron:trigger",
+): CodeModeNamespaceDescriptor {
+  return { id, globalName: "trigger", scope: { kind: "object", entries } };
+}
+
+function gatedTool(name: string, label: string, events: string[], value: unknown) {
+  const started = createDeferred();
+  const release = createDeferred();
+  const state = { aborted: false, completed: false };
+  const tool = fakeTool(name, async (_id, _input, signal) => {
+    events.push(`${label}:start`);
+    started.resolve();
+    signal?.addEventListener(
+      "abort",
+      () => {
+        state.aborted = true;
+        release.reject(new Error("aborted"));
+      },
+      { once: true },
+    );
+    await release.promise;
+    events.push(`${label}:done`);
+    state.completed = true;
+    return jsonResult(value);
+  });
+  return { tool, started, release, state };
+}
+
+function releaseTool(
+  name: string,
+  label: string,
+  events: string[],
+  gate: ReturnType<typeof gatedTool>,
+) {
+  return fakeTool(name, async () => {
+    events.push(`${label}:release`);
+    gate.release.resolve();
+    return jsonResult({ released: true });
+  });
+}
+
 describe("headless Code Mode", () => {
   afterEach(async () => {
     vi.useRealTimers();
@@ -59,20 +112,16 @@ describe("headless Code Mode", () => {
       expect(testing.activeRuns.size).toBe(0);
       return jsonResult({ input });
     });
-    const ctx = createHeadlessCodeModeHarness([first, second]);
-
-    const result = expectCompleted(
-      await runCodeModeScriptHeadless({
-        ctx,
-        code: `
+    const result = await complete(
+      [first, second],
+      `
           const first = await headless_first({});
           const second = await headless_second({
             value: first.value,
           });
           return second;
         `,
-        wallClockMs: 120_000,
-      }),
+      { wallClockMs: 120_000 },
     );
 
     expect(result.value).toEqual({ input: { value: 2 } });
@@ -84,166 +133,84 @@ describe("headless Code Mode", () => {
   it("drains a headless nested combinator after its outer race wins", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const events: string[] = [];
-    const nestedStarted = createDeferred();
-    const nestedRelease = createDeferred();
-    let nestedAborted = false;
-    const never = fakeTool("headless_nested_race_never", async (_toolCallId, _input, signal) => {
-      events.push("nested:start");
-      nestedStarted.resolve();
-      signal?.addEventListener(
-        "abort",
-        () => {
-          nestedAborted = true;
-          nestedRelease.reject(new Error("aborted"));
-        },
-        { once: true },
-      );
-      await nestedRelease.promise;
-      events.push("nested:done");
-      return jsonResult({ winner: "nested" });
-    });
+    const nested = gatedTool("headless_nested_race_never", "nested", events, { winner: "nested" });
+    const never = nested.tool;
     const fast = fakeTool("headless_nested_race_fast", async () => {
-      await nestedStarted.promise;
+      await nested.started.promise;
       events.push("fast:win");
       return jsonResult({ winner: "fast" });
     });
-    const release = fakeTool("headless_nested_race_release", async () => {
-      events.push("nested:release");
-      nestedRelease.resolve();
-      return jsonResult({ released: true });
-    });
+    const release = releaseTool("headless_nested_race_release", "nested", events, nested);
 
-    const result = expectCompleted(
-      await runCodeModeScriptHeadless({
-        ctx: createHeadlessCodeModeHarness([never, fast, release]),
-        code: `const value = await Promise.race([
+    const result = await complete(
+      [never, fast, release],
+      `const value = await Promise.race([
             Promise.all([headless_nested_race_never({})]),
             headless_nested_race_fast({}),
           ]);
           void headless_nested_race_release({});
           return value;`,
-        wallClockMs: 5_000,
-      }),
+      { wallClockMs: 5_000 },
     );
 
     expect(result.value).toEqual({ winner: "fast" });
     expect(result.toolCallCount).toBe(3);
-    expect(never.execute).toHaveBeenCalledOnce();
-    expect(fast.execute).toHaveBeenCalledOnce();
-    expect(release.execute).toHaveBeenCalledOnce();
+    expectToolCalls(1, never, fast, release);
     expect(events).toEqual(["nested:start", "fast:win", "nested:release", "nested:done"]);
-    expect(nestedAborted).toBe(false);
+    expect(nested.state.aborted).toBe(false);
   });
 
   it.each([
-    {
-      label: "directly",
-      auditCode: "void headless_early_audit({});",
-    },
-    {
-      label: "in a detached already-settled Promise.race",
-      auditCode: "void Promise.race([headless_early_audit({}), Promise.resolve()]);",
-    },
-    {
-      label: "in a detached Promise.all",
-      auditCode: "void Promise.all([headless_early_audit({})]);",
-    },
-    {
-      label: "in a detached Promise.allSettled",
-      auditCode: "void Promise.allSettled([headless_early_audit({})]);",
-    },
-    {
-      label: "in a detached Promise.any",
-      auditCode: "void Promise.any([headless_early_audit({})]);",
-    },
-    {
-      label: "in a detached Promise.race",
-      auditCode: "void Promise.race([headless_early_audit({})]);",
-    },
+    ["directly", "void headless_early_audit({});"],
+    [
+      "in a detached already-settled Promise.race",
+      "void Promise.race([headless_early_audit({}), Promise.resolve()]);",
+    ],
+    ["in a detached Promise.all", "void Promise.all([headless_early_audit({})]);"],
+    ["in a detached Promise.allSettled", "void Promise.allSettled([headless_early_audit({})]);"],
+    ["in a detached Promise.any", "void Promise.any([headless_early_audit({})]);"],
+    ["in a detached Promise.race", "void Promise.race([headless_early_audit({})]);"],
   ])(
-    "drains a headless detached audit started $label before an awaited nested call",
-    async ({ auditCode }) => {
+    "drains a headless detached audit started %s before an awaited nested call",
+    async (_label, auditCode) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       const events: string[] = [];
-      let auditCompleted = false;
-      let auditAborted = false;
-      const auditStarted = createDeferred();
-      const auditRelease = createDeferred();
-      const audit = fakeTool("headless_early_audit", async (_toolCallId, _input, signal) => {
-        events.push("audit:start");
-        auditStarted.resolve();
-        signal?.addEventListener(
-          "abort",
-          () => {
-            auditAborted = true;
-            auditRelease.reject(new Error("aborted"));
-          },
-          { once: true },
-        );
-        await auditRelease.promise;
-        events.push("audit:done");
-        auditCompleted = true;
-        return jsonResult({ recorded: true });
-      });
+      const gate = gatedTool("headless_early_audit", "audit", events, { recorded: true });
+      const audit = gate.tool;
       const fast = fakeTool("headless_awaited_fast", async () => {
-        await auditStarted.promise;
+        await gate.started.promise;
         events.push("awaited:done");
         return jsonResult({ winner: "fast" });
       });
-      const release = fakeTool("headless_early_audit_release", async () => {
-        events.push("audit:release");
-        auditRelease.resolve();
-        return jsonResult({ released: true });
-      });
+      const release = releaseTool("headless_early_audit_release", "audit", events, gate);
 
-      const result = expectCompleted(
-        await runCodeModeScriptHeadless({
-          ctx: createHeadlessCodeModeHarness([audit, fast, release]),
-          code: `${auditCode}
+      const result = await complete(
+        [audit, fast, release],
+        `${auditCode}
           const value = await headless_awaited_fast({});
           void headless_early_audit_release({});
           return value;`,
-          wallClockMs: 5_000,
-        }),
+        { wallClockMs: 5_000 },
       );
 
       expect(result.value).toEqual({ winner: "fast" });
       expect(result.toolCallCount).toBe(3);
-      expect(audit.execute).toHaveBeenCalledOnce();
-      expect(fast.execute).toHaveBeenCalledOnce();
-      expect(release.execute).toHaveBeenCalledOnce();
+      expectToolCalls(1, audit, fast, release);
       expect(events).toEqual(["audit:start", "awaited:done", "audit:release", "audit:done"]);
-      expect(auditCompleted).toBe(true);
-      expect(auditAborted).toBe(false);
+      expect(gate.state).toEqual({ completed: true, aborted: false });
     },
   );
 
   it("drains a headless race winner's detached audit and its slower race branch", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const events: string[] = [];
-    const loserStarted = createDeferred();
-    const loserRelease = createDeferred();
+    const gate = gatedTool("headless_race_loser", "loser", events, { winner: "slow" });
+    const loser = gate.tool;
     const auditStarted = createDeferred();
-    let loserAborted = false;
     const winner = fakeTool("headless_race_winner", async () => {
-      await loserStarted.promise;
+      await gate.started.promise;
       events.push("winner:win");
       return jsonResult({ winner: "fast" });
-    });
-    const loser = fakeTool("headless_race_loser", async (_toolCallId, _input, signal) => {
-      events.push("loser:start");
-      loserStarted.resolve();
-      signal?.addEventListener(
-        "abort",
-        () => {
-          loserAborted = true;
-          loserRelease.reject(new Error("aborted"));
-        },
-        { once: true },
-      );
-      await loserRelease.promise;
-      events.push("loser:done");
-      return jsonResult({ winner: "slow" });
     });
     const audit = fakeTool("headless_race_audit", async () => {
       events.push("audit:done");
@@ -253,30 +220,25 @@ describe("headless Code Mode", () => {
     const release = fakeTool("headless_race_loser_release", async () => {
       await auditStarted.promise;
       events.push("loser:release");
-      loserRelease.resolve();
+      gate.release.resolve();
       return jsonResult({ released: true });
     });
 
-    const result = expectCompleted(
-      await runCodeModeScriptHeadless({
-        ctx: createHeadlessCodeModeHarness([winner, loser, audit, release]),
-        code: `const value = await Promise.race([
+    const result = await complete(
+      [winner, loser, audit, release],
+      `const value = await Promise.race([
             headless_race_winner({}),
             headless_race_loser({}),
           ]);
           void headless_race_audit({});
           void headless_race_loser_release({});
           return value;`,
-        wallClockMs: 5_000,
-      }),
+      { wallClockMs: 5_000 },
     );
 
     expect(result.value).toEqual({ winner: "fast" });
     expect(result.toolCallCount).toBe(4);
-    expect(winner.execute).toHaveBeenCalledOnce();
-    expect(loser.execute).toHaveBeenCalledOnce();
-    expect(audit.execute).toHaveBeenCalledOnce();
-    expect(release.execute).toHaveBeenCalledOnce();
+    expectToolCalls(1, winner, loser, audit, release);
     expect(events).toEqual([
       "loser:start",
       "winner:win",
@@ -284,7 +246,7 @@ describe("headless Code Mode", () => {
       "loser:release",
       "loser:done",
     ]);
-    expect(loserAborted).toBe(false);
+    expect(gate.state.aborted).toBe(false);
   });
 
   it.each(["race", "any"] as const)(
@@ -292,100 +254,50 @@ describe("headless Code Mode", () => {
     async (combinator) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       const events: string[] = [];
-      const slowStarted = createDeferred();
-      const slowRelease = createDeferred();
-      let slowAborted = false;
-      let slowCompleted = false;
+      const gate = gatedTool("headless_slow", "slow", events, { winner: "slow" });
+      const slow = gate.tool;
       const fast = fakeTool("headless_fast", async () => {
-        await slowStarted.promise;
+        await gate.started.promise;
         events.push("fast:win");
         return jsonResult({ winner: "fast" });
       });
-      const slow = fakeTool("headless_slow", async (_toolCallId, _input, signal) => {
-        events.push("slow:start");
-        slowStarted.resolve();
-        signal?.addEventListener(
-          "abort",
-          () => {
-            slowAborted = true;
-            slowRelease.reject(new Error("aborted"));
-          },
-          { once: true },
-        );
-        await slowRelease.promise;
-        events.push("slow:done");
-        slowCompleted = true;
-        return jsonResult({ winner: "slow" });
-      });
-      const release = fakeTool("headless_slow_release", async () => {
-        events.push("slow:release");
-        slowRelease.resolve();
-        return jsonResult({ released: true });
-      });
+      const release = releaseTool("headless_slow_release", "slow", events, gate);
 
-      const result = expectCompleted(
-        await runCodeModeScriptHeadless({
-          ctx: createHeadlessCodeModeHarness([fast, slow, release]),
-          code: `const value = await Promise.${combinator}([
+      const result = await complete(
+        [fast, slow, release],
+        `const value = await Promise.${combinator}([
               headless_slow({}),
               headless_fast({}),
             ]);
             void headless_slow_release({});
             return value;`,
-          wallClockMs: 5_000,
-        }),
+        { wallClockMs: 5_000 },
       );
 
       expect(result.value).toEqual({ winner: "fast" });
       expect(result.toolCallCount).toBe(3);
-      expect(fast.execute).toHaveBeenCalledOnce();
-      expect(slow.execute).toHaveBeenCalledOnce();
-      expect(release.execute).toHaveBeenCalledOnce();
+      expectToolCalls(1, fast, slow, release);
       expect(events).toEqual(["slow:start", "fast:win", "slow:release", "slow:done"]);
-      expect(slowCompleted).toBe(true);
-      expect(slowAborted).toBe(false);
+      expect(gate.state).toEqual({ completed: true, aborted: false });
     },
   );
 
   it("preserves headless fail-fast Promise.all while draining the slower nested tool", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const events: string[] = [];
-    const slowStarted = createDeferred();
-    const slowRelease = createDeferred();
-    let slowAborted = false;
-    let slowCompleted = false;
+    const gate = gatedTool("headless_slow", "slow", events, { winner: "slow" });
+    const slow = gate.tool;
     const failed = fakeTool("headless_failed", async () => {
       events.push("failed:wait");
-      await slowStarted.promise;
+      await gate.started.promise;
       events.push("failed:reject");
       throw new Error("fast failure");
     });
-    const slow = fakeTool("headless_slow", async (_toolCallId, _input, signal) => {
-      events.push("slow:start");
-      slowStarted.resolve();
-      signal?.addEventListener(
-        "abort",
-        () => {
-          slowAborted = true;
-          slowRelease.reject(new Error("aborted"));
-        },
-        { once: true },
-      );
-      await slowRelease.promise;
-      events.push("slow:done");
-      slowCompleted = true;
-      return jsonResult({ winner: "slow" });
-    });
-    const release = fakeTool("headless_slow_release", async () => {
-      events.push("slow:release");
-      slowRelease.resolve();
-      return jsonResult({ released: true });
-    });
+    const release = releaseTool("headless_slow_release", "slow", events, gate);
 
-    const result = expectCompleted(
-      await runCodeModeScriptHeadless({
-        ctx: createHeadlessCodeModeHarness([failed, slow, release]),
-        code: `try {
+    const result = await complete(
+      [failed, slow, release],
+      `try {
           await Promise.all([
             headless_failed({}),
             headless_slow({}),
@@ -395,15 +307,12 @@ describe("headless Code Mode", () => {
           void headless_slow_release({});
           return error.message;
         }`,
-        wallClockMs: 5_000,
-      }),
+      { wallClockMs: 5_000 },
     );
 
     expect(result.value).toBe("fast failure");
     expect(result.toolCallCount).toBe(3);
-    expect(failed.execute).toHaveBeenCalledOnce();
-    expect(slow.execute).toHaveBeenCalledOnce();
-    expect(release.execute).toHaveBeenCalledOnce();
+    expectToolCalls(1, failed, slow, release);
     expect(events).toEqual([
       "failed:wait",
       "slow:start",
@@ -411,8 +320,7 @@ describe("headless Code Mode", () => {
       "slow:release",
       "slow:done",
     ]);
-    expect(slowCompleted).toBe(true);
-    expect(slowAborted).toBe(false);
+    expect(gate.state).toEqual({ completed: true, aborted: false });
   });
 
   it.each([
@@ -452,22 +360,9 @@ describe("headless Code Mode", () => {
           return "done";
         `,
         extraNamespaces: [
-          {
-            id: "cron:trigger",
-            globalName: "trigger",
-            scope: {
-              kind: "object",
-              entries: [
-                [
-                  "state",
-                  {
-                    kind: "value",
-                    value: { "": 7, count: 4, nested: { stable: true } },
-                  },
-                ],
-              ],
-            },
-          },
+          triggerNamespace([
+            ["state", { kind: "value", value: { "": 7, count: 4, nested: { stable: true } } }],
+          ]),
         ],
       }),
     );
@@ -483,16 +378,7 @@ describe("headless Code Mode", () => {
   it("keeps an injected namespace while calling a colliding tool by its advertised global", async () => {
     const tool = fakeTool("trigger", async () => jsonResult({ owner: "tool" }));
     const ctx = createHeadlessCodeModeHarness([tool]);
-    const extraNamespaces: CodeModeNamespaceDescriptor[] = [
-      {
-        id: "cron:trigger",
-        globalName: "trigger",
-        scope: {
-          kind: "object",
-          entries: [["owner", { kind: "value", value: "namespace" }]],
-        },
-      },
-    ];
+    const extraNamespaces = [triggerNamespace([["owner", { kind: "value", value: "namespace" }]])];
     const run = async () =>
       expectCompleted(
         await runCodeModeScriptHeadless({
@@ -528,18 +414,7 @@ describe("headless Code Mode", () => {
       await runCodeModeScriptHeadless({
         ctx: createHeadlessCodeModeHarness(),
         code: "return true;",
-        extraNamespaces: [
-          {
-            id: "cron:trigger",
-            globalName: "trigger",
-            scope: { kind: "object", entries: [] },
-          },
-          {
-            id: "plugin:trigger",
-            globalName: "trigger",
-            scope: { kind: "object", entries: [] },
-          },
-        ],
+        extraNamespaces: [triggerNamespace([]), triggerNamespace([], "plugin:trigger")],
       }),
     );
 
@@ -691,26 +566,13 @@ describe("headless Code Mode", () => {
       },
       execute: vi.fn(async () => jsonResult({ unexpected: true })),
     };
-    const config = { tools: { codeMode: { enabled: false, timeoutMs: 60_000 } } } as never;
-    const catalogRef = createToolSearchCatalogRef();
-    registerHeadlessToolSearchCatalog({ catalogRef, tools: [strict] });
-    const ctx: ToolSearchToolContext = {
-      config,
-      runtimeConfig: config,
-      agentId: "main",
-      catalogRef,
-    };
-
-    const result = await runCodeModeScriptHeadless({
-      ctx,
-      code: "return await headless_strict({ value: 42 });",
-      wallClockMs: 120_000,
-    });
-
-    expect(result.status).toBe("failed");
-    if (result.status !== "failed") {
-      throw new Error("expected headless Code Mode failure");
-    }
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessCodeModeHarness([strict]),
+        code: "return await headless_strict({ value: 42 });",
+        wallClockMs: 120_000,
+      }),
+    );
     expect(result.error).toContain("value");
     expect(result.toolCallCount).toBe(1);
     expect(strict.execute).not.toHaveBeenCalled();
