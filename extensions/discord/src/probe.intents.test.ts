@@ -147,10 +147,7 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     ]);
     const fetcher = withFetchPreconnect(
       async () =>
-        new Response(body, {
-          headers: { "content-type": "application/json" },
-          status: 200,
-        }),
+        new Response(body, { headers: { "content-type": "application/json" }, status: 200 }),
     );
     await expect(probeGetMe(fetcher)).resolves.toMatchObject({
       ok: false,
@@ -198,10 +195,7 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
       }
       return stalledJsonResponse(init?.signal, terminated);
     });
-    const probe = probeDiscord("MTIz.abc.def", 50, {
-      fetcher,
-      includeApplication: true,
-    });
+    const probe = probeDiscord("MTIz.abc.def", 50, { fetcher, includeApplication: true });
     const outerStatusResult = Promise.race([
       probe,
       new Promise<{ ok: false; timedOut: true }>((resolve) => {

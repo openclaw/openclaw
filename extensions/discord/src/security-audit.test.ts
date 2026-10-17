@@ -162,9 +162,7 @@ describe("Discord security audit findings", () => {
       accountId: "beta",
       orderedAccountIds: ["alpha", "beta"],
       hasExplicitAccountPath: true,
-      config: {
-        allowFrom: ["Alice#1234"],
-      } satisfies DiscordAccountConfig,
+      config: { allowFrom: ["Alice#1234"] } satisfies DiscordAccountConfig,
       expectNameBasedSeverity: "warn",
       detailIncludes: ["channels.discord.accounts.beta.allowFrom (1)"],
       detailExcludes: ["Alice#1234"],

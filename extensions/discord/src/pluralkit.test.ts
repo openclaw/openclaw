@@ -46,9 +46,7 @@ describe("fetchPluralKitMessageInfo", () => {
       receivedHeaders = init?.headers as Record<string, string> | undefined;
       return Response.json({ member: { id: "mem_1" } });
     });
-    const result = await lookup(fetcher, {
-      config: { enabled: true, token: "pk_test" },
-    });
+    const result = await lookup(fetcher, { config: { enabled: true, token: "pk_test" } });
     expect(result?.member?.id).toBe("mem_1");
     expect(receivedHeaders?.Authorization).toBe("pk_test");
   });
@@ -67,10 +65,7 @@ describe("fetchPluralKitMessageInfo", () => {
           );
         },
       });
-      return new Response(body, {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
     });
     const lookupPromise = lookup(fetcher);
     await vi.advanceTimersByTimeAsync(0);
@@ -98,9 +93,7 @@ describe("fetchPluralKitMessageInfo", () => {
         );
       });
     });
-    const lookupPromise = lookup(fetcher, {
-      signal: parent.signal,
-    });
+    const lookupPromise = lookup(fetcher, { signal: parent.signal });
     parent.abort(new Error("preflight stopped"));
     await expect(lookupPromise).rejects.toThrow("preflight stopped");
     expect(observedSignal?.aborted).toBe(true);

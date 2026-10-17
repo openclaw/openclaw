@@ -7,34 +7,23 @@ import { discordOutbound } from "./outbound-adapter.js";
 import { recordDiscordMessageCreateAmbiguity } from "./retry.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 
-type DiscordSendPayload = NonNullable<typeof discordOutbound.sendPayload>;
-
-function requireDiscordSendPayload(): DiscordSendPayload {
-  const sendPayload = discordOutbound.sendPayload;
-  if (!sendPayload) {
-    throw new Error("Expected Discord outbound sendPayload");
-  }
-  return sendPayload;
+const sendPayload = discordOutbound.sendPayload;
+if (!sendPayload) {
+  throw new Error("Expected Discord outbound sendPayload");
 }
 
-describe("Discord outbound payload contract", () => {
-  it("plain text delegates to sendText", async () => {
-    resetGlobalHookRunner();
-    const sendDiscord = vi.fn().mockResolvedValue({ messageId: "dc-1", channelId: "123456" });
-    const result = await requireDiscordSendPayload()({
-      cfg: {},
-      to: "channel:123456",
-      text: "",
-      payload: { text: "hello" },
-      deps: { sendDiscord },
-    });
-    expect(sendDiscord).toHaveBeenCalledExactlyOnceWith(
-      "channel:123456",
-      "hello",
-      expect.anything(),
-    );
-    expect(result.channel).toBe("discord");
+it("plain text delegates to sendText", async () => {
+  resetGlobalHookRunner();
+  const sendDiscord = vi.fn().mockResolvedValue({ messageId: "dc-1", channelId: "123456" });
+  const result = await sendPayload({
+    cfg: {},
+    to: "channel:123456",
+    text: "",
+    payload: { text: "hello" },
+    deps: { sendDiscord },
   });
+  expect(sendDiscord).toHaveBeenCalledExactlyOnceWith("channel:123456", "hello", expect.anything());
+  expect(result.channel).toBe("discord");
 });
 
 describe("Discord forum outbound payload ownership", () => {
@@ -64,10 +53,7 @@ describe("Discord forum outbound payload ownership", () => {
       } else if (route === "/channels/forum1/threads") {
         threadCount += 1;
         const threadId = `thread${threadCount}`;
-        response = {
-          id: threadId,
-          message: { id: `starter${threadCount}`, channel_id: threadId },
-        };
+        response = { id: threadId, message: { id: `starter${threadCount}`, channel_id: threadId } };
       } else {
         mediaCount += 1;
         response = { id: `media${mediaCount}`, channel_id: route.split("/")[2] };
@@ -76,19 +62,10 @@ describe("Discord forum outbound payload ownership", () => {
     });
     const rest = new RequestClient("discord-fixture-token", { fetch, queueRequests: false });
     const readFile = vi.fn(async () => Buffer.from("forum attachment"));
-    const mediaAccess = {
-      localRoots: [process.cwd()],
-      readFile,
-      workspaceDir: process.cwd(),
-    };
+    const mediaAccess = { localRoots: [process.cwd()], readFile, workspaceDir: process.cwd() };
     const onDeliveryResult = vi.fn();
-    const sendPayload = requireDiscordSendPayload();
     const sendDiscord: typeof sendMessageDiscord = async (target, text, options) =>
-      await sendMessageDiscord(target, text, {
-        ...options,
-        rest,
-        token: "discord-fixture-token",
-      });
+      await sendMessageDiscord(target, text, { ...options, rest, token: "discord-fixture-token" });
     const run = () =>
       sendPayload({
         cfg: { channels: { discord: { token: "discord-fixture-token" } } },
@@ -102,9 +79,7 @@ describe("Discord forum outbound payload ownership", () => {
         mediaAccess,
         mediaLocalRoots: mediaAccess.localRoots,
         mediaReadFile: readFile,
-        deps: {
-          discord: sendDiscord,
-        },
+        deps: { discord: sendDiscord },
         onDeliveryResult,
       });
     vi.spyOn(globalThis, "fetch").mockImplementation(fetch);
@@ -206,87 +181,78 @@ describe("Discord forum outbound payload ownership", () => {
   });
 });
 
-describe("Discord voice fallback delivery safety", () => {
-  function runVoicePayload(mode: "ambiguous" | "source" | "remaining" | "encoder") {
-    const deliveredText = mode === "ambiguous" || mode === "encoder";
-    const error =
-      mode === "source"
-        ? new DiscordError(new Response(null, { status: 503 }), {
-            message: "audio source unavailable",
-          })
-        : mode === "ambiguous"
-          ? Object.assign(new Error("voice create failed after acceptance"), { status: 503 })
-          : new Error("ffmpeg unavailable");
-    const onDeliveryResult = vi.fn();
-    const voiceDelivery = vi.fn(async () => {
-      if (mode === "ambiguous") {
-        recordDiscordMessageCreateAmbiguity(error);
-      }
-      throw error;
-    });
-    let textDeliveryCalls = 0;
-    const textDelivery = vi.fn(async (_to: string, _text: string, sendOptions?: unknown) => {
-      const callIndex = textDeliveryCalls++;
-      if (mode === "remaining" && callIndex > 0) {
-        throw new Error("remaining media unavailable");
-      }
-      const result = {
-        messageId: "fallback-text",
-        channelId: "123456",
-      };
-      await (
-        sendOptions as
-          | { onDeliveryResult?: (deliveryResult: typeof result) => Promise<void> }
-          | undefined
-      )?.onDeliveryResult?.(result);
-      return result;
-    });
-    const sendPayload = requireDiscordSendPayload();
-    const promise = sendPayload({
-      cfg: {},
-      to: "channel:123456",
-      text: "",
-      payload: {
-        ...(deliveredText
-          ? { ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true } }
-          : { text: "answer" }),
-        mediaUrls: [
-          "https://example.test/voice.ogg",
-          ...(mode === "remaining" ? ["https://example.test/remaining.png"] : []),
-        ],
-        audioAsVoice: true,
-      },
-      deps: {
-        discord: textDelivery,
-        discordVoice: voiceDelivery,
-      },
-      onDeliveryResult,
-    });
-    return { error, onDeliveryResult, promise, textDelivery, voiceDelivery };
-  }
-
-  it.each([
-    ["ambiguous", 0],
-    ["source", 1],
-    ["remaining", 2],
-    ["encoder", 0],
-  ] as const)("preserves %s voice failure and fallback delivery", async (mode, textCalls) => {
-    const { error, promise, textDelivery, voiceDelivery, onDeliveryResult } = runVoicePayload(mode);
-    await expect(promise).rejects.toBe(error);
-    expect(voiceDelivery).toHaveBeenCalledOnce();
-    expect(textDelivery).toHaveBeenCalledTimes(textCalls);
-    if (textCalls === 1) {
-      expect(textDelivery).toHaveBeenCalledExactlyOnceWith(
-        "channel:123456",
-        "answer",
-        expect.objectContaining({ cfg: {} }),
-      );
-      expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ channel: "discord", messageId: "fallback-text" }),
-      );
+function runVoicePayload(mode: "ambiguous" | "source" | "remaining" | "encoder") {
+  const deliveredText = mode === "ambiguous" || mode === "encoder";
+  const error =
+    mode === "source"
+      ? new DiscordError(new Response(null, { status: 503 }), {
+          message: "audio source unavailable",
+        })
+      : mode === "ambiguous"
+        ? Object.assign(new Error("voice create failed after acceptance"), { status: 503 })
+        : new Error("ffmpeg unavailable");
+  const onDeliveryResult = vi.fn();
+  const voiceDelivery = vi.fn(async () => {
+    if (mode === "ambiguous") {
+      recordDiscordMessageCreateAmbiguity(error);
     }
-    if (mode === "encoder") {
-      expect(onDeliveryResult).not.toHaveBeenCalled();
-    }
+    throw error;
   });
+  let textDeliveryCalls = 0;
+  const textDelivery = vi.fn(async (_to: string, _text: string, sendOptions?: unknown) => {
+    const callIndex = textDeliveryCalls++;
+    if (mode === "remaining" && callIndex > 0) {
+      throw new Error("remaining media unavailable");
+    }
+    const result = { messageId: "fallback-text", channelId: "123456" };
+    await (
+      sendOptions as
+        | { onDeliveryResult?: (deliveryResult: typeof result) => Promise<void> }
+        | undefined
+    )?.onDeliveryResult?.(result);
+    return result;
+  });
+  const promise = sendPayload({
+    cfg: {},
+    to: "channel:123456",
+    text: "",
+    payload: {
+      ...(deliveredText
+        ? { ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true } }
+        : { text: "answer" }),
+      mediaUrls: [
+        "https://example.test/voice.ogg",
+        ...(mode === "remaining" ? ["https://example.test/remaining.png"] : []),
+      ],
+      audioAsVoice: true,
+    },
+    deps: { discord: textDelivery, discordVoice: voiceDelivery },
+    onDeliveryResult,
+  });
+  return { error, onDeliveryResult, promise, textDelivery, voiceDelivery };
+}
+
+it.each([
+  ["ambiguous", 0],
+  ["source", 1],
+  ["remaining", 2],
+  ["encoder", 0],
+] as const)("preserves %s voice failure and fallback delivery", async (mode, textCalls) => {
+  const { error, promise, textDelivery, voiceDelivery, onDeliveryResult } = runVoicePayload(mode);
+  await expect(promise).rejects.toBe(error);
+  expect(voiceDelivery).toHaveBeenCalledOnce();
+  expect(textDelivery).toHaveBeenCalledTimes(textCalls);
+  if (textCalls === 1) {
+    expect(textDelivery).toHaveBeenCalledExactlyOnceWith(
+      "channel:123456",
+      "answer",
+      expect.objectContaining({ cfg: {} }),
+    );
+    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ channel: "discord", messageId: "fallback-text" }),
+    );
+  }
+  if (mode === "encoder") {
+    expect(onDeliveryResult).not.toHaveBeenCalled();
+  }
 });
