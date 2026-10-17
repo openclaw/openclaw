@@ -57,63 +57,62 @@ function runTurn(
   });
 }
 
+function runRestricted(
+  fake: ReturnType<typeof createClientFactory>,
+  params: Partial<TurnParams> = {},
+) {
+  return runTurn(fake.factory, { requireNoExternalCapabilities: true, ...params });
+}
+
 describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
-  it.each<{ source: string; requirements: JsonValue }>([
-    { source: "required feature", requirements: { featureRequirements: { hooks: true } } },
-  ])(
-    "preserves mandatory hooks from $source in a private tool-free turn",
-    async ({ requirements }) => {
-      const fake = createClientFactory({
-        managedRequirements: requirements,
-        hooks: [{ key: "managed:pre_tool_use:0:0", enabled: true, isManaged: true }],
-      });
+  it("preserves mandatory hooks in a private tool-free turn", async () => {
+    const requirements: JsonValue = { featureRequirements: { hooks: true } };
+    const fake = createClientFactory({
+      managedRequirements: requirements,
+      hooks: [{ key: "managed:pre_tool_use:0:0", enabled: true, isManaged: true }],
+    });
 
-      await expect(
-        runTurn(fake.factory, {
-          requireNoExternalCapabilities: true,
-        }),
-      ).resolves.toMatchObject({ text: "The message was sent successfully." });
+    await expect(runRestricted(fake)).resolves.toMatchObject({
+      text: "The message was sent successfully.",
+    });
 
-      const start = requestParams(fake, "thread/start");
-      expect(start).toMatchObject({
-        environments: [],
-        dynamicTools: [],
-        ephemeral: true,
-        sandbox: "read-only",
-        config: {
-          "features.hooks": true,
-          "features.shell_tool": false,
-          "features.code_mode": false,
-          "features.plugins": false,
-          "features.apps": false,
-          "orchestrator.mcp.enabled": false,
-          mcp_servers: { inherited: { enabled: false } },
-          notify: [],
-          project_root_markers: [],
-        },
-      });
-      const startOptions = vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions;
-      expect(startOptions?.cwd).toEqual((start as { cwd: string }).cwd);
-      expect(startOptions?.args).toEqual(
-        expect.arrayContaining([
-          "project_root_markers=[]",
-          "features.hooks=true",
-          "features.plugins=false",
-        ]),
-      );
-      expect(fake.methods.indexOf("hooks/list")).toBeLessThan(fake.methods.indexOf("thread/start"));
-    },
-  );
+    const start = requestParams(fake, "thread/start");
+    expect(start).toMatchObject({
+      environments: [],
+      dynamicTools: [],
+      ephemeral: true,
+      sandbox: "read-only",
+      config: {
+        "features.hooks": true,
+        "features.shell_tool": false,
+        "features.code_mode": false,
+        "features.plugins": false,
+        "features.apps": false,
+        "orchestrator.mcp.enabled": false,
+        mcp_servers: { inherited: { enabled: false } },
+        notify: [],
+        project_root_markers: [],
+      },
+    });
+    const startOptions = vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions;
+    expect(startOptions?.cwd).toEqual((start as { cwd: string }).cwd);
+    expect(startOptions?.args).toEqual(
+      expect.arrayContaining([
+        "project_root_markers=[]",
+        "features.hooks=true",
+        "features.plugins=false",
+      ]),
+    );
+    expect(fake.methods.indexOf("hooks/list")).toBeLessThan(fake.methods.indexOf("thread/start"));
+  });
 
   it("still refuses managed tool enablement before starting a private completion", async () => {
     const fake = createClientFactory({
       managedRequirements: { featureRequirements: { hooks: true, shell_tool: true } },
     });
-    await expect(
-      runTurn(fake.factory, {
-        requireNoExternalCapabilities: true,
-      }),
-    ).rejects.toThrow("cannot override required feature shell_tool");
+    await expect(runRestricted(fake)).rejects.toThrow(
+      "cannot override required feature shell_tool",
+    );
     expect(fake.methods).not.toContain("thread/start");
   });
 
@@ -137,9 +136,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
             : []),
         ],
       });
-      const run = runTurn(fake.factory, {
-        requireNoExternalCapabilities: true,
-      });
+      const run = runRestricted(fake);
       if (hasRevision) {
         await expect(run).resolves.toMatchObject({
           text: "Approved revision.",
@@ -232,12 +229,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       await vi.waitFor(() => expect(fake.methods).toContain("turn/start"));
       fake.close(new Error("app-server transport disconnected"));
       await vi.waitFor(
-        () =>
-          expect(outcome).toEqual(
-            expect.objectContaining({
-              message: expect.stringContaining("closed"),
-            }),
-          ),
+        () => expect(outcome).toMatchObject({ message: expect.stringContaining("closed") }),
         { timeout: 200 },
       );
     } finally {
@@ -255,46 +247,44 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     ).rejects.toThrow("pre-bind notification buffer exceeded");
   });
 
-  it.each(["mcpServerStatus/list"])(
-    "does not dispatch a turn after its caller retires during %s",
-    async (suspendedMethod) => {
-      const suspended = createDeferred<void>();
-      const release = createDeferred<void>();
-      const fake = createClientFactory({
-        beforeRequest: async (method) => {
-          if (method === suspendedMethod) {
-            suspended.resolve();
-            await release.promise;
-          }
-        },
-      });
-      const retired = new Error("bounded turn caller retired");
-      let current = true;
-      const params = {
-        requireNoExternalCapabilities: true,
-        assertCurrent: () => {
-          if (!current) {
-            throw retired;
-          }
-        },
-      };
-      const run = runTurn(fake.factory, params);
-      const rejection = expect(run).rejects.toBe(retired);
-      await suspended.promise;
-      const codexHome = vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions?.env?.CODEX_HOME;
-      current = false;
-      release.resolve();
+  it("does not dispatch a turn after its caller retires during MCP attestation", async () => {
+    const suspendedMethod = "mcpServerStatus/list";
+    const suspended = createDeferred<void>();
+    const release = createDeferred<void>();
+    const fake = createClientFactory({
+      beforeRequest: async (method) => {
+        if (method === suspendedMethod) {
+          suspended.resolve();
+          await release.promise;
+        }
+      },
+    });
+    const retired = new Error("bounded turn caller retired");
+    let current = true;
+    const params = {
+      requireNoExternalCapabilities: true,
+      assertCurrent: () => {
+        if (!current) {
+          throw retired;
+        }
+      },
+    };
+    const run = runTurn(fake.factory, params);
+    const rejection = expect(run).rejects.toBe(retired);
+    await suspended.promise;
+    const codexHome = vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions?.env?.CODEX_HOME;
+    current = false;
+    release.resolve();
 
-      await rejection;
-      expect(fake.methods).not.toContain("turn/start");
-      expect(fake.notifications.size).toBe(0);
-      expect(fake.requests.size).toBe(0);
-      if (!codexHome) {
-        throw new Error("expected the bounded turn's temporary Codex home");
-      }
-      await expect(fs.access(codexHome)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
+    await rejection;
+    expect(fake.methods).not.toContain("turn/start");
+    expect(fake.notifications.size).toBe(0);
+    expect(fake.requests.size).toBe(0);
+    if (!codexHome) {
+      throw new Error("expected the bounded turn's temporary Codex home");
+    }
+    await expect(fs.access(codexHome)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
   it.each(["thread/start", "turn/start"] as const)(
     "rejects expired authority before the physical %s write after setup",
@@ -397,20 +387,8 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     });
   });
 
-  it("continues after a retryable error notification", async () => {
-    const fake = createClientFactory({
-      errorBeforeCompletion: { message: "temporary upstream disconnect", willRetry: true },
-    });
-
-    await expect(
-      runTurn(fake.factory, {
-        taskLabel: "settled-turn finalization",
-        requireNoExternalCapabilities: true,
-      }),
-    ).resolves.toMatchObject({ text: "The message was sent successfully." });
-  });
-
   it.each([
+    { receipt: "retry", codexErrorInfo: undefined, status: undefined },
     { receipt: "notification", codexErrorInfo: "serverOverloaded", status: 503 },
     { receipt: "turn", codexErrorInfo: "rateLimitExceeded", status: 429 },
     {
@@ -418,41 +396,33 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 502 } },
       status: 502,
     },
+    { receipt: "interrupted", codexErrorInfo: undefined, status: undefined },
   ])(
-    "preserves terminal $receipt failure metadata: $codexErrorInfo",
+    "handles $receipt completion with status $status",
     async ({ receipt, codexErrorInfo, status }) => {
       const error = { message: "terminal upstream failure", codexErrorInfo };
       const fake = createClientFactory(
-        receipt === "notification"
-          ? { errorBeforeCompletion: { ...error, willRetry: false } }
-          : { terminalStatus: "failed", terminalError: error },
+        receipt === "retry"
+          ? { errorBeforeCompletion: { message: "temporary upstream disconnect", willRetry: true } }
+          : receipt === "interrupted"
+            ? {
+                terminalStatus: "interrupted",
+                assistantDelta: "Partial answer that must not be delivered.",
+              }
+            : receipt === "notification"
+              ? { errorBeforeCompletion: { ...error, willRetry: false } }
+              : { terminalStatus: "failed", terminalError: error },
       );
-
-      await expect(
-        runTurn(fake.factory, {
-          taskLabel: "settled-turn finalization",
-          requireNoExternalCapabilities: true,
-        }),
-      ).rejects.toMatchObject({
-        message: "terminal upstream failure",
-        status,
-      });
+      const run = runRestricted(fake, { taskLabel: "settled-turn finalization" });
+      if (receipt === "retry") {
+        await expect(run).resolves.toMatchObject({ text: "The message was sent successfully." });
+      } else if (receipt === "interrupted") {
+        await expect(run).rejects.toThrow("turn ended with status interrupted");
+      } else {
+        await expect(run).rejects.toMatchObject({ message: "terminal upstream failure", status });
+      }
     },
   );
-
-  it("rejects an interrupted turn even when it emitted partial assistant text", async () => {
-    const fake = createClientFactory({
-      terminalStatus: "interrupted",
-      assistantDelta: "Partial answer that must not be delivered.",
-    });
-
-    await expect(
-      runTurn(fake.factory, {
-        taskLabel: "settled-turn finalization",
-        requireNoExternalCapabilities: true,
-      }),
-    ).rejects.toThrow("turn ended with status interrupted");
-  });
 
   it.each(["prepared", "profile"] as const)(
     "bridges %s auth into the private home when the configured home is native",
@@ -470,117 +440,109 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         requireNoExternalCapabilities: true,
       });
 
-      expect(fake.factory).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ...(authSelection === "prepared" ? { preparedAuth } : { authProfileId: profile }),
-          authRequirement: "api-key",
-          startOptions: expect.objectContaining({
-            homeScope: "agent",
-            env: expect.objectContaining({
-              CODEX_HOME: expect.stringContaining("codex-bounded-turn-"),
-            }),
-          }),
-        }),
-      );
+      const clientOptions = vi.mocked(fake.factory).mock.calls[0]?.[0];
+      expect(clientOptions).toMatchObject({
+        ...(authSelection === "prepared" ? { preparedAuth } : { authProfileId: profile }),
+        authRequirement: "api-key",
+        startOptions: {
+          homeScope: "agent",
+          env: { CODEX_HOME: expect.stringContaining("codex-bounded-turn-") },
+        },
+      });
       expect(vi.mocked(fake.factory).mock.calls[0]?.[0]).not.toHaveProperty(
         authSelection === "prepared" ? "authProfileId" : "preparedAuth",
       );
     },
   );
 
-  it("carries attached provider overrides into private turns without importing tool policy", async () => {
+  it.each([
+    {
+      name: "carries provider overrides without importing tool policy",
+      appServer: {
+        args: [
+          '-copenai_base_url="http://127.0.0.1:9/first"',
+          "app-server",
+          '--config=openai_base_url="http://127.0.0.1:9/last"',
+          '-c=model_catalog_json="/tmp/synthetic-models.json"',
+          "-csandbox_workspace_write.exclude_slash_tmp=false",
+          "--config",
+          "features.hooks=true",
+          "--",
+          '-copenai_base_url="http://127.0.0.1:9/ignored"',
+        ],
+      },
+      restricted: false,
+      expected: {
+        args: [
+          "app-server",
+          "-c",
+          'openai_base_url="http://127.0.0.1:9/first"',
+          "-c",
+          'openai_base_url="http://127.0.0.1:9/last"',
+          "-c",
+          'model_catalog_json="/tmp/synthetic-models.json"',
+          "-c",
+          "project_root_markers=[]",
+          "--listen",
+          "stdio://",
+        ],
+      },
+    },
+    {
+      name: "resolves relative executable and model-catalog paths",
+      appServer: {
+        command: "./bin/custom-codex",
+        args: ["app-server", "-c", "model_catalog_json='./fixtures/models.json'"],
+      },
+      restricted: true,
+      expected: {
+        command: path.resolve("./bin/custom-codex"),
+        cwd: expect.stringContaining("codex-bounded-turn-"),
+        args: expect.arrayContaining([
+          `model_catalog_json=${JSON.stringify(path.resolve("./fixtures/models.json"))}`,
+        ]),
+      },
+    },
+    {
+      name: "preserves the Node launcher without inherited native policy flags",
+      appServer: {
+        command: "node",
+        args: ["./bin/codex-wrapper.js", "app-server", "--sandbox", "danger-full-access"],
+      },
+      restricted: true,
+      expected: {
+        command: "node",
+        cwd: expect.stringContaining("codex-bounded-turn-"),
+        args: [
+          path.resolve("./bin/codex-wrapper.js"),
+          "app-server",
+          "-c",
+          "project_root_markers=[]",
+          "-c",
+          "features.hooks=true",
+          "-c",
+          "features.plugins=false",
+          "--listen",
+          "stdio://",
+        ],
+      },
+    },
+  ])("private launch: $name", async ({ appServer, restricted, expected }) => {
     const fake = createClientFactory();
     await runTurn(fake.factory, {
-      options: {
-        pluginConfig: {
-          appServer: {
-            args: [
-              '-copenai_base_url="http://127.0.0.1:9/first"',
-              "app-server",
-              '--config=openai_base_url="http://127.0.0.1:9/last"',
-              '-c=model_catalog_json="/tmp/synthetic-models.json"',
-              "-csandbox_workspace_write.exclude_slash_tmp=false",
-              "--config",
-              "features.hooks=true",
-              "--",
-              '-copenai_base_url="http://127.0.0.1:9/ignored"',
-            ],
-          },
-        },
-      },
+      options: { pluginConfig: { appServer } },
+      ...(restricted ? { requireNoExternalCapabilities: true } : {}),
     });
-    expect(vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions?.args).toEqual([
-      "app-server",
-      "-c",
-      'openai_base_url="http://127.0.0.1:9/first"',
-      "-c",
-      'openai_base_url="http://127.0.0.1:9/last"',
-      "-c",
-      'model_catalog_json="/tmp/synthetic-models.json"',
-      "-c",
-      "project_root_markers=[]",
-      "--listen",
-      "stdio://",
-    ]);
-    expect(requestParams(fake, "thread/start")).toMatchObject({
-      sandbox: "read-only",
-      approvalPolicy: "on-request",
-    });
-  });
-
-  it("resolves relative executable and model-catalog paths before entering the private workspace", async () => {
-    const fake = createClientFactory();
-    const command = "./bin/custom-codex";
-    await runTurn(fake.factory, {
-      options: {
-        pluginConfig: {
-          appServer: {
-            command,
-            args: ["app-server", "-c", "model_catalog_json='./fixtures/models.json'"],
-          },
-        },
-      },
-      requireNoExternalCapabilities: true,
-    });
-    expect(vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions).toMatchObject({
-      command: path.resolve(command),
-      cwd: expect.stringContaining("codex-bounded-turn-"),
-      args: expect.arrayContaining([
-        `model_catalog_json=${JSON.stringify(path.resolve("./fixtures/models.json"))}`,
-      ]),
-    });
-  });
-
-  it("preserves the Node launcher while removing inherited native policy flags", async () => {
-    const wrapper = "./bin/codex-wrapper.js";
-    const fake = createClientFactory();
-    await runTurn(fake.factory, {
-      options: {
-        pluginConfig: {
-          appServer: {
-            command: "node",
-            args: [wrapper, "app-server", "--sandbox", "danger-full-access"],
-          },
-        },
-      },
-      requireNoExternalCapabilities: true,
-    });
-    expect(vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions).toMatchObject({
-      command: "node",
-      cwd: expect.stringContaining("codex-bounded-turn-"),
-      args: [
-        path.resolve(wrapper),
-        "app-server",
-        "-c",
-        "project_root_markers=[]",
-        "-c",
-        "features.hooks=true",
-        "-c",
-        "features.plugins=false",
-        "--listen",
-        "stdio://",
-      ],
-    });
+    const startOptions = vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions;
+    if (restricted) {
+      expect(startOptions).toMatchObject(expected);
+    } else {
+      expect(startOptions?.args).toEqual(expected.args);
+      expect(requestParams(fake, "thread/start")).toMatchObject({
+        sandbox: "read-only",
+        approvalPolicy: "on-request",
+      });
+    }
   });
 
   it("preserves and reports the configured native provider when no override is supplied", async () => {
@@ -649,31 +611,32 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
   });
 
   it("attests ring-zero and totals response usage when final usage is missing", async () => {
-    const firstResponse = {
-      responseId: "response-first",
+    const response = (
+      responseId: string,
+      [
+        totalTokens,
+        inputTokens,
+        cachedInputTokens,
+        cacheWriteInputTokens,
+        outputTokens,
+        reasoningOutputTokens,
+      ]: [number, number, number, number, number, number],
+    ) => ({
+      responseId,
       usage: {
-        totalTokens: 12,
-        inputTokens: 8,
-        cachedInputTokens: 2,
-        cacheWriteInputTokens: 1,
-        outputTokens: 4,
-        reasoningOutputTokens: 3,
+        totalTokens,
+        inputTokens,
+        cachedInputTokens,
+        cacheWriteInputTokens,
+        outputTokens,
+        reasoningOutputTokens,
       },
-    };
+    });
+    const firstResponse = response("response-first", [12, 8, 2, 1, 4, 3]);
     const fake = createClientFactory({
       responseCompletions: [
         firstResponse,
-        {
-          responseId: "response-final",
-          usage: {
-            totalTokens: 20,
-            inputTokens: 15,
-            cachedInputTokens: 5,
-            cacheWriteInputTokens: 2,
-            outputTokens: 5,
-            reasoningOutputTokens: 2,
-          },
-        },
+        response("response-final", [20, 15, 5, 2, 5, 2]),
         firstResponse,
         { responseId: "response-without-usage", usage: null },
       ],

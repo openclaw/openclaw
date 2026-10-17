@@ -48,14 +48,20 @@ type JsonRpcResponse = {
   error?: { code?: number; message?: string };
 };
 
+function rotatedTokens(prefix: string, accountId = ACCOUNT_ID) {
+  return {
+    access: `${prefix}-access`,
+    refresh: `${prefix}-refresh`,
+    expires: Date.now() + 60_000,
+    accountId,
+  };
+}
+
 function oauthProfile(prefix: string, overrides: Partial<OAuthCredential> = {}): OAuthCredential {
   return {
     type: "oauth",
     provider: "openai",
-    access: `${prefix}-access`,
-    refresh: `${prefix}-refresh`,
-    expires: Date.now() + 60_000,
-    accountId: ACCOUNT_ID,
+    ...rotatedTokens(prefix),
     ...overrides,
   };
 }
@@ -87,13 +93,7 @@ function expectRefreshError(response: JsonRpcResponse, message: string | RegExp)
 }
 
 function rotateCredential(credential: OAuthCredential, prefix: string, accountId = ACCOUNT_ID) {
-  return {
-    ...credential,
-    access: `${prefix}-access`,
-    refresh: `${prefix}-refresh`,
-    expires: Date.now() + 60_000,
-    accountId,
-  };
+  return { ...credential, ...rotatedTokens(prefix, accountId) };
 }
 
 async function waitForResponse(harness: Harness, id: string): Promise<JsonRpcResponse> {
@@ -189,12 +189,21 @@ async function withAuthRefreshHarness(
       async () => {
         const previousRegistry = getActivePluginRegistry();
         const manifests = loadPluginManifestRegistryCore({ workspaceDir: stateDir });
-        const createProviderRecord = (id: string) => {
+        const registration = createPluginRegistry({
+          runtime: createPluginRuntimeMock(),
+          logger: { info() {}, warn() {}, error() {}, debug() {} },
+          activateGlobalSideEffects: false,
+        });
+        const otherProviderRefresh = vi.fn(async (credential: OAuthCredential) => credential);
+        for (const [id, label, refresh] of [
+          ["openai", "OpenAI", refreshOAuth],
+          ["anthropic", "Anthropic", otherProviderRefresh],
+        ] as const) {
           const manifest = manifests.plugins.find((plugin) => plugin.id === id);
           if (!manifest || manifest.rootDir !== path.join(bundledRoot, id)) {
             throw new Error(`Unexpected fixture manifest owner: ${id}`);
           }
-          return createPluginRecord({
+          const record = createPluginRecord({
             id,
             source: manifest.source,
             rootDir: manifest.rootDir,
@@ -204,29 +213,14 @@ async function withAuthRefreshHarness(
             providerIds: [id],
             configSchema: true,
           });
-        };
-        const registration = createPluginRegistry({
-          runtime: createPluginRuntimeMock(),
-          logger: { info() {}, warn() {}, error() {}, debug() {} },
-          activateGlobalSideEffects: false,
-        });
-        const record = createProviderRecord("openai");
-        const otherProviderRecord = createProviderRecord("anthropic");
-        registration.registry.plugins.push(record, otherProviderRecord);
-        const api = registration.createApi(record, { config: {} });
-        const otherProviderRefresh = vi.fn(async (credential: OAuthCredential) => credential);
-        api.registerProvider({
-          id: "openai",
-          label: "OpenAI",
-          auth: [],
-          refreshOAuth,
-        });
-        registration.createApi(otherProviderRecord, { config: {} }).registerProvider({
-          id: "anthropic",
-          label: "Anthropic",
-          auth: [],
-          refreshOAuth: otherProviderRefresh,
-        });
+          registration.registry.plugins.push(record);
+          registration.createApi(record, { config: {} }).registerProvider({
+            id,
+            label,
+            auth: [],
+            refreshOAuth: refresh,
+          });
+        }
         const harness = createHarness();
         const authRefreshFailed = createDeferred<void>();
         try {
@@ -273,34 +267,23 @@ async function withAuthRefreshHarness(
 }
 
 describe("Codex app-server auth refresh authority", () => {
-  it.each([
-    { name: "is deleted", credential: undefined },
-    {
-      name: "becomes an OpenAI API key",
-      credential: {
-        type: "api_key",
-        provider: "openai",
-        key: "replacement-api-key",
-      },
-    },
-    {
-      name: "becomes an OpenAI token",
-      credential: {
-        type: "token",
-        provider: "openai",
-        token: "replacement-token",
-      },
-    },
-    {
-      name: "becomes another provider's OAuth credential",
-      credential: oauthProfile("other-provider", {
+  it.each<[string, AuthProfileCredential | undefined]>([
+    ["is deleted", undefined],
+    [
+      "becomes an OpenAI API key",
+      { type: "api_key", provider: "openai", key: "replacement-api-key" },
+    ],
+    ["becomes an OpenAI token", { type: "token", provider: "openai", token: "replacement-token" }],
+    [
+      "becomes another provider's OAuth credential",
+      oauthProfile("other-provider", {
         provider: "anthropic",
         expires: Date.now() + 24 * 60 * 60_000,
       }),
-    },
-  ] satisfies Array<{ name: string; credential: AuthProfileCredential | undefined }>)(
-    "rejects a retained persisted OAuth profile when canonical authority $name",
-    async ({ credential }) => {
+    ],
+  ])(
+    "rejects a retained persisted OAuth profile when canonical authority %s",
+    async (_name, credential) => {
       const refreshOAuth = vi.fn(async (current: OAuthCredential) =>
         rotateCredential(current, "retired-profile-rotated"),
       );

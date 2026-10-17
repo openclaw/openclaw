@@ -185,12 +185,11 @@ function createAuthHarness(params: {
     ...harness,
     seenAuthProfileIds,
     seenClientOptions,
-    async completeTurn() {
-      await harness.completeTurn({
+    completeTurn: () =>
+      harness.completeTurn({
         threadId: "thread-auth-contract",
         turnId: "turn-auth-contract",
-      });
-    },
+      }),
   };
 }
 
@@ -276,47 +275,29 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     expect(binding?.authProfileId).toBeUndefined();
   });
 
-  it("locks a prepared subscription route to its forwarded OAuth profile", async () => {
-    const harness = createAuthHarness({ startMethod: "thread/start" });
-    const authProfileStore = {
-      version: 1 as const,
-      profiles: {
-        "openai:chatgpt": {
-          ...oauthProfile(createChatgptAccessToken("account-oauth")),
-          accountId: "account-oauth",
-        },
-      },
-    };
-    params.authProfileStore = authProfileStore;
-    setPreparedOpenAIRoute(params, "subscription", "openai:chatgpt");
-
-    const run = runAttempt(params);
-    const clientOptions = await waitForClient(harness);
-    expectProfileHandoff(clientOptions, authProfileStore, "openai:chatgpt", "account-oauth");
-    expect(clientOptions).not.toHaveProperty("authProfileId");
-    await completeRun(harness, run);
-  });
-
-  it("accepts a prepared subscription route with a real token profile", async () => {
-    const harness = createAuthHarness({ startMethod: "thread/start" });
-    const authProfileStore = {
-      version: 1 as const,
-      profiles: {
-        "openai:token": {
-          type: "token" as const,
-          provider: "openai",
-          token: createChatgptAccessToken("account-token"),
-        },
-      },
-    };
-    params.authProfileStore = authProfileStore;
-    setPreparedOpenAIRoute(params, "subscription", "openai:token");
-
-    const run = runAttempt(params);
-    const clientOptions = await waitForClient(harness);
-    expectProfileHandoff(clientOptions, authProfileStore, "openai:token", "account-token");
-    await completeRun(harness, run);
-  });
+  it.each(["oauth", "token"] as const)(
+    "locks a prepared subscription route to its forwarded %s profile",
+    async (kind) => {
+      const harness = createAuthHarness({ startMethod: "thread/start" });
+      const profileId = kind === "oauth" ? "openai:chatgpt" : "openai:token";
+      const accountId = `account-${kind}`;
+      const token = createChatgptAccessToken(accountId);
+      const credential =
+        kind === "oauth"
+          ? { ...oauthProfile(token), accountId }
+          : { type: "token" as const, provider: "openai", token };
+      const authProfileStore = { version: 1, profiles: { [profileId]: credential } };
+      params.authProfileStore = authProfileStore;
+      setPreparedOpenAIRoute(params, "subscription", profileId);
+      const run = runAttempt(params);
+      const clientOptions = await waitForClient(harness);
+      expectProfileHandoff(clientOptions, authProfileStore, profileId, accountId);
+      if (kind === "oauth") {
+        expect(clientOptions).not.toHaveProperty("authProfileId");
+      }
+      await completeRun(harness, run);
+    },
+  );
 
   it("keeps a user-home app-server on native auth despite a prepared Platform route", async () => {
     const harness = createAuthHarness({ startMethod: "thread/start" });
