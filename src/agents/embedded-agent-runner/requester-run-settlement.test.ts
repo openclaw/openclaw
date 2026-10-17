@@ -19,6 +19,24 @@ const acceptedSessionSpawns = [
 function makeResult(meta: Partial<EmbeddedAgentRunResult["meta"]>): EmbeddedAgentRunResult {
   return { acceptedSessionSpawns, meta: { durationMs: 1, ...meta } };
 }
+const settlement = {
+  requesterSessionKey: requester.sessionKey,
+  requesterAgentId: requester.agentId,
+  requesterTurnRunId: requester.runId,
+  acceptedSessionSpawns,
+  assertCurrent: expect.any(Function),
+};
+async function withAdmission(
+  run: (admission: ReturnType<typeof prepareSystemAgentRunAdmission>) => Promise<void>,
+) {
+  const admission = prepareSystemAgentRunAdmission({}, requester.runId, "main", "settlement-test");
+  try {
+    await admission.admit("embedded");
+    await run(admission);
+  } finally {
+    admission.close();
+  }
+}
 
 describe("logical requester settlement", () => {
   beforeEach(() => {
@@ -61,10 +79,8 @@ describe("logical requester settlement", () => {
     expect(result.requesterContinuationSettled).toBeUndefined();
   });
 
-  it("transfers producer-owned completion after a partial harness receipt", async () => {
-    const admission = prepareSystemAgentRunAdmission({}, requester.runId, "main", "yield-test");
-    try {
-      await admission.admit("embedded");
+  it("transfers producer-owned completion after a partial harness receipt", () =>
+    withAdmission(async (admission) => {
       mergeAcceptedSessionSpawnsForRun(admission.operationalRunInstance, acceptedSessionSpawns);
       const result: EmbeddedAgentRunResult = {
         acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:subagent:child" }],
@@ -78,18 +94,11 @@ describe("logical requester settlement", () => {
       );
 
       expect(registry.settle).toHaveBeenCalledExactlyOnceWith({
-        requesterSessionKey: requester.sessionKey,
-        requesterAgentId: requester.agentId,
-        requesterTurnRunId: requester.runId,
+        ...settlement,
         requesterYielded: true,
-        acceptedSessionSpawns,
-        assertCurrent: expect.any(Function),
       });
       expect(result.requesterContinuationSettled).toBe(true);
-    } finally {
-      admission.close();
-    }
-  });
+    }));
 
   it.each(["cancelled", "aborted"] as const)("does not transfer %s ownership", async (kind) => {
     const result = makeResult({ yielded: true, ...(kind === "aborted" ? { aborted: true } : {}) });
@@ -130,11 +139,6 @@ describe("logical requester settlement", () => {
       try {
         await admission.admit("embedded");
         mergeAcceptedSessionSpawnsForRun(admission.operationalRunInstance, acceptedSessionSpawns);
-        const params = {
-          ...requester,
-          preparedRunAdmission: admission,
-          abortSignal: abort.signal,
-        };
         if (owner === "closed") {
           admission.close();
         }
@@ -147,15 +151,14 @@ describe("logical requester settlement", () => {
         if (owner === "cancelled") {
           abort.abort();
         }
-        await settleFailedRequesterRun(params, new Error("provider failed"));
+        await settleFailedRequesterRun(
+          { ...requester, preparedRunAdmission: admission, abortSignal: abort.signal },
+          new Error("provider failed"),
+        );
         if (owner === "active") {
           expect(registry.settle).toHaveBeenCalledExactlyOnceWith({
-            requesterSessionKey: requester.sessionKey,
-            requesterAgentId: requester.agentId,
-            requesterTurnRunId: requester.runId,
+            ...settlement,
             requesterYielded: false,
-            acceptedSessionSpawns,
-            assertCurrent: expect.any(Function),
           });
         } else {
           expect(registry.settle).not.toHaveBeenCalled();
@@ -167,10 +170,8 @@ describe("logical requester settlement", () => {
     },
   );
 
-  it("returns both failures without retrying a failed registry commit", async () => {
-    const admission = prepareSystemAgentRunAdmission({}, requester.runId, "main", "failure-test");
-    try {
-      await admission.admit("embedded");
+  it("returns both failures without retrying a failed registry commit", () =>
+    withAdmission(async (admission) => {
       const params = { ...requester, preparedRunAdmission: admission };
       mergeAcceptedSessionSpawnsForRun(admission.operationalRunInstance, acceptedSessionSpawns);
       const failure = new Error("registry unavailable");
@@ -184,15 +185,10 @@ describe("logical requester settlement", () => {
       expect(registry.settle).toHaveBeenCalledOnce();
       expect(await settleFailedRequesterRun(params, combined)).toBe(combined);
       expect(registry.settle).toHaveBeenCalledOnce();
-    } finally {
-      admission.close();
-    }
-  });
+    }));
 
-  it("revalidates admission after the final caller assertion", async () => {
-    const admission = prepareSystemAgentRunAdmission({}, requester.runId, "main", "assertion-test");
-    try {
-      await admission.admit("embedded");
+  it("revalidates admission after the final caller assertion", () =>
+    withAdmission(async (admission) => {
       await expect(
         settleRequesterRun(
           { ...requester, preparedRunAdmission: admission },
@@ -201,8 +197,5 @@ describe("logical requester settlement", () => {
         ),
       ).rejects.toThrow("settlement is closed");
       expect(registry.settle).not.toHaveBeenCalled();
-    } finally {
-      admission.close();
-    }
-  });
+    }));
 });

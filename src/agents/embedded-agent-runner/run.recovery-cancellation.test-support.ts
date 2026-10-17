@@ -39,6 +39,18 @@ function timeoutAttempt(sessionIdUsed = "test-session") {
   });
 }
 
+function completedAssistant(tokens?: number, withText = false) {
+  const assistant = makeAssistantMessageFixture({
+    stopReason: "stop",
+    errorMessage: undefined,
+    ...(withText ? { content: [{ type: "text" as const, text: "Done." }] } : {}),
+  });
+  if (tokens !== undefined) {
+    assistant.usage = { ...assistant.usage, input: tokens, totalTokens: tokens };
+  }
+  return assistant;
+}
+
 describe("recovery cancellation through the public run owner", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let runEmbeddedAgent: TestRunEmbeddedAgent;
@@ -47,6 +59,8 @@ describe("recovery cancellation through the public run owner", () => {
   let contextEngine: Awaited<
     ReturnType<(typeof import("../../context-engine/registry.js"))["resolveContextEngine"]>
   >;
+  const readLatest = (target: Parameters<typeof sessionAccessor.loadSessionEntry>[0]) =>
+    sessionAccessor.loadSessionEntry({ ...target, readConsistency: "latest" });
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
     sessionAccessor = await import("../../config/sessions/session-accessor.js");
@@ -183,10 +197,7 @@ describe("recovery cancellation through the public run owner", () => {
       expect(mockedCompactDirect).toHaveBeenCalledOnce();
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
       if (session) {
-        const entry = sessionAccessor.loadSessionEntry({
-          ...session.runParams.sessionTarget,
-          readConsistency: "latest",
-        });
+        const entry = readLatest(session.runParams.sessionTarget);
         expect(entry).toMatchObject({ sessionId: runParams.sessionId });
         expect(entry?.compactionCount ?? 0).toBe(committed ? 1 : 0);
         expect(entry?.totalTokens).toBe(committed ? 40 : undefined);
@@ -252,10 +263,7 @@ describe("recovery cancellation through the public run owner", () => {
           callerError,
         );
 
-        const entry = sessionAccessor.loadSessionEntry({
-          ...sessionTarget,
-          readConsistency: "latest",
-        });
+        const entry = readLatest(sessionTarget);
         if (change !== "deleted") {
           expect(entry).toMatchObject({
             compactionCount: 7,
@@ -325,11 +333,7 @@ describe("recovery cancellation through the public run owner", () => {
             runId: attempt.runId,
             onContextAccountingEvent: attempt.onContextAccountingEvent,
           });
-          const assistant = makeAssistantMessageFixture({
-            stopReason: "stop",
-            errorMessage: undefined,
-          });
-          assistant.usage = { ...assistant.usage, input: 120, totalTokens: 120 };
+          const assistant = completedAssistant(120);
           try {
             harness.emit({ type: "message_start", message: assistant });
             harness.emit({ type: "message_end", message: assistant });
@@ -352,12 +356,7 @@ describe("recovery cancellation through the public run owner", () => {
 
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(settlement === "returned" ? 2 : 1);
       expect(mockedCompactDirect).toHaveBeenCalledTimes(settlement === "returned" ? 1 : 0);
-      expect(
-        sessionAccessor.loadSessionEntry({
-          ...session.runParams.sessionTarget,
-          readConsistency: "latest",
-        }),
-      ).toMatchObject({
+      expect(readLatest(session.runParams.sessionTarget)).toMatchObject({
         compactionCount: settlement === "returned" ? 2 : 1,
         totalTokens: settlement === "returned" ? 120 : 80,
       });
@@ -391,20 +390,11 @@ describe("recovery cancellation through the public run owner", () => {
         compactionCountOwner: attempt.compactionCountOwner,
         onContextAccountingEvent: attempt.onContextAccountingEvent,
       });
-      const assistant = makeAssistantMessageFixture({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [{ type: "text", text: "Done." }],
-      });
-      assistant.usage = { ...assistant.usage, input: 120, totalTokens: 120 };
+      const assistant = completedAssistant(120, true);
       const emitModel = () => {
         const message =
           testCase.order === "compaction-then-unknown"
-            ? makeAssistantMessageFixture({
-                stopReason: "stop",
-                errorMessage: undefined,
-                content: assistant.content,
-              })
+            ? completedAssistant(undefined, true)
             : assistant;
         harness.emit({ type: "message_start", message });
         harness.emit({ type: "message_end", message });
@@ -562,10 +552,7 @@ describe("recovery cancellation through the public run owner", () => {
         compactionAccounting: accounting.fact,
       });
 
-      const persisted = sessionAccessor.loadSessionEntry({
-        ...sessionTarget,
-        readConsistency: "latest",
-      });
+      const persisted = readLatest(sessionTarget);
       if (writer === "replaced") {
         expect(persisted).toEqual(beforeFinalization);
         expect(persisted).toMatchObject({ activeWriterRunId: "replacement-writer" });
@@ -654,9 +641,7 @@ describe("recovery cancellation through the public run owner", () => {
       if (!target) {
         throw new Error("Fresh session must remain durable");
       }
-      expect(
-        sessionAccessor.loadSessionEntry({ ...target, readConsistency: "latest" }),
-      ).toMatchObject({
+      expect(readLatest(target)).toMatchObject({
         sessionId: runParams.sessionId,
         compactionCount: 1,
       });

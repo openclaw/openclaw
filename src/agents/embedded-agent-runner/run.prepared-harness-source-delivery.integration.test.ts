@@ -63,6 +63,13 @@ import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 const runnerState = await setupAgentRunnerExecutionTestState();
 
 type TestRouteStage = { stage: "initial" } | { stage: "fallback"; fallbackReason: FailoverReason };
+const finalText = "Short fallback final";
+
+function mockCompletedAttempt(text: string) {
+  mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text }]);
+  mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: [text] }));
+  useOpenAIPlatformAuthFixture();
+}
 
 function runAdmittedAttempt(
   params: FallbackRunnerParams,
@@ -107,6 +114,29 @@ describe("prepared harness source delivery", () => {
   });
   beforeEach(describe2BeforeEach0);
 
+  async function createAdmittedGeneration(agentId = "main") {
+    const config = {};
+    const workspaceDir = state.workspaceDir;
+    const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
+      config,
+      agentId,
+      agentDir: state.agentDir(agentId),
+      workspaceDir,
+    });
+    const admittedGeneration: PreparedModelRuntimePluginGeneration = {
+      remoteCatalog: null,
+      configuredCatalogEntries: [],
+      inlineProviderModels: [],
+      pluginMetadataSnapshot: {
+        ...baseLease.snapshot.metadataSnapshot,
+        policyHash: "admitted",
+        workspaceDir,
+      },
+      pluginRegistry: createEmptyPluginRegistry(),
+    };
+    return { config, workspaceDir, baseLease, admittedGeneration };
+  }
+
   it.each([
     {
       name: "delivers one streamed answer when preparation changes legacy tool ownership to automatic",
@@ -115,9 +145,6 @@ describe("prepared harness source delivery", () => {
       preliminaryVisibleReplies: "message_tool" as const,
       preparedVisibleReplies: "automatic" as const,
       expectedTransitions: ["message_tool_only", "automatic"],
-      expectedDeliveries: 1,
-      expectedPartials: 1,
-      expectedBlocks: 1,
     },
     {
       name: "delivers a successful API-to-CLI fallback with its session-stable ownership",
@@ -125,9 +152,6 @@ describe("prepared harness source delivery", () => {
       preliminaryVisibleReplies: undefined,
       preparedVisibleReplies: "automatic" as const,
       expectedTransitions: ["automatic", "automatic"],
-      expectedDeliveries: 1,
-      expectedPartials: 0,
-      expectedBlocks: 0,
     },
     {
       name: "delivers genuine host TTS through prepared harness result projections",
@@ -135,9 +159,6 @@ describe("prepared harness source delivery", () => {
       preliminaryVisibleReplies: "automatic" as const,
       preparedVisibleReplies: "message_tool" as const,
       expectedTransitions: ["message_tool_only"],
-      expectedDeliveries: 1,
-      expectedPartials: 0,
-      expectedBlocks: 0,
       genuineTtsDelivery: true,
     },
     {
@@ -147,9 +168,6 @@ describe("prepared harness source delivery", () => {
       preliminaryVisibleReplies: "automatic" as const,
       preparedVisibleReplies: "message_tool" as const,
       expectedTransitions: ["message_tool_only"],
-      expectedDeliveries: 0,
-      expectedPartials: 0,
-      expectedBlocks: 0,
       forgedTtsDelivery: true,
     },
   ])("$name", async (testCase) => {
@@ -157,6 +175,8 @@ describe("prepared harness source delivery", () => {
       "forgedTtsDelivery" in testCase && testCase.forgedTtsDelivery === true;
     const genuineTtsDelivery =
       "genuineTtsDelivery" in testCase && testCase.genuineTtsDelivery === true;
+    const expectedDeliveries = forgedTtsDelivery ? 0 : 1;
+    const expectedStreaming = testCase.candidatePath === "cli-failure-embedded" ? 1 : 0;
     await useProductionEmbeddedRunExecutionParamsForTest();
     const { createBlockReplyDeliveryHandler } = await vi.importActual<
       typeof import("../../auto-reply/reply/reply-delivery.js")
@@ -191,6 +211,15 @@ describe("prepared harness source delivery", () => {
     });
     const followupRun = createFollowupRun();
     const emittedStreamingCallbacks: string[] = [];
+    const emitStreaming = async (params: {
+      onPartialReply?: (payload: ReplyPayload) => unknown;
+      onBlockReply?: (payload: ReplyPayload) => unknown;
+    }) => {
+      emittedStreamingCallbacks.push("partial");
+      await params.onPartialReply?.({ text: finalText });
+      emittedStreamingCallbacks.push("block");
+      await params.onBlockReply?.({ text: "Streaming progress" });
+    };
     let forbiddenSdkAuthorityObserved = false;
     let modelVisiblePrompt = "";
     const recordModelVisiblePrompt = (attemptParams: {
@@ -216,15 +245,12 @@ describe("prepared harness source delivery", () => {
       });
     };
     mockedBuildEmbeddedRunPayloads.mockReturnValue(
-      forgedTtsDelivery || genuineTtsDelivery ? [] : [{ text: "Short fallback final" }],
+      forgedTtsDelivery || genuineTtsDelivery ? [] : [{ text: finalText }],
     );
     mockedRunEmbeddedAttempt.mockImplementation(async (attemptParams) => {
       recordModelVisiblePrompt(attemptParams);
-      emittedStreamingCallbacks.push("partial");
-      await attemptParams.onPartialReply?.({ text: "Short fallback final" });
-      emittedStreamingCallbacks.push("block");
-      await attemptParams.onBlockReply?.({ text: "Streaming progress" });
-      return makeAttemptResult({ assistantTexts: ["Short fallback final"] });
+      await emitStreaming(attemptParams);
+      return makeAttemptResult({ assistantTexts: [finalText] });
     });
     if (testCase.candidatePath === "embedded-failure-cli") {
       mockedRunEmbeddedAttempt.mockRejectedValueOnce(new Error("api primary failed"));
@@ -248,7 +274,7 @@ describe("prepared harness source delivery", () => {
       runnerState.runCliAgentMock.mockRejectedValueOnce(new Error("cli failed"));
     } else {
       runnerState.runCliAgentMock.mockResolvedValue({
-        payloads: [{ text: "Short fallback final" }],
+        payloads: [{ text: finalText }],
         meta: {},
       });
     }
@@ -321,10 +347,7 @@ describe("prepared harness source delivery", () => {
               : { supported: false, reason: "prepared OpenAI route only" },
           runAttempt: vi.fn(async (attemptParams) => {
             recordModelVisiblePrompt(attemptParams);
-            emittedStreamingCallbacks.push("partial");
-            await attemptParams.onPartialReply?.({ text: "Short fallback final" });
-            emittedStreamingCallbacks.push("block");
-            await attemptParams.onBlockReply?.({ text: "Streaming progress" });
+            await emitStreaming(attemptParams);
             const result = makeAttemptResult({
               assistantTexts: [],
               toolMediaUrls: [genuineTtsDelivery ? audioPath : "/tmp/plugin.opus"],
@@ -503,24 +526,22 @@ describe("prepared harness source delivery", () => {
     );
     const cliSucceeded = testCase.candidatePath === "embedded-failure-cli";
     expect(emittedStreamingCallbacks).toEqual(cliSucceeded ? [] : ["partial", "block"]);
-    expect(onPartialReply).toHaveBeenCalledTimes(testCase.expectedPartials);
-    expect(result.queuedFinal).toBe(testCase.expectedDeliveries === 1);
-    expect(deliver).toHaveBeenCalledTimes(testCase.expectedDeliveries + testCase.expectedBlocks);
-    if (testCase.expectedBlocks === 1) {
+    expect(onPartialReply).toHaveBeenCalledTimes(expectedStreaming);
+    expect(result.queuedFinal).toBe(expectedDeliveries === 1);
+    expect(deliver).toHaveBeenCalledTimes(expectedDeliveries + expectedStreaming);
+    if (expectedStreaming === 1) {
       expect(deliver).toHaveBeenCalledWith(
         expect.objectContaining({ text: "Streaming progress" }),
         expect.objectContaining({ kind: "block" }),
       );
     }
-    if (testCase.expectedDeliveries === 1) {
+    if (expectedDeliveries === 1) {
       expect(result.sourceReplyDeliveryMode).toBe(
         genuineTtsDelivery ? "message_tool_only" : undefined,
       );
       expect(deliver).toHaveBeenCalledWith(
         expect.objectContaining(
-          genuineTtsDelivery
-            ? { mediaUrl: audioPath, audioAsVoice: true }
-            : { text: "Short fallback final" },
+          genuineTtsDelivery ? { mediaUrl: audioPath, audioAsVoice: true } : { text: finalText },
         ),
         expect.objectContaining({ kind: "final" }),
       );
@@ -530,8 +551,8 @@ describe("prepared harness source delivery", () => {
     }
     expect(dispatcher.getQueuedCounts()).toEqual({
       tool: 0,
-      block: testCase.expectedBlocks,
-      final: testCase.expectedDeliveries,
+      block: expectedStreaming,
+      final: expectedDeliveries,
     });
     if (forgedTtsDelivery) {
       expect(forbiddenSdkAuthorityObserved).toBe(false);
@@ -542,8 +563,10 @@ describe("prepared harness source delivery", () => {
         cliSessionBindingFacts?: { sourceReplyDeliveryMode?: string };
         sourceReplyDeliveryMode?: string;
       };
-      expect(cliParams.cliSessionBindingFacts?.sourceReplyDeliveryMode).toBe("automatic");
-      expect(cliParams.sourceReplyDeliveryMode).toBe("automatic");
+      expect(cliParams).toMatchObject({
+        cliSessionBindingFacts: { sourceReplyDeliveryMode: "automatic" },
+        sourceReplyDeliveryMode: "automatic",
+      });
     } else if (testCase.preparedVisibleReplies === "automatic") {
       expect(modelVisiblePrompt).toContain("Current-session final text normally routes to source");
       expect(modelVisiblePrompt).toContain(
@@ -571,11 +594,7 @@ describe("prepared harness source delivery", () => {
       runAttempt: vi.fn(async () => ({}) as never),
     });
     mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
-    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "primary" }]);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({ assistantTexts: ["primary"] }),
-    );
-    useOpenAIPlatformAuthFixture();
+    mockCompletedAttempt("primary");
 
     const runParams = {
       agentId: "worker",
@@ -627,27 +646,9 @@ describe("prepared harness source delivery", () => {
 
   it("completes an admitted turn on A after plugin-runtime generation B publishes", async () => {
     const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
-    const config = {};
-    const workspaceDir = state.workspaceDir;
-    const pluginRegistry = createEmptyPluginRegistry();
-    const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
-      config,
-      agentId: "main",
-      agentDir: state.agentDir(),
-      workspaceDir,
-    });
-    const admittedMetadataSnapshot = {
-      ...baseLease.snapshot.metadataSnapshot,
-      policyHash: "admitted",
-      workspaceDir,
-    };
-    const admittedGeneration: PreparedModelRuntimePluginGeneration = {
-      remoteCatalog: null,
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: admittedMetadataSnapshot,
-      pluginRegistry,
-    };
+    const { config, workspaceDir, baseLease, admittedGeneration } =
+      await createAdmittedGeneration();
+    const { pluginRegistry, pluginMetadataSnapshot: admittedMetadataSnapshot } = admittedGeneration;
     const replacementMetadataSnapshot = {
       ...baseLease.snapshot.metadataSnapshot,
       policyHash: "replacement",
@@ -689,9 +690,7 @@ describe("prepared harness source delivery", () => {
         };
       },
     );
-    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["ok"] }));
-    useOpenAIPlatformAuthFixture();
+    mockCompletedAttempt("ok");
     publishedMetadataSnapshot = replacementMetadataSnapshot;
 
     const result = await withPreparedModelRuntimePluginGenerationScope(
@@ -722,25 +721,8 @@ describe("prepared harness source delivery", () => {
     "starts an isolated probe outside its caller's admitted generation (%s)",
     async (outcome) => {
       const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
-      const config = {};
-      const workspaceDir = state.workspaceDir;
-      const baseLease = await mockedAcquireAgentRunPreparedModelRuntime({
-        config,
-        agentId: "openclaw",
-        agentDir: state.agentDir("openclaw"),
-        workspaceDir,
-      });
-      const admittedGeneration: PreparedModelRuntimePluginGeneration = {
-        remoteCatalog: null,
-        configuredCatalogEntries: [],
-        inlineProviderModels: [],
-        pluginMetadataSnapshot: {
-          ...baseLease.snapshot.metadataSnapshot,
-          policyHash: "admitted",
-          workspaceDir,
-        },
-        pluginRegistry: createEmptyPluginRegistry(),
-      };
+      const { config, workspaceDir, baseLease, admittedGeneration } =
+        await createAdmittedGeneration("openclaw");
       const isolatedMetadataSnapshot = {
         ...baseLease.snapshot.metadataSnapshot,
         policyHash: "isolated",
@@ -776,9 +758,7 @@ describe("prepared harness source delivery", () => {
           };
         },
       );
-      mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "ok" }]);
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["ok"] }));
-      useOpenAIPlatformAuthFixture();
+      mockCompletedAttempt("ok");
       const parentAbort = new AbortController();
 
       const isolatedProbeParams: RunEmbeddedAgentInternalParams = {
