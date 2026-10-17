@@ -1,4 +1,3 @@
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
@@ -19,7 +18,7 @@ import { createCompactionRequestBudget } from "../sessions/compaction/request-bu
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
-import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import { prepareEmbeddedAttemptPromptPreflight } from "./run/attempt-prompt-preflight.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -91,7 +90,6 @@ type RecoveryInputOverrides = Omit<
   attempt?: Partial<EmbeddedRunAttemptResult>;
   assistantOverflowCandidate?: AssistantMessage;
 };
-type CompactionResult = Awaited<ReturnType<RecoveryInput["contextEngine"]["compact"]>>;
 
 const overflowError = () => new Error("request_too_large: Request size exceeds context window");
 const recover = (overrides: RecoveryInputOverrides = {}) =>
@@ -125,16 +123,8 @@ const predictedPressure = {
   overflowTokens: 26_522,
 } as const;
 
-const successfulCompaction = (): CompactionResult =>
-  ({
-    ok: true,
-    compacted: true,
-    result: {
-      summary: "Compacted session",
-      tokensBefore: 150_000,
-      tokensAfter: 80_000,
-    },
-  }) as CompactionResult;
+const successfulCompaction = (tokensAfter = 80_000, summary = "Compacted session") =>
+  makeCompactionSuccess({ summary, tokensBefore: 150_000, tokensAfter });
 
 function makeAssistantMessage(
   input: Pick<AssistantMessage, "stopReason"> &
@@ -198,12 +188,10 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
         session: {
           ...session,
           target: {
-            ...session.target,
-            agentId: session.target?.agentId ?? input.sessionAgentId,
+            agentId: input.sessionAgentId,
             sessionId: session.id,
-            sessionKey: session.target?.sessionKey ?? input.resolvedSessionKey,
-            storePath:
-              session.target?.storePath ?? path.join(input.workspaceDir, "openclaw-agent.sqlite"),
+            sessionKey: input.resolvedSessionKey,
+            storePath: "/tmp/workspace/openclaw-agent.sqlite",
           },
         },
         assertActive,
@@ -398,11 +386,7 @@ describe("recoverEmbeddedRunOverflow", () => {
         sessionId = "rotated-session";
         return "session-1";
       }),
-      attempt: {
-        ...precheckAttempt({ route: "compact_then_truncate" }),
-        sessionIdUsed: "session-1",
-        messagesSnapshot: [],
-      },
+      attempt: precheckAttempt({ route: "compact_then_truncate" }),
     });
 
     expect(await recoverEmbeddedRunOverflow(input)).toEqual({ action: "retry" });
@@ -419,15 +403,9 @@ describe("recoverEmbeddedRunOverflow", () => {
     { successful: false, tokensAfter: 80_000 },
     { successful: true, tokensAfter: 150_000 },
   ])("bounds recovery until completed progress ($successful, $tokensAfter)", async (testCase) => {
-    mocks.compact.mockResolvedValue({
-      ok: true,
-      compacted: true,
-      result: {
-        summary: "Committed summary",
-        tokensBefore: 150_000,
-        tokensAfter: testCase.tokensAfter,
-      },
-    });
+    mocks.compact.mockResolvedValue(
+      successfulCompaction(testCase.tokensAfter, "Committed summary"),
+    );
     const state = createEmbeddedRunContextRecoveryState();
     let committedCompactions = 0;
     for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -492,10 +470,9 @@ describe("recoverEmbeddedRunOverflow", () => {
     manager.appendMessage(createAssistant(testModel, [{ type: "text", text: "ACK" }]));
     manager.appendMessage({ role: "user", content: oversized, timestamp: 3 });
     const before = structuredClone(manager.getBranch());
+    const budgetDefaults = { contextWindow, reserveTokens: 10_000, systemPrompt };
     const requestBudget = createCompactionRequestBudget({
-      contextWindow,
-      reserveTokens: 10_000,
-      systemPrompt,
+      ...budgetDefaults,
       pendingPrompt: oversized,
     });
     const preflight = await prepareEmbeddedAttemptPromptPreflight({
@@ -546,13 +523,12 @@ describe("recoverEmbeddedRunOverflow", () => {
 
     const pendingPrompt = "What is the code word?";
     const pendingUserIdempotencyKey = "normal-follow-up";
-    const pendingUser = {
+    manager.appendMessage({
       role: "user" as const,
       content: pendingPrompt,
       timestamp: 4,
       idempotencyKey: pendingUserIdempotencyKey,
-    };
-    manager.appendMessage(pendingUser);
+    });
     const { session } = await createTestSession({
       model: { ...testModel, contextWindow },
       sessionManager: manager,
@@ -588,9 +564,7 @@ describe("recoverEmbeddedRunOverflow", () => {
       };
     });
     input.state.compactionRequestBudget = createCompactionRequestBudget({
-      contextWindow,
-      reserveTokens: 10_000,
-      systemPrompt,
+      ...budgetDefaults,
       pendingPrompt,
       pendingUserIdempotencyKey,
     });

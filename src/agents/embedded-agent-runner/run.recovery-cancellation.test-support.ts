@@ -51,58 +51,73 @@ function completedAssistant(tokens?: number, withText = false) {
   return assistant;
 }
 
-type SubscribedHarness = ReturnType<
-  typeof import("../embedded-agent-subscribe.e2e-harness.js").createSubscribedSessionHarness
->;
-function mockSubscribedAttempt(
-  use: (
-    attempt: EmbeddedRunAttemptInternalParams,
-    harness: SubscribedHarness,
-  ) => Promise<ReturnType<typeof makeAttemptResult>>,
-  full = true,
-  events = false,
+type AccountingEvent = "model" | "unknown" | "compaction";
+function mockAccountingAttempt(
+  events: readonly AccountingEvent[],
+  options: { tokensAfter?: number; terminal?: "timeout" | Error } = {},
 ) {
   mockedRunEmbeddedAttempt.mockImplementationOnce(async (input) => {
     const attempt = input as EmbeddedRunAttemptInternalParams;
     const { createSubscribedSessionHarness } =
       await import("../embedded-agent-subscribe.e2e-harness.js");
+    const chronology = options.tokensAfter !== undefined && !options.terminal;
+    const assistant = completedAssistant(120, chronology);
     const harness = createSubscribedSessionHarness({
       runId: attempt.runId,
       onContextAccountingEvent: attempt.onContextAccountingEvent,
-      ...(full
+      ...(options.tokensAfter !== undefined
         ? {
             agentId: attempt.agentId,
             sessionKey: attempt.sessionKey,
             sessionExtras: { messages: [] },
             compactionCountOwner: attempt.compactionCountOwner,
-            ...(events ? { onAgentEvent: attempt.onAgentEvent } : {}),
+            ...(options.terminal ? { onAgentEvent: attempt.onAgentEvent } : {}),
           }
         : {}),
     });
     try {
-      return await use(attempt, harness);
+      for (const event of events) {
+        if (event === "compaction") {
+          // Private accounting commits; the public event only projects completion.
+          attempt.onContextAccountingEvent?.({
+            kind: "compaction",
+            tokensAfter: options.tokensAfter,
+          });
+          harness.emit({
+            type: "compaction_end",
+            reason: "threshold",
+            outcome: {
+              status: "completed",
+              tokensBefore: 180_000,
+              tokensAfter: options.tokensAfter,
+              willRetry: false,
+            },
+          });
+        } else {
+          const message = event === "unknown" ? completedAssistant(undefined, true) : assistant;
+          harness.emit({ type: "message_start", message });
+          harness.emit({ type: "message_end", message });
+        }
+      }
+      await harness.subscription.waitForPendingEvents();
+      if (options.terminal instanceof Error) {
+        throw options.terminal;
+      }
+      const compaction = {
+        compactionCount: harness.subscription.getCompactionCount(),
+        compactionTokensAfter: options.tokensAfter,
+      };
+      if (options.terminal === "timeout") {
+        return { ...timeoutAttempt(attempt.sessionId), ...compaction };
+      }
+      // Chronology cases deliberately retain the pre-compaction terminal assistant.
+      return makeAttemptResult({
+        sessionIdUsed: attempt.sessionId,
+        ...(chronology ? { lastAssistant: assistant, ...compaction } : {}),
+      });
     } finally {
       harness.subscription.unsubscribe();
     }
-  });
-}
-
-function emitCompaction(
-  attempt: EmbeddedRunAttemptInternalParams,
-  harness: SubscribedHarness,
-  tokensAfter: number,
-) {
-  // Private accounting commits; the public event only projects completion.
-  attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter });
-  harness.emit({
-    type: "compaction_end",
-    reason: "threshold",
-    outcome: {
-      status: "completed",
-      tokensBefore: 180_000,
-      tokensAfter,
-      willRetry: false,
-    },
   });
 }
 
@@ -308,29 +323,11 @@ describe("recovery cancellation through the public run owner", () => {
       session = await createSharedRunIntegrationSession();
       const attemptError = new Error("attempt cleanup failed after completed compaction");
       const onAgentEvent = vi.fn();
-      mockSubscribedAttempt(
-        async (attempt, harness) => {
-          emitCompaction(attempt, harness, 80);
-          await harness.subscription.waitForPendingEvents();
-          if (settlement === "thrown") {
-            throw attemptError;
-          }
-          return {
-            ...timeoutAttempt(attempt.sessionId),
-            compactionCount: harness.subscription.getCompactionCount(),
-            compactionTokensAfter: 80,
-          };
-        },
-        true,
-        true,
-      );
-      mockSubscribedAttempt(async (attempt, harness) => {
-        const assistant = completedAssistant(120);
-        harness.emit({ type: "message_start", message: assistant });
-        harness.emit({ type: "message_end", message: assistant });
-        await harness.subscription.waitForPendingEvents();
-        return makeAttemptResult({ sessionIdUsed: attempt.sessionId });
-      }, false);
+      mockAccountingAttempt(["compaction"], {
+        tokensAfter: 80,
+        terminal: settlement === "thrown" ? attemptError : "timeout",
+      });
+      mockAccountingAttempt(["model"]);
       prepareCompaction("Outer timeout recovery");
 
       const run = runEmbeddedAgent({ ...session.runParams, onAgentEvent });
@@ -356,60 +353,38 @@ describe("recovery cancellation through the public run owner", () => {
   );
 
   it.each([
-    { order: "model-then-compaction", currentContextTokens: 40 },
-    { order: "compaction-then-model", currentContextTokens: 120 },
-    { order: "compaction-then-unknown", currentContextTokens: undefined },
-  ] as const)("carries producer chronology through the run owner ($order)", async (testCase) => {
-    session = await createSharedRunIntegrationSession();
-    const { runParams } = session;
-    const facts = vi.fn<(fact: CompactionAccountingFact | undefined) => void>();
-    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "Done." }]);
-    mockSubscribedAttempt(async (attempt, harness) => {
-      const assistant = completedAssistant(120, true);
-      const emitModel = () => {
-        const message =
-          testCase.order === "compaction-then-unknown"
-            ? completedAssistant(undefined, true)
-            : assistant;
-        harness.emit({ type: "message_start", message });
-        harness.emit({ type: "message_end", message });
-      };
-      if (testCase.order === "model-then-compaction") {
-        emitModel();
-      }
-      emitCompaction(attempt, harness, 40);
-      if (testCase.order !== "model-then-compaction") {
-        emitModel();
-      }
-      await harness.subscription.waitForPendingEvents();
-      // Terminal copies can still describe the pre-compaction assistant.
-      return makeAttemptResult({
-        sessionIdUsed: runParams.sessionId,
-        lastAssistant: assistant,
-        compactionCount: harness.subscription.getCompactionCount(),
-        compactionTokensAfter: 40,
+    ["model-then-compaction", ["model", "compaction"], 40],
+    ["compaction-then-model", ["compaction", "model"], 120],
+    ["compaction-then-unknown", ["compaction", "unknown"], undefined],
+  ] as const)(
+    "carries producer chronology through the run owner (%s)",
+    async (_order, events, currentContextTokens) => {
+      session = await createSharedRunIntegrationSession();
+      const { runParams } = session;
+      const facts = vi.fn<(fact: CompactionAccountingFact | undefined) => void>();
+      mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "Done." }]);
+      mockAccountingAttempt(events, { tokensAfter: 40 });
+
+      const result = await runEmbeddedAgent({
+        ...runParams,
+        onCompactionAccounting: facts,
       });
-    });
 
-    const result = await runEmbeddedAgent({
-      ...runParams,
-      onCompactionAccounting: facts,
-    });
-
-    expect(result.payloads).toEqual([{ text: "Done." }]);
-    expect(facts).toHaveBeenCalledExactlyOnceWith({
-      kind: "durable",
-      count: 1,
-      currentContextSnapshot: { tokens: testCase.currentContextTokens },
-      target: {
-        ...runParams.sessionTarget,
-        lifecycleRevision: undefined,
-        activeWriterRunId: runParams.runId,
-      },
-    });
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
-    expect(mockedCompactDirect).not.toHaveBeenCalled();
-  });
+      expect(result.payloads).toEqual([{ text: "Done." }]);
+      expect(facts).toHaveBeenCalledExactlyOnceWith({
+        kind: "durable",
+        count: 1,
+        currentContextSnapshot: { tokens: currentContextTokens },
+        target: {
+          ...runParams.sessionTarget,
+          lifecycleRevision: undefined,
+          activeWriterRunId: runParams.runId,
+        },
+      });
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+      expect(mockedCompactDirect).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["current", "replaced"] as const)(
     "finalizes opaque native usage only for its %s writer",
@@ -423,7 +398,7 @@ describe("recovery cancellation through the public run owner", () => {
       const { SESSION_TOTAL_TOKENS_VERSION } = await import("../../config/sessions/types.js");
       const { normalizeUsage } = await import("../usage.js");
       useOpenAIPlatformAuthFixture();
-      const initialEntry = {
+      await sessionAccessor.replaceSessionEntry(sessionTarget, {
         sessionId,
         updatedAt: 1,
         lifecycleRevision: "native-usage-generation",
@@ -431,8 +406,7 @@ describe("recovery cancellation through the public run owner", () => {
         totalTokens: 0,
         totalTokensFresh: true,
         totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-      };
-      await sessionAccessor.replaceSessionEntry(sessionTarget, initialEntry);
+      });
       const sessionEntry = sessionAccessor.loadExactSessionEntryReadOnly(sessionTarget)?.entry;
       if (!sessionEntry) {
         throw new Error("The command must retain its pre-claim working copy");
@@ -445,12 +419,8 @@ describe("recovery cancellation through the public run owner", () => {
         refreshSessionEntry: () => {},
       });
       const candidate = accounting.beginCandidate();
-      const assistant = makeAssistantMessageFixture({
-        model: "gpt-5.6-luna",
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [{ type: "text", text: "Done." }],
-      });
+      const assistant = completedAssistant(undefined, true);
+      assistant.model = "gpt-5.6-luna";
       assistant.usage = {
         ...assistant.usage,
         input: 3,
