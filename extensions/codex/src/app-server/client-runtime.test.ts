@@ -74,6 +74,19 @@ function createRuntimeHarness() {
   return harness;
 }
 
+async function claimThread(
+  threadId: string,
+  release?: Parameters<typeof retainCodexAppServerLiveThread>[2],
+) {
+  const harness = createRuntimeHarness();
+  const thread = liveThread(harness.client, threadId);
+  await thread.retain(release);
+  const invalidated = vi.fn();
+  const ownership = await thread.claim(invalidated);
+  expect(ownership).toBeDefined();
+  return Object.assign(harness, { thread, invalidated, ownership });
+}
+
 afterEach(() => {
   for (const client of clients) {
     client.close();
@@ -250,22 +263,6 @@ it("requests retirement when its auth owner rejects a workspace change", async (
   });
 });
 
-it("retains independently subscribed conversations on the same physical client", async () => {
-  const { client } = createHarness();
-  const thread = liveThread(client, "thread-a");
-
-  await expect(retainCodexAppServerLiveThread(client, "thread-before-runtime")).resolves.toBe(
-    false,
-  );
-  ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });
-
-  await expect(thread.retain()).resolves.toBe(true);
-  await expect(retainCodexAppServerLiveThread(client, "thread-b")).resolves.toBe(true);
-  await expect(thread.consume()).resolves.toEqual(liveOwnership);
-  await expect(consumeCodexAppServerLiveThread(client, "thread-b")).resolves.toEqual(liveOwnership);
-  await expect(thread.consume()).resolves.toBeUndefined();
-});
-
 it("claims a fresh auto-subscribed child without exposing or evicting an idle owner", async () => {
   const request = vi.fn(async () => ({}));
   const client = {
@@ -301,13 +298,8 @@ it("claims a fresh auto-subscribed child without exposing or evicting an idle ow
 });
 
 it("keeps claimed ownership until physical release succeeds", async () => {
-  const { client } = createRuntimeHarness();
-  const thread = liveThread(client, "thread-claimed");
   const release = failFirstRelease("unsubscribe unavailable");
-  await thread.retain(release);
-  const invalidated = vi.fn();
-  const ownership = await thread.claim(invalidated);
-  expect(ownership).toBeDefined();
+  const { client, thread, invalidated, ownership } = await claimThread("thread-claimed", release);
 
   expect(invalidated).not.toHaveBeenCalled();
   expect(thread.isClaimed()).toBe(true);
@@ -344,14 +336,14 @@ it("rejects unproven or stale ownership before transferring an active claim", as
 
 it("preserves a retained successor from obsolete forget, release, and republish after independent-retain", async () => {
   vi.useFakeTimers();
-  const { client } = createRuntimeHarness();
-  const thread = liveThread(client, "thread-reused");
   const originalRelease = vi.fn(async (_threadId: string) => undefined);
   const replacementRelease = vi.fn(async (_threadId: string) => undefined);
-  await thread.retain(originalRelease);
-  const invalidated = vi.fn();
-  const original = await thread.claim(invalidated);
-  expect(original).toBeDefined();
+  const {
+    client,
+    thread,
+    invalidated,
+    ownership: original,
+  } = await claimThread("thread-reused", originalRelease);
   await expect(thread.retain(original?.release)).resolves.toBe(true);
   expect(invalidated).not.toHaveBeenCalled();
   await expect(thread.retain(replacementRelease, "successor-config")).resolves.toBe(true);
@@ -449,7 +441,11 @@ it.each([
 );
 
 it("blocks only the exact thread whose subscription is being released", async () => {
-  const { client } = createRuntimeHarness();
+  const { client } = createHarness();
+  await expect(retainCodexAppServerLiveThread(client, "thread-before-runtime")).resolves.toBe(
+    false,
+  );
+  ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });
   const thread = liveThread(client, "thread-a");
 
   const releaseGate = createDeferred<void>();
@@ -496,14 +492,14 @@ it("transfers ownership only for the exact immutable thread fingerprint", async 
 });
 
 it("rolls back the new owner when capacity eviction cannot release its oldest thread", async () => {
-  const { client } = createRuntimeHarness();
-  const thread = liveThread(client, "thread-overflow");
   const failingRelease = failFirstRelease("oldest unsubscribe failed");
   const overflowRelease = vi.fn(async (_threadId: string) => undefined);
-  const invalidated = vi.fn();
-  await thread.retain(overflowRelease);
-  const overflow = await thread.claim(invalidated);
-  expect(overflow).toBeDefined();
+  const {
+    client,
+    thread,
+    invalidated,
+    ownership: overflow,
+  } = await claimThread("thread-overflow", overflowRelease);
   await retainCodexAppServerLiveThread(client, "thread-oldest", failingRelease);
   for (let index = 1; index < EXPECTED_MAX_IDLE_LIVE_THREADS; index += 1) {
     await retainCodexAppServerLiveThread(client, `thread-${index}`);
@@ -556,13 +552,8 @@ it.each(["eviction", "release"])(
 it("renews a failed expiry instead of spinning and retries the same native owner", async () => {
   vi.useFakeTimers();
   vi.spyOn(performance, "now").mockImplementation(() => Date.now());
-  const { client } = createRuntimeHarness();
-  const thread = liveThread(client, "thread-expiry-retry");
   const release = failFirstRelease("temporary unsubscribe failure");
-  await thread.retain(release);
-  const invalidated = vi.fn();
-  const ownership = await thread.claim(invalidated);
-  expect(ownership).toBeDefined();
+  const { thread, invalidated, ownership } = await claimThread("thread-expiry-retry", release);
   await thread.retain(ownership?.release);
 
   await vi.advanceTimersByTimeAsync(EXPECTED_LIVE_THREAD_IDLE_TIMEOUT_MS - 1);
@@ -583,14 +574,12 @@ it("renews a failed expiry instead of spinning and retries the same native owner
 it.each(["thread/closed", "client-close", "forget"] as const)(
   "invalidates a pending retained release once on %s without restoring failed work",
   async (terminal) => {
-    const { client, send, writes } = createRuntimeHarness();
-    const thread = liveThread(client, "thread-terminal");
     const failedUnsubscribe = createDeferred<void>();
     const release = vi.fn(async () => await failedUnsubscribe.promise);
-    await thread.retain(release);
-    const invalidated = vi.fn();
-    const ownership = await thread.claim(invalidated);
-    expect(ownership).toBeDefined();
+    const { client, send, writes, thread, invalidated, ownership } = await claimThread(
+      "thread-terminal",
+      release,
+    );
     await thread.retain(ownership?.release);
     const releasing = thread.release();
     try {

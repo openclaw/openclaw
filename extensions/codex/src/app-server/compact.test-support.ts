@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { setImmediate as nextImmediate } from "node:timers/promises";
 import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -172,12 +173,7 @@ export function maybeCompactCodexAppServerSession(
   params: CompactTestParams,
   options: MaybeCompactOptions = {},
 ) {
-  const identity = sessionBindingIdentity({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    config: params.config,
-  });
+  const identity = sessionBindingIdentity(params);
   registerCodexTestSessionIdentity(
     params.sessionFile,
     params.sessionId,
@@ -279,9 +275,7 @@ export function compactDetails(result: CompactResult): Record<string, unknown> {
 
 export async function flushAsyncTasks(iterations = 3): Promise<void> {
   for (let index = 0; index < iterations; index += 1) {
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextImmediate();
   }
 }
 

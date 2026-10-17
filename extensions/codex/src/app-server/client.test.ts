@@ -420,25 +420,47 @@ it("interleaves a bounded remote file command with a pending dynamic tool reques
   });
 });
 
-it.each([{ executionTimeoutMs: 900_000, beforeDeadlineMs: 660_000, deadlineMs: 930_000 }])(
-  "accepts one owner execution budget of $executionTimeoutMs ms",
-  async ({ executionTimeoutMs, beforeDeadlineMs, deadlineMs }) => {
+it.each([
+  {
+    id: "owned-budget",
+    executionTimeoutMs: 900_000,
+    beforeDeadlineMs: 660_000,
+    deadlineMs: 930_000,
+    params: { tool: "node_exec" },
+  },
+  {
+    id: "credential-wait",
+    executionTimeoutMs: undefined,
+    beforeDeadlineMs: 3_630_000,
+    deadlineMs: 3_660_000,
+    params: {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "credential-wait",
+      namespace: null,
+      tool: "secrets",
+      arguments: { action: "request", name: "TEST_API_KEY", timeoutSeconds: 3600 },
+    },
+  },
+])(
+  "bounds $id without aborting before its deadline",
+  async ({ id, executionTimeoutMs, beforeDeadlineMs, deadlineMs, params }) => {
     const harness = createToolHarness({ budget: executionTimeoutMs });
-
-    harness.send({ id: "owned-budget", method: "item/tool/call", params: { tool: "node_exec" } });
+    harness.send({ id, method: "item/tool/call", params });
     await vi.advanceTimersByTimeAsync(beforeDeadlineMs);
     expect(harness.writes).toHaveLength(0);
     expect(harness.getSignal()?.aborted).toBe(false);
-
-    harness.setBudget(1_800_000);
+    if (executionTimeoutMs !== undefined) {
+      harness.setBudget(1_800_000);
+    }
     await vi.advanceTimersByTimeAsync(deadlineMs - beforeDeadlineMs);
     expect(harness.getSignal()?.aborted).toBe(true);
     expect(harness.writes).toHaveLength(1);
     expect(harness.frame()).toMatchObject({
-      id: "owned-budget",
+      id,
       result: {
         success: false,
-        contentItems: [{ text: expect.stringContaining(`${deadlineMs}ms`) }],
+        contentItems: [{ type: "inputText", text: expect.stringContaining(`${deadlineMs}ms`) }],
       },
     });
     expect(vi.getTimerCount()).toBe(0);
@@ -464,40 +486,6 @@ it("ignores an execution budget reported after the request completed", async () 
   expect(harness.getSignal()?.aborted).toBe(false);
 });
 
-it("keeps the transport open for a maximum credential wait and bounds a hung handler", async () => {
-  const waitMs = 3_600_000;
-  const harness = createToolHarness();
-  harness.send({
-    id: "credential-wait",
-    method: "item/tool/call",
-    params: {
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "credential-wait",
-      namespace: null,
-      tool: "secrets",
-      arguments: {
-        action: "request",
-        name: "TEST_API_KEY",
-        timeoutSeconds: 3600,
-      },
-    },
-  });
-  await vi.advanceTimersByTimeAsync(waitMs + 30_000);
-  expect(harness.writes).toHaveLength(0);
-  expect(harness.getSignal()?.aborted).toBe(false);
-  await vi.advanceTimersByTimeAsync(30_000);
-  expect(harness.getSignal()?.aborted).toBe(true);
-  expect(harness.writes).toHaveLength(1);
-  expect(harness.frame()).toMatchObject({
-    id: "credential-wait",
-    result: {
-      success: false,
-      contentItems: [{ type: "inputText", text: expect.stringContaining(`${waitMs + 60_000}ms`) }],
-    },
-  });
-});
-
 it("only treats known Codex app-server approval methods as approvals", () => {
   expect(isCodexAppServerApprovalRequest("item/commandExecution/requestApproval")).toBe(true);
   expect(isCodexAppServerApprovalRequest("item/fileChange/requestApproval")).toBe(true);
@@ -507,35 +495,19 @@ it("only treats known Codex app-server approval methods as approvals", () => {
 });
 
 it.each([
-  {
-    method: "item/commandExecution/requestApproval",
-    params: { threadId: "thread-1", turnId: "turn-1", itemId: "cmd-1", command: "pnpm test" },
-    result: { decision: "decline" },
-  },
-  {
-    method: "item/tool/requestUserInput",
-    params: { threadId: "thread-1", turnId: "turn-1", itemId: "tool-1", questions: [] },
-    result: { answers: {} },
-  },
-  {
-    method: "mcpServer/elicitation/request",
-    params: {
-      threadId: "thread-1",
-      turnId: null,
-      serverName: "forms",
-      mode: "form",
-      message: "Enter a value",
-      requestedSchema: { type: "object", properties: {} },
-    },
-    result: {
+  ["item/commandExecution/requestApproval", { decision: "decline" }],
+  ["item/tool/requestUserInput", { answers: {} }],
+  [
+    "mcpServer/elicitation/request",
+    {
       action: "decline",
       content: null,
       _meta: { message: "OpenClaw has no interactive handler for this elicitation." },
     },
-  },
-])("fails closed for unhandled $method", async ({ method, params, result }) => {
+  ],
+])("fails closed for unhandled %s", async (method, result) => {
   const harness = createHarness();
-  harness.send({ id: "unhandled", method, params });
+  harness.send({ id: "unhandled", method, params: { threadId: "thread-1" } });
   await vi.waitFor(() => expect(harness.writes).toHaveLength(1));
   expect(harness.frame()).toEqual({ id: "unhandled", result });
 });

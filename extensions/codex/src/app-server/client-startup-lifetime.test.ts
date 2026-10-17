@@ -76,13 +76,9 @@ it("fork timeout preserves a peer through the exact late response", async () => 
   expect(await acquire()).toBe(old.client);
   const peer = old.client.request("turn/start", { threadId: "peer" }, { timeoutMs: 5_000 });
   const peerFrame = await old.frame("turn/start");
-  let continued = false;
-  const startup = old.client.request(method, { threadId: "abandoned" }, { timeoutMs: 100 }).then(
-    () => {
-      continued = true;
-    },
-    (error: unknown) => error,
-  );
+  const startup = old.client
+    .request(method, { threadId: "abandoned" }, { timeoutMs: 100 })
+    .catch((error: unknown) => error);
   const frame = await old.frame(method);
   expect(await startup).toMatchObject({ reason: "timed out", mayHaveWritten: true });
   expect(old.stdinDestroyed).toBe(false);
@@ -94,7 +90,6 @@ it("fork timeout preserves a peer through the exact late response", async () => 
   const helperFrame = await old.frame("thread/fork", helperStartIndex);
   old.send({ id: helperFrame.id, result: { thread: { id: "peer-helper" } } });
   await expect(helper).resolves.toEqual({ thread: { id: "peer-helper" } });
-  expect(continued).toBe(false);
   old.send({ id: peerFrame.id, result: { turn: { id: "peer-turn" } } });
   await expect(peer).resolves.toEqual({ turn: { id: "peer-turn" } });
   expect(old.stdinDestroyed).toBe(false);

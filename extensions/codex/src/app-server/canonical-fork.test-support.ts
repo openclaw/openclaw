@@ -175,15 +175,17 @@ export async function createCanonicalForkFixture(params: {
   ) => {
     const senderIsOwner = options.senderIsOwner ?? params.senderIsOwner;
     const session = identity(key);
-    const runId = randomUUID();
-    const host = await params.createHost({
+    const turnInput = {
       sessionId: session.sessionId,
       sessionKey: key,
-      runId,
-      storePath,
+      runId: randomUUID(),
       prompt: text,
       senderIsOwner,
       senderId: options.senderId,
+    };
+    const host = await params.createHost({
+      ...turnInput,
+      storePath,
       workerOwned: options.workerOwned,
     });
     try {
@@ -198,17 +200,14 @@ export async function createCanonicalForkFixture(params: {
         // The host owns admission and publication readiness; the native transport
         // supplies connection facts without provider authentication or a model turn.
         const attempt = {
+          ...turnInput,
           config,
           agentId: "main",
           agentDir,
-          sessionId: session.sessionId,
-          sessionKey: key,
           workspaceDir,
           cwd: workspaceDir,
           sessionTarget: { ...session, storePath },
-          runId,
           userTurnTranscriptRecorder: host.userTurnTranscriptRecorder,
-          prompt: text,
           provider: "codex",
           modelId: model.id,
           model,
@@ -216,8 +215,6 @@ export async function createCanonicalForkFixture(params: {
           timeoutMs: 10_000,
           authProfileStore: { version: 1, profiles: {} },
           githubPublicationAvailable: false,
-          senderIsOwner,
-          senderId: options.senderId,
           abortSignal: host.abortController.signal,
         } as unknown as EmbeddedRunAttemptParamsV2;
         const runAbortController = host.abortController;
