@@ -103,46 +103,53 @@ async function fixtureReadyBeforeSettlement(
   await Promise.race([receipts.waitFor(directPidFile, "ready"), settled]);
 }
 
-function createProofRepo(): {
-  descendantPidFile: string;
-  directPidFile: string;
-  repoDir: string;
-} {
+function createProofRepo(leaderExits = false) {
   const repoDir = tempDirs.make("openclaw-plugin-pretag-proof-");
   const scriptsDir = join(repoDir, "scripts");
   const directPidFile = join(repoDir, "runtime-build.pid");
   const descendantPidFile = join(repoDir, "runtime-build-descendant.pid");
   mkdirSync(scriptsDir, { recursive: true });
   writeJsonFile(join(repoDir, "package.json"), { name: "openclaw-test-root", type: "module" });
-  writePublishablePluginFixture(repoDir, {
-    version: "2026.8.26",
-    publishTo: "npm",
-  });
+  writePublishablePluginFixture(repoDir, { version: "2026.8.26", publishTo: "npm" });
+  const writeScript = (name: string, source: string) =>
+    writeFileSync(join(scriptsDir, name), source);
+  const pids = () => [readPid(directPidFile), readPid(descendantPidFile)];
 
   // The production caller resolves the tsx loader from its cwd before launching this fixture.
   const nodeModulesDir = join(repoDir, "node_modules");
   mkdirSync(nodeModulesDir);
   symlinkSync(realpathSync(resolve("node_modules/tsx")), join(nodeModulesDir, "tsx"), "dir");
-  writeFileSync(
-    join(scriptsDir, "check-plugin-npm-runtime-builds.mts"),
-    `import { spawn } from "node:child_process";
+  const stallSource = `import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
-${fixtureReceiptClientSource(receipts.endpoint)}
+${leaderExits ? "" : fixtureReceiptClientSource(receipts.endpoint)}
 
-const descendant = spawn(process.execPath, ["-e", 'setInterval(() => {}, 1000); process.send("ready");'], {
+const descendant = spawn(process.execPath, ["-e", ${JSON.stringify(leaderExits ? 'process.send("ready"); setInterval(() => {}, 1000);' : 'setInterval(() => {}, 1000); process.send("ready");')}], {
   stdio: ["ignore", "ignore", "ignore", "ipc"],
 });
 descendant.once("message", () => {
   writeFileSync(${JSON.stringify(directPidFile)}, String(process.pid));
   writeFileSync(${JSON.stringify(descendantPidFile)}, String(descendant.pid));
-  sendReceipt(${JSON.stringify(directPidFile)}, "ready");
+  ${leaderExits ? "" : `sendReceipt(${JSON.stringify(directPidFile)}, "ready");`}
   descendant.disconnect();
+  ${leaderExits ? "descendant.unref();" : ""}
 });
-setInterval(() => {}, 1000);
-`,
-    "utf8",
-  );
-  return { descendantPidFile, directPidFile, repoDir };
+${leaderExits ? "" : "setInterval(() => {}, 1000);"}
+`;
+  writeScript("check-plugin-npm-runtime-builds.mts", stallSource);
+  return {
+    repoDir,
+    writeScript,
+    stallSource,
+    pids,
+    ready: (operation: PromiseLike<unknown>) =>
+      fixtureReadyBeforeSettlement(directPidFile, descendantPidFile, operation),
+    expectAlive: (alive: boolean) => expect(pids().map(isProcessAlive)).toEqual([alive, alive]),
+    expectTerminated: () => {
+      expect(readPid(descendantPidFile)).toBeGreaterThan(1);
+      expect(pids().map(isProcessAlive)).toEqual([false, false]);
+    },
+    cleanup: () => pids().forEach(killProcessIfAlive),
+  };
 }
 
 describe("scripts/plugin-release-pretag-pack-check.ts process-tree proof", () => {
@@ -150,26 +157,20 @@ describe("scripts/plugin-release-pretag-pack-check.ts process-tree proof", () =>
     "bounds a stalled runtime build and leaves no process-tree descendant alive",
     ({ signal }) =>
       fixtureLifetime.run(async () => {
-        const { descendantPidFile, directPidFile, repoDir } = createProofRepo();
+        const proof = createProofRepo();
         const timeoutMs = 100;
-        let descendantPid = 0;
-        let directPid = 0;
+        let pids: number[] = [];
         const startedAt = Date.now();
         let command = Promise.resolve();
         const releaseAndWait = startProcessWatchdogFixture(() => {
-          command = runPluginReleasePretagPackCheck(repoDir, { timeoutMs });
+          command = runPluginReleasePretagPackCheck(proof.repoDir, { timeoutMs });
           void command.catch(() => {});
           return command;
         });
         try {
-          await withinTest(
-            fixtureReadyBeforeSettlement(directPidFile, descendantPidFile, command),
-            signal,
-          );
-          directPid = readPid(directPidFile);
-          descendantPid = readPid(descendantPidFile);
-          expect(isProcessAlive(directPid)).toBe(true);
-          expect(isProcessAlive(descendantPid)).toBe(true);
+          await withinTest(proof.ready(command), signal);
+          pids = proof.pids();
+          expect(pids.map(isProcessAlive)).toEqual([true, true]);
           const readyAt = Date.now();
           await expect(withinTest(releaseAndWait(), signal)).rejects.toMatchObject({
             code: "ETIMEDOUT",
@@ -181,14 +182,10 @@ describe("scripts/plugin-release-pretag-pack-check.ts process-tree proof", () =>
           expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs * 0.75);
           expect(completionMs).toBeLessThan(7_500);
           // requireProcessTreeExit joins the exact tree before this command rejects.
-          expect(isProcessAlive(directPid)).toBe(false);
-          expect(isProcessAlive(descendantPid)).toBe(false);
+          expect(pids.map(isProcessAlive)).toEqual([false, false]);
         } finally {
           await releaseAndWait().catch(() => {});
-          directPid ||= readPid(directPidFile);
-          descendantPid ||= readPid(descendantPidFile);
-          killProcessIfAlive(directPid);
-          killProcessIfAlive(descendantPid);
+          (pids.length ? pids : proof.pids()).forEach(killProcessIfAlive);
         }
       }),
     30_000,
@@ -197,36 +194,18 @@ describe("scripts/plugin-release-pretag-pack-check.ts process-tree proof", () =>
   posixIt(
     "rejects a build leader that exits successfully while a descendant remains",
     async () => {
-      const { descendantPidFile, directPidFile, repoDir } = createProofRepo();
-      writeFileSync(join(repoDir, "scripts/plugin-npm-publish.sh"), "#!/bin/bash\nexit 0\n");
-      writeFileSync(
-        join(repoDir, "scripts/check-plugin-npm-runtime-builds.mts"),
-        `import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
-const descendant = spawn(process.execPath, ["-e", 'process.send("ready"); setInterval(() => {}, 1000);'], {
-  stdio: ["ignore", "ignore", "ignore", "ipc"],
-});
-descendant.once("message", () => {
-  writeFileSync(${JSON.stringify(directPidFile)}, String(process.pid));
-  writeFileSync(${JSON.stringify(descendantPidFile)}, String(descendant.pid));
-  descendant.disconnect();
-  descendant.unref();
-});
-`,
-      );
+      const proof = createProofRepo(true);
+      proof.writeScript("plugin-npm-publish.sh", "#!/bin/bash\nexit 0\n");
       try {
         await expect(
-          runPluginReleasePretagPackCheck(repoDir, { timeoutMs: 5_000 }),
+          runPluginReleasePretagPackCheck(proof.repoDir, { timeoutMs: 5_000 }),
         ).rejects.toMatchObject({
           code: "EPROCESSGROUP_CLEANUP_FAILED",
           processTreeState: "terminated",
         });
-        expect(readPid(descendantPidFile)).toBeGreaterThan(1);
-        expect(isProcessAlive(readPid(directPidFile))).toBe(false);
-        expect(isProcessAlive(readPid(descendantPidFile))).toBe(false);
+        proof.expectTerminated();
       } finally {
-        killProcessIfAlive(readPid(directPidFile));
-        killProcessIfAlive(readPid(descendantPidFile));
+        proof.cleanup();
       }
     },
     15_000,
@@ -257,15 +236,22 @@ function startProofCli(repoDir: string) {
     stdout: string;
     stderr: string;
   }>((resolveCompletion, reject) => {
-    child.once("error", (error) => {
-      reject(error);
-    });
+    child.once("error", reject);
     child.once("close", (code, signal) => {
       resolveCompletion({ code, signal, stdout, stderr });
     });
   });
   void completion.catch(() => {});
-  return { child, completion };
+  return {
+    child,
+    completion,
+    async cleanup(signal: NodeJS.Signals) {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill(signal);
+      }
+      await completion.catch(() => {});
+    },
+  };
 }
 
 describe("pretag executable and per-stage deadlines", () => {
@@ -277,29 +263,20 @@ describe("pretag executable and per-stage deadlines", () => {
       `joins the build tree and returns ${code} for ${signal}`,
       ({ signal: testSignal }) =>
         fixtureLifetime.run(async () => {
-          const { descendantPidFile, directPidFile, repoDir } = createProofRepo();
-          const cli = startProofCli(repoDir);
+          const proof = createProofRepo();
+          const cli = startProofCli(proof.repoDir);
           try {
-            await withinTest(
-              fixtureReadyBeforeSettlement(directPidFile, descendantPidFile, cli.completion),
-              testSignal,
-            );
-            expect(isProcessAlive(readPid(directPidFile))).toBe(true);
-            expect(isProcessAlive(readPid(descendantPidFile))).toBe(true);
+            await withinTest(proof.ready(cli.completion), testSignal);
+            proof.expectAlive(true);
             expect(cli.child.kill(signal)).toBe(true);
             const result = await withinTest(cli.completion, testSignal);
             expect(result).toMatchObject({ code, signal: null });
             expect(result.stderr).toContain(`failed with exit code ${code}`);
-            expect(isProcessAlive(readPid(directPidFile))).toBe(false);
-            expect(isProcessAlive(readPid(descendantPidFile))).toBe(false);
+            proof.expectAlive(false);
             expect(result.stdout).not.toContain("npm pack:");
           } finally {
-            killProcessIfAlive(readPid(directPidFile));
-            killProcessIfAlive(readPid(descendantPidFile));
-            if (cli.child.exitCode === null && cli.child.signalCode === null) {
-              cli.child.kill("SIGKILL");
-            }
-            await cli.completion.catch(() => {});
+            proof.cleanup();
+            await cli.cleanup("SIGKILL");
           }
         }),
       20_000,
@@ -310,11 +287,8 @@ describe("pretag executable and per-stage deadlines", () => {
     "preserves a real build failure at the executable boundary and does not pack",
     ({ signal }) =>
       fixtureLifetime.run(async () => {
-        const { repoDir } = createProofRepo();
-        writeFileSync(
-          join(repoDir, "scripts/check-plugin-npm-runtime-builds.mts"),
-          "process.exit(7);\n",
-        );
+        const { repoDir, writeScript } = createProofRepo();
+        writeScript("check-plugin-npm-runtime-builds.mts", "process.exit(7);\n");
         const cli = startProofCli(repoDir);
         try {
           const result = await withinTest(cli.completion, signal);
@@ -322,10 +296,7 @@ describe("pretag executable and per-stage deadlines", () => {
           expect(result.stderr).toContain("failed with exit code 7");
           expect(result.stdout).not.toContain("npm pack:");
         } finally {
-          if (cli.child.exitCode === null && cli.child.signalCode === null) {
-            cli.child.kill("SIGTERM");
-          }
-          await cli.completion.catch(() => {});
+          await cli.cleanup("SIGTERM");
         }
       }),
     20_000,
@@ -335,25 +306,19 @@ describe("pretag executable and per-stage deadlines", () => {
     posixIt(
       `bounds the real ${stage} pack command and joins its descendants`,
       async () => {
-        const { repoDir, directPidFile, descendantPidFile } = createProofRepo();
+        const proof = createProofRepo();
+        const { repoDir, writeScript, stallSource } = proof;
         writePublishablePluginFixture(repoDir, { version: "2026.8.26", publishTo: "both" });
-        const scriptsDir = join(repoDir, "scripts");
-        writeFileSync(
-          join(scriptsDir, "stall.mts"),
-          readFileSync(join(scriptsDir, "check-plugin-npm-runtime-builds.mts")),
-        );
-        writeFileSync(
-          join(scriptsDir, "check-plugin-npm-runtime-builds.mts"),
-          "process.exit(0);\n",
-        );
-        writeFileSync(
-          join(scriptsDir, "plugin-npm-publish.sh"),
+        writeScript("stall.mts", stallSource);
+        writeScript("check-plugin-npm-runtime-builds.mts", "process.exit(0);\n");
+        writeScript(
+          "plugin-npm-publish.sh",
           stage === "npm"
             ? "#!/bin/bash\nexec node --import tsx scripts/stall.mts\n"
             : "#!/bin/bash\nexit 0\n",
         );
-        writeFileSync(
-          join(scriptsDir, "plugin-clawhub-publish.sh"),
+        writeScript(
+          "plugin-clawhub-publish.sh",
           "#!/bin/bash\nexec node --import tsx scripts/stall.mts\n",
         );
         try {
@@ -363,12 +328,9 @@ describe("pretag executable and per-stage deadlines", () => {
             code: "ETIMEDOUT",
             message: expect.stringContaining(`${stage} pack for @openclaw/demo-plugin timed out`),
           });
-          expect(readPid(descendantPidFile)).toBeGreaterThan(1);
-          expect(isProcessAlive(readPid(directPidFile))).toBe(false);
-          expect(isProcessAlive(readPid(descendantPidFile))).toBe(false);
+          proof.expectTerminated();
         } finally {
-          killProcessIfAlive(readPid(directPidFile));
-          killProcessIfAlive(readPid(descendantPidFile));
+          proof.cleanup();
         }
       },
       15_000,
@@ -378,7 +340,7 @@ describe("pretag executable and per-stage deadlines", () => {
   posixIt(
     "lets two plugins complete real independent build and pack budgets",
     async () => {
-      const { repoDir } = createProofRepo();
+      const { repoDir, writeScript } = createProofRepo();
       for (const extensionId of ["demo-plugin", "second-plugin"]) {
         writePublishablePluginFixture(repoDir, {
           extensionId,
@@ -386,7 +348,6 @@ describe("pretag executable and per-stage deadlines", () => {
           publishTo: "both",
         });
       }
-      const scriptsDir = join(repoDir, "scripts");
       const recordPath = join(repoDir, "stages.jsonl");
       const stageCode = `import { appendFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
@@ -395,13 +356,10 @@ appendFileSync(${JSON.stringify(recordPath)}, JSON.stringify({ args: process.arg
 // each individual stage remains comfortably within it.
 await delay(350);
 `;
-      writeFileSync(join(scriptsDir, "check-plugin-npm-runtime-builds.mts"), stageCode);
-      writeFileSync(join(scriptsDir, "pack.mts"), stageCode);
+      writeScript("check-plugin-npm-runtime-builds.mts", stageCode);
+      writeScript("pack.mts", stageCode);
       for (const name of ["plugin-npm-publish.sh", "plugin-clawhub-publish.sh"]) {
-        writeFileSync(
-          join(scriptsDir, name),
-          '#!/bin/bash\nexec node --import tsx scripts/pack.mts "$@"\n',
-        );
+        writeScript(name, '#!/bin/bash\nexec node --import tsx scripts/pack.mts "$@"\n');
       }
       const started = Date.now();
       await runPluginReleasePretagPackCheck(repoDir, { timeoutMs: 2_000 });

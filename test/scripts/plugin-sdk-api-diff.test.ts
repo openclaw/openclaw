@@ -11,10 +11,10 @@ import {
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
-  expandPluginSdkApiDiffSet,
-  decodePluginSdkApiArtifact,
-  selectPluginSdkApiReleaseEvidence,
-  validatePluginSdkApiReleaseEvidence,
+  expandPluginSdkApiDiffSet as expandDiffs,
+  decodePluginSdkApiArtifact as decode,
+  selectPluginSdkApiReleaseEvidence as selectEvidence,
+  validatePluginSdkApiReleaseEvidence as validateEvidence,
 } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import {
@@ -75,28 +75,87 @@ function commit(repo: string, message: string): string {
   return git(repo, ["rev-parse", "HEAD"]).trim();
 }
 
-function runCli(repo: string, runnerTemp: string, binDir: string, args: string[]) {
-  return spawnSync(
-    process.execPath,
-    [
-      ...resolveRuntimeWorkerArgv(
-        resolveRuntimeWorkerUrl(scriptModuleEntrypoints.pluginSdkApiDiff),
-      ),
-      ...args,
-    ],
-    {
-      cwd: repo,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
-        PNPM_MARKER: join(binDir, "installs"),
-        RUNNER_TEMP: runnerTemp,
-        TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
-      },
-      timeout: 30_000,
-    },
+function makeFixture(name: string) {
+  const repo = tempDirs.make(`plugin-sdk-${name}-repo-`);
+  const runnerTemp = tempDirs.make(`plugin-sdk-${name}-temp-`);
+  const binDir = tempDirs.make(`plugin-sdk-${name}-bin-`);
+  git(repo, ["init", "--quiet", "--initial-branch=main"]);
+  return { repo, runnerTemp, binDir };
+}
+
+function sdkSource(repo: string) {
+  mkdirSync(join(repo, "src/plugin-sdk"), { recursive: true });
+  mkdirSync(join(repo, "scripts/lib"), { recursive: true });
+  writeFileSync(join(repo, ".gitignore"), "node_modules\n");
+  writeFileSync(
+    join(repo, "package.json"),
+    JSON.stringify({ version: "2026.8.2", type: "module" }),
   );
+  writeFileSync(
+    join(repo, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        target: "ESNext",
+        types: [],
+        skipLibCheck: true,
+      },
+    }),
+  );
+  writeFileSync(join(repo, "scripts/lib/plugin-sdk-entrypoints.json"), '["fixture"]');
+  writeFileSync(join(repo, "scripts/lib/plugin-sdk-private-local-only-subpaths.json"), "[]");
+  return join(repo, "src/plugin-sdk/fixture.ts");
+}
+
+function writePnpm(binDir: string, source: string) {
+  const path = join(binDir, "pnpm");
+  writeFileSync(path, source);
+  chmodSync(path, 0o755);
+}
+
+function cliArgs(args: string[]) {
+  return [
+    ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(scriptModuleEntrypoints.pluginSdkApiDiff)),
+    ...args,
+  ];
+}
+
+function cliEnv(runnerTemp: string, binDir: string) {
+  return {
+    ...process.env,
+    PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+    PNPM_MARKER: join(binDir, "installs"),
+    RUNNER_TEMP: runnerTemp,
+    TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
+  };
+}
+
+function runCli(repo: string, runnerTemp: string, binDir: string, args: string[]) {
+  return spawnSync(process.execPath, cliArgs(args), {
+    cwd: repo,
+    encoding: "utf8",
+    env: cliEnv(runnerTemp, binDir),
+    timeout: 30_000,
+  });
+}
+
+function trackChild(child: ReturnType<typeof spawn>) {
+  const state = { stderr: "", closed: false };
+  assert(child.stderr);
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    state.stderr += chunk;
+  });
+  const close = ownChildCompletion(
+    new Promise<number | null>((resolveClose) => {
+      child.once("close", (code) => {
+        state.closed = true;
+        resolveClose(code);
+      });
+    }),
+  );
+  return Object.assign(state, { close });
 }
 
 let receipts: FixtureReceiptChannel;
@@ -141,46 +200,21 @@ describe("Plugin SDK API diff CLI", () => {
   it("finishes every revision install before starting declaration rendering", async ({
     signal,
   }) => {
-    const repo = tempDirs.make("plugin-sdk-install-order-repo-");
-    const runnerTemp = tempDirs.make("plugin-sdk-install-order-temp-");
-    const binDir = tempDirs.make("plugin-sdk-install-order-bin-");
+    const { repo, runnerTemp, binDir } = makeFixture("install-order");
     const installClaim = join(binDir, "install-claim");
     const blockedMarker = join(binDir, "install-blocked");
     const releaseMarker = join(binDir, "install-release");
     const renderDuringInstall = join(binDir, "render-during-install");
     const renderStarted = join(binDir, "render-started");
-    git(repo, ["init", "--quiet", "--initial-branch=main"]);
-    mkdirSync(join(repo, "src/plugin-sdk"), { recursive: true });
-    mkdirSync(join(repo, "scripts/lib"), { recursive: true });
-    writeFileSync(join(repo, ".gitignore"), "node_modules\n");
-    writeFileSync(
-      join(repo, "package.json"),
-      JSON.stringify({ version: "2026.8.2", type: "module" }),
-    );
-    writeFileSync(
-      join(repo, "tsconfig.json"),
-      JSON.stringify({
-        compilerOptions: {
-          module: "NodeNext",
-          moduleResolution: "NodeNext",
-          target: "ESNext",
-          types: [],
-          skipLibCheck: true,
-        },
-      }),
-    );
-    writeFileSync(join(repo, "scripts/lib/plugin-sdk-entrypoints.json"), '["fixture"]');
-    writeFileSync(join(repo, "scripts/lib/plugin-sdk-private-local-only-subpaths.json"), "[]");
-    const source = join(repo, "src/plugin-sdk/fixture.ts");
+    const source = sdkSource(repo);
     writeFileSync(source, "export type Fixture = string;\n");
     const baseSha = commit(repo, "base");
     writeFileSync(source, "export type Fixture = number;\n");
     commit(repo, "head");
     symlinkSync(resolve("node_modules"), join(repo, "node_modules"), "dir");
 
-    const fakePnpm = join(binDir, "pnpm");
-    writeFileSync(
-      fakePnpm,
+    writePnpm(
+      binDir,
       `#!/bin/sh
 if mkdir "$PNPM_MARKER" 2>/dev/null; then
   while [ ! -e "$PNPM_BLOCKED" ]; do sleep 0.05; done
@@ -191,7 +225,6 @@ ${writeInstallReceipt(binDir)} "$PNPM_BLOCKED"
 while [ ! -e "$PNPM_RELEASE" ]; do sleep 0.05; done
 `,
     );
-    chmodSync(fakePnpm, 0o755);
     const renderProbe = join(binDir, "render-probe.cjs");
     writeFileSync(
       renderProbe,
@@ -226,43 +259,20 @@ if (process.argv.includes("--render-root")) {
 }
 `,
     );
-    const child = spawn(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeWorkerUrl(scriptModuleEntrypoints.pluginSdkApiDiff),
-        ),
-        "--base",
-        baseSha,
-        "--head",
-        "HEAD",
-      ],
-      {
-        cwd: repo,
-        env: {
-          ...withRuntimePreload(process.env, renderProbe),
-          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
-          PNPM_MARKER: installClaim,
-          PNPM_BLOCKED: blockedMarker,
-          PNPM_RELEASE: releaseMarker,
-          RENDER_DURING_INSTALL: renderDuringInstall,
-          RENDER_STARTED: renderStarted,
-          RUNNER_TEMP: runnerTemp,
-          TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
-        },
-        stdio: ["ignore", "ignore", "pipe"],
+    const child = spawn(process.execPath, cliArgs(["--base", baseSha, "--head", "HEAD"]), {
+      cwd: repo,
+      env: {
+        ...withRuntimePreload(cliEnv(runnerTemp, binDir), renderProbe),
+        PNPM_MARKER: installClaim,
+        PNPM_BLOCKED: blockedMarker,
+        PNPM_RELEASE: releaseMarker,
+        RENDER_DURING_INSTALL: renderDuringInstall,
+        RENDER_STARTED: renderStarted,
       },
-    );
-    const close = ownChildCompletion(
-      new Promise<number | null>((resolveClose) => {
-        child.once("close", resolveClose);
-      }),
-    );
-    let stderr = "";
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
+      stdio: ["ignore", "ignore", "pipe"],
     });
+    const tracked = trackChild(child);
+    const { close } = tracked;
 
     let exitCode: number | null = null;
     try {
@@ -278,7 +288,7 @@ if (process.argv.includes("--render-root")) {
       }
       await close;
     }
-    const progressLines = stderr.trim().split("\n");
+    const progressLines = tracked.stderr.trim().split("\n");
     expect(progressLines).toHaveLength(8);
     for (const line of progressLines) {
       expect(line).toMatch(
@@ -292,19 +302,14 @@ if (process.argv.includes("--render-root")) {
   }, 50_000);
 
   it("reports identical commit aliases without installing or changing a dirty caller", () => {
-    const repo = tempDirs.make("plugin-sdk-identical-repo-");
-    const runnerTemp = tempDirs.make("plugin-sdk-identical-temp-");
-    const binDir = tempDirs.make("plugin-sdk-identical-bin-");
-    git(repo, ["init", "--quiet", "--initial-branch=main"]);
+    const { repo, runnerTemp, binDir } = makeFixture("identical");
     writeFileSync(join(repo, "README.md"), "committed\n");
     const headSha = commit(repo, "fixture");
     git(repo, ["tag", "same-commit"]);
     writeFileSync(join(repo, "README.md"), "uncommitted\n");
     const status = git(repo, ["status", "--porcelain"]);
     const worktrees = git(repo, ["worktree", "list", "--porcelain"]);
-    const fakePnpm = join(binDir, "pnpm");
-    writeFileSync(fakePnpm, '#!/bin/sh\n: > "$PNPM_MARKER"\nexit 97\n');
-    chmodSync(fakePnpm, 0o755);
+    writePnpm(binDir, '#!/bin/sh\n: > "$PNPM_MARKER"\nexit 97\n');
     const jsonPath = join(binDir, "diff.json");
     const evidencePath = join(binDir, "evidence.json");
     const summaryPath = join(binDir, "summary.md");
@@ -323,10 +328,8 @@ if (process.argv.includes("--render-root")) {
     ]);
 
     expect(child.status, child.stderr).toBe(0);
-    expect(decodePluginSdkApiArtifact(JSON.parse(readFileSync(jsonPath, "utf8")))).toEqual(
-      emptyDiff,
-    );
-    expect(decodePluginSdkApiArtifact(JSON.parse(readFileSync(evidencePath, "utf8")))).toEqual({
+    expect(decode(JSON.parse(readFileSync(jsonPath, "utf8")))).toEqual(emptyDiff);
+    expect(decode(JSON.parse(readFileSync(evidencePath, "utf8")))).toEqual({
       schema: "openclaw.plugin-sdk-api-release-evidence/v1",
       status: "checked",
       baseRef: "same-commit",
@@ -353,15 +356,10 @@ if (process.argv.includes("--render-root")) {
   ])(
     "validates refs and release versions before skipping renders: %j",
     (fixture) => {
-      const repo = tempDirs.make("plugin-sdk-invalid-repo-");
-      const runnerTemp = tempDirs.make("plugin-sdk-invalid-temp-");
-      const binDir = tempDirs.make("plugin-sdk-invalid-bin-");
-      git(repo, ["init", "--quiet", "--initial-branch=main"]);
+      const { repo, runnerTemp, binDir } = makeFixture("invalid");
       writeFileSync(join(repo, "package.json"), JSON.stringify({ version: fixture.version }));
       commit(repo, "fixture");
-      const fakePnpm = join(binDir, "pnpm");
-      writeFileSync(fakePnpm, '#!/bin/sh\n: > "$PNPM_MARKER"\nexit 97\n');
-      chmodSync(fakePnpm, 0o755);
+      writePnpm(binDir, '#!/bin/sh\n: > "$PNPM_MARKER"\nexit 97\n');
       const worktrees = git(repo, ["worktree", "list", "--porcelain"]);
       const child = runCli(repo, runnerTemp, binDir, [
         ...(fixture.selectors
@@ -385,71 +383,38 @@ if (process.argv.includes("--render-root")) {
 
   it("interrupts a running child and removes its registered worktree", async ({ signal }) => {
     // Keep revision checkout bounded so startup reaches the child this test cancels.
-    const repo = tempDirs.make("plugin-sdk-api-diff-repo-");
-    const runnerTemp = tempDirs.make("plugin-sdk-api-diff-temp-");
-    const binDir = tempDirs.make("plugin-sdk-api-diff-bin-");
+    const { repo, runnerTemp, binDir } = makeFixture("api-diff");
     const pnpmMarker = join(binDir, "pnpm-started");
     const invocationCounts = join(runnerTemp, ".git-invocation-counts.json");
     const runnerSentinel = join(runnerTemp, "runner-owned.txt");
     writeFileSync(invocationCounts, "{}\n");
     writeFileSync(runnerSentinel, "preserve\n");
 
-    git(repo, ["init", "--quiet", "--initial-branch=main"]);
     writeFileSync(join(repo, "README.md"), "fixture\n");
     const baseSha = commit(repo, "fixture");
     writeFileSync(join(repo, "README.md"), "changed fixture\n");
     commit(repo, "changed fixture");
 
-    const fakePnpm = join(binDir, "pnpm");
-    writeFileSync(
-      fakePnpm,
+    writePnpm(
+      binDir,
       `#!/bin/sh\ntrap 'exit 143' INT TERM\n: > "$PNPM_MARKER"\n${writeInstallReceipt(binDir)} "$PNPM_MARKER"\nwhile :; do sleep 1; done\n`,
     );
-    chmodSync(fakePnpm, 0o755);
 
-    const child = spawn(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeWorkerUrl(scriptModuleEntrypoints.pluginSdkApiDiff),
-        ),
-        "--base",
-        baseSha,
-        "--head",
-        "HEAD",
-      ],
-      {
-        cwd: repo,
-        env: {
-          ...process.env,
-          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
-          PNPM_MARKER: pnpmMarker,
-          RUNNER_TEMP: runnerTemp,
-          // The fixture owns Git state; the source CLI still needs its workspace aliases.
-          TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
-        },
-        stdio: ["ignore", "ignore", "pipe"],
+    const child = spawn(process.execPath, cliArgs(["--base", baseSha, "--head", "HEAD"]), {
+      cwd: repo,
+      env: {
+        ...cliEnv(runnerTemp, binDir),
+        PNPM_MARKER: pnpmMarker,
       },
-    );
-
-    let closed = false;
-    const close = ownChildCompletion(
-      new Promise<number | null>((resolveClose) => {
-        child.once("close", (code) => {
-          closed = true;
-          resolveClose(code);
-        });
-      }),
-    );
-    let stderr = "";
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
+      stdio: ["ignore", "ignore", "pipe"],
     });
+
+    const tracked = trackChild(child);
+    const { close } = tracked;
 
     try {
       await withinTest(installBeforeSettlement(pnpmMarker, close), signal);
-      expect(closed, stderr).toBe(false);
+      expect(tracked.closed, tracked.stderr).toBe(false);
       const revisionRoot = git(repo, ["worktree", "list", "--porcelain", "-z"])
         .split("\0")
         .filter((record) => record.startsWith("worktree "))
@@ -470,7 +435,7 @@ if (process.argv.includes("--render-root")) {
       expect(existsSync(invocationCounts)).toBe(true);
       expect(readFileSync(runnerSentinel, "utf8")).toBe("preserve\n");
     } finally {
-      if (!closed) {
+      if (!tracked.closed) {
         // Let the CLI join its installer and remove revision worktrees on test cancellation.
         child.kill("SIGTERM");
         await close;
@@ -486,35 +451,11 @@ if (process.argv.includes("--render-root")) {
   ])(
     "renders only unique revisions needed by changed selectors: %j",
     (bases) => {
-      const repo = tempDirs.make("plugin-sdk-selector-repo-");
-      const runnerTemp = tempDirs.make("plugin-sdk-selector-temp-");
-      const binDir = tempDirs.make("plugin-sdk-selector-bin-");
+      const { repo, runnerTemp, binDir } = makeFixture("selector");
       const installLog = join(binDir, "installs");
       const evidencePath = join(binDir, "evidence.json");
       const jsonPath = join(binDir, "diff.json");
-      git(repo, ["init", "--quiet", "--initial-branch=main"]);
-      mkdirSync(join(repo, "src/plugin-sdk"), { recursive: true });
-      mkdirSync(join(repo, "scripts/lib"), { recursive: true });
-      writeFileSync(join(repo, ".gitignore"), "node_modules\n");
-      writeFileSync(
-        join(repo, "package.json"),
-        JSON.stringify({ version: "2026.8.2", type: "module" }),
-      );
-      writeFileSync(
-        join(repo, "tsconfig.json"),
-        JSON.stringify({
-          compilerOptions: {
-            module: "NodeNext",
-            moduleResolution: "NodeNext",
-            target: "ESNext",
-            types: [],
-            skipLibCheck: true,
-          },
-        }),
-      );
-      writeFileSync(join(repo, "scripts/lib/plugin-sdk-entrypoints.json"), '["fixture"]');
-      writeFileSync(join(repo, "scripts/lib/plugin-sdk-private-local-only-subpaths.json"), "[]");
-      const source = join(repo, "src/plugin-sdk/fixture.ts");
+      const source = sdkSource(repo);
       writeFileSync(source, "export type Fixture = string;\n");
       const latestSha = commit(repo, "latest");
       git(repo, ["tag", "v2026.7.31"]);
@@ -526,9 +467,7 @@ if (process.argv.includes("--render-root")) {
       git(repo, ["tag", "candidate"]);
       writeFileSync(source, "export type Fixture = uncommitted;\n");
       symlinkSync(resolve("node_modules"), join(repo, "node_modules"), "dir");
-      const fakePnpm = join(binDir, "pnpm");
-      writeFileSync(fakePnpm, '#!/bin/sh\nprintf "%s\\n" "$PWD" >> "$PNPM_MARKER"\n');
-      chmodSync(fakePnpm, 0o755);
+      writePnpm(binDir, '#!/bin/sh\nprintf "%s\\n" "$PWD" >> "$PNPM_MARKER"\n');
       const worktrees = git(repo, ["worktree", "list", "--porcelain"]);
       const child = runCli(repo, runnerTemp, binDir, [
         "--bases-json",
@@ -554,12 +493,10 @@ if (process.argv.includes("--render-root")) {
         ).toSorted(),
       );
       const bundle = JSON.parse(readFileSync(evidencePath, "utf8"));
-      expect(decodePluginSdkApiArtifact(bundle).schema).toBe(
-        "openclaw.plugin-sdk-api-release-evidence-set/v2",
-      );
-      const reports = expandPluginSdkApiDiffSet(JSON.parse(readFileSync(jsonPath, "utf8")));
+      expect(decode(bundle).schema).toBe("openclaw.plugin-sdk-api-release-evidence-set/v2");
+      const reports = expandDiffs(JSON.parse(readFileSync(jsonPath, "utf8")));
       for (const [selector, ref] of Object.entries(bases)) {
-        const evidence = selectPluginSdkApiReleaseEvidence({
+        const evidence = selectEvidence({
           evidence: bundle,
           npmDistTag: selector,
         });
@@ -568,7 +505,7 @@ if (process.argv.includes("--render-root")) {
         const changed = baseSha !== headSha;
         expect(evidence).toMatchObject({ baseRef: ref, baseSha, headSha, workflowSha: headSha });
         expect(
-          validatePluginSdkApiReleaseEvidence({
+          validateEvidence({
             acknowledgement: changed ? evidence.digest.slice(0, 8) : "",
             evidence: bundle,
             expectedHeadSha: headSha,

@@ -10,6 +10,33 @@ const releaseTag = "v2026.8.1";
 const alphaBranch = "tideclaw/alpha/2026-08-30-1200Z";
 const packageDir = "extensions/fixture";
 const packageJson = '{"name":"@openclaw/fixture","version":"2026.8.33"}\n';
+const monthlyBranch = "extended-stable/2026.8.33";
+const mainMiss = { "merge-base --is-ancestor HEAD origin/main": { code: 1 } };
+const releaseMiss = {
+  ...mainMiss,
+  "for-each-ref --format=%(refname) refs/remotes/origin/release": { code: 0, output: "" },
+};
+const fetchBranches = [
+  "fetch",
+  "--no-tags",
+  "origin",
+  "+refs/heads/main:refs/remotes/origin/main",
+  "+refs/heads/release/*:refs/remotes/origin/release/*",
+];
+const protectedReleaseEnv = {
+  RELEASE_PUBLISH_RUN_ATTEMPT: "2",
+  RELEASE_PUBLISH_RUN_ID: "123",
+  RELEASE_TAG: releaseTag,
+  TARGET_SHA: sha,
+  WORKFLOW_REF: "refs/tags/release-publish/abcdef123456-2",
+  WORKFLOW_SHA: workflowSha,
+};
+const preflightEnv = {
+  PREFLIGHT_ONLY: "true",
+  NPM_DIST_TAG: "extended-stable",
+  PUBLISH_SCOPE: "all-publishable",
+  SOURCE_REF: sha,
+};
 
 type PluginMode =
   | "clawhub-resolve"
@@ -21,24 +48,20 @@ type PluginMode =
   | "npm-publish-read";
 type RunOptions = Partial<Parameters<typeof runCiGitStep>[0]>;
 
+function workflow(registry: "npm" | "clawhub", step: string, job = `preview_plugins_${registry}`) {
+  return { file: `.github/workflows/plugin-${registry}-release.yml`, job, step };
+}
+
 const modes: Record<
   PluginMode,
   { workflow: { file: string; job: string; step: string }; env: Record<string, string> }
 > = {
   "clawhub-resolve": {
-    workflow: {
-      file: ".github/workflows/plugin-clawhub-release.yml",
-      job: "preview_plugins_clawhub",
-      step: "Resolve checked-out ref",
-    },
+    workflow: workflow("clawhub", "Resolve checked-out ref"),
     env: { RELEASE_TAG: "", TARGET_REF: "" },
   },
   "clawhub-oidc": {
-    workflow: {
-      file: ".github/workflows/plugin-clawhub-release.yml",
-      job: "preview_plugins_clawhub",
-      step: "Validate OIDC source matches workflow ref",
-    },
+    workflow: workflow("clawhub", "Validate OIDC source matches workflow ref"),
     env: {
       DRY_RUN: "false",
       RELEASE_PUBLISH_RUN_ATTEMPT: "",
@@ -50,27 +73,15 @@ const modes: Record<
     },
   },
   "clawhub-trust": {
-    workflow: {
-      file: ".github/workflows/plugin-clawhub-release.yml",
-      job: "preview_plugins_clawhub",
-      step: "Validate ref is on a trusted publish branch",
-    },
+    workflow: workflow("clawhub", "Validate ref is on a trusted publish branch"),
     env: { TRUSTED_PUBLISH_BRANCH: "main" },
   },
   "npm-resolve": {
-    workflow: {
-      file: ".github/workflows/plugin-npm-release.yml",
-      job: "preview_plugins_npm",
-      step: "Resolve checked-out ref",
-    },
+    workflow: workflow("npm", "Resolve checked-out ref"),
     env: {},
   },
   "npm-trust": {
-    workflow: {
-      file: ".github/workflows/plugin-npm-release.yml",
-      job: "preview_plugins_npm",
-      step: "Validate ref is on a trusted publish branch",
-    },
+    workflow: workflow("npm", "Validate ref is on a trusted publish branch"),
     env: {
       RELEASE_CANDIDATE_BRANCH: "",
       NPM_DIST_TAG: "default",
@@ -89,19 +100,15 @@ const modes: Record<
     },
   },
   "npm-preflight-read": {
-    workflow: {
-      file: ".github/workflows/plugin-npm-release.yml",
-      job: "verify_plugin_npm_preflight",
-      step: "Read exact npm preflight source package",
-    },
+    workflow: workflow(
+      "npm",
+      "Read exact npm preflight source package",
+      "verify_plugin_npm_preflight",
+    ),
     env: { EXTENSION_ID: "fixture", PACKAGE_DIR: packageDir, SOURCE_SHA: sha },
   },
   "npm-publish-read": {
-    workflow: {
-      file: ".github/workflows/plugin-npm-release.yml",
-      job: "publish_plugins_npm",
-      step: "Read exact npm publication source package",
-    },
+    workflow: workflow("npm", "Read exact npm publication source package", "publish_plugins_npm"),
     env: { EXTENSION_ID: "fixture", PACKAGE_DIR: packageDir, TARGET_SHA: sha },
   },
 };
@@ -125,16 +132,7 @@ function gitCommands(report: Awaited<ReturnType<typeof pluginRun>>) {
 posixIt.for([
   {
     mode: "clawhub-resolve" as const,
-    commands: [
-      [
-        "fetch",
-        "--no-tags",
-        "origin",
-        "+refs/heads/main:refs/remotes/origin/main",
-        "+refs/heads/release/*:refs/remotes/origin/release/*",
-      ],
-      ["rev-parse", "HEAD"],
-    ],
+    commands: [fetchBranches, ["rev-parse", "HEAD"]],
     output: `sha=${sha}\n`,
   },
   {
@@ -149,16 +147,7 @@ posixIt.for([
   },
   {
     mode: "npm-trust" as const,
-    commands: [
-      [
-        "fetch",
-        "--no-tags",
-        "origin",
-        "+refs/heads/main:refs/remotes/origin/main",
-        "+refs/heads/release/*:refs/remotes/origin/release/*",
-      ],
-      ["merge-base", "--is-ancestor", "HEAD", "origin/main"],
-    ],
+    commands: [fetchBranches, ["merge-base", "--is-ancestor", "HEAD", "origin/main"]],
     output: "",
   },
 ])(
@@ -239,13 +228,7 @@ posixIt.for([1, 125, 143])(
     });
     expect(report.code, report.output).toBe(0);
     expect(gitCommands(report)).toEqual([
-      [
-        "fetch",
-        "--no-tags",
-        "origin",
-        "+refs/heads/main:refs/remotes/origin/main",
-        "+refs/heads/release/*:refs/remotes/origin/release/*",
-      ],
+      fetchBranches,
       ["rev-parse", "--verify", "--quiet", "release/fixture^{commit}"],
       ["rev-parse", "--verify", "--quiet", "origin/release/fixture^{commit}"],
       ["rev-parse", "origin/release/fixture^{commit}"],
@@ -264,13 +247,7 @@ posixIt(
     });
     expect(report.code, report.output).toBe(0);
     expect(report.fetches.map(({ args }) => args)).toEqual([
-      [
-        "fetch",
-        "--no-tags",
-        "origin",
-        "+refs/heads/main:refs/remotes/origin/main",
-        "+refs/heads/release/*:refs/remotes/origin/release/*",
-      ],
+      fetchBranches,
       ["fetch", "--no-tags", "origin", `+refs/tags/${releaseTag}:refs/tags/${releaseTag}`],
     ]);
   },
@@ -281,14 +258,7 @@ posixIt(
   "ClawHub protected tooling validates the exact peeled release target",
   async ({ signal }) => {
     const report = await pluginRun(signal, "clawhub-oidc", {
-      env: {
-        RELEASE_PUBLISH_RUN_ATTEMPT: "2",
-        RELEASE_PUBLISH_RUN_ID: "123",
-        RELEASE_TAG: releaseTag,
-        TARGET_SHA: sha,
-        WORKFLOW_REF: "refs/tags/release-publish/abcdef123456-2",
-        WORKFLOW_SHA: workflowSha,
-      },
+      env: protectedReleaseEnv,
       revisions: { [`${releaseTag}^{commit}`]: sha },
     });
     expect(report.code, report.output).toBe(0);
@@ -305,14 +275,7 @@ posixIt.for([1, 125])(
   { timeout: 55_000 },
   async (code, { signal }) => {
     const report = await pluginRun(signal, "clawhub-oidc", {
-      env: {
-        RELEASE_PUBLISH_RUN_ATTEMPT: "2",
-        RELEASE_PUBLISH_RUN_ID: "123",
-        RELEASE_TAG: releaseTag,
-        TARGET_SHA: sha,
-        WORKFLOW_REF: "refs/tags/release-publish/abcdef123456-2",
-        WORKFLOW_SHA: workflowSha,
-      },
+      env: protectedReleaseEnv,
       commandResults: { [`rev-parse ${releaseTag}^{commit}`]: { code } },
     });
     expect(report.code, report.output).toBe(1);
@@ -351,10 +314,7 @@ posixIt(
   async ({ signal }) => {
     const report = await pluginRun(signal, "npm-trust", {
       env: { WORKFLOW_REF: `refs/heads/${alphaBranch}` },
-      commandResults: {
-        "merge-base --is-ancestor HEAD origin/main": { code: 1 },
-        "for-each-ref --format=%(refname) refs/remotes/origin/release": { code: 0, output: "" },
-      },
+      commandResults: releaseMiss,
     });
     expect(report.code, report.output).toBe(1);
     expect(report.output).toContain(
@@ -371,8 +331,7 @@ posixIt(
     const report = await pluginRun(signal, "clawhub-trust", {
       env: { TRUSTED_PUBLISH_BRANCH: alphaBranch },
       commandResults: {
-        "merge-base --is-ancestor HEAD origin/main": { code: 1 },
-        "for-each-ref --format=%(refname) refs/remotes/origin/release": { code: 0, output: "" },
+        ...releaseMiss,
         [`merge-base --is-ancestor HEAD refs/remotes/origin/${alphaBranch}`]: { code: 0 },
       },
     });
@@ -387,13 +346,10 @@ posixIt.for(["refs/heads/extended-stable/2026.8.33", "refs/heads/main"])(
   "npm extended-stable preflight retains exact-tip admission from %s",
   { timeout: 55_000 },
   async (workflowRef, { signal }) => {
-    const branch = "extended-stable/2026.8.33";
+    const branch = monthlyBranch;
     const report = await pluginRun(signal, "npm-trust", {
       env: {
-        PREFLIGHT_ONLY: "true",
-        NPM_DIST_TAG: "extended-stable",
-        PUBLISH_SCOPE: "all-publishable",
-        SOURCE_REF: sha,
+        ...preflightEnv,
         WORKFLOW_REF: workflowRef,
       },
       revisions: {
@@ -413,61 +369,47 @@ posixIt.for(["refs/heads/extended-stable/2026.8.33", "refs/heads/main"])(
 
 const candidateAdmissionCases: Array<{
   name: string;
-  env: Record<string, string>;
-  commands: RunOptions["commandResults"];
-  code: number;
-  message: string;
+  env?: RunOptions["env"];
+  commands?: RunOptions["commandResults"];
+  code?: number;
+  message?: string;
 }> = [
-  { name: "qualified protected tooling", env: {}, commands: {}, code: 0, message: "" },
+  { name: "qualified protected tooling", code: 0 },
   {
     name: "wrong candidate month",
     env: { RELEASE_CANDIDATE_BRANCH: "extended-stable/2026.7.33" },
-    commands: {},
-    code: 1,
     message: "release_candidate_branch must be extended-stable/2026.8.33",
   },
   {
     name: "mutable main tooling",
     env: { WORKFLOW_REF: "refs/heads/main" },
-    commands: {},
-    code: 1,
     message: "require a protected release-publish/<sha12>-<n> tooling tag",
   },
   {
     name: "tooling outside main",
-    env: {},
     commands: { [`merge-base --is-ancestor ${workflowSha} origin/main`]: { code: 1 } },
-    code: 1,
     message: "workflow revision is not reachable from current main",
   },
   {
     name: "candidate outside monthly branch",
-    env: {},
     commands: {
-      "merge-base --is-ancestor HEAD refs/remotes/origin/extended-stable/2026.8.33": { code: 1 },
+      [`merge-base --is-ancestor HEAD refs/remotes/origin/${monthlyBranch}`]: { code: 1 },
     },
-    code: 1,
     message: "target must be reachable from extended-stable/2026.8.33",
   },
   {
     name: "tooling ancestry Git failure",
-    env: {},
     commands: { [`merge-base --is-ancestor ${workflowSha} origin/main`]: { code: 23 } },
     code: 23,
-    message: "",
   },
   {
     name: "preflight candidate override",
     env: { PREFLIGHT_ONLY: "true", REQUIRE_NPM_PUBLISH_ENVIRONMENT: "false" },
-    commands: {},
-    code: 1,
     message: "preflight must not include release_candidate_branch",
   },
   {
     name: "non-extended candidate override",
     env: { NPM_DIST_TAG: "default" },
-    commands: {},
-    code: 1,
     message: "release_candidate_branch is only valid for extended-stable publication",
   },
 ];
@@ -475,7 +417,7 @@ const candidateAdmissionCases: Array<{
 posixIt.for(candidateAdmissionCases)(
   "npm canonical candidate admission: $name",
   { timeout: 55_000 },
-  async ({ env, commands, code, message }, { signal }) => {
+  async ({ env, commands = {}, code = 1, message }, { signal }) => {
     const report = await pluginRun(signal, "npm-trust", {
       env: {
         NPM_DIST_TAG: "extended-stable",
@@ -509,13 +451,10 @@ posixIt.for([
   "npm extended-stable preflight rejects %s",
   { timeout: 55_000 },
   async ([_name, workflowRef, branchSha], { signal }) => {
-    const branch = "extended-stable/2026.8.33";
+    const branch = monthlyBranch;
     const report = await pluginRun(signal, "npm-trust", {
       env: {
-        PREFLIGHT_ONLY: "true",
-        NPM_DIST_TAG: "extended-stable",
-        PUBLISH_SCOPE: "all-publishable",
-        SOURCE_REF: sha,
+        ...preflightEnv,
         WORKFLOW_REF: workflowRef,
       },
       revisions: {
@@ -534,10 +473,7 @@ posixIt(
     const report = await pluginRun(signal, "npm-trust", {
       env: { PREFLIGHT_ONLY: "true", SOURCE_REF: sha, WORKFLOW_REF: `refs/heads/${alphaBranch}` },
       revisions: { [`${sha}^{commit}`]: sha },
-      commandResults: {
-        "merge-base --is-ancestor HEAD origin/main": { code: 1 },
-        "for-each-ref --format=%(refname) refs/remotes/origin/release": { code: 0, output: "" },
-      },
+      commandResults: releaseMiss,
     });
     expect(report.code, report.output).toBe(1);
     expect(report.output).toContain(
@@ -578,84 +514,50 @@ posixIt.for(["clawhub-trust", "npm-trust"] as const)(
   },
 );
 
-const terminalCases: Array<{
-  commandResults?: RunOptions["commandResults"];
-  env?: Record<string, string>;
-  match: string;
-  mode: PluginMode;
-  operation: string;
-  revisions?: Record<string, string>;
-}> = [
-  { mode: "clawhub-resolve" as const, operation: "fetch", match: "^fetch " },
-  {
-    mode: "clawhub-resolve" as const,
-    operation: "rev-parse",
-    match: "^rev-parse --verify --quiet ",
-    env: { TARGET_REF: "release/fixture" },
-    revisions: { "origin/release/fixture^{commit}": sha },
-  },
-  {
-    mode: "clawhub-resolve" as const,
-    operation: "checkout",
-    match: "^checkout ",
+function terminalCase(
+  mode: PluginMode,
+  operation: string,
+  options: Pick<RunOptions, "env" | "commandResults" | "revisions"> = {},
+  match = `^${operation} `,
+) {
+  return { mode, operation, match, ...options };
+}
+const sourcePackage = {
+  commandResults: { [`show ${sha}:${packageDir}/package.json`]: { code: 0, output: packageJson } },
+};
+const terminalCases = [
+  terminalCase("clawhub-resolve", "fetch"),
+  terminalCase(
+    "clawhub-resolve",
+    "rev-parse",
+    {
+      env: { TARGET_REF: "release/fixture" },
+      revisions: { "origin/release/fixture^{commit}": sha },
+    },
+    "^rev-parse --verify --quiet ",
+  ),
+  terminalCase("clawhub-resolve", "checkout", {
     env: { TARGET_REF: sha },
     revisions: { [`${sha}^{commit}`]: sha },
-  },
-  {
-    mode: "clawhub-oidc" as const,
-    operation: "rev-parse",
-    match: "^rev-parse ",
+  }),
+  terminalCase("clawhub-oidc", "rev-parse", {
     env: {
+      ...protectedReleaseEnv,
       RELEASE_PUBLISH_RUN_ATTEMPT: "1",
       RELEASE_PUBLISH_RUN_ID: "1",
-      RELEASE_TAG: releaseTag,
-      TARGET_SHA: sha,
       WORKFLOW_REF: "refs/tags/release-publish/abcdef123456-1",
-      WORKFLOW_SHA: workflowSha,
     },
-  },
-  {
-    mode: "clawhub-trust" as const,
-    operation: "merge-base",
-    match: "^merge-base ",
-  },
-  {
-    mode: "clawhub-trust" as const,
-    operation: "for-each-ref",
-    match: "^for-each-ref ",
-    commandResults: { "merge-base --is-ancestor HEAD origin/main": { code: 1 } },
-  },
-  { mode: "npm-resolve" as const, operation: "rev-parse", match: "^rev-parse " },
-  { mode: "npm-trust" as const, operation: "fetch", match: "^fetch " },
-  {
-    mode: "npm-trust" as const,
-    operation: "merge-base",
-    match: "^merge-base ",
-  },
-  {
-    mode: "npm-trust" as const,
-    operation: "for-each-ref",
-    match: "^for-each-ref ",
-    commandResults: { "merge-base --is-ancestor HEAD origin/main": { code: 1 } },
-  },
-  { mode: "npm-preflight-read" as const, operation: "fetch", match: "^fetch " },
-  {
-    mode: "npm-preflight-read" as const,
-    operation: "show",
-    match: "^show ",
-    commandResults: {
-      [`show ${sha}:${packageDir}/package.json`]: { code: 0, output: packageJson },
-    },
-  },
-  { mode: "npm-publish-read" as const, operation: "fetch", match: "^fetch " },
-  {
-    mode: "npm-publish-read" as const,
-    operation: "show",
-    match: "^show ",
-    commandResults: {
-      [`show ${sha}:${packageDir}/package.json`]: { code: 0, output: packageJson },
-    },
-  },
+  }),
+  terminalCase("clawhub-trust", "merge-base"),
+  terminalCase("clawhub-trust", "for-each-ref", { commandResults: mainMiss }),
+  terminalCase("npm-resolve", "rev-parse"),
+  terminalCase("npm-trust", "fetch"),
+  terminalCase("npm-trust", "merge-base"),
+  terminalCase("npm-trust", "for-each-ref", { commandResults: mainMiss }),
+  terminalCase("npm-preflight-read", "fetch"),
+  terminalCase("npm-preflight-read", "show", sourcePackage),
+  terminalCase("npm-publish-read", "fetch"),
+  terminalCase("npm-publish-read", "show", sourcePackage),
 ];
 
 posixIt.for(

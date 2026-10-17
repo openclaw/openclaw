@@ -5,13 +5,13 @@ import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  createPluginSdkApiDiffSet,
-  encodePluginSdkApiArtifact,
-  decodePluginSdkApiArtifact,
-  expandPluginSdkApiDiffSet,
-  selectPluginSdkApiReleaseEvidence,
-  createPluginSdkApiReleaseEvidence,
-  createPluginSdkApiReleaseEvidenceSet,
+  createPluginSdkApiDiffSet as createDiffSet,
+  encodePluginSdkApiArtifact as encode,
+  decodePluginSdkApiArtifact as decode,
+  expandPluginSdkApiDiffSet as expandDiffs,
+  selectPluginSdkApiReleaseEvidence as selectEvidence,
+  createPluginSdkApiReleaseEvidence as createEvidence,
+  createPluginSdkApiReleaseEvidenceSet as createEvidenceSet,
   validatePluginSdkApiReleaseEvidence,
 } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -30,12 +30,25 @@ function diff(exports: unknown[] = []) {
 }
 
 function evidence(exports: unknown[] = []) {
-  return createPluginSdkApiReleaseEvidence({
+  return createEvidence({
     baseRef: "v2026.8.1",
     baseSha,
     diff: diff(exports),
     headSha,
     workflowSha,
+  });
+}
+
+function validate(
+  receipt: unknown,
+  overrides: Partial<Parameters<typeof validatePluginSdkApiReleaseEvidence>[0]> = {},
+) {
+  return validatePluginSdkApiReleaseEvidence({
+    acknowledgement: "",
+    evidence: receipt,
+    expectedHeadSha: headSha,
+    expectedWorkflowSha: workflowSha,
+    ...overrides,
   });
 }
 
@@ -46,9 +59,7 @@ describe("Plugin SDK API release evidence", () => {
     writeFileSync(
       manifestPath,
       JSON.stringify({
-        pluginSdkApi: encodePluginSdkApiArtifact(
-          createPluginSdkApiReleaseEvidenceSet({ beta: evidence(), latest: receipt }),
-        ),
+        pluginSdkApi: encode(createEvidenceSet({ beta: evidence(), latest: receipt })),
       }),
     );
     const run = (acknowledgement?: string) =>
@@ -84,31 +95,25 @@ describe("Plugin SDK API release evidence", () => {
     const latest = { ...beta, baseRef: "v2026.7.31", baseSha: "c".repeat(40) };
     const selectors = { beta, latest };
     const legacy = { schema: "openclaw.plugin-sdk-api-release-evidence-set/v1", selectors };
-    const compactBytes = JSON.stringify(createPluginSdkApiReleaseEvidenceSet(selectors));
+    const compactBytes = JSON.stringify(createEvidenceSet(selectors));
     const compact = JSON.parse(compactBytes);
     expect(Buffer.byteLength(JSON.stringify(legacy))).toBeGreaterThan(16 * 1024 * 1024);
     expect(Buffer.byteLength(compactBytes)).toBeLessThan(16 * 1024 * 1024);
     expect(Object.keys(compact.diffs)).toEqual([beta.digest]);
-    const report = createPluginSdkApiDiffSet({ beta: beta.diff, latest: latest.diff });
+    const report = createDiffSet({ beta: beta.diff, latest: latest.diff });
     const reportBytes = JSON.stringify(report);
     expect(Buffer.byteLength(reportBytes)).toBeLessThan(16 * 1024 * 1024);
-    expect(expandPluginSdkApiDiffSet(JSON.parse(reportBytes))).toEqual({
+    expect(expandDiffs(JSON.parse(reportBytes))).toEqual({
       beta: beta.diff,
       latest: latest.diff,
     });
     for (const npmDistTag of ["beta", "latest"] as const) {
-      expect(selectPluginSdkApiReleaseEvidence({ evidence: compact, npmDistTag })).toEqual(
-        selectors[npmDistTag],
-      );
+      expect(selectEvidence({ evidence: compact, npmDistTag })).toEqual(selectors[npmDistTag]);
       const input = {
         acknowledgement: beta.digest.slice(0, 8),
-        expectedHeadSha: headSha,
-        expectedWorkflowSha: workflowSha,
         npmDistTag,
       };
-      expect(validatePluginSdkApiReleaseEvidence({ ...input, evidence: compact })).toEqual(
-        validatePluginSdkApiReleaseEvidence({ ...input, evidence: legacy }),
-      );
+      expect(validate(compact, input)).toEqual(validate(legacy, input));
     }
   });
 
@@ -116,65 +121,59 @@ describe("Plugin SDK API release evidence", () => {
     const declaration = "declare interface Shared { value: string; }\n".repeat(1000);
     const beta = evidence([{ declaration, change: "added" }]);
     const latest = evidence([{ declaration, change: "removed" }]);
-    const logical = createPluginSdkApiReleaseEvidenceSet({ beta, latest });
-    const encodedBytes = JSON.stringify(encodePluginSdkApiArtifact(logical));
+    const logical = createEvidenceSet({ beta, latest });
+    const encodedBytes = JSON.stringify(encode(logical));
     const encoded = JSON.parse(encodedBytes);
     expect(encodedBytes.length).toBeLessThan(JSON.stringify(logical).length / 2);
-    expect(decodePluginSdkApiArtifact(encoded)).toEqual(logical);
+    expect(decode(encoded)).toEqual(logical);
     for (const npmDistTag of ["beta", "latest"] as const) {
       const receipt = { beta, latest }[npmDistTag];
-      expect(selectPluginSdkApiReleaseEvidence({ evidence: encoded, npmDistTag })).toEqual(receipt);
+      expect(selectEvidence({ evidence: encoded, npmDistTag })).toEqual(receipt);
       expect(
-        validatePluginSdkApiReleaseEvidence({
-          evidence: encoded,
-          npmDistTag,
-          acknowledgement: receipt.digest.slice(0, 8),
-          expectedHeadSha: headSha,
-          expectedWorkflowSha: workflowSha,
-        }),
+        validate(encoded, { npmDistTag, acknowledgement: receipt.digest.slice(0, 8) }),
       ).toMatchObject({ digest: receipt.digest });
     }
-    const report = createPluginSdkApiDiffSet({ beta: beta.diff, latest: latest.diff });
-    expect(expandPluginSdkApiDiffSet(encodePluginSdkApiArtifact(report))).toEqual({
+    const report = createDiffSet({ beta: beta.diff, latest: latest.diff });
+    expect(expandDiffs(encode(report))).toEqual({
       beta: beta.diff,
       latest: latest.diff,
     });
     expect(
-      selectPluginSdkApiReleaseEvidence({
-        evidence: encodePluginSdkApiArtifact(beta),
+      selectEvidence({
+        evidence: encode(beta),
         npmDistTag: "beta",
       }),
     ).toEqual(beta);
   });
 
   it("rejects malformed transport, nested envelopes and bounded expansion bombs", () => {
-    const encoded = encodePluginSdkApiArtifact(evidence());
+    const encoded = encode(evidence());
     for (const invalid of [
       { ...encoded, data: encoded.data + "!" },
       { ...encoded, data: Buffer.from("not gzip").toString("base64") },
       { ...encoded, encoding: "brotli+base64" },
       { ...encoded, extra: true },
       { ...encoded, data: "A".repeat(16 * 1024 * 1024 + 1) },
-      encodePluginSdkApiArtifact(encoded),
+      encode(encoded),
     ]) {
-      expect(() => decodePluginSdkApiArtifact(invalid)).toThrow();
+      expect(() => decode(invalid)).toThrow();
     }
     const bomb = {
       ...encoded,
       data: gzipSync(Buffer.alloc(64 * 1024 * 1024 + 1, 32)).toString("base64"),
     };
-    expect(() => decodePluginSdkApiArtifact(bomb)).toThrow();
+    expect(() => decode(bomb)).toThrow();
     const beta = evidence([{ declaration: "beta" }]);
     const latest = evidence([{ declaration: "latest" }]);
-    const logical = createPluginSdkApiReleaseEvidenceSet({ beta, latest });
+    const logical = createEvidenceSet({ beta, latest });
     const latestDiff = logical.diffs[latest.digest];
     if (!latestDiff) {
       throw new Error("Missing latest comparison fixture");
     }
     latestDiff.exports.push({ declaration: "tampered unselected comparison" });
     expect(() =>
-      selectPluginSdkApiReleaseEvidence({
-        evidence: encodePluginSdkApiArtifact(logical),
+      selectEvidence({
+        evidence: encode(logical),
         npmDistTag: "beta",
       }),
     ).toThrow("digest does not match");
@@ -183,15 +182,9 @@ describe("Plugin SDK API release evidence", () => {
   it("rejects missing, extra, redirected and modified pooled comparisons", () => {
     const beta = evidence([{ change: "added", exportName: "betaOnly" }]);
     const latest = evidence([{ change: "removed", exportName: "latestOnly" }]);
-    const compact = createPluginSdkApiReleaseEvidenceSet({ beta, latest });
-    const validate = (value: unknown) =>
-      validatePluginSdkApiReleaseEvidence({
-        acknowledgement: beta.digest.slice(0, 8),
-        evidence: value,
-        expectedHeadSha: headSha,
-        expectedWorkflowSha: workflowSha,
-        npmDistTag: "beta",
-      });
+    const compact = createEvidenceSet({ beta, latest });
+    const validateBeta = (value: unknown) =>
+      validate(value, { acknowledgement: beta.digest.slice(0, 8), npmDistTag: "beta" });
     for (const mutate of [
       (value: typeof compact) => {
         delete value.diffs[beta.digest];
@@ -212,130 +205,92 @@ describe("Plugin SDK API release evidence", () => {
     ]) {
       const changed = structuredClone(compact);
       mutate(changed);
-      expect(() => validate(changed)).toThrow();
+      expect(() => validateBeta(changed)).toThrow();
     }
-    expect(validate(compact)).toMatchObject({ digest: beta.digest });
-    expect(
-      expandPluginSdkApiDiffSet(
-        createPluginSdkApiDiffSet({ beta: beta.diff, latest: latest.diff }),
-      ),
-    ).toEqual({ beta: beta.diff, latest: latest.diff });
+    expect(validateBeta(compact)).toMatchObject({ digest: beta.digest });
+    expect(expandDiffs(createDiffSet({ beta: beta.diff, latest: latest.diff }))).toEqual({
+      beta: beta.diff,
+      latest: latest.diff,
+    });
   });
 
   it("rejects evidence for another release SHA or a changed diff payload", () => {
     const receipt = evidence([{ change: "added", exportName: "send" }]);
-    expect(() =>
-      validatePluginSdkApiReleaseEvidence({
-        acknowledgement: receipt.digest.slice(0, 8),
-        evidence: receipt,
-        expectedHeadSha: "c".repeat(40),
-        expectedWorkflowSha: workflowSha,
-      }),
-    ).toThrow("head SHA does not match");
+    const acknowledgement = receipt.digest.slice(0, 8);
+    expect(() => validate(receipt, { acknowledgement, expectedHeadSha: "c".repeat(40) })).toThrow(
+      "head SHA does not match",
+    );
 
     const changed = structuredClone(receipt);
     changed.diff.exports.push({ change: "removed", exportName: "receive" });
-    expect(() =>
-      validatePluginSdkApiReleaseEvidence({
-        acknowledgement: receipt.digest.slice(0, 8),
-        evidence: changed,
-        expectedHeadSha: headSha,
-        expectedWorkflowSha: workflowSha,
-      }),
-    ).toThrow("digest does not match");
+    expect(() => validate(changed, { acknowledgement })).toThrow("digest does not match");
   });
 
   it("rejects a preflight receipt when the npm dist-tag predecessor moved", () => {
     const receipt = evidence();
-    const validate = (currentSelectorRef: string, currentSelectorSha: string) =>
-      validatePluginSdkApiReleaseEvidence({
-        acknowledgement: "",
-        currentSelectorRef,
-        currentSelectorSha,
-        evidence: receipt,
-        expectedHeadSha: headSha,
-        expectedWorkflowSha: workflowSha,
-        targetRef: "v2026.8.2",
-      });
+    const validateSelector = (currentSelectorRef: string, currentSelectorSha: string) =>
+      validate(receipt, { currentSelectorRef, currentSelectorSha, targetRef: "v2026.8.2" });
 
-    expect(validate("v2026.8.1", baseSha)).toMatchObject({ status: "checked" });
-    expect(() => validate("v2026.8.1-1", "c".repeat(40))).toThrow(
+    expect(validateSelector("v2026.8.1", baseSha)).toMatchObject({ status: "checked" });
+    expect(() => validateSelector("v2026.8.1-1", "c".repeat(40))).toThrow(
       "predecessor no longer matches the npm dist-tag",
     );
-    expect(validate("v2026.8.2", headSha)).toMatchObject({ status: "checked" });
-    expect(() => validate("v2026.8.2", "c".repeat(40))).toThrow(
+    expect(validateSelector("v2026.8.2", headSha)).toMatchObject({ status: "checked" });
+    expect(() => validateSelector("v2026.8.2", "c".repeat(40))).toThrow(
       "dist-tag target does not match the release SHA",
     );
   });
 
   it("requires the selected channel's predecessor and acknowledgement", () => {
     const beta = evidence([{ change: "added", exportName: "betaOnly" }]);
-    const latest = createPluginSdkApiReleaseEvidence({
+    const latest = createEvidence({
       baseRef: "v2026.7.31",
       baseSha: "c".repeat(40),
       diff: diff([{ change: "removed", exportName: "oldStable" }]),
       headSha,
       workflowSha,
     });
-    const bundle = createPluginSdkApiReleaseEvidenceSet({ beta, latest });
-    const validate = (
+    const bundle = createEvidenceSet({ beta, latest });
+    const validateSelector = (
       npmDistTag: string,
       predecessor = latest,
       acknowledgement = latest.digest.slice(0, 8),
     ) =>
-      validatePluginSdkApiReleaseEvidence({
+      validate(bundle, {
         acknowledgement,
         currentSelectorRef: predecessor.baseRef,
         currentSelectorSha: predecessor.baseSha,
-        evidence: bundle,
-        expectedHeadSha: headSha,
-        expectedWorkflowSha: workflowSha,
         npmDistTag,
         targetRef: "v2026.8.2",
       });
 
-    expect(validate("latest")).toMatchObject({ digest: latest.digest });
-    expect(validate("beta", beta, beta.digest.slice(0, 8))).toMatchObject({ digest: beta.digest });
-    expect(() => validate("latest", beta)).toThrow("predecessor no longer matches");
-    expect(() => validate("latest", latest, beta.digest.slice(0, 8))).toThrow(
+    expect(validateSelector("latest")).toMatchObject({ digest: latest.digest });
+    expect(validateSelector("beta", beta, beta.digest.slice(0, 8))).toMatchObject({
+      digest: beta.digest,
+    });
+    expect(() => validateSelector("latest", beta)).toThrow("predecessor no longer matches");
+    expect(() => validateSelector("latest", latest, beta.digest.slice(0, 8))).toThrow(
       "require acknowledgement",
     );
-    expect(() => validate("alpha")).toThrow("beta or latest");
-    expect(() => validate("")).toThrow("beta or latest");
-    expect(() => createPluginSdkApiReleaseEvidenceSet({ beta })).toThrow("bind beta and latest");
-    expect(() =>
-      createPluginSdkApiReleaseEvidenceSet({ beta, latest: { ...latest, headSha: baseSha } }),
-    ).toThrow("one release and tooling SHA");
-    expect(() =>
-      createPluginSdkApiReleaseEvidenceSet({ beta, latest: { ...latest, workflowSha: baseSha } }),
-    ).toThrow("one release and tooling SHA");
+    expect(() => validateSelector("alpha")).toThrow("beta or latest");
+    expect(() => validateSelector("")).toThrow("beta or latest");
+    expect(() => createEvidenceSet({ beta })).toThrow("bind beta and latest");
+    expect(() => createEvidenceSet({ beta, latest: { ...latest, headSha: baseSha } })).toThrow(
+      "one release and tooling SHA",
+    );
+    expect(() => createEvidenceSet({ beta, latest: { ...latest, workflowSha: baseSha } })).toThrow(
+      "one release and tooling SHA",
+    );
   });
 
   it("rejects untrusted tooling and unavailable evidence", () => {
     const receipt = evidence();
-    expect(() =>
-      validatePluginSdkApiReleaseEvidence({
-        acknowledgement: "",
-        evidence: receipt,
-        expectedHeadSha: headSha,
-        expectedWorkflowSha: undefined,
-      }),
-    ).toThrow("Expected Plugin SDK API evidence workflow SHA");
-    expect(() =>
-      validatePluginSdkApiReleaseEvidence({
-        acknowledgement: "",
-        evidence: receipt,
-        expectedHeadSha: headSha,
-        expectedWorkflowSha: "f".repeat(40),
-      }),
-    ).toThrow("workflow SHA does not match trusted tooling");
-    expect(() =>
-      validatePluginSdkApiReleaseEvidence({
-        acknowledgement: "",
-        evidence: { ...receipt, status: "unavailable" },
-        expectedHeadSha: headSha,
-        expectedWorkflowSha: workflowSha,
-      }),
-    ).toThrow("invalid status");
+    expect(() => validate(receipt, { expectedWorkflowSha: undefined })).toThrow(
+      "Expected Plugin SDK API evidence workflow SHA",
+    );
+    expect(() => validate(receipt, { expectedWorkflowSha: "f".repeat(40) })).toThrow(
+      "workflow SHA does not match trusted tooling",
+    );
+    expect(() => validate({ ...receipt, status: "unavailable" })).toThrow("invalid status");
   });
 });
