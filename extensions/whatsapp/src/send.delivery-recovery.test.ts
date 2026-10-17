@@ -1,4 +1,4 @@
-import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from "baileys";
+import type { AnyMessageContent, WAMessage } from "baileys";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -46,6 +46,12 @@ vi.mock("./connection-controller-runtime-context.js", () => ({
 const cfg = { channels: { whatsapp: {} } } as OpenClawConfig;
 const accountId = "default";
 const chunkConfig = { channels: { whatsapp: { textChunkLimit: 160 } } };
+const mediaFixture = (
+  kind: "document" | "image" | "audio",
+  fileName: string,
+  contentType: string,
+  bytes: string,
+) => ({ kind, fileName, contentType, buffer: Buffer.from(bytes) });
 
 function installChunkSender(prefix: string) {
   const sendMessage = vi.fn<ActiveWebListener["sendMessage"]>(async () =>
@@ -107,92 +113,78 @@ describe("WhatsApp delivery recovery", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("preserves long styles and quotes only the first chunk", async () => {
-    await withStateDirEnv("openclaw-whatsapp-styled-reply-", async () => {
-      const sendMessage = installChunkSender("part");
-      const onDeliveryResult = vi.fn();
-      const result = await sendDurableMessageBatch({
-        cfg: chunkConfig,
-        channel: "whatsapp",
-        to: "+1555",
-        payloads: [{ text: `**${"x".repeat(340)}**` }],
-        replyToId: "quoted",
-        replyToMode: "first",
-        onDeliveryResult,
-        durability: "required",
+  it.each(["batch", "payload"] as const)(
+    "preserves styles and first-chunk quoting via %s",
+    async (route) => {
+      await withStateDirEnv("openclaw-whatsapp-styled-reply-", async () => {
+        const prefix = route === "batch" ? "part" : "payload";
+        const length = route === "batch" ? 340 : 4_200;
+        const sendMessage = installChunkSender(prefix);
+        const onDeliveryResult = vi.fn();
+        const onPlatformSendDispatch = vi.fn(async () => {});
+        const text = `**${"x".repeat(length)}**`;
+        const common = {
+          cfg: chunkConfig,
+          to: "+1555",
+          replyToId: "quoted",
+          replyToMode: "first" as const,
+          onDeliveryResult,
+        };
+        if (route === "batch") {
+          const result = await sendDurableMessageBatch({
+            ...common,
+            channel: "whatsapp",
+            payloads: [{ text }],
+            durability: "required",
+          });
+          expect(result.status).toBe("sent");
+        } else {
+          await whatsappChannelOutbound.sendPayload!({
+            ...common,
+            text,
+            payload: { text },
+            formatting: { textLimit: 80 },
+            replyToIdSource: "implicit",
+            onPlatformSendDispatch,
+          });
+        }
+        const parts = sendMessage.mock.calls.map(([, part]) => part);
+        if (route === "batch") {
+          expect(parts).toEqual([158, 158, 24].map((size) => `*${"x".repeat(size)}*`));
+          expect(
+            onDeliveryResult.mock.calls.map(([progress]) =>
+              progress.receipt?.parts.map((part: { replyToId?: string }) => part.replyToId),
+            ),
+          ).toEqual([["quoted"], [undefined], [undefined]]);
+        } else {
+          expect(parts.length).toBeGreaterThan(1);
+          expect(parts.every((part) => /^\*x+\*$/.test(part) && part.length <= 80)).toBe(true);
+          expect(parts.map((part) => part.slice(1, -1)).join("")).toBe("x".repeat(length));
+          expect(onPlatformSendDispatch).toHaveBeenCalledTimes(parts.length);
+        }
+        expect(sendMessage.mock.calls.map((call) => call[4]?.quotedMessageKey?.id)).toEqual(
+          parts.map((_, index) => (index === 0 ? "quoted" : undefined)),
+        );
+        expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual(
+          parts.map((_, index) => `${prefix}-${index + 1}`),
+        );
       });
-      expect(result.status).toBe("sent");
-      // Marker overhead carries into the next chunk instead of a tiny "*xx*" message.
-      expect(sendMessage.mock.calls.map(([, text]) => text)).toEqual([
-        `*${"x".repeat(158)}*`,
-        `*${"x".repeat(158)}*`,
-        `*${"x".repeat(24)}*`,
-      ]);
-      expect(sendMessage.mock.calls.map((call) => call[4]?.quotedMessageKey?.id)).toEqual([
-        "quoted",
-        undefined,
-        undefined,
-      ]);
-      expect(onDeliveryResult.mock.calls.map(([progress]) => progress.messageId)).toEqual([
-        "part-1",
-        "part-2",
-        "part-3",
-      ]);
-      expect(
-        onDeliveryResult.mock.calls.map(([progress]) =>
-          progress.receipt?.parts.map((part: { replyToId?: string }) => part.replyToId),
-        ),
-      ).toEqual([["quoted"], [undefined], [undefined]]);
-    });
-  });
-
-  it("keeps payload formatting intact under a narrower delivery limit", async () => {
-    const sendMessage = installChunkSender("payload");
-    const onPlatformSendDispatch = vi.fn(async () => {});
-    const onDeliveryResult = vi.fn();
-    const text = `**${"x".repeat(4_200)}**`;
-    await whatsappChannelOutbound.sendPayload!({
-      cfg: chunkConfig,
-      to: "+1555",
-      text,
-      payload: { text },
-      formatting: { textLimit: 80 },
-      replyToId: "quoted",
-      replyToIdSource: "implicit",
-      replyToMode: "first",
-      onPlatformSendDispatch,
-      onDeliveryResult,
-    });
-    const parts = sendMessage.mock.calls.map(([, part]) => part);
-    expect(parts.length).toBeGreaterThan(1);
-    expect(parts.every((part) => /^\*x+\*$/.test(part) && part.length <= 80)).toBe(true);
-    expect(parts.map((part) => part.slice(1, -1)).join("")).toBe("x".repeat(4_200));
-    expect(sendMessage.mock.calls.map((call) => call[4]?.quotedMessageKey?.id)).toEqual(
-      parts.map((_, index) => (index === 0 ? "quoted" : undefined)),
-    );
-    expect(onPlatformSendDispatch).toHaveBeenCalledTimes(parts.length);
-    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual(
-      parts.map((_, index) => `payload-${index + 1}`),
-    );
-  });
+    },
+  );
 
   it("preserves payloads, receipts, and callback order through the active web socket", async () => {
     const order: string[] = [];
     const nativeSendsToReject = new Set<number>();
-    const socketSend = vi.fn(
-      async (jid: string, content: AnyMessageContent, options?: MiscMessageGenerationOptions) => {
-        const sequence = socketSend.mock.calls.length;
-        order.push(`socket:${sequence}`);
-        if (nativeSendsToReject.delete(sequence)) {
-          throw new Error("fixture transport failed");
-        }
-        return {
-          key: { id: `native-${sequence}`, remoteJid: jid, fromMe: true },
-          message: content,
-          ...(options ? { messageStubParameters: ["quoted"] } : {}),
-        } as WAMessage;
-      },
-    );
+    const socketSend = vi.fn(async (jid: string, _content: AnyMessageContent) => {
+      const sequence = socketSend.mock.calls.length;
+      order.push(`socket:${sequence}`);
+      if (nativeSendsToReject.delete(sequence)) {
+        throw new Error("fixture transport failed");
+      }
+      return {
+        key: { id: `native-${sequence}`, remoteJid: jid, fromMe: true },
+      } as WAMessage;
+    });
     const sendApi = createWebSendApi({
       sock: {
         sendMessage: socketSend,
@@ -210,24 +202,14 @@ describe("WhatsApp delivery recovery", () => {
     const mediaLocalRoots = ["/tmp/whatsapp-dispatch-legacy"];
     const mediaReadFile = vi.fn(async () => Buffer.from("legacy-read"));
     const media = {
-      "fixture://captionless.pdf": {
-        buffer: Buffer.from("pdf"),
-        contentType: "application/pdf",
-        kind: "document",
-        fileName: "captionless.pdf",
-      },
-      "fixture://forced.png": {
-        buffer: Buffer.from("png"),
-        contentType: "image/png",
-        kind: "image",
-        fileName: "forced.png",
-      },
-      "fixture://voice.ogg": {
-        buffer: Buffer.from("ogg"),
-        contentType: "audio/ogg",
-        kind: "audio",
-        fileName: "voice.ogg",
-      },
+      "fixture://captionless.pdf": mediaFixture(
+        "document",
+        "captionless.pdf",
+        "application/pdf",
+        "pdf",
+      ),
+      "fixture://forced.png": mediaFixture("image", "forced.png", "image/png", "png"),
+      "fixture://voice.ogg": mediaFixture("audio", "voice.ogg", "audio/ogg", "ogg"),
     } as const;
     runtimeContextMocks.loadOutboundMediaFromUrl.mockImplementation(async (url: string) => {
       const fixture = media[url as keyof typeof media];
@@ -288,30 +270,18 @@ describe("WhatsApp delivery recovery", () => {
     }).catch((error: unknown) => error);
 
     const jid = "1555@s.whatsapp.net";
+    const document = (fileName: string, bytes: string, mimetype: string, caption?: string) => [
+      jid,
+      { document: Buffer.from(bytes), fileName, caption, mimetype },
+    ];
     const audio = { audio: Buffer.from("ogg"), ptt: true, mimetype: "audio/ogg; codecs=opus" };
     expect([textResult, captionlessResult, documentResult, voiceResult, quotedResult]).toEqual(
       [1, 2, 3, 4, 6].map((id) => ({ channel: "whatsapp", messageId: `native-${id}`, toJid: jid })),
     );
     expect(socketSend.mock.calls).toEqual([
       [jid, { text: "plain text" }],
-      [
-        jid,
-        {
-          document: Buffer.from("pdf"),
-          fileName: "captionless.pdf",
-          caption: undefined,
-          mimetype: "application/pdf",
-        },
-      ],
-      [
-        jid,
-        {
-          document: Buffer.from("png"),
-          fileName: "forced.png",
-          caption: "document caption",
-          mimetype: "image/png",
-        },
-      ],
+      document("captionless.pdf", "pdf", "application/pdf"),
+      document("forced.png", "png", "image/png", "document caption"),
       [jid, audio],
       [jid, { text: "voice caption" }],
       [

@@ -52,16 +52,12 @@ vi.mock("./creds-files.js", async () => {
 
 vi.mock("./accounts.js", async () => {
   const actual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
-  return Object.assign({}, actual, {
-    resolveWhatsAppAuthDir: hoisted.resolveWhatsAppAuthDir,
-  });
+  return { ...actual, resolveWhatsAppAuthDir: hoisted.resolveWhatsAppAuthDir };
 });
 
 vi.mock("./auth-store.js", async () => {
   const actual = await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
-  return Object.assign({}, actual, {
-    readWebAuthState: hoisted.readWebAuthState,
-  });
+  return { ...actual, readWebAuthState: hoisted.readWebAuthState };
 });
 
 const whatsappGetStatus = createPluginSetupWizardStatus({
@@ -134,27 +130,32 @@ describe("whatsapp setup wizard", () => {
     expectWhatsAppOwnerAllowlistSetup(result.cfg, harness);
   });
 
-  it("writes named-account DM policy and allowFrom instead of the channel root", async () => {
+  it.each(["work", ""])("writes scoped DM policy for selected account %j", async (accountId) => {
     const harness = createSeparatePhoneHarness(["separate", "open"]);
-
     const named = await runFinalizeWithHarness({
       harness,
-      accountId: "work",
-      cfg: createWhatsAppWorkAccountConfig() as OpenClawConfig,
+      accountId,
+      cfg: createWhatsAppWorkAccountConfig(accountId ? {} : { defaultAccount: "work" }),
     });
 
     expectWhatsAppWorkAccountOpenAccess(named.cfg);
     expectWhatsAppWorkAccountAccessNote(harness);
   });
 
-  it("labels the selected named account in setup status even when not linked", async () => {
+  it.each([
+    ["not-linked", "not linked"],
+    ["unstable", "auth stabilizing"],
+  ] as const)("labels the selected account when %s", async (state, label) => {
+    hoisted.readWebAuthState.mockResolvedValue(state);
+    if (state === "unstable") {
+      hoisted.resolveWhatsAppAuthDir.mockReturnValue({ authDir: "/tmp/work" });
+    }
     const status = await whatsappGetStatus({
       cfg: workConfig(),
       accountOverrides: { whatsapp: "work" },
     });
 
-    expect(status.configured).toBe(false);
-    expect(status.statusLines).toEqual(["WhatsApp (work): not linked"]);
+    expect(status).toMatchObject({ configured: false, statusLines: [`WhatsApp (work): ${label}`] });
   });
 
   it("uses configured defaultAccount for omitted-account setup status", async () => {
@@ -176,36 +177,9 @@ describe("whatsapp setup wizard", () => {
       accountOverrides: {},
     });
 
-    expect(status.configured).toBe(true);
-    expect(status.statusLines).toEqual(["WhatsApp (work): linked"]);
+    expect(status).toMatchObject({ configured: true, statusLines: ["WhatsApp (work): linked"] });
     expect(hoisted.readWebAuthState).toHaveBeenCalledWith("/tmp/default");
     expect(hoisted.readWebAuthState).toHaveBeenCalledWith("/tmp/work");
-  });
-
-  it("shows auth stabilizing when auth reads time out", async () => {
-    hoisted.resolveWhatsAppAuthDir.mockReturnValue({ authDir: "/tmp/work" });
-    hoisted.readWebAuthState.mockResolvedValue("unstable");
-
-    const status = await whatsappGetStatus({
-      cfg: workConfig(),
-      accountOverrides: { whatsapp: "work" },
-    });
-
-    expect(status.configured).toBe(false);
-    expect(status.statusLines).toEqual(["WhatsApp (work): auth stabilizing"]);
-  });
-
-  it("uses configured defaultAccount for omitted-account finalize writes", async () => {
-    const harness = createSeparatePhoneHarness(["separate", "open"]);
-
-    const result = await runFinalizeWithHarness({
-      harness,
-      accountId: "",
-      cfg: createWhatsAppWorkAccountConfig({ defaultAccount: "work" }) as OpenClawConfig,
-    });
-
-    expectWhatsAppWorkAccountOpenAccess(result.cfg);
-    expectWhatsAppWorkAccountAccessNote(harness);
   });
 
   it("enables allowlist self-chat mode for personal-phone setup", async () => {
@@ -299,21 +273,17 @@ describe("whatsapp setup wizard", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("skips relink note when already linked and relink is declined", async () => {
-    hoisted.hasWebCredsSync.mockReturnValue(true);
+  it.each([true, false])("shows login followup only when unlinked (linked: %s)", async (linked) => {
+    hoisted.hasWebCredsSync.mockReturnValue(linked);
     const harness = createSeparatePhoneHarness(["separate", "disabled"]);
 
     await runFinalizeWithHarness({ harness });
 
     expect(hoisted.loginWeb).not.toHaveBeenCalled();
-    expectNoWhatsAppLoginFollowup(harness);
-  });
-
-  it("shows follow-up login command note when not linked and linking is skipped", async () => {
-    const harness = createSeparatePhoneHarness(["separate", "disabled"]);
-
-    await runFinalizeWithHarness({ harness });
-
-    expectWhatsAppLoginFollowup(harness);
+    if (linked) {
+      expectNoWhatsAppLoginFollowup(harness);
+    } else {
+      expectWhatsAppLoginFollowup(harness);
+    }
   });
 });
