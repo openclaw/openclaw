@@ -155,14 +155,13 @@ describe("Discord Crabline real-plugin roundtrip", () => {
       expect(inboundChannelId).not.toBe(parentChannelId);
       expect(readStringValue(inboundBody?.content) ?? "").toMatch(/<@\d{17,20}>/u);
 
-      const outbound = events.find(
-        (event) =>
-          event.type === "api" &&
-          event.method === "POST" &&
-          event.path === `/api/v10/channels/${inboundChannelId}/messages` &&
-          (readStringValue(readObject(event.body)?.content) ?? "").includes(EXPECTED_MARKER) &&
-          event.accepted === true,
-      );
+      const isOutbound = (event: RecorderEvent) =>
+        event.type === "api" &&
+        event.method === "POST" &&
+        event.path === `/api/v10/channels/${inboundChannelId}/messages` &&
+        (readStringValue(readObject(event.body)?.content) ?? "").includes(EXPECTED_MARKER) &&
+        event.accepted === true;
+      const outbound = events.find(isOutbound);
       const outboundBody = readObject(outbound?.body);
       expect(outbound).toBeDefined();
       expect(readStringValue(outboundBody?.content) ?? "").toContain(EXPECTED_MARKER);
@@ -199,16 +198,7 @@ describe("Discord Crabline real-plugin roundtrip", () => {
       );
       expect(path.resolve(suite.result.outputDir, snapshotRecorderPath)).not.toBe(recorderPath);
       expect(snapshotEvents.some((event) => event.accepted === true)).toBe(true);
-      expect(
-        snapshotEvents.some(
-          (event) =>
-            event.type === "api" &&
-            event.method === "POST" &&
-            event.path === `/api/v10/channels/${inboundChannelId}/messages` &&
-            (readStringValue(readObject(event.body)?.content) ?? "").includes(EXPECTED_MARKER) &&
-            event.accepted === true,
-        ),
-      ).toBe(false);
+      expect(snapshotEvents.some(isOutbound)).toBe(false);
 
       // The suite returns only after Gateway, WebSocket, HTTP, recorder, and temporary runtime
       // owners have all completed their ordered cleanup.

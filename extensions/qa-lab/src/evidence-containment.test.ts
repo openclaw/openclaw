@@ -62,14 +62,16 @@ function finish(
   retryOf?: string | null,
 ) {
   const id = parent.begin(0, retryOf);
-  parent.complete(id, {
-    status,
-    entries: [row(status)],
-    receipts: [receipt(id)],
-    childEvidence,
-  });
+  parent.complete(id, { status, entries: [row(status)], receipts: [receipt(id)], childEvidence });
   parent.select(0, id);
   return id;
+}
+
+function projectCoverage(summary: ReturnType<typeof bundle>, entry = summary.entries[0]!) {
+  return resolveQaEvidenceContainment(summary.occurrences, summary.entries).projectCoverage(
+    entry.binding.occurrenceId,
+    entry.coverage,
+  );
 }
 
 describe("retained child evidence ownership", () => {
@@ -107,8 +109,7 @@ describe("retained child evidence ownership", () => {
       { id: "other.claim", role: "primary" },
     ]);
     const entry = summary.entries[0]!;
-    const containment = resolveQaEvidenceContainment(summary.occurrences, summary.entries);
-    expect(containment.projectCoverage(entry.binding.occurrenceId, entry.coverage)).toEqual([
+    expect(projectCoverage(summary, entry)).toEqual([
       { id: "qa.coverage", role: "secondary" },
       { id: "qa.reporting", role: "secondary" },
       { id: "qa.diagnostic", role: "diagnostic" },
@@ -116,25 +117,10 @@ describe("retained child evidence ownership", () => {
     expect(entry).toEqual(original.entries[0]);
     expect(getEffectiveQaEvidenceEntries(summary)[0]).toBe(entry);
     const empty = capture(child, []);
-    expect(
-      resolveQaEvidenceContainment(empty.occurrences, empty.entries).projectCoverage(
-        entry.binding.occurrenceId,
-        entry.coverage,
-      ),
-    ).toEqual([]);
+    expect(projectCoverage(empty, entry)).toEqual([]);
     const historical = capture(child);
-    expect(
-      resolveQaEvidenceContainment(historical.occurrences, historical.entries).projectCoverage(
-        entry.binding.occurrenceId,
-        entry.coverage,
-      ),
-    ).toBe(entry.coverage);
-    expect(
-      resolveQaEvidenceContainment(child.occurrences, child.entries).projectCoverage(
-        entry.binding.occurrenceId,
-        entry.coverage,
-      ),
-    ).toBe(entry.coverage);
+    expect(projectCoverage(historical, entry)).toBe(entry.coverage);
+    expect(projectCoverage(child, entry)).toBe(entry.coverage);
     expect(child).toEqual(original);
   });
 

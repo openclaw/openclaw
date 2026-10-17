@@ -15,6 +15,21 @@ import {
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
 import { QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 
+function invocation(id: string) {
+  return createQaEvidenceInvocation({
+    scenarios: [{ id, execution: { kind: "script" } }],
+    channel: null,
+    launch: {
+      source: { ref: null, integrity: null },
+      runtime: { id: null, version: null },
+      package: null,
+      protocol: null,
+      accountRef: null,
+      proofClass: null,
+    },
+  });
+}
+
 describe("evidence gallery presentation", () => {
   it("bounds presentation reads and shares in-flight child summaries without reordering rows", async () => {
     const repoRoot = await createTempRepo();
@@ -111,18 +126,7 @@ describe("evidence gallery presentation", () => {
           artifact: { kind: "summary", path: "child/qa-suite-summary.json" },
         });
         source.entries[0]!.execution!.artifacts[0]!.source = "qa-suite";
-        const owner = createQaEvidenceInvocation({
-          scenarios: [{ id: "recorded", execution: { kind: "script" } }],
-          channel: null,
-          launch: {
-            source: { ref: null, integrity: null },
-            runtime: { id: null, version: null },
-            package: null,
-            protocol: null,
-            accountRef: null,
-            proofClass: null,
-          },
-        });
+        const owner = invocation("recorded");
         const id = owner.begin(0);
         owner.complete(id, { status: "pass", entries: source.entries });
         owner.select(0, id);
@@ -170,21 +174,10 @@ describe("evidence gallery presentation", () => {
     try {
       const outputDir = path.join(repoRoot, "evidence");
       await fs.mkdir(outputDir);
-      const invocation = createQaEvidenceInvocation({
-        scenarios: [{ id: "same-label", execution: { kind: "script" } }],
-        channel: null,
-        launch: {
-          source: { ref: null, integrity: null },
-          runtime: { id: null, version: null },
-          package: null,
-          protocol: null,
-          accountRef: null,
-          proofClass: null,
-        },
-      });
+      const owner = invocation("same-label");
       let prior: string | null = null;
       for (const [index, status] of (["fail", "pass"] as const).entries()) {
-        const occurrenceId = invocation.begin(0, prior);
+        const occurrenceId = owner.begin(0, prior);
         const file = `attempt-${index}.log`;
         await fs.writeFile(path.join(outputDir, file), `observed attempt ${index}`);
         const summary = vitestArtifactEvidence({
@@ -193,11 +186,11 @@ describe("evidence gallery presentation", () => {
           artifact: { kind: "log", path: file },
         });
         summary.entries[0]!.result = { status };
-        invocation.complete(occurrenceId, { status, entries: summary.entries });
+        owner.complete(occurrenceId, { status, entries: summary.entries });
         prior = occurrenceId;
       }
-      invocation.select(0, prior!);
-      const evidence = invocation.snapshot({ generatedAt: "2026-06-17T12:00:00.000Z" });
+      owner.select(0, prior!);
+      const evidence = owner.snapshot({ generatedAt: "2026-06-17T12:00:00.000Z" });
       const evidencePath = path.join(outputDir, QA_EVIDENCE_FILENAME);
       await writeJson(evidencePath, evidence);
       const original = await fs.readFile(evidencePath, "utf8");
