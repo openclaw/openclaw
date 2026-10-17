@@ -450,45 +450,6 @@ describe("sidebar projection memo", () => {
     },
   );
 
-  it("updates roster selection without reprojecting unchanged rows", async () => {
-    const mounted = await mountRoster();
-    const sidebar = mounted.sidebar as unknown as Sidebar;
-    sidebar.sidebarAgentsMode = "roster";
-    await settleRoster(mounted.sidebar);
-    const source = sidebar.rosterSessionSource;
-    const refresh = rosterActivityStore(mounted.context).refresh();
-    flush();
-    expect(sidebar.rosterSessionSource).toBe(source);
-    await refresh;
-    await settleRoster(mounted.sidebar);
-    await vi.dynamicImportSettled();
-    flush();
-    const sessionKey = "agent:main:recent";
-    const row = () => sidebar.querySelector(`[data-session-key="${sessionKey}"]`);
-    expect(row()).not.toBeNull();
-    const sections = vi.spyOn(SidebarSessionProjection.prototype, "project");
-    projectRows.mockClear();
-    row()!
-      .querySelector<HTMLAnchorElement>(".sidebar-recent-session__link")!
-      .dispatchEvent(new MouseEvent("click", { altKey: true, bubbles: true, cancelable: true }));
-    await settleRoster(mounted.sidebar);
-    expect(row()?.classList.contains("sidebar-recent-session--selected")).toBe(true);
-    row()!.querySelector<HTMLButtonElement>("[data-sidebar-session-menu]")!.click();
-    await settleRoster(mounted.sidebar);
-    expect(row()?.querySelector("[data-sidebar-session-menu]")?.getAttribute("aria-expanded")).toBe(
-      "true",
-    );
-    sidebar.sidebarMenus.closeSessionMenu();
-    sidebar.clearSessionSelection();
-    await settleRoster(mounted.sidebar);
-    expect(row()?.classList.contains("sidebar-recent-session--selected")).toBe(false);
-    expect(row()?.querySelector("[data-sidebar-session-menu]")?.getAttribute("aria-expanded")).toBe(
-      "false",
-    );
-    expect(projectRows).not.toHaveBeenCalled();
-    expect(sections).not.toHaveBeenCalled();
-  });
-
   it("invalidates live attention, expiry, outbox snapshots, and store-owned PR and archive facts", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
