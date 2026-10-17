@@ -178,7 +178,7 @@ describe("agent image understanding", () => {
         url: "https://vision.example/describe",
         fetchImpl: sendPixels,
         lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
-        init: { method: "POST", body: request.buffer, signal: request.signal },
+        init: { method: "POST", body: new Uint8Array(request.buffer), signal: request.signal },
       });
       try {
         return { text: await result.response.text() };
