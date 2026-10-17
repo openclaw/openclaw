@@ -72,11 +72,7 @@ export function array<T>(reader: SnapshotReader<T>, max = Infinity): SnapshotRea
       if (!Array.isArray(value) || value.length > max) {
         return invalid();
       }
-      const parsed: T[] = [];
-      for (let index = 0; index < value.length; index++) {
-        parsed.push(reader.parse(value[index]));
-      }
-      return parsed;
+      return Array.from(value, (item) => reader.parse(item));
     },
   };
 }

@@ -329,7 +329,7 @@ describe("standalone browser protocol validation", () => {
   );
 
   it("cleans activity's unknown own keys while retaining its scalar values", () => {
-    const value = { ...activity, extra: { nested: true }, startedAt: NaN };
+    const value = { ...activity, extra: { nested: true }, startedAt: Number.NaN };
     Object.defineProperty(value, "hidden", { value: true, configurable: true });
     const canonical = { ...value };
     Object.defineProperty(canonical, "hidden", { value: true, configurable: true });

@@ -253,7 +253,12 @@ async function main() {
         group === "sender-identity"
           ? `packages/gateway-protocol/src/compiled/sender-identity.${extension}`
           : `${outputBase}/${group}.${extension}`;
-      const formatted = await format(outputPath, header + contents);
+      const generatedHeader =
+        extension === "js"
+          ? header +
+            "/* oxlint-disable -- Unmodified TypeBox compiler/helper output; lint the generator and verify canonical schema parity instead. */\n"
+          : header;
+      const formatted = await format(outputPath, generatedHeader + contents);
       if (formatted.errors.length) {
         throw new Error(`Cannot format ${outputPath}: ${JSON.stringify(formatted.errors)}`);
       }
