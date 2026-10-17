@@ -1,6 +1,10 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createNodeMeetingRealtimeAudioTransport } from "./realtime-node-audio-transport.js";
 
@@ -277,5 +281,52 @@ describe("node meeting realtime audio transport", () => {
     await Promise.all([pushing, clearing]);
 
     expect(invoke.mock.calls.map(([call]) => call.params.action)).toEqual(["pushAudio", "stop"]);
+  });
+  it("keeps bridge commands reachable after the joining plugin call has responded", async () => {
+    // Stands in for the Gateway request scope whose client authority closes once the
+    // join method responds; node invokes still inside it are rejected.
+    const joinRequest = new AsyncLocalStorage<{ responded: boolean }>();
+    const pulls: ReturnType<typeof createDeferredCore<Record<string, unknown>>>[] = [];
+    const invoke = vi.fn(async ({ params }: { params: { action: string } }) => {
+      if (joinRequest.getStore()?.responded) {
+        throw new Error("Gateway client authority closed before dispatching node.invoke.");
+      }
+      if (params.action !== "pullAudio") {
+        return { ok: true };
+      }
+      const pending = createDeferredCore<Record<string, unknown>>();
+      pulls.push(pending);
+      return await pending.promise;
+    });
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "meeting-owner" });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { registry, record });
+    const request = { responded: false };
+    const onAudio = vi.fn();
+    const onFatal = vi.fn();
+    const transport = joinRequest.run(request, () =>
+      instance.run(() => {
+        const created = createTransport(invoke);
+        created.onFatal(onFatal);
+        created.startInput(onAudio);
+        return created;
+      }),
+    );
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    pulls.shift()?.resolve({ base64: Buffer.from([1, 2]).toString("base64") });
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    request.responded = true;
+    pulls.shift()?.resolve({ base64: Buffer.from([3, 4]).toString("base64") });
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await joinRequest.run(request, () => transport.writeOutput(Buffer.from([5, 6])));
+    expect(onAudio.mock.calls).toEqual([[Buffer.from([1, 2])], [Buffer.from([3, 4])]]);
+    expect(onFatal).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({ params: expect.objectContaining({ action: "pushAudio" }) }),
+    );
+
+    await transport.stop();
+    pulls.shift()?.resolve({});
   });
 });

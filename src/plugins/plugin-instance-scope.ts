@@ -8,6 +8,7 @@ import type {
   PluginInstanceConsumer,
   PluginInstanceDisposalResult,
   PluginInstanceExecution,
+  PluginInstanceLifecycle,
 } from "./plugin-instance.types.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
@@ -126,6 +127,16 @@ export function hasCurrentPluginInstanceAuthority(pluginId: string): boolean {
     !instance.owner?.revoked &&
     !instance.lifecycle.signal.aborted
   );
+}
+
+/**
+ * Captures the calling instance's background runner for work that outlives this call.
+ * Work started inside a Gateway request otherwise keeps that request's authority and
+ * fails once the request responds. Outside a managed plugin call the runner is a pass-through.
+ */
+export function captureCurrentPluginBackgroundRunner(): PluginInstanceLifecycle["runInBackgroundContext"] {
+  const owner = pluginInstanceInvocation.getStore()?.instance;
+  return owner ? owner.lifecycle.runInBackgroundContext : (run) => run();
 }
 
 /** Direct SDK registrars retain the same owner as registrations made through api. */
