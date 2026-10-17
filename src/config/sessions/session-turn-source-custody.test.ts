@@ -70,6 +70,28 @@ function recorder(
   });
 }
 const messages = (f: Fixture) => f.events().filter((event) => event.type === "message");
+const user = (content: string, idempotencyKey: string, timestamp = 1) => ({
+  role: "user" as const,
+  content,
+  timestamp,
+  idempotencyKey,
+});
+function expectSource(
+  publish: unknown,
+  database: Parameters<typeof readOpenClawAgentDatabaseIdentity>[0],
+  entry: Record<string, unknown>,
+) {
+  const { identity, birthtime } = readOpenClawAgentDatabaseIdentity(database);
+  expect(publish).toHaveBeenCalledExactlyOnceWith(
+    {
+      agentId: database.agentId,
+      path: database.path,
+      databaseIdentity: identity,
+      databaseBirthtime: birthtime,
+    },
+    expect.objectContaining(entry),
+  );
+}
 
 it("prepares shared-ID input through its transcript owner and retains intervening metadata", async () => {
   await withFixture(async (f) => {
@@ -94,7 +116,7 @@ it("prepares shared-ID input through its transcript owner and retains intervenin
     });
     const persist = async (key: string) => {
       const rec = recorder(f, {
-        message: { role: "user", content: key, timestamp: 1, idempotencyKey: key },
+        message: user(key, key),
         target: { ...base, expectedSessionId: base.sessionId, sessionEntry: baseEntry },
       });
       bindUserTurnInputActor(rec, { phase: "acceptInput", acquire: async () => input });
@@ -124,12 +146,7 @@ it.each([false, true])(
         target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
       });
       const rec = recorder(f, {
-        message: {
-          role: "user",
-          content: "Initial lifecycle",
-          timestamp: 1,
-          idempotencyKey: "first-input:user",
-        },
+        message: user("Initial lifecycle", "first-input:user"),
         target: {
           ...scope,
           expectedSessionId: scope.sessionId,
@@ -218,12 +235,7 @@ it.each([
   async ({ phase, change }) => {
     await withFixture(async (f) => {
       const input = await f.acquire();
-      const message = {
-        role: "user" as const,
-        content: "Retain one prepared input.",
-        timestamp: 1,
-        idempotencyKey: "intervening-write:user",
-      };
+      const message = user("Retain one prepared input.", "intervening-write:user");
       const prepare = vi.fn<NonNullable<RecorderOptions["beforeMessageWrite"]>>(
         ({ message: preparedMessage }) => preparedMessage,
       );
@@ -277,12 +289,7 @@ it("retains actor-bound recorder custody through a durable worker publication fa
   await withFixture(async (f) => {
     const input = await f.acquire();
     const failure = new Error("durable input publication failed");
-    const message = {
-      role: "user" as const,
-      content: "Keep the worker's committed input.",
-      timestamp: 1,
-      idempotencyKey: "durable-actor:user",
-    };
+    const message = user("Keep the worker's committed input.", "durable-actor:user");
     const rec = recorder(f, { message, onPersistenceError() {} });
     bindUserTurnInputActor(rec, { phase: "acceptInput", acquire: async () => input });
     try {
@@ -307,16 +314,7 @@ it("retains actor-bound recorder custody through a durable worker publication fa
       await expect(
         withSessionTranscriptSourcePublication(f.scope, published, () => rec.persistApproved()),
       ).rejects.toThrow(failure.message);
-      const identity = readOpenClawAgentDatabaseIdentity(f.database);
-      expect(published).toHaveBeenCalledExactlyOnceWith(
-        {
-          agentId: f.scope.agentId,
-          path: f.database.path,
-          databaseIdentity: identity.identity,
-          databaseBirthtime: identity.birthtime,
-        },
-        expect.objectContaining({ sessionId: f.scope.sessionId }),
-      );
+      expectSource(published, f.database, { sessionId: f.scope.sessionId });
       const receipt = expectDefined(rec.getAdmissionReceipt(), "committed worker admission");
       expect(rec.isPendingInputConsumed?.()).toBe(true);
       expect(
@@ -349,12 +347,7 @@ it.each(["fresh", "replay"])(
       });
       const makeRecorder = () =>
         recorder(f, {
-          message: {
-            role: "user",
-            content: "synthetic command",
-            timestamp: Date.now(),
-            idempotencyKey: "unstaged-command",
-          },
+          message: user("synthetic command", "unstaged-command", Date.now()),
           assertOriginalInputCommit: assertCurrent,
           beforeMessageWrite: ({ message }) => {
             assertCurrent();
@@ -408,6 +401,17 @@ it.each(["worker", "native"] as const)(
         storePath: state.statePath("goal-source.sqlite"),
       };
       const failure = new Error("synthetic postcommit failure");
+      const fail = () => {
+        throw failure;
+      };
+      const databaseScope = { agentId: scope.agentId, path: scope.storePath };
+      const beforeFreshMessageCommit =
+        writer === "native"
+          ? () => {
+              const database = openOpenClawAgentDatabase(databaseScope);
+              expect(deferSqlitePostCommitPublication(database.db, fail)).toBe(true);
+            }
+          : undefined;
       const sourceCommitted = vi.fn<Parameters<typeof withSessionTranscriptSourcePublication>[1]>();
       const persistence = expect(
         withSessionTranscriptSourcePublication(scope, sourceCommitted, () =>
@@ -429,30 +433,10 @@ it.each(["worker", "native"] as const)(
               {
                 eventId: "goal-source-message",
                 message: { role: "user", content: "Retain this committed Goal." },
-                ...(writer === "native"
-                  ? {
-                      beforeFreshMessageCommit() {
-                        const database = openOpenClawAgentDatabase({
-                          agentId: scope.agentId,
-                          path: scope.storePath,
-                        });
-                        expect(
-                          deferSqlitePostCommitPublication(database.db, () => {
-                            throw failure;
-                          }),
-                        ).toBe(true);
-                      },
-                    }
-                  : {}),
+                beforeFreshMessageCommit,
               },
             ],
-            ...(writer === "worker"
-              ? {
-                  onMessageCommitted() {
-                    throw failure;
-                  },
-                }
-              : {}),
+            onMessageCommitted: writer === "worker" ? fail : undefined,
           }),
         ),
       );
@@ -461,23 +445,11 @@ it.each(["worker", "native"] as const)(
       } else {
         await persistence.resolves.toMatchObject({ appendedCount: 1 });
       }
-      const database = openOpenClawAgentDatabase({
-        agentId: scope.agentId,
-        path: scope.storePath,
+      const database = openOpenClawAgentDatabase(databaseScope);
+      expectSource(sourceCommitted, database, {
+        sessionId: scope.sessionId,
+        goal: expect.objectContaining({ objective: "Retain this committed Goal." }),
       });
-      const identity = readOpenClawAgentDatabaseIdentity(database);
-      expect(sourceCommitted).toHaveBeenCalledExactlyOnceWith(
-        {
-          agentId: database.agentId,
-          path: database.path,
-          databaseIdentity: identity.identity,
-          databaseBirthtime: identity.birthtime,
-        },
-        expect.objectContaining({
-          sessionId: scope.sessionId,
-          goal: expect.objectContaining({ objective: "Retain this committed Goal." }),
-        }),
-      );
       expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.goal?.objective).toBe(
         "Retain this committed Goal.",
       );

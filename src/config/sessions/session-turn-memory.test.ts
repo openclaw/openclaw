@@ -40,12 +40,13 @@ const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
 const database = { agentId: scope.agentId, path: scope.storePath };
 const initialSessionEntry = { sessionId, updatedAt: 1, incognito: true };
 type TurnOptions = Omit<SqliteSessionTurnOptions, "expectedSessionId" | "sessionFile">;
-const turn = (options: TurnOptions) => ({
-  expectedSessionId: sessionId,
-  sessionFile: "synthetic-session.jsonl",
-  config: {},
-  ...options,
-});
+const appendTurn = (options: TurnOptions) =>
+  appendExpectedSessionTranscriptTurn(scope, {
+    expectedSessionId: sessionId,
+    sessionFile: "synthetic-session.jsonl",
+    config: {},
+    ...options,
+  });
 const user = (content: string, idempotencyKey?: string) => ({
   role: "user",
   content,
@@ -82,7 +83,7 @@ async function fixture(boundAuthority = authority) {
   expect(initialized.kind).toBe("committed");
   const append = (options: TurnOptions) =>
     runWithSessionActorStorage({ actor, authority: boundAuthority, ...database }, () =>
-      appendExpectedSessionTranscriptTurn(scope, turn(options)),
+      appendTurn(options),
     );
   const history = async () => {
     const read = await storage.read(
@@ -99,13 +100,10 @@ async function fixture(boundAuthority = authority) {
 
 describe("memory actor transcript turn binding", () => {
   it("preserves raw events and duplicate results through the unbound writer without bypassing authority", async () => {
-    await appendExpectedSessionTranscriptTurn(
-      scope,
-      turn({
-        initialSessionEntry,
-        messages: [{ eventId: "raw-user", message: user("Input") }],
-      }),
-    );
+    await appendTurn({
+      initialSessionEntry,
+      messages: [{ eventId: "raw-user", message: user("Input") }],
+    });
     const events = [
       {
         type: "custom",
@@ -142,15 +140,12 @@ describe("memory actor transcript turn binding", () => {
   });
 
   it("acquires an unbound incognito owner for turns and notifications without recreating closed sessions", async () => {
-    const options = turn({ messages: [{ message: user("First input", "first") }] });
-    await missing(appendExpectedSessionTranscriptTurn(scope, options));
+    const options = { messages: [{ message: user("First input", "first") }] };
+    await missing(appendTurn(options));
     expect(memorySessionActorOwners.read(database)).toBeUndefined();
-    const created = await appendExpectedSessionTranscriptTurn(scope, {
-      ...options,
-      initialSessionEntry,
-    });
+    const created = await appendTurn({ ...options, initialSessionEntry });
     expect(created.appendedMessages).toEqual([appended(options.messages[0]!.message)]);
-    const followup = await appendExpectedSessionTranscriptTurn(scope, {
+    const followup = await appendTurn({
       ...options,
       messages: [{ message: user("Follow-up", "follow-up") }],
     });
@@ -170,7 +165,7 @@ describe("memory actor transcript turn binding", () => {
       notified.mockClear();
       memorySessionActorOwners.closeSession(database, sessionKey);
       await missing(publishTranscriptUpdate(scope));
-      await missing(appendExpectedSessionTranscriptTurn(scope, options));
+      await missing(appendTurn(options));
       expect(notified).not.toHaveBeenCalled();
     } finally {
       unsubscribe();

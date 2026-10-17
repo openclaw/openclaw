@@ -43,6 +43,25 @@ vi.mock("node:worker_threads", async () =>
 const observer = useReconcileWorkerObserver();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type DatabaseOptions = Parameters<typeof reconcile>[0];
+type Database = ReturnType<typeof openDatabase>;
+
+function transcriptRows(database: Database, sessionId: string) {
+  return database.db
+    .prepare("SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
+    .all(sessionId);
+}
+
+function expectFts(database: Database, messageId: string, text: string) {
+  expect(database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all()).toEqual([
+    { message_id: messageId, text },
+  ]);
+}
+
+function requiredLease(leases: ReadonlyMap<string, string>, pathname: string) {
+  const id = expectDefined(leases.get(pathname), "worker lease");
+  expect(id).toEqual(expect.any(String));
+  return id;
+}
 
 function fixture(name: string) {
   const stateDir = tempDirs.make(`openclaw-reconcile-${name}-`);
@@ -68,27 +87,52 @@ async function expectReconciled(options: DatabaseOptions, reconciledSessions: nu
   await expect(reconcile(options)).resolves.toEqual({ reconciledSessions });
 }
 
-function holdPlanFinish(
-  task: Parameters<NonNullable<typeof observer.onTask>>[0],
-  hold: (release: () => void) => void,
+function planGate(
+  observe: (task: Parameters<NonNullable<typeof observer.onTask>>[0]) => boolean,
   events?: string[],
 ) {
-  const postMessage = task.port.postMessage.bind(task.port);
-  let finishing = false;
-  task.observeMessage((message) => {
-    finishing = message.type === "plan-finish";
-    if (message.type === "lease-released") {
-      events?.push("worker-release");
+  const ready = createDeferredCore();
+  let acknowledgement: (() => void) | undefined;
+  let worker: Worker | undefined;
+  observer.onTask = (task) => {
+    if (!observe(task)) {
+      return;
     }
-  });
-  task.port.postMessage = (message: unknown, transferList) => {
-    const transfer = Array.isArray(transferList) ? { transfer: transferList } : transferList;
-    if (finishing) {
+    if (task.input.mode === "disk") {
+      worker = task.worker;
+    }
+    const post = task.port.postMessage.bind(task.port);
+    let finishing = false;
+    task.observeMessage((message) => {
+      finishing = message.type === "plan-finish";
+      if (message.type === "lease-released") {
+        events?.push("worker-release");
+      }
+    });
+    task.port.postMessage = (message: unknown, transferList) => {
+      const send = () =>
+        post(message, Array.isArray(transferList) ? { transfer: transferList } : transferList);
+      if (!finishing) {
+        return send();
+      }
       finishing = false;
-      hold(() => postMessage(message, transfer));
-    } else {
-      postMessage(message, transfer);
-    }
+      acknowledgement = send;
+      ready.resolve();
+    };
+  };
+  return {
+    ready: ready.promise,
+    get worker() {
+      return expectDefined(worker, "active planner worker");
+    },
+    resume() {
+      acknowledgement?.();
+      acknowledgement = undefined;
+    },
+    async terminate() {
+      acknowledgement = undefined;
+      await this.worker.terminate();
+    },
   };
 }
 
@@ -223,19 +267,13 @@ it("reconciles a dirty projection while the parent retains serving Gateway owner
     });
     await expectReconciled(options, 1);
     owner.assertCurrent();
-    const canonicalLeaseId = expectDefined(
-      canonical.leases.get(database.path),
-      "canonical writer lease",
-    );
-    expect(canonicalLeaseId).toEqual(expect.any(String));
+    const canonicalLeaseId = requiredLease(canonical.leases, database.path);
     expect(plannerLeaseId).toEqual(expect.any(String));
     expect(new Set([...nativeLeases, canonicalLeaseId, plannerLeaseId]).size).toBe(3);
     expect(readAgentDatabaseLeaseIds(database.path, env)).toEqual(
       [...nativeLeases, canonicalLeaseId].toSorted(),
     );
-    expect(
-      database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
-    ).toEqual([{ message_id: "seed", text: "synthetic ownership" }]);
+    expectFts(database, "seed", "synthetic ownership");
   } finally {
     canonical.restore();
     try {
@@ -251,14 +289,12 @@ it.each(["complete", "native-exit"] as const)(
   async (ending) => {
     const { stateDir, env } = fixture("pool-close");
     const targets = ["active", "queued", "next"].map((agentId) => ({ agentId, env }));
-    const paused = createDeferredCore();
-    let releaseAcknowledgement: (() => void) | undefined;
-    let activeWorker: Worker | undefined;
     const modes: string[] = [];
     const sessionId = "lifecycle-session";
     const canonical = observeCanonicalWriterLeases();
     const nativeLeases = new Map<string, string[]>();
     const plannerLeases = new Map<string, string>();
+    let gate: ReturnType<typeof planGate> | undefined;
     let operations: Promise<PromiseSettledResult<unknown>[]> | undefined;
     try {
       for (const options of targets) {
@@ -273,40 +309,27 @@ it.each(["complete", "native-exit"] as const)(
         nativeLeases.set(database.path, baseline);
       }
       await closePool();
-      observer.onTask = (task) => {
-        const { input, worker } = task;
+      gate = planGate(({ input }) => {
         modes.push(input.mode);
         if (input.mode === "disk") {
           plannerLeases.set(input.path, input.leaseId);
         }
-        if (input.mode !== "disk" || input.agentId !== "active") {
-          return;
-        }
-        activeWorker = worker;
-        holdPlanFinish(task, (release) => {
-          releaseAcknowledgement = release;
-          paused.resolve();
-        });
-      };
+        return input.mode === "disk" && input.agentId === "active";
+      });
       const direct = reconcile(targets[0]!);
       startReconcile(targets[1]!);
       operations = Promise.allSettled([direct, waitForReconcile(targets[1]!)]);
-      await paused.promise;
+      await gate.ready;
       await vi.waitFor(() => {
         expectPool({ workers: 1, activeTasks: 1 });
       });
       const activePath = openDatabase(targets[0]!).path;
-      const canonicalLeaseId = expectDefined(
-        canonical.leases.get(activePath),
-        "canonical writer lease",
-      );
-      const plannerLeaseId = expectDefined(plannerLeases.get(activePath), "planner lease");
-      expect(canonicalLeaseId).toEqual(expect.any(String));
-      expect(plannerLeaseId).toEqual(expect.any(String));
+      const canonicalLeaseId = requiredLease(canonical.leases, activePath);
+      const plannerLeaseId = requiredLease(plannerLeases, activePath);
       const activeLeases = [...nativeLeases.get(activePath)!, canonicalLeaseId, plannerLeaseId];
       expect(new Set(activeLeases).size).toBe(3);
       expect(readAgentDatabaseLeaseIds(activePath, env)).toEqual(activeLeases.toSorted());
-      const threadId = activeWorker!.threadId;
+      const threadId = gate.worker.threadId;
       let closed = false;
       const closing = closePool().then(() => {
         closed = true;
@@ -316,11 +339,9 @@ it.each(["complete", "native-exit"] as const)(
       expect(isReconciling(targets[2]!)).toBe(false);
       expect(closed).toBe(false);
       if (ending === "native-exit") {
-        releaseAcknowledgement = undefined;
-        await activeWorker!.terminate();
+        await gate.terminate();
       } else {
-        releaseAcknowledgement!();
-        releaseAcknowledgement = undefined;
+        gate.resume();
       }
       const results = await operations;
       await closing;
@@ -336,20 +357,13 @@ it.each(["complete", "native-exit"] as const)(
       for (const options of targets.slice(0, 2)) {
         const database = openDatabase(options);
         const actual = readAgentDatabaseLeaseIds(database.path, env);
-        const canonicalId = expectDefined(canonical.leases.get(database.path), "canonical lease");
+        const canonicalId = requiredLease(canonical.leases, database.path);
         const plannerId = plannerLeases.get(database.path);
-        expect(canonicalId).toEqual(expect.any(String));
         expect(plannerId).toEqual(expect.any(String));
         expect(canonicalId).not.toBe(plannerId);
         expect(actual).not.toContain(plannerId);
-        expect(actual).toEqual(
-          [...nativeLeases.get(database.path)!, canonicalId].toSorted((left, right) =>
-            left.localeCompare(right),
-          ),
-        );
-        expect(
-          database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
-        ).toEqual([{ message_id: options.agentId, text: options.agentId }]);
+        expect(actual).toEqual([...nativeLeases.get(database.path)!, canonicalId].toSorted());
+        expectFts(database, options.agentId, options.agentId);
       }
       observer.onTask = ({ worker }) => {
         expect(worker.threadId).not.toBe(threadId);
@@ -360,7 +374,7 @@ it.each(["complete", "native-exit"] as const)(
       expect(poolSnapshot().workers).toBe(0);
     } finally {
       canonical.restore();
-      releaseAcknowledgement?.();
+      gate?.resume();
       await operations;
       await cleanup(stateDir);
     }
@@ -372,10 +386,8 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
   "joins transcript lease settlement before closing an agent (%s)",
   async (ending) => {
     const { stateDir, env, options } = fixture("agent-close");
-    const paused = createDeferredCore();
     const events: string[] = [];
-    let releaseAcknowledgement: (() => void) | undefined;
-    let activeWorker: Worker | undefined;
+    let gate: ReturnType<typeof planGate> | undefined;
     let reconciliation: Promise<PromiseSettledResult<unknown>[]> | undefined;
     let closing: Promise<boolean> | undefined;
     let closeSpy: { mockRestore(): void } | undefined;
@@ -390,35 +402,19 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
       const database = openDatabase(options);
       const nativeLeases = readAgentDatabaseLeaseIds(database.path, env);
       expect(nativeLeases).toHaveLength(1);
-      const readTranscript = () =>
-        database.db
-          .prepare(
-            "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
-          )
-          .all("settlement");
-      const original = readTranscript();
+      const original = transcriptRows(database, "settlement");
       expect(original).not.toEqual([]);
       database.db
         .prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?")
         .run("settlement");
-      observer.onTask = (task) => {
-        const { input, worker } = task;
+      gate = planGate(({ input }) => {
         if (input.mode === "release") {
           events.push("release-task");
-        } else {
-          activeWorker = worker;
         }
-        holdPlanFinish(
-          task,
-          (release) => {
-            releaseAcknowledgement = release;
-            paused.resolve();
-          },
-          events,
-        );
-      };
+        return true;
+      }, events);
       reconciliation = Promise.allSettled([reconcile(options)]);
-      await paused.promise;
+      await gate.ready;
       const close = database.db.close.bind(database.db);
       let leasesAtNativeClose: string[] | undefined;
       closeSpy = vi.spyOn(database.db, "close").mockImplementation(() => {
@@ -434,7 +430,7 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
       }
       if (ending === "pool-timeout") {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        const terminate = vi.spyOn(activeWorker!, "terminate");
+        const terminate = vi.spyOn(gate.worker, "terminate");
         const poolClosing = closePool();
         await vi.advanceTimersByTimeAsync(4_999);
         expect(terminate).not.toHaveBeenCalled();
@@ -445,11 +441,9 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
       }
       closing = closeDatabase(database.path);
       if (ending === "native-exit") {
-        releaseAcknowledgement = undefined;
-        await activeWorker!.terminate();
+        await gate.terminate();
       } else if (ending === "complete") {
-        releaseAcknowledgement!();
-        releaseAcknowledgement = undefined;
+        gate.resume();
       }
       await expect(closing).resolves.toBe(true);
       const [result] = await reconciliation;
@@ -467,39 +461,28 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
       expect(leasesAtNativeClose).toEqual(nativeLeases);
       expect(readAgentDatabaseLeaseIds(database.path, env)).toEqual([]);
       const reopened = openDatabase(options);
-      expect(
-        reopened.db
-          .prepare(
-            "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
-          )
-          .all("settlement"),
-      ).toEqual(original);
+      expect(transcriptRows(reopened, "settlement")).toEqual(original);
       if (ending === "complete") {
-        const count = (table: string) =>
-          reopened.db
-            .prepare(`SELECT count(*) AS count FROM ${table} WHERE session_id = ?`)
-            .get(orphanSessionId);
-        const orphanRows = () => ({
-          index: count("session_transcript_index_state"),
-          identities: count("session_transcript_fts_rows"),
-          content: count("session_transcript_fts"),
-        });
-        expect(orphanRows()).toEqual({
-          index: { count: 1 },
-          identities: { count: 1 },
-          content: { count: 1 },
-        });
+        const tables = [
+          "session_transcript_index_state",
+          "session_transcript_fts_rows",
+          "session_transcript_fts",
+        ];
+        const orphanCounts = () =>
+          tables.map(
+            (table) =>
+              reopened.db
+                .prepare(`SELECT count(*) AS count FROM ${table} WHERE session_id = ?`)
+                .get(orphanSessionId)?.count,
+          );
+        expect(orphanCounts()).toEqual([1, 1, 1]);
         observer.onTask = undefined;
         await expectReconciled(options, 0);
-        expect(orphanRows()).toEqual({
-          index: { count: 0 },
-          identities: { count: 0 },
-          content: { count: 0 },
-        });
+        expect(orphanCounts()).toEqual([0, 0, 0]);
       }
     } finally {
       vi.useRealTimers();
-      releaseAcknowledgement?.();
+      gate?.resume();
       await reconciliation;
       await closing?.catch(() => {});
       closeSpy?.mockRestore();
