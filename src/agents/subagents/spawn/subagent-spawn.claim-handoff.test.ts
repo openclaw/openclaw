@@ -3,6 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import type { SubagentRegistrationScope } from "../registry/subagent-registry.types.js";
 import {
+  createSubagentRegistrationScopeForTest,
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
 } from "./subagent-spawn.test-helpers.js";
@@ -56,9 +57,27 @@ beforeEach(() => {
     );
 });
 
-afterEach(() => {
-  resetScheduler();
-});
+afterEach(() => resetScheduler());
+
+function expectCalls(count: number, ...mocks: { mock: { calls: readonly unknown[] } }[]) {
+  for (const mock of mocks) {
+    expect(mock).toHaveBeenCalledTimes(count);
+  }
+}
+
+function observe(promise: Promise<unknown>) {
+  const state = { completed: false };
+  const markCompleted = () => {
+    state.completed = true;
+  };
+  return { state, settled: promise.then(markCompleted, markCompleted) };
+}
+
+const spawnCollector = (task: string) =>
+  spawn(
+    { task, collect: true },
+    { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+  );
 
 function claimFixture() {
   const gate = createDeferred();
@@ -67,14 +86,11 @@ function claimFixture() {
   const rollback = vi.fn(async () => {});
   const dispose = vi.fn(async () => {});
   const scope = {
-    canLaunch: () => !claimed,
-    canCleanupSession: () => true,
-    canAcceptLaunch: () => true,
-    canAbortAcceptedRun: () => true,
-    canRetireReservation: () => true,
-    settleFailedLaunch: settle,
-    waitForClaim: () => (claimed ? gate.promise : undefined),
-    waitForRetirementPublication: () => undefined,
+    ...createSubagentRegistrationScopeForTest({
+      canLaunch: () => !claimed,
+      settleFailedLaunch: settle,
+      waitForClaim: () => (claimed ? gate.promise : undefined),
+    }),
   };
   return {
     scope,
@@ -143,26 +159,19 @@ it("keeps one collector launch pending through reversible Gateway suspension", a
   expect(suspension.commit()).toBe(true);
   const { launch, cleanup, callbacks } = callbackFixture(f);
   const first = outsideRoot(() => callbacks.start());
-  let settled = false;
-  const observed = Promise.allSettled([first]).then(() => {
-    settled = true;
-  });
+  const observed = observe(first);
   try {
     await nextTurn();
-    expect(settled).toBe(false);
+    expect(observed.state.completed).toBe(false);
     expect(launch).not.toHaveBeenCalled();
     expect(suspension.release()).toBe(true);
     await first;
-    expect(launch).toHaveBeenCalledOnce();
-    expect(startQueuedRun).toHaveBeenCalledOnce();
-    expect(f.dispose).toHaveBeenCalledOnce();
-    expect(f.rollback).not.toHaveBeenCalled();
-    expect(f.settle).not.toHaveBeenCalled();
-    expect(cleanup).not.toHaveBeenCalled();
+    expectCalls(1, launch, startQueuedRun, f.dispose);
+    expectCalls(0, f.rollback, f.settle, cleanup);
   } finally {
     suspension.rollback();
     suspension.release();
-    await observed;
+    await observed.settled;
   }
 });
 
@@ -180,10 +189,7 @@ it.each([false, true])(
     work.beginClose();
     try {
       expect(await work.track(() => callbacks.onStartFailure(failure))).toBe(attempted);
-      expect(f.settle).toHaveBeenCalledTimes(Number(attempted));
-      expect(cleanup).toHaveBeenCalledTimes(Number(attempted));
-      expect(f.rollback).toHaveBeenCalledTimes(Number(attempted));
-      expect(launch).toHaveBeenCalledTimes(Number(attempted));
+      expectCalls(Number(attempted), f.settle, cleanup, f.rollback, launch);
     } finally {
       await work.drain();
     }
@@ -202,10 +208,7 @@ it("settles a stopped activation through its retained scope before retiring the 
     retired = true;
   });
   registerOwnedEngine(f);
-  const result = await spawn(
-    { task: "superseded original collector", collect: true },
-    { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
-  );
+  const result = await spawnCollector("superseded original collector");
   try {
     expect(result.status).toBe("accepted");
     await vi.waitFor(() => expect(f.settle).toHaveBeenCalledOnce());
@@ -229,20 +232,13 @@ it("retains the actual spawn activation handoff through a provisional claim", as
   const f = claimFixture();
   const registered = createDeferred();
   registerOwnedEngine(f, () => registered.resolve());
-  let completed = false;
-  const pending = spawn(
-    { task: "preserve prepared collector", collect: true },
-    { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
-  ).then((result) => {
-    completed = true;
-    return result;
-  });
+  const pending = spawnCollector("preserve prepared collector");
+  const observed = observe(pending);
   try {
     await registered.promise;
     await nextTurn();
-    expect(completed).toBe(false);
-    expect(f.rollback).not.toHaveBeenCalled();
-    expect(f.dispose).not.toHaveBeenCalled();
+    expect(observed.state.completed).toBe(false);
+    expectCalls(0, f.rollback, f.dispose);
     expect(callGateway.mock.calls.some(([request]) => request.method === "agent")).toBe(false);
     f.release();
     expect((await pending).status).toBe("accepted");
@@ -257,29 +253,17 @@ it("retains the actual spawn activation handoff through a provisional claim", as
 it("retains collector failure cleanup through a provisional claim", async () => {
   const f = claimFixture();
   const { launch, cleanup, callbacks } = callbackFixture(f);
-  let completed = false;
   const pending = Promise.resolve(callbacks.onStartFailure(new Error("launch refused")));
-  const observed = pending.then(
-    () => {
-      completed = true;
-    },
-    () => {
-      completed = true;
-    },
-  );
+  const observed = observe(pending);
   try {
     await nextTurn();
-    expect(completed).toBe(false);
-    expect(launch).not.toHaveBeenCalled();
-    expect(cleanup).not.toHaveBeenCalled();
-    expect(f.rollback).not.toHaveBeenCalled();
-    expect(f.settle).not.toHaveBeenCalled();
+    expect(observed.state.completed).toBe(false);
+    expectCalls(0, launch, cleanup, f.rollback, f.settle);
     f.release();
     await pending;
-    expect(cleanup).toHaveBeenCalledOnce();
-    expect(f.settle).toHaveBeenCalledOnce();
+    expectCalls(1, cleanup, f.settle);
   } finally {
     f.release();
-    await observed;
+    await observed.settled;
   }
 });

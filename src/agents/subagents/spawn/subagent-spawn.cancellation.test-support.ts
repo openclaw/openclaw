@@ -73,6 +73,27 @@ export function registerNativeCancellationCases<
         await import("../../../gateway/server-plugin-subagent-runtime.js");
       const context = bound.context as unknown as GatewayRequestContext;
       context.resolveGatewayContext = () => context;
+      const scoped = <T>(work: () => T) =>
+        withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, work);
+      const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
+      const register = (runId: string, sessionKey: string, ownerKey: string, task: string) =>
+        scoped(() =>
+          registerSubagentRun({
+            runId,
+            childSessionKey: sessionKey,
+            childAgentId: "main",
+            sessionEntry: expectDefined(
+              loadSessionEntry({ storePath: bound.storePath, sessionKey }),
+              "registered session",
+            ),
+            requesterSessionKey: ownerKey,
+            controllerSessionKey: ownerKey,
+            requesterDisplayKey: ownerKey,
+            task,
+            cleanup: "keep",
+            expectsCompletionMessage: false,
+          }),
+        );
       const plugins = createRuntimeTestRegistry(
         createPluginRuntime({
           subagent: createGatewaySubagentRuntime(() => context),
@@ -109,14 +130,15 @@ export function registerNativeCancellationCases<
             params: Parameters<typeof runtime.recovery.waitForAgent>[0],
             timeoutMs?: number,
           ): Promise<T> => {
-            const completion = (async () => {
-              const response = await waitFacade.wait<T>(params, timeoutMs, waitCleanup.signal);
-              if (params.runId === targetRunId) {
-                terminalReady.resolve(response);
-                await releaseTerminal.promise;
-              }
-              return response;
-            })();
+            const completion = waitFacade
+              .wait<T>(params, timeoutMs, waitCleanup.signal)
+              .then(async (response) => {
+                if (params.runId === targetRunId) {
+                  terminalReady.resolve(response);
+                  await releaseTerminal.promise;
+                }
+                return response;
+              });
             if (params.runId === targetRunId) {
               targetWait.resolve({ completion });
             }
@@ -129,8 +151,6 @@ export function registerNativeCancellationCases<
       let blockedAdmission: SessionWorkAdmissionLease | undefined;
       let stopObserving: (() => void) | undefined;
       let restoreNativeControl: (() => void) | undefined;
-      let nativeResult: Awaited<ReturnType<typeof killNative>> | undefined;
-      let phase = "dispatch target";
       let retired = false;
       const releaseFixtureWork = () => {
         releaseCancellation.resolve();
@@ -153,23 +173,7 @@ export function registerNativeCancellationCases<
       };
       onTestFinished(retireFixture);
       const settleRootWork = observeRootWork();
-      await withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
-        registerSubagentRun({
-          runId: parentRunId,
-          childSessionKey: parentSessionKey,
-          childAgentId: "main",
-          sessionEntry: expectDefined(
-            loadSessionEntry({ storePath: bound.storePath, sessionKey: parentSessionKey }),
-            "registered parent session",
-          ),
-          requesterSessionKey: requester,
-          controllerSessionKey: requester,
-          requesterDisplayKey: requester,
-          task: "Own the selected native task",
-          cleanup: "keep",
-          expectsCompletionMessage: false,
-        }),
-      );
+      await register(parentRunId, parentSessionKey, requester, "Own the selected native task");
       const ancestor = subagentRuns.get(parentRunId)!;
       api.on("before_dispatch", async () => {
         await api.runtime.subagent.run({
@@ -204,23 +208,7 @@ export function registerNativeCancellationCases<
             operatorRoleActor: { kind: "system" },
           },
         );
-        await withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
-          registerSubagentRun({
-            runId: targetRunId,
-            childSessionKey: targetKey,
-            childAgentId: "main",
-            sessionEntry: expectDefined(
-              loadSessionEntry({ storePath: bound.storePath, sessionKey: targetKey }),
-              "registered cancellation target",
-            ),
-            requesterSessionKey: parentSessionKey,
-            controllerSessionKey: parentSessionKey,
-            requesterDisplayKey: parentSessionKey,
-            task: "Selected native task",
-            cleanup: "keep",
-            expectsCompletionMessage: false,
-          }),
-        );
+        await register(targetRunId, targetKey, parentSessionKey, "Selected native task");
         const target = expectDefined(context.chatAbortControllers.get(targetRunId), "target run");
         const onAbort = vi.fn(() => entered.resolve());
         target.controller.signal.addEventListener("abort", onAbort, { once: true });
@@ -251,22 +239,19 @@ export function registerNativeCancellationCases<
               entered.resolve();
               await releaseCancellation.promise;
             }
-            nativeResult = await killNative(...args);
-            return nativeResult;
+            return await killNative(...args);
           });
         restoreNativeControl = () => nativeKillSpy.mockRestore();
         const tool = createSubagentsTool({ config: bound.cfg, agentSessionKey: requester });
         pending = tool.execute("native-cancel", { action: "cancel", runId: targetRunId });
         // Observe refusal immediately while the fixture controls the publication boundary.
         pendingSettled = Promise.allSettled([pending]);
-        phase = "native interruption";
-        await withinTest(
+        await wait(
           awaitGateBeforeSettlement(
             entered.promise,
             pending,
             `Native cancellation settled before the ${transition} interruption signal`,
           ),
-          signal,
         );
         if (transition === "already interrupted") {
           const claimed = createDeferred();
@@ -278,14 +263,12 @@ export function registerNativeCancellationCases<
           const stopObservingClaim = subscribeSubagentRunChanges("persistence", inspectClaim);
           try {
             inspectClaim();
-            phase = "kill claim publication";
-            await withinTest(
+            await wait(
               awaitGateBeforeSettlement(
                 claimed.promise,
                 pending,
                 "Cancellation returned before admission interruption",
               ),
-              signal,
             );
           } finally {
             stopObservingClaim();
@@ -293,14 +276,12 @@ export function registerNativeCancellationCases<
         }
         await vi.advanceTimersByTimeAsync(1);
         if (transition !== "blocked drain") {
-          phase = "ancestor replacement";
-          await withinTest(
+          await wait(
             hookRunner.runBeforeDispatch(
               { content: "Change ancestor control" },
               { sessionKey: requester },
               requesterContext,
             ),
-            signal,
           );
           const replacement = expectDefined(subagentRuns.get(nextRunId), "new ancestor");
           expect(replacement.generation).toBeGreaterThan(ancestor.generation!);
@@ -313,8 +294,7 @@ export function registerNativeCancellationCases<
         const interrupted = transition !== "before interruption";
         if (interrupted) {
           await vi.advanceTimersByTimeAsync(9);
-          phase = "native terminal response";
-          expect(await withinTest(terminalReady.promise, signal)).toMatchObject({
+          expect(await wait(terminalReady.promise)).toMatchObject({
             stopReason: "rpc",
             timeoutPhase: "queue",
             providerStarted: false,
@@ -329,8 +309,7 @@ export function registerNativeCancellationCases<
           expect(target.controller.signal.aborted).toBe(true);
           expect(onAbort).toHaveBeenCalledOnce();
           await vi.advanceTimersByTimeAsync(SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS);
-          phase = "blocked cancellation result";
-          const cancellation = await withinTest(pending, signal);
+          const cancellation = await wait(pending);
           expect(subagentRuns.get(targetRunId)?.killIntent).toEqual(originalClaim);
           expect(cancellation.details).toMatchObject({
             killed: false,
@@ -346,23 +325,20 @@ export function registerNativeCancellationCases<
           });
           blockedAdmission?.release();
           releaseTerminal.resolve();
-          phase = "released cancellation settlement";
-          await withinTest(settled.promise, signal);
+          await wait(settled.promise);
           expect(resolveSubagentSessionStatus(subagentRuns.get(targetRunId))).toBe("killed");
-          expect(subagentRuns.get(targetRunId)?.killIntent).toBeUndefined();
-          expect(subagentRuns.get(targetRunId)?.killReconciliation).toMatchObject({
-            killedAt: originalClaim.requestedAt,
-            taskCancellationAccepted: true,
+          expect(subagentRuns.get(targetRunId)).toMatchObject({
+            killIntent: undefined,
+            killReconciliation: {
+              killedAt: originalClaim.requestedAt,
+              taskCancellationAccepted: true,
+            },
           });
           assertNoModelExecution();
         } else {
           // Revocation refuses the caller result even when the native owner already
           // accepted the stop; the registry assertions below prove that settlement.
-          phase = "revoked cancellation result";
-          await withinTest(
-            expect(pending).rejects.toThrow("Subagent cancellation owner changed"),
-            signal,
-          );
+          await wait(expect(pending).rejects.toThrow("Subagent cancellation owner changed"));
           expect(target.controller.signal.aborted).toBe(interrupted);
           expect(onAbort).toHaveBeenCalledTimes(Number(interrupted));
           expect(resolveSubagentSessionStatus(subagentRuns.get(targetRunId))).toBe(
@@ -373,28 +349,15 @@ export function registerNativeCancellationCases<
           releaseTerminal.resolve();
         }
       } catch (error) {
-        const result = nativeResult?.found
-          ? {
-              found: true,
-              killed: nativeResult.killed,
-              state: nativeResult.targetState?.state,
-              error: nativeResult.error?.slice(0, 400),
-            }
-          : { found: nativeResult?.found };
-        failures.push(
-          new Error(
-            `Native cancellation ${transition} failed at ${phase}: ${JSON.stringify(result)}`,
-            { cause: error },
-          ),
-        );
+        failures.push(error);
       } finally {
         try {
           releaseFixtureWork();
           await vi.advanceTimersByTimeAsync(20);
           // Pre-interruption cleanup produces the terminal response that the other cases observed.
           if (pending && !signal.aborted) {
-            const { completion } = await withinTest(targetWait.promise, signal);
-            await withinTest(completion, signal);
+            const { completion } = await wait(targetWait.promise);
+            await wait(completion);
           }
         } catch (error) {
           failures.push(error);

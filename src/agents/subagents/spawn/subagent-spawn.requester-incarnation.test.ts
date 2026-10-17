@@ -2,8 +2,6 @@ import "./subagent-spawn-model.mocks.shared.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { installSpawnAuthorityFixture } from "./subagent-spawn.authority.test-support.js";
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -16,12 +14,7 @@ import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "../../../acp/runtime/registry.js";
-import {
-  captureRuntimeConfigAsyncReader,
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-} from "../../../config/config.js";
+import { getRuntimeConfig } from "../../../config/config.js";
 import {
   loadSessionEntryReadOnly,
   replaceSessionEntrySync,
@@ -35,10 +28,6 @@ import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
 import { maybeSpawnVisibleSession } from "../../tools/sessions-spawn-visible.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
-import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "../registry/subagent-registry.persistence.test-support.js";
 import { spawnAcpDirect } from "./acp-spawn.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
@@ -47,27 +36,8 @@ import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 const fixture = installSpawnAuthorityFixture();
+const { writeSession, configure } = fixture;
 const backendId = "requester-incarnation-fixture";
-const writeSession = (
-  sessionKey: string,
-  defaultSessionId: string,
-  agentId = "main",
-  lifecycleRevision?: string,
-) =>
-  writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId,
-    sessionKey,
-    defaultSessionId,
-    lifecycleRevision,
-  });
-
-async function configure(config: ReturnType<typeof getRuntimeConfig>) {
-  await writeFile(path.join(fixture.stateDir, "openclaw.json"), JSON.stringify(config));
-  clearConfigCache();
-  clearRuntimeConfigSnapshot();
-  await captureRuntimeConfigAsyncReader()();
-}
 
 it.each([false, true])(
   "plans children without host reads and sees committed requester preferences (proxied completion=%s)",
@@ -279,7 +249,7 @@ it.each([
       if (typeof runId !== "string") {
         throw new Error("Expected an accepted child run");
       }
-      await settleSubagentRegistryPersistenceWork();
+      await fixture.settle();
       const restored = loadSubagentRegistryFromSqlite().get(runId);
       expect(restored).toMatchObject({
         runId,

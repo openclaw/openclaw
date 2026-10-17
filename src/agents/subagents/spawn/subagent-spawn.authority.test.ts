@@ -2,18 +2,10 @@ import "./subagent-spawn-model.mocks.shared.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { installSpawnAuthorityFixture, waitForSubagentCleanupCompleted } from "./subagent-spawn.authority.test-support.js";
-/** Registered native children retain their own lifecycle after spawn handoff. */
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-} from "../../../config/config.js";
-import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { handleChatAbortRequest } from "../../../gateway/server-methods/chat-abort-handler.js";
@@ -51,7 +43,6 @@ import { killSubagentRunAdmin } from "../registry/subagent-control.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import { registerSubagentRun } from "../registry/subagent-registry.js";
-import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
 import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
@@ -66,6 +57,14 @@ vi.mock("../../../browser-lifecycle-cleanup.js", { spy: true });
 const fixture = installSpawnAuthorityFixture();
 const { parentSessionKey, parentRunId, groupId, createBoundParent } = fixture;
 type Bound = Awaited<ReturnType<typeof createBoundParent>>;
+const observe = (pending: Promise<unknown>) => pending.catch((error: unknown) => error);
+const abortParent = (context: Bound["context"], scopes = ["operator.write"]) =>
+  invokeChatAbortHandler({
+    handler: handleChatAbortRequest,
+    context,
+    request: { sessionKey: parentSessionKey, runId: parentRunId },
+    client: { connId: "owner-connection", connect: { scopes } },
+  });
 
 function inGateway<T>(context: Bound["context"], work: () => T) {
   return withPluginRuntimeGatewayRequestScope(
@@ -110,7 +109,7 @@ function spawnTool(
   sessionKey: string,
   runId: string,
   abortSignal: AbortSignal,
-  observe: (source: AnyAgentTool) => AnyAgentTool = (source) => source,
+  decorate: (source: AnyAgentTool) => AnyAgentTool = (source) => source,
 ) {
   const source = createSessionsSpawnTool({
     config: cfg,
@@ -120,7 +119,7 @@ function spawnTool(
   });
   return finalizeAgentTools({
     tools: [
-      observe(source),
+      decorate(source),
       createAgentsWaitTool({ config: cfg, agentSessionKey: sessionKey, agentId: "main" }),
     ],
     hookContext: { config: cfg, agentId: "main", sessionKey, runId },
@@ -158,22 +157,13 @@ describe("pending spawn invocation authority", () => {
           },
         },
       };
-      await writeFile(path.join(fixture.stateDir, "openclaw.json"), JSON.stringify(config));
-      clearConfigCache();
-      clearRuntimeConfigSnapshot();
-      setRuntimeConfigSnapshot(config);
+      await fixture.configure(config);
       const { cfg, storePath, context, admission, parent } = await createBoundParent();
       const key = (id: string) => `agent:main:subagent:${id}`;
       const ids = slowBranch === "sibling" ? ["a", "b"] : ["a", "b", "d"];
       const slowId = slowBranch === "sibling" ? "a" : "d";
       for (const id of ids) {
-        await writeSubagentSessionEntry({
-          stateDir: fixture.stateDir,
-          agentId: "main",
-          sessionKey: key(id),
-          defaultSessionId: `${id}-session`,
-          lifecycleRevision: "original",
-        });
+        await fixture.writeSession(key(id), `${id}-session`, "main", "original");
         await registerSubagentRun({
           runId: id,
           childSessionKey: key(id),
@@ -256,12 +246,7 @@ describe("pending spawn invocation authority", () => {
           await resume.promise;
         }
       });
-      const cancellation = invokeChatAbortHandler({
-        handler: handleChatAbortRequest,
-        context,
-        request: { sessionKey: parentSessionKey, runId: parentRunId },
-        client: { connId: "owner-connection", connect: { scopes: ["operator.write"] } },
-      });
+      const cancellation = abortParent(context);
       const freshAdmission = prepareAgentRunAdmission({
         cfg,
         operationalRunInstance: createOperationalRunInstanceRef("fresh-b"),
@@ -274,14 +259,19 @@ describe("pending spawn invocation authority", () => {
       let fresh: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
       const freshInterrupted = vi.fn();
       const dispatch = vi.fn();
-      try {
-        // The sibling drain and B's delivery bookkeeping publish independently.
-        await entered.promise;
+      const expectCompletedSibling = () => {
         expect(isSameSubagentRunOwner(subagentRuns.get("b"), completedB)).toBe(true);
         expect(subagentRuns.get("b")?.generation).toBe(completedGeneration);
         expect(resolveSubagentSessionStatus(subagentRuns.get("b"))).toBe("done");
-        const original = loadSessionEntry({ storePath, sessionKey: key("b") });
-        expect(original).toMatchObject({ sessionId: "b-session", lifecycleRevision: "original" });
+        expect(loadSessionEntry({ storePath, sessionKey: key("b") })).toMatchObject({
+          sessionId: "b-session",
+          lifecycleRevision: "original",
+        });
+      };
+      try {
+        // The sibling drain and B's delivery bookkeeping publish independently.
+        await entered.promise;
+        expectCompletedSibling();
         const admitted = await freshAdmission.admit("embedded");
         bindGatewayContextResolver(admitted, () => context as unknown as GatewayRequestContext);
         fresh = await beginSessionWorkAdmission({
@@ -320,13 +310,7 @@ describe("pending spawn invocation authority", () => {
           expect.objectContaining({ aborted: true }),
         );
         expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe("killed");
-        expect(isSameSubagentRunOwner(subagentRuns.get("b"), completedB)).toBe(true);
-        expect(subagentRuns.get("b")?.generation).toBe(completedGeneration);
-        expect(resolveSubagentSessionStatus(subagentRuns.get("b"))).toBe("done");
-        expect(loadSessionEntry({ storePath, sessionKey: key("b") })).toMatchObject({
-          sessionId: "b-session",
-          lifecycleRevision: "original",
-        });
+        expectCompletedSibling();
         expect(freshInterrupted).not.toHaveBeenCalled();
         expect(fresh.isActive()).toBe(true);
         expect(getAdmittedRunDelegatedAuthority(admitted)).toBeDefined();
@@ -355,16 +339,7 @@ describe("pending spawn invocation authority", () => {
     const { cfg, context, admission, parent, admitted } = await createBoundParent();
     await blockSpawn(parentSessionKey, "handoff-blocker");
     let cancellation: ReturnType<typeof invokeChatAbortHandler> | undefined;
-    const abortParent = () =>
-      invokeChatAbortHandler({
-        handler: handleChatAbortRequest,
-        context,
-        request: { sessionKey: parentSessionKey, runId: parentRunId },
-        client: {
-          connId: "owner-connection",
-          connect: { scopes: ["operator.read", "operator.write"] },
-        },
-      });
+    const cancel = () => abortParent(context, ["operator.read", "operator.write"]);
     let registrationAbortRequested = false;
     const stopObservingRegistration = subscribeSubagentRunChanges("persistence", () => {
       if (
@@ -374,7 +349,7 @@ describe("pending spawn invocation authority", () => {
         )
       ) {
         registrationAbortRequested = true;
-        cancellation = abortParent();
+        cancellation = cancel();
       }
     });
     const rollback = vi.fn(async () => {});
@@ -386,24 +361,20 @@ describe("pending spawn invocation authority", () => {
         ...source,
         execute: (...args) => {
           const pending = source.execute!(...args);
-          forwarded = pending.then(
-            (value) => value,
-            (error: unknown) => error,
-          );
+          forwarded = observe(pending);
           return pending;
         },
       }),
     );
-    const pending = asCaller(context, admitted, parentSessionKey, () =>
-      tool.execute!("spawn-handoff", {
-        task: "independent after handoff",
-        collect: true,
-        context: "isolated",
-        groupId,
-      }),
-    ).then(
-      (value) => value,
-      (error: unknown) => error,
+    const pending = observe(
+      asCaller(context, admitted, parentSessionKey, () =>
+        tool.execute!("spawn-handoff", {
+          task: "independent after handoff",
+          collect: true,
+          context: "isolated",
+          groupId,
+        }),
+      ),
     );
     try {
       await pending;
@@ -414,7 +385,7 @@ describe("pending spawn invocation authority", () => {
       const { runId } = (accepted as { details: { runId: string } }).details;
       expect(subagentRuns.get(runId)?.requesterTurnRunId).toBe(parentRunId);
       expect(dispatch).not.toHaveBeenCalled();
-      cancellation ??= abortParent();
+      cancellation ??= cancel();
       const respond = await cancellation;
       expect(respond).toHaveBeenCalledWith(true, {
         ok: true,
@@ -484,10 +455,7 @@ describe("pending spawn invocation authority", () => {
         handoffId: work.createHandoff(),
         onInterrupt: () => interrupted.resolve(),
       });
-      const generation = entry.generation;
-      const createdAt = entry.createdAt;
-      const taskRunId = entry.taskRunId;
-      const schedulerSlotId = entry.schedulerSlotId;
+      const { generation, createdAt, taskRunId, schedulerSlotId } = entry;
       const runtimeOwner = getSubagentRunRuntimeKey(entry);
       cancellation = killSubagentRunAdmin({
         cfg,
@@ -497,12 +465,11 @@ describe("pending spawn invocation authority", () => {
         expectedGeneration: entry.generation,
         expectedOwnerKey: parentSessionKey,
       });
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         interrupted.promise,
-        cancellation.then((result) => {
-          throw new Error(`Cancellation returned before drain: ${JSON.stringify(result)}`);
-        }),
-      ]);
+        cancellation,
+        "Cancellation returned before drain",
+      );
       const accepted = createDeferred<typeof entry>();
       const stopObservingAcceptance = subscribeSubagentRunChanges("persistence", () => {
         const current = subagentRuns.get("accepted-task-run");
@@ -512,12 +479,11 @@ describe("pending spawn invocation authority", () => {
       });
       try {
         response.resolve();
-        const acceptedEntry = await Promise.race([
+        const acceptedEntry = await awaitGateBeforeSettlement(
           accepted.promise,
-          cancellation.then((result) => {
-            throw new Error(`Cancellation returned before acceptance: ${JSON.stringify(result)}`);
-          }),
-        ]);
+          cancellation,
+          "Cancellation returned before acceptance",
+        );
         expect(acceptedEntry).toMatchObject({
           runId: "accepted-task-run",
           childSessionKey: entry.childSessionKey,
