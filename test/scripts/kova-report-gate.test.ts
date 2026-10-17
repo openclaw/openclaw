@@ -157,7 +157,7 @@ function syncRecords(report: JsonObject, records: JsonObject[]) {
   const groups = [...new Set(records.map((record) => record.scenario))].map((scenario) => {
     const rows = records.filter((record) => record.scenario === scenario);
     return {
-      key: `${scenario}|${SURFACE}|${STATE}`,
+      key: `${String(scenario)}|${SURFACE}|${STATE}`,
       scenario,
       surface: SURFACE,
       state: STATE,
