@@ -42,51 +42,245 @@ function appendToolRound(messages: Context["messages"], model: Model, round: num
 describe("Anthropic runtime-context cache lifecycle", () => {
   registerParityHostLifecycle();
 
-  it.each(["provider"] as const)(
-    "preserves shipped carrier bytes before signed thinking through %s replay",
-    async (implementation) => {
-      const legacyText = [
-        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-        "retained v2026.9.7 context",
-        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-      ].join("\n");
-      const legacyCarrier: Message = {
-        role: "user",
-        content: [{ type: "text", text: legacyText }],
-        timestamp: 2,
-        runtimeContextCarrier: true,
-        runtimeContextCarrierRetained: true,
+  it.each(["none", "short", "long"] as const)(
+    "keeps the exact carrier-free prefix and tool checkpoint with %s caching",
+    async (cacheRetention) => {
+      const model: Model<"anthropic-messages"> = {
+        ...anthropicModel,
+        input: ["text", "image"],
       };
       const messages: Context["messages"] = [
         { role: "user", content: "Original question", timestamp: 1 },
-        legacyCarrier,
-        {
-          role: "assistant",
-          api: anthropicModel.api,
-          provider: anthropicModel.provider,
-          model: anthropicModel.id,
-          timestamp: 3,
-          stopReason: "stop",
-          usage: createZeroUsage(),
-          content: [
-            { type: "thinking", thinking: "signed thought", thinkingSignature: "signature" },
-            { type: "text", text: "Original answer" },
-          ],
-        },
-        { role: "user", content: "Continue", timestamp: 4 },
       ];
+      appendToolRound(messages, model, 1);
+      const cacheControl =
+        cacheRetention === "none"
+          ? undefined
+          : { type: "ephemeral", ...(cacheRetention === "long" ? { ttl: "1h" } : {}) };
+      const text = { type: "text" as const, text: "Runtime facts must survive." };
+      const image = { type: "image" as const, mimeType: "image/png", data: "aW1n" };
+      const wireImage = {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "aW1n" },
+      };
+      const stringCarrier: Message = {
+        role: "user",
+        content: text.text,
+        timestamp: 4,
+        runtimeContext: { retained: false },
+      };
+      const cases: Array<{
+        carriers: Message[];
+        blocks: unknown[];
+      }> = [
+        {
+          carriers: [stringCarrier],
+          blocks: [text],
+        },
+        {
+          carriers: [
+            {
+              role: "user",
+              content: [text],
+              timestamp: 4,
+              runtimeContextCarrier: true,
+              runtimeContextCarrierRetained: false,
+            },
+          ],
+          blocks: [text],
+        },
+        {
+          carriers: [{ role: "user", content: [text, image], timestamp: 4, runtimeContext: {} }],
+          blocks: [text, wireImage],
+        },
+        {
+          carriers: [
+            { role: "user", content: text.text, timestamp: 4, runtimeContext: { retained: false } },
+            {
+              role: "user",
+              content: [image, { type: "text", text: "Additional runtime facts." }],
+              timestamp: 5,
+              runtimeContext: { retained: false },
+            },
+          ],
+          blocks: [text, wireImage, { type: "text", text: "Additional runtime facts." }],
+        },
+      ];
+      for (const implementation of ["provider", "transport"] as const) {
+        const { payload: carrierFree } = await captureAnthropicRequest(implementation, {
+          model,
+          cacheRetention,
+          context: { ...context, messages },
+        });
+        expect(carrierFree.messages).toEqual([
+          {
+            role: "user",
+            content: cacheControl
+              ? [{ type: "text", text: "Original question", cache_control: cacheControl }]
+              : "Original question",
+          },
+          {
+            role: "assistant",
+            content: ["a", "b"].map((suffix) => ({
+              type: "tool_use",
+              id: `call_1_${suffix}`,
+              name: "lookup",
+              input: { query: `call_1_${suffix}` },
+            })),
+          },
+          {
+            role: "user",
+            content: ["a", "b"].map((suffix) => ({
+              type: "tool_result",
+              tool_use_id: `call_1_${suffix}`,
+              content: `Answer call_1_${suffix}`,
+              is_error: false,
+              cache_control: suffix === "b" ? cacheControl : undefined,
+            })),
+          },
+        ]);
+        for (const { carriers, blocks } of cases) {
+          const source = { ...context, messages: [...messages, ...carriers] };
+          const before = JSON.stringify(source);
+          const { payload } = await captureAnthropicRequest(implementation, {
+            model,
+            cacheRetention,
+            context: source,
+          });
+          const wire = payload.messages as Array<{ role: string; content: unknown }>;
+          expect(wire).toHaveLength(3);
+          const last = wire.at(-1);
+          if (!last || !Array.isArray(last.content)) {
+            throw new Error("Expected tool results followed by runtime context");
+          }
+          expect(last.content.slice(2)).toEqual(blocks);
+          const prefix = [...wire.slice(0, -1), { ...last, content: last.content.slice(0, 2) }];
+          expect(JSON.stringify({ ...payload, messages: prefix })).toBe(
+            JSON.stringify(carrierFree),
+          );
+          expect(JSON.stringify(source)).toBe(before);
+        }
 
-      const { payload } = await captureAnthropicRequest(implementation, {
-        model: anthropicModel,
-        context: { ...context, messages },
-      });
-      const serialized = JSON.stringify(payload.messages);
-
-      expect(serialized).toContain(JSON.stringify(legacyText).slice(1, -1));
-      expect(serialized).not.toContain("OpenClaw runtime context:");
-      expect(serialized).toContain("signature");
+        const { payload: continued } = await captureAnthropicRequest(implementation, {
+          model,
+          cacheRetention,
+          context: {
+            ...context,
+            messages: [
+              ...messages,
+              stringCarrier,
+              {
+                role: "assistant",
+                api: model.api,
+                provider: model.provider,
+                model: model.id,
+                timestamp: 5,
+                stopReason: "stop",
+                usage: createZeroUsage(),
+                content: [{ type: "text", text: "Done" }],
+              },
+              { role: "user", content: "Next question", timestamp: 6 },
+            ],
+          },
+        });
+        const continuedWire = continued.messages as Array<{ role: string; content: unknown }>;
+        expect(continuedWire.slice(3)).toEqual([
+          { role: "assistant", content: [{ type: "text", text: "Done" }] },
+          { role: "user", content: "Next question" },
+        ]);
+        const continuedToolResults = continuedWire[2];
+        if (!continuedToolResults || !Array.isArray(continuedToolResults.content)) {
+          throw new Error("Expected the original tool-result checkpoint");
+        }
+        expect(continuedToolResults.content.slice(2)).toEqual([text]);
+        expect(
+          JSON.stringify([
+            ...continuedWire.slice(0, 2),
+            { ...continuedToolResults, content: continuedToolResults.content.slice(0, 2) },
+          ]),
+        ).toBe(JSON.stringify(carrierFree.messages));
+      }
     },
   );
+
+  it.each([
+    { name: "canonical retained", marker: { runtimeContext: { retained: true } } },
+    {
+      name: "legacy retained",
+      marker: { runtimeContextCarrier: true, runtimeContextCarrierRetained: true },
+    },
+    { name: "model-retained fallback", marker: { runtimeContext: {} } },
+    { name: "ordinary unmarked user", marker: {} },
+  ])("preserves $name post-tool history before signed thinking", async ({ marker }) => {
+    const model = { ...anthropicModel, id: "claude-opus-5-5" };
+    const legacyText = [
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+      "retained v2026.9.7 context",
+      "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    ].join("\n");
+    const messages: Context["messages"] = [
+      { role: "user", content: "Original question", timestamp: 1 },
+    ];
+    appendToolRound(messages, model, 1);
+    messages.push(
+      { role: "user", content: [{ type: "text", text: legacyText }], timestamp: 4, ...marker },
+      {
+        role: "assistant",
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        timestamp: 5,
+        stopReason: "stop",
+        usage: createZeroUsage(),
+        content: [
+          { type: "thinking", thinking: "signed thought", thinkingSignature: "signature" },
+          { type: "text", text: "Original answer" },
+        ],
+      },
+      { role: "user", content: "Continue", timestamp: 6 },
+    );
+    const before = JSON.stringify(messages);
+    for (const implementation of ["provider", "transport"] as const) {
+      const { payload } = await captureAnthropicRequest(implementation, {
+        model,
+        cacheRetention: "none",
+        context: { ...context, messages },
+      });
+      expect(JSON.stringify(payload.messages)).toBe(
+        JSON.stringify([
+          { role: "user", content: "Original question" },
+          {
+            role: "assistant",
+            content: ["a", "b"].map((suffix) => ({
+              type: "tool_use",
+              id: `call_1_${suffix}`,
+              name: "lookup",
+              input: { query: `call_1_${suffix}` },
+            })),
+          },
+          {
+            role: "user",
+            content: ["a", "b"].map((suffix) => ({
+              type: "tool_result",
+              tool_use_id: `call_1_${suffix}`,
+              content: `Answer call_1_${suffix}`,
+              is_error: false,
+            })),
+          },
+          { role: "user", content: [{ type: "text", text: legacyText }] },
+          {
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "signed thought", signature: "signature" },
+              { type: "text", text: "Original answer" },
+            ],
+          },
+          { role: "user", content: "Continue" },
+        ]),
+      );
+      expect(JSON.stringify(messages)).toBe(before);
+    }
+  });
 
   it.each([{ implementation: "transport", marker: "canonical" }] as const)(
     "keeps mixed-media $marker carriers before steering out of the cache through $implementation replay",
@@ -457,14 +651,24 @@ describe("Anthropic runtime-context cache lifecycle", () => {
             context: { ...context, messages: retained ? messages : [...messages, carrier] },
           });
           const wire = payload.messages as Array<{ role: string; content: unknown }>;
-          const stable = retained ? wire : wire.slice(0, -1);
+          const stable = retained ? wire : [...wire];
           if (!retained) {
-            expect(wire.at(-1)).toEqual({
-              role: "user",
-              content: blocks
-                ? [{ type: "text", text: "OpenClaw runtime context:\nRuntime context" }]
-                : "OpenClaw runtime context:\nRuntime context",
-            });
+            if (round === 0) {
+              expect(stable.pop()).toEqual({
+                role: "user",
+                content: "OpenClaw runtime context:\nRuntime context",
+              });
+            } else {
+              const last = stable.at(-1);
+              if (!last || !Array.isArray(last.content)) {
+                throw new Error("Expected tool results followed by runtime context");
+              }
+              expect(last.content.at(-1)).toEqual({
+                type: "text",
+                text: "OpenClaw runtime context:\nRuntime context",
+              });
+              stable[stable.length - 1] = { ...last, content: last.content.slice(0, -1) };
+            }
           } else {
             const retainedContent = wire[1]?.content;
             expect(

@@ -244,6 +244,7 @@ export function applyAnthropicRequestCacheControl(
   cacheControl: AnthropicEphemeralCacheControl | undefined,
   supportsCacheControlOnTools: boolean,
   cacheBreakpointOptOutMessageIndexes: ReadonlySet<number> = new Set(),
+  cacheBreakpointBlockLimits?: ReadonlyMap<number, number>,
 ): void {
   if (!cacheControl) {
     return;
@@ -262,6 +263,7 @@ export function applyAnthropicRequestCacheControl(
     cacheControl,
     ANTHROPIC_CACHE_CONTROL_LIMIT - usedMarkers,
     cacheBreakpointOptOutMessageIndexes,
+    cacheBreakpointBlockLimits,
   );
 }
 
@@ -329,6 +331,7 @@ function applyAnthropicCacheControlToMessages(
   cacheControl: AnthropicEphemeralCacheControl,
   markerLimit: number,
   cacheBreakpointOptOutMessageIndexes: ReadonlySet<number>,
+  cacheBreakpointBlockLimits: ReadonlyMap<number, number> | undefined,
 ): void {
   if (!Array.isArray(messages) || messages.length === 0 || markerLimit <= 0) {
     return;
@@ -337,6 +340,11 @@ function applyAnthropicCacheControlToMessages(
   let stableEnd = messages.length;
   for (const index of cacheBreakpointOptOutMessageIndexes) {
     stableEnd = Math.min(stableEnd, index);
+  }
+  if (cacheBreakpointBlockLimits) {
+    for (const index of cacheBreakpointBlockLimits.keys()) {
+      stableEnd = Math.min(stableEnd, index + 1);
+    }
   }
   let marked = 0;
   for (let i = stableEnd - 1; i >= 0 && marked < Math.min(markerLimit, 2); i--) {
@@ -351,7 +359,8 @@ function applyAnthropicCacheControlToMessages(
       continue;
     }
 
-    for (let j = blocks.length - 1; j >= 0; j--) {
+    const blockEnd = cacheBreakpointBlockLimits?.get(i) ?? blocks.length;
+    for (let j = blockEnd - 1; j >= 0; j--) {
       const blockRecord = blocks[j];
       if (!isRecord(blockRecord)) {
         continue;
