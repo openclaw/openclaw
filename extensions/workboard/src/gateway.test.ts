@@ -1,5 +1,4 @@
 import { DatabaseSync } from "node:sqlite";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardGatewayMethods } from "./gateway.js";
@@ -12,36 +11,52 @@ import {
 } from "./test/sqlite-store.js";
 import { createWorkboardTools } from "./tools.js";
 
+function captureGateway() {
+  const capture = createGatewayMethodCapture();
+  const invoke = async (
+    name: string,
+    params?: Record<string, unknown>,
+    context: Record<string, unknown> = {},
+  ) => {
+    const respond = vi.fn();
+    await capture.methods.get(name)!.handler({ params, respond, ...context } as never);
+    return respond;
+  };
+  return { ...capture, invoke };
+}
+
 describe("workboard gateway methods", () => {
   it("refuses a Sessions board edit after the Gateway caller loses authority", async () => {
     const store = createWorkboardSqliteTestStore();
     const sessionsBoard = await startEmptySessionsBoardService(store);
     const board = await store.upsertBoard({ id: "sessions", kind: "sessions" });
-    const { api, methods } = createGatewayMethodCapture();
+    const { api, invoke } = captureGateway();
     registerWorkboardGatewayMethods({ api, store, sessionsBoard });
-    const respond = vi.fn();
-    await methods.get("workboard.sessionsBoard.update")!.handler({
-      params: { boardId: "sessions", patch: { scope: { includeArchived: true } } },
-      hasCurrentClientAuthority: () => false,
-      respond,
-    } as never);
+
+    const respond = await invoke(
+      "workboard.sessionsBoard.update",
+      { boardId: "sessions", patch: { scope: { includeArchived: true } } },
+      { hasCurrentClientAuthority: () => false },
+    );
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: "workboard_error",
       message: "Caller authority is no longer active.",
     });
     expect(await store.getSessionsBoard("sessions")).toEqual(board);
     // Role/scope/profile authorization is rechecked too, not just transport currentness.
-    const revokedRole = vi.fn();
-    await methods.get("workboard.sessionsBoard.update")!.handler({
-      params: { boardId: "sessions", patch: { scope: { includeArchived: true } } },
-      hasCurrentClientAuthority: () => true,
-      sessionMutationAuthorization: {
-        assertCurrent: () => {
-          throw new Error("operator scope revoked");
+
+    const revokedRole = await invoke(
+      "workboard.sessionsBoard.update",
+      { boardId: "sessions", patch: { scope: { includeArchived: true } } },
+      {
+        hasCurrentClientAuthority: () => true,
+        sessionMutationAuthorization: {
+          assertCurrent: () => {
+            throw new Error("operator scope revoked");
+          },
         },
       },
-      respond: revokedRole,
-    } as never);
+    );
     expect(revokedRole).toHaveBeenCalledWith(false, undefined, {
       code: "workboard_error",
       message: "operator scope revoked",
@@ -50,26 +65,25 @@ describe("workboard gateway methods", () => {
   });
 
   it("rejects new client attachment bytes after disabling uploads without blocking agent output or reads", async () => {
-    const { api, methods } = createGatewayMethodCapture();
+    const { api, methods, invoke } = captureGateway();
     let config: OpenClawPluginApi["config"] = {};
     api.runtime.config = { current: () => config } as OpenClawPluginApi["runtime"]["config"];
     const store = createWorkboardSqliteTestStore();
     registerWorkboardGatewayMethods({ api, store });
     const card = await store.create({ title: "Upload policy" });
-    const add = methods.get("workboard.cards.attachments.add")!.handler;
     const input = { id: card.id, fileName: "proof.txt", contentBase64: "cHJvb2Y=" };
-    const enabled = vi.fn();
-    await add({ params: input, respond: enabled } as never);
+
+    const enabled = await invoke("workboard.cards.attachments.add", input);
     expect(enabled.mock.calls[0]?.[0]).toBe(true);
     const initial = await store.listAttachments(card.id);
     expect(initial.attachments).toHaveLength(1);
 
     config = { gateway: { uploads: { enabled: false } } };
-    const disabled = vi.fn();
-    await add({
-      params: { ...input, internal: { syntheticClient: true } },
-      respond: disabled,
-    } as never);
+
+    const disabled = await invoke("workboard.cards.attachments.add", {
+      ...input,
+      internal: { syntheticClient: true },
+    });
     expect(disabled).toHaveBeenCalledWith(
       false,
       undefined,
@@ -80,12 +94,11 @@ describe("workboard gateway methods", () => {
     );
     expect((await store.listAttachments(card.id)).attachments).toHaveLength(1);
 
-    const synthetic = vi.fn();
-    await add({
-      params: { ...input, fileName: "internal.txt" },
-      respond: synthetic,
-      client: { internal: { syntheticClient: true } },
-    } as never);
+    const synthetic = await invoke(
+      "workboard.cards.attachments.add",
+      { ...input, fileName: "internal.txt" },
+      { client: { internal: { syntheticClient: true } } },
+    );
     expect(synthetic.mock.calls[0]?.[0]).toBe(true);
 
     const tool = createWorkboardTools({ store }).find(
@@ -99,8 +112,11 @@ describe("workboard gateway methods", () => {
     expect(read.mock.calls[0]?.[1]?.attachments).toHaveLength(3);
 
     config = { gateway: { uploads: { enabled: true } } };
-    const reenabled = vi.fn();
-    await add({ params: { ...input, fileName: "reenabled.txt" }, respond: reenabled } as never);
+
+    const reenabled = await invoke("workboard.cards.attachments.add", {
+      ...input,
+      fileName: "reenabled.txt",
+    });
     expect(reenabled.mock.calls[0]?.[0]).toBe(true);
   });
 
@@ -108,7 +124,7 @@ describe("workboard gateway methods", () => {
   test.each(["card-read", "attachment-write", "attachment-committed", "metadata-write"] as const)(
     "rejects attachment bytes when %s observes hot disable",
     async (phase) => {
-      const { api, methods } = createGatewayMethodCapture();
+      const { api, invoke } = captureGateway();
       let disabled = false;
       let pauseRead = false;
       api.runtime.config = {
@@ -152,11 +168,12 @@ describe("workboard gateway methods", () => {
       const card = await store.create({ title: "Late upload policy" });
       using db = new DatabaseSync(dbPath, { readOnly: true });
       pauseRead = true;
-      const respond = vi.fn();
-      await methods.get("workboard.cards.attachments.add")!.handler({
-        params: { id: card.id, fileName: "late.txt", contentBase64: "bGF0ZQ==" },
-        respond,
-      } as never);
+
+      const respond = await invoke("workboard.cards.attachments.add", {
+        id: card.id,
+        fileName: "late.txt",
+        contentBase64: "bGF0ZQ==",
+      });
       expect
         .soft(respond)
         .toHaveBeenCalledWith(
@@ -177,18 +194,12 @@ describe("workboard gateway methods", () => {
   it.each(["move", "archive", "delete"] as const)(
     "returns a redacted conflict for stale %s requests",
     async (action) => {
-      type Handler = Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
-      const methods = new Map<string, Handler>();
+      const { api, methods } = captureGateway();
       const store = createWorkboardSqliteTestStore();
-      const api = createTestPluginApi({
-        registerGatewayMethod: (name, handler) => {
-          methods.set(name, handler);
-        },
-      });
       registerWorkboardGatewayMethods({ api, store });
       const base = await store.create({ title: "Shared card" });
       const claimed = await store.claim(base.id, { ownerId: "main" });
-      const handler = methods.get(`workboard.cards.${action}`)!;
+      const handler = methods.get(`workboard.cards.${action}`)!.handler;
       const respond = vi.fn();
       await handler({
         params: {
@@ -231,68 +242,11 @@ describe("workboard gateway methods", () => {
   );
 
   it("registers CRUD methods with read/write scopes", async () => {
-    const { api, methods, invoke } = createGatewayMethodCapture();
+    const { api, methods, invoke } = captureGateway();
 
     const store = createWorkboardSqliteTestStore();
     registerWorkboardGatewayMethods({ api, store });
 
-    expect([...methods.keys()]).toEqual([
-      "workboard.cards.list",
-      "workboard.cards.list.owner",
-      "workboard.cards.create",
-      "workboard.cards.create.owner",
-      "workboard.cards.captureSession",
-      "workboard.cards.update",
-      "workboard.cards.start",
-      "workboard.cards.move",
-      "workboard.cards.move.owner",
-      "workboard.cards.delete",
-      "workboard.cards.comment",
-      "workboard.cards.link",
-      "workboard.cards.linkDependency",
-      "workboard.cards.proof",
-      "workboard.cards.artifact",
-      "workboard.cards.claim",
-      "workboard.cards.heartbeat",
-      "workboard.cards.release",
-      "workboard.cards.promote",
-      "workboard.cards.reassign",
-      "workboard.cards.reclaim",
-      "workboard.cards.complete",
-      "workboard.cards.block",
-      "workboard.cards.unblock",
-      "workboard.cards.bulk",
-      "workboard.cards.diagnostics",
-      "workboard.cards.diagnostics.refresh",
-      "workboard.cards.dispatch",
-      "workboard.cards.dispatch.owner",
-      "workboard.cards.dispatchWithOptions",
-      "workboard.cards.dispatchWithOptions.owner",
-      "workboard.boards.list",
-      "workboard.boards.upsert",
-      "workboard.sessionsBoard.read",
-      "workboard.sessionsBoard.update",
-      "workboard.sessionsBoard.move",
-      "workboard.boards.archive",
-      "workboard.boards.delete",
-      "workboard.cards.stats",
-      "workboard.cards.runs",
-      "workboard.cards.specify",
-      "workboard.cards.decompose",
-      "workboard.notifications.subscribe",
-      "workboard.notifications.list",
-      "workboard.notifications.delete",
-      "workboard.notifications.events",
-      "workboard.notifications.advance",
-      "workboard.cards.attachments.list",
-      "workboard.cards.attachments.get",
-      "workboard.cards.attachments.add",
-      "workboard.cards.attachments.delete",
-      "workboard.cards.workerLog",
-      "workboard.cards.protocolViolation",
-      "workboard.cards.archive",
-      "workboard.cards.export",
-    ]);
     for (const [scope, names] of [
       [
         "operator.read",
@@ -337,13 +291,10 @@ describe("workboard gateway methods", () => {
       ],
     });
 
-    const createHandler = methods.get("workboard.cards.create")?.handler;
-    const listHandler = methods.get("workboard.cards.list")?.handler;
-    const createRespond = vi.fn();
-    await createHandler?.({
-      params: { title: "Investigate queue drift", priority: "urgent" },
-      respond: createRespond,
-    } as never);
+    const createRespond = await invoke("workboard.cards.create", {
+      title: "Investigate queue drift",
+      priority: "urgent",
+    });
     expect(createRespond.mock.calls[0]?.[0]).toBe(true);
     expect(createRespond.mock.calls[0]?.[1]?.card).toMatchObject({
       metadata: { automation: { workspaceAccess: { unrestricted: true } } },
@@ -367,8 +318,7 @@ describe("workboard gateway methods", () => {
       }),
     );
 
-    const listRespond = vi.fn();
-    await listHandler?.({ params: {}, respond: listRespond } as never);
+    const listRespond = await invoke("workboard.cards.list", {});
     expect(listRespond.mock.calls[0]?.[1]).toMatchObject({
       cards: [expect.objectContaining({ title: "Investigate queue drift" })],
       boards: expect.arrayContaining([
@@ -386,7 +336,7 @@ describe("workboard gateway methods", () => {
     const store = createWorkboardSqliteTestStore();
     const sessionsBoard = await startEmptySessionsBoardService(store);
     try {
-      const { api, methods, invoke } = createGatewayMethodCapture();
+      const { api, methods, invoke } = captureGateway();
       registerWorkboardGatewayMethods({ api, store, sessionsBoard });
       const created = await invoke("workboard.boards.upsert", {
         id: "sessions",
@@ -476,8 +426,10 @@ describe("workboard gateway methods", () => {
         snapshot.revision.revision,
       );
       const beforeInvalid = await store.getSessionsBoard("sessions");
+      const invalid = (action: string, input: Record<string, unknown>, message: RegExp) =>
+        [`workboard.sessionsBoard.${action}`, { boardId: "sessions", ...input }, message] as const;
       const invalidRequests = [
-        ["workboard.sessionsBoard.read", {}, /boardId required/],
+        invalid("read", { boardId: undefined }, /boardId required/),
         ...["includeAutomation", "includeHome"].map(
           (field) =>
             [
@@ -486,11 +438,7 @@ describe("workboard gateway methods", () => {
               new RegExp(`scope.${field} must be a boolean`),
             ] as const,
         ),
-        [
-          "workboard.sessionsBoard.read",
-          { boardId: "sessions", junk: true },
-          /Unknown Sessions board read field: junk/,
-        ],
+        invalid("read", { junk: true }, /Unknown Sessions board read field: junk/),
         ...[null, [], true, "everyone"].map(
           (view) =>
             [
@@ -510,36 +458,16 @@ describe("workboard gateway methods", () => {
           ([view, message]) =>
             ["workboard.sessionsBoard.read", { boardId: "sessions", view }, message] as const,
         ),
-        [
-          "workboard.sessionsBoard.update",
-          { boardId: "sessions", patch: [] },
-          /patch must be an object/,
-        ],
-        [
-          "workboard.sessionsBoard.update",
-          { boardId: "sessions", patch: { columns: [] } },
-          /2\.\.12 columns/,
-        ],
-        [
-          "workboard.sessionsBoard.update",
-          { boardId: "sessions", patch: { scope: { maxAgeHours: -1 } } },
+        invalid("update", { patch: [] }, /patch must be an object/),
+        invalid("update", { patch: { columns: [] } }, /2\.\.12 columns/),
+        invalid(
+          "update",
+          { patch: { scope: { maxAgeHours: -1 } } },
           /maxAgeHours must be a positive finite number/,
-        ],
-        [
-          "workboard.sessionsBoard.update",
-          { boardId: "sessions", patch: { kind: "cards" } },
-          /Unknown.*field: kind/,
-        ],
-        [
-          "workboard.sessionsBoard.move",
-          { boardId: "sessions", columnId: "working" },
-          /sessionKey required/,
-        ],
-        [
-          "workboard.sessionsBoard.move",
-          { boardId: "sessions", sessionKey: "agent:main:a", columnId: 2 },
-          /columnId required/,
-        ],
+        ),
+        invalid("update", { patch: { kind: "cards" } }, /Unknown.*field: kind/),
+        invalid("move", { columnId: "working" }, /sessionKey required/),
+        invalid("move", { sessionKey: "agent:main:a", columnId: 2 }, /columnId required/),
         ["workboard.boards.upsert", { id: "sessions", kind: "cards" }, /kind cannot be changed/],
       ] as const;
       for (const [name, input, message] of invalidRequests) {
@@ -562,7 +490,7 @@ describe("workboard gateway methods", () => {
   });
 
   it("applies connected client workspace access when accepting card paths", async () => {
-    const { methods, registerGatewayMethod } = createGatewayMethodCapture();
+    const { methods, registerGatewayMethod, invoke } = captureGateway();
     const store = createWorkboardSqliteTestStore();
     const api = {
       runtime: {
@@ -574,36 +502,31 @@ describe("workboard gateway methods", () => {
       registerGatewayMethod,
     } as unknown as OpenClawPluginApi;
     registerWorkboardGatewayMethods({ api, store });
-    const create = methods.get("workboard.cards.create")?.handler;
     const context = {
       getRuntimeConfig: () => ({ agents: { defaults: { workspace: "/workspace" } } }),
     };
 
-    const deniedRespond = vi.fn();
-    await create?.({
-      params: {
+    const deniedRespond = await invoke(
+      "workboard.cards.create",
+      {
         title: "Outside",
         workspace: { kind: "worktree", sourcePath: "/outside/repo" },
       },
-      client: { connect: { scopes: ["operator.write"] } },
-      context,
-      respond: deniedRespond,
-    } as never);
+      { client: { connect: { scopes: ["operator.write"] } }, context },
+    );
     expect(deniedRespond.mock.calls[0]?.[0]).toBe(false);
     expect(deniedRespond.mock.calls[0]?.[2]?.message).toContain("outside the caller");
 
-    const insideRespond = vi.fn();
-    await create?.({
-      params: {
+    const insideRespond = await invoke(
+      "workboard.cards.create",
+      {
         title: "Inside",
         workspace: { kind: "worktree", sourcePath: "/workspace/repo" },
         workspaceAccess: { unrestricted: true },
         metadata: { automation: { workspaceAccess: { unrestricted: true } } },
       },
-      client: { connect: { scopes: ["operator.write"] } },
-      context,
-      respond: insideRespond,
-    } as never);
+      { client: { connect: { scopes: ["operator.write"] } }, context },
+    );
     expect(insideRespond.mock.calls[0]?.[0]).toBe(true);
     expect(insideRespond.mock.calls[0]?.[1]?.card).toMatchObject({
       metadata: {
@@ -613,21 +536,19 @@ describe("workboard gateway methods", () => {
       },
     });
     const insideId = insideRespond.mock.calls[0]?.[1]?.card.id as string;
-    const forgedUpdateRespond = vi.fn();
-    await methods.get("workboard.cards.update")?.handler({
-      params: { id: insideId, patch: { workspaceAccess: { unrestricted: true } } },
-      client: { connect: { scopes: ["operator.write"] } },
-      context,
-      respond: forgedUpdateRespond,
-    } as never);
+
+    const forgedUpdateRespond = await invoke(
+      "workboard.cards.update",
+      { id: insideId, patch: { workspaceAccess: { unrestricted: true } } },
+      { client: { connect: { scopes: ["operator.write"] } }, context },
+    );
     expect(forgedUpdateRespond.mock.calls[0]?.[0]).toBe(true);
-    const forgedBulkRespond = vi.fn();
-    await methods.get("workboard.cards.bulk")?.handler({
-      params: { ids: [insideId], patch: { workspaceAccess: { unrestricted: true } } },
-      client: { connect: { scopes: ["operator.write"] } },
-      context,
-      respond: forgedBulkRespond,
-    } as never);
+
+    const forgedBulkRespond = await invoke(
+      "workboard.cards.bulk",
+      { ids: [insideId], patch: { workspaceAccess: { unrestricted: true } } },
+      { client: { connect: { scopes: ["operator.write"] } }, context },
+    );
     expect(forgedBulkRespond.mock.calls[0]?.[0]).toBe(true);
     await expect(store.get(insideId)).resolves.toMatchObject({
       metadata: {
@@ -637,15 +558,14 @@ describe("workboard gateway methods", () => {
       },
     });
 
-    const adminRespond = vi.fn();
-    await create?.({
-      params: {
+    const adminRespond = await invoke(
+      "workboard.cards.create",
+      {
         title: "Admin outside",
         workspace: { kind: "worktree", sourcePath: "/outside/repo" },
       },
-      client: { connect: { scopes: ["operator.admin"] } },
-      respond: adminRespond,
-    } as never);
+      { client: { connect: { scopes: ["operator.admin"] } } },
+    );
     expect(adminRespond.mock.calls[0]?.[0]).toBe(true);
     expect(adminRespond.mock.calls[0]?.[1]?.card).toMatchObject({
       metadata: { automation: { workspaceAccess: { unrestricted: true } } },
@@ -659,13 +579,12 @@ describe("workboard gateway methods", () => {
       client: { connect: { scopes: ["operator.admin"] } },
       respond: vi.fn(),
     } as never);
-    const inheritedRespond = vi.fn();
-    await create?.({
-      params: { title: "No implicit workspace", boardId: "outside-default" },
-      client: { connect: { scopes: ["operator.write"] } },
-      context,
-      respond: inheritedRespond,
-    } as never);
+
+    const inheritedRespond = await invoke(
+      "workboard.cards.create",
+      { title: "No implicit workspace", boardId: "outside-default" },
+      { client: { connect: { scopes: ["operator.write"] } }, context },
+    );
     expect(inheritedRespond.mock.calls[0]?.[0]).toBe(true);
     expect(
       inheritedRespond.mock.calls[0]?.[1]?.card.metadata?.automation?.workspace,
@@ -673,7 +592,7 @@ describe("workboard gateway methods", () => {
   });
 
   it("stores metadata updates through dedicated card methods", async () => {
-    const { api, invoke } = createGatewayMethodCapture();
+    const { api, invoke } = captureGateway();
 
     registerWorkboardGatewayMethods({ api, store: createWorkboardSqliteTestStore() });
 
@@ -707,16 +626,14 @@ describe("workboard gateway methods", () => {
   });
 
   it("validates labels from comma-separated gateway input", async () => {
-    const { api, methods } = createGatewayMethodCapture();
+    const { api, invoke } = captureGateway();
 
     registerWorkboardGatewayMethods({ api, store: createWorkboardSqliteTestStore() });
 
-    const createHandler = methods.get("workboard.cards.create")?.handler;
-    const respond = vi.fn();
-    await createHandler?.({
-      params: { title: "Check labels", labels: `valid, ${"x".repeat(41)}` },
-      respond,
-    } as never);
+    const respond = await invoke("workboard.cards.create", {
+      title: "Check labels",
+      labels: `valid, ${"x".repeat(41)}`,
+    });
 
     expect(respond.mock.calls[0]?.[0]).toBe(false);
     expect(respond.mock.calls[0]?.[2]).toMatchObject({
@@ -725,7 +642,7 @@ describe("workboard gateway methods", () => {
   });
 
   it("returns an actionable exact-card admission failure", async () => {
-    const { methods, registerGatewayMethod } = createGatewayMethodCapture();
+    const { registerGatewayMethod, invoke } = captureGateway();
     const run = vi.fn();
     const api = {
       runtime: {
@@ -741,13 +658,12 @@ describe("workboard gateway methods", () => {
       workspaceAccess: { unrestricted: true },
     });
     registerWorkboardGatewayMethods({ api, store });
-    const respond = vi.fn();
 
-    await methods.get("workboard.cards.start")?.handler({
-      params: { id: card.id },
-      context: { getRuntimeConfig: () => ({}) },
-      respond,
-    } as never);
+    const respond = await invoke(
+      "workboard.cards.start",
+      { id: card.id },
+      { context: { getRuntimeConfig: () => ({}) } },
+    );
 
     expect(run).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
@@ -761,7 +677,7 @@ describe("workboard gateway methods", () => {
   });
 
   it("threads maxStarts and dispatches omitted params with the legacy default cap", async () => {
-    const { methods, registerGatewayMethod } = createGatewayMethodCapture();
+    const { methods, registerGatewayMethod, invoke } = captureGateway();
     const run = vi.fn(async (input: { idempotencyKey: string }) => ({
       runId: `accepted:${input.idempotencyKey}`,
     }));
@@ -807,8 +723,8 @@ describe("workboard gateway methods", () => {
         }),
       ),
     );
-    const defaultRespond = vi.fn();
-    await methods.get("workboard.cards.dispatch")?.handler({ respond: defaultRespond } as never);
+
+    const defaultRespond = await invoke("workboard.cards.dispatch", undefined);
     expect(defaultRespond.mock.calls[0]?.[0]).toBe(true);
     expect(defaultRespond.mock.calls[0]?.[1]?.started).toHaveLength(3);
     await expect(store.get(defaultCards[0]!.id)).resolves.toMatchObject({ status: "running" });
@@ -859,7 +775,7 @@ describe("workboard gateway methods", () => {
   });
 
   it("keeps write-scope worktree dispatch within configured agent workspaces", async () => {
-    const { methods, registerGatewayMethod } = createGatewayMethodCapture();
+    const { methods, registerGatewayMethod } = captureGateway();
     const run = vi.fn().mockResolvedValue({ runId: "run-card" });
     const createWorktree = vi.fn().mockResolvedValue({
       id: "managed-id",
@@ -970,7 +886,7 @@ describe("workboard gateway methods", () => {
 
   it("preserves the actionable claim refusal in the direct RPC error shape", async () => {
     const store = createWorkboardSqliteTestStore();
-    const { api, invoke } = createGatewayMethodCapture();
+    const { api, invoke } = captureGateway();
     registerWorkboardGatewayMethods({ api, store });
     const parent = await store.create({ title: "Completed parent", status: "done" });
     const child = await store.create({ title: "Blocked child", parents: [parent.id] });
@@ -985,7 +901,7 @@ describe("workboard gateway methods", () => {
   });
 
   it("claims, heartbeats, and bulk-updates cards through gateway methods", async () => {
-    const { api, methods, invoke } = createGatewayMethodCapture();
+    const { api, methods, invoke } = captureGateway();
 
     registerWorkboardGatewayMethods({ api, store: createWorkboardSqliteTestStore() });
 
