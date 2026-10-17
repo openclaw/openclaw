@@ -24,27 +24,45 @@ const key = "agent:main:pending-stop";
 
 const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
+async function createPendingOwner(profileName: string) {
+  const client = roleClient("view", profileName);
+  client.connId = "pending-owner";
+  client.connect.scopes = ["operator.sessions.write"];
+  const cfg = rolePolicyConfig();
+  setRuntimeConfigSnapshot(cfg);
+  const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+  const entry = {
+    sessionId: "original",
+    updatedAt: 1,
+    createdActor: {
+      type: "human" as const,
+      source: "profile" as const,
+      id: client.authenticatedUserProfile!.profileId,
+    },
+  };
+  await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+  const stop = async (runId: string) => {
+    const respond = vi.fn();
+    await handleGatewayRequest({
+      req: { type: "req", id: "stop", method: "chat.abort", params: { sessionKey: key, runId } },
+      client,
+      context,
+      respond,
+      isWebchatConnect: () => false,
+      extraHandlers: { "chat.abort": handleChatAbortRequest },
+    });
+    return respond.mock.calls[0]?.[1];
+  };
+  return { client, cfg, context, entry, stop };
+}
+
 describe("pending Stop producer binding", () => {
   it.each(["current", "replacement"] as const)(
     "uses the agent reservation's original row across %s admission",
     async (target) => {
       await withOpenClawTestState(profileState, async () => {
-        const client = roleClient("view", "pending-agent-owner");
-        client.connId = "pending-owner";
-        client.connect.scopes = ["operator.sessions.write"];
-        const cfg = rolePolicyConfig();
-        setRuntimeConfigSnapshot(cfg);
-        const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-        const entry = {
-          sessionId: "original",
-          updatedAt: 1,
-          createdActor: {
-            type: "human" as const,
-            source: "profile" as const,
-            id: client.authenticatedUserProfile!.profileId,
-          },
-        };
-        await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+        const { client, cfg, context, entry, stop } =
+          await createPendingOwner("pending-agent-owner");
         const runId = `pending-agent-${target}`;
         const request = {
           message: "queued",
@@ -84,21 +102,7 @@ describe("pending Stop producer binding", () => {
             { ...entry, sessionId: "replacement" },
           );
         }
-        const respond = vi.fn();
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "stop",
-            method: "chat.abort",
-            params: { sessionKey: key, runId },
-          },
-          client,
-          context,
-          respond,
-          isWebchatConnect: () => false,
-          extraHandlers: { "chat.abort": handleChatAbortRequest },
-        });
-        expect(respond.mock.calls[0]?.[1]).toMatchObject({ aborted: target === "current" });
+        expect(await stop(runId)).toMatchObject({ aborted: target === "current" });
         if (target === "replacement") {
           expect(context.dedupe.get(`agent:${runId}`)).toBe(pending);
         } else {
@@ -114,24 +118,7 @@ describe("pending Stop producer binding", () => {
   it("keeps a real chat admission abortable while its original session lifecycle is held", async () => {
     await withOpenClawTestState(profileState, async () => {
       await loadOrCreateProcessDeviceIdentityAsync();
-      const client = roleClient("view", "pending-chat-owner");
-      client.connId = "pending-owner";
-      client.connect.scopes = ["operator.sessions.write"];
-      const cfg = rolePolicyConfig();
-      setRuntimeConfigSnapshot(cfg);
-      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: key },
-        {
-          sessionId: "original",
-          updatedAt: 1,
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: client.authenticatedUserProfile!.profileId,
-          },
-        },
-      );
+      const { client, context, stop } = await createPendingOwner("pending-chat-owner");
       const runId = "pending-chat-admission";
       const request = await normalizeChatSendRequest({
         params: { sessionKey: key, message: "queued", idempotencyKey: runId },
@@ -168,21 +155,7 @@ describe("pending Stop producer binding", () => {
           expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true),
         );
         expect(context.chatAbortControllers.has(runId)).toBe(false);
-        const respond = vi.fn();
-        await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "stop",
-            method: "chat.abort",
-            params: { sessionKey: key, runId },
-          },
-          client,
-          context,
-          respond,
-          isWebchatConnect: () => false,
-          extraHandlers: { "chat.abort": handleChatAbortRequest },
-        });
-        expect(respond.mock.calls[0]?.[1]).toMatchObject({ aborted: true, runIds: [runId] });
+        expect(await stop(runId)).toMatchObject({ aborted: true, runIds: [runId] });
         expect(context.dedupe.get(`chat:${runId}`)?.payload).toMatchObject({
           status: "timeout",
           summary: "aborted",

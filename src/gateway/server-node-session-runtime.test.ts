@@ -130,6 +130,48 @@ function liveTextPublisher(
   };
 }
 
+function pairedSubscriber(event: "chat" | "agent", sessionKey = "main") {
+  const entered = createDeferred();
+  const pairing = createDeferred<string>();
+  let delayed = false;
+  const runtime = createRuntime(() => {
+    if (!delayed) {
+      return Promise.resolve("generation-a");
+    }
+    entered.resolve();
+    return pairing.promise;
+  });
+  const frames: string[] = [];
+  const socket = registerNode(runtime, "conn-original", "generation-a", frames);
+  runtime.nodeSubscribe("node-a", sessionKey, "conn-original");
+  return {
+    runtime,
+    frames,
+    socket,
+    publisher: liveTextPublisher(runtime, event, sessionKey),
+    delay: () => {
+      delayed = true;
+    },
+    resume: () => {
+      delayed = false;
+    },
+    entered: entered.promise,
+    release: () => pairing.resolve("generation-a"),
+  };
+}
+
+function publishInventory(runtime: ReturnType<typeof createRuntime>, available: number) {
+  return updateNodeRunnerInventory({
+    registry: runtime.nodeRegistry,
+    nodeId: "node-a",
+    connId: "conn-original",
+    declaration: {
+      protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      workerHost: { enabled: true, capacity: { total: 1, available } },
+    },
+  });
+}
+
 describe("gateway node session runtime", () => {
   test.each(["chat", "agent"] as const)(
     "%s snapshots attach, resubscribe, and changed projections while preserving append ordering",
@@ -182,11 +224,7 @@ describe("gateway node session runtime", () => {
   );
 
   test("re-baselines after a failed send or a skipped publication", async () => {
-    const frames: string[] = [];
-    const runtime = createRuntime(async () => "generation-a");
-    const socket = registerNode(runtime, "conn-original", "generation-a", frames);
-    runtime.nodeSubscribe("node-a", "main", "conn-original");
-    const publisher = liveTextPublisher(runtime, "chat");
+    const { socket, publisher, frames } = pairedSubscriber("chat");
     await publisher.send("one", "one");
     vi.mocked(socket.send).mockImplementationOnce(() => {
       throw new Error("send failed");
@@ -204,26 +242,14 @@ describe("gateway node session runtime", () => {
   });
 
   test("preserves transformed assistant snapshots before resuming queued appends", async () => {
-    const entered = createDeferred();
-    const pairing = createDeferred<string>();
-    let delayed = false;
-    const runtime = createRuntime(() => {
-      if (delayed) {
-        entered.resolve();
-        return pairing.promise;
-      }
-      return Promise.resolve("generation-a");
-    });
-    const frames: string[] = [];
-    registerNode(runtime, "conn-original", "generation-a", frames);
-    runtime.nodeSubscribe("node-a", "main", "conn-original");
-    const publisher = liveTextPublisher(runtime, "agent");
+    const f = pairedSubscriber("agent");
+    const { publisher, frames } = f;
     await publisher.send("foo", "foo");
-    delayed = true;
+    f.delay();
     const transformed = publisher.send("X", "bar");
     const append = publisher.send("Xbaz", "baz");
-    await entered.promise;
-    pairing.resolve("generation-a");
+    await f.entered;
+    f.release();
     await Promise.all([transformed, append]);
 
     expect(frames.map((frame) => JSON.parse(frame).payload.data)).toEqual([
@@ -234,29 +260,17 @@ describe("gateway node session runtime", () => {
   });
 
   test("does not inherit receipts when a connection is replaced during pairing verification", async () => {
-    const entered = createDeferred();
-    const pairing = createDeferred<string>();
-    let delayed = false;
-    const runtime = createRuntime(() => {
-      if (delayed) {
-        entered.resolve();
-        return pairing.promise;
-      }
-      return Promise.resolve("generation-a");
-    });
-    const originalFrames: string[] = [];
-    registerNode(runtime, "conn-original", "generation-a", originalFrames);
-    runtime.nodeSubscribe("node-a", "main", "conn-original");
-    const publisher = liveTextPublisher(runtime, "chat");
+    const f = pairedSubscriber("chat");
+    const { publisher, runtime, frames: originalFrames } = f;
     await publisher.send("one", "one");
-    delayed = true;
+    f.delay();
     const pending = publisher.send("one two", " two");
-    await entered.promise;
+    await f.entered;
     const replacementFrames: string[] = [];
     registerNode(runtime, "conn-replacement", "generation-a", replacementFrames);
-    pairing.resolve("generation-a");
+    f.release();
     await pending;
-    delayed = false;
+    f.resume();
     await publisher.send("one two three", " three");
     await publisher.send("one two three four", " four");
 
@@ -280,29 +294,17 @@ describe("gateway node session runtime", () => {
     { boundary: "unsubscribe", state: "final", drain: false },
     { boundary: "resubscribe", state: "final", drain: false },
   ] as const)("settles queued node text at $boundary", async ({ boundary, state, drain }) => {
-    const entered = createDeferred();
-    const pairing = createDeferred<string>();
-    let delayed = false;
     let current = true;
-    const runtime = createRuntime(() => {
-      if (delayed) {
-        entered.resolve();
-        return pairing.promise;
-      }
-      return Promise.resolve("generation-a");
-    });
-    const frames: string[] = [];
-    registerNode(runtime, "conn-original", "generation-a", frames);
     const sessionKey = "agent:main:main";
-    runtime.nodeSubscribe("node-a", sessionKey, "conn-original");
-    const publisher = liveTextPublisher(runtime, "agent", sessionKey);
+    const f = pairedSubscriber("agent", sessionKey);
+    const { publisher, runtime, frames } = f;
     const chatRunState = createChatRunState();
     chatRunState.getOrCreate("run-a").liveTextGroup = publisher.group;
     await publisher.send("one", "one", { isCurrent: () => current });
-    delayed = true;
+    f.delay();
     const firstTail = publisher.send("one two", " two", { isCurrent: () => current });
     const secondTail = publisher.send("one two three", " three", { isCurrent: () => current });
-    await entered.promise;
+    await f.entered;
     if (boundary === "revoked source") {
       current = false;
     }
@@ -333,7 +335,7 @@ describe("gateway node session runtime", () => {
         runtime.nodeSubscribe("node-a", sessionKey, "conn-original");
       }
     }
-    pairing.resolve("generation-a");
+    f.release();
     await Promise.all([firstTail, secondTail, ...terminals]);
 
     const events = frames.map((frame) => JSON.parse(frame));
@@ -352,21 +354,10 @@ describe("gateway node session runtime", () => {
     "drains the queued assistant tail when the source gap arrives on %s",
     async (stream) => {
       vi.useFakeTimers();
-      const entered = createDeferred();
-      const pairing = createDeferred<string>();
-      let delayed = false;
-      const runtime = createRuntime(() => {
-        if (delayed) {
-          entered.resolve();
-          return pairing.promise;
-        }
-        return Promise.resolve("generation-a");
-      });
-      const frames: string[] = [];
-      registerNode(runtime, "conn-original", "generation-a", frames);
       const sessionKey = "agent:main:node-source-gap";
       const runId = "run-source-gap";
-      runtime.nodeSubscribe("node-a", sessionKey, "conn-original");
+      const f = pairedSubscriber("agent", sessionKey);
+      const { runtime, frames } = f;
       const chatRunState = createChatRunState();
       const sends: Promise<void>[] = [];
       const handler = createAgentEventHandler({
@@ -405,7 +396,7 @@ describe("gateway node session runtime", () => {
       try {
         await emit(1, "assistant", { text: "A", delta: "A" });
         await Promise.all(sends);
-        delayed = true;
+        f.delay();
         await emit(2, "assistant", { text: "AB", delta: "B" });
         await emit(
           4,
@@ -414,8 +405,8 @@ describe("gateway node session runtime", () => {
             ? { phase: "start", toolCallId: "gap-tool", name: "read" }
             : { phase: "end" },
         );
-        await entered.promise;
-        pairing.resolve("generation-a");
+        await f.entered;
+        f.release();
         await Promise.all(sends);
 
         const events = frames.map((frame) => JSON.parse(frame));
@@ -436,7 +427,7 @@ describe("gateway node session runtime", () => {
           events.findIndex((frame) => frame.event === "agent" && frame.payload.stream === stream),
         ).toBeGreaterThan(tailIndex);
       } finally {
-        pairing.resolve("generation-a");
+        f.release();
         await handler.dispose();
         chatRunState.clear();
         vi.useRealTimers();
@@ -465,17 +456,7 @@ describe("gateway node session runtime", () => {
     );
     registerNode(runtime, "conn-original", "generation-a", []);
 
-    expect(
-      updateNodeRunnerInventory({
-        registry: runtime.nodeRegistry,
-        nodeId: "node-a",
-        connId: "conn-original",
-        declaration: {
-          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerHost: { enabled: true, capacity: { total: 1, available: 0 } },
-        },
-      }),
-    ).toEqual({ changed: true });
+    expect(publishInventory(runtime, 0)).toEqual({ changed: true });
     expect(broadcast).toHaveBeenNthCalledWith(
       1,
       GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
@@ -522,22 +503,11 @@ describe("gateway node session runtime", () => {
       onRunnerStateChanged,
     );
     registerNode(runtime, "conn-original", "generation-a", []);
-    const publish = (available: number) =>
-      updateNodeRunnerInventory({
-        registry: runtime.nodeRegistry,
-        nodeId: "node-a",
-        connId: "conn-original",
-        declaration: {
-          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerHost: { enabled: true, capacity: { total: 1, available } },
-        },
-      });
-
-    expect(publish(1)).toEqual({ changed: true });
+    expect(publishInventory(runtime, 1)).toEqual({ changed: true });
     broadcast.mockClear();
     onRunnerStateChanged.mockClear();
 
-    expect(publish(0)).toEqual({ changed: true });
+    expect(publishInventory(runtime, 0)).toEqual({ changed: true });
 
     expect(runtime.nodeWorkerSupervisorTransport.hasCurrentRunner("node-a")).toBe(true);
     expect(onRunnerStateChanged).toHaveBeenCalledExactlyOnceWith("node-a", {

@@ -33,6 +33,8 @@ import { createSessionRowProjectionFixture } from "./session-row-projection.test
 import { listProjectedSessions } from "./session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
+const agentDir = "/tmp/gateway-agent";
+const workspaceDir = "/tmp/gateway-workspace";
 const snapshot: ModelCatalogSnapshot = {
   entries: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
   routeVariants: [],
@@ -44,10 +46,7 @@ function ownerConfig(agentId = "main", extra: OpenClawConfig = {}): OpenClawConf
     agents: {
       ...extra.agents,
       entries: {
-        [agentId]: {
-          agentDir: "/tmp/gateway-agent",
-          workspace: "/tmp/gateway-workspace",
-        },
+        [agentId]: { agentDir, workspace: workspaceDir },
       },
     },
   };
@@ -59,13 +58,9 @@ function ownerSnapshot(
   agentId?: string,
 ): PublishedModelCatalogOwnerCandidate {
   return {
-    catalogOwner: preparePublishedModelCatalogOwnerIdentity({
-      config,
-      agentId,
-      agentDir: "/tmp/gateway-agent",
-    }),
+    catalogOwner: preparePublishedModelCatalogOwnerIdentity({ config, agentId, agentDir }),
     ...(agentId ? { agentId } : {}),
-    agentDir: "/tmp/gateway-agent",
+    agentDir,
     config,
     observationConfig: config,
     isCurrent: () => true,
@@ -74,6 +69,19 @@ function ownerSnapshot(
     metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,
     modelCatalog,
   };
+}
+
+function catalogLoaders(candidate: PublishedModelCatalogOwnerCandidate) {
+  const params = {
+    getConfig: () => candidate.config,
+    loadPublishedPreparedModelCatalogOwnerSnapshot: vi.fn(async () => candidate),
+  };
+  const publicLoader = vi.fn(() => loadGatewayModelCatalogSnapshot(params));
+  registerGatewayModelCatalogPrivateAccess(publicLoader, {
+    loadDeferred: (options) => loadPreparedGatewayModelCatalogSnapshot({ ...params, ...options }),
+    readPrepared: async () => undefined,
+  });
+  return { params, publicLoader };
 }
 
 describe("gateway prepared model catalog", () => {
@@ -202,53 +210,32 @@ describe("gateway prepared model catalog", () => {
   });
 
   it.each([
-    { name: "wrong directory", agentId: "main", agentDir: "/tmp/wrong-agent", bound: false },
-    {
-      name: "unknown explicit id",
-      agentId: "missing",
-      agentDir: "/tmp/gateway-agent",
-      bound: false,
-    },
-    {
-      name: "explicit empty roster",
-      agentId: "main",
-      agentDir: "/tmp/gateway-agent",
-      empty: true,
-      bound: false,
-    },
-    {
-      name: "shared directory without id",
-      agentDir: "/tmp/gateway-agent",
-      shared: true,
-      bound: false,
-    },
-    {
-      name: "explicit shared-directory id",
-      agentId: "WORKER",
-      agentDir: "/tmp/gateway-agent",
-      shared: true,
-      bound: true,
-    },
-    { name: "unique directory without id", agentDir: "/tmp/gateway-agent", bound: true },
-  ])(
-    "preserves prepared binding validation: $name",
-    async ({ agentId, agentDir, empty, shared, bound }) => {
+    ["wrong directory", "main", "/tmp/wrong-agent", "unique", false],
+    ["unknown explicit id", "missing", agentDir, "unique", false],
+    ["explicit empty roster", "main", agentDir, "empty", false],
+    ["shared directory without id", undefined, agentDir, "shared", false],
+    ["explicit shared-directory id", "WORKER", agentDir, "shared", true],
+    ["unique directory without id", undefined, agentDir, "unique", true],
+  ] as const)(
+    "preserves prepared binding validation: %s",
+    async (_name, agentId, requestedDir, roster, bound) => {
       const config = ownerConfig();
-      if (empty) {
+      const shared = roster === "shared";
+      if (roster === "empty") {
         config.agents = { entries: {} };
       } else if (shared) {
-        config.agents!.entries!.worker = { agentDir, workspace: "/tmp/worker-workspace" };
+        config.agents!.entries!.worker = {
+          agentDir: requestedDir,
+          workspace: "/tmp/worker-workspace",
+        };
       }
-      const input = { config, agentId, agentDir };
+      const input = { config, agentId, agentDir: requestedDir };
       const candidate = {
         ...ownerSnapshot(config),
         ...input,
         catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
       };
-      const project = loadGatewayModelCatalogSnapshot({
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => candidate,
-      });
+      const project = loadGatewayModelCatalogSnapshot(catalogLoaders(candidate).params);
       if (!bound) {
         await expect(project).rejects.toMatchObject({
           name: "PublishedModelCatalogOwnerResolutionError",
@@ -257,7 +244,7 @@ describe("gateway prepared model catalog", () => {
       }
       const expected = {
         agentId: shared ? "worker" : "main",
-        workspaceDir: shared ? "/tmp/worker-workspace" : "/tmp/gateway-workspace",
+        workspaceDir: shared ? "/tmp/worker-workspace" : workspaceDir,
       };
       await expect(project).resolves.toMatchObject(expected);
       const resolved = resolvePublishedModelCatalogOwner(candidate);
@@ -273,33 +260,30 @@ describe("gateway prepared model catalog", () => {
   it("rejects a bound catalog without prepared auth", async () => {
     const config = ownerConfig();
     const candidate = { ...ownerSnapshot(config), authStore: undefined };
-    await expect(
-      loadGatewayModelCatalogSnapshot({
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => candidate,
-      }),
-    ).rejects.toThrow("missing prepared auth state");
+    await expect(loadGatewayModelCatalogSnapshot(catalogLoaders(candidate).params)).rejects.toThrow(
+      "missing prepared auth state",
+    );
   });
 
   it("forwards the requested agent lifecycle owner", async () => {
     const config = ownerConfig("worker");
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ({
       ...ownerSnapshot(config, snapshot, "worker"),
-      workspaceDir: "/tmp/gateway-workspace",
+      workspaceDir,
     }));
 
     const projected = await loadGatewayModelCatalogSnapshot({
       agentId: "worker",
-      agentDir: "/tmp/gateway-agent",
+      agentDir,
       getConfig: () => config,
       loadPublishedPreparedModelCatalogOwnerSnapshot,
-      workspaceDir: "/tmp/gateway-workspace",
+      workspaceDir,
     });
     expect(projected).toMatchObject({
       agentId: "worker",
-      agentDir: "/tmp/gateway-agent",
+      agentDir,
       config,
-      workspaceDir: "/tmp/gateway-workspace",
+      workspaceDir,
     } satisfies Partial<GatewayModelCatalogSnapshot>);
     expect(projected).not.toHaveProperty("authStore");
     expect(projected).not.toHaveProperty("metadataSnapshot");
@@ -308,10 +292,10 @@ describe("gateway prepared model catalog", () => {
 
     expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
       agentId: "worker",
-      agentDir: "/tmp/gateway-agent",
+      agentDir,
       config,
       readOnly: true,
-      workspaceDir: "/tmp/gateway-workspace",
+      workspaceDir,
     });
   });
 
@@ -322,49 +306,24 @@ describe("gateway prepared model catalog", () => {
       authStore: {
         version: 1 as const,
         profiles: {
-          "openai:refreshed": {
-            type: "api_key" as const,
-            provider: "openai",
-            key: "refreshed",
-          },
+          "openai:refreshed": { type: "api_key" as const, provider: "openai", key: "refreshed" },
         },
       },
       authModes: { openai: "api_key" as const },
     }));
     bindPreparedModelRuntimeAuth(candidate, { load: loadAuth });
-    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => candidate);
+    const { params, publicLoader } = catalogLoaders(candidate);
 
-    const prepared = await loadPreparedGatewayModelCatalogSnapshot({
-      getConfig: () => config,
-      loadPublishedPreparedModelCatalogOwnerSnapshot,
-    });
+    const prepared = await loadPreparedGatewayModelCatalogSnapshot(params);
     expect(prepared.authStore).toEqual(candidate.authStore);
     expect(loadAuth).not.toHaveBeenCalled();
 
-    const publicLoader = vi.fn(async () =>
-      loadGatewayModelCatalogSnapshot({
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot,
-      }),
-    );
-    registerGatewayModelCatalogPrivateAccess(publicLoader, {
-      loadDeferred: (params) =>
-        loadPreparedGatewayModelCatalogSnapshot({
-          ...params,
-          getConfig: () => config,
-          loadPublishedPreparedModelCatalogOwnerSnapshot,
-        }),
-      readPrepared: async () => undefined,
-    });
     const loaded = await loadDeferredCatalog(
       { loadGatewayModelCatalogSnapshot: publicLoader },
       "main",
       {
         readOnly: true,
-        authScope: {
-          providerIds: ["openai"],
-          profileIds: ["openai:refreshed"],
-        },
+        authScope: { providerIds: ["openai"], profileIds: ["openai:refreshed"] },
         refreshAuth: true,
       },
     );
@@ -385,27 +344,10 @@ describe("gateway prepared model catalog", () => {
       authModes: { openai: "oauth" as const },
     };
     bindPreparedModelRuntimeAuth(candidate, {
-      load: async () => ({
-        authStore: { version: 1, profiles: {} },
-        authModes: {},
-      }),
+      load: async () => ({ authStore: { version: 1, profiles: {} }, authModes: {} }),
     });
 
-    const publicLoader = vi.fn(async () =>
-      loadGatewayModelCatalogSnapshot({
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => candidate,
-      }),
-    );
-    registerGatewayModelCatalogPrivateAccess(publicLoader, {
-      loadDeferred: (params) =>
-        loadPreparedGatewayModelCatalogSnapshot({
-          ...params,
-          getConfig: () => config,
-          loadPublishedPreparedModelCatalogOwnerSnapshot: async () => candidate,
-        }),
-      readPrepared: async () => undefined,
-    });
+    const { publicLoader } = catalogLoaders(candidate);
     const loaded = await loadDeferredCatalog(
       { loadGatewayModelCatalogSnapshot: publicLoader },
       "main",
@@ -428,8 +370,7 @@ describe("gateway prepared model catalog", () => {
 
     await expect(
       loadPreparedGatewayModelCatalogSnapshot({
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => candidate,
+        ...catalogLoaders(candidate).params,
         refreshAuth: true,
       }),
     ).rejects.toBe(error);

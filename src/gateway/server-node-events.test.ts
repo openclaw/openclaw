@@ -124,9 +124,7 @@ const execEventHeartbeatOptions = (sessionKey?: string) => ({
   ...(sessionKey ? { sessionKey } : {}),
 });
 
-function buildCtx(
-  opts: { authorizeNodeSystemRunEvent?: NodeEventContext["authorizeNodeSystemRunEvent"] } = {},
-): NodeEventContext {
+function buildCtx(overrides: Partial<NodeEventContext> = {}): NodeEventContext {
   return {
     deps: {} as CliDeps,
     broadcast: () => {},
@@ -142,16 +140,23 @@ function buildCtx(
     getHealthCache: () => null,
     refreshHealthSnapshot: async () => ({}) as HealthSummary,
     loadGatewayModelCatalog: async () => [],
-    authorizeNodeSystemRunEvent: opts.authorizeNodeSystemRunEvent ?? (() => false),
+    authorizeNodeSystemRunEvent: () => false,
     logGateway: { warn: () => {} },
+    ...overrides,
+  };
+}
+
+function nodeFixture(nodeId: string, overrides: Partial<NodeEventContext> = {}) {
+  const ctx = buildCtx(overrides);
+  return {
+    ctx,
+    emit: (event: string, payload: unknown, connection?: Parameters<typeof handleNodeEvent>[3]) =>
+      handleNodeEvent(ctx, nodeId, nodeEvent(event, payload), connection),
   };
 }
 
 function presenceConnection(deviceId: string, generation = `${deviceId}-generation`) {
-  return {
-    deviceId,
-    pairingGeneration: { nodeId: deviceId, key: generation },
-  };
+  return { deviceId, pairingGeneration: { nodeId: deviceId, key: generation } };
 }
 
 const directRegistration = {
@@ -248,14 +253,10 @@ describe("node exec events", () => {
   it.each(["gateway-device-1", "gateway-device-other"])(
     "accepts relay APNs registrations only for this gateway: %s",
     async (gatewayDeviceId) => {
-      const ctx = buildCtx();
-      await handleNodeEvent(
-        ctx,
-        "node-relay-sandbox",
-        nodeEvent("push.apns.register", {
-          ...relayRegistration,
-          gatewayDeviceId,
-        }),
+      const { emit } = nodeFixture("node-relay-sandbox");
+      await emit(
+        "push.apns.register",
+        { ...relayRegistration, gatewayDeviceId },
         { resolveApnsRegistrationGeneration: () => "generation-node-relay-sandbox" },
       );
 
@@ -298,16 +299,10 @@ describe("node exec events", () => {
   );
   it("accepts legacy exec.finished events when authorization matches without runId", async () => {
     const authorizeNodeSystemRunEvent = vi.fn(() => true);
-    const ctx = buildCtx({ authorizeNodeSystemRunEvent });
-    await handleNodeEvent(
-      ctx,
-      "node-2",
-      nodeEvent("exec.finished", {
-        sessionKey: "agent:main:main",
-        exitCode: 0,
-        timedOut: false,
-        output: "done",
-      }),
+    const { emit } = nodeFixture("node-2", { authorizeNodeSystemRunEvent });
+    await emit(
+      "exec.finished",
+      { sessionKey: "agent:main:main", exitCode: 0, timedOut: false, output: "done" },
       { connId: "conn-1" },
     );
 
@@ -319,41 +314,29 @@ describe("node exec events", () => {
     });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Exec finished (node=node-2, code 0)\ndone",
-      {
-        sessionKey: "agent:main:main",
-        contextKey: "exec",
-      },
+      { sessionKey: "agent:main:main", contextKey: "exec" },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith(execEventHeartbeatOptions("agent:main:main"));
   });
 
   it("dedupes duplicate exec.finished events for the same runId on the same session", async () => {
-    const ctx = buildCtx({ authorizeNodeSystemRunEvent: () => true });
-    const payloadJSON = JSON.stringify({
+    const { emit } = nodeFixture("node-2", { authorizeNodeSystemRunEvent: () => true });
+    const payload = {
       sessionKey: "agent:main:main",
       runId: "run-dup-finished",
       exitCode: 0,
       timedOut: false,
       output: "done",
-    });
+    };
 
-    await handleNodeEvent(ctx, "node-2", {
-      event: "exec.finished",
-      payloadJSON,
-    });
-    await handleNodeEvent(ctx, "node-2", {
-      event: "exec.finished",
-      payloadJSON,
-    });
+    await emit("exec.finished", payload);
+    await emit("exec.finished", payload);
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Exec finished (node=node-2 id=run-dup-finished, code 0)\ndone",
-      {
-        sessionKey: "agent:main:main",
-        contextKey: "exec:run-dup-finished",
-      },
+      { sessionKey: "agent:main:main", contextKey: "exec:run-dup-finished" },
     );
   });
 
@@ -361,10 +344,7 @@ describe("node exec events", () => {
     "suppresses exec completion for %s",
     async (mode) => {
       if (mode === "disabled notifications") {
-        const cfg = {
-          session: { mainKey: "main" },
-          tools: { exec: { notifyOnExit: false } },
-        };
+        const cfg = { session: { mainKey: "main" }, tools: { exec: { notifyOnExit: false } } };
         runtimeMocks.getRuntimeConfig.mockReturnValueOnce(cfg);
       }
       await handleNodeEvent(
@@ -386,8 +366,7 @@ describe("node exec events", () => {
 describe("voice transcript events", () => {
   it("persists only the accepted replay session ID when identical new-session events race", async () => {
     const addChatRun = vi.fn();
-    const ctx = buildCtx();
-    ctx.addChatRun = addChatRun;
+    const { emit } = nodeFixture("node-new-session-replay", { addChatRun });
     loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
       ...buildSessionLookup(sessionKey),
       entry: undefined,
@@ -416,18 +395,8 @@ describe("voice transcript events", () => {
       sessionKey: "voice-new-session-replay-race",
     };
 
-    const firstReplay = handleNodeEvent(
-      ctx,
-      "node-new-session-replay",
-      nodeEvent("voice.transcript", payload),
-      { isConnectionCurrent },
-    );
-    const duplicateReplay = handleNodeEvent(
-      ctx,
-      "node-new-session-replay",
-      nodeEvent("voice.transcript", payload),
-      { isConnectionCurrent },
-    );
+    const firstReplay = emit("voice.transcript", payload, { isConnectionCurrent });
+    const duplicateReplay = emit("voice.transcript", payload, { isConnectionCurrent });
     await Promise.all([firstReplay, duplicateReplay]);
     await detachedChecksStarted.promise;
     detachedAdmission.resolve(true);
@@ -441,8 +410,7 @@ describe("voice transcript events", () => {
 
   it("rechecks a queued replay after an earlier stale reservation is released", async () => {
     const addChatRun = vi.fn();
-    const ctx = buildCtx();
-    ctx.addChatRun = addChatRun;
+    const ctx = buildCtx({ addChatRun });
     const staleCheckStarted = createDeferred();
     const staleAdmission = createDeferred<boolean>();
     let staleCheckCount = 0;
@@ -485,21 +453,19 @@ describe("voice transcript events", () => {
 
   it("skips the detached session-store touch after voice admission loses ownership", async () => {
     const addChatRun = vi.fn();
-    const ctx = buildCtx();
-    ctx.addChatRun = addChatRun;
+    const { emit } = nodeFixture("node-stale-after-voice-admission", { addChatRun });
     let checkCount = 0;
     const isConnectionCurrent = vi.fn(() => {
       checkCount += 1;
       return checkCount <= 3;
     });
 
-    await handleNodeEvent(
-      ctx,
-      "node-stale-after-voice-admission",
-      nodeEvent("voice.transcript", {
+    await emit(
+      "voice.transcript",
+      {
         text: "do not persist stale voice ownership",
         sessionKey: "voice-detached-store-currentness",
-      }),
+      },
       { isConnectionCurrent },
     );
     await waitForFast(() => expect(isConnectionCurrent).toHaveBeenCalledTimes(4));
@@ -523,14 +489,9 @@ describe("voice transcript events", () => {
         entry: undefined,
       });
       const addChatRun = vi.fn();
-      const ctx = buildCtx();
-      ctx.addChatRun = addChatRun;
+      const { emit } = nodeFixture("node-harness-voice-missing", { addChatRun });
 
-      await handleNodeEvent(
-        ctx,
-        "node-harness-voice-missing",
-        nodeEvent(event, { ...payload, sessionKey }),
-      );
+      await emit(event, { ...payload, sessionKey });
       await Promise.resolve();
 
       expect(upsertSessionEntryMock).not.toHaveBeenCalled();
@@ -543,18 +504,13 @@ describe("voice transcript events", () => {
 
   it("does not block agent dispatch when session-store touch fails", async () => {
     const warn = vi.fn();
-    const ctx = buildCtx();
-    ctx.logGateway = { warn };
+    const { emit } = nodeFixture("node-v3", { logGateway: { warn } });
     upsertSessionEntryMock.mockRejectedValueOnce(new Error("disk down"));
 
-    await handleNodeEvent(
-      ctx,
-      "node-v3",
-      nodeEvent("voice.transcript", {
-        text: "continue anyway",
-        sessionKey: "voice-store-fail-session",
-      }),
-    );
+    await emit("voice.transcript", {
+      text: "continue anyway",
+      sessionKey: "voice-store-fail-session",
+    });
     await Promise.resolve();
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
@@ -679,14 +635,8 @@ describe("notifications changed events", () => {
   );
 
   it("ignores notifications.changed payloads missing required fields", async () => {
-    const ctx = buildCtx();
-    await handleNodeEvent(
-      ctx,
-      "node-n3",
-      nodeEvent("notifications.changed", {
-        change: "posted",
-      }),
-    );
+    const { emit } = nodeFixture("node-n3");
+    await emit("notifications.changed", { change: "posted" });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatMock).not.toHaveBeenCalled();
@@ -786,15 +736,14 @@ describe("agent request events", () => {
   it("does not launch agent work when pairing changes during model lookup", async () => {
     const modelCatalog =
       createDeferred<Awaited<ReturnType<NodeEventContext["loadGatewayModelCatalog"]>>>();
-    const ctx = buildCtx();
+    const { ctx, emit } = nodeFixture("node-revoked-during-model-lookup");
     ctx.loadGatewayModelCatalog = vi.fn(() => modelCatalog.promise);
     let connectionCurrent = true;
     const isConnectionCurrent = vi.fn(async () => connectionCurrent);
 
-    const request = handleNodeEvent(
-      ctx,
-      "node-revoked-during-model-lookup",
-      nodeEvent("agent.request", {
+    const request = emit(
+      "agent.request",
+      {
         message: "describe this image",
         sessionKey: "agent:main:revoked-during-model-lookup",
         attachments: [{ type: "image", mimeType: "image/png", content: "AAAA" }],
@@ -802,7 +751,7 @@ describe("agent request events", () => {
         receipt: true,
         channel: "telegram",
         to: "123",
-      }),
+      },
       { isConnectionCurrent },
     );
 
@@ -925,8 +874,7 @@ describe("agent request events", () => {
 
   it("declines non-image attachments cleanly when parse throws UnsupportedAttachmentError", async () => {
     const warn = vi.fn();
-    const ctx = buildCtx();
-    ctx.logGateway = { warn };
+    const { emit } = nodeFixture("node-non-image-refusal", { logGateway: { warn } });
 
     parseMessageWithAttachmentsMock.mockRejectedValueOnce(
       Object.assign(new Error("attachment a.pdf: non-image attachments not supported"), {
@@ -935,22 +883,13 @@ describe("agent request events", () => {
       }),
     );
 
-    await handleNodeEvent(
-      ctx,
-      "node-non-image-refusal",
-      nodeEvent("agent.request", {
-        message: "read this",
-        sessionKey: "agent:main:main",
-        attachments: [
-          {
-            type: "file",
-            mimeType: "application/pdf",
-            fileName: "a.pdf",
-            content: "JVBERi0=",
-          },
-        ],
-      }),
-    );
+    await emit("agent.request", {
+      message: "read this",
+      sessionKey: "agent:main:main",
+      attachments: [
+        { type: "file", mimeType: "application/pdf", fileName: "a.pdf", content: "JVBERi0=" },
+      ],
+    });
 
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(
@@ -978,11 +917,10 @@ describe("agent request events", () => {
   });
   it("does not throttle stale node presence alive generations", async () => {
     updatePairedDevicePresenceMock.mockResolvedValue(false);
-    const ctx = buildCtx();
-    const result = await handleNodeEvent(
-      ctx,
-      "ios-presence-unpaired",
-      nodeEvent("node.presence.alive", { trigger: "silent_push" }),
+    const { emit } = nodeFixture("ios-presence-unpaired");
+    const result = await emit(
+      "node.presence.alive",
+      { trigger: "silent_push" },
       presenceConnection("ios-presence-unpaired"),
     );
 
@@ -990,10 +928,9 @@ describe("agent request events", () => {
 
     updatePairedDevicePresenceMock.mockClear();
     updatePairedDevicePresenceMock.mockResolvedValue(true);
-    const retry = await handleNodeEvent(
-      ctx,
-      "ios-presence-unpaired",
-      nodeEvent("node.presence.alive", { trigger: "silent_push" }),
+    const retry = await emit(
+      "node.presence.alive",
+      { trigger: "silent_push" },
       presenceConnection("ios-presence-unpaired"),
     );
     expect(retry).toEqual(eventResult("node.presence.alive", "persisted", true));
@@ -1143,11 +1080,7 @@ describe("agent request events", () => {
     });
     expect(broadcast).toHaveBeenCalledWith(
       "node.presence",
-      {
-        nodeId: "mac-node",
-        lastActiveAtMs: 90_000,
-        presenceUpdatedAtMs: 100_000,
-      },
+      { nodeId: "mac-node", lastActiveAtMs: 90_000, presenceUpdatedAtMs: 100_000 },
       { dropIfSlow: true },
     );
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();

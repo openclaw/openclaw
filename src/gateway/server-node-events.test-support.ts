@@ -3,7 +3,6 @@ import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { DurableMessageBatchSendResult } from "../channels/message/runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -31,45 +30,18 @@ export const buildSessionLookup = (
   agentId: resolveAgentIdFromSessionKey(sessionKey, "main"),
   storePath: "/tmp/sessions.json",
   store: {},
-  entry: {
-    agentHarnessId: entry.agentHarnessId,
-    modelSelectionLocked: entry.modelSelectionLocked,
+  entry: normalizeLegacySessionEntryDelivery({
+    ...entry,
     sessionId: entry.sessionId ?? `sid-${sessionKey}`,
     updatedAt: entry.updatedAt ?? Date.now(),
-    model: entry.model,
-    modelProvider: entry.modelProvider,
-    delivery: normalizeLegacySessionEntryDelivery({
-      ...entry,
-      sessionId: entry.sessionId ?? `sid-${sessionKey}`,
-      updatedAt: entry.updatedAt ?? Date.now(),
-    } as SessionEntry).delivery,
-    label: entry.label,
-    spawnedBy: entry.spawnedBy,
-    parentSessionKey: entry.parentSessionKey,
-  },
+  }),
   canonicalKey: sessionKey,
   storeKeys: [sessionKey],
   legacyKey: undefined,
 });
 
-const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-const registerApnsRegistrationMock = vi.hoisted(() => vi.fn());
-const loadOrCreateProcessDeviceIdentityMock = vi.hoisted(() =>
-  vi.fn(() => ({
-    deviceId: "gateway-device-1",
-    publicKeyPem: "public",
-    privateKeyPem: "private",
-  })),
-);
-const parseMessageWithAttachmentsMock = vi.hoisted(() => vi.fn());
-const persistInboundImagesForTranscriptMock = vi.hoisted(() => vi.fn());
-const normalizeChannelIdMock = vi.hoisted(() =>
-  vi.fn((channel?: string | null) => channel ?? null),
-);
-const updatePairedDevicePresenceMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
-
 const runtimeMocks = vi.hoisted(() => ({
-  agentCommandFromIngress: ingressAgentCommandMock,
+  agentCommandFromIngress: vi.fn().mockResolvedValue(undefined),
   ApnsRegistrationPairingChangedError: class ApnsRegistrationPairingChangedError extends Error {
     constructor() {
       super("node pairing changed before APNs registration");
@@ -83,17 +55,19 @@ const runtimeMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "main" } })),
   INLINE_IMAGE_DURABLE_OMISSION_MARKER:
     "[image attachment omitted: durable managed media claim unavailable]",
-  loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
+  loadOrCreateProcessDeviceIdentity: vi.fn(() => ({
+    deviceId: "gateway-device-1",
+    publicKeyPem: "public",
+    privateKeyPem: "private",
+  })),
   loadSessionEntry: vi.fn((sessionKey: string, _opts?: unknown) => buildSessionLookup(sessionKey)),
   upsertSessionEntryCore: vi.fn(),
-  normalizeChannelId: normalizeChannelIdMock,
-  parseMessageWithAttachments: parseMessageWithAttachmentsMock,
-  registerApnsRegistration: registerApnsRegistrationMock,
+  normalizeChannelId: vi.fn((channel?: string | null) => channel ?? null),
+  parseMessageWithAttachments: vi.fn(),
+  registerApnsRegistration: vi.fn(),
+  updatePairedDevicePresence: vi.fn().mockResolvedValue(true),
   requestHeartbeat: vi.fn(),
-  resolveSystemMainSessionTarget: vi.fn(() => ({
-    agentId: "ops",
-    sessionKey: "agent:ops:main",
-  })),
+  resolveSystemMainSessionTarget: vi.fn(() => ({ agentId: "ops", sessionKey: "agent:ops:main" })),
   resolveChatAttachmentMaxBytes: vi.fn(() => 20 * 1024 * 1024),
   resolveGatewayModelSupportsImages: vi.fn(
     async ({
@@ -129,7 +103,7 @@ const runtimeMocks = vi.hoisted(() => ({
       model: entry?.model ?? "default-model",
     }),
   ),
-  persistInboundImagesForTranscript: persistInboundImagesForTranscriptMock,
+  persistInboundImagesForTranscript: vi.fn(),
 }));
 
 vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
@@ -174,7 +148,7 @@ vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
 
 vi.mock("../infra/device-pairing.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/device-pairing.js")>()),
-  updatePairedDevicePresence: updatePairedDevicePresenceMock,
+  updatePairedDevicePresence: runtimeMocks.updatePairedDevicePresence,
 }));
 
 vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
@@ -228,13 +202,13 @@ vi.mock("./ws-log.js", async (importOriginal) => ({
   formatForLog: runtimeMocks.formatForLog,
 }));
 
-export {
-  loadOrCreateProcessDeviceIdentityMock,
-  parseMessageWithAttachmentsMock,
-  persistInboundImagesForTranscriptMock,
-  updatePairedDevicePresenceMock,
-  runtimeMocks,
-};
+export const {
+  loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
+  parseMessageWithAttachments: parseMessageWithAttachmentsMock,
+  persistInboundImagesForTranscript: persistInboundImagesForTranscriptMock,
+  updatePairedDevicePresence: updatePairedDevicePresenceMock,
+} = runtimeMocks;
+export { runtimeMocks };
 
 export function makeNodeClient(connId: string, nodeId: string): GatewayWsClient {
   return {
@@ -247,12 +221,7 @@ export function makeNodeClient(connId: string, nodeId: string): GatewayWsClient 
     connect: {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "node-host",
-        version: "1.0.0",
-        platform: "linux",
-        mode: "node",
-      },
+      client: { id: "node-host", version: "1.0.0", platform: "linux", mode: "node" },
       device: {
         id: nodeId,
         publicKey: "public-key",
