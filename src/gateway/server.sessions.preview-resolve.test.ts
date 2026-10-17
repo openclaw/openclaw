@@ -10,10 +10,9 @@ import {
 } from "../state/openclaw-agent-db.js";
 import type { ControlUiSessionPreview } from "./control-ui-contract.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import * as sessionRows from "./session-row-projection-record.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript-preview.js";
-import type { SessionsListResult } from "./session-utils.types.js";
+import type { SessionsListResult, SessionsPreviewResult } from "./session-utils.types.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -45,13 +44,13 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
     sessionConfig: testState.sessionConfig,
     sessionStorePath: testState.sessionStorePath,
   };
-  const configPaths = new Set([config.CONFIG_PATH]);
-  if (process.env.OPENCLAW_CONFIG_PATH) {
-    configPaths.add(process.env.OPENCLAW_CONFIG_PATH);
-  }
-  if (process.env.OPENCLAW_STATE_DIR) {
-    configPaths.add(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"));
-  }
+  const configPaths = new Set([
+    config.CONFIG_PATH,
+    ...(process.env.OPENCLAW_CONFIG_PATH ? [process.env.OPENCLAW_CONFIG_PATH] : []),
+    ...(process.env.OPENCLAW_STATE_DIR
+      ? [path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json")]
+      : []),
+  ]);
   const files = new Map<string, Buffer | undefined>();
   for (const configPath of configPaths) {
     try {
@@ -212,35 +211,24 @@ function identifiedClient(profileId: string, scopes: string[] = ["operator.read"
 test("sessions.preview returns transcript previews within the requested text budget", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionId = "sess-preview";
-  const lines = createToolSummaryPreviewTranscriptLines(sessionId);
-
   await writeSessionStore({ entries: { "agent:main:main": sessionStoreEntry(sessionId) } });
   await seedSessionTranscript({
     sessionId,
     sessionKey: "agent:main:main",
     storePath,
-    messages: lines
-      .map((line) => JSON.parse(line) as { message?: Record<string, unknown> })
-      .map((record) => record.message)
-      .filter((message): message is Record<string, unknown> => Boolean(message))
-      .map((message) =>
-        Object.assign(
-          { role: String(message.role) },
-          message,
-          message.role === "user"
-            ? { content: "Long preview input crosses the requested character budget." }
-            : {},
-        ),
-      ),
+    messages: [
+      { role: "user", content: "Long preview input crosses the requested character budget." },
+      { role: "assistant", content: "Hi" },
+      { role: "assistant", content: [{ type: "toolcall", name: "weather" }] },
+      { role: "assistant", content: "Forecast ready" },
+    ],
   });
 
-  const preview = await directSessionReq<{
-    previews: Array<{
-      key: string;
-      status: string;
-      items: Array<{ role: string; text: string }>;
-    }>;
-  }>("sessions.preview", { keys: ["main"], limit: 3, maxChars: 24 });
+  const preview = await directSessionReq<SessionsPreviewResult>("sessions.preview", {
+    keys: ["main"],
+    limit: 3,
+    maxChars: 24,
+  });
   expect(preview.ok).toBe(true);
   const entry = preview.payload?.previews[0];
   expect(entry).toMatchObject({ key: "main", status: "ok" });
@@ -408,24 +396,22 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
 test("sessions.resolve by key respects spawnedBy visibility filters", async () => {
   await createSessionStoreDir();
   const now = Date.now();
+  const parents: Array<[string, number, string]> = [
+    ["visible-parent", 3_000, "agent:main:main"],
+    ["hidden-parent", 2_000, "agent:main:main"],
+    ["shared-child-key-filter", 1_000, "agent:main:subagent:hidden-parent"],
+  ];
   await writeSessionStore({
-    entries: {
-      "agent:main:subagent:visible-parent": {
-        sessionId: "sess-visible-parent",
-        updatedAt: now - 3_000,
-        spawnedBy: "agent:main:main",
-      },
-      "agent:main:subagent:hidden-parent": {
-        sessionId: "sess-hidden-parent",
-        updatedAt: now - 2_000,
-        spawnedBy: "agent:main:main",
-      },
-      "agent:main:subagent:shared-child-key-filter": {
-        sessionId: "sess-shared-child-key-filter",
-        updatedAt: now - 1_000,
-        spawnedBy: "agent:main:subagent:hidden-parent",
-      },
-    },
+    entries: Object.fromEntries(
+      parents.map(([id, age, spawnedBy]) => [
+        `agent:main:subagent:${id}`,
+        {
+          sessionId: `sess-${id}`,
+          updatedAt: now - age,
+          spawnedBy,
+        },
+      ]),
+    ),
   });
 
   const { ws } = await openClient();

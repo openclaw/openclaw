@@ -69,13 +69,9 @@ async function createState(prefix: string) {
   return state;
 }
 
-function managedWorktreeFixture(params: {
-  id: string;
-  name: string;
-  ownerId: string;
-  path: string;
-  repoRoot: string;
-}): ManagedWorktreeRecord {
+function managedWorktreeFixture(
+  params: Pick<ManagedWorktreeRecord, "id" | "name" | "ownerId" | "path" | "repoRoot">,
+): ManagedWorktreeRecord {
   return {
     ...params,
     baseRef: "HEAD",
@@ -87,6 +83,37 @@ function managedWorktreeFixture(params: {
   };
 }
 
+function selection(provider: string, model: string, runtime: string, profile: string) {
+  return {
+    expectedEntry: {
+      providerOverride: provider,
+      modelOverride: model,
+      agentRuntimeOverride: runtime,
+      authProfileOverride: profile,
+    },
+    expectedTitleSelection: {
+      regularModelRef: `${provider}/${model}@${profile}`,
+      agentHarnessRuntimeOverride: runtime,
+      preferredProfile: profile,
+    },
+  };
+}
+const parentSelection = selection("openai", "gpt-5.6-sol", "codex", "parent-work");
+
+function configureModels(workspace: string, restricted = false) {
+  testState.agentConfig = {
+    workspace,
+    model: { primary: "openai/gpt-5.6-luna" },
+    ...(restricted ? { models: { "openai/gpt-5.6-luna": {} } } : {}),
+  };
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    { id: "gpt-5.6-luna", name: "GPT 5.6 Luna", provider: "openai" },
+    ...(!restricted ? [{ id: "gpt-5.6-sol", name: "GPT 5.6 Sol", provider: "openai" }] : []),
+    { id: "sonnet-4.6", name: "Sonnet 4.6", provider: "anthropic" },
+  ];
+}
+
 test.for([
   {
     name: "registered catalog target",
@@ -96,41 +123,18 @@ test.for([
       agentRuntime: "claude-cli",
     },
     parentEntry: undefined,
-    expectedEntry: {
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-      agentRuntimeOverride: "claude-cli",
-      authProfileOverride: "catalog-work",
-    },
-    expectedTitleSelection: {
-      regularModelRef: "anthropic/claude-sonnet-4-6@catalog-work",
-      agentHarnessRuntimeOverride: "claude-cli",
-      preferredProfile: "catalog-work",
-    },
+    ...selection("anthropic", "claude-sonnet-4-6", "claude-cli", "catalog-work"),
   },
   {
     name: "inherited parent",
     request: { parentSessionKey: "main" },
     catalogTarget: undefined,
     parentEntry: {
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
+      ...parentSelection.expectedEntry,
       modelOverrideSource: "user" as const,
-      agentRuntimeOverride: "codex",
-      authProfileOverride: "parent-work",
       authProfileOverrideSource: "user" as const,
     },
-    expectedEntry: {
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
-      agentRuntimeOverride: "codex",
-      authProfileOverride: "parent-work",
-    },
-    expectedTitleSelection: {
-      regularModelRef: "openai/gpt-5.6-sol@parent-work",
-      agentHarnessRuntimeOverride: "codex",
-      preferredProfile: "parent-work",
-    },
+    ...parentSelection,
   },
 ])(
   "sessions.create names its session during checkout preparation through the $name selection",
@@ -140,16 +144,7 @@ test.for([
   ) =>
     await withSessionTestState({ layout: "state-only" }, async (state) => {
       const workspace = await copyGitWorkspace(gitWorkspaceTemplate, state.root);
-      testState.agentConfig = {
-        workspace,
-        model: { primary: "openai/gpt-5.6-luna" },
-      };
-      agentDiscoveryMock.enabled = true;
-      agentDiscoveryMock.models = [
-        { id: "gpt-5.6-luna", name: "GPT 5.6 Luna", provider: "openai" },
-        { id: "gpt-5.6-sol", name: "GPT 5.6 Sol", provider: "openai" },
-        { id: "sonnet-4.6", name: "Sonnet 4.6", provider: "anthropic" },
-      ];
+      configureModels(workspace);
       if (catalogTarget) {
         const registry = createEmptyPluginRegistry();
         registry.sessionCatalogs.push({
@@ -205,13 +200,11 @@ test.for([
         }
       };
       const stopTitleObserver = sessionChanges.subscribe(checkTitle);
-      const pastedText = `Pasted deployment plan ${"x".repeat(2_000)}`;
       const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
-      const message = "Review this rollout [[reply_to_current]]";
       const attachment = {
         type: "file",
         mimeType: "text/plain",
-        content: Buffer.from(pastedText).toString("base64"),
+        content: Buffer.from(`Pasted deployment plan ${"x".repeat(2_000)}`).toString("base64"),
       };
       dashboardTitleGenerationMocks.generate.mockResolvedValueOnce("Attachment Repair");
       const dispatchCountBefore = dispatchInboundMessageMock.mock.calls.length;
@@ -223,7 +216,7 @@ test.for([
         const created = await createSession(
           {
             worktree: true,
-            message,
+            message: "Review this rollout [[reply_to_current]]",
             attachments: [attachment],
             ...request,
           },
@@ -266,16 +259,7 @@ test.for([
 test("sessions.create does not start title generation for a model denied by policy", async () => {
   const openClawState = await createState("openclaw-session-worktree-title-denied-model-");
   const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-  testState.agentConfig = {
-    workspace,
-    model: { primary: "openai/gpt-5.6-luna" },
-    models: { "openai/gpt-5.6-luna": {} },
-  };
-  agentDiscoveryMock.enabled = true;
-  agentDiscoveryMock.models = [
-    { id: "gpt-5.6-luna", name: "GPT 5.6 Luna", provider: "openai" },
-    { id: "sonnet-4.6", name: "Sonnet 4.6", provider: "anthropic" },
-  ];
+  configureModels(workspace, true);
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:denied-title-route";
   const created = await createSession({

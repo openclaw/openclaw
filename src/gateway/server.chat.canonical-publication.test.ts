@@ -18,6 +18,11 @@ import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sq
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import {
+  closeProvider,
+  listenProvider,
+  readProviderBody,
+} from "./gateway-provider-fixture.test-support.js";
 import { parseSseEvents } from "./http-stream.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -62,6 +67,7 @@ const contentFrom = (messages: Record<string, unknown>[]) =>
   messages
     .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
     .filter(isRecord);
+type History = { sessionId: string; messages: Record<string, unknown>[]; hasMore: boolean };
 
 it(
   "chat.send preserves canonical sanitized message publication through chat.history and artifacts.download",
@@ -105,15 +111,12 @@ it(
     });
     const provider = createServer((request, response) => {
       void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
+        const input = await readProviderBody(request);
         if (request.method !== "POST" || request.url !== "/v1/responses") {
           response.writeHead(404).end();
           return;
         }
-        const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        const body: unknown = JSON.parse(input);
         if (!isRecord(body)) {
           throw new Error("Invalid synthetic endpoint request");
         }
@@ -185,16 +188,8 @@ it(
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     try {
-      await new Promise<void>((resolve, reject) => {
-        provider.once("error", reject);
-        provider.listen(0, "127.0.0.1", resolve);
-      });
-      const address = provider.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing synthetic endpoint address");
-      }
       const model = buildMockOpenAiResponsesProvider(
-        `http://127.0.0.1:${address.port}/v1`,
+        await listenProvider(provider),
         "canonical-proof",
       );
       gateway = await startGatewayWithClient({
@@ -232,6 +227,9 @@ it(
         configPath,
         token: "canonical-proof-token",
       });
+      const rpc = gateway.client.request.bind(gateway.client);
+      const wait = (runId: string) =>
+        rpc<{ status: string }>("agent.wait", { runId, timeoutMs: 60_000 }, { timeoutMs: 65_000 });
       for (const scenario of cases) {
         selected = scenario;
         primaryRequests = 0;
@@ -240,11 +238,19 @@ it(
         releaseTool = createDeferred();
         heldFinalRequest = createDeferred();
         const sessionKey = `agent:main:canonical-${scenario.name}`;
-        const started = await gateway.client.request<{ runId: string }>("chat.send", {
-          sessionKey,
-          message: "Send the proof attachment in this conversation.",
-          idempotencyKey: `canonical-${scenario.name}`,
-        });
+        const send = () =>
+          rpc<{ runId: string }>("chat.send", {
+            sessionKey,
+            message: "Send the proof attachment in this conversation.",
+            idempotencyKey: `canonical-${scenario.name}`,
+          });
+        const readHistory = (limit = 20) => rpc<History>("chat.history", { sessionKey, limit });
+        const listArtifacts = () =>
+          rpc<ArtifactsListResult>("artifacts.list", {
+            sessionKey,
+            messageRole: "assistant",
+          });
+        const started = await send();
         let streamText = "";
         if (scenario.name === "details-cap") {
           await withTestTimeout(firstRequest.promise, 15_000, "tool request was not admitted");
@@ -280,13 +286,8 @@ it(
                   .map((frame): unknown => JSON.parse(frame.data)),
               );
               if (
-                messages.some(
-                  (message) =>
-                    message.role === "assistant" &&
-                    Array.isArray(message.content) &&
-                    message.content.some(
-                      (block: unknown) => isRecord(block) && block.type === "attachment",
-                    ),
+                contentFrom(messages.filter((message) => message.role === "assistant")).some(
+                  (block) => block.type === "attachment",
                 )
               ) {
                 expect(messages).toContainEqual(
@@ -306,34 +307,21 @@ it(
         }
         if (scenario.name === "cancel") {
           await withTestTimeout(heldFinalRequest.promise, 15_000, "final request was not held");
-          const aborted = await gateway.client.request("chat.abort", {
+          const aborted = await rpc("chat.abort", {
             sessionKey,
             runId: started.runId,
           });
           expect(aborted).toMatchObject({ aborted: true, runIds: [started.runId] });
         }
-        const completed = await gateway.client.request<{ status: string }>(
-          "agent.wait",
-          { runId: started.runId, timeoutMs: 60_000 },
-          { timeoutMs: 65_000 },
-        );
-        const history = await gateway.client.request<{
-          sessionId: string;
-          messages: Array<Record<string, unknown>>;
-        }>("chat.history", { sessionKey, limit: 20 });
+        const completed = await wait(started.runId);
+        const history = await readHistory();
         const rawEvents = loadTranscriptEventsSync({
           agentId: "main",
           sessionId: history.sessionId,
           sessionKey,
         });
-        const page = await gateway.client.request<{ messages: unknown[]; hasMore: boolean }>(
-          "chat.history",
-          { sessionKey, limit: 2 },
-        );
-        const listed = await gateway.client.request<ArtifactsListResult>("artifacts.list", {
-          sessionKey,
-          messageRole: "assistant",
-        });
+        const page = await readHistory(2);
+        const listed = await listArtifacts();
         const rawMessages = messagesFrom(rawEvents);
         const diagnosticCalls = contentFrom(rawMessages).filter(
           (block) => block.type === "toolCall",
@@ -363,60 +351,51 @@ it(
           expect(savedResult?.details).not.toHaveProperty("idempotencyKey");
           expect(savedResult?.details).not.toHaveProperty("sourceReplyTranscriptOwner");
         }
-        expect(page).toMatchObject({ hasMore: true });
-        expect(page.messages).toEqual(history.messages.slice(-2));
+        expect({ hasMore: page.hasMore, messages: page.messages }).toEqual({
+          hasMore: true,
+          messages: history.messages.slice(-2),
+        });
         const visibleText = contentFrom(
           history.messages.filter((message) => message.role === "assistant"),
         )
           .filter((block) => block.type === "text")
           .map((block) => block.text);
-        expect.soft(visibleText, scenario.name).toEqual(scenario.expectedText);
         expect
-          .soft(completed.status, scenario.name)
-          .toBe(scenario.name === "cancel" ? "error" : "ok");
-        expect
-          .soft(listed.artifacts, scenario.name)
-          .toHaveLength(scenario.name === "dry-run" || scenario.name === "missing-media" ? 0 : 1);
+          .soft(
+            { text: visibleText, status: completed.status, artifacts: listed.artifacts.length },
+            scenario.name,
+          )
+          .toEqual({
+            text: scenario.expectedText,
+            status: scenario.name === "cancel" ? "error" : "ok",
+            artifacts: scenario.name === "dry-run" || scenario.name === "missing-media" ? 0 : 1,
+          });
         for (const artifact of listed.artifacts) {
           expect(artifact).toMatchObject({
             title: "proof.txt",
             mimeType: "text/plain",
             sizeBytes: attachment.length,
           });
-          const download = await gateway.client.request<ArtifactsDownloadResult>(
-            "artifacts.download",
-            { sessionKey, artifactId: artifact.id },
-          );
+          const download = await rpc<ArtifactsDownloadResult>("artifacts.download", {
+            sessionKey,
+            artifactId: artifact.id,
+          });
           if (!download.url) {
             throw new Error("Missing authorized download URL");
           }
           const response = await fetch(new URL(download.url, `http://127.0.0.1:${gateway.port}`));
           const bytes = Buffer.from(await response.arrayBuffer());
-          expect.soft(response.status, scenario.name).toBe(200);
-          expect.soft(bytes, scenario.name).toEqual(attachment);
+          expect.soft([response.status, bytes], scenario.name).toEqual([200, attachment]);
           expect(response.headers.get("content-type")).toBe("text/plain");
         }
         const requestsBeforeReplay = primaryRequests;
-        const replay = await gateway.client.request<{ runId: string }>("chat.send", {
-          sessionKey,
-          message: "Send the proof attachment in this conversation.",
-          idempotencyKey: `canonical-${scenario.name}`,
-        });
+        const replay = await send();
         expect(replay.runId).toBe(started.runId);
-        await gateway.client.request(
-          "agent.wait",
-          { runId: replay.runId, timeoutMs: 60_000 },
-          { timeoutMs: 65_000 },
-        );
+        await wait(replay.runId);
         expect(primaryRequests, scenario.name).toBe(requestsBeforeReplay);
-        const reloaded = await gateway.client.request<typeof history>("chat.history", {
-          sessionKey,
-          limit: 20,
-        });
+        const reloaded = await readHistory();
         expect(reloaded.messages).toEqual(history.messages);
-        expect(
-          await gateway.client.request("artifacts.list", { sessionKey, messageRole: "assistant" }),
-        ).toEqual(listed);
+        expect(await listArtifacts()).toEqual(listed);
       }
     } finally {
       releaseTool.resolve();
@@ -427,10 +406,7 @@ it(
         }
       } finally {
         unsubscribe();
-        provider.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          provider.close(() => resolve());
-        });
+        await closeProvider(provider);
         snapshot.restore();
         clearRuntimeConfigSnapshot();
         clearConfigCache();

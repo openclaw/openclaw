@@ -20,17 +20,27 @@ const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 async function seedSession(
   sessionKey: string,
   entry: Partial<SessionEntry> = {},
-  sessionId = sessionKey,
+  sessionId = sessionKey.slice(sessionKey.lastIndexOf(":") + 1),
 ) {
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId, entry) } });
   return {
+    sessionKey,
     storePath,
     read: () => loadSessionEntry({ sessionKey, storePath }),
     patch: (params: Record<string, unknown>) =>
       directSessionReq("sessions.patch", { key: sessionKey, ...params }),
   };
 }
+
+const changed = (sessionKey: string) => ({
+  ok: false,
+  error: {
+    message: `Session ${sessionKey} changed before patch. Retry.`,
+    details: { reason: "session-changed" },
+  },
+});
+const invalid = (message: string) => ({ ok: false, error: { code: "INVALID_REQUEST", message } });
 
 function observingContext() {
   return {
@@ -97,13 +107,7 @@ test.each([
     { context },
   );
 
-  expect(result).toMatchObject({
-    ok: false,
-    error: {
-      message: `Session ${sessionKey} changed before patch. Retry.`,
-      details: { reason: "session-changed" },
-    },
-  });
+  expect(result).toMatchObject(changed(sessionKey));
   expect(read()).toEqual(replacementBefore);
   expect(embeddedRunMock.abortCalls).toEqual([]);
   expectNoPublication(context);
@@ -198,27 +202,21 @@ test("sessions.patch rejects stale lifecycle revisions for metadata mutations", 
 });
 
 test("sessions.patch preserves concurrent tool restrictions from a stale replacement", async () => {
-  const sessionKey = "agent:main:tool-overrides-cas";
   const original = { webSearch: false };
   const restricted = { ...original, mcpToolsDeny: { docs: ["delete"] } };
   const replacement = { ...original, skills: { release: false } };
-  const { read, patch } = await seedSession(
-    sessionKey,
-    { toolOverrides: original },
-    "tool-overrides-cas",
-  );
+  const { sessionKey, read, patch } = await seedSession("agent:main:tool-overrides-cas", {
+    toolOverrides: original,
+  });
   const concurrent = await patch({ toolOverrides: restricted });
   expect(concurrent.ok).toBe(true);
 
   const stale = await patch({ expectedToolOverrides: original, toolOverrides: replacement });
 
+  const expected = changed(sessionKey);
   expect(stale).toMatchObject({
-    ok: false,
-    error: {
-      code: "INVALID_REQUEST",
-      message: `Session ${sessionKey} changed before patch. Retry.`,
-      details: { reason: "session-changed" },
-    },
+    ...expected,
+    error: { ...expected.error, code: "INVALID_REQUEST" },
   });
   expect(read()?.toolOverrides).toEqual(restricted);
   const fresh = await patch({ expectedToolOverrides: restricted, toolOverrides: replacement });
@@ -227,34 +225,24 @@ test("sessions.patch preserves concurrent tool restrictions from a stale replace
 });
 
 test("sessions.patch requires expected tool overrides to guard a replacement", async () => {
-  const sessionKey = "agent:main:tool-overrides-cas-envelope";
-  const { read, patch } = await seedSession(
-    sessionKey,
-    { toolOverrides: { webSearch: false } },
-    "tool-overrides-cas-envelope",
-  );
+  const { read, patch } = await seedSession("agent:main:tool-overrides-cas-envelope", {
+    toolOverrides: { webSearch: false },
+  });
   const result = await patch({
     expectedToolOverrides: { webSearch: false },
     label: "unguarded replacement",
   });
 
-  expect(result).toMatchObject({
-    ok: false,
-    error: {
-      code: "INVALID_REQUEST",
-      message: "expectedToolOverrides requires a toolOverrides replacement.",
-    },
-  });
+  expect(result).toMatchObject(
+    invalid("expectedToolOverrides requires a toolOverrides replacement."),
+  );
   expect(read()).not.toHaveProperty("label");
 });
 
 test("sessions.patch rejects stale permission replacement", async () => {
-  const sessionKey = "agent:main:permission-mode-cas";
-  const { read, patch } = await seedSession(
-    sessionKey,
-    { permissionMode: "guarded" },
-    "permission-mode-cas",
-  );
+  const { read, patch } = await seedSession("agent:main:permission-mode-cas", {
+    permissionMode: "guarded",
+  });
   await patch({ permissionMode: "read-only" });
   const stale = await patch({
     expectedPermissionMode: "guarded",
@@ -269,25 +257,18 @@ test("sessions.patch rejects stale permission replacement", async () => {
 });
 
 test("sessions.patch rejects automatic acknowledgement with another mutation", async () => {
-  const sessionKey = "agent:main:conditional-unread-label";
-  const { read, patch } = await seedSession(
-    sessionKey,
-    { markedUnreadAt: 10 },
-    "conditional-unread-label",
-  );
+  const { read, patch } = await seedSession("agent:main:conditional-unread-label", {
+    markedUnreadAt: 10,
+  });
   const result = await patch({
     unread: false,
     expectedMarkedUnreadAt: 9,
     label: "Must not be discarded",
   });
 
-  expect(result).toMatchObject({
-    ok: false,
-    error: {
-      code: "INVALID_REQUEST",
-      message: "expectedMarkedUnreadAt requires unread=false as the only mutation.",
-    },
-  });
+  expect(result).toMatchObject(
+    invalid("expectedMarkedUnreadAt requires unread=false as the only mutation."),
+  );
   expect(read()).toMatchObject({
     markedUnreadAt: 10,
     sessionId: "conditional-unread-label",
@@ -357,8 +338,7 @@ test.each([
 });
 
 test("sessions.patch keeps explicit unread markers strictly advancing", async () => {
-  const sessionKey = "agent:main:conditional-unread-revision";
-  const { read, patch } = await seedSession(sessionKey, {}, "conditional-unread-revision");
+  const { read, patch } = await seedSession("agent:main:conditional-unread-revision");
   const now = vi.spyOn(Date, "now").mockReturnValue(100);
 
   try {
@@ -381,12 +361,9 @@ test("sessions.patch keeps explicit unread markers strictly advancing", async ()
 });
 
 test("sessions.patch preserves legacy read semantics for manual markers", async () => {
-  const sessionKey = "agent:main:mixed-version-unread";
-  const { read, patch } = await seedSession(
-    sessionKey,
-    { markedUnreadAt: 10 },
-    "mixed-version-unread",
-  );
+  const { read, patch } = await seedSession("agent:main:mixed-version-unread", {
+    markedUnreadAt: 10,
+  });
   const legacyRead = await patch({ unread: false });
 
   expect(legacyRead).toMatchObject({ ok: true });
