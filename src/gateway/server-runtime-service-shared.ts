@@ -1,6 +1,5 @@
 // Shared Gateway runtime service helpers.
 // Supplies minimal service handles for tests and reduced startup paths.
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 
 export type GatewayRuntimeServiceLogger = {
@@ -16,6 +15,6 @@ export type GatewayRuntimeServiceLogger = {
 export function createNoopHeartbeatRunner(): HeartbeatRunner {
   return {
     stop: () => {},
-    updateConfig: (_cfg: OpenClawConfig) => {},
+    updateConfig: () => {},
   };
 }
