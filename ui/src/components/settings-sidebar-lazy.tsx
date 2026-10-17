@@ -1,6 +1,5 @@
 import { createEffect, For, Show } from "solid-js";
 import { titleForRoute, visibleSettingsNavigationGroups } from "../app-navigation.ts";
-import type { ShellViewHost } from "../app/app-shell-view-state.ts";
 import type { LazyRenderer } from "../app/lazy-renderer.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -19,11 +18,11 @@ export type SettingsSidebarFallbackProps = Pick<
   | "nativeDeviceSettings"
 > & { canAdmin: boolean };
 
-export function LazySettingsSidebar(props: {
-  loader: SettingsSidebarLoader;
-  host: ShellViewHost;
-  sidebarProps: SettingsSidebarFallbackProps;
-}) {
+export function LazySettingsSidebar(
+  props: Parameters<SettingsSidebarModule["ShellSettingsSidebar"]>[0] & {
+    loader: SettingsSidebarLoader;
+  },
+) {
   createEffect(
     () => !props.loader.renderer() && !props.loader.failed(),
     (load) => {
@@ -123,7 +122,7 @@ function SettingsSidebarFallback(props: {
 
 function SettingsSidebarSkeleton(props: SettingsSidebarFallbackProps) {
   const groups = () =>
-    visibleSettingsNavigationGroups(Boolean(props.canAdmin), props.nativeDeviceSettings ?? null);
+    visibleSettingsNavigationGroups(props.canAdmin, props.nativeDeviceSettings ?? null);
   return (
     <>
       <div class="settings-sidebar__agent" aria-hidden="true">
