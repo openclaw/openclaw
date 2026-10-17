@@ -19,12 +19,9 @@ import {
   type PendingDesktopConnection,
 } from "./desktop-panel-connection.ts";
 import * as desktopAuth from "./desktop-panel-credentials.ts";
+import type { DesktopPanelControls, DesktopPanelInputs } from "./desktop-panel-inputs.ts";
 import { desktopPanelLayout } from "./desktop-panel-layout.ts";
-import type {
-  DesktopPanelInputs,
-  DesktopPanelControls,
-  DesktopPanelState,
-} from "./desktop-panel-state.ts";
+import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { DesktopSessionOwner } from "./desktop-session-owner.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 

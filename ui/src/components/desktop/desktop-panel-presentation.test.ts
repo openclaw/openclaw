@@ -346,6 +346,7 @@ describe("desktop panel presentation lifecycle", () => {
       expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(
         1,
       );
+      expect(panel.querySelector(".desktop-environment button")).not.toBeNull();
     });
     clickPanelButton(panel);
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
