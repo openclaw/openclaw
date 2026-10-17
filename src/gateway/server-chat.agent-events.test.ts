@@ -2509,7 +2509,7 @@ describe("agent event handler", () => {
             sessionKey: "agent:work:shared",
           }),
           new Set(["conn-session"]),
-          { dropIfSlow: true },
+          { dropIfSlow: true, sessionEventSubscriptionKeys: ["agent:work:shared"] },
         );
       });
     },

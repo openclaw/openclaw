@@ -185,6 +185,7 @@ export function registerActivitySummaryPublicationTests(
           }),
           {
             sessionKeys: [target.key],
+            sessionEventSubscriptionKeys: [target.key],
             agentId: target.agentId,
             dropIfSlow: true,
             prepareSessionProjection: expect.any(Function),

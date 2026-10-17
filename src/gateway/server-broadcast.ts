@@ -250,12 +250,7 @@ export function createGatewayBroadcaster(params: {
       opts?.sessionKeys,
       opts?.agentId,
     );
-    const sessionEventMetrics = prepareSessionEventMetrics(
-      event,
-      payload,
-      opts?.sessionEventSubscriptionKeys ?? sessionKeys,
-      params.sessionMessageSubscribers,
-    );
+    let sessionEventMetrics: ReturnType<typeof prepareSessionEventMetrics> | null = null;
     const sessionSubscriptionVerified = opts?.sessionSubscriptionVerified === true;
     const isSessionSubscriptionEvent = SESSION_SUBSCRIPTION_EVENTS.has(event);
     const sessionMessageSubscribers = params.sessionMessageSubscribers;
@@ -644,6 +639,15 @@ export function createGatewayBroadcaster(params: {
           sequenceFrames.set(nextSeq, frame);
         } else {
           frame = cached;
+        }
+        // Preserve frame snapshots before metrics inspect getter-backed payloads.
+        if (sessionEventMetrics === null) {
+          sessionEventMetrics = prepareSessionEventMetrics(
+            event,
+            payload,
+            opts?.sessionEventSubscriptionKeys ?? sessionKeys,
+            params.sessionMessageSubscribers,
+          );
         }
       } catch (err) {
         log.error(`broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`);
