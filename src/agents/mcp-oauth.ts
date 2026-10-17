@@ -1,3 +1,4 @@
+/** MCP OAuth credential provider, flow coordinator, and login helpers. */
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

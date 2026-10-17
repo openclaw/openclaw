@@ -1,3 +1,7 @@
+/**
+ * Activates and injects OpenAI/Codex native web-search tools when config,
+ * model API, and auth state allow it.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 import { externalCliDiscoveryForProviderAuth } from "./auth-profiles/external-cli-discovery.js";
@@ -12,6 +16,7 @@ import {
 
 export type NativeWebSearchToolPolicyParams = WebSearchToolPolicyParams;
 
+/** Returns whether a model API can accept the native Codex web_search tool. */
 export function isCodexNativeSearchEligibleModel(params: {
   modelProvider?: string;
   modelApi?: string;
@@ -26,6 +31,7 @@ function hasCodexNativeWebSearchTool(tools: unknown): boolean {
   return tools.some((tool) => isRecord(tool) && tool.type === "web_search");
 }
 
+/** Checks whether OpenAI/Codex auth is available for native web search. */
 export async function hasAvailableCodexAuth(params: {
   config?: OpenClawConfig;
   agentDir?: string;

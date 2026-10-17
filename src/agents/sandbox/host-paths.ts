@@ -1,4 +1,6 @@
 /**
+ * Host path normalization for sandbox mount policy.
+ *
  * Handles POSIX, Windows drive, and namespace-prefixed paths before policy-key comparison.
  */
 import { posix } from "node:path";

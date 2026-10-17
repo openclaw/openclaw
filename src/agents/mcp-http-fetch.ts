@@ -1,4 +1,5 @@
 /**
+ * MCP HTTP fetch wrappers.
  * Adds SSRF protection, scoped TLS/client-cert dispatchers, response cleanup,
  * and same-origin header handling around the MCP SDK fetch contract.
  */

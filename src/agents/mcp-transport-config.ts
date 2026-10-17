@@ -1,3 +1,6 @@
+/**
+ * Resolves MCP transport command, environment, and timeout configuration.
+ */
 import { redactSensitiveUrl } from "@openclaw/net-policy/redact-sensitive-url";
 import {
   clampPositiveTimerTimeoutMs,

@@ -1,4 +1,6 @@
 /**
+ * Session tool path normalization helpers.
+ *
  * Expands user/file URL inputs and resolves read/write paths against the active cwd with macOS filename variants.
  */
 import { basename, isAbsolute, resolve as resolvePath } from "node:path";
@@ -43,6 +45,7 @@ function expandPath(filePath: string): string {
 }
 
 /**
+ * Resolve a path relative to the given cwd.
  * Handles ~ expansion and absolute paths.
  */
 export function resolveToCwd(filePath: string, cwd: string): string {

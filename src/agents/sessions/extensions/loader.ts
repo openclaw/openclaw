@@ -78,6 +78,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 }
 
 /**
+ * Create the ExtensionAPI for an extension.
  * Registration methods write to the extension object.
  * Action methods delegate to the shared runtime.
  */
@@ -102,6 +103,7 @@ function createExtensionAPI(
     return result;
   };
   return {
+    // Registration methods - write to extension
     on(event: string, handler: HandlerFn): void {
       runtime.assertActive();
       const list = extension.handlers.get(event) ?? [];
@@ -154,6 +156,7 @@ function createExtensionAPI(
       extension.messageRenderers.set(customType, renderer as MessageRenderer);
     },
 
+    // Flag access - checks extension registered it, reads from runtime
     getFlag(name: string): boolean | string | undefined {
       runtime.assertActive();
       if (!extension.flags.has(name)) {

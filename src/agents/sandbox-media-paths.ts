@@ -1,4 +1,5 @@
 /**
+ * Sandbox media path resolution helpers.
  *
  * Bridges media references through sandbox filesystems while enforcing workspace-only boundaries when required.
  */

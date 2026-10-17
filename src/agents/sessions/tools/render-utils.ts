@@ -80,6 +80,7 @@ export function getTextOutput(
   return output;
 }
 
+/** Formats the invalid-argument marker with the active theme. */
 export function invalidArgText(theme: Pick<Theme, "fg">): string {
   return theme.fg("error", "[invalid arg]");
 }

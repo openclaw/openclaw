@@ -1,3 +1,6 @@
+/**
+ * Auth-profile backed bearer injection for remote MCP servers.
+ */
 import crypto from "node:crypto";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";

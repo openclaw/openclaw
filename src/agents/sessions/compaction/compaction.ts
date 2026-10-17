@@ -16,6 +16,7 @@ export {
   type CompactionResult,
 } from "../../runtime/index.js";
 
+/** Generates a compaction summary through the shared agent-core runtime. */
 export async function generateSummary(
   currentMessages: AgentMessage[],
   model: Model,

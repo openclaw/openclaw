@@ -1,3 +1,4 @@
+/** Interprets direct announcement responses and the existing text-fallback receipt. */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   INTERNAL_MESSAGE_CHANNEL,
