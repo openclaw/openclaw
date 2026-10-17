@@ -5,7 +5,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
-import { requireGit } from "../../agents/worktrees/git.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -23,12 +22,12 @@ import type {
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
@@ -47,15 +46,16 @@ import {
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
 import {
   createWorkerEnvironmentStore,
-  type WorkerEnvironmentRecord,
   type WorkerEnvironmentStore,
   type WorkerEnvironmentTransitionPatch,
 } from "./store.js";
 
-export const waitForFast = <T>(
+export function waitForFast<T>(
   callback: () => T | Promise<T>,
   options: { timeout?: number; interval?: number } = {},
-) => vi.waitFor(callback, { interval: 1, ...options });
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
 
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 export type WorkerEnvironmentServiceOptions = Parameters<
@@ -93,18 +93,6 @@ export const NODE_BOOTSTRAP: WorkerNodeEnrollment["nodeBootstrap"] = {
   openclawVersion: "2026.8.1",
   enabledPluginIds: ["runtime-plugin"],
 };
-
-export const createNodeArtifacts = async () => ({
-  artifacts: {
-    nodeBootstrapSha256: NODE_BOOTSTRAP.sha256,
-    enabledPluginIds: [...NODE_BOOTSTRAP.enabledPluginIds],
-    workerBundleHash: BUNDLE_HASH,
-    workerArchiveSha256: BUNDLE_ARTIFACT.tarballSha256,
-    openclawVersion: BUNDLE_ARTIFACT.openclawVersion,
-    protocolFeatures: [...BUNDLE_ARTIFACT.protocolFeatures],
-  },
-  assertCurrent: () => {},
-});
 export const BUNDLE_ARTIFACT: Extract<WorkerInstallationArtifact, { install: "bundle" }> = {
   install: "bundle",
   bundleHash: BUNDLE_HASH,
@@ -162,9 +150,15 @@ export function setupWorkerEnvironmentServiceSuite() {
     testState.root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-service-"),
     );
+    testState.stateDb = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: testState.root },
+    });
     testState.nowMs = 1_000;
     testState.providersEnabled = true;
-    await openWorkerEnvironmentDatabase();
+    testState.store = await createWorkerEnvironmentStore({
+      database: testState.stateDb,
+      now: () => testState.nowMs,
+    });
     testState.config = {
       cloudWorkers: {
         desktop: true,
@@ -203,7 +197,10 @@ export function setupWorkerEnvironmentServiceSuite() {
     await fs.rm(testState.root, { recursive: true, force: true });
   });
 
-  afterAll(closeStateDatabaseForTest);
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  });
 }
 
 async function closeWorkerEnvironmentDatabase() {
@@ -212,30 +209,17 @@ async function closeWorkerEnvironmentDatabase() {
   closeOpenClawStateDatabaseForTest();
 }
 
-export const getDevelopmentProfile = () =>
-  expectDefined(testState.config.cloudWorkers?.profiles?.development, "development worker profile");
-
-export async function createProjectFixture(name = "project", script = "#!/bin/sh\ntrue\n") {
-  const root = path.join(testState.root, name);
-  await fs.mkdir(path.join(root, ".openclaw"), { recursive: true });
-  await fs.writeFile(path.join(root, ".openclaw/worktree-setup.sh"), script, { mode: 0o755 });
-  await requireGit(root, ["init", "--quiet"]);
-  await requireGit(root, ["config", "user.name", "Project Test"]);
-  await requireGit(root, ["config", "user.email", "project@example.invalid"]);
-  await requireGit(root, ["config", "commit.gpgsign", "false"]);
-  await requireGit(root, ["add", "."]);
-  await requireGit(root, ["commit", "--quiet", "-m", "fixture"]);
-  return root;
+export function getDevelopmentProfile() {
+  return expectDefined(
+    testState.config.cloudWorkers?.profiles?.development,
+    "development worker profile",
+  );
 }
 
 export async function reopenWorkerEnvironmentStore() {
   await testState.service?.stop();
   testState.service = undefined;
   await closeWorkerEnvironmentDatabase();
-  await openWorkerEnvironmentDatabase();
-}
-
-async function openWorkerEnvironmentDatabase() {
   testState.stateDb = openOpenClawStateDatabase({
     env: { OPENCLAW_STATE_DIR: testState.root },
   });
@@ -315,23 +299,27 @@ export function createService(
   return testState.service;
 }
 
-export const createProvider = (overrides: Partial<WorkerProvider> = {}): WorkerProvider => ({
-  id: "fake",
-  supportedExecutionModes: ["remote-exec"],
-  resolveAllocation: async () => ({ leaseId: "lease-1", sharedHost: false }),
-  provision: async () => ({ leaseId: "lease-1", ssh: SSH_ENDPOINT }),
-  inspect: async () => ({ status: "active" }),
-  destroy: async () => {},
-  ...overrides,
-});
+export function createProvider(overrides: Partial<WorkerProvider> = {}): WorkerProvider {
+  return {
+    id: "fake",
+    supportedExecutionModes: ["remote-exec"],
+    resolveAllocation: async () => ({ leaseId: "lease-1", sharedHost: false }),
+    provision: async () => ({ leaseId: "lease-1", ssh: SSH_ENDPOINT }),
+    inspect: async () => ({ status: "active" }),
+    destroy: async () => {},
+    ...overrides,
+  };
+}
 
-export const createLiveEvents = (overrides: Record<string, unknown> = {}) => ({
-  apply: vi.fn(async () => LIVE_EVENT_ACK),
-  clear: vi.fn(),
-  clearEnvironment: vi.fn(),
-  rotateCredential: vi.fn(() => true),
-  ...overrides,
-});
+export function createLiveEvents(overrides: Record<string, unknown> = {}) {
+  return {
+    apply: vi.fn(async () => LIVE_EVENT_ACK),
+    clear: vi.fn(),
+    clearEnvironment: vi.fn(),
+    rotateCredential: vi.fn(() => true),
+    ...overrides,
+  };
+}
 
 export async function seedBootstrapping(
   environmentId: string,
@@ -342,23 +330,11 @@ export async function seedBootstrapping(
     ...(install ? { install } : {}),
     settings: { region: "test" },
   });
-  return transition(provisioning, "bootstrapping", {
-    leaseId: `lease:${environmentId}`,
-    sshEndpoint: SSH_ENDPOINT,
-    sharedHost,
-  });
-}
-
-function transition(
-  record: WorkerEnvironmentRecord,
-  to: WorkerEnvironmentRecord["state"],
-  patch?: WorkerEnvironmentTransitionPatch,
-) {
   return testState.store.transition({
-    environmentId: record.environmentId,
-    from: record.state,
-    to,
-    ...(patch ? { patch } : {}),
+    environmentId,
+    from: provisioning.state,
+    to: "bootstrapping",
+    patch: { leaseId: `lease:${environmentId}`, sshEndpoint: SSH_ENDPOINT, sharedHost },
   });
 }
 
@@ -373,7 +349,11 @@ async function seedProvisioning(
     profileSnapshot,
     provisionOperationId: `provision:${environmentId}`,
   });
-  return transition(intent, "provisioning");
+  return testState.store.transition({
+    environmentId,
+    from: intent.state,
+    to: "provisioning",
+  });
 }
 
 export async function seedReady(
@@ -381,82 +361,111 @@ export async function seedReady(
   install?: WorkerInstallationArtifact["install"],
   sharedHost = false,
 ) {
-  return transition(
-    await seedBootstrapping(environmentId, install, sharedHost),
-    "ready",
-    readyPatch(environmentId),
-  );
+  const bootstrapping = await seedBootstrapping(environmentId, install, sharedHost);
+  return testState.store.transition({
+    environmentId,
+    from: bootstrapping.state,
+    to: "ready",
+    patch: readyPatch(environmentId),
+  });
 }
 
 export async function seedReadyDesktop(
   environmentId: string,
   desktop: WorkerDesktopEndpoint = DESKTOP,
 ) {
-  return seedDesktop(environmentId, desktop, false);
+  const provisioning = await seedProvisioning(environmentId, {
+    settings: { region: "test", desktop: true },
+  });
+  const bootstrapping = await testState.store.transition({
+    environmentId,
+    from: provisioning.state,
+    to: "bootstrapping",
+    patch: {
+      leaseId: `lease:${environmentId}`,
+      sshEndpoint: SSH_ENDPOINT,
+      desktop,
+    },
+  });
+  return testState.store.transition({
+    environmentId,
+    from: bootstrapping.state,
+    to: "ready",
+    patch: readyPatch(environmentId),
+  });
 }
 
 export async function seedReadyNodeDesktop(
   environmentId: string,
   desktop: WorkerDesktopEndpoint = DESKTOP,
 ) {
-  return seedDesktop(environmentId, desktop, true);
-}
-
-async function seedDesktop(environmentId: string, desktop: WorkerDesktopEndpoint, node: boolean) {
   const provisioning = await seedProvisioning(environmentId, {
     settings: { region: "test", desktop: true },
   });
-  const lease = { leaseId: `lease:${environmentId}`, desktop };
-  return node
-    ? transition(provisioning, "ready", {
-        ...lease,
-        nodeDeviceId: `node:${environmentId}`,
-        sshEndpoint: null,
-        ...readyPatch(environmentId),
-      })
-    : transition(
-        await transition(provisioning, "bootstrapping", { ...lease, sshEndpoint: SSH_ENDPOINT }),
-        "ready",
-        readyPatch(environmentId),
-      );
+  return testState.store.transition({
+    environmentId,
+    from: provisioning.state,
+    to: "ready",
+    patch: {
+      leaseId: `lease:${environmentId}`,
+      nodeDeviceId: `node:${environmentId}`,
+      sshEndpoint: null,
+      desktop,
+      ...readyPatch(environmentId),
+    },
+  });
 }
 
-const makeCredential = <SessionId extends string | null>(key: string[], sessionId: SessionId) => ({
-  credentialHash: hashWorkerCredential(key.join("-")),
-  sessionId,
-  rpcSetVersion: 1,
-  expiresAtMs: testState.nowMs + 10_000,
-});
-
-export const readyPatch = (
+export function readyPatch(
   environmentId: string,
   receipt: NonNullable<WorkerEnvironmentTransitionPatch["bootstrapReceipt"]> = BOOTSTRAP_RECEIPT,
-) => ({
-  bootstrapReceipt: receipt,
-  credential: makeCredential([CREDENTIAL, environmentId], null),
-});
+) {
+  return {
+    bootstrapReceipt: receipt,
+    credential: {
+      credentialHash: hashWorkerCredential([CREDENTIAL, environmentId].join("-")),
+      sessionId: null,
+      rpcSetVersion: 1,
+      expiresAtMs: testState.nowMs + 10_000,
+    },
+  };
+}
 
-export const attachedPatch = (environmentId: string, sessionId: string) => ({
-  attachedSessionIds: [sessionId],
-  credential: makeCredential([CREDENTIAL, environmentId, sessionId], sessionId),
-});
+export function attachedPatch(environmentId: string, sessionId: string) {
+  return {
+    attachedSessionIds: [sessionId],
+    credential: {
+      credentialHash: hashWorkerCredential([CREDENTIAL, environmentId, sessionId].join("-")),
+      sessionId,
+      rpcSetVersion: 1,
+      expiresAtMs: testState.nowMs + 10_000,
+    },
+  };
+}
 
-export const admissionFor = (environmentId: string) => ({
-  environmentId,
-  credential: [CREDENTIAL, environmentId].join("-"),
-  sessionId: null,
-  runId: null,
-  ownerEpoch: 1,
-  rpcSetVersion: 1,
-  handshake: BOOTSTRAP_RECEIPT,
-});
+export function admissionFor(environmentId: string) {
+  return {
+    environmentId,
+    credential: [CREDENTIAL, environmentId].join("-"),
+    sessionId: null,
+    runId: null,
+    ownerEpoch: 1,
+    rpcSetVersion: 1,
+    handshake: BOOTSTRAP_RECEIPT,
+  };
+}
 
 export async function seedAttachedIdentity(
   environmentId: string,
   sessionId: string,
 ): Promise<WorkerConnectionIdentity> {
   const ready = await seedReady(environmentId);
-  const attached = await transition(ready, "attached", attachedPatch(environmentId, sessionId));
+  const attached = await testState.store.transition({
+    environmentId,
+    from: ready.state,
+    to: "attached",
+    patch: attachedPatch(environmentId, sessionId),
+  });
   const credential = testState.store.getCredential(environmentId);
   if (!credential || !attached.bootstrapReceipt) {
     throw new Error("attached worker fixture is incomplete");
@@ -481,70 +490,77 @@ export async function seedAttachedIdentity(
   };
 }
 
-export const inferenceRequest = (
+export function inferenceRequest(
   identity: WorkerConnectionIdentity,
-): Parameters<WorkerEnvironmentService["startInference"]>[1] => ({
-  runEpoch: identity.ownerEpoch,
-  sessionId: identity.sessionId ?? "session-missing",
-  runId: identity.runId ?? "run-missing",
-  turnId: "turn-inference",
-  modelRef: { provider: "fake", model: "model-test" },
-  context: { messages: [] },
-  options: {},
-});
+): Parameters<WorkerEnvironmentService["startInference"]>[1] {
+  return {
+    runEpoch: identity.ownerEpoch,
+    sessionId: identity.sessionId ?? "session-missing",
+    runId: identity.runId ?? "run-missing",
+    turnId: "turn-inference",
+    modelRef: { provider: "fake", model: "model-test" },
+    context: { messages: [] },
+    options: {},
+  };
+}
 
-export const transcriptRequest = (
+export function transcriptRequest(
   identity: WorkerConnectionIdentity,
   text: string,
   overrides: TranscriptOverrides = {},
-): TranscriptRequest => ({
-  runEpoch: identity.ownerEpoch,
-  seq: 1,
-  baseLeafId: null,
-  messages: [
-    {
-      role: "user",
-      content: [{ type: "text", text }],
-      timestamp: 1,
-    },
-  ],
-  ...overrides,
-});
+): TranscriptRequest {
+  return {
+    runEpoch: identity.ownerEpoch,
+    seq: 1,
+    baseLeafId: null,
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text }],
+        timestamp: 1,
+      },
+    ],
+    ...overrides,
+  };
+}
 
-const liveEventRequest = (
+function liveEventRequest(
   identity: WorkerConnectionIdentity,
   event: LiveEventRequest["event"],
   overrides: LiveOpts = {},
-): LiveEventRequest => ({
-  runEpoch: identity.ownerEpoch,
-  lastAckedSeq: 0,
-  seq: 1,
-  runId: identity.runId ?? "run-missing",
-  event,
-  ...overrides,
-});
+): LiveEventRequest {
+  return {
+    runEpoch: identity.ownerEpoch,
+    lastAckedSeq: 0,
+    seq: 1,
+    runId: identity.runId ?? "run-missing",
+    event,
+    ...overrides,
+  };
+}
 
-export const assistantEvent = (
+export function assistantEvent(
   identity: WorkerConnectionIdentity,
   text: string,
   extra: LiveOpts = {},
-) => liveEventRequest(identity, { kind: "assistant", payload: { text, delta: text } }, extra);
+) {
+  return liveEventRequest(identity, { kind: "assistant", payload: { text, delta: text } }, extra);
+}
 
-export const terminalEvent = (identity: WorkerConnectionIdentity, overrides: LiveOpts = {}) =>
-  liveEventRequest(
+export function terminalEvent(identity: WorkerConnectionIdentity, overrides: LiveOpts = {}) {
+  return liveEventRequest(
     identity,
     { kind: "lifecycle", payload: { phase: "end", endedAt: 2 } },
     overrides,
   );
+}
 
-export const successfulTranscriptCommit = (
-  entryId: string,
-  beforeCommit?: () => Promise<unknown>,
-) =>
-  vi.fn(async () => {
+export function successfulTranscriptCommit(entryId: string, beforeCommit?: () => Promise<unknown>) {
+  return vi.fn(async () => {
     await beforeCommit?.();
     return { ok: true as const, result: { entryIds: [entryId], newLeafId: entryId } };
   });
+}
 
 export function sequencedLiveEvents(ackedSeq = (seq: number) => seq) {
   const apply = vi.fn(async ({ request }: { request: LiveEventRequest }) => ({
@@ -602,9 +618,13 @@ export async function bindPlacementHarness(
       Object.freeze(captured.owner);
       Object.freeze(captured);
       let released = false;
+      let revoked = false;
       const listeners = new Set<() => void>();
-      // releaseSource publishes sourceReleased before notifying these retained claims.
       const revoke = () => {
+        if (revoked) {
+          return;
+        }
+        revoked = true;
         const pending = [...listeners];
         listeners.clear();
         for (const listener of pending) {
@@ -613,6 +633,7 @@ export async function bindPlacementHarness(
       };
       const isCurrent = () =>
         !released &&
+        !revoked &&
         !sourceReleased &&
         sameWorkerSessionTurnClaim(captured, claim) &&
         validateWorkerTurn(captured);
@@ -640,7 +661,8 @@ export async function bindPlacementHarness(
       };
     },
   };
-  attachWorkerTurnExecutionIdentityStore(executionStore, testState.stateDb.path);
+  const databasePath = testState.stateDb.path;
+  attachWorkerTurnExecutionIdentityStore(executionStore, databasePath);
   const placementStore = {
     fenceWorkerTurnForRecovery: vi.fn(),
     prepareWorkerRuntimeRefresh: vi.fn(async () => {

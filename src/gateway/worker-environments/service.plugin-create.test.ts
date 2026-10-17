@@ -1,6 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { requireGit } from "../../agents/worktrees/git.js";
 import type { GatewayRequestHandlerOptions as CoreHandler } from "../../plugin-sdk/core.js";
 import type { GatewayRequestHandlerOptions as RuntimeHandler } from "../../plugin-sdk/gateway-runtime.js";
 import {
@@ -87,7 +89,8 @@ describe("worker creation through the shipped plugin Gateway context", () => {
     const service = support.createService(support.createProvider({ provision }));
     await withRegisteredCreator(service, ["development", "plugin-create"], async (invoke) => {
       const first = await invoke();
-      expect((await invoke()).environmentId).toBe(first.environmentId);
+      const replayed = await invoke();
+      expect(replayed.environmentId).toBe(first.environmentId);
       expect(first).toMatchObject({ state: "ready", profileId: "development" });
       expect(provision).toHaveBeenCalledOnce();
       expect(support.testState.store.list()).toHaveLength(1);
@@ -95,18 +98,37 @@ describe("worker creation through the shipped plugin Gateway context", () => {
   });
 
   it("preserves all eight positions and joins caller cancellation before allocation", async () => {
-    const root = await support.createProjectFixture("plugin-project", "#!/bin/sh\nexit 77\n");
+    const projectPath = path.join(support.testState.root, "plugin-project");
+    await fs.mkdir(projectPath);
+    await requireGit(projectPath, ["init", "--quiet"]);
+    await requireGit(projectPath, ["config", "user.name", "Plugin Test"]);
+    await requireGit(projectPath, ["config", "user.email", "plugin@example.invalid"]);
+    await fs.writeFile(path.join(projectPath, "input.txt"), "plugin project\n");
+    await fs.mkdir(path.join(projectPath, ".openclaw"));
+    await fs.writeFile(
+      path.join(projectPath, ".openclaw", "worktree-setup.sh"),
+      "#!/bin/sh\nexit 77\n",
+      { mode: 0o755 },
+    );
+    await requireGit(projectPath, ["add", "."]);
+    await requireGit(projectPath, ["commit", "--quiet", "-m", "fixture"]);
     type PrepareOptions = Parameters<NonNullable<WorkerProvider["prepareProvision"]>>[2];
     const entered = createDeferredCore<PrepareOptions>();
     const released = createDeferredCore();
-    const allocate = vi.fn(async () => {
-      throw new Error("Unexpected worker allocation");
-    });
+    const allocate = vi.fn(async () => ({
+      leaseId: "must-not-allocate",
+      ssh: support.SSH_ENDPOINT,
+    }));
     const prepareNodeEnrollment = vi.fn<
       NonNullable<support.WorkerEnvironmentServiceOptions["prepareNodeEnrollment"]>
-    >(async () => {
-      throw new Error("Unexpected node enrollment");
-    });
+    >(async () => ({
+      mode: "resume",
+      deviceId: "plugin-node",
+      displayName: "Plugin worker",
+      openclawVersion: support.NODE_BOOTSTRAP.openclawVersion,
+      nodeBootstrap: support.NODE_BOOTSTRAP,
+      waitForDeviceId: async () => "plugin-node",
+    }));
     const closeNodeEnrollment = vi.fn();
     const service = support.createService(
       support.createProvider({
@@ -123,24 +145,44 @@ describe("worker creation through the shipped plugin Gateway context", () => {
         projectNamespace: "plugin-proof",
         prepareNodeEnrollment,
         closeNodeEnrollment,
-        prepareNodeArtifacts: support.createNodeArtifacts,
+        prepareNodeArtifacts: async () => ({
+          artifacts: {
+            nodeBootstrapSha256: support.NODE_BOOTSTRAP.sha256,
+            enabledPluginIds: [...support.NODE_BOOTSTRAP.enabledPluginIds],
+            workerBundleHash: support.BUNDLE_HASH,
+            workerArchiveSha256: support.BUNDLE_ARTIFACT.tarballSha256,
+            openclawVersion: support.BUNDLE_ARTIFACT.openclawVersion,
+            protocolFeatures: [...support.BUNDLE_ARTIFACT.protocolFeatures],
+          },
+          assertCurrent: () => {},
+        }),
       },
     );
     const caller = new AbortController();
     const stopReason = new Error("Plugin caller stopped creation");
     await withRegisteredCreator(
       service,
-      ["development", "options", "large", "remote-exec", root, caller.signal, "linux", false],
+      [
+        "development",
+        "plugin-options",
+        "large",
+        "remote-exec",
+        projectPath,
+        caller.signal,
+        "linux",
+        false,
+      ],
       async (invoke) => {
         const creation = invoke();
         const settled = creation.catch((error: unknown) => error);
         try {
           const options = expectDefined(
-            await awaitGateBeforeSettlement(
+            await Promise.race([
               entered.promise,
-              creation,
-              "Creation settled before preparation",
-            ),
+              settled.then((outcome) => {
+                throw outcome;
+              }),
+            ]),
             "provider preparation options",
           );
           expect(options).toMatchObject({
@@ -149,7 +191,10 @@ describe("worker creation through the shipped plugin Gateway context", () => {
             os: "linux",
           });
           const project = expectDefined(options.project, "provider project");
-          expect(project).toMatchObject({ root, preparation: { purpose: "session" } });
+          expect(project).toMatchObject({
+            root: projectPath,
+            preparation: { purpose: "session" },
+          });
           expect(support.testState.store.list()).toMatchObject([
             {
               profileId: "development",
@@ -157,7 +202,7 @@ describe("worker creation through the shipped plugin Gateway context", () => {
                 machineClass: "large",
                 executionMode: "remote-exec",
                 os: "linux",
-                project: { root, preparation: { runSetupScript: false } },
+                project: { root: projectPath, preparation: { runSetupScript: false } },
               },
             },
           ]);

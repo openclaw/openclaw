@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
@@ -22,7 +23,18 @@ describe("on-demand prepared worker admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   async function fixture() {
-    const projectPath = await support.createProjectFixture();
+    const projectPath = path.join(support.testState.root, "project");
+    await fs.mkdir(projectPath);
+    await requireGit(projectPath, ["init", "--quiet"]);
+    await requireGit(projectPath, ["config", "user.name", "Project Test"]);
+    await requireGit(projectPath, ["config", "user.email", "project@example.invalid"]);
+    await requireGit(projectPath, ["config", "commit.gpgsign", "false"]);
+    await fs.mkdir(path.join(projectPath, ".openclaw"));
+    await fs.writeFile(path.join(projectPath, ".openclaw/worktree-setup.sh"), "#!/bin/sh\ntrue\n", {
+      mode: 0o755,
+    });
+    await requireGit(projectPath, ["add", "."]);
+    await requireGit(projectPath, ["commit", "--quiet", "-m", "base"]);
     const provision = vi.fn<WorkerProvider["provision"]>(async () => {
       throw new Error("Synthetic provider unavailable");
     });
@@ -40,7 +52,17 @@ describe("on-demand prepared worker admission", () => {
       prepareNodeEnrollment: async () => {
         throw new Error("Synthetic provider must not enroll");
       },
-      prepareNodeArtifacts: support.createNodeArtifacts,
+      prepareNodeArtifacts: async () => ({
+        artifacts: {
+          nodeBootstrapSha256: support.NODE_BOOTSTRAP.sha256,
+          enabledPluginIds: ["runtime-plugin"],
+          workerBundleHash: support.BUNDLE_HASH,
+          workerArchiveSha256: support.BUNDLE_ARTIFACT.tarballSha256,
+          openclawVersion: support.BUNDLE_ARTIFACT.openclawVersion,
+          protocolFeatures: [],
+        },
+        assertCurrent: () => {},
+      }),
     });
     return {
       service,
@@ -69,12 +91,6 @@ describe("on-demand prepared worker admission", () => {
       await entered.promise;
       const baseCommit = await requireGit(f.projectPath, ["rev-parse", "HEAD"]);
       const record = support.testState.store.get(result.environmentId)!;
-      const preparation = {
-        purpose: "build",
-        demandAtMs: 1_000,
-        expiresAtMs: 11_000,
-        consumedAtMs: null,
-      };
       expect(result).toEqual({
         environmentId: record.environmentId,
         preparationKey: record.preparation!.key,
@@ -83,7 +99,6 @@ describe("on-demand prepared worker admission", () => {
       expect(record).toMatchObject({
         profileId: "development",
         attachedSessionIds: [],
-        destroyRequestedAtMs: null,
         profileSnapshot: {
           executionMode: "worker-turn",
           project: {
@@ -91,15 +106,24 @@ describe("on-demand prepared worker admission", () => {
             baseCommit,
           },
         },
-        preparation,
+        preparation: {
+          purpose: "build",
+          demandAtMs: 1_000,
+          expiresAtMs: 11_000,
+          consumedAtMs: null,
+        },
       });
       expect(readWorkerProjectPreparation(record.profileSnapshot.project)?.setupRecipe).toMatch(
         /^[a-f0-9]{40}$/u,
       );
       expect(f.provision).toHaveBeenCalledOnce();
+      expect(support.testState.store.get(record.environmentId)?.destroyRequestedAtMs).toBeNull();
       expect(f.service.list()[0]?.preparation).toEqual({
-        ...preparation,
+        purpose: "build",
         key: result.preparationKey,
+        demandAtMs: 1_000,
+        expiresAtMs: 11_000,
+        consumedAtMs: null,
         project: { label: "project", baseCommit },
       });
     } finally {
@@ -133,64 +157,67 @@ describe("on-demand prepared worker admission", () => {
     }
   });
 
-  it("cancels an in-flight reserve while retaining cleanup ownership until the provider settles", async () => {
-    const f = await fixture();
-    const entered = createDeferredCore<AbortSignal>();
-    const release = createDeferredCore();
-    let provisionSettled = false;
-    f.provision.mockImplementation(async (_profile, _operation, options) => {
-      const signal = options!.signal!;
-      entered.resolve(signal);
+  it.each(["reserve"] as const)(
+    "cancels an in-flight %s while retaining cleanup ownership until the provider settles",
+    async () => {
+      const f = await fixture();
+      const entered = createDeferredCore<AbortSignal>();
+      const release = createDeferredCore();
+      let provisionSettled = false;
+      f.provision.mockImplementation(async (_profile, _operation, options) => {
+        const signal = options!.signal!;
+        entered.resolve(signal);
+        try {
+          await release.promise;
+          signal.throwIfAborted();
+          throw new Error("Synthetic provider unavailable");
+        } finally {
+          provisionSettled = true;
+        }
+      });
+      const destroyProvider = vi.fn(async () => {
+        expect(provisionSettled).toBe(true);
+      });
+      f.provider.destroy = destroyProvider;
+      const intent = await f.service.prepareProjectIntent("development", {
+        projectPath: f.projectPath,
+        executionMode: "worker-turn",
+        setupAuthorized: true,
+      });
+      const { environmentId } = await support.testState.store.createIntent({
+        environmentId: "automatic-reserve",
+        provisionOperationId: "automatic-reserve-operation",
+        providerId: intent.providerId,
+        profileId: "development",
+        profileSnapshot: intent.profileSnapshot,
+        preparation: {
+          purpose: "reserve",
+          key: intent.preparationKey!,
+          demandAtMs: 1_000,
+          expiresAtMs: 11_000,
+        },
+      });
+      f.service.schedulePreparedRefill();
+      const signal = await entered.promise;
+      const cancelled = new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      const destroyed = f.service.destroyUnattached(environmentId);
       try {
-        await release.promise;
-        signal.throwIfAborted();
-        throw new Error("Synthetic provider unavailable");
+        await cancelled;
+        expect(support.testState.store.get(environmentId)?.destroyRequestedAtMs).toBe(
+          support.testState.nowMs,
+        );
+        expect(signal.aborted).toBe(true);
+        expect(destroyProvider).not.toHaveBeenCalled();
       } finally {
-        provisionSettled = true;
+        release.resolve();
+        await destroyed;
       }
-    });
-    const destroyProvider = vi.fn(async () => {
-      expect(provisionSettled).toBe(true);
-    });
-    f.provider.destroy = destroyProvider;
-    const intent = await f.service.prepareProjectIntent("development", {
-      projectPath: f.projectPath,
-      executionMode: "worker-turn",
-      setupAuthorized: true,
-    });
-    const { environmentId } = await support.testState.store.createIntent({
-      environmentId: "automatic-reserve",
-      provisionOperationId: "automatic-reserve-operation",
-      providerId: intent.providerId,
-      profileId: "development",
-      profileSnapshot: intent.profileSnapshot,
-      preparation: {
-        purpose: "reserve",
-        key: intent.preparationKey!,
-        demandAtMs: 1_000,
-        expiresAtMs: 11_000,
-      },
-    });
-    f.service.schedulePreparedRefill();
-    const signal = await entered.promise;
-    const cancelled = new Promise<void>((resolve) => {
-      signal.addEventListener("abort", () => resolve(), { once: true });
-    });
-    const destroyed = f.service.destroyUnattached(environmentId);
-    try {
-      await cancelled;
-      expect(support.testState.store.get(environmentId)?.destroyRequestedAtMs).toBe(
-        support.testState.nowMs,
-      );
-      expect(signal.aborted).toBe(true);
-      expect(destroyProvider).not.toHaveBeenCalled();
-    } finally {
-      release.resolve();
-      await destroyed;
-    }
-    expect(support.testState.store.get(environmentId)?.state).toBe("destroyed");
-    expect(destroyProvider).toHaveBeenCalledOnce();
-  });
+      expect(support.testState.store.get(environmentId)?.state).toBe("destroyed");
+      expect(destroyProvider).toHaveBeenCalledOnce();
+    },
+  );
 
   it("deduplicates concurrent fresh builds and fails closed at the global cap", async () => {
     const f = await fixture();
