@@ -2473,6 +2473,7 @@ src/config/sessions/work-start-error.ts
 src/gateway/payload-limits.ts
 src/gateway/server-constants.ts
 src/gateway/session-display-projection.ts
+src/gateway/session-row-transcript-preview.ts
 src/gateway/session-transcript-entry-message.ts
 src/gateway/session-transcript-source-pages.ts
 src/gateway/worker-environments/transcript-commit-policy.ts
