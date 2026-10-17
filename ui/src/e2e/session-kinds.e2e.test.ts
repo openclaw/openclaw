@@ -69,7 +69,7 @@ suite.define(() => {
             }),
           ),
         );
-        expect(styles.map(({ width, height }) => [width, height])).toEqual(
+        expect(styles.map(({ width: controlWidth, height }) => [controlWidth, height])).toEqual(
           Array.from({ length: 4 }, () => [34, 34]),
         );
         expect(
