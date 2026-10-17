@@ -1,7 +1,6 @@
 // Covers CLI execution paths where the process supervisor keeps stdout capture
 // disabled and the runner must parse streamed chunks without relying on tails.
 import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { buildAnthropicCliBackend } from "../../../extensions/anthropic/api.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildExternalRunFailureReply } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import {
@@ -677,7 +676,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
   });
 
   it.each([0, 1])(
-    "preserves Claude refresh contention through process exit %i and reply copy",
+    "preserves the prepared backend failure code through process exit %i and reply copy",
     async (exitCode) => {
       const message =
         "Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again";
@@ -694,11 +693,13 @@ describe("executePreparedCliRun supervisor output capture", () => {
         { exitCode },
       );
       const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
-      context.backendResolved.classifyErrorCode = buildAnthropicCliBackend().classifyErrorCode;
+      const classifyErrorCode = vi.fn(() => "refresh_contention");
+      context.backendResolved.classifyErrorCode = classifyErrorCode;
 
       const error = await executePreparedCliRun(context).catch((caught: unknown) => caught);
 
       assert(error instanceof Error);
+      expect(classifyErrorCode).toHaveBeenCalledExactlyOnceWith(message);
       expect(error).toMatchObject({ name: "FailoverError", code: "refresh_contention", message });
       expect(buildExternalRunFailureReply({ message: error.message, error })).toEqual({
         text: "Another sign-in is still in progress. Wait a moment, then try again.",
