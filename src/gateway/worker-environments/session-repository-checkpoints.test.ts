@@ -37,11 +37,19 @@ const hash = (bytes: string) => `sha256:${createHash("sha256").update(bytes).dig
 const readText = (root: string, name: string) => fs.readFile(path.join(root, name), "utf8");
 const listRefs = (root: string, prefix = "worker-result-candidates/") =>
   git(root, ["for-each-ref", "--format=%(refname)", `refs/openclaw/${prefix}`]);
-const settled = <T>(pending: Promise<T>) =>
-  pending.then(
-    (value) => ({ ok: true as const, value }),
-    (error: unknown) => ({ ok: false as const, error }),
-  );
+const hasRef = (root: string, stagedResultRef: string) =>
+  hasWorkerWorkspaceResultRef({ root, stagedResultRef });
+async function candidateLocks(root: string, candidates: string[], locked: boolean) {
+  for (const candidate of candidates) {
+    const lock = path.join(root, `${candidate}.lock`);
+    if (locked) {
+      await fs.mkdir(path.dirname(lock), { recursive: true });
+      await fs.writeFile(lock, "another Git writer\n", { flag: "wx" });
+    } else {
+      await fs.rm(lock);
+    }
+  }
+}
 function authority(message = "checkpoint authority closed") {
   const guard = {
     current: true,
@@ -53,35 +61,6 @@ function authority(message = "checkpoint authority closed") {
   };
   return guard;
 }
-function pauseAtBoundary(signal?: AbortSignal) {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const resume = () => release.resolve();
-  signal?.addEventListener("abort", resume, { once: true });
-  return {
-    entered: entered.resolve,
-    resume,
-    pause: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-    released: release.promise,
-    wait: (pending: Promise<unknown>) => waitForBoundary(entered.promise, pending),
-    close: () => {
-      resume();
-      signal?.removeEventListener("abort", resume);
-    },
-  };
-}
-async function waitForBoundary(entered: Promise<void>, pending: Promise<unknown>) {
-  await Promise.race([
-    entered,
-    pending.then((outcome) => {
-      throw new Error("Checkpoint settled before boundary", { cause: outcome });
-    }),
-  ]);
-}
-
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const root of roots.splice(0)) {
@@ -103,7 +82,6 @@ async function fixture(editContent?: string) {
   await fs.writeFile(path.join(remote, "keep.txt"), "upstream\n");
   await fs.writeFile(path.join(remote, "remove.txt"), "remove me\n");
   const base = await captureWorkspaceManifest({ root: remote, baseCommit });
-  const baseManifestRaw = serializeWorkerWorkspaceManifest(base.manifest);
   const initial = await store.create({
     agentId: "main",
     sessionKey: "agent:main:repository",
@@ -118,49 +96,8 @@ async function fixture(editContent?: string) {
     assertCurrent,
   });
   const owner = { store, workspaceId: workspace.workspaceId };
-  const artifact = store.artifactPath(workspace.workspaceId);
   const current = () => store.get(workspace.workspaceId);
   const edit = (content: string) => fs.writeFile(path.join(remote, "edit.txt"), content);
-  const rebind = () =>
-    store.bindBase({
-      ...owner,
-      expectedRevision: workspace.revision,
-      baseCommit,
-      assertCurrent,
-    });
-  const read = (checkpointRef?: string, includePublication?: boolean) => ({
-    ...owner,
-    checkpointRef,
-    includePublication,
-  });
-  const preview = async (selectedStore = store) =>
-    (
-      await readArtifacts({
-        ...owner,
-        store: selectedStore,
-        previewPath: "edit.txt",
-        assertCurrent,
-      })
-    ).preview;
-  const stage = async (
-    claim: string,
-    extra: Partial<Parameters<typeof stageCheckpoint>[0]> = {},
-  ) => {
-    const captured = await captureWorkspaceManifest({ root: remote, baseCommit });
-    return await stageCheckpoint({
-      store,
-      workspaceId: workspace.workspaceId,
-      expectedRevision: (await current())!.revision,
-      checkpointRef: workerWorkspaceResultRef(claim),
-      stagingRoot: remote,
-      baseManifestRaw,
-      currentManifestRaw: serializeWorkerWorkspaceManifest(captured.manifest),
-      baseManifestRef: base.manifestRef,
-      currentManifestRef: captured.manifestRef,
-      assertCurrent,
-      ...extra,
-    });
-  };
   if (editContent !== undefined) {
     await edit(editContent);
   }
@@ -170,13 +107,34 @@ async function fixture(editContent?: string) {
     database,
     store,
     workspace,
-    stage,
-    rebind,
-    read,
-    preview,
-    artifact,
+    artifact: store.artifactPath(workspace.workspaceId),
     current,
     edit,
+    rebind: () =>
+      store.bindBase({ ...owner, expectedRevision: workspace.revision, baseCommit, assertCurrent }),
+    read: (checkpointRef?: string) => ({ ...owner, checkpointRef }),
+    preview: (selectedStore = store) =>
+      readArtifacts({
+        ...owner,
+        store: selectedStore,
+        previewPath: "edit.txt",
+        assertCurrent,
+      }).then(({ preview }) => preview),
+    stage: async (claim: string, extra: Partial<Parameters<typeof stageCheckpoint>[0]> = {}) => {
+      const captured = await captureWorkspaceManifest({ root: remote, baseCommit });
+      return await stageCheckpoint({
+        ...owner,
+        expectedRevision: (await current())!.revision,
+        checkpointRef: workerWorkspaceResultRef(claim),
+        stagingRoot: remote,
+        baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+        currentManifestRaw: serializeWorkerWorkspaceManifest(captured.manifest),
+        baseManifestRef: base.manifestRef,
+        currentManifestRef: captured.manifestRef,
+        assertCurrent,
+        ...extra,
+      });
+    },
   };
 }
 
@@ -201,33 +159,8 @@ async function publicationFixture(root: string, content = "working tree\n", blob
   return { sha, input: { publicationStagingRoot, publicationDigest: hash(metadata) } };
 }
 
-it("fences Git initialization after checkpoint directory creation", async () => {
-  const { artifact, stage } = await fixture();
-  const boundary = pauseAtBoundary();
-  const mkdir = fs.mkdir.bind(fs);
-  const guard = authority();
-  let held = false;
-  vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
-    const result = await mkdir(...args);
-    if (!held && String(args[0]) === artifact) {
-      held = true;
-      await boundary.pause();
-    }
-    return result;
-  });
-  const pending = settled(stage("directory-authority", guard));
-  await boundary.wait(pending);
-  guard.current = false;
-  boundary.resume();
-  const outcome = await pending;
-  if (outcome.ok) {
-    await outcome.value.discard();
-  }
-  expect(outcome.ok).toBe(false);
-  await expect(fs.stat(path.join(artifact, "HEAD"))).rejects.toMatchObject({ code: "ENOENT" });
-});
-
 it.for([
+  { boundary: "directory", closure: "authority", publication: false },
   { boundary: "metadata", closure: "authority", publication: true },
   { boundary: "queue", closure: "authority", publication: false },
   ...["preparation", "import", "final-input"].flatMap((boundary) =>
@@ -241,20 +174,37 @@ it.for([
   async ({ boundary, closure, publication }, { signal }) => {
     const { root, artifact, current, stage, rebind } = await fixture("working tree\n");
     const { input } = await publicationFixture(root);
-    await fs.mkdir(artifact, { recursive: true });
-    await git(artifact, ["init", "--quiet", "--bare"]);
-    const common = await fs.realpath(artifact);
-    const queueKey = process.platform === "win32" ? common.toLowerCase() : common;
-    const gate = pauseAtBoundary(signal);
+    if (boundary !== "directory") {
+      await fs.mkdir(artifact, { recursive: true });
+      await git(artifact, ["init", "--quiet", "--bare"]);
+    }
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const resume = () => release.resolve();
+    signal.addEventListener("abort", resume, { once: true });
+    const pause = async () => {
+      entered.resolve();
+      await release.promise;
+    };
     const guard = authority();
     let publicationPreparations = 0;
     let queueOwner: Promise<void> | undefined;
     const importRoots: string[] = [];
+    const mkdir = fs.mkdir.bind(fs);
+    vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
+      const result = await mkdir(...args);
+      if (boundary === "directory" && String(args[0]) === artifact) {
+        await pause();
+      }
+      return result;
+    });
     const holdQueue = async () => {
+      const common = await fs.realpath(artifact);
+      const queueKey = process.platform === "win32" ? common.toLowerCase() : common;
       const held = createDeferredCore();
       queueOwner = workspaceResultGit.withWorkspaceResultRefMutation(artifact, async () => {
         held.resolve();
-        await gate.released;
+        await release.promise;
       });
       await Promise.race([held.promise, queueOwner]);
       const queue = resolveGlobalSingleton<KeyedAsyncQueue>(
@@ -267,7 +217,7 @@ it.for([
       vi.spyOn(queue, "enqueue").mockImplementation((key, task, hooks) => {
         const queued = enqueue(key, task, hooks);
         if (key === queueKey) {
-          gate.entered();
+          entered.resolve();
         }
         return queued;
       });
@@ -277,7 +227,7 @@ it.for([
       async (...args) => {
         const result = await metadata(...args);
         if (boundary === "metadata") {
-          await gate.pause();
+          await pause();
         }
         return result;
       },
@@ -288,7 +238,7 @@ it.for([
       if (path.basename(args[0]).startsWith("openclaw-workspace-import-")) {
         importRoots.push(result);
         if (boundary === "before-preparation" && importRoots.length === 2) {
-          await gate.pause();
+          await pause();
         }
       }
       return result;
@@ -303,7 +253,7 @@ it.for([
         if ("publication" in params === publication) {
           // A real admitted worker completes its private input; closure does not cancel it instantly.
           if (boundary === "preparation") {
-            await gate.pause();
+            await pause();
           }
           if (boundary === "queue") {
             await holdQueue();
@@ -316,7 +266,7 @@ it.for([
     const imports = vi.spyOn(processExec, "runExec").mockImplementation(async (...args) => {
       const result = await runExec(...args);
       if (boundary === "import" && args[0] === "git" && args[1].includes("fast-import")) {
-        await gate.pause();
+        await pause();
       }
       return result;
     });
@@ -331,25 +281,33 @@ it.for([
         args[0].includes("update-ref")
       ) {
         refInputHeld = true;
-        await gate.pause();
+        await pause();
       }
       // Keep the real runner and its beforeInput authority check.
       return run(...args);
     });
-    const pending = settled(
-      stage("publication-authority", {
-        ...(publication ? input : {}),
-        assertCurrent: guard.assertCurrent,
-      }).then(async (prepared) => {
+    const pending = stage("publication-authority", {
+      ...(publication ? input : {}),
+      assertCurrent: guard.assertCurrent,
+    })
+      .then(async (prepared) => {
         if (boundary === "final-input") {
           finalPrepared = prepared;
           await prepared.publish();
         }
         return prepared;
-      }),
-    );
+      })
+      .then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
     try {
-      await gate.wait(pending);
+      await Promise.race([
+        entered.promise,
+        pending.then((outcome) => {
+          throw new Error("Checkpoint settled before boundary", { cause: outcome });
+        }),
+      ]);
       if (finalPrepared) {
         expect(await listRefs(artifact, "worker-results/")).toBe("");
       }
@@ -365,12 +323,11 @@ it.for([
         await rebind();
       }
       const atRelease = await current();
-      gate.resume();
+      release.resolve();
       const outcome = await pending;
       await finalPrepared?.discard();
       if (outcome.ok) {
         await outcome.value.publish();
-        await outcome.value.discard();
       }
       await queueOwner;
       expect(outcome).toMatchObject({
@@ -391,12 +348,16 @@ it.for([
       for (const directory of importRoots) {
         await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
       }
-      const refs = await listRefs(artifact, "");
-      expect(refs.split("\n").filter(Boolean)).toHaveLength(0);
-      expect(refs).not.toContain("worker-result-candidates");
+      if (boundary === "directory") {
+        const head = path.join(artifact, "HEAD");
+        await expect(fs.stat(head)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(await listRefs(artifact, "")).toBe("");
+      }
       expect(publicationPreparations).toBe(publication && preparedInput ? 1 : 0);
     } finally {
-      gate.close();
+      resume();
+      signal.removeEventListener("abort", resume);
       const outcome = await pending;
       await queueOwner;
       await finalPrepared?.discard();
@@ -423,9 +384,7 @@ it("retains cumulative multi-turn files, deletions and executable modes in a bar
   const second = await stage("turn-second");
   const accepted = await second.publish();
   expect(await git(artifact, ["rev-parse", "--is-bare-repository"])).toBe("true");
-  expect(
-    await hasWorkerWorkspaceResultRef({ root: artifact, stagedResultRef: first.checkpointRef }),
-  ).toBe(true);
+  expect(await hasRef(artifact, first.checkpointRef)).toBe(true);
   await withCheckpoint(read(), async (snapshot) => {
     expect(await readText(snapshot.stagingRoot, "first.txt")).toBe("first turn\n");
     expect(await readText(snapshot.stagingRoot, "second.sh")).toContain("echo second");
@@ -435,9 +394,8 @@ it("retains cumulative multi-turn files, deletions and executable modes in a bar
     if (process.platform !== "win32") {
       expect(await fs.readlink(path.join(snapshot.stagingRoot, "current.txt"))).toBe("first.txt");
     }
-    await expect(fs.stat(path.join(snapshot.stagingRoot, "keep.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    const unchanged = path.join(snapshot.stagingRoot, "keep.txt");
+    await expect(fs.stat(unchanged)).rejects.toMatchObject({ code: "ENOENT" });
   });
   expect(accepted.checkpointRef).toBe(second.checkpointRef);
   await withCheckpoint(read(first.checkpointRef), async (snapshot) => {
@@ -446,8 +404,7 @@ it("retains cumulative multi-turn files, deletions and executable modes in a bar
 });
 
 it("recovers a published artifact after the acceptance transaction fails, without accepting a closed claim", async () => {
-  const { database, store, workspace, current, edit, stage, preview } = await fixture();
-  await edit("recover me\n");
+  const { database, store, workspace, current, stage, preview } = await fixture("recover me\n");
   const guard = authority("claim closed");
   const prepared = await stage("turn-recover", guard);
   guard.current = false;
@@ -461,9 +418,7 @@ it("recovers a published artifact after the acceptance transaction fails, withou
   acceptance.mockRestore();
   await prepared.discard();
   await closeOpenClawStateDatabaseByPathAsync(database.path);
-  const reopened = createSessionRepositoryWorkspaceStore({
-    path: database.path,
-  });
+  const reopened = createSessionRepositoryWorkspaceStore({ path: database.path });
   const recovery = {
     store: reopened,
     workspaceId: workspace.workspaceId,
@@ -477,26 +432,19 @@ it("recovers a published artifact after the acceptance transaction fails, withou
 });
 
 it("retries failed candidate cleanup and keeps completed cleanup independent of later Git locks", async () => {
-  const { artifact, edit, stage, preview } = await fixture();
-  await edit("recover after cleanup\n");
+  const { artifact, stage, preview } = await fixture("recover after cleanup\n");
   const prepared = await stage("turn-cleanup-retry");
   const candidate = await listRefs(artifact);
   expect(candidate).not.toBe("");
-  const lockPath = path.join(artifact, `${candidate}.lock`);
-  await fs.writeFile(lockPath, "another Git writer\n", { flag: "wx" });
+  await candidateLocks(artifact, [candidate], true);
   const attempts = await Promise.allSettled([prepared.discard(), prepared.discard()]);
   expect(attempts.map((attempt) => attempt.status)).toEqual(["rejected", "rejected"]);
-  expect(await hasWorkerWorkspaceResultRef({ root: artifact, stagedResultRef: candidate })).toBe(
-    true,
-  );
-  await fs.rm(lockPath);
+  expect(await hasRef(artifact, candidate)).toBe(true);
+  await candidateLocks(artifact, [candidate], false);
   await Promise.all([prepared.discard(), prepared.discard()]);
-  expect(await hasWorkerWorkspaceResultRef({ root: artifact, stagedResultRef: candidate })).toBe(
-    false,
-  );
+  expect(await hasRef(artifact, candidate)).toBe(false);
 
-  await fs.mkdir(path.dirname(lockPath), { recursive: true });
-  await fs.writeFile(lockPath, "another Git writer\n", { flag: "wx" });
+  await candidateLocks(artifact, [candidate], true);
   await Promise.all([prepared.discard(), prepared.discard()]);
   const accepted = await prepared.publish();
   expect(accepted.checkpointRef).toBe(prepared.checkpointRef);
@@ -529,11 +477,9 @@ it.each(["caller", "database"] as const)(
       ...targetOwner,
       assertCurrent: guard.assertCurrent,
     });
-    if (retired === "database") {
-      await expect(fork).rejects.toBeInstanceOf(StateDatabaseReadAdmissionInvalidatedError);
-    } else {
-      await expect(fork).rejects.toThrow("fork caller revoked");
-    }
+    await expect(fork).rejects.toThrow(
+      retired === "database" ? StateDatabaseReadAdmissionInvalidatedError : "fork caller revoked",
+    );
     if (!created) {
       throw new Error("Fork did not allocate its real target");
     }
@@ -548,37 +494,40 @@ it.each(["caller", "database"] as const)(
   },
 );
 
-it.each([false, true])(
-  "retains independent raw recovery when the forked publication companion is corrupt: %s",
-  async (corrupt) => {
-    const { root, artifact: sourceArtifact, edit, store, workspace, stage } = await fixture();
-    await edit("working tree\r\n");
-    const { sha, input } = await publicationFixture(root);
+it.each(["healthy", "corrupt-companion", "invalid-blob"])(
+  "retains independent raw recovery with %s publication",
+  async (publication) => {
+    const source = await fixture("working tree\r\n");
+    const { root, artifact: sourceArtifact, store, workspace, stage } = source;
+    const invalid = publication === "invalid-blob";
+    const { sha, input } = await publicationFixture(
+      root,
+      invalid ? "wrong Git blob content\n" : undefined,
+      invalid ? "b".repeat(40) : undefined,
+    );
     const prepared = await stage("turn-publication", input);
     const candidates = (await listRefs(sourceArtifact)).split("\n");
-    expect(candidates).toHaveLength(2);
-    await prepared.publish();
-    for (const candidate of candidates) {
-      await fs.mkdir(path.dirname(path.join(sourceArtifact, candidate)), { recursive: true });
-      await fs.writeFile(path.join(sourceArtifact, `${candidate}.lock`), "another Git writer\n", {
-        flag: "wx",
-      });
-    }
+    expect(candidates).toHaveLength(invalid ? 1 : 2);
+    await prepared.verify();
+    expect((await prepared.publish()).checkpointRef).toBe(prepared.checkpointRef);
+    expect(await listRefs(sourceArtifact)).toBe("");
+    await candidateLocks(sourceArtifact, candidates, true);
     await Promise.all([prepared.discard(), prepared.discard()]);
-    for (const candidate of candidates) {
-      await fs.rm(path.join(sourceArtifact, `${candidate}.lock`));
+    await candidateLocks(sourceArtifact, candidates, false);
+    let fork = workspace;
+    if (!invalid) {
+      fork = await forkWorkspace({
+        store,
+        sourceWorkspaceId: workspace.workspaceId,
+        agentId: "main",
+        sessionKey: "agent:main:fork",
+        assertCurrent,
+      });
+      expect(fork.workspaceId).not.toBe(workspace.workspaceId);
+      expect(fork.branch).not.toBe(workspace.branch);
+      await store.delete({ workspaceId: workspace.workspaceId, assertCurrent });
     }
-    const fork = await forkWorkspace({
-      store,
-      sourceWorkspaceId: workspace.workspaceId,
-      agentId: "main",
-      sessionKey: "agent:main:fork",
-      assertCurrent,
-    });
-    expect(fork.workspaceId).not.toBe(workspace.workspaceId);
-    expect(fork.branch).not.toBe(workspace.branch);
-    await store.delete({ workspaceId: workspace.workspaceId, assertCurrent });
-    if (corrupt) {
+    if (publication === "corrupt-companion") {
       const artifact = store.artifactPath(fork.workspaceId);
       const companion = await listRefs(artifact, "worker-results/publication-*");
       expect(companion).not.toBe("");
@@ -587,16 +536,14 @@ it.each([false, true])(
     const forkSource = { store, workspaceId: fork.workspaceId, includePublication: true };
     let reads = 0;
     await withCheckpoint(forkSource, async (snapshot) => {
+      const { stagingRoot, publicationStagingRoot, publicationDigest } = snapshot;
       reads += 1;
-      expect(await readText(snapshot.stagingRoot, "edit.txt")).toBe("working tree\r\n");
-      if (corrupt) {
-        expect(snapshot.publicationStagingRoot).toBeUndefined();
-        expect(snapshot.publicationDigest).toBeUndefined();
+      expect(await readText(stagingRoot, "edit.txt")).toBe("working tree\r\n");
+      if (publication !== "healthy") {
+        expect([publicationStagingRoot, publicationDigest]).toEqual([undefined, undefined]);
       } else {
-        expect(snapshot.publicationDigest).toBe(input.publicationDigest);
-        expect(
-          await fs.readFile(path.join(snapshot.publicationStagingRoot!, "blobs", sha), "utf8"),
-        ).toBe("working tree\n");
+        expect(publicationDigest).toBe(input.publicationDigest);
+        expect(await readText(publicationStagingRoot!, `blobs/${sha}`)).toBe("working tree\n");
       }
     });
     expect(reads).toBe(1);
@@ -613,8 +560,7 @@ it.each([false, true])(
 it.each(["recovery", "publication"])(
   "verifies the peeled %s candidate and rejects its replacement or removal",
   async (target) => {
-    const { root, artifact, edit, current, stage } = await fixture();
-    await edit("working tree\r\n");
+    const { root, artifact, current, stage } = await fixture("working tree\r\n");
     const { input } = await publicationFixture(root);
     const prepared = await stage("turn-verify", input);
     const refs = (await listRefs(artifact)).split("\n");
@@ -650,25 +596,8 @@ it.each(["recovery", "publication"])(
   },
 );
 
-it("accepts raw recovery files when a publication blob fails validation", async () => {
-  const { root, artifact, edit, stage, read } = await fixture();
-  await edit("recoverable change\n");
-  const { input } = await publicationFixture(root, "wrong Git blob content\n", "b".repeat(40));
-  const prepared = await stage("turn-rejected-publication", input);
-  await prepared.verify();
-  const accepted = await prepared.publish();
-  expect(accepted.checkpointRef).toBe(prepared.checkpointRef);
-  await withCheckpoint(read(undefined, true), async (snapshot) => {
-    expect(await readText(snapshot.stagingRoot, "edit.txt")).toBe("recoverable change\n");
-    expect(snapshot.publicationStagingRoot).toBeUndefined();
-    expect(snapshot.publicationDigest).toBeUndefined();
-  });
-  expect(await listRefs(artifact)).toBe("");
-});
-
 it("rejects mismatched transferred bytes and cannot replace an immutable checkpoint identity", async () => {
-  const { remote, edit, stage, preview } = await fixture();
-  await edit("first\n");
+  const { remote, edit, stage, preview } = await fixture("first\n");
   const initial = await stage("turn-immutable");
   await initial.publish();
   await edit("second\n");
