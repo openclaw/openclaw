@@ -201,17 +201,16 @@ function writeFixtureGitBin(root: string, origin: string) {
   return binDir;
 }
 
-async function runFixtureManagedCommand({
-  args,
-  bin,
-  cwd,
-  env,
-}: {
+type FixtureCommand = {
   args: string[];
   bin: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-}) {
+  requireProcessTreeExit: boolean;
+  timeoutMs: number;
+};
+
+async function runFixtureManagedCommand({ args, bin, cwd, env }: FixtureCommand) {
   // Fixtures need a real fast-forward, but do not need production process-tree timing.
   // Keep that contract in managed-child-process tests so fixture assertions stay isolated.
   execFileSync(bin, args, { cwd, env, stdio: "ignore" });
@@ -433,17 +432,22 @@ function createSnapshotFixture({ current = true, advance = false } = {}) {
   const commands = fakeCommands(mirror);
   let entrypoint = snapshot;
   const inspect = () => ({ ...managed.deployment, entrypoint, invocationPrefix: [entrypoint] });
-  const replacement = {
+  const record = (event: string) => commands.calls.push(event);
+  const replacement = (observe = false) => ({
     install() {
+      if (observe) {
+        record("install replacement plist");
+      }
       entrypoint = source;
     },
     restore() {
+      if (observe) {
+        record("restore previous plist");
+      }
       entrypoint = snapshot;
     },
     discard() {},
-  };
-  const record = (event: string) => commands.calls.push(event);
-  const options = { checkout: mirror, remote: "origin", lockPath: managed.lockPath };
+  });
   return {
     ...fixture,
     ...managed,
@@ -451,31 +455,19 @@ function createSnapshotFixture({ current = true, advance = false } = {}) {
     snapshot,
     commands,
     inspect,
-    replacement,
     stopped() {
       record("prove gateway stopped");
       return stoppedGateway();
     },
     prepareReplacement() {
       record("prepare replacement plist");
-      return {
-        ...replacement,
-        install() {
-          record("install replacement plist");
-          replacement.install();
-        },
-        restore() {
-          record("restore previous plist");
-          replacement.restore();
-        },
-      };
+      return replacement(true);
     },
-    options,
     run: (dependencies: Record<string, unknown>) =>
-      maintainFixture(options, {
+      fixture.run({
         runCommand: commands.runCommand,
         inspectGatewayDeployment: inspect,
-        prepareGatewayEntrypointReplacement: () => replacement,
+        prepareGatewayEntrypointReplacement: () => replacement(),
         replaceGatewayEntrypoint: (_deployment: unknown, next: string) => {
           entrypoint = next;
         },
@@ -1204,15 +1196,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     await expect(
       run({
         inspectGatewayDeployment: () => deployment,
-        runManagedCommand: async ({
-          args,
-          requireProcessTreeExit,
-          timeoutMs,
-        }: {
-          args: string[];
-          requireProcessTreeExit: boolean;
-          timeoutMs: number;
-        }) => {
+        runManagedCommand: async ({ args, requireProcessTreeExit, timeoutMs }: FixtureCommand) => {
           const command = args.join(" ");
           events.push(`${command} timeout=${timeoutMs} strict=${requireProcessTreeExit}`);
           if (command === "install --frozen-lockfile") {
@@ -1272,7 +1256,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
         await expect(
           run({
             inspectGatewayDeployment: () => deployment,
-            runManagedCommand: async ({ args }: { args: string[] }) => {
+            runManagedCommand: async ({ args }: FixtureCommand) => {
               const command = args.join(" ");
               events.push(command);
               if (command === "install --frozen-lockfile") {
@@ -1624,66 +1608,53 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     expect(resumed).toEqual(["fixture-suspension"]);
   });
 
-  test("builds a trusted source control client while a snapshot is still running", async () => {
-    const fixture = createSnapshotFixture({ current: false });
-    const { commands, source, snapshot, plistPath } = fixture;
-    let controlEntrypoint = "";
-    let proofAttempts = 0;
-    const output = await fixture.run({
-      prepareGatewaySuspension: (_checkout: string, deployment: { entrypoint: string }) => {
-        controlEntrypoint = deployment.entrypoint;
-        return preparedSuspension();
-      },
-      verifyAndAuditGateway: passGatewayRestartVerification,
-      proveGatewayStopped: () => {
-        commands.calls.push("prove gateway stopped");
-        if (++proofAttempts <= 2) {
-          throw new Error("snapshot still owns its listener");
-        }
-        return stoppedGateway();
-      },
-      sleep: (ms: number) => {
-        commands.calls.push(`sleep ${ms}`);
-      },
-    });
-    expect(controlEntrypoint).toBe(source);
-    expect(proofAttempts).toBe(3);
-    expectRetargeted(output.gatewayDeployment, source, snapshot);
-    expect(commands.calls).toEqual([
-      "prove gateway stopped",
-      "pnpm install --frozen-lockfile",
-      "pnpm build",
-      bootout,
-      "prove gateway stopped",
-      "sleep 250",
-      "prove gateway stopped",
-      traceOn,
-      ...launchAgentStart(plistPath),
-      traceOff,
-    ]);
-  });
-
-  test("recovers a stopped snapshot when the source control build is missing", async () => {
-    const fixture = createSnapshotFixture({ current: false });
-    const { commands, source, snapshot, plistPath } = fixture;
-    let prepareCalled = false;
-    const output = await fixture.run({
-      prepareGatewaySuspension: () => {
-        prepareCalled = true;
-        throw new Error("must not execute an unavailable control build");
-      },
-      verifyAndAuditGateway: passGatewayRestartVerification,
-    });
-    expect(prepareCalled).toBe(false);
-    expectRetargeted(output.gatewayDeployment, source, snapshot);
-    expect(commands.calls).toEqual([
-      "pnpm install --frozen-lockfile",
-      "pnpm build",
-      traceOn,
-      ...launchAgentStart(plistPath),
-      traceOff,
-    ]);
-  });
+  test.each([true, false])(
+    "rebuilds the source control client with a running snapshot: %s",
+    async (running) => {
+      const fixture = createSnapshotFixture({ current: false });
+      const { commands, source, snapshot, plistPath } = fixture;
+      let controlEntrypoint = "";
+      let proofAttempts = 0;
+      const output = await fixture.run({
+        prepareGatewaySuspension: (_checkout: string, deployment: { entrypoint: string }) => {
+          controlEntrypoint = deployment.entrypoint;
+          if (!running) {
+            throw new Error("must not execute an unavailable control build");
+          }
+          return preparedSuspension();
+        },
+        verifyAndAuditGateway: passGatewayRestartVerification,
+        proveGatewayStopped: () => {
+          if (running) {
+            commands.calls.push("prove gateway stopped");
+          }
+          if (running && ++proofAttempts <= 2) {
+            throw new Error("snapshot still owns its listener");
+          }
+          return stoppedGateway();
+        },
+        sleep: (ms: number) => {
+          commands.calls.push(`sleep ${ms}`);
+        },
+      });
+      expect(controlEntrypoint).toBe(running ? source : "");
+      if (running) {
+        expect(proofAttempts).toBe(3);
+      }
+      expectRetargeted(output.gatewayDeployment, source, snapshot);
+      expect(commands.calls).toEqual([
+        ...(running ? ["prove gateway stopped"] : []),
+        "pnpm install --frozen-lockfile",
+        "pnpm build",
+        ...(running
+          ? [bootout, "prove gateway stopped", "sleep 250", "prove gateway stopped"]
+          : []),
+        traceOn,
+        ...launchAgentStart(plistPath),
+        traceOff,
+      ]);
+    },
+  );
 
   test("accepts an observed LaunchAgent process after bootstrap reports failure", async () => {
     const { mirror, run, deployment, plistPath } = makeManagedFixture({
@@ -1740,7 +1711,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const failure = await run({
       inspectGatewayDeployment: () => deployment,
       isGatewayLoaded: () => false,
-      runManagedCommand: ({ args, bin }: { args: string[]; bin: string }) => {
+      runManagedCommand: ({ args, bin }: FixtureCommand) => {
         if (bin === "/bin/launchctl" && args[0] === "bootstrap") {
           throw Object.assign(new Error("launchctl cleanup remained live"), {
             code: "EPROCESSGROUP_CLEANUP_FAILED",
