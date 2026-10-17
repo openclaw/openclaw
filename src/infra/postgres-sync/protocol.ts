@@ -50,7 +50,7 @@ export function preparePostgresQuery(sql: string): {
   let result = "";
   let parameter = 0;
   let statementStart = true;
-  let previousKeyword: string | undefined;
+  let previousToken: string | undefined;
   let mutation: PostgresResult["mutation"];
   for (let i = 0; i < sql.length;) {
     const rest = sql.slice(i);
@@ -80,33 +80,43 @@ export function preparePostgresQuery(sql: string): {
       const next = end < 0 ? sql.length : end + dollar.length;
       result += sql.slice(i, next);
       i = next;
+      previousToken = undefined;
       statementStart = false;
     } else if (quoted) {
       result += quoted[0];
       i += quoted[0].length;
       if (!quoted[0].startsWith("--")) {
+        previousToken = undefined;
         statementStart = false;
       }
     } else {
       if (statementStart && /^pragma\b/i.test(rest)) {
         throw new Error("The experimental PostgreSQL engine does not support PRAGMA statements");
       }
+      const number = /^(?:\d[\d_]*(?:\.[\d_]*)?|\.[\d_]+)(?:[eE][+-]?[\d_]+)?/.exec(rest)?.[0];
+      if (number) {
+        result += number;
+        i += number.length;
+        previousToken = undefined;
+        statementStart = false;
+        continue;
+      }
       const word = /^[A-Za-z_][A-Za-z_0-9$]*/.exec(rest)?.[0];
       if (word) {
         const keyword = word.toUpperCase();
-        // SELECT tags can hide modifying CTEs or SELECT INTO. Row locks and labels do not write.
-        if (previousKeyword !== "AS") {
-          if (keyword === "INTO" && previousKeyword !== "INSERT" && previousKeyword !== "MERGE") {
+        // SELECT tags can hide modifying CTEs or SELECT INTO; qualified names do not write.
+        if (previousToken !== "AS" && previousToken !== ".") {
+          if (keyword === "INTO" && previousToken !== "INSERT" && previousToken !== "MERGE") {
             mutation = "unscoped";
           } else if (
             mutation === undefined &&
             /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(keyword) &&
-            !(keyword === "UPDATE" && (previousKeyword === "FOR" || previousKeyword === "KEY"))
+            !(keyword === "UPDATE" && (previousToken === "FOR" || previousToken === "KEY"))
           ) {
             mutation = "scoped";
           }
         }
-        previousKeyword = keyword;
+        previousToken = keyword;
         result += word;
         i += word.length;
         statementStart = false;
@@ -114,7 +124,7 @@ export function preparePostgresQuery(sql: string): {
       }
       const character = sql.charAt(i);
       if (!/\s/.test(character)) {
-        previousKeyword = undefined;
+        previousToken = character;
       }
       if (character === "?" && sql[i + 1] === "?") {
         result += "?";

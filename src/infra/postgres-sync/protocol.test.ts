@@ -45,12 +45,16 @@ describe("experimental PostgreSQL SQL boundary", () => {
     ],
     ["MERGE INTO entries USING source ON false WHEN NOT MATCHED THEN INSERT VALUES (?)", "scoped"],
     ["SELECT * INTO copied_entries FROM entries", "unscoped"],
+    ['SELECT t."id" INTO copied_entries FROM entries AS t', "unscoped"],
+    ['SELECT 1 AS "id" INTO copied_entries', "unscoped"],
+    ["SELECT 1. INTO copied_entries", "unscoped"],
     [
       "SELECT * INTO copied_entries FROM entries; INSERT INTO copied_entries VALUES (?)",
       "unscoped",
     ],
     ["SELECT * FROM entries FOR UPDATE", undefined],
     ["SELECT * FROM entries FOR NO KEY UPDATE", undefined],
+    ["SELECT t.update, t . /* column */ into FROM entries AS t", undefined],
     ["SELECT 1 AS update, 'DELETE', $$INSERT$$, E'UPDATE\\\' INTO' /* MERGE */", undefined],
   ] as const)("retains mutation evidence while preparing %s", (input, expected) => {
     expect(preparePostgresQuery(input).mutation).toBe(expected);

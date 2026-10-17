@@ -110,6 +110,26 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     run(() => db.close());
   });
 
+  it("keeps read snapshots pure when columns use qualified SQL keywords", () => {
+    const db = open();
+    run(() => db.exec('CREATE TABLE keyword_entries ("update" integer, "into" integer)'));
+    run(() => db.exec("INSERT INTO keyword_entries VALUES (7, 8)"));
+    const before = readSqliteDatabaseScopedWriteToken(db, "first");
+    run(() =>
+      db.runTransaction(
+        () =>
+          expect(
+            db.query("SELECT t.update, t . /* column */ into FROM keyword_entries AS t").rows,
+          ).toEqual([{ update: 7, into: 8 }]),
+        undefined,
+        true,
+      ),
+    );
+    expect(readSqliteDatabaseScopedWriteToken(db, "first")).toBe(before);
+    run(() => db.exec("DROP TABLE keyword_entries"));
+    run(() => db.close());
+  });
+
   it("preserves certified CTE write scopes but fences SELECT INTO across scopes", () => {
     const db = open();
     run(() => db.exec("CREATE TABLE cte_entries (id integer)"));
@@ -135,12 +155,19 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     run(() =>
       db.runTransaction(() =>
         withSqliteDatabaseWriteScope(db, ["second"], () =>
-          db.exec("SELECT id INTO cte_copy FROM cte_entries"),
+          db.exec('SELECT source."id" INTO cte_copy FROM cte_entries AS source'),
         ),
       ),
     );
     expect(readSqliteDatabaseScopedWriteToken(db, "first")).not.toBe(first);
-    run(() => db.exec("DROP TABLE cte_copy; DROP TABLE cte_entries"));
+    const afterQuoted = readSqliteDatabaseScopedWriteToken(db, "first");
+    run(() =>
+      db.runTransaction(() =>
+        withSqliteDatabaseWriteScope(db, ["second"], () => db.exec("SELECT 1. INTO cte_number")),
+      ),
+    );
+    expect(readSqliteDatabaseScopedWriteToken(db, "first")).not.toBe(afterQuoted);
+    run(() => db.exec("DROP TABLE cte_copy; DROP TABLE cte_number; DROP TABLE cte_entries"));
     run(() => db.close());
   });
 
