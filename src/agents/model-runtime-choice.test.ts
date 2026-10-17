@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -39,6 +40,31 @@ vi.mock("./prepared-model-catalog.js", () => ({
 }));
 
 const cfg: OpenClawConfig = { plugins: { enabled: false } };
+const selection = { agentId: "main", raw: "fixture/new-model", source: "override" as const };
+type ChoiceOptions = Partial<Parameters<typeof prepareModelChoice>[0]>;
+const chooseModel = (config: OpenClawConfig, options: ChoiceOptions = {}) =>
+  prepareModelChoice({ ...selection, cfg: config, ...options });
+function metadata(
+  ...plugins: NonNullable<Parameters<typeof createPluginMetadataSnapshotFixture>[0]>["plugins"]
+) {
+  return createPluginMetadataSnapshotFixture({ plugins });
+}
+function providerConfig(provider: string, value: ModelProviderConfig): OpenClawConfig {
+  return { ...cfg, models: { providers: { [provider]: value } } };
+}
+function spawnFixture(config: OpenClawConfig) {
+  const callGateway = vi.fn(async () => {
+    throw new Error("Reached session creation");
+  });
+  const tool = createSessionsSpawnTool({
+    agentSessionKey: "agent:main:main",
+    config,
+    callGateway,
+    registerRun: vi.fn(),
+    countActiveRuns: () => 0,
+  });
+  return { callGateway, tool };
+}
 function publish(
   isCurrent = () => true,
   config = cfg,
@@ -96,15 +122,11 @@ function renderPublishedAliases(owner: PreparedModelRuntimeSnapshot) {
 }
 
 describe("prepared model support admission", () => {
-  const selection = { agentId: "main", raw: "fixture/new-model", source: "override" as const };
-  const custom: OpenClawConfig = {
-    ...cfg,
-    models: {
-      providers: {
-        fixture: { api: "openai-completions", baseUrl: "https://custom.invalid/v1", models: [] },
-      },
-    },
-  };
+  const custom = providerConfig("fixture", {
+    api: "openai-completions",
+    baseUrl: "https://custom.invalid/v1",
+    models: [],
+  });
 
   const manualPolicy: OpenClawConfig = {
     ...custom,
@@ -150,9 +172,7 @@ describe("prepared model support admission", () => {
     },
   ])("$name", async ({ current, config, request, expected }) => {
     publish(() => current, config);
-    expect(await prepareModelChoice({ ...selection, cfg: config, ...request })).toMatchObject(
-      expected,
-    );
+    expect(await chooseModel(config, request)).toMatchObject(expected);
   });
 
   it("rejects an unsupported explicit selection even with a viable fallback", async () => {
@@ -166,20 +186,14 @@ describe("prepared model support admission", () => {
       },
     };
     publish(() => true, config, {
-      metadataSnapshot: createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "xai",
-            providers: ["xai"],
-            providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
-          },
-        ],
+      metadataSnapshot: metadata({
+        id: "xai",
+        providers: ["xai"],
+        providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
       }),
     });
     expect(
-      await prepareModelChoice({
-        ...selection,
-        cfg: config,
+      await chooseModel(config, {
         raw: "xai/nonexistent-native-fixture",
         fallbacks: ["fixture/custom-unlisted"],
       }),
@@ -187,12 +201,12 @@ describe("prepared model support admission", () => {
   });
 
   it.each([
-    { model: "current", ambiguous: false, admitted: true, authored: false, route: "native" },
-    { model: "current", ambiguous: false, admitted: true, authored: true, route: "native" },
-    { model: "auto", ambiguous: false, admitted: false, authored: false, route: "native" },
-    { model: "current", ambiguous: true, admitted: false, authored: false, route: "native" },
+    { model: "current", ambiguous: false, admitted: true, authored: false },
+    { model: "current", ambiguous: false, admitted: true, authored: true },
+    { model: "auto", ambiguous: false, admitted: false, authored: false },
+    { model: "current", ambiguous: true, admitted: false, authored: false },
   ])(
-    "checks the native donor before visible alias creation: $model/$ambiguous/$authored/$route",
+    "checks the native donor before visible alias creation: $model/$ambiguous/$authored",
     async (testCase) => {
       await withTestDir({ prefix: "openclaw-native-alias-" }, async (dir) => {
         const config: OpenClawConfig = {
@@ -205,8 +219,7 @@ describe("prepared model support admission", () => {
             providers: {
               personal: {
                 api: "openai-responses",
-                baseUrl:
-                  testCase.route === "custom" ? "https://custom.invalid/v1" : "https://api.x.ai/v1",
+                baseUrl: "https://api.x.ai/v1",
                 models: testCase.authored
                   ? [
                       {
@@ -235,40 +248,38 @@ describe("prepared model support admission", () => {
         const owner = publish(() => true, config, {
           agentDir: path.join(dir, "agent"),
           workspaceDir: dir,
-          metadataSnapshot: createPluginMetadataSnapshotFixture({
-            plugins: [
-              {
-                id: "xai",
-                providers: ["xai"],
-                providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
-                modelCatalog: {
-                  discovery: { xai: "static" },
-                  providers: { xai: catalog },
-                  suppressions: [
-                    {
-                      provider: "xai",
-                      model: "auto",
-                      reason: "Retired selector",
-                      retirement: { replacedBy: "current" },
-                      when: { baseUrlHosts: ["api.x.ai"] },
-                    },
-                  ],
-                },
+          metadataSnapshot: metadata(
+            {
+              id: "xai",
+              providers: ["xai"],
+              providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
+              modelCatalog: {
+                discovery: { xai: "static" },
+                providers: { xai: catalog },
+                suppressions: [
+                  {
+                    provider: "xai",
+                    model: "auto",
+                    reason: "Retired selector",
+                    retirement: { replacedBy: "current" },
+                    when: { baseUrlHosts: ["api.x.ai"] },
+                  },
+                ],
               },
-              ...(testCase.ambiguous
-                ? [
-                    {
-                      id: "second-owner",
-                      providers: ["second-native"],
-                      modelCatalog: {
-                        discovery: { "second-native": "static" as const },
-                        providers: { "second-native": catalog },
-                      },
+            },
+            ...(testCase.ambiguous
+              ? [
+                  {
+                    id: "second-owner",
+                    providers: ["second-native"],
+                    modelCatalog: {
+                      discovery: { "second-native": "static" as const },
+                      providers: { "second-native": catalog },
                     },
-                  ]
-                : []),
-            ],
-          }),
+                  },
+                ]
+              : []),
+          ),
         });
         bindPreparedModelRuntimeAuth(owner, {
           store: {
@@ -276,26 +287,10 @@ describe("prepared model support admission", () => {
             profiles: { personal: { provider: "personal", type: "api_key", key: "synthetic-key" } },
           },
         });
-        const callGateway = vi.fn(async () => {
-          throw new Error("Reached session creation");
-        });
-        const tool = createSessionsSpawnTool({
-          agentSessionKey: "agent:main:main",
-          config,
-          callGateway,
-          registerRun: vi.fn(),
-          countActiveRuns: () => 0,
-        });
+        const { callGateway, tool } = spawnFixture(config);
         const model = `personal/${testCase.model}`;
         if (testCase.authored && testCase.admitted) {
-          expect(
-            await prepareModelChoice({
-              cfg: config,
-              agentId: "main",
-              raw: model,
-              source: "override",
-            }),
-          ).toMatchObject({
+          expect(await chooseModel(config, { raw: model })).toMatchObject({
             kind: "resolved",
             model: {
               compat: { codeMode: "capable" },
@@ -319,25 +314,18 @@ describe("prepared model support admission", () => {
   );
 
   it("does not lend a native descriptor to another native endpoint", async () => {
-    const config: OpenClawConfig = {
-      ...cfg,
-      models: {
-        providers: {
-          fixture: { api: "openai-responses", baseUrl: "https://b.native.invalid/v1", models: [] },
-        },
-      },
-    };
+    const config = providerConfig("fixture", {
+      api: "openai-responses",
+      baseUrl: "https://b.native.invalid/v1",
+      models: [],
+    });
     publish(() => true, config, {
-      metadataSnapshot: createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "fixture",
-            providers: ["fixture"],
-            providerEndpoints: [
-              { endpointClass: "xai-native", hosts: ["a.native.invalid"] },
-              { endpointClass: "groq-native", hosts: ["b.native.invalid"] },
-            ],
-          },
+      metadataSnapshot: metadata({
+        id: "fixture",
+        providers: ["fixture"],
+        providerEndpoints: [
+          { endpointClass: "xai-native", hosts: ["a.native.invalid"] },
+          { endpointClass: "groq-native", hosts: ["b.native.invalid"] },
         ],
       }),
       configuredRuntimeModels: [
@@ -356,9 +344,9 @@ describe("prepared model support admission", () => {
         },
       ],
     });
-    expect(
-      await prepareModelChoice({ ...selection, cfg: config, raw: "fixture/model" }),
-    ).toMatchObject({ kind: "unavailable" });
+    expect(await chooseModel(config, { raw: "fixture/model" })).toMatchObject({
+      kind: "unavailable",
+    });
   });
 
   it("does not advertise an inline model whose catalog alias has competing owners", async () => {
@@ -380,25 +368,23 @@ describe("prepared model support admission", () => {
     };
     const owner = publish(() => true, config, {
       configuredRuntimeModels: [{ provider, modelId: model.id, model }],
-      metadataSnapshot: createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "openai",
-            origin: "bundled",
-            enabledByDefault: true,
-            providers: ["openai"],
-            modelCatalog: {
-              aliases: { [provider]: { provider: "openai", api: "azure-openai-responses" } },
-            },
+      metadataSnapshot: metadata(
+        {
+          id: "openai",
+          origin: "bundled",
+          enabledByDefault: true,
+          providers: ["openai"],
+          modelCatalog: {
+            aliases: { [provider]: { provider: "openai", api: "azure-openai-responses" } },
           },
-          {
-            id: "workspace-override",
-            origin: "workspace",
-            providers: ["github-copilot"],
-            modelCatalog: { aliases: { [provider]: { provider: "github-copilot" } } },
-          },
-        ],
-      }),
+        },
+        {
+          id: "workspace-override",
+          origin: "workspace",
+          providers: ["github-copilot"],
+          modelCatalog: { aliases: { [provider]: { provider: "github-copilot" } } },
+        },
+      ),
     });
     const { withPluginRuntimeGenerationScope } =
       await import("../plugins/runtime/generation-scope.js");
@@ -414,9 +400,7 @@ describe("prepared model support admission", () => {
       ),
     ).toMatchObject({ ambiguous: true });
     expect(
-      await prepareModelChoice({
-        ...selection,
-        cfg: config,
+      await chooseModel(config, {
         raw: `${provider}/deployment`,
         source: "automatic",
       }),
@@ -446,30 +430,22 @@ describe("prepared model support admission", () => {
     });
     const owner = publish(() => true, config, {
       pluginRegistry: registry,
-      metadataSnapshot: createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "fixture",
-            providers: ["fixture"],
-            modelCatalog: {
-              suppressions: [
-                { provider: "fixture", model: "retired", reason: "Retired fixture model" },
-              ],
-            },
-          },
-        ],
+      metadataSnapshot: metadata({
+        id: "fixture",
+        providers: ["fixture"],
+        modelCatalog: {
+          suppressions: [
+            { provider: "fixture", model: "retired", reason: "Retired fixture model" },
+          ],
+        },
       }),
     });
-    expect(
-      await prepareModelChoice({ ...selection, cfg: config, source: "automatic" }),
-    ).toMatchObject({
+    expect(await chooseModel(config, { source: "automatic" })).toMatchObject({
       kind: "pending",
       ref: { provider: "fixture", model: "new-model" },
     });
     expect(
-      await prepareModelChoice({
-        ...selection,
-        cfg: config,
+      await chooseModel(config, {
         source: "automatic",
         raw: "fixture/retired",
       }),
@@ -478,7 +454,7 @@ describe("prepared model support admission", () => {
       error: expect.stringContaining("Retired fixture model"),
     });
     expect(prepareDynamicModel).not.toHaveBeenCalled();
-    expect(await prepareModelChoice({ ...selection, cfg: config })).toMatchObject({
+    expect(await chooseModel(config, {})).toMatchObject({
       kind: "resolved",
       ref: { provider: "fixture", model: "new-model" },
       model: dynamicModel,
@@ -508,9 +484,7 @@ describe("prepared model support admission", () => {
       metadataSnapshot: owner.metadataSnapshot,
     });
     expect(
-      await prepareModelChoice({
-        ...selection,
-        cfg: incompleteConfig,
+      await chooseModel(incompleteConfig, {
         source: "automatic",
         raw: "fixture/retired",
       }),
@@ -546,25 +520,21 @@ describe("prepared model support admission", () => {
     return publish(() => true, config, {
       ...facts,
       configuredRuntimeModels: [{ provider: "xai", modelId: "auto", model }],
-      metadataSnapshot: createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "xai",
-            providers: ["xai"],
-            providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
-            modelCatalog: {
-              suppressions: [
-                {
-                  provider: "xai",
-                  model: "auto",
-                  reason: "Retired native selector",
-                  retirement: { replacedBy: "grok-4.6" },
-                  when: { baseUrlHosts: ["api.x.ai"] },
-                },
-              ],
+      metadataSnapshot: metadata({
+        id: "xai",
+        providers: ["xai"],
+        providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
+        modelCatalog: {
+          suppressions: [
+            {
+              provider: "xai",
+              model: "auto",
+              reason: "Retired native selector",
+              retirement: { replacedBy: "grok-4.6" },
+              when: { baseUrlHosts: ["api.x.ai"] },
             },
-          },
-        ],
+          ],
+        },
       }),
     });
   }
@@ -574,18 +544,14 @@ describe("prepared model support admission", () => {
     const raw = "xai/auto";
     const ref = { provider: "xai", model: "auto" };
     expect(
-      await prepareModelChoice({
-        ...selection,
-        cfg: owner.config,
+      await chooseModel(owner.config, {
         raw,
         source: "automatic",
         fallbacks: ["fixture/custom-unlisted"],
       }),
     ).toMatchObject({ kind: "automatic", ref });
     expect(
-      await prepareModelChoice({
-        ...selection,
-        cfg: owner.config,
+      await chooseModel(owner.config, {
         raw,
         source: "automatic",
         fallbacks: ["xai/auto"],
@@ -631,16 +597,7 @@ describe("prepared model support admission", () => {
           },
         },
       };
-      const callGateway = vi.fn(async () => {
-        throw new Error("Reached session creation");
-      });
-      const tool = createSessionsSpawnTool({
-        agentSessionKey: "agent:main:main",
-        config,
-        callGateway,
-        registerRun: vi.fn(),
-        countActiveRuns: () => 0,
-      });
+      const { callGateway, tool } = spawnFixture(config);
       await expect(
         tool.execute("retired-fallback", { task: "test", visible: true }),
       ).rejects.toThrow("Reached session creation");
@@ -651,16 +608,13 @@ describe("prepared model support admission", () => {
     });
   });
 
-  it.each([{ baseUrl: "https://custom.invalid/v1", kind: "resolved", advertised: true }])(
-    "uses final inline transport for admission and alias publication: $baseUrl",
-    async ({ baseUrl, kind, advertised }) => {
-      const owner = retiredXaiOwner(baseUrl);
-      expect(
-        await prepareModelChoice({ ...selection, cfg: owner.config, raw: "xai/auto" }),
-      ).toMatchObject({ kind });
-      expect(renderPublishedAliases(owner).includes("- Grok: xai/auto")).toBe(advertised);
-    },
-  );
+  it("uses final inline transport for admission and alias publication", async () => {
+    const owner = retiredXaiOwner("https://custom.invalid/v1");
+    expect(await chooseModel(owner.config, { raw: "xai/auto" })).toMatchObject({
+      kind: "resolved",
+    });
+    expect(renderPublishedAliases(owner).includes("- Grok: xai/auto")).toBe(true);
+  });
 
   it("uses provider transport normalization for explicit, automatic and published aliases without discovery", async () => {
     const model = makeProviderModelFixture({
@@ -691,14 +645,10 @@ describe("prepared model support admission", () => {
     const owner = publish(() => true, config, {
       pluginRegistry: registry,
       configuredRuntimeModels: [{ provider: "xai", modelId: model.id, model }],
-      metadataSnapshot: createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "xai",
-            providers: ["xai"],
-            providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
-          },
-        ],
+      metadataSnapshot: metadata({
+        id: "xai",
+        providers: ["xai"],
+        providerEndpoints: [{ endpointClass: "xai-native", hosts: ["api.x.ai"] }],
       }),
     });
     const choice = { ...selection, cfg: config, raw: "xai/grok-4.6" };
@@ -715,18 +665,11 @@ describe("prepared model support admission", () => {
   });
 
   it("does not certify a Platform-only model on a pinned subscription route", async () => {
-    const config: OpenClawConfig = {
-      ...cfg,
-      models: {
-        providers: {
-          openai: {
-            api: "openai-chatgpt-responses",
-            baseUrl: "https://chatgpt.com/backend-api/codex",
-            models: [],
-          },
-        },
-      },
-    };
+    const config = providerConfig("openai", {
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      models: [],
+    });
     const row = {
       provider: "openai",
       id: "chat-latest",
@@ -751,9 +694,7 @@ describe("prepared model support admission", () => {
         },
       },
     });
-    expect(
-      await prepareModelChoice({ ...selection, cfg: config, raw: "openai/chat-latest@oauth" }),
-    ).toMatchObject({
+    expect(await chooseModel(config, { raw: "openai/chat-latest@oauth" })).toMatchObject({
       kind: "unavailable",
       error: expect.stringContaining("only through OpenAI Platform"),
     });
@@ -867,8 +808,10 @@ describe("prepared model support admission", () => {
               }),
             },
           ],
-          metadataSnapshot: createPluginMetadataSnapshotFixture({
-            plugins: [{ id: "anthropic", providers: ["anthropic"], cliBackends: ["claude-cli"] }],
+          metadataSnapshot: metadata({
+            id: "anthropic",
+            providers: ["anthropic"],
+            cliBackends: ["claude-cli"],
           }),
         });
         const recheckNativeLogin = vi.fn(async () => {
@@ -876,7 +819,7 @@ describe("prepared model support admission", () => {
           Object.assign(owner, { authModes: { "claude-cli": "api_key" } });
         });
         Object.assign(owner, { recheckNativeLogin });
-        const result = await prepareModelChoice({ ...selection, cfg: config, raw });
+        const result = await chooseModel(config, { raw });
         expect(result.kind, JSON.stringify(result)).toBe("resolved");
         expect(result).toMatchObject({
           kind: "resolved",
@@ -911,8 +854,7 @@ describe("prepared model support admission", () => {
       const { state, reload } = publishNativeRenewal(config, {
         row: configured ? configuredRow : nativeRow,
       });
-      const choose = (raw = "fixture/native") =>
-        prepareModelChoice({ ...selection, source, cfg: config, raw });
+      const choose = (raw = "fixture/native") => chooseModel(config, { source, raw });
       expect(await choose()).toMatchObject(nativeResolved);
       expect(reload).not.toHaveBeenCalled();
       state.registered = false;
@@ -976,10 +918,8 @@ describe("prepared model support admission", () => {
         });
       }
       expect(
-        await prepareModelChoice({
-          ...selection,
+        await chooseModel(implicitNative, {
           source,
-          cfg: implicitNative,
           raw: "fixture/native",
         }),
       ).toMatchObject({ kind: "unavailable" });

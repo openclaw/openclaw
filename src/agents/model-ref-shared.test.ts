@@ -1,4 +1,3 @@
-// Checks model reference normalization across manifests and runtime owners.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -18,15 +17,18 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalization.runtime.js";
 
-beforeEach(() => {
+function resetRuntime() {
   resetPluginRuntimeStateForTest();
   clearPluginMetadataLifecycleCaches();
-});
+}
+beforeEach(resetRuntime);
+afterEach(resetRuntime);
 
-afterEach(() => {
-  resetPluginRuntimeStateForTest();
-  clearPluginMetadataLifecycleCaches();
-});
+const normalizationRequest = {
+  provider: "fixture",
+  context: { provider: "fixture", modelId: "model" },
+};
+const normalize = () => normalizeProviderModelIdWithRuntime(normalizationRequest);
 
 describe("normalizeStaticProviderModelId", () => {
   it("keeps the built-in Anthropic alias table aligned with the bundled manifest", async () => {
@@ -95,11 +97,7 @@ describe("provider model normalization bridge", () => {
       withPluginRuntimeRegistryScope(generation.pluginRegistry, () =>
         withPluginRuntimeGenerationScope(
           { ...generation, pluginRegistry: createEmptyPluginRegistry() },
-          () =>
-            normalizeProviderModelIdWithRuntime({
-              provider: "fixture",
-              context: { provider: "fixture", modelId: "model" },
-            }),
+          normalize,
         ),
       ),
     ).toBeUndefined();
@@ -108,11 +106,6 @@ describe("provider model normalization bridge", () => {
   it("does not borrow an active provider on a request registry miss", () => {
     const generation = createModelNormalizerGeneration();
     setActivePluginRegistry(generation.pluginRegistry, "another-gateway");
-    const normalize = () =>
-      normalizeProviderModelIdWithRuntime({
-        provider: "fixture",
-        context: { provider: "fixture", modelId: "model" },
-      });
     expect(normalize()).toBe("fixture-owner-model");
     expect(withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), normalize)).toBeUndefined();
   });
@@ -148,10 +141,7 @@ describe("provider model normalization bridge", () => {
 
       expect(
         bridge.withPluginRuntimeGenerationScope(createModelNormalizerGeneration(), () =>
-          bridge.normalizeProviderModelIdWithRuntime({
-            provider: "fixture",
-            context: { provider: "fixture", modelId: "model" },
-          }),
+          bridge.normalizeProviderModelIdWithRuntime(normalizationRequest),
         ),
       ).toBe("fixture-owner-model");
     });

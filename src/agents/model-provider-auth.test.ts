@@ -1,4 +1,3 @@
-// Verifies route-scoped auth and retained runtime preparation guards.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -11,25 +10,18 @@ import type {
   ModelAuthAvailabilityRef,
 } from "./model-auth-availability.js";
 
-const syntheticAuthMocks = vi.hoisted(() => {
-  const prepareSyntheticAuth = vi.fn<
+const syntheticAuthMocks = vi.hoisted(() => ({
+  prepareProviderSyntheticAuthWithPlugin: vi.fn<
     typeof import("../plugins/provider-runtime.js").prepareProviderSyntheticAuthWithPlugin
-  >(async () => undefined);
-  return {
-    prepareProviderSyntheticAuthWithPlugin: prepareSyntheticAuth,
-    resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
-  };
-});
+  >(async () => undefined),
+  resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
+}));
 
 vi.mock("../plugins/provider-runtime.js", () => syntheticAuthMocks);
 
 const modelAuthMocks = vi.hoisted(() => ({
   createRuntimeProviderAuthLookup: vi.fn(() => ({
-    envApiKey: {
-      aliasMap: {},
-      candidateMap: {},
-      authEvidenceMap: {},
-    },
+    envApiKey: { aliasMap: {}, candidateMap: {}, authEvidenceMap: {} },
     syntheticAuthProviderRefs: [],
   })),
   prepareRuntimeAvailableProviderAuth:
@@ -63,6 +55,8 @@ vi.mock("./model-auth-availability.js", () => ({
 vi.mock("./auth-profiles.js", () => authProfilesMocks);
 
 const { createProviderAuthChecker } = await import("./model-provider-auth.js");
+const { prepareRuntimeAvailableProviderAuth } =
+  await vi.importActual<typeof import("./model-auth-runtime.js")>("./model-auth-runtime.js");
 
 describe("model auth checker", () => {
   afterEach(() => {
@@ -79,8 +73,6 @@ describe("model auth checker", () => {
     syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin.mockImplementationOnce(
       async () => await prepared.promise,
     );
-    const { prepareRuntimeAvailableProviderAuth } =
-      await vi.importActual<typeof import("./model-auth-runtime.js")>("./model-auth-runtime.js");
     let settled = false;
     const answer = prepareRuntimeAvailableProviderAuth({
       provider: "native",
@@ -109,8 +101,6 @@ describe("model auth checker", () => {
   });
 
   it("honors cancellation before returning fast-path auth", async () => {
-    const { prepareRuntimeAvailableProviderAuth } =
-      await vi.importActual<typeof import("./model-auth-runtime.js")>("./model-auth-runtime.js");
     const lookup = modelAuthMocks.createRuntimeProviderAuthLookup();
     const params = {
       provider: "native",
@@ -131,8 +121,6 @@ describe("model auth checker", () => {
   it.each([false, true])(
     "does not prepare native auth for a managed SecretRef (available: %s)",
     async (available) => {
-      const { prepareRuntimeAvailableProviderAuth } =
-        await vi.importActual<typeof import("./model-auth-runtime.js")>("./model-auth-runtime.js");
       const cfg: OpenClawConfig = {
         models: {
           providers: {
@@ -168,7 +156,7 @@ describe("model auth checker", () => {
   );
 
   it("caches OpenAI auth by the complete route tuple", async () => {
-    const hasAuth = createProviderAuthChecker({ cfg: {} as OpenClawConfig });
+    const hasAuth = createProviderAuthChecker({ cfg: {} });
     const platformRef = {
       modelId: "gpt-5.5",
       api: "openai-responses",
@@ -216,7 +204,7 @@ describe("model auth checker", () => {
     };
     modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue(evaluation);
     modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(true);
-    const hasAuth = createProviderAuthChecker({ cfg: {} as OpenClawConfig });
+    const hasAuth = createProviderAuthChecker({ cfg: {} });
     const ref = { modelId: "claude-sonnet-4-6", api: "anthropic-messages" };
 
     await expect(hasAuth.evaluateModelAuth("anthropic", ref)).resolves.toBe(evaluation);

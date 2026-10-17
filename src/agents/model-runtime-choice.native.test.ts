@@ -39,6 +39,22 @@ const custom: OpenClawConfig = {
     },
   },
 };
+function publishKeyless(
+  config: OpenClawConfig,
+  facts: Parameters<typeof createModelRuntimeChoiceOwnerFixture>[2] = {},
+  isCurrent = () => true,
+) {
+  const owner = createModelRuntimeChoiceOwnerFixture(config, isCurrent, facts);
+  bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+  published.owner = owner;
+  return owner;
+}
+const selectRuntime = (
+  options: Omit<Parameters<typeof prepareModelSelectionRuntime>[0], keyof typeof request> &
+    Partial<typeof request>,
+) => prepareModelSelectionRuntime({ ...request, ...options });
+const selectPublished = (cfg: OpenClawConfig, runtimeId = "openclaw", model = request.model) =>
+  preparePublishedModelRuntimeChoice({ ...request, cfg, runtimeId, model });
 
 it.each(["worker", "gateway", "optional", "account"] as const)(
   "admits an explicit keyless OpenClaw selection only for required worker inference (%s)",
@@ -58,9 +74,7 @@ it.each(["worker", "gateway", "optional", "account"] as const)(
         },
       },
     };
-    const owner = createModelRuntimeChoiceOwnerFixture(cfg);
-    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
-    published.owner = owner;
+    const owner = publishKeyless(cfg);
     const entry: SessionEntry = {
       sessionId: "worker-session",
       updatedAt: 0,
@@ -71,9 +85,8 @@ it.each(["worker", "gateway", "optional", "account"] as const)(
         ? { authProfileOverride: "fixture:missing", authProfileOverrideSource: "user" as const }
         : {}),
     };
-    const selection = await prepareModelSelectionRuntime({
+    const selection = await selectRuntime({
       cfg,
-      ...request,
       rawRuntime: "openclaw",
       sessionEntry: entry,
       catalog: owner.modelCatalog.entries,
@@ -90,14 +103,8 @@ it.each(["worker", "gateway", "optional", "account"] as const)(
 );
 
 it("reports missing sign-in instead of a catalog refresh", async () => {
-  const owner = createModelRuntimeChoiceOwnerFixture(custom);
-  bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
-  published.owner = owner;
-  const selection = await preparePublishedModelRuntimeChoice({
-    ...request,
-    cfg: custom,
-    runtimeId: "openclaw",
-  });
+  publishKeyless(custom);
+  const selection = await selectPublished(custom);
   expect(selection).toEqual({
     kind: "unavailable",
     message:
@@ -116,11 +123,9 @@ it("points a signed-out Claude CLI route at claude auth login", async () => {
     plugins: { enabled: false },
     agents: { defaults: { models: { "anthropic/*": { agentRuntime: { id: "claude-cli" } } } } },
   };
-  const owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+  publishKeyless(cfg, {
     modelCatalog: { entries: [entry], routeVariants: [entry] },
   });
-  bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
-  published.owner = owner;
   const selection = await preparePublishedModelRuntimeChoice({
     cfg,
     agentId: "main",
@@ -137,8 +142,7 @@ it("points a signed-out Claude CLI route at claude auth login", async () => {
 it("keeps keyless host selection after an explicit runtime reset without granting explicit availability", async () => {
   for (const agentRuntimeOverride of [undefined, "claude-cli"]) {
     expect(
-      await prepareModelSelectionRuntime({
-        ...request,
+      await selectRuntime({
         cfg: custom,
         catalog: [{ provider: "fixture", id: "model", name: "Model", reasoning: false }],
         sessionEntry: { agentRuntimeOverride },
@@ -151,13 +155,7 @@ it("keeps keyless host selection after an explicit runtime reset without grantin
       },
     });
   }
-  expect(
-    await preparePublishedModelRuntimeChoice({
-      ...request,
-      cfg: custom,
-      runtimeId: "openclaw",
-    }),
-  ).toMatchObject({ kind: "unavailable" });
+  expect(await selectPublished(custom)).toMatchObject({ kind: "unavailable" });
 });
 
 it.each(["configured", "literal"] as const)(
@@ -195,16 +193,17 @@ it.each(["configured", "literal"] as const)(
         },
       });
     }
-    const owner = createModelRuntimeChoiceOwnerFixture(config, () => current, {
-      pluginRegistry: registry,
-      modelCatalog: { entries, routeVariants: entries },
-    });
-    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
-    published.owner = owner;
+    publishKeyless(
+      config,
+      {
+        pluginRegistry: registry,
+        modelCatalog: { entries, routeVariants: entries },
+      },
+      () => current,
+    );
     const checks: Array<() => string | undefined> = [];
     for (const [i, entry] of entries.entries()) {
-      const result = await prepareModelSelectionRuntime({
-        ...request,
+      const result = await selectRuntime({
         cfg: config,
         model: entry.id,
         catalog: entries,
@@ -235,8 +234,7 @@ it("does not let a retained host pin bypass a forced unavailable native runtime"
   vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
   vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
   expect(
-    await prepareModelSelectionRuntime({
-      ...request,
+    await selectRuntime({
       cfg: {},
       sessionEntry: { agentRuntimeOverride: "openclaw" },
       catalog: [{ provider: "fixture", id: "model", name: "Model", reasoning: false }],
@@ -247,25 +245,15 @@ it("does not let a retained host pin bypass a forced unavailable native runtime"
 it("validates off-catalog host routes without granting an incompatible runtime", async () => {
   let current = true;
   published.owner = createModelRuntimeChoiceOwnerFixture(custom, () => current);
-  const choice = await preparePublishedModelRuntimeChoice({
-    ...request,
-    cfg: custom,
-    model: "off-catalog",
-    runtimeId: "openclaw",
-  });
+  const choice = await selectPublished(custom, "openclaw", "off-catalog");
   expect(choice.kind).toBe("ready");
   if (choice.kind !== "ready") {
     throw new Error("Configured route unavailable");
   }
   expect(choice.validate()).toBeUndefined();
-  expect(
-    await preparePublishedModelRuntimeChoice({
-      ...request,
-      cfg: custom,
-      model: "off-catalog",
-      runtimeId: "codex",
-    }),
-  ).toMatchObject({ kind: "unavailable" });
+  expect(await selectPublished(custom, "codex", "off-catalog")).toMatchObject({
+    kind: "unavailable",
+  });
   current = false;
   expect(choice.validate()).toContain("not available");
 });
@@ -294,18 +282,15 @@ it("rejects a stale native observation without renewing it", async () => {
     },
   });
   const reload = vi.fn(async () => ({ entries: [entry], routeVariants: [entry] }));
-  const owner = {
-    ...createModelRuntimeChoiceOwnerFixture({}, () => true, {
+  const owner = publishKeyless(
+    {},
+    {
       pluginRegistry: registry,
       modelCatalog: { entries: [entry], routeVariants: [entry] },
-    }),
-    loadNativeModelCatalog: reload,
-  };
-  bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
-  published.owner = owner;
-  expect(
-    await preparePublishedModelRuntimeChoice({ ...request, cfg: {}, runtimeId: "native-test" }),
-  ).toMatchObject({
+    },
+  );
+  owner.loadNativeModelCatalog = reload;
+  expect(await selectPublished({}, "native-test")).toMatchObject({
     kind: "unavailable",
     message: expect.stringContaining("Refresh the model catalog and choose again"),
   });
