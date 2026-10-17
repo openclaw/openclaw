@@ -160,6 +160,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private readonly mcpAppUnmountGate: ReturnType<typeof createMcpAppUnmountGate>;
 
   constructor(
+    // Native geometry and touch-held history must commit before paint.
     private readonly invalidate: () => void,
     initialOffset: number | null = null,
     onInitialOffsetSettled?: (position: ChatSessionScrollPosition) => void,
@@ -178,10 +179,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       measureConnectedRows: () => this.presentation.measureRows(),
       queueRowMeasure: () => this.presentation.queueRowMeasure(),
       onViewportResize: () => this.callbacks.onViewportResize?.(),
-      requestUpdate: invalidate,
+      invalidate,
     });
     this.virtualizer = new Virtualizer({
-      // Every geometry notification must commit before paint, including non-sync measurements.
       onChange: invalidate,
       count: 0,
       getScrollElement: () => this.scrollElement,
@@ -205,7 +205,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             isProgrammaticScroll: () => this.isProgrammaticScroll,
             cancelScroll: () => this.cancelScroll(),
             onLayoutCorrection: this.recordEndLayoutCorrection,
-            requestUpdate: invalidate,
+            invalidate,
             onOffset: () => this.endAnchor.recordViewport(this.scrollElement),
             onComposerLayout: (changed) => this.commitComposerResize(changed),
             onReaderScroll: (towardEnd) => {

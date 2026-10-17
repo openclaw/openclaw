@@ -53,8 +53,8 @@ describe("chat transcript scroll ownership", () => {
       anchorToEnd: false,
     });
     transcriptDomState.measuredRowHeight = 1000;
-    const requestUpdate = vi.fn();
-    const transcript = createChatTranscript(requestUpdate, () => paneId, {
+    const invalidate = vi.fn();
+    const transcript = createChatTranscript(invalidate, () => paneId, {
       canFollowEnd: () => false,
     });
     const rows: TestContentRow[] = [
@@ -77,12 +77,12 @@ describe("chat transcript scroll ownership", () => {
       renderRows(rows);
       expect(session["endAnchor"].atEnd).toBe(false);
       const geometry = vi.spyOn(session["virtualizer"].options, "onChange");
-      requestUpdate.mockClear();
+      invalidate.mockClear();
 
       container.scrollTop = 600;
       container.dispatchEvent(new Event("scroll"));
       expect(session["endAnchor"].atEnd).toBe(true);
-      expect(requestUpdate).toHaveBeenCalledTimes(geometry.mock.calls.length);
+      expect(invalidate).toHaveBeenCalledTimes(geometry.mock.calls.length);
     } finally {
       transcript.dispose();
     }
