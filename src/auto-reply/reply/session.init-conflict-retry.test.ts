@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { AgentHarnessSessionCleanupError } from "../../agents/harness/errors.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import {
@@ -7,6 +7,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -16,6 +17,12 @@ import {
   runWithSessionInitConflictRetry,
 } from "./session-init-conflict-retry.js";
 import { initSessionState as initSessionStateRaw } from "./session.js";
+
+const initSessionState = (
+  params: Omit<Parameters<typeof initSessionStateRaw>[0], "ctx"> & {
+    ctx: Record<string, unknown>;
+  },
+) => initSessionStateRaw({ ...params, ctx: finalizeInboundContext(params.ctx) });
 
 const commitConflictControl = vi.hoisted(() => ({
   abortController: undefined as AbortController | undefined,
@@ -28,10 +35,11 @@ const commitConflictControl = vi.hoisted(() => ({
 
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
-  const commit = actual.commitReplySessionInitialization;
   return {
     ...actual,
-    commitReplySessionInitialization: async (params: Parameters<typeof commit>[0]) => {
+    commitReplySessionInitialization: async (
+      ...args: Parameters<typeof actual.commitReplySessionInitialization>
+    ) => {
       commitConflictControl.commitCalls += 1;
       if (commitConflictControl.remainingFailures > 0) {
         commitConflictControl.remainingFailures -= 1;
@@ -46,193 +54,266 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
           revision: `forced-conflict-${commitConflictControl.commitCalls}`,
         };
       }
+      const [params] = args;
       const beforeEntryMutation = commitConflictControl.beforeEntryMutation;
-      const options = { ...params };
-      if (beforeEntryMutation) {
-        options.beforeEntryMutation = async (context) => {
-          await params.beforeEntryMutation?.(context);
-          await beforeEntryMutation(params);
-        };
-      }
-      return await commit(options);
+      return await actual.commitReplySessionInitialization({
+        ...params,
+        ...(beforeEntryMutation
+          ? {
+              beforeEntryMutation: async (context) => {
+                await params.beforeEntryMutation?.(context);
+                await beforeEntryMutation({
+                  sessionKey: params.sessionKey,
+                  storePath: params.storePath,
+                });
+              },
+            }
+          : {}),
+      });
     },
   };
 });
 
 const SESSION_KEY = "agent:main:dashboard:test";
-const conflictMessage = `reply session initialization conflicted for ${SESSION_KEY}`;
-afterEach(() => {
-  vi.restoreAllMocks();
-  Object.assign(commitConflictControl, {
-    abortController: undefined,
-    beforeEntryMutation: undefined,
-    commitCalls: 0,
-    remainingFailures: 0,
-  });
-});
 
-it.each([
-  ["retries string conflicts", conflictMessage, false, 2],
-  ["does not retry other errors", new Error("reply session initialization aborted"), false, 1],
-  ["stops on abort", new ReplySessionInitConflictError(SESSION_KEY), true, 1],
-] as const)("%s", async (_name, error, abort, calls) => {
-  const controller = new AbortController();
-  const attempt = vi
-    .fn<() => Promise<string>>()
-    .mockImplementationOnce(() => {
-      if (abort) {
-        controller.abort();
-      }
-      return Promise.reject(error);
-    })
-    .mockResolvedValue("ok");
-  const result = runWithSessionInitConflictRetry(attempt, {
-    signal: controller.signal,
-    sleep: async () => {},
-  });
-  if (calls === 2) {
-    await expect(result).resolves.toBe("ok");
-  } else {
-    await expect(result).rejects.toBe(error);
-  }
-  expect(attempt).toHaveBeenCalledTimes(calls);
-});
-
-it.each([
-  ["caller delays", 3, [1, 2, 3], [1, 2, 3]],
-  ["capped exponential backoff", Infinity, undefined, [250, 500, 1_000, 2_000]],
-] as const)("applies %s between attempts", async (_name, failures, retryDelaysMs, expected) => {
-  let calls = 0;
-  const attempt = vi.fn(async () => {
-    if (++calls <= failures) {
+function conflictingAttempt(failures: number) {
+  const state = { calls: 0 };
+  const attempt = async () => {
+    state.calls += 1;
+    if (state.calls <= failures) {
       throw new ReplySessionInitConflictError(SESSION_KEY);
     }
-    return "ok";
-  });
-  const delays: number[] = [];
-  vi.spyOn(Math, "random").mockReturnValue(0);
-  const result = runWithSessionInitConflictRetry(attempt, {
-    retryDelaysMs,
-    sleep: async (ms) => {
-      delays.push(ms);
-    },
-  });
-  if (retryDelaysMs) {
-    await expect(result).resolves.toBe("ok");
-  } else {
-    await expect(result).rejects.toBeInstanceOf(ReplySessionInitConflictError);
-  }
-  expect(attempt).toHaveBeenCalledTimes(expected.length + 1);
-  expect(delays).toEqual(expected);
-});
-const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-late-conflict-");
-function fixture() {
-  const scope = {
-    sessionKey: SESSION_KEY,
-    storePath: path.join(sessionDirs.make(), "sessions.json"),
+    return "ok" as const;
   };
-  return {
-    ...scope,
-    read: () => loadSessionEntry({ ...scope, readConsistency: "latest" }),
-    seed: (entry: Parameters<typeof upsertSessionEntryCore>[1]) =>
-      upsertSessionEntryCore(scope, entry),
-    initialize: ({
-      ctx = {},
-      ...params
-    }: Partial<Omit<Parameters<typeof initSessionStateRaw>[0], "ctx">> & {
-      ctx?: Record<string, unknown>;
-    } = {}) =>
-      initSessionStateRaw({
-        cfg: { session: { store: scope.storePath } },
-        commandAuthorized: true,
-        ctx: finalizeInboundContext({ Body: "hello", SessionKey: SESSION_KEY, ...ctx }),
-        ...params,
-      }),
-  };
+  return { attempt, state };
 }
-it("preserves the session generation when registered mandatory cleanup fails, then retries", async () => {
-  const { storePath, read: readSession, initialize, seed } = fixture();
-  const failure = new AgentHarnessSessionCleanupError("native session still running");
-  let cleanupAvailable = false;
-  await seed({
-    sessionId: "cleanup-blocked-session",
-    lifecycleRevision: "cleanup-original-revision",
-    updatedAt: Date.now() - 86_400_000,
+
+const instantSleep = async (_ms: number) => {};
+
+describe("runWithSessionInitConflictRetry", () => {
+  it("retries conflict messages rejected as strings", async () => {
+    const attempt = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(`reply session initialization conflicted for ${SESSION_KEY}`)
+      .mockResolvedValue("ok");
+
+    await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).resolves.toBe(
+      "ok",
+    );
+    expect(attempt).toHaveBeenCalledTimes(2);
   });
-  const original = readSession();
-  await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), async () => {
-    registerAgentHarness({
-      id: "required-cleanup",
-      label: "Required cleanup",
-      supports: () => ({ supported: false }),
-      runAttempt: async () => {
-        throw new Error("not used");
-      },
-      reset: async () => {
-        if (!cleanupAvailable) {
-          throw failure;
-        }
-      },
-    });
-    const reset = () =>
-      initialize({
-        cfg: { session: { store: storePath, reset: { mode: "idle", idleMinutes: 30 } } },
-        ctx: { Body: "/new" },
-      });
-    await expect(reset()).rejects.toBe(failure);
-    expect(readSession()).toEqual(original);
-    cleanupAvailable = true;
-    const resumed = await reset();
-    expect(resumed.isNewSession).toBe(true);
-    expect(readSession()).toMatchObject({
-      sessionId: resumed.sessionId,
-      lifecycleRevision: resumed.sessionEntry.lifecycleRevision,
-    });
-    expect(resumed.sessionEntry.lifecycleRevision).not.toBe(original?.lifecycleRevision);
+
+  it("executes an attempt after every caller-provided retry delay", async () => {
+    const { attempt, state } = conflictingAttempt(3);
+    const delays: number[] = [];
+    await expect(
+      runWithSessionInitConflictRetry(attempt, {
+        retryDelaysMs: [1, 2, 3],
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+      }),
+    ).resolves.toBe("ok");
+    expect(state.calls).toBe(4);
+    expect(delays).toEqual([1, 2, 3]);
+  });
+
+  it("does not retry non-conflict errors", async () => {
+    let calls = 0;
+    const attempt = async () => {
+      calls += 1;
+      throw new Error("reply session initialization aborted");
+    };
+    await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).rejects.toThrow(
+      "reply session initialization aborted",
+    );
+    expect(calls).toBe(1);
+  });
+
+  it("stops retrying when the abort signal fires", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const attempt = async () => {
+      calls += 1;
+      controller.abort();
+      throw new ReplySessionInitConflictError(SESSION_KEY);
+    };
+    await expect(
+      runWithSessionInitConflictRetry(attempt, {
+        signal: controller.signal,
+        sleep: instantSleep,
+      }),
+    ).rejects.toBeInstanceOf(ReplySessionInitConflictError);
+    expect(calls).toBe(1);
+  });
+
+  it("applies capped exponential backoff between attempts", async () => {
+    const delays: number[] = [];
+    const { attempt, state } = conflictingAttempt(Number.POSITIVE_INFINITY);
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      await expect(
+        runWithSessionInitConflictRetry(attempt, {
+          sleep: async (ms) => {
+            delays.push(ms);
+          },
+        }),
+      ).rejects.toBeInstanceOf(ReplySessionInitConflictError);
+      expect(state.calls).toBe(5);
+      expect(delays).toEqual([250, 500, 1_000, 2_000]);
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 });
 
-it("retries a late same-session lifecycle conflict without losing either update", async () => {
-  const { read, initialize, seed } = fixture();
-  let lateWrites = 0;
-  commitConflictControl.beforeEntryMutation = (scope) => {
-    const currentEntry = loadSessionEntry({ ...scope, readConsistency: "latest" });
-    if (!currentEntry) {
-      throw new Error("expected the projected reply session row");
-    }
-    lateWrites += 1;
-    replaceSessionEntrySync(scope, {
-      ...currentEntry,
-      lastHeartbeatSentAt: 100 + lateWrites,
-      lastHeartbeatText: `concurrent metadata ${lateWrites}`,
+describe("initSessionState conflict retry wiring", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-late-conflict-");
+  it("preserves the session generation when registered mandatory cleanup fails, then retries", async () => {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const registry = createEmptyPluginRegistry();
+    const failure = new AgentHarnessSessionCleanupError("native session still running");
+    let cleanupAvailable = false;
+    await upsertSessionEntryCore(
+      { sessionKey: SESSION_KEY, storePath },
+      {
+        sessionId: "cleanup-blocked-session",
+        lifecycleRevision: "cleanup-original-revision",
+        updatedAt: Date.now() - 86_400_000,
+      },
+    );
+    const readSession = () =>
+      loadSessionEntry({ readConsistency: "latest", sessionKey: SESSION_KEY, storePath });
+    const original = readSession();
+    await withPluginRuntimeRegistryScope(registry, async () => {
+      registerAgentHarness({
+        id: "required-cleanup",
+        label: "Required cleanup",
+        supports: () => ({ supported: false }),
+        runAttempt: async () => {
+          throw new Error("not used");
+        },
+        reset: async () => {
+          if (!cleanupAvailable) {
+            throw failure;
+          }
+        },
+      });
+      const initialize = () =>
+        initSessionState({
+          cfg: { session: { store: storePath, reset: { mode: "idle", idleMinutes: 30 } } },
+          commandAuthorized: true,
+          ctx: { Body: "/new", SessionKey: SESSION_KEY },
+        });
+      await expect(initialize()).rejects.toBe(failure);
+      expect(readSession()).toEqual(original);
+      cleanupAvailable = true;
+      const resumed = await initialize();
+      expect(resumed.isNewSession).toBe(true);
+      expect(readSession()).toMatchObject({
+        sessionId: resumed.sessionId,
+        lifecycleRevision: resumed.sessionEntry.lifecycleRevision,
+      });
+      expect(resumed.sessionEntry.lifecycleRevision).not.toBe(original?.lifecycleRevision);
     });
-    if (lateWrites === 2) {
+  });
+
+  it("retries a late same-session lifecycle conflict without losing either update", async () => {
+    const root = sessionDirs.make();
+    const storePath = path.join(root, "sessions.json");
+    let lateWrites = 0;
+    commitConflictControl.commitCalls = 0;
+    commitConflictControl.beforeEntryMutation = ({ sessionKey, storePath: targetStorePath }) => {
+      if (lateWrites >= 2) {
+        return;
+      }
+      const currentEntry = loadSessionEntry({
+        readConsistency: "latest",
+        sessionKey,
+        storePath: targetStorePath,
+      });
+      if (!currentEntry) {
+        throw new Error("expected the projected reply session row");
+      }
+      lateWrites += 1;
+      replaceSessionEntrySync(
+        { sessionKey, storePath: targetStorePath },
+        {
+          ...currentEntry,
+          lastHeartbeatSentAt: 100 + lateWrites,
+          lastHeartbeatText: `concurrent metadata ${lateWrites}`,
+        },
+      );
+      if (lateWrites === 2) {
+        commitConflictControl.beforeEntryMutation = undefined;
+      }
+    };
+
+    try {
+      await upsertSessionEntryCore(
+        { sessionKey: SESSION_KEY, storePath },
+        // No display name seeded: the derived thread label may only initialize an
+        // unnamed session, and this test tracks the init write surviving retries.
+        {
+          sessionId: "existing-session",
+          updatedAt: Date.now(),
+        },
+      );
+
+      const result = await initSessionState({
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        commandAuthorized: true,
+        ctx: {
+          Body: "hello",
+          SessionKey: SESSION_KEY,
+          ThreadLabel: "reply initialization update",
+        },
+      });
+
+      expect(commitConflictControl.commitCalls).toBe(3);
+      expect(lateWrites).toBe(2);
+      expect(result.sessionEntry).toMatchObject({
+        displayName: "reply initialization update",
+        lastHeartbeatSentAt: 102,
+        lastHeartbeatText: "concurrent metadata 2",
+        sessionId: "existing-session",
+      });
+      expect(
+        loadSessionEntry({ readConsistency: "latest", sessionKey: SESSION_KEY, storePath }),
+      ).toMatchObject({
+        displayName: "reply initialization update",
+        lastHeartbeatSentAt: 102,
+        lastHeartbeatText: "concurrent metadata 2",
+        sessionId: "existing-session",
+      });
+    } finally {
       commitConflictControl.beforeEntryMutation = undefined;
     }
-  };
+  });
 
-  await seed({ sessionId: "existing-session", updatedAt: Date.now() });
+  it("cancels the production backoff through the initializer signal", async () => {
+    const root = sessionDirs.make();
+    const controller = new AbortController();
+    commitConflictControl.abortController = controller;
+    commitConflictControl.commitCalls = 0;
+    commitConflictControl.remainingFailures = 2;
 
-  const result = await initialize({ ctx: { ThreadLabel: "reply initialization update" } });
+    try {
+      const initializing = initSessionState({
+        cfg: { session: { store: path.join(root, "sessions.json") } } as OpenClawConfig,
+        commandAuthorized: true,
+        ctx: {
+          Body: "hello",
+          SessionKey: SESSION_KEY,
+        },
+        signal: controller.signal,
+      });
 
-  expect(commitConflictControl.commitCalls).toBe(3);
-  expect(lateWrites).toBe(2);
-  const expected = {
-    displayName: "reply initialization update",
-    lastHeartbeatSentAt: 102,
-    lastHeartbeatText: "concurrent metadata 2",
-    sessionId: "existing-session",
-  };
-  expect(result.sessionEntry).toMatchObject(expected);
-  expect(read()).toMatchObject(expected);
-});
-
-it("cancels the production backoff through the initializer signal", async () => {
-  const { initialize } = fixture();
-  const controller = new AbortController();
-  commitConflictControl.abortController = controller;
-  commitConflictControl.remainingFailures = 2;
-
-  await expect(initialize({ signal: controller.signal })).rejects.toThrow("aborted");
-  expect(commitConflictControl.commitCalls).toBe(2);
+      await expect(initializing).rejects.toThrow("aborted");
+      expect(commitConflictControl.commitCalls).toBe(2);
+    } finally {
+      commitConflictControl.abortController = undefined;
+      commitConflictControl.remainingFailures = 0;
+    }
+  });
 });

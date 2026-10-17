@@ -45,7 +45,7 @@ function preparedSnapshot(projection: Projection, query: SnapshotQuery) {
 
 async function waitForPage(
   page: ReturnType<typeof listProjectedSessions>,
-  prepared: Deferred<void>,
+  prepared: Deferred,
   signal: AbortSignal,
 ) {
   const abort = () => prepared.reject(signal.reason);
