@@ -79,7 +79,6 @@ export async function servePublicSessionCardRepresentation(params: {
       if (
         !representation ||
         !Buffer.isBuffer(representation.body) ||
-        !representation.isCurrent() ||
         !isPublicSessionShareActive(config, locator, projection)
       ) {
         return false;

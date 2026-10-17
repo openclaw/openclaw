@@ -68,9 +68,6 @@ export async function servePublicSessionRepresentation(params: {
       if (!representation || !isPublicSessionShareActive(config, locator, projection)) {
         return 404 as const;
       }
-      if (!representation.isCurrent()) {
-        return 503 as const;
-      }
       const { body, etag } = representation;
       if (typeof body !== "string") {
         return 503 as const;

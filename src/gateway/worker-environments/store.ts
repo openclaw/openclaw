@@ -120,7 +120,7 @@ export async function createWorkerEnvironmentStore(
   }
   function mutate<Key extends keyof Operations>(
     type: Key,
-    input: Omit<Operations[Key]["input"], "publicationIncarnation">,
+    input: Operations[Key]["input"],
     assertCurrent: () => void = () => {},
     revocationId?: string,
   ): Promise<Operations[Key]["output"]["result"]> {
@@ -131,7 +131,6 @@ export async function createWorkerEnvironmentStore(
     const captured = structuredClone({
       ...input,
       nowMs: options.now?.(),
-      publicationIncarnation: owner.incarnation,
     });
     const operation = owner.enqueue(async () => {
       const token = {};
@@ -160,11 +159,7 @@ export async function createWorkerEnvironmentStore(
           throw new Error("Worker environment mutation has no commit admission");
         }
         context.admission.assertCurrent();
-        const facts = readWorkerEnvironmentReceipt(
-          receipt.publication,
-          { identity: context.admission.identity.key, incarnation: owner.incarnation },
-          committedIds,
-        );
+        const facts = readWorkerEnvironmentReceipt(receipt.publication, committedIds);
         const revision = commitSequence;
         publishSqliteCommittedState({
           installFacts() {

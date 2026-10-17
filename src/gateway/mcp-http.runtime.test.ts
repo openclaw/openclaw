@@ -206,32 +206,6 @@ describe("McpLoopbackToolCache", () => {
     }
   });
 
-  it.each(["evict", "clear"])(
-    "does not resurrect cache rows when %s overtakes discovery",
-    async (action) => {
-      const cache = new McpLoopbackToolCache();
-      const params = scopeParams({ nodeExecAllowed: true, grantToken: "pending-grant" });
-      const entered = createDeferred();
-      const inventory = createDeferred<unknown[]>();
-      listNodes.mockImplementationOnce(() => {
-        entered.resolve();
-        return inventory.promise;
-      });
-      const pending = cache.resolve(params);
-      await entered.promise;
-      if (action === "evict") {
-        cache.evictGrant("pending-grant");
-      } else {
-        cache.clear();
-      }
-      inventory.resolve([]);
-      await pending;
-      expect(cache.evictGrant("pending-grant")).toBe(false);
-      await cache.resolve(params);
-      expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
-    },
-  );
-
   it.each(["discovery", "construction"] as const)(
     "does not cache tools when cancellation overtakes %s",
     async (stage) => {

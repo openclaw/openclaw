@@ -373,47 +373,6 @@ describe("QuestionManager", () => {
     expect(clock.armedAtMs).toBeNull();
   });
 
-  it.each(["replacement", "answer"] as const)(
-    "keeps a reentrant %s intact when refreshing the original requester",
-    (transition) => {
-      let armed = false;
-      const onResolved = vi.fn();
-      const original = manager.request({
-        id: "reentrant-liveness",
-        questions,
-        timeoutMs: 10_000,
-        onResolved,
-        isRequesterActive: () => {
-          if (!armed) {
-            return true;
-          }
-          armed = false;
-          if (transition === "replacement") {
-            manager.reset();
-            manager.request({ id: "reentrant-liveness", questions, timeoutMs: 10_000 });
-          } else {
-            manager.resolve("reentrant-liveness", answers);
-          }
-          return false;
-        },
-      });
-      const observation = manager.observe(original.id)!;
-      armed = true;
-      observation.refreshRequester();
-      if (transition === "replacement") {
-        expect(observation.isCurrent()).toBe(false);
-        expect(observation.record.status).toBe("pending");
-        expect(manager.observe(original.id)?.record).not.toBe(original);
-        expect(manager.observe(original.id)?.record.status).toBe("pending");
-        expect(onResolved).not.toHaveBeenCalled();
-      } else {
-        expect(observation.isCurrent()).toBe(true);
-        expect(observation.record).toMatchObject({ status: "answered", answers });
-        expect(onResolved).toHaveBeenCalledOnce();
-      }
-    },
-  );
-
   it("preserves a replacement created by a retired entry's reset callback", async () => {
     const replacementRelease = vi.fn();
     const replacementWaitRelease = vi.fn();

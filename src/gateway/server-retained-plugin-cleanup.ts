@@ -54,24 +54,20 @@ export async function cleanupGatewayRetiredPluginArtifacts(params: {
         await using cache = createPluginCache();
         await withPluginCache(cache, async () => {
           const installedIndex = await preparePersistedInstalledPluginIndexCacheEntry({ stateDir });
-          const assertInventoryCurrent = async () => {
-            await assertOwned();
-            installedIndex.assertCurrent();
-          };
-          await assertInventoryCurrent();
+          await assertOwned();
           const records = await recordsModule.loadInstalledPluginIndexInstallRecords({ stateDir });
           const reclaimed = await captures.pruneUnreferencedPluginNativeCaptures(
             stateDir,
-            assertInventoryCurrent,
+            assertOwned,
             process.env,
-            { startup: true, installedIndex },
+            { startup: true, installedIndex: installedIndex.entry },
           );
           for (const warning of reclaimed.warnings) {
             params.log.warn(warning);
           }
-          await assertInventoryCurrent();
+          await assertOwned();
           const removedGenerations = await cleanupRetainedManagedNpmInstallGenerations({
-            assertCurrent: assertInventoryCurrent,
+            assertCurrent: assertOwned,
             activeInstallPaths: [
               ...params.startupInstallPaths,
               ...Object.values(records).flatMap((record) =>

@@ -13,7 +13,7 @@ import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-run
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { testState } from "./test-helpers.runtime-state.js";
@@ -221,10 +221,10 @@ describe("plugin approval forwarding through the Gateway", () => {
           await expectApprovalDelivery(started, "Destination native handler", false, "discord");
           await opsRoute.stop();
           otherGateway = createGatewayInstanceRuntime({
-            getContext: () => {
+            context: createDirectChatContext(),
+            getMethodRegistry: () => {
               throw new Error("the other Gateway must not receive requests");
             },
-            getMethodRegistry: () => createGatewayMethodRegistry([]),
             isDispatchAvailable: () => true,
           });
           reporters.push(registerNativeRoute(otherGateway.nativeApprovals, "ops"));

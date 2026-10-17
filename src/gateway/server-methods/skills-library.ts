@@ -15,11 +15,9 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
-import { captureSessionEntryCurrentCheckAsyncInternal } from "../../config/sessions/session-entry-current-check.js";
+import { captureSessionEntrySourceAssertion } from "../../config/sessions/session-entry-source-authority.js";
 import {
   sessionEntryCommitGuardOptions,
-  prepareSessionSourceAuthority,
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
@@ -165,50 +163,20 @@ async function selectedSession(
     const profiles = await prepareSessionSharingProfiles(options.client);
     const { agentId } = resolveSessionStoreIdentity({ cfg: sourceCfg, sessionKey });
     const facts = await prepareSessionMutationFacts({ cfg: sourceCfg, sessionKey, agentId });
-    let entryRead:
-      | Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>>
-      | undefined;
-    let pins: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
-    let entryAuthority: Awaited<ReturnType<typeof prepareSessionSourceAuthority>> | undefined;
-    const release = async () => {
-      try {
-        await entryAuthority?.release?.();
-      } finally {
-        pins?.release();
-        entryRead?.release();
-        facts.release();
-      }
-    };
     try {
       const identity = facts.readCurrent(sourceCfg).target;
-      entryRead = await captureSessionEntryCurrentCheckAsyncInternal({
-        agentId: identity.agentId,
-        sessionKey: identity.storeKey,
-        storePath: identity.readSource?.path ?? identity.storePath,
-        fields: ["pluginOwnerId"],
-        errorMessage: "Session selection changed; refresh and retry.",
-      });
-      entryAuthority = await prepareSessionSourceAuthority(entryRead.source);
-      const entry = entryRead.entry;
-      const readSource = identity.readSource;
-      if (!entry || !readSource || typeof readSource.databaseIdentity !== "string") {
+      const { entry, readSource } = identity;
+      if (!readSource || typeof readSource.databaseIdentity !== "string") {
         throw new SkillLibraryError("NOT_FOUND", "Session not found.");
       }
-      pins = retainPreparedSessionEntryPredicate({
-        databaseIdentity: `file:${readSource.databaseIdentity}`,
-        sessionKey: identity.storeKey,
-        entry,
-        matches: (_before, after) =>
-          isDeepStrictEqual(entry.skillLibrarySelections, after?.skillLibrarySelections),
-      });
       const currentTarget = () => {
-        entryAuthority!.assertCurrent();
         const cfg = options.context.getRuntimeConfig();
         const current = facts.readCurrent(cfg);
         if (
           !current.target ||
           current.target.entry.sessionId !== entry.sessionId ||
-          current.target.entry.lifecycleRevision !== entry.lifecycleRevision
+          current.target.entry.lifecycleRevision !== entry.lifecycleRevision ||
+          current.target.entry.pluginOwnerId !== entry.pluginOwnerId
         ) {
           throw new SkillLibraryError("CONFLICT", "Session selection changed; refresh and retry.");
         }
@@ -222,7 +190,7 @@ async function selectedSession(
         if (error) {
           throw new SessionMutationAuthorizationChangedError(error);
         }
-        return { ...current.target, entry };
+        return current.target;
       };
       const target = currentTarget();
       const assertMutationCurrent = () => {
@@ -237,26 +205,44 @@ async function selectedSession(
           throw new SessionMutationAuthorizationChangedError(error);
         }
       };
-      const source = composeSessionSourceAssertion([entryRead.source], (assertSources) => {
-        assertSources();
-        assertMutationCurrent();
-      });
       return {
         target,
-        source,
+        get source() {
+          // Read-only callers need published facts, not native writer-source preparation.
+          return captureSessionEntrySourceAssertion({
+            scope: {
+              agentId: identity.agentId,
+              sessionKey: identity.storeKey,
+              storePath: identity.storePath,
+            },
+            readSource,
+            expected: entry,
+            fields: ["sessionId", "lifecycleRevision", "pluginOwnerId"],
+            assertCurrent: assertMutationCurrent,
+            assertHostCurrent: assertMutationCurrent,
+            refuse: () => {
+              throw new SkillLibraryError(
+                "CONFLICT",
+                "Session selection changed; refresh and retry.",
+              );
+            },
+          });
+        },
         assertCurrent() {
-          currentTarget();
-          if (!pins!.isCurrent()) {
+          const current = currentTarget();
+          if (
+            !isDeepStrictEqual(entry.skillLibrarySelections, current.entry.skillLibrarySelections)
+          ) {
             throw new SkillLibraryError(
               "CONFLICT",
               "Session selection changed; refresh and retry.",
             );
           }
         },
-        release,
+        release: facts.release,
       };
     } catch (error) {
-      await release();
+      facts.release();
       throw error;
     }
   }

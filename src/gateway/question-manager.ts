@@ -259,14 +259,7 @@ export class QuestionManager {
     ) {
       return;
     }
-    const active = entry.isRequesterActive?.();
-    // Liveness can reset/reuse the public id or settle the captured entry reentrantly.
-    // A worker-confirmed source loss must retire only this still-pending observation.
-    if (
-      active === false &&
-      this.entries.get(entry.record.id) === entry &&
-      entry.record.status === "pending"
-    ) {
+    if (entry.isRequesterActive?.() === false) {
       this.cancelEntry(entry, "requester-inactive");
     }
   }

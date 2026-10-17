@@ -263,18 +263,16 @@ export function createApprovalHandlers(
         );
         return;
       }
-      const id = readExactApprovalId(rawParams);
+      const id = rawParams.id;
       let record: OperatorApprovalRecord | null;
       try {
-        using prepared = id
-          ? await loadVisibleApproval({
-              ...params,
-              id,
-              authority,
-              client,
-              getCfg: () => context.getRuntimeConfig(),
-            })
-          : null;
+        using prepared = await loadVisibleApproval({
+          ...params,
+          id,
+          authority,
+          client,
+          getCfg: () => context.getRuntimeConfig(),
+        });
         record = prepared?.readCurrent() ?? null;
       } catch (error) {
         if (!authority.isCurrent()) {
@@ -427,10 +425,9 @@ export function createApprovalHandlers(
           // override (custom operator UIs, CLI) beats the config default.
           ...(record.kind === "exec" &&
           requestedDecision === "allow-always" &&
-          typeof resolveParams?.grantExpiresInDays === "number"
+          resolveParams?.grantExpiresInDays !== undefined
             ? {
-                grantExpiresAtMs:
-                  Date.now() + Math.floor(resolveParams.grantExpiresInDays) * 86_400_000,
+                grantExpiresAtMs: Date.now() + resolveParams.grantExpiresInDays * 86_400_000,
               }
             : {}),
         });

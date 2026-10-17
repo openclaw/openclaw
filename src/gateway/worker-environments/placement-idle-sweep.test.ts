@@ -7,8 +7,6 @@ import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
-import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -431,83 +429,47 @@ describe("worker placement idle suspension", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it.each(["transaction", "commit"] as const)(
-    "rechecks idle policy at drain %s admission",
-    async (stage) => {
-      const { harness, idleSweep, profile, info, warn } = await createIdleFixture({
-        getSessionWorkAdmissionCheck: async () => () => false,
-      });
-      const active = await harness.service.dispatch(REQUEST);
-      nowMs += 60_000;
-      let admissionReached = false;
-      probe.admission(operationAdmission, (request, grant, admit) => {
-        if (request.stage === stage) {
-          admissionReached = true;
-          profile.suspendAfter = undefined;
-        }
-        admit(request, grant);
-      });
-      await idleSweep.sweep();
-      expect(admissionReached).toBe(true);
+  it("rechecks activity after delayed automatic reclaim preparation", async () => {
+    const reclaimStarted = createDeferredCore();
+    const releaseReclaim = createDeferredCore();
+    const { harness, idleSweep, info, warn } = await createIdleFixture({
+      reclaim: async (request, authorize, beforeDrain) => {
+        reclaimStarted.resolve();
+        await releaseReclaim.promise;
+        return harness.service.reclaim(request, authorize, beforeDrain);
+      },
+      getSessionWorkAdmissionCheck: async () => () => false,
+    });
+    await harness.service.dispatch(REQUEST);
+    nowMs += 60_000;
+    const sweeping = idleSweep.sweep();
+    try {
+      await reclaimStarted.promise;
+
+      const claim = await claimWorkerTurn("turn-during-idle-reclaim-wait");
+      nowMs += 1_000;
+      await placements.releaseTurn(claim);
+      releaseReclaim.resolve();
+      await sweeping;
+
       expect(placements.get(REQUEST.sessionId)).toMatchObject({
         state: "active",
-        generation: active.generation,
+        turnClaim: null,
+        updatedAtMs: nowMs,
       });
       expect(harness.environments.destroy).not.toHaveBeenCalled();
       expect(info).not.toHaveBeenCalled();
       expect(warn).not.toHaveBeenCalled();
-    },
-  );
 
-  it.each(["activity", "disabled policy", "longer timeout"])(
-    "rechecks %s after delayed automatic reclaim preparation",
-    async (change) => {
-      const reclaimStarted = createDeferredCore();
-      const releaseReclaim = createDeferredCore();
-      const { harness, idleSweep, profile, info, warn } = await createIdleFixture({
-        reclaim: async (request, authorize, beforeDrain) => {
-          reclaimStarted.resolve();
-          await releaseReclaim.promise;
-          return harness.service.reclaim(request, authorize, beforeDrain);
-        },
-        getSessionWorkAdmissionCheck: async () => () => false,
-      });
-      const active = await harness.service.dispatch(REQUEST);
       nowMs += 60_000;
-      const sweeping = idleSweep.sweep();
-      try {
-        await reclaimStarted.promise;
-
-        if (change === "activity") {
-          const claim = await claimWorkerTurn("turn-during-idle-reclaim-wait");
-          nowMs += 1_000;
-          await placements.releaseTurn(claim);
-        } else {
-          profile.suspendAfter = change === "disabled policy" ? undefined : "2m";
-        }
-        releaseReclaim.resolve();
-        await sweeping;
-
-        expect(placements.get(REQUEST.sessionId)).toMatchObject({
-          state: "active",
-          turnClaim: null,
-          updatedAtMs: change === "activity" ? nowMs : active.updatedAtMs,
-        });
-        expect(harness.environments.destroy).not.toHaveBeenCalled();
-        expect(info).not.toHaveBeenCalled();
-        expect(warn).not.toHaveBeenCalled();
-
-        profile.suspendAfter = "1m";
-        nowMs += 60_000;
-        await idleSweep.sweep();
-        expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
-        expect(harness.environments.destroy).toHaveBeenCalledOnce();
-      } finally {
-        releaseReclaim.resolve();
-        await Promise.allSettled([sweeping]);
-      }
-    },
-  );
+      await idleSweep.sweep();
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
+      expect(harness.environments.destroy).toHaveBeenCalledOnce();
+    } finally {
+      releaseReclaim.resolve();
+      await Promise.allSettled([sweeping]);
+    }
+  });
 
   it("finishes its owned drain without rechecking idle eligibility during teardown", async () => {
     let hasSessionWork = false;

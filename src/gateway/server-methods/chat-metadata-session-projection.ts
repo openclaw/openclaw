@@ -19,7 +19,6 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import {
   settleCurrentReadPreparations,
-  withCurrentReadAuthority,
   type CurrentReadAuthority,
 } from "../../shared/current-read-authority.js";
 import { resolveGatewaySessionRuntimeSelectionLocked } from "../session-utils-projection.js";
@@ -124,8 +123,6 @@ export async function prepareChatMetadataModelProjection(params: {
     import("./models-list-result.js"),
     import("../../agents/model-catalog-decisions.js"),
   ]);
-  // A draft has no persisted session grant: recheck its live human before hydrating private auth.
-  await withCurrentReadAuthority(params, () => {});
   // Chat metadata must stay on process-published facts. Live discovery belongs to explicit
   // models.list refresh requests so a slow provider cannot delay chat startup.
   const snapshot = params.facts.modelCatalog;
@@ -170,7 +167,6 @@ export async function prepareChatMetadataModelProjection(params: {
     }),
   ] as const;
   const [modelCatalog, readModels] = await settleCurrentReadPreparations(work);
-  await withCurrentReadAuthority(params, () => {});
   return {
     modelCatalog,
     read: () => ({ models: readModels.read().models }),

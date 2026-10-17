@@ -128,14 +128,12 @@ export async function serveControlUiPublicSessionMedia(params: {
       () => [{ key: locator.sessionKey, agentId: locator.agentId }],
       () => {
         if (
+          !representation ||
           !isPublicSessionShareActive(config, locator, projection) ||
           !mime ||
           !PUBLIC_IMAGE_TYPES.has(mime)
         ) {
           return unavailable(404);
-        }
-        if (!representation?.isCurrent()) {
-          return unavailable(503);
         }
         res.setHeader("Content-Disposition", "inline");
         res.setHeader("Content-Type", mime);

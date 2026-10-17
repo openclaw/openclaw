@@ -68,7 +68,6 @@ export function startWorktreeMaintenance(params: {
   const scheduler = params.scheduler.scope();
   const inOwnerContext = AsyncLocalStorage.snapshot();
   let receipt: ManagedWorktreeGcReceipt | undefined;
-  let inFlight: Promise<void> | undefined;
   let archivePending = false;
   const isActive = () =>
     !scheduler.signal.aborted &&
@@ -133,7 +132,7 @@ export function startWorktreeMaintenance(params: {
             let batchItems = 0;
             // The scheduler already detaches this job and joins its tracked cleanup.
             // Preserve that work scope when admitting the maintenance root.
-            inFlight = runWithGatewayIndependentRootWorkAdmission(
+            return runWithGatewayIndependentRootWorkAdmission(
               async () => {
                 await previousDrain;
                 assertCurrent();
@@ -187,13 +186,11 @@ export function startWorktreeMaintenance(params: {
               })
               .finally(() => {
                 current.completedAt = scheduler.now();
-                inFlight = undefined;
                 if (archivePending && isActive()) {
                   archivePending = false;
                   owner.request();
                 }
               });
-            return inFlight;
           },
         }),
       );
@@ -213,7 +210,6 @@ export function startWorktreeMaintenance(params: {
     stop: async () => {
       // Aborting also wakes a paused batch before joining worker settlement.
       await scheduler.stop();
-      await inFlight;
       await previousDrain;
       if (owners.get(params.getRuntimeConfig) === owner) {
         owners.delete(params.getRuntimeConfig);

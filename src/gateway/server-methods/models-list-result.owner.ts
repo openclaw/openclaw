@@ -10,10 +10,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  withCurrentReadAuthority,
-  type CurrentReadAuthority,
-} from "../../shared/current-read-authority.js";
+import type { CurrentReadAuthority } from "../../shared/current-read-authority.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import type { ChatMetadataReadParams, ChatMetadataSessionEntry } from "./chat-metadata-contract.js";
 import { resolveSessionCatalogProfiles } from "./chat-metadata-session-projection.js";
@@ -93,13 +90,11 @@ export async function resolveModelsListOwner({
       refreshFullCatalog: true,
       ...(params.params.provider ? { providerDiscoveryProviderIds: [params.params.provider] } : {}),
     });
-    await withCurrentReadAuthority(authority, () => {});
   }
   const ownerSnapshot =
     source.kind === "gateway" && !usedPreloadedCatalog
       ? await readPreparedCatalog(source.context, initialAgentId)
       : undefined;
-  await withCurrentReadAuthority(authority, () => {});
   if (!publishedOwner && !usedPreloadedCatalog && !ownerSnapshot) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(
       "Model catalog is not ready. Retry after Gateway startup or refresh finishes.",

@@ -74,7 +74,7 @@ describe("restart recovery startup ownership", () => {
   ] as const)("uses the registered startup owner during %s", async (stage) => {
     const context = createDirectChatContext({ trackExecution: trackAsyncWork });
     const runtime = createGatewayInstanceRuntime({
-      getContext: () => context,
+      context,
       getMethodRegistry: () => createGatewayMethodRegistry([]),
       isDispatchAvailable: () => true,
     });

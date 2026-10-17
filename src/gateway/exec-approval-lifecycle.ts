@@ -65,16 +65,6 @@ export type PendingEntry<TPayload> = {
     assertCurrent: () => void;
     autoReview?: { committedResolutionKey?: string };
   };
-  terminalPublication?: Pick<
-    OperatorApprovalRecord,
-    | "kind"
-    | "runtimeEpoch"
-    | "status"
-    | "decision"
-    | "terminalReason"
-    | "resolvedAtMs"
-    | "updatedAtMs"
-  >;
 };
 
 /** Owns local observations and genuine decision effects, never durable decision policy. */
@@ -101,19 +91,6 @@ export abstract class ExecApprovalLifecycle<TPayload> {
 
   protected emitLifecycle(event: OperatorApprovalLifecycleEvent): void {
     try {
-      const { record } = event;
-      const entry = this.pending.get(record.id);
-      if (this.options.onLifecycle !== undefined && event.phase === "terminal" && entry) {
-        entry.terminalPublication = {
-          kind: record.kind,
-          runtimeEpoch: record.runtimeEpoch,
-          status: record.status,
-          decision: record.decision,
-          terminalReason: record.terminalReason,
-          resolvedAtMs: record.resolvedAtMs,
-          updatedAtMs: record.updatedAtMs,
-        };
-      }
       this.options.onLifecycle?.(event);
     } catch {
       // Stream fanout is observational. It must never change approval truth or
@@ -213,21 +190,12 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     return settled;
   }
 
-  /** Settle one durable terminal transition and report whether this manager published it. */
+  /** Settle one durable terminal transition and report whether this call published it. */
   async reconcileDurableTerminal(record: OperatorApprovalRecord): Promise<boolean> {
     await this.waitForMutations(record.id);
-    this.settleLocalFromStore(record);
-    const published = this.pending.get(record.id)?.terminalPublication;
-    return (
-      published !== undefined &&
-      published.kind === record.kind &&
-      published.runtimeEpoch === record.runtimeEpoch &&
-      published.status === record.status &&
-      published.decision === record.decision &&
-      published.terminalReason === record.terminalReason &&
-      published.resolvedAtMs === record.resolvedAtMs &&
-      published.updatedAtMs === record.updatedAtMs
-    );
+    const settled = this.settleLocalFromStore(record);
+    // Replay may repeat an identical tombstone if a queued mutation already published it.
+    return settled && this.options.onLifecycle !== undefined;
   }
 
   protected reportError(

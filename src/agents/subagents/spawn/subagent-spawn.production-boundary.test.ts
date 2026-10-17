@@ -246,7 +246,7 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
   };
   const methodRegistry = createRequestGatewayMethodRegistry();
   const runtime = createGatewayInstanceRuntime({
-    getContext: () => context,
+    context,
     getMethodRegistry: () => methodRegistry,
     isDispatchAvailable: () => true,
   });

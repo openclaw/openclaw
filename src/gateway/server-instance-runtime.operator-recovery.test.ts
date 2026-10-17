@@ -55,11 +55,11 @@ afterEach(() => {
 
 const chatContext = () => createDirectChatContext({ trackExecution: trackAsyncWork });
 const createRuntime = (
-  getContext: () => ReturnType<typeof chatContext>,
+  context: ReturnType<typeof chatContext>,
   registry = createGatewayMethodRegistry([]),
 ) => {
   const runtime = createGatewayInstanceRuntime({
-    getContext,
+    context,
     getMethodRegistry: () => registry,
     isDispatchAvailable: () => true,
   });
@@ -156,7 +156,7 @@ describe("typed restart recovery operator admission", () => {
           if (revoked && attempt === 1) {
             setUserProfileRole(profileId, "changed-role");
           }
-          const runtime = createRuntime(() => context);
+          const runtime = createRuntime(context);
           const finish = createDeferred();
           let registration: ReturnType<typeof registerChatAbortController> | undefined;
           startTurn.mockImplementation(async ({ preflight, principal, io }) => {
@@ -213,7 +213,7 @@ describe("typed restart recovery operator admission", () => {
     "rejects dispatch before authority restoration when %s differs from the original claim",
     async (field) => {
       await withRecovery(async ({ target, context }) => {
-        using runtime = createRuntime(() => context);
+        using runtime = createRuntime(context);
         const request = recoveryRequest(target);
         request[field] = "another-claim";
         await expect(
@@ -238,7 +238,7 @@ describe("typed restart recovery operator admission", () => {
             handler: vi.fn(),
           },
         ]);
-        using runtime = createRuntime(() => context, registry);
+        using runtime = createRuntime(context, registry);
         startTurn.mockImplementation(async ({ principal, io }) => {
           const authorization = authorizeGatewayMethod(
             "cron.add",
@@ -271,12 +271,10 @@ describe("typed restart recovery operator admission", () => {
     "registration aborted",
     "lifecycle rotated",
     "Gateway closed",
-    "Gateway context replaced",
   ] as const)("refuses retained operator work after its exact %s", async (boundary) => {
     await withRecovery(async ({ target, context }) => {
-      let activeContext = context;
       const registration = registerRecovery(context, target);
-      using runtime = createRuntime(() => activeContext);
+      using runtime = createRuntime(context);
       const entered = createDeferred<AgentTurnPrincipal>();
       const finish = createDeferred();
       startTurn.mockImplementation(async ({ principal, io }) => {
@@ -313,8 +311,6 @@ describe("typed restart recovery operator admission", () => {
           rotateAgentEventLifecycleGeneration();
         } else if (boundary === "Gateway closed") {
           runtime.close();
-        } else {
-          activeContext = chatContext();
         }
         expect(authority.assertCurrent).toThrow();
         if (boundary === "registration replaced") {

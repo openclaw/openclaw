@@ -1372,7 +1372,7 @@ describe("createGatewayCloseHandler", () => {
     ).toBe(false);
   });
 
-  it.each(["post-terminal", "untracked", "settled", "pending"] as const)(
+  it.each(["post-terminal", "untracked", "pending"] as const)(
     "preserves terminal recovery until persistence and caller work settle (%s)",
     async (persistence) => {
       vi.useFakeTimers();
@@ -1387,10 +1387,9 @@ describe("createGatewayCloseHandler", () => {
         projectSessionActive: false,
         projectSessionTerminalPersisted: callerPending,
         ...(callerPending ? {} : { registrationCleanupRequested: true }),
-        ...(persistence === "settled" || persistence === "pending"
+        ...(persistence === "pending"
           ? {
-              projectSessionTerminalPersistence:
-                persistence === "settled" ? Promise.resolve() : new Promise<void>(() => {}),
+              projectSessionTerminalPersistence: new Promise<void>(() => {}),
             }
           : {}),
       });
@@ -1418,19 +1417,15 @@ describe("createGatewayCloseHandler", () => {
       expect(entry.controller.signal.aborted).toBe(true);
       expect(chatAbortControllers.size).toBe(0);
       expect(markMainSessionsAbortedForRestart).toHaveBeenCalledOnce();
-      expect(firstMockCall(markMainSessionsAbortedForRestart)?.[0]?.activeRuns).toEqual(
-        persistence === "settled"
-          ? []
-          : [
-              {
-                runId,
-                lifecycleGeneration: "generation-1",
-                sessionKey,
-                sessionId,
-                observedAt: expect.any(Number),
-              },
-            ],
-      );
+      expect(firstMockCall(markMainSessionsAbortedForRestart)?.[0]?.activeRuns).toEqual([
+        {
+          runId,
+          lifecycleGeneration: "generation-1",
+          sessionKey,
+          sessionId,
+          observedAt: expect.any(Number),
+        },
+      ]);
       if (persistence === "untracked") {
         expect(vi.mocked(deps.broadcast).mock.calls.some(([event]) => event === "chat")).toBe(
           false,

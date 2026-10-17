@@ -7,33 +7,32 @@ import type { GatewaySessionRow } from "./session-utils.types.js";
 
 it("preserves presentation clocks and the delivered baseline when serialization fails", () => {
   const references = new SessionAncestorReferences();
-  const row: GatewaySessionRow = {
+  const row: GatewaySessionRow = Object.freeze({
     key: "agent:main:parent",
     sessionId: "parent",
     kind: "direct",
     updatedAt: 1,
     snapshotAt: 10,
     label: "Parent",
-  };
+  });
   const first = references.prepare([prepareSessionAncestor(row)]);
   first.delivered();
   expect(first.ancestorSessions[0]?.snapshotAt).toBe(10);
   expect(row.snapshotAt).toBe(10);
 
-  row.snapshotAt = 20;
-  Object.defineProperty(row, "label", {
-    configurable: true,
-    enumerable: true,
-    get() {
+  const unavailable = Object.freeze({
+    ...row,
+    snapshotAt: 20,
+    get label(): string {
       throw new Error("presentation unavailable");
     },
   });
-  expect(() => references.prepare([prepareSessionAncestor(row)])).toThrow(
+  expect(() => references.prepare([prepareSessionAncestor(unavailable)])).toThrow(
     "presentation unavailable",
   );
-  expect(row.snapshotAt).toBe(20);
-  Object.defineProperty(row, "label", { value: "Parent" });
-  const next = references.prepare([prepareSessionAncestor(row)]);
+  expect(unavailable.snapshotAt).toBe(20);
+  const nextRow = Object.freeze({ ...row, snapshotAt: 20 });
+  const next = references.prepare([prepareSessionAncestor(nextRow)]);
   expect(next.ancestorSessions).toEqual([]);
   expect(next.ancestorSessionRefs).toEqual([
     expect.objectContaining({
@@ -41,14 +40,16 @@ it("preserves presentation clocks and the delivered baseline when serialization 
       snapshotAt: 20,
     }),
   ]);
-  expect(row.snapshotAt).toBe(20);
+  expect(nextRow.snapshotAt).toBe(20);
 
-  delete row.snapshotAt;
-  const unclocked = references.prepare([prepareSessionAncestor(row)]);
+  const { snapshotAt: _snapshotAt, ...unclockedRow } = nextRow;
+  const unclocked = references.prepare([prepareSessionAncestor(unclockedRow)]);
   unclocked.delivered();
-  expect(Object.hasOwn(row, "snapshotAt")).toBe(false);
-  row.snapshotAt = 30;
-  expect(references.prepare([prepareSessionAncestor(row)]).ancestorSessionRefs).toBeUndefined();
+  expect(Object.hasOwn(unclockedRow, "snapshotAt")).toBe(false);
+  const reclockedRow = Object.freeze({ ...unclockedRow, snapshotAt: 30 });
+  expect(
+    references.prepare([prepareSessionAncestor(reclockedRow)]).ancestorSessionRefs,
+  ).toBeUndefined();
 });
 
 it.each([

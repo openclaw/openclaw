@@ -117,30 +117,23 @@ function attachment(sessionId = "session", closedAtMs: number | null = null) {
 
 it("requires complete exact-key receipts before replacing environment authority", () => {
   const owner = acquireProjection();
-  const source = { identity: "environment-store", incarnation: owner.incarnation };
   install(owner, environment, true);
-  const deletion = createWorkerEnvironmentReceipt(source, facts(undefined));
+  const deletion = createWorkerEnvironmentReceipt(facts(undefined));
   for (const invalid of [
-    { ...deletion, facts: new Map() },
-    { ...deletion, source: { ...source, identity: "another-store" } },
-    { ...deletion, source: { ...source, incarnation: "retired-owner" } },
-    { ...deletion, facts: new Map([[id, { kind: "unknown" }]]) },
-    {
-      ...deletion,
-      facts: new Map([[id, { kind: "postimage", value: { environment: null } }]]),
-    },
+    new Map(),
+    new Map([...deletion, ["unexpected", deletion.get(id)]]),
+    new Map([[id, { environment: null }]]),
+    new Map([
+      [id, { ...deletion.get(id), environment: { ...environment, environmentId: "other" } }],
+    ]),
   ]) {
     expect(() =>
-      owner.install(
-        readWorkerEnvironmentReceipt(invalid, source, [id]),
-        owner.nextSequence(),
-        false,
-      ),
+      owner.install(readWorkerEnvironmentReceipt(invalid, [id]), owner.nextSequence(), false),
     ).toThrow(/receipt/);
     expect(owner.get(id)).toEqual(environment);
     expect(owner.credential(id)).toEqual(credential);
   }
-  owner.install(readWorkerEnvironmentReceipt(deletion, source, [id]), owner.nextSequence(), false);
+  owner.install(readWorkerEnvironmentReceipt(deletion, [id]), owner.nextSequence(), false);
   expect(owner.get(id)).toBeUndefined();
   expect(owner.credential(id)).toBeUndefined();
 });

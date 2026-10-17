@@ -82,7 +82,7 @@ function createPreparationGateway(
     }),
   );
   const runtime = createGatewayInstanceRuntime({
-    getContext: () => gatewayContext,
+    context: gatewayContext,
     getMethodRegistry: () => registry,
     isDispatchAvailable: () => !execution.isClosing,
   });

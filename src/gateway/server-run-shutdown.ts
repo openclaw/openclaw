@@ -155,13 +155,13 @@ async function settleTerminalSessionPersistenceForRestart(
     if (entry.projectSessionActive !== false || !persistence) {
       return [];
     }
-    return [{ entry, persistence }];
+    return [persistence];
   });
   if (pending.length === 0) {
     return;
   }
   const results = await raceWithTimeout(
-    () => Promise.allSettled(pending.map(({ persistence }) => persistence)),
+    () => Promise.allSettled(pending),
     RESTART_TERMINAL_PERSISTENCE_WAIT_TIMEOUT_MS,
     () => null,
     { ref: false },
@@ -171,17 +171,6 @@ async function settleTerminalSessionPersistenceForRestart(
       `terminal session persistence did not settle within ${RESTART_TERMINAL_PERSISTENCE_WAIT_TIMEOUT_MS}ms; preserving restart recovery`,
     );
     return;
-  }
-  for (const [index, result] of results.entries()) {
-    const tracked = pending[index];
-    if (!tracked || tracked.entry.projectSessionTerminalPersistence !== tracked.persistence) {
-      continue;
-    }
-    tracked.entry.projectSessionTerminalPending = false;
-    tracked.entry.projectSessionTerminalPersistence = undefined;
-    if (result.status === "fulfilled") {
-      tracked.entry.projectSessionTerminalPersisted = true;
-    }
   }
 }
 

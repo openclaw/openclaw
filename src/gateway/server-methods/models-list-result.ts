@@ -199,9 +199,8 @@ async function prepareOwnedModelsListResult({
     routeResolverFactory: params.routeResolverFactory,
   };
   const preloadedProjector = usedPreloadedCatalog ? params.catalogProjector : undefined;
-  const projector = preloadedProjector
-    ? await withCurrentReadAuthority(authority, () => preloadedProjector)
-    : await prepareModelCatalogDecisions(projectorParams, authority);
+  const projector =
+    preloadedProjector ?? (await prepareModelCatalogDecisions(projectorParams, authority));
   if (view !== "provider-config") {
     await projector.prepareSelectedAccountCatalog(
       () => {
@@ -220,7 +219,6 @@ async function prepareOwnedModelsListResult({
       },
     );
   }
-  await withCurrentReadAuthority(authority, () => {});
   const catalog = dedupeModelCatalogEntries([
     ...preparedCatalog.catalog,
     ...projector.snapshot.entries,
@@ -278,7 +276,6 @@ async function prepareOwnedModelsListResult({
               draft?.owner ?? scope?.requesterProfileId ?? params.requesterProfileId,
           }),
         );
-  await withCurrentReadAuthority(authority, () => {});
   const readOutcomeProjection = () => {
     const accountSelection = readAccountSelection?.();
     const pendingProviders = projector.snapshot.pendingProviders?.filter(

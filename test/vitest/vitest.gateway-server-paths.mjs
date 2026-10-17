@@ -24,6 +24,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/call-device-auth.worker.test.ts",
   "src/gateway/chat-auth-readiness.integration.test.ts",
   "src/gateway/chat-display-projection.cron.test.ts",
+  "src/gateway/cli-session-history.worker.test.ts",
   "src/gateway/config-reload.activation.integration.test.ts",
   "src/gateway/config-reload.lease-retry.test.ts",
   "src/gateway/config-reload.plugin-drain.test.ts",

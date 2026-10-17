@@ -33,6 +33,7 @@ import { abortChatRunById, removeChatAbortControllerEntry } from "./chat-abort.j
 import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
 import type { AgentEventHandlerOptions } from "./server-chat.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
+import { prepareGatewayRunShutdown } from "./server-run-shutdown.js";
 import { registerActivitySummaryPublicationTests } from "./server-runtime-subscriptions.activity-summary.test-support.js";
 import { registerSessionPublicationTests } from "./server-runtime-subscriptions.publication.test-support.js";
 import {
@@ -886,6 +887,90 @@ describe("startGatewayEventSubscriptions", () => {
         terminalPersistence.resolve();
         await waiter;
         removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
+      }
+    },
+  );
+
+  it.each(["fulfilled", "rejected"] as const)(
+    "joins the subscription-owned terminal write during registration cleanup and restart (%s)",
+    async (outcome) => {
+      const params = createParams();
+      const runId = "terminal-cleanup-restart";
+      const sessionKey = "agent:main:main";
+      const registration = registerSubscriptionChatRun(params, {
+        runId,
+        sessionId: "terminal-cleanup-session",
+        sessionKey,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      });
+      const terminal = createDeferred();
+      const failure = new Error("terminal write failed");
+      agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminal.promise);
+      agentEventHandlerMocks.create.mockReturnValue(
+        Object.assign(async () => {}, { dispose() {} }),
+      );
+      unsubs = startGatewayEventSubscriptions(params);
+      const marker =
+        vi.fn<
+          NonNullable<
+            Parameters<typeof prepareGatewayRunShutdown>[0]["markMainSessionsAbortedForRestart"]
+          >
+        >();
+      try {
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          sessionKey,
+          sessionId: registration.entry.sessionId,
+          lifecycleGeneration: registration.entry.lifecycleGeneration,
+          data: { phase: "end", endedAt: Date.now() },
+        });
+        const persistence = registration.entry.projectSessionTerminalPersistence;
+        expect(persistence).toBeInstanceOf(Promise);
+        registration.cleanup();
+        expect(params.chatAbortControllers.get(runId)).toBe(registration.entry);
+        const shutdown = prepareGatewayRunShutdown({
+          ...params,
+          resolveGatewayContext: () => undefined,
+          chatQueuedTurns: new Map(),
+          removeChatRun: (sessionId, clientRunId, key) =>
+            params.chatRunState.registry.remove(sessionId, clientRunId, key),
+          getPendingReplyCount: () => 0,
+          timeoutMs: 0,
+          warnings: [],
+          markMainSessionsAbortedForRestart: marker,
+        });
+        expect(marker).not.toHaveBeenCalled();
+        if (outcome === "fulfilled") {
+          terminal.resolve();
+        } else {
+          terminal.reject(failure);
+        }
+        await shutdown;
+        await unsubs.agentUnsub();
+        expect(params.chatAbortControllers.has(runId)).toBe(false);
+        expect(registration.entry.projectSessionTerminalPersisted).toBe(outcome === "fulfilled");
+        expect(marker).toHaveBeenCalledOnce();
+        expect(marker.mock.calls[0]?.[0]?.activeRuns).toEqual(
+          outcome === "fulfilled"
+            ? []
+            : [
+                expect.objectContaining({
+                  runId,
+                  sessionKey,
+                  sessionId: registration.entry.sessionId,
+                }),
+              ],
+        );
+        if (outcome === "rejected") {
+          await expect(waitForChatAbortTerminalPersistence(registration.entry)).rejects.toBe(
+            failure,
+          );
+        }
+      } finally {
+        terminal.resolve();
+        await unsubs.agentUnsub();
+        registration.cleanup();
       }
     },
   );

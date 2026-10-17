@@ -722,7 +722,7 @@ describe("operator approval session events", () => {
     },
   );
 
-  it("publishes expiry once when replay reconciliation joins a held manager mutation", async () => {
+  it("settles expiry once when replay reconciliation joins a held manager mutation", async () => {
     const databaseOptions = createDatabaseOptions();
     const reviewer = createClient({
       connId: "reviewer",
@@ -741,10 +741,12 @@ describe("operator approval session events", () => {
         return managerHolder.current?.reconcileDurableTerminal(record) ?? false;
       },
     });
+    const onExpired = vi.fn();
     const manager = new ExecApprovalManager({
       scheduler: createTestGatewayScheduler(),
       persistence: { runtimeEpoch: "replay-mutation-race", databaseOptions },
       onLifecycle: runtime.publish,
+      onExpired,
     });
     managerHolder.current = manager;
     const record = manager.create(
@@ -786,23 +788,38 @@ describe("operator approval session events", () => {
       releaseSweep.resolve();
       await reconciling.promise;
       releaseMutation.resolve();
-      await expiry;
+      await expect(expiry).resolves.toBe(false);
       const prepared = await replay;
       expect(prepared.isCurrent()).toBe(true);
       expect(prepared.replay.approvals).toEqual([]);
       await expect(decision).resolves.toBeNull();
-      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-        "session.approval",
-        expect.objectContaining({
-          phase: "terminal",
-          approval: expect.objectContaining({
-            id: record.id,
-            status: "expired",
-            reason: "timeout",
-          }),
+      expect(onExpired).toHaveBeenCalledOnce();
+      expect(
+        await operatorApprovalStore.getOperatorApprovalDetailed({
+          id: record.id,
+          nowMs: replayAtMs,
+          databaseOptions,
         }),
-        new Set(["reviewer"]),
-      );
+      ).toMatchObject({
+        outcome: "found",
+        record: { status: "expired", terminalReason: "timeout", resolvedAtMs: replayAtMs },
+      });
+      expect(broadcastToConnIds).toHaveBeenCalled();
+      for (const call of broadcastToConnIds.mock.calls) {
+        expect(call).toEqual([
+          "session.approval",
+          expect.objectContaining({
+            phase: "terminal",
+            approval: expect.objectContaining({
+              id: record.id,
+              status: "expired",
+              reason: "timeout",
+              resolvedAtMs: replayAtMs,
+            }),
+          }),
+          new Set(["reviewer"]),
+        ]);
+      }
     } finally {
       releaseSweep.resolve();
       releaseMutation.resolve();

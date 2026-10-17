@@ -186,7 +186,7 @@ export function createControlUiPublicSessionRequestGate(): ControlUiPublicSessio
       }
 
       const inFlightKey = `${configId(params.config)}:${params.requestKey}`;
-      const cached = cache.get(inFlightKey, params.config);
+      const cached = cache.get(inFlightKey);
       if (cached) {
         return { kind: "ok", value: cached };
       }
@@ -195,7 +195,7 @@ export function createControlUiPublicSessionRequestGate(): ControlUiPublicSessio
         const value = await existing;
         return value === undefined ? { kind: "unavailable" } : { kind: "ok", value };
       }
-      const build = cache.begin(inFlightKey, params.sessionKey, params.config);
+      const build = cache.begin(inFlightKey, params.sessionKey);
       const pending = (async () => {
         const release = await acquire(params.publicationKey);
         if (!release) {
@@ -203,10 +203,10 @@ export function createControlUiPublicSessionRequestGate(): ControlUiPublicSessio
           return undefined;
         }
         try {
-          if (!build.isCurrent()) {
+          const body = await params.work();
+          if (!active) {
             return undefined;
           }
-          const body = await params.work();
           if (body === null) {
             build.cancel();
             return null;

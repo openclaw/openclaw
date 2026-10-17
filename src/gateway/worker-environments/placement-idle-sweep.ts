@@ -125,11 +125,7 @@ export function createWorkerPlacementIdleSweep(options: {
               return;
             }
             const assertCurrent = () => {
-              if (
-                options.getConfig().cloudWorkers?.profiles?.[environment.profileId]
-                  ?.suspendAfter !== suspendAfter ||
-                hasSessionWork?.()
-              ) {
+              if (hasSessionWork?.()) {
                 throw new WorkerPlacementAutoSuspendBusyError();
               }
             };
