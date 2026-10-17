@@ -49,21 +49,15 @@ vi.mock("../config/config.js", () => ({
   transformConfigFileWithRetry: vi.fn(),
 }));
 
-vi.mock("./installed-plugin-index-records.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./installed-plugin-index-records.js")>();
-  return {
-    ...actual,
-    writePersistedInstalledPluginIndexInstallRecordsWithLease: mocks.write,
-  };
-});
+vi.mock("./installed-plugin-index-records.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./installed-plugin-index-records.js")>()),
+  writePersistedInstalledPluginIndexInstallRecordsWithLease: mocks.write,
+}));
 
-vi.mock("./installed-plugin-index-store-write.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./installed-plugin-index-store-write.js")>();
-  return {
-    ...actual,
-    restorePersistedInstalledPluginIndexIfCurrent: mocks.restore,
-  };
-});
+vi.mock("./installed-plugin-index-store-write.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./installed-plugin-index-store-write.js")>()),
+  restorePersistedInstalledPluginIndexIfCurrent: mocks.restore,
+}));
 
 vi.mock("./plugin-lifecycle-lease.js", () => ({
   withPluginLifecycleLease: mocks.withLease,
@@ -136,17 +130,14 @@ describe("plugin install record marker fencing", () => {
   });
 
   it.each([
-    { transition: "retirement", owner: "lease", boundary: "preparation" },
-    { transition: "retirement", owner: "invoker", boundary: "preparation" },
-    { transition: "activation", owner: "lease", boundary: "preparation" },
-    ...(["removal", "directory cleanup"] as const).map((boundary) => ({
-      transition: "activation",
-      owner: "invoker",
-      boundary,
-    })),
-  ])(
-    "carries live $owner authority through awaited $transition marker $boundary",
-    async ({ transition, owner, boundary }) => {
+    ["retirement", "lease", "preparation"],
+    ["retirement", "invoker", "preparation"],
+    ["activation", "lease", "preparation"],
+    ["activation", "invoker", "removal"],
+    ["activation", "invoker", "directory cleanup"],
+  ] as const)(
+    "fences awaited %s markers using %s authority at %s",
+    async (transition, owner, boundary) => {
       const stateDir = retentionTempDirs.make("openclaw-record-marker-fence-");
       const fixture = createRetainedMarkerFixture(stateDir);
       if (transition === "activation") {

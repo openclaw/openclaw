@@ -57,6 +57,25 @@ function policyWarning(reason = "review this plugin", fingerprint = "warning-a")
   return { warning: { reason, fingerprint } };
 }
 
+function warningWithFinding(prefix: string, severity: "warn" | "critical", fingerprint: string) {
+  return {
+    ...policyWarning("same bounded reason", fingerprint),
+    findings: [
+      {
+        ruleId: `${prefix}-rule`,
+        severity,
+        message: "same bounded message",
+        evidence: `${prefix} evidence`,
+      },
+    ],
+  };
+}
+
+function warningLogger() {
+  const warnings: string[] = [];
+  return { warnings, logger: { warn: (message: string) => warnings.push(message) } };
+}
+
 function scanBundle(sourceDir = makeTempDir()) {
   return scanBundleInstallSourceRuntime({
     logger: {},
@@ -305,28 +324,9 @@ describe("plugin install policy warnings", () => {
 
   it("renders metadata changes that require approval again", async () => {
     const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
-    const initialWarning = {
-      warning: { reason: "same bounded reason", fingerprint: "full-warning-a" },
-      findings: [
-        {
-          ruleId: "initial-rule",
-          severity: "warn" as const,
-          message: "same bounded message",
-          evidence: "initial evidence",
-        },
-      ],
-    };
-    runInstallPolicyMock.mockResolvedValueOnce(initialWarning).mockResolvedValueOnce({
-      warning: { ...initialWarning.warning, fingerprint: "full-warning-b" },
-      findings: [
-        {
-          ruleId: "refreshed-rule",
-          severity: "critical",
-          message: "same bounded message",
-          evidence: "refreshed evidence",
-        },
-      ],
-    });
+    runInstallPolicyMock
+      .mockResolvedValueOnce(warningWithFinding("initial", "warn", "full-warning-a"))
+      .mockResolvedValueOnce(warningWithFinding("refreshed", "critical", "full-warning-b"));
 
     const result = await scanPackage({ onInstallPolicyWarning });
 
@@ -354,9 +354,7 @@ describe("plugin install policy warnings", () => {
         targetName: "payload",
         targetType: "plugin",
       },
-      reason: expectedInstallPolicyNotice({
-        guidance: approvalGuidance,
-      }),
+      reason: expectedInstallPolicyNotice({ guidance: approvalGuidance }),
     });
     expect(runInstallPolicyMock).toHaveBeenCalledTimes(1);
   });
@@ -375,14 +373,14 @@ describe("plugin install policy warnings", () => {
   });
 
   it("renders warning details as one readable review notice", async () => {
-    const warnings: string[] = [];
+    const { warnings, logger } = warningLogger();
     runInstallPolicyMock.mockResolvedValue({
-      warning: { reason: "review this plugin", fingerprint: "warning-a" },
+      ...policyWarning(),
       findings: [{ ruleId: "context", severity: "info", message: "Informational context." }],
     });
 
     await scanPackage({
-      logger: { warn: (message) => warnings.push(message) },
+      logger,
       onInstallPolicyWarning: vi.fn().mockResolvedValue({ status: "declined" }),
     });
 
@@ -416,12 +414,9 @@ describe("plugin install policy warnings", () => {
         findings,
       });
     const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
-    const warnings: string[] = [];
+    const { warnings, logger } = warningLogger();
 
-    const result = await scanPackage({
-      logger: { warn: (message) => warnings.push(message) },
-      onInstallPolicyWarning,
-    });
+    const result = await scanPackage({ logger, onInstallPolicyWarning });
 
     expect(result?.blocked).toEqual({
       code: "security_scan_failed",
@@ -452,10 +447,7 @@ describe("plugin install policy warnings", () => {
       });
       const evidence = `${"e".repeat(size - withoutEvidence.length - 3)}\ne`;
       runInstallPolicyMock.mockResolvedValueOnce({
-        warning: {
-          reason,
-          fingerprint: `warning-${String(size)}`,
-        },
+        ...policyWarning(reason, `warning-${String(size)}`),
         findings: [{ ruleId, severity: "critical", message, file, evidence }],
       });
 
@@ -490,9 +482,9 @@ describe("plugin install policy warnings", () => {
   it("bounds maximum-size allow findings without blocking the install", async () => {
     const { findings } = createMaximumPolicyFindings();
     runInstallPolicyMock.mockResolvedValue({ findings });
-    const warnings: string[] = [];
+    const { warnings, logger } = warningLogger();
 
-    const result = await scanPackage({ logger: { warn: (message) => warnings.push(message) } });
+    const result = await scanPackage({ logger });
 
     expect(result).toBeUndefined();
     expect(warnings.join("\n")).toContain("additional findings omitted");

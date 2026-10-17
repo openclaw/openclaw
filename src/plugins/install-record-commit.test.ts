@@ -155,36 +155,38 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     });
   });
 
-  it("moves pending plugin install records into the plugin index before writing stripped config", async () => {
-    const existingRecords = { existing: npmRecord("existing@1.0.0") };
-    const pendingRecords = { demo: npmRecord("demo@1.0.0") };
-    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(existingRecords);
-    const strippedConfig = pluginConfig(true);
-    const nextConfig = { plugins: { ...strippedConfig.plugins, installs: pendingRecords } };
-
+  it.each([false, true])("commits config with pending records: %s", async (pending) => {
+    const existing = { existing: npmRecord("existing@1.0.0") };
+    const installs = { demo: npmRecord("demo@1.0.0") };
+    const strippedConfig: OpenClawConfig = pending
+      ? pluginConfig(true)
+      : { gateway: { mode: "local" } };
+    const nextConfig = pending
+      ? { plugins: { ...strippedConfig.plugins, installs } }
+      : strippedConfig;
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(pending ? existing : {});
     const result = await commitConfigWithPendingPluginInstalls({
       nextConfig,
-      baseHash: "config-1",
+      ...(pending ? { baseHash: "config-1" } : {}),
     });
-
-    expect(mocks.writeRecords).toHaveBeenCalledWith(
-      {
-        ...existingRecords,
-        ...pendingRecords,
-      },
-      indexWriteOptions(strippedConfig),
-    );
+    if (pending) {
+      expect(mocks.writeRecords).toHaveBeenCalledWith(
+        { ...existing, ...installs },
+        indexWriteOptions(strippedConfig),
+      );
+    } else {
+      expect(mocks.writeRecords).not.toHaveBeenCalled();
+    }
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: strippedConfig,
-      baseHash: "config-1",
-      writeOptions: {
-        unsetPaths: [["plugins", "installs"]],
-      },
+      ...(pending
+        ? { baseHash: "config-1", writeOptions: { unsetPaths: [["plugins", "installs"]] } }
+        : {}),
     });
     expect(result).toMatchObject({
       path: "/tmp/openclaw.json",
       nextConfig: strippedConfig,
-      movedInstallRecords: true,
+      movedInstallRecords: pending,
       persistedHash: "test-config-hash",
     });
   });
@@ -455,22 +457,5 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       }),
     ).rejects.toThrow("config changed");
     expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(false);
-  });
-
-  it("uses a plain config write when no pending plugin install records exist", async () => {
-    const nextConfig: OpenClawConfig = { gateway: { mode: "local" } };
-
-    const result = await commitConfigWithPendingPluginInstalls({ nextConfig });
-
-    expect(mocks.writeRecords).not.toHaveBeenCalled();
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig,
-    });
-    expect(result).toMatchObject({
-      path: "/tmp/openclaw.json",
-      nextConfig,
-      movedInstallRecords: false,
-      persistedHash: "test-config-hash",
-    });
   });
 });
