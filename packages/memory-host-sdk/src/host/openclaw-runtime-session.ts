@@ -42,7 +42,7 @@ export function assertBoundIncognitoMemorySyncAccess(
   }
 }
 
-/** @deprecated Await readTranscriptStatsBatchReadOnlyAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Await readTranscriptStatsBatchReadOnlyAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function readTranscriptStatsBatchReadOnlySync(
   scopes: Parameters<typeof readAccessorTranscriptStatsBatchReadOnlySync>[0],
 ) {

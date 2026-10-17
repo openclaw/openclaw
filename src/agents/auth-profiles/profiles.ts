@@ -163,7 +163,7 @@ export async function promoteAuthProfileInOrder(params: {
   return updated === null ? err("lock-contention") : ok(updated);
 }
 
-/** @deprecated Use upsertAuthProfileAsync. Supported through 2026-12-31. */
+/** @deprecated Use upsertAuthProfileAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export function upsertAuthProfile(params: {
   profileId: string;
   credential: AuthProfileCredential;

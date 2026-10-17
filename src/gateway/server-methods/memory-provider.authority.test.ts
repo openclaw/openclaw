@@ -1,5 +1,6 @@
 // Gateway dispatch of provider-neutral memory reads: method scopes, caller kinds,
 // and request currency, through the real handlers and provider acquisition.
+import { dirname } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MemorySearchResult } from "../../memory-host-sdk/host/types.js";
@@ -11,6 +12,8 @@ import type {
 } from "../../plugins/registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
+import { resolveBundledPluginPublicModulePath } from "../../test-utils/bundled-plugin-public-surface.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -238,6 +241,19 @@ describe("Memory Core legacy owner", () => {
       tools: { sessions: { visibility: "agent" } },
     };
     const registry = createEmptyPluginRegistry();
+    const source = resolveBundledPluginPublicModulePath({
+      pluginId: "memory-core",
+      artifactBasename: "index.js",
+    });
+    // The registered runtime also owns public artifacts used for legacy search diagnostics.
+    registry.plugins.push(
+      createPluginRecord({
+        id: "memory-core",
+        origin: "bundled",
+        rootDir: dirname(source),
+        source,
+      }),
+    );
     registry.memoryCapabilities.push({
       pluginId: "memory-core",
       capability: {

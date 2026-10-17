@@ -120,12 +120,27 @@
   "dependencies": {
     "@anthropic-ai/sdk": "0.133.0",
     "@google/genai": "2.28.0",
-    "@mistralai/mistralai": "2.7.0",
+    "@opentelemetry/semantic-conventions": "1.43.0",
     "openai": "7.31.0",
     "partial-json": "0.1.7",
-    "typebox": "1.3.36"
+    "typebox": "1.3.36",
+    "zod": "4.6.5",
+    "zod-to-json-schema": "3.25.2"
+  },
+  "peerDependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.220.0",
+    "@opentelemetry/resources": "^2.9.0",
+    "@opentelemetry/sdk-trace-base": "^2.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/api": { "optional": true },
+    "@opentelemetry/exporter-trace-otlp-http": { "optional": true },
+    "@opentelemetry/resources": { "optional": true },
+    "@opentelemetry/sdk-trace-base": { "optional": true }
   },
   "devDependencies": {
+    "@mistralai/mistralai": "2.7.0",
     "@openclaw/model-catalog-core": "workspace:*",
     "@openclaw/normalization-core": "workspace:*"
   },

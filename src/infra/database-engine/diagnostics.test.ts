@@ -82,8 +82,8 @@ describe("physical store diagnostics", () => {
   });
 
   it.each([
-    { version: 25, pending: 1, issue: "Schema migrations pending" },
-    { version: 27, pending: 0, issue: "newer than supported" },
+    { version: 25, pending: 2, issue: "Schema migrations pending" },
+    { version: 28, pending: 0, issue: "newer than supported" },
   ])(
     "preserves readable state schema $version when port admission refuses it",
     async ({ version, pending, issue }) => {
@@ -109,7 +109,7 @@ describe("physical store diagnostics", () => {
       expect(result.schema).toEqual({
         versioning: "versioned",
         version,
-        expectedVersion: 26,
+        expectedVersion: 27,
         pending,
       });
       expect(result.issues.join(" ")).toContain(issue);

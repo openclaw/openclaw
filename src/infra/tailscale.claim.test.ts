@@ -43,6 +43,10 @@ function queueOwner(
 ) {
   const started = createDeferred();
   const stopped = createDeferred();
+  const exitOwner = (code: number, signal: NodeJS.Signals | null) => {
+    owner.emit("exit", code, signal);
+    owner.emit("close", code, signal);
+  };
   const owner = Object.assign(new EventEmitter(), {
     connected: true,
     send: vi.fn(() => {
@@ -61,10 +65,10 @@ function queueOwner(
         owner.emit("message", { type: "stop-failed", message: options.stopFailure });
       }
       if (options.stop !== false) {
-        queueMicrotask(() => owner.emit("exit", 0, null));
+        queueMicrotask(() => exitOwner(0, null));
       }
     }),
-    kill: vi.fn(() => owner.emit("exit", 0, "SIGTERM")),
+    kill: vi.fn(() => exitOwner(0, "SIGTERM")),
   });
   forkMock.mockImplementationOnce(() => {
     started.resolve();
@@ -82,7 +86,7 @@ function queueOwner(
     });
     return owner;
   });
-  return { owner, started: started.promise, stopped: stopped.promise };
+  return { owner, exit: exitOwner, started: started.promise, stopped: stopped.promise };
 }
 
 const legacyRoutes = JSON.stringify({
@@ -399,7 +403,7 @@ describe("private Tailscale Serve claims", () => {
   ])(
     "owns private port $port through $ending without adopting legacy routes",
     async ({ port, ending }) => {
-      const { owner } = queueOwner();
+      const { owner, exit } = queueOwner();
       const claim = await claimTailscaleServePort(18789, port, () => {});
 
       expect(forkMock.mock.calls[0]?.[1]).toEqual([
@@ -410,7 +414,7 @@ describe("private Tailscale Serve claims", () => {
       ]);
       expect(forkMock.mock.calls[0]?.[2]).toMatchObject({
         detached: process.platform !== "win32",
-        stdio: ["ignore", "ignore", "ignore", "ipc"],
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
       });
       expect(runExecMock.mock.calls.map((call) => call[1])).toEqual([
         ["status", "--json"],
@@ -422,7 +426,7 @@ describe("private Tailscale Serve claims", () => {
         expect(owner.send).toHaveBeenCalledTimes(1);
         expect(owner.send).toHaveBeenCalledWith({ type: "stop" }, expect.any(Function));
       } else {
-        owner.emit("exit", 1, null);
+        exit(1, null);
       }
       await expect(claim.exited).resolves.toBeUndefined();
       expect(claim.isActive()).toBe(false);
@@ -478,7 +482,7 @@ describe("private Tailscale Serve claims", () => {
     const starting = claimTailscaleRoute("serve", 19001, 18789, vi.fn());
     await first.stopped;
     expect(forkMock).toHaveBeenCalledTimes(1);
-    first.owner.emit("exit", 0, null);
+    first.exit(0, null);
     await stopping;
     const claimB = await starting;
     await claimB.stop();

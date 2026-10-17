@@ -222,4 +222,44 @@ describe("Memory watch configuration", () => {
     }
     expect(await manager.search("Cobalt heron", { minScore: 0 })).toEqual([]);
   });
+
+  it("stops refreshing clean searches after all observations recover", async () => {
+    await fs.writeFile(path.join(state.workspaceDir, "memory", "note.md"), "Amber lantern.");
+    await configureMemoryCoreDreamingStateForTests(state.env);
+    manager = await MemoryIndexManager.get({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg: config(),
+      agentId: "main",
+    });
+    if (!manager) {
+      throw new Error("memory manager unavailable");
+    }
+    await manager.sync({ reason: "initial" });
+    const lifecycle = manager as unknown as { awaitManagerIdle: () => Promise<void> };
+    const sync = vi.spyOn(MemoryIndexManager.prototype, "sync");
+    const observationCount = observer.observations.length;
+    vi.useFakeTimers();
+    observer.observations[0]!.health({
+      state: "unavailable",
+      failure: { operation: "scan", code: "EIO", error: new Error("temporary scan failure") },
+    });
+    await manager.search("Amber lantern", { minScore: 0 });
+    await lifecycle.awaitManagerIdle();
+    expect(sync).toHaveBeenCalledWith({ reason: "search" });
+
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.waitFor(() => {
+      expect(manager!.status().custom?.watcher).toEqual(
+        Array.from({ length: observationCount }, () => expect.objectContaining({ state: "ready" })),
+      );
+    });
+    await manager.sync({ reason: "recovered" });
+    await lifecycle.awaitManagerIdle();
+    sync.mockClear();
+    expect(
+      (await manager.search("Amber lantern", { minScore: 0 })).map((result) => result.snippet),
+    ).toContain("Amber lantern.");
+    await lifecycle.awaitManagerIdle();
+    expect(sync).not.toHaveBeenCalled();
+  });
 });

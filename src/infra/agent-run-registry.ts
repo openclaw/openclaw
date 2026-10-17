@@ -143,7 +143,7 @@ export function registerAgentRunContext(
     return;
   }
   const runIndexInputBefore = projectedAgentRunInputKey(existing);
-  const previous = { sessionKey: existing.sessionKey, agentId: existing.agentId };
+  const { sessionKey, sessionId, agentId } = existing;
   for (const key of ["sessionKey", "sessionId", "agentId"] as const) {
     if (context[key] && existing[key] !== context[key]) {
       existing[key] = context[key];
@@ -183,7 +183,7 @@ export function registerAgentRunContext(
   }
   recordAgentEventRouting(runId, existing);
   if (runIndexInputBefore !== projectedAgentRunInputKey(existing)) {
-    bumpAgentRunIndexVersion(existing, previous);
+    bumpAgentRunIndexVersion(existing, { sessionKey, sessionId, agentId });
   }
 }
 

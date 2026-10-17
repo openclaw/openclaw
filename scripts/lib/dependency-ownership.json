@@ -92,11 +92,6 @@
       "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
     },
-    "@mistralai/mistralai": {
-      "owner": "provider:mistral",
-      "class": "default-runtime-initially",
-      "risk": ["provider-sdk", "network"]
-    },
     "@openclaw/ai": {
       "owner": "core:ai-runtime",
       "class": "core-runtime",
@@ -111,6 +106,11 @@
       "owner": "core:process-execution",
       "class": "core-runtime",
       "risk": ["native", "process-execution", "service-manager"]
+    },
+    "@opentelemetry/semantic-conventions": {
+      "owner": "provider:mistral",
+      "class": "default-runtime-initially",
+      "risk": ["telemetry"]
     },
     "@silvia-odwyer/photon-node": {
       "owner": "core:media",
@@ -360,6 +360,11 @@
     "zod": {
       "owner": "core:config-and-plugin-sdk-validation",
       "class": "core-runtime",
+      "risk": ["schema-validation"]
+    },
+    "zod-to-json-schema": {
+      "owner": "provider:mistral",
+      "class": "default-runtime-initially",
       "risk": ["schema-validation"]
     }
   }

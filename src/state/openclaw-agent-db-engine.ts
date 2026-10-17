@@ -13,6 +13,7 @@ import { captureSqliteSchemaFacts } from "../infra/sqlite-schema-admission.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { VERSION } from "../version.js";
 import {
+  AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
   AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
@@ -22,6 +23,10 @@ import {
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-metadata.js";
 import { assertCurrentAgentSchemaMetadata } from "./openclaw-agent-db-schema-read.js";
+import {
+  AGENT_INDEX_RETIREMENT_SQL,
+  withLegacyAgentPostgresIndexes,
+} from "./openclaw-agent-index-retirement-migration.js";
 import { agentTranscriptSearchSchema } from "./openclaw-agent-search-schema.js";
 import {
   AGENT_WRITE_LAYOUT_POSTGRES_MIGRATION_SQL,
@@ -60,6 +65,7 @@ export function admitAgentEngineSearchExtensions(
 }
 
 const agentPostgresSql = `${agentPostgresRuntime.sql}\n${agentSearchPostgresRuntime.sql}`;
+const agentPostgresV28Sql = withLegacyAgentPostgresIndexes(agentPostgresSql);
 
 export const agentEngineSchema: StoreSchema = {
   id: "agent",
@@ -70,11 +76,24 @@ export const agentEngineSchema: StoreSchema = {
   postgresMigrations: [
     {
       version: AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
-      fromSchema: { postgres: withLegacyAgentPostgresWriteLayout(agentPostgresSql) },
-      schema: { postgres: agentPostgresSql },
+      fromSchema: { postgres: withLegacyAgentPostgresWriteLayout(agentPostgresV28Sql) },
+      schema: { postgres: agentPostgresV28Sql },
       sql: `${AGENT_WRITE_LAYOUT_POSTGRES_MIGRATION_SQL}
         UPDATE schema_meta
         SET schema_version = ${AGENT_WRITE_LAYOUT_SCHEMA_VERSION},
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
+    {
+      version: AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
+      fromSchema: { postgres: agentPostgresV28Sql },
+      schema: { postgres: agentPostgresSql },
+      sql: `${AGENT_INDEX_RETIREMENT_SQL}
+        ALTER FUNCTION openclaw_transcript_navigation_check(text)
+          STRICT SET search_path = pg_catalog;
+        UPDATE schema_meta
+        SET schema_version = ${AGENT_INDEX_RETIREMENT_SCHEMA_VERSION},
           app_version = '${VERSION.replaceAll("'", "''")}',
           updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
         WHERE meta_key = 'primary';`,

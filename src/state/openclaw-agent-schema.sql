@@ -84,9 +84,6 @@ END;
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_updated_at
   ON session_nodes(updated_at DESC, session_key);
 
-CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_last_interaction_at
-  ON session_nodes(last_interaction_at DESC, session_key);
-
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_label
   ON session_nodes(label, session_key)
   WHERE label IS NOT NULL;
@@ -335,9 +332,6 @@ CREATE TABLE IF NOT EXISTS session_reactions (
   PRIMARY KEY (session_key, session_id, message_id, emoji, identity_id),
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
 ) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_agent_session_reactions_message
-  ON session_reactions(session_key, session_id, message_id);
 
 CREATE TABLE IF NOT EXISTS board_tabs (
   session_key TEXT NOT NULL,

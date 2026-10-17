@@ -7,6 +7,7 @@ export { listActiveEmbeddedRunSessionIds } from "../../agents/embedded-agent-run
 export { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 export {
   resolveGatewayRestartDecision,
+  registerGatewayRuntimeRecovery,
   respawnGatewayProcessForUpdate,
   restartGatewayProcessWithFreshPid,
 } from "../../infra/process-respawn.js";

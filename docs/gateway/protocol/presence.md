@@ -12,9 +12,12 @@ How the Gateway reports which nodes are connected, and which server-pushed event
 
 ## Presence
 
-- `system-presence` returns entries keyed by device identity, including
-  `deviceId`, `roles`, and `scopes`, so UIs can show one row per device even
-  when it connects as both operator and node.
+- `system-presence` returns one row per live operator connection, including
+  `deviceId`, `roles`, and `scopes`. Separate tabs keep their own watched-session
+  facts. Reconnecting removes offline rows for the same identity: device ID,
+  then client instance ID, then connection ID. When the last connection closes,
+  at most one offline row for that identity remains until the five-minute TTL.
+  Node connections retain device-keyed rows. UIs can group rows by device or person.
 - `node.list` includes optional `lastSeenAtMs` and `lastSeenReason`. Connected
   nodes report current connection time with reason `connect`; paired nodes can
   also report durable background presence via a trusted node event.

@@ -1,6 +1,6 @@
 // Serializes Chrome MCP operations and maps opaque targets/snapshot refs.
 import { randomUUID } from "node:crypto";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { SdkError } from "@modelcontextprotocol/client";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -218,14 +218,12 @@ async function callTool(
   // SDK-owned cancellation removes its request correlation entry. An outer race would return
   // early while leaving the underlying MCP request pending after a target-browser crash.
   const request = { name, arguments: args };
-  const rawCall = (
-    (timeoutMs !== undefined && timeoutMs > 0) || signal
-      ? lease.session.client.callTool(request, undefined, {
-          ...(timeoutMs !== undefined && timeoutMs > 0 ? { timeout: timeoutMs } : {}),
-          ...(signal ? { signal } : {}),
-        })
-      : lease.session.client.callTool(request)
-  ) as Promise<ChromeMcpToolResult>;
+  const toolDefinition = lease.session.tools?.find((tool) => tool.name === name);
+  const rawCall = lease.session.client.callTool(request, {
+    ...(timeoutMs !== undefined && timeoutMs > 0 ? { timeout: timeoutMs } : {}),
+    ...(signal ? { signal } : {}),
+    ...(toolDefinition ? { toolDefinition } : {}),
+  });
 
   let result: ChromeMcpToolResult;
   try {
@@ -238,7 +236,7 @@ async function callTool(
     if (signal?.aborted) {
       throw toErrorObject(signal.reason ?? err, "Non-Error abort reason");
     }
-    if (timeoutMs && err instanceof McpError && err.code === MCP_REQUEST_TIMEOUT_CODE) {
+    if (timeoutMs && err instanceof SdkError && err.code === MCP_REQUEST_TIMEOUT_CODE) {
       throw new Error(
         `Chrome MCP "${name}" timed out after ${timeoutMs}ms. Session reset for reconnect.`,
         { cause: err },

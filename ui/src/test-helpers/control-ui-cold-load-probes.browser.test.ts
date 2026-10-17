@@ -26,7 +26,7 @@ describe("serialized cold-load probes", () => {
         const owner = {
           hostElement: sidebar, isConnected: true,
           sessionData: { requestSessionDataUpdate() { return this; } },
-          requestUpdate() { return this; }, prepareRender() { return this; }, commitRender() { return this; }
+          invalidate() { return this; }, prepareRender() { return this; }, commitRender() { return this; }
         };
         if (${ownerProbes}) map.set(sidebar, owner);
         const pageOwner = {
@@ -42,7 +42,7 @@ describe("serialized cold-load probes", () => {
         if (${ownerProbes}) map.set(pane, paneOwner);
         const restoredAfterCapture = WeakMap === NativeWeakMap && map.set === nativeSet;
         __coldLoad.startLive();
-        const receiverPreserved = owner.requestUpdate() === owner &&
+        const receiverPreserved = owner.invalidate() === owner &&
           owner.sessionData.requestSessionDataUpdate() === owner.sessionData &&
           pageOwner.requestUpdate() === pageOwner && paneOwner.requestUpdate() === paneOwner;
         owner.prepareRender(); owner.commitRender();
@@ -72,7 +72,7 @@ describe("serialized cold-load probes", () => {
         nativeRestored: true,
         storedOwner: true,
         ownerProbes,
-        sidebarMethods: ownerProbes ? ["requestUpdate", "prepareRender", "commitRender"] : [],
+        sidebarMethods: ownerProbes ? ["invalidate", "prepareRender", "commitRender"] : [],
         chatPasses: ownerProbes ? ["openclaw-chat-page", "openclaw-chat-pane"] : [],
         frameCount: ownerProbes ? 1 : 0,
       });

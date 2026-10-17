@@ -28,8 +28,10 @@ import {
   hasPluginLifecycleLeaseDemand,
   runOutsidePluginLifecycleLease,
   withPluginLifecycleLease,
+  withPluginLifecycleLeaseAsync,
   withPluginArtifactCleanupLease,
   type PluginLifecycleLeaseContext,
+  type PluginMetadataLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
@@ -162,46 +164,51 @@ function runLeaseChild(
 }
 
 describe("plugin lifecycle lease", () => {
-  it("releases retired cache facts while native resources retain the expired lease", async () => {
-    class CacheFacts {
-      readonly owner = "lifecycle-operation";
-    }
-    await withOpenClawTestState({ label: "plugin-lifecycle-cache-retention" }, async (state) => {
-      const retained: Array<{ resource: AsyncResource; lease: PluginLifecycleLeaseContext }> = [];
-      try {
-        for (let index = 0; index < 4; index++) {
-          retained.push(
-            await withPluginLifecycleLease({ env: state.env }, async (lease) => {
-              Object.assign(getPluginCache(), { facts: new CacheFacts() });
-              // A service drops caller cache scope but still inherits the lifecycle lease.
-              const resource = runOutsidePluginCache(
-                () => new AsyncResource("retained-plugin-lease", { requireManualDestroy: true }),
-              );
-              return { resource, lease };
-            }),
-          );
-        }
-        await nextTurn();
-        expect(queryObjects(CacheFacts)).toBe(0);
-        for (const { resource, lease } of retained) {
-          await expect(
-            writePersistedInstalledPluginIndexInstallRecordsWithLease(
-              { demo: { source: "npm", spec: "demo@1.0.0" } },
-              { env: state.env, candidates: [], lease },
-            ),
-          ).rejects.toBeInstanceOf(OpenClawStateLeaseError);
-          await expect(
-            resource.runInAsyncScope(() => withPluginLifecycleLease({}, async () => "stale")),
-          ).rejects.toBeInstanceOf(OpenClawStateLeaseError);
-        }
-        expect(await readPersistedInstalledPluginIndex({ env: state.env })).toBeNull();
-      } finally {
-        for (const { resource } of retained) {
-          resource.emitDestroy();
-        }
+  it.each(["native", "worker"] as const)(
+    "releases retired cache facts while %s resources retain the expired lease",
+    async (kind) => {
+      class CacheFacts {
+        readonly owner = "lifecycle-operation";
       }
-    });
-  });
+      await withOpenClawTestState({ label: "plugin-lifecycle-cache-retention" }, async (state) => {
+        const withLease =
+          kind === "native" ? withPluginLifecycleLease : withPluginLifecycleLeaseAsync;
+        const retained: Array<{ resource: AsyncResource; lease: PluginMetadataLeaseContext }> = [];
+        try {
+          for (let index = 0; index < 4; index++) {
+            retained.push(
+              await withLease({ env: state.env }, async (lease) => {
+                Object.assign(getPluginCache(), { facts: new CacheFacts() });
+                // A service drops caller cache scope but still inherits the lifecycle lease.
+                const resource = runOutsidePluginCache(
+                  () => new AsyncResource("retained-plugin-lease", { requireManualDestroy: true }),
+                );
+                return { resource, lease };
+              }),
+            );
+          }
+          await nextTurn();
+          expect(queryObjects(CacheFacts)).toBe(0);
+          for (const { resource, lease } of retained) {
+            await expect(
+              writePersistedInstalledPluginIndexInstallRecordsWithLease(
+                { demo: { source: "npm", spec: "demo@1.0.0" } },
+                { env: state.env, candidates: [], lease },
+              ),
+            ).rejects.toBeInstanceOf(OpenClawStateLeaseError);
+            await expect(
+              resource.runInAsyncScope(() => withLease({}, async () => "stale")),
+            ).rejects.toBeInstanceOf(OpenClawStateLeaseError);
+          }
+          expect(await readPersistedInstalledPluginIndex({ env: state.env })).toBeNull();
+        } finally {
+          for (const { resource } of retained) {
+            resource.emitDestroy();
+          }
+        }
+      });
+    },
+  );
 
   it.for(["runtime", "cleanup"] as const)(
     "clears process demand after a %s waiter aborts or acquires and its holder releases",

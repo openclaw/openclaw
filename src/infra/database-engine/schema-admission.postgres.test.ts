@@ -8,6 +8,7 @@ import { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import {
   captureSqliteDatabaseAdmissions,
   publishSqliteDatabaseSchemaChange,
+  revokeSqliteDatabaseAdmissions,
 } from "../sqlite-database-admission.js";
 import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
@@ -73,6 +74,42 @@ function fixture(
 }
 
 describe.skipIf(!connection)("PostgreSQL schema admission", () => {
+  it("reads an existing anchor while another handle holds write admission", () => {
+    fixture(({ db }) => {
+      db.exec("INSERT INTO items (id) VALUES (1)");
+      const location = db.anchor.location();
+      if (!location) {
+        throw new Error("Expected a file-backed PostgreSQL anchor");
+      }
+      using reader = openNodeSqliteDatabase(location);
+      revokeSqliteDatabaseAdmissions(db.anchor);
+      db.anchor.exec("BEGIN IMMEDIATE");
+      try {
+        const opened = openEngineStore({
+          anchor: reader,
+          schema,
+          input: { connection: connection!, schemaPrefix: "r2" },
+          existingOnly: true,
+          openSqlite: () => {
+            throw new Error("Unexpected SQLite bootstrap");
+          },
+          prepareAnchor: () => {},
+          inspectSqlite: () => {
+            admitSqliteSchema(reader);
+            return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(reader)) };
+          },
+        });
+        try {
+          expect(opened.prepare("SELECT value FROM items").all()).toEqual([{ value: 1 }]);
+        } finally {
+          opened.close();
+        }
+      } finally {
+        db.anchor.exec("ROLLBACK");
+      }
+    });
+  });
+
   it.each([
     ["default value", "ALTER TABLE items ALTER COLUMN value SET DEFAULT 2"],
     [

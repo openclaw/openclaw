@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -79,7 +80,7 @@ export function packageActivationIdentity(
           : null;
   if (reason) {
     throw new Error(
-      `Package publication object ${JSON.stringify(file)} has an unsafe identity (${reason}; owner UID ${stat.uid}, expected UID ${expectedUid ?? "unavailable"}). Verify this object's ownership and type before retrying openclaw update.`,
+      `Package publication object ${JSON.stringify(file)} has an unsafe identity (${reason}; mode=${(stat.mode & 0o7777n).toString(8).padStart(4, "0")} nlink=${stat.nlink}; owner UID ${stat.uid}, expected UID ${expectedUid ?? "unavailable"}). Verify this object's ownership and type before retrying openclaw update.`,
     );
   }
   return `${stat.dev}:${stat.ino}`;
@@ -92,15 +93,58 @@ export function privatePackageActivationIdentity(
   const directory = role === "anchor" || role === "control";
   const value = packageActivationIdentity(file, directory);
   const stat = fs.lstatSync(file);
-  if ((stat.mode & 0o077) !== 0 || (!directory && stat.nlink !== 1)) {
-    const basename = path
-      .basename(file)
-      .replace(/[^A-Za-z0-9_.-]/gu, "_")
-      .slice(0, 64);
-    const mode = (stat.mode & 0o7777).toString(8).padStart(4, "0");
-    throw packageUpdateRefusal(
+  const mode = (stat.mode & 0o7777).toString(8).padStart(4, "0");
+  const refusal = (detail: string) =>
+    packageUpdateRefusal(
       "package-recovery-permissions-unsafe",
-      `Package recovery ${role} ${JSON.stringify(basename)} unsafe: mode=${mode} nlink=${stat.nlink} uid=${stat.uid}; expected owner-only mode${directory ? "" : " nlink=1"}.${!directory && stat.nlink !== 1 ? " Run openclaw doctor --fix." : ""}`,
+      `Package recovery ${role} ${JSON.stringify(file)} unsafe: mode=${mode} nlink=${stat.nlink} uid=${stat.uid}; ${detail}`,
+    );
+  if (!directory && stat.nlink !== 1) {
+    throw refusal("expected nlink=1. Run openclaw doctor --fix.");
+  }
+  if ((stat.mode & 0o077) !== 0) {
+    // POSIX ACL masks occupy the group mode bits. chmod clears their effective
+    // grants too; getfacl is optional and only improves the repair diagnostic.
+    const acl =
+      process.platform === "linux"
+        ? spawnSync("/usr/bin/getfacl", ["-cp", "--", file], {
+            encoding: "utf8",
+            timeout: 1000,
+            maxBuffer: 64 * 1024,
+          })
+        : undefined;
+    const aclPresent = acl?.status === 0 && /^(?:user|group):[^:]+:|^mask::/mu.test(acl.stdout);
+    let fd: number | undefined;
+    try {
+      fd = fs.openSync(
+        file,
+        fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+      );
+      const opened = fs.fstatSync(fd, { bigint: true });
+      if (
+        `${opened.dev}:${opened.ino}` !== value ||
+        opened.uid !== BigInt(stat.uid) ||
+        (directory ? !opened.isDirectory() : !opened.isFile() || opened.nlink !== 1n)
+      ) {
+        throw new Error("object identity changed before permission repair");
+      }
+      fs.fchmodSync(fd, directory ? 0o700 : 0o600);
+      const repaired = fs.fstatSync(fd, { bigint: true });
+      if ((repaired.mode & 0o077n) !== 0n || packageActivationIdentity(file, directory) !== value) {
+        throw new Error("owner-only permission repair could not be verified");
+      }
+    } catch (error) {
+      throw refusal(
+        `could not restore owner-only permissions${aclPresent ? " (POSIX ACL entries present)" : ""}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      if (fd !== undefined) {
+        fs.closeSync(fd);
+      }
+    }
+    process.emitWarning(
+      `Repaired package recovery ${role} ${JSON.stringify(file)}: mode=${mode} nlink=${stat.nlink} -> mode=${directory ? "0700" : "0600"}.${aclPresent ? " POSIX ACL entries were present; their access mask was neutralized." : " POSIX ACL access masks, if present, were neutralized."}`,
+      { code: "OPENCLAW_PACKAGE_PERMISSIONS_REPAIRED" },
     );
   }
   return value;

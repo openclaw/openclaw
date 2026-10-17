@@ -2,6 +2,7 @@ import { sql, type Expression, type RawBuilder, type SqlBool } from "kysely";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../agents/internal-runtime-context.js";
 import { SOURCE_PAGE_MAX_BYTES } from "../../gateway/session-transcript-source-pages.js";
 import { engineIndexHint } from "../../infra/database-engine/index-hint.js";
+import { jsonArrayElements } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -111,7 +112,7 @@ function selectHistoricalDisplayEvents(
                 "active.event_seq",
                 "in",
                 /* kysely-allow-raw: one bounded binding carries recovered control sequences. */
-                sql<number>`(SELECT value FROM json_each(${JSON.stringify(unindexedControls)}))`,
+                sql<number>`(SELECT CAST(value AS BIGINT) FROM ${jsonArrayElements(projection.database.db, sql.val(JSON.stringify(unindexedControls)))})`,
               ),
             ]
           : []),

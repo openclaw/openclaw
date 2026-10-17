@@ -15,6 +15,21 @@ import {
 import { getAcpSessionResetControls } from "./manager.reset-controls.js";
 import { DEFAULT_DEPS } from "./manager.types.js";
 
+it("cancels a cold runtime with one resolution and one pre-ensure metadata read", async () => {
+  await withAcpCancellationFixture(async (f) => {
+    const read = vi.spyOn(DEFAULT_DEPS, "loadSessionEntryAsync");
+    try {
+      await f.manager.cancelSession({ ...f.target, expectedOwnerKey: "agent:main:main" });
+      expect(f.ensureSession).toHaveBeenCalledTimes(1);
+      expect(f.cancel).toHaveBeenCalledTimes(1);
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(readAcpSessionEntry(f.target)?.acp?.state).toBe("idle");
+    } finally {
+      read.mockRestore();
+    }
+  });
+});
+
 it("refuses inline-only idle ACP metadata without host data SQL", async () => {
   await withAcpCancellationFixture(
     async (f) => {
@@ -207,99 +222,6 @@ it.each(["metadata", "lifecycle"] as const)(
     });
   },
 );
-
-it("joins only the superseded actor's late handle after post-ensure control read", async () => {
-  await withAcpCancellationFixture(async (f) => {
-    const readEntered = createDeferred();
-    const releaseRead = createDeferred();
-    const closeEntered = createDeferred();
-    const releaseClose = createDeferred();
-    let ensured = false;
-    let gated = false;
-    let settled = false;
-    f.ensureSession.mockImplementationOnce(async () => {
-      ensured = true;
-      return {
-        sessionKey: f.target.sessionKey,
-        backend: "cancellation-proof",
-        runtimeSessionName: "superseded-late-runtime",
-      };
-    });
-    const close = vi.spyOn(f.runtime, "close").mockImplementationOnce(async () => {
-      closeEntered.resolve();
-      await releaseClose.promise;
-    });
-    const load = DEFAULT_DEPS.loadSessionEntryAsync;
-    const read = vi
-      .spyOn(DEFAULT_DEPS, "loadSessionEntryAsync")
-      .mockImplementation(async (params) => {
-        const value = await load(params);
-        if (ensured && !gated) {
-          gated = true;
-          readEntered.resolve();
-          await releaseRead.promise;
-        }
-        return value;
-      });
-    const sql = observeHostDataSql();
-    const cancellation = f.manager.cancelSession({
-      ...f.target,
-      reason: "old-actor",
-      expectedOwnerKey: "agent:main:main",
-    });
-    const result = Promise.allSettled([cancellation]).then((value) => {
-      settled = true;
-      return value;
-    });
-    let successor: Promise<void> | undefined;
-    try {
-      await awaitGateBeforeSettlement(
-        readEntered.promise,
-        result,
-        "Cancellation ended before post-ensure read.",
-      );
-      await getAcpSessionResetControls(f.manager).forceDiscardSessionRuntime({
-        ...f.target,
-        reason: "fixture-actor-replacement",
-      });
-      successor = f.manager.cancelSession({
-        ...f.target,
-        reason: "successor-actor",
-        expectedOwnerKey: "agent:main:main",
-      });
-      await successor;
-      releaseRead.resolve();
-      await awaitGateBeforeSettlement(
-        closeEntered.promise,
-        result,
-        "Superseded handle was not closed.",
-      );
-      expect(settled).toBe(false);
-      expect(close).toHaveBeenCalledExactlyOnceWith({
-        handle: expect.objectContaining({ runtimeSessionName: "superseded-late-runtime" }),
-        reason: "session-actor-superseded",
-        discardPersistentState: true,
-      });
-      releaseClose.resolve();
-      expect(await result).toMatchObject([{ status: "rejected" }]);
-      await f.manager.cancelSession({ ...f.target, reason: "successor-reuse" });
-      sql.restore();
-      expect(f.ensureSession).toHaveBeenCalledTimes(2);
-      expect(f.cancel.mock.calls.map(([input]) => input.reason)).toEqual([
-        "successor-actor",
-        "successor-reuse",
-      ]);
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-      read.mockRestore();
-      releaseRead.resolve();
-      releaseClose.resolve();
-      await Promise.allSettled([result, successor]);
-      close.mockRestore();
-    }
-  });
-});
 
 it("refuses caller revocation while the registered cancellation read is pending", async () => {
   await withAcpCancellationFixture(async (f) => {

@@ -1,17 +1,90 @@
 // Qa Lab Matrix tests cover harness behavior.
 import { readFile } from "node:fs/promises";
+import type { QaDockerRunCommand as RunCommand } from "openclaw/plugin-sdk/qa-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import type { FetchLike } from "../../../docker-runtime.js";
 import {
   MATRIX_QA_CLEANUP_TIMEOUT_MS,
-  isMatrixVersionsReachable,
-  waitForReachableMatrixBaseUrl,
+  isMatrixVersionsReachable as isMatrixVersionsReachableDefault,
+  waitForReachableMatrixBaseUrl as waitForReachableMatrixBaseUrlDefault,
   writeMatrixQaHarnessFiles,
 } from "./harness.runtime-internals.js";
-import { startMatrixQaHarness } from "./harness.runtime.js";
-import type { MatrixQaRecordingProxy } from "./recording-proxy.js";
+import { startMatrixQaHarness as startMatrixQaHarnessDefault } from "./harness.runtime.js";
+import type { MatrixQaRecordingProxy, startMatrixQaRecordingProxy } from "./recording-proxy.js";
 
-type MatrixQaHarnessDeps = Parameters<typeof startMatrixQaHarness>[1];
+const io = vi.hoisted(() => ({
+  execCommand: vi.fn<RunCommand>(),
+  fetchHealthUrl: vi.fn<FetchLike>(),
+  sleep: vi.fn<(ms: number) => Promise<unknown>>(),
+  startRecordingProxy: vi.fn<typeof startMatrixQaRecordingProxy>(),
+}));
+
+vi.mock("../../../docker-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../docker-runtime.js")>()),
+  execCommand: io.execCommand,
+  fetchHealthUrl: io.fetchHealthUrl,
+}));
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: io.sleep,
+}));
+vi.mock("./recording-proxy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./recording-proxy.js")>()),
+  startMatrixQaRecordingProxy: io.startRecordingProxy,
+}));
+
+afterAll(() => {
+  vi.doUnmock("../../../docker-runtime.js");
+  vi.doUnmock("node:timers/promises");
+  vi.doUnmock("./recording-proxy.js");
+  vi.resetModules();
+});
+
+type MatrixQaHarnessDeps = {
+  fetchImpl?: FetchLike;
+  runCommand?: RunCommand;
+  sleepImpl?: (ms: number) => Promise<unknown>;
+  startRecordingProxyImpl?: typeof startMatrixQaRecordingProxy;
+};
+
+async function startMatrixQaHarness(
+  params: Parameters<typeof startMatrixQaHarnessDefault>[0],
+  deps?: MatrixQaHarnessDeps,
+) {
+  const actual = await vi.importActual<typeof import("../../../docker-runtime.js")>(
+    "../../../docker-runtime.js",
+  );
+  io.execCommand.mockReset().mockImplementation(deps?.runCommand ?? actual.execCommand);
+  io.fetchHealthUrl.mockReset().mockImplementation(deps?.fetchImpl ?? actual.fetchHealthUrl);
+  io.sleep.mockReset().mockImplementation(deps?.sleepImpl ?? (async () => {}));
+  if (deps?.startRecordingProxyImpl) {
+    io.startRecordingProxy.mockReset().mockImplementation(deps.startRecordingProxyImpl);
+  }
+  return await startMatrixQaHarnessDefault(params);
+}
+
+function isMatrixVersionsReachable(
+  baseUrl: string,
+  fetchImpl: FetchLike,
+  timeoutSignal?: AbortSignal,
+  signal?: AbortSignal,
+) {
+  io.fetchHealthUrl.mockImplementation(fetchImpl);
+  return isMatrixVersionsReachableDefault(baseUrl, timeoutSignal, signal);
+}
+
+function waitForReachableMatrixBaseUrl(
+  params: Parameters<typeof waitForReachableMatrixBaseUrlDefault>[0] & {
+    fetchImpl: FetchLike;
+    sleepImpl: (ms: number) => Promise<unknown>;
+  },
+) {
+  const { fetchImpl, sleepImpl, ...options } = params;
+  io.fetchHealthUrl.mockImplementation(fetchImpl);
+  io.sleep.mockImplementation(sleepImpl);
+  return waitForReachableMatrixBaseUrlDefault(options);
+}
 type MatrixQaHarnessResult = Awaited<ReturnType<typeof startMatrixQaHarness>>;
 
 async function withStartedMatrixHarness(

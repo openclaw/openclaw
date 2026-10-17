@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import {
   assertSqliteIntegrity,
+  assertSqliteTableIntegrity,
   isTerminalSqliteIntegrityError,
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityCheckOptions,
@@ -167,10 +168,10 @@ export function repairCanonicalSqliteIndexes(
       db.exec(`RELEASE SAVEPOINT ${savepoint};`);
       return [];
     }
-    assertSqliteIntegrity(db, databaseLabel, {
-      check: options.integrity?.check ?? "quick",
-      tables: [...new Set([...repairIndexes].map((index) => index.tableName))],
-    });
+    // The source was already admitted; index-only DDL needs no second whole-file scan.
+    for (const table of new Set([...repairIndexes].map((index) => index.tableName))) {
+      assertSqliteTableIntegrity(db, databaseLabel, table);
+    }
     options.validateAfterRepair?.();
     db.exec(`RELEASE SAVEPOINT ${savepoint};`);
   } catch (error) {

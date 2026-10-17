@@ -9,9 +9,9 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { withPluginCommandExecution } from "../command-execution-lock.js";
 import {
   clearPluginHostRuntimeState,
+  clearPluginRunContext,
   getPluginRunContext,
   setPluginRunContext,
-  withPluginRunContextCleanup,
 } from "../host-hook-runtime.js";
 import { listPluginSessionSchedulerJobs } from "../host-hook-runtime.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
@@ -28,21 +28,18 @@ describe("plugin cleanup scheduler ownership", () => {
     clearPluginHostRuntimeState();
     resetAgentEventsForTest();
   });
-  it("clears only the selected run-context namespace and returns the callback result", () => {
+  it("clears only the selected run-context namespace", () => {
     for (const namespace of ["selected", "retained"]) {
       setPluginRunContext({
         pluginId: "cleanup-contract",
         patch: { runId: "cleanup-run", namespace, value: namespace },
       });
     }
-    const result = withPluginRunContextCleanup(
-      { pluginId: "cleanup-contract", runId: "cleanup-run", namespace: "selected" },
-      (clear) => {
-        clear();
-        return "finished";
-      },
-    );
-    expect(result).toBe("finished");
+    clearPluginRunContext({
+      pluginId: "cleanup-contract",
+      runId: "cleanup-run",
+      namespace: "selected",
+    });
     const read = (namespace: string) =>
       getPluginRunContext({
         pluginId: "cleanup-contract",

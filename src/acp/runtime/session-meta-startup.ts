@@ -9,6 +9,7 @@ import {
 import { parseSqliteSessionEntryRecord } from "../../config/sessions/session-entry-json.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   listAgentDatabaseAdmissionRefusals,
@@ -151,20 +152,22 @@ export async function assertAcpSessionKeysMigratedForStartup(
 export function assertEmbeddedAcpMetadataMigratedForStartup(
   options: OpenClawAgentDatabaseOptions,
 ): void {
-  const inspected = withOpenClawAgentDatabaseReadOnly((database) => {
-    const db = getSessionKysely(database.db);
-    for (const row of iterateSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("session_nodes")
-        .select(["session_key", "entry_json", "current_session_id", "updated_at"]),
-    )) {
-      if (parseSqliteSessionEntryRecord(row)?.acp != null) {
-        return { session_key: row.session_key };
+  const inspected = withEngineStoreAdmission(() =>
+    withOpenClawAgentDatabaseReadOnly((database) => {
+      const db = getSessionKysely(database.db);
+      for (const row of iterateSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_nodes")
+          .select(["session_key", "entry_json", "current_session_id", "updated_at"]),
+      )) {
+        if (parseSqliteSessionEntryRecord(row)?.acp != null) {
+          return { session_key: row.session_key };
+        }
       }
-    }
-    return undefined;
-  }, options);
+      return undefined;
+    }, options),
+  );
   if (inspected.found && inspected.value) {
     migrationRequired(
       `agent ${JSON.stringify(options.agentId)} session ${JSON.stringify(inspected.value.session_key)}`,

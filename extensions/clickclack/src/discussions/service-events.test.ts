@@ -1,3 +1,4 @@
+import "./session-authority.test-support.js";
 import type {
   OpenClawPluginGatewayEvents,
   OpenClawPluginSessionsChangedEvent,

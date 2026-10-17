@@ -29,6 +29,14 @@ export function createDiagnosticsMetrics(
     createHistogram(name, description, "ms", AGENT_DURATION_MS_BUCKETS);
 
   return {
+    sessionsListBaselineRetirementsCounter: createCounter(
+      "sessions.list.baseline_retirements",
+      "Session list baseline retirement events by cause, not rows or views retired",
+    ),
+    sessionsListBaseMissesCounter: createCounter(
+      "sessions.list.base_misses",
+      "Successful full sidebar responses with a supplied base, by miss reason",
+    ),
     gcDurationHistogram: createDurationHistogram(
       "gc.duration_ms",
       "Elapsed garbage collection duration for the hosting JavaScript isolate",

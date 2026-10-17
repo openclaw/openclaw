@@ -118,7 +118,6 @@ export async function loadChatHistory(
     sessionKey,
     requestAgentId,
     method,
-    deltaCursor,
     inputRunIds,
     requestKeyPrefix,
   ).then((result) => {

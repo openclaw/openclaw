@@ -260,7 +260,8 @@ export class CodexNativeSubagentCompletionDelivery {
         if (
           child.nativeCompletionDelivered ||
           !this.isCurrent(state, child) ||
-          !this.claim(state, child)
+          (child.completionCustody && !child.completionCustody.isCurrent()) ||
+          (child.deliveryOwnerKey && completionDeliveryOwners.get(child.deliveryOwnerKey) !== child)
         ) {
           throw new Error("Native completion retirement is no longer current.");
         }

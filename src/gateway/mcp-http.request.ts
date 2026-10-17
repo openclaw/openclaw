@@ -10,6 +10,7 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { writeJsonWithoutCharset } from "../infra/http-json.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-header-value.js";
@@ -144,8 +145,7 @@ export function validateMcpLoopbackRequest(params: {
   onSseResponse?: (res: ServerResponse) => void;
 }): McpLoopbackRequestAuth | null {
   const reply = (status: number, body: unknown): null => {
-    params.res.writeHead(status, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify(body));
+    writeJsonWithoutCharset(params.res, status, body);
     return null;
   };
   const url = URL.parse(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);

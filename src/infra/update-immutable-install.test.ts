@@ -1,19 +1,21 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
+import type * as Activation from "./package-update-activation-immutable.js";
 import { packageActivationRuntimeIdentity } from "./package-update-activation-paths.js";
 import type { ImmutableInstallRecord } from "./update-immutable-install-schema.js";
 import { inspectImmutableInstall, prepareImmutableUpdate } from "./update-immutable-install.js";
+import {
+  immutableLayout,
+  identity,
+  expectUncalled,
+} from "./update-immutable-layout.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   read: vi.fn<typeof import("./update-immutable-install-record.js").readImmutableInstallRecord>(),
-  record:
-    vi.fn<
-      typeof import("./package-update-activation-immutable.js").recordImmutablePreparedGeneration
-    >(),
+  record: vi.fn<typeof Activation.recordImmutablePreparedGeneration>(),
   command: vi.fn<import("./update-runner-types.js").CommandRunner>(),
   build: vi.fn<typeof import("./update-immutable-build.js").runImmutableBuild>(),
   verify: vi.fn<typeof import("./update-immutable-generation.js").verifyImmutableGeneration>(),
@@ -45,10 +47,7 @@ vi.mock("./update-runner-git-schema.js", async (importOriginal) => ({
 }));
 vi.mock("./update-runner-command.js", async (original) => ({
   ...(await original<typeof import("./update-runner-command.js")>()),
-  buildUpdateCommandRunner: async () => ({
-    runCommand: mocks.command,
-    defaultCommandEnv: {},
-  }),
+  buildUpdateCommandRunner: async () => ({ runCommand: mocks.command, defaultCommandEnv: {} }),
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -58,61 +57,25 @@ const buildDigest = "c".repeat(64);
 let root: string;
 let record: ImmutableInstallRecord;
 const pointer = () => fs.readlink(path.join(root, "current"));
-const identity = (file: string) => {
-  const stat = fsSync.lstatSync(file);
-  return `${stat.dev}:${stat.ino}`;
-};
+const readRelease = (sha: string, file: string) =>
+  fs.readFile(path.join(root, "releases", sha, file), "utf8");
+async function expectUnchanged(...unused: Parameters<typeof expectUncalled>) {
+  expect(await pointer()).toBe(`releases/${currentSha}`);
+  expectUncalled(...unused);
+}
 
 beforeEach(async () => {
   vi.resetAllMocks();
   const parent = await fs.realpath(dirs.make("openclaw-immutable-adapter-"));
-  root = path.join(parent, "installation");
-  const currentPath = path.join(root, "releases", currentSha);
-  await fs.mkdir(currentPath, { recursive: true, mode: 0o755 });
-  await fs.writeFile(path.join(currentPath, "serving"), "previous Gateway bytes");
-  await fs.symlink(`releases/${currentSha}`, path.join(root, "current"));
-  const runtime = await fs.realpath(process.execPath);
-  // The Testbox runner is unprivileged; preserve real inode, mode, and pointer
-  // observations while projecting the installation's required root ownership.
-  const lstat = fsSync.lstatSync;
-  vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
-    const stat = lstat(...args);
-    if (stat && String(args[0]).startsWith(`${parent}${path.sep}`)) {
-      Object.defineProperty(stat, "uid", { value: typeof stat.uid === "bigint" ? 0n : 0 });
-    }
-    return stat;
+  const descriptor = immutableLayout(parent, {
+    sha: currentSha,
+    buildDigest,
+    unit: "openclaw-fixture.service",
+    account: "openclaw-fixture",
   });
-  if (process.geteuid) {
-    vi.spyOn(process, "geteuid").mockReturnValue(0);
-  }
-  record = {
-    revision: 0,
-    descriptor: {
-      version: 1,
-      kind: "immutable",
-      root,
-      rootIdentity: identity(root),
-      releasesIdentity: identity(path.join(root, "releases")),
-      current: {
-        sha: currentSha,
-        path: currentPath,
-        identity: identity(currentPath),
-        pointerIdentity: identity(path.join(root, "current")),
-        buildDigest,
-      },
-      service: {
-        unit: "openclaw-fixture.service",
-        scope: "system",
-        account: "openclaw-fixture",
-        stateDir: path.join(parent, "state"),
-        configPath: path.join(parent, "state", "openclaw.json"),
-        profile: null,
-      },
-      runtime: { path: runtime, identity: packageActivationRuntimeIdentity(runtime) },
-      source: "https://github.com/openclaw/openclaw.git",
-    },
-    prepared: null,
-  };
+  root = descriptor.root;
+  await fs.writeFile(path.join(descriptor.current.path, "serving"), "previous Gateway bytes");
+  record = { revision: 0, descriptor, prepared: null };
   mocks.read.mockImplementation(async () => record);
   mocks.record.mockImplementation((previous, prepared, assertCurrent) => {
     assertCurrent();
@@ -128,17 +91,15 @@ beforeEach(async () => {
     expect((await fs.stat(path.dirname(destination))).mode & 0o077).toBe(0);
     await fs.cp(source, destination, { recursive: true, verbatimSymlinks: true });
   });
-  mocks.command.mockImplementation(async (argv) => {
-    return {
-      code: 0,
-      stdout: argv.includes("ls-remote") ? `${nextSha}\trefs/heads/main\n` : "",
-      stderr: "",
-    };
-  });
+  mocks.command.mockImplementation(async (argv) => ({
+    code: 0,
+    stdout: argv.includes("ls-remote") ? `${nextSha}\trefs/heads/main\n` : "",
+    stderr: "",
+  }));
   mocks.build.mockImplementation(async ({ stage, sha }) => {
     const built = path.join(stage, "generation");
     await fs.mkdir(path.join(built, "dist"), { recursive: true, mode: 0o755 });
-    await fs.writeFile(path.join(built, "dist", "index.js"), `candidate ${sha}`);
+    await fs.writeFile(path.join(built, "dist/index.js"), `candidate ${sha}`);
   });
 });
 afterEach(() => vi.restoreAllMocks());
@@ -163,63 +124,51 @@ it("leaves an ordinary checkout with an unrelated current file to its existing u
   await fs.writeFile(path.join(checkout, "current"), "operator notes");
 
   await expect(inspectImmutableInstall(checkout)).resolves.toBeNull();
-
   expect(mocks.read).not.toHaveBeenCalled();
   expect(await fs.readFile(path.join(checkout, "current"), "utf8")).toBe("operator notes");
 });
 
-it("refuses a replaced pointer without changing the adopted generation", async () => {
-  await fs.mkdir(path.join(root, "releases", nextSha), { mode: 0o755 });
-  await fs.unlink(path.join(root, "current"));
-  await fs.symlink(`releases/${nextSha}`, path.join(root, "current"));
-  await expect(inspectImmutableInstall(root)).rejects.toThrow("changed since adoption");
-  expect(await pointer()).toBe(`releases/${nextSha}`);
-  expect(mocks.record).not.toHaveBeenCalled();
-});
-
-it("refuses a current pointer outside releases", async () => {
-  const foreign = path.join(path.dirname(root), "foreign", currentSha);
-  await fs.mkdir(foreign, { recursive: true, mode: 0o755 });
+it.each([
+  ["replaced", "changed since adoption"],
+  ["outside releases", /current must|contained/u],
+] as const)("refuses a pointer %s without adopting it", async (kind, error) => {
+  const destination =
+    kind === "replaced"
+      ? path.join(root, "releases", nextSha)
+      : path.join(path.dirname(root), "foreign", currentSha);
+  await fs.mkdir(destination, { recursive: true, mode: 0o755 });
   const current = path.join(root, "current");
-  const target = path.relative(root, foreign);
+  const target = path.relative(root, destination);
   await fs.unlink(current);
   await fs.symlink(target, current);
-  record.descriptor.current.pointerIdentity = identity(current);
-
-  await expect(inspectImmutableInstall(root)).rejects.toThrow(/current must|contained/u);
+  if (kind === "outside releases") {
+    record.descriptor.current.pointerIdentity = identity(current);
+  }
+  await expect(inspectImmutableInstall(root)).rejects.toThrow(error);
   expect(await pointer()).toBe(target);
-  expect(mocks.record).not.toHaveBeenCalled();
+  expectUncalled(mocks.record);
 });
 
-it.each([undefined])(
-  "resolves a dry-run target without filesystem or receipt changes (%s)",
-  async (sha) => {
-    const before = await fs.readdir(root);
-    const result = await prepareImmutableUpdate({ root, sha, dryRun: true });
-    expect(result).toMatchObject({ status: "dry-run", targetSha: nextSha });
-    expect(result.coverage?.target).toEqual({ sha: nextSha, preparation: "unknown" });
-    expect(await fs.readdir(root)).toEqual(before);
-    expect(await pointer()).toBe(`releases/${currentSha}`);
-    expect(mocks.build).not.toHaveBeenCalled();
-    expect(mocks.record).not.toHaveBeenCalled();
-    expect(mocks.command.mock.calls.filter(([argv]) => argv.includes("ls-remote"))).toHaveLength(
-      sha ? 0 : 1,
-    );
-  },
-);
+it("resolves a dry-run target without filesystem or receipt changes", async () => {
+  const before = await fs.readdir(root);
+  const result = await prepareImmutableUpdate({ root, dryRun: true });
+  expect(result).toMatchObject({ status: "dry-run", targetSha: nextSha });
+  expect(result.coverage?.target).toEqual({ sha: nextSha, preparation: "unknown" });
+  expect(await fs.readdir(root)).toEqual(before);
+  await expectUnchanged(mocks.build, mocks.record);
+  expect(mocks.command.mock.calls.filter(([argv]) => argv.includes("ls-remote"))).toHaveLength(1);
+});
 
 it("refuses abbreviated targets before fetching or building", async () => {
   expect(await prepareImmutableUpdate({ root, sha: "abcdef", dryRun: true })).toMatchObject({
     status: "error",
     reason: expect.stringContaining("full lowercase 40-hex"),
   });
-  expect(mocks.command).not.toHaveBeenCalled();
-  expect(await pointer()).toBe(`releases/${currentSha}`);
+  await expectUnchanged(mocks.command);
 });
 
-it.skipIf(process.platform !== "linux")(
-  "refuses a different Node executable before touching a candidate",
-  async () => {
+describe.skipIf(process.platform !== "linux")("immutable preparation", () => {
+  it("refuses a different Node executable before touching a candidate", async () => {
     const runtime = path.join(path.dirname(root), "node");
     await fs.writeFile(runtime, "synthetic external runtime", { mode: 0o755 });
     record.descriptor.runtime = {
@@ -233,32 +182,21 @@ it.skipIf(process.platform !== "linux")(
       status: "error",
       reason: expect.stringContaining("Run preparation with the adopted Node executable"),
     });
-    expect(await pointer()).toBe(`releases/${currentSha}`);
     expect(await fs.readdir(path.join(root, "releases"))).toEqual([currentSha]);
-    expect(mocks.build).not.toHaveBeenCalled();
-    expect(mocks.record).not.toHaveBeenCalled();
-    expect(mocks.command).not.toHaveBeenCalled();
-  },
-);
+    await expectUnchanged(mocks.build, mocks.record, mocks.command);
+  });
 
-it.skipIf(process.platform !== "linux")(
-  "does no candidate work when the exact target is already current",
-  async () => {
+  it("does no candidate work when the exact target is already current", async () => {
     expect(await prepareImmutableUpdate({ root, sha: currentSha })).toMatchObject({
       status: "already-current",
       targetSha: currentSha,
     });
-    expect(mocks.command).not.toHaveBeenCalled();
-    expect(mocks.build).not.toHaveBeenCalled();
-    expect(mocks.record).not.toHaveBeenCalled();
+    expectUncalled(mocks.command, mocks.build, mocks.record);
     expect(await fs.readdir(root)).toEqual(["current", "releases"]);
-  },
-);
+  });
 
-it.skipIf(process.platform !== "linux").each([undefined])(
-  "freezes the exact candidate, seals and records it without selecting it (%s)",
-  async (sha) => {
-    const result = await prepareImmutableUpdate({ root, sha });
+  it("freezes the exact candidate, seals and records it without selecting it", async () => {
+    const result = await prepareImmutableUpdate({ root });
     const destination = path.join(root, "releases", nextSha);
     expect(result).toMatchObject({
       status: "prepared",
@@ -266,24 +204,15 @@ it.skipIf(process.platform !== "linux").each([undefined])(
       installation: { currentSha, prepared: { sha: nextSha, path: destination, buildDigest } },
     });
     expect(await pointer()).toBe(`releases/${currentSha}`);
-    expect(await fs.readFile(path.join(destination, "dist", "index.js"), "utf8")).toBe(
-      `candidate ${nextSha}`,
-    );
-    expect(await fs.readFile(path.join(record.descriptor.current.path, "serving"), "utf8")).toBe(
-      "previous Gateway bytes",
-    );
-    expect(mocks.command.mock.calls.filter(([argv]) => argv.includes("ls-remote"))).toHaveLength(
-      sha ? 0 : 1,
-    );
+    expect(await readRelease(nextSha, "dist/index.js")).toBe(`candidate ${nextSha}`);
+    expect(await readRelease(currentSha, "serving")).toBe("previous Gateway bytes");
+    expect(mocks.command.mock.calls.filter(([argv]) => argv.includes("ls-remote"))).toHaveLength(1);
     expect(mocks.seal).toHaveBeenCalledOnce();
     expect(mocks.record).toHaveBeenCalledOnce();
     expect(await fs.readdir(root)).toEqual(["current", "releases"]);
-  },
-);
+  });
 
-it.skipIf(process.platform !== "linux")(
-  "retains build custody without sealing or publishing when descendants did not settle",
-  async () => {
+  it("retains build custody without sealing or publishing when descendants did not settle", async () => {
     mocks.build.mockRejectedValueOnce(new CommandProcessCleanupError());
     const result = await prepareImmutableUpdate({ root, sha: nextSha });
     expect(result.status).toBe("error");
@@ -291,15 +220,10 @@ it.skipIf(process.platform !== "linux")(
     expect((await fs.readdir(root)).some((name) => name.startsWith(".openclaw-immutable-"))).toBe(
       true,
     );
-    expect(await pointer()).toBe(`releases/${currentSha}`);
-    expect(mocks.seal).not.toHaveBeenCalled();
-    expect(mocks.record).not.toHaveBeenCalled();
-  },
-);
+    await expectUnchanged(mocks.seal, mocks.record);
+  });
 
-it.skipIf(process.platform !== "linux")(
-  "preserves an existing generation without a matching preparation receipt",
-  async () => {
+  it("preserves an existing generation without a matching preparation receipt", async () => {
     const destination = path.join(root, "releases", nextSha);
     await fs.mkdir(destination, { mode: 0o755 });
     await fs.writeFile(path.join(destination, "incomplete"), "retain for inspection");
@@ -310,11 +234,7 @@ it.skipIf(process.platform !== "linux")(
       status: "error",
       reason: expect.stringContaining("without a matching preparation receipt"),
     });
-    expect(await fs.readFile(path.join(destination, "incomplete"), "utf8")).toBe(
-      "retain for inspection",
-    );
-    expect(await pointer()).toBe(`releases/${currentSha}`);
-    expect(mocks.build).not.toHaveBeenCalled();
-    expect(mocks.record).not.toHaveBeenCalled();
-  },
-);
+    expect(await readRelease(nextSha, "incomplete")).toBe("retain for inspection");
+    await expectUnchanged(mocks.build, mocks.record);
+  });
+});

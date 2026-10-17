@@ -128,6 +128,7 @@ export function publishSidebarSessionList(
 ): void {
   owner.sessionsResult = snapshot.result;
   owner.sessionsAgentId = snapshot.agentId;
+  owner.sessionsLoading = snapshot.loading;
   owner.sessionsStartupPending = snapshot.startupPending === true;
   if (snapshot.result && snapshot.agentId) {
     const agentId = normalizeAgentId(snapshot.agentId);
@@ -152,7 +153,6 @@ export function subscribeFilteredSidebarSessions(
       return;
     }
     publishSidebarSessionList(owner, snapshot);
-    owner.sessionsLoading = snapshot.loading;
     publishSidebarSessionError(owner, snapshot.error, "list");
     owner.requestSessionDataUpdate();
   };

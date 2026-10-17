@@ -153,9 +153,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   private readonly homeMemos = new Map<string, SidebarProjectionMemo<SidebarHomeSession>>();
   readonly sessionOwnerFilter = new SessionOwnerFilter(
     () => this.context?.gateway,
-    () => this.requestUpdate(),
+    () => this.invalidate(),
   );
-  readonly sessionData = new SessionDataOwner(this, () => this.requestUpdate());
+  readonly sessionData = new SessionDataOwner(this, () => this.invalidate());
 
   samePresence(previous: PresencePayload | undefined, next: PresencePayload | undefined): boolean {
     return this.sessionProjection.samePresence(previous, next, sidebarPresenceScope(this));
@@ -214,7 +214,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   setSessionSortMode(mode: SidebarSessionSortMode) {
     this.sessionSortMode = storeSidebarSessionSortMode(mode, this.sessionPeopleSortCapability());
-    this.requestUpdate();
+    this.invalidate();
   }
 
   sidebarSessionOwnerFilter() {
@@ -239,7 +239,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   private readonly sessionSelection = createSidebarSessionSelection(
     () => this.visibleSessionRowsInOrder(),
-    () => this.requestUpdate(),
+    () => this.invalidate(),
   );
   get selectedSessionKeys(): ReadonlySet<string> {
     return this.sessionSelection.selectedKeys;
@@ -257,7 +257,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   setSessionsEmptyGroupsMode(mode: SidebarEmptyGroupsMode): void {
     this.emptyGroups.set(mode);
-    this.requestUpdate();
+    this.invalidate();
   }
   sessionsStatusFilter: SidebarSessionStatusFilter = loadStoredSidebarSessionStatusFilter();
   hiddenSessionCatalogIds: ReadonlySet<string> = loadStoredHiddenSessionCatalogIds();
@@ -305,7 +305,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   promoteCreatedSession(sessionKey: string) {
     if (this.sessionProjection.promoteCreatedSession(sessionKey)) {
-      this.requestUpdate();
+      this.invalidate();
     }
   }
 
@@ -756,12 +756,12 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
         this.sessionData.discardEmptyChildSessionSnapshot(key);
       }
     }
-    this.requestUpdate();
+    this.invalidate();
   }
 
   showMoreChildren(sessionKey: string) {
     this.sessionProjection.children.showMore(sessionKey);
-    this.requestUpdate();
+    this.invalidate();
   }
 
   agentUnreadCount(agentId: string): number {

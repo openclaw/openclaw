@@ -14,6 +14,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -166,6 +167,8 @@ it("claims once without writing absent outcomes, durable retries, or another run
   expect(await claim("first-run")).toBeUndefined();
   expect(commits).toBe(0);
   const afterAbsent = admissions;
+  // Gateway presentation notifications carry no storage mutation facts.
+  sessionChanges.emit({ agentId: target.agentId, sessionKey: target.sessionKey });
   expect(await claim("first-run")).toBeUndefined();
   expect(await claim("second-run")).toBeUndefined();
   expect(admissions).toBe(afterAbsent);
@@ -175,6 +178,7 @@ it("claims once without writing absent outcomes, durable retries, or another run
   expect(claimed).toMatchObject({ summary: "Recorded progress" });
   expect(commits).toBe(2);
   const afterClaim = admissions;
+  sessionChanges.emit({ agentId: target.agentId, sessionKey: target.sessionKey });
   expect(await claim("first-run")).toEqual(claimed);
   expect(await claim("second-run")).toBeUndefined();
   expect(commits).toBe(2);

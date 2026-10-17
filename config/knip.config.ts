@@ -8,6 +8,7 @@ import { createManagedHandoffBuildConfigs } from "../scripts/lib/managed-handoff
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
+import aiBuildConfig from "../tsdown.ai.config.ts";
 import { compileViteConfigConsumers } from "./knip-vite-consumers.mjs";
 
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
@@ -23,6 +24,8 @@ const repositoryScriptEntries = [
   "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
   "scripts/generate-postgres-schema.mts!",
+  // ui:validators:gen/check compile canonical payload schemas into browser runtime guards.
+  "scripts/generate-control-ui-validators.mts!",
   // Immutable activation and release deployment launch this packaged entry by path.
   "gateway-prewarm.mjs!",
   "apps/linux/scripts/test-runtime-boundary.mjs!",
@@ -707,6 +710,30 @@ function compileDynamicMjsConsumers(source: string, filePath: string): string {
   return source;
 }
 
+function compileBundledPackageConsumers(source: string, filePath: string): string {
+  const manifestPath = path.resolve(filePath);
+  if (
+    manifestPath === path.resolve("package.json") ||
+    manifestPath === path.resolve("packages/ai/package.json")
+  ) {
+    // The bundled SDK imports these runtime externals. Project the real build
+    // policy into each shipping manifest; the root config alone has one owner.
+    const manifest: {
+      dependencies?: Record<string, string>;
+    } = JSON.parse(source);
+    const neverBundle = aiBuildConfig.deps?.neverBundle;
+    if (typeof neverBundle !== "function") {
+      throw new Error("Expected the AI build's externalization callback.");
+    }
+    return Object.keys(manifest.dependencies ?? {})
+      .filter((dependency) => neverBundle(dependency, undefined, false))
+      .map((dependency) => `import ${JSON.stringify(dependency)};`)
+      .join("\n");
+  }
+  // JSON has no import graph in Knip unless a compiler supplies one.
+  return "";
+}
+
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
   return {
     entry: [...bundledPluginEntries, ...extraEntries],
@@ -777,6 +804,7 @@ const config = {
     yml: compileWorkflowConsumers,
     sh: compileShellConsumers,
     mjs: compileDynamicMjsConsumers,
+    json: compileBundledPackageConsumers,
   },
   ignoreFiles: [
     // Production mode excludes dev/maintainer executables. The full-tree
@@ -945,7 +973,7 @@ const config = {
         "*.config.{js,mjs,cjs,ts,mts,cts}!",
         "*.mjs!",
       ],
-      entry: rootEntries,
+      entry: ["package.json!", ...rootEntries],
     },
     "examples/ai-chat": {
       entry: ["index.mjs!"],
@@ -984,6 +1012,8 @@ const config = {
     "packages/ai": {
       // Mirror the published export map so knip sees every dist entry point.
       entry: [
+        // The JSON compiler models the shared build's external runtime consumers.
+        "package.json!",
         "src/index.ts!",
         "src/provider-types.ts!",
         "src/providers.ts!",

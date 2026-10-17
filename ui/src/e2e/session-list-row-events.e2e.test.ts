@@ -147,7 +147,8 @@ suite.define(() => {
           const params = requireRecord(request.params);
           expect(params).toMatchObject({
             rowMode:
-              params.source === "sidebar" && params.includeLastMessage === true
+              (params.source === "sidebar" || params.source === "agent-roster") &&
+              params.includeLastMessage === true
                 ? "sidebar"
                 : params.hasBoard === true
                   ? "dashboard"

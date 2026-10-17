@@ -228,7 +228,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-menu")).not.toBeNull();
 
     (context.agents.state as { agentsList: AgentsListResult | null }).agentsList = TWO_AGENTS;
-    sidebar.requestUpdate();
+    sidebar.invalidate();
 
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith("agent.identity.get", { agentId: "research" });
