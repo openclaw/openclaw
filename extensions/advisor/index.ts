@@ -10,6 +10,11 @@ const RAW_CODEX_CALL_TYPES = new Set([
   "local_shell_call",
   "tool_search_call",
 ]);
+const RAW_CODEX_OUTPUT_TYPES = new Set([
+  "function_call_output",
+  "custom_tool_call_output",
+  "tool_search_output",
+]);
 
 export const DEFAULT_REVIEW_INSTRUCTIONS = `Decide whether the agent is wasting the user's time compared with a clearly better next step it can take now.
 Correct it when it repeats an action whose result has not changed; waits or polls on work that already finished or failed; stops, reports a blocker or asks the user about something it can resolve with the files, tools, credentials or authority it already has; builds a workaround when an installed tool does the job; grows scope beyond the request; claims an outcome the tool results contradict; or ignores an explicit user constraint.
@@ -236,8 +241,9 @@ export default definePluginEntry({
           if (phase === "started" && RAW_CODEX_CALL_TYPES.has(String(event.data.type))) {
             session.pending.add(`raw:${itemId}`);
           } else if (phase === "completed") {
-            session.pending.delete(`native:${itemId}`);
-            session.pending.delete(`raw:${itemId}`);
+            // A raw call and its native child can share an ID; each settles on its own receipt.
+            const raw = RAW_CODEX_OUTPUT_TYPES.has(String(event.data.type));
+            session.pending.delete(`${raw ? "raw" : "native"}:${itemId}`);
             maybeReview(run);
           }
         } else if (event.stream === "lifecycle" && (phase === "end" || phase === "error")) {

@@ -185,6 +185,29 @@ describe("advisor", () => {
     expect(run.forkSession).toHaveBeenCalledOnce();
   });
 
+  it("settles a raw call and its native child separately when they share an ID", async () => {
+    const run = setup({ everyToolCalls: 1, everyMinutes: 0 });
+    await run.start();
+    await run.startRun();
+    await run.emit("codex_app_server.item", "started", "run-1", {
+      itemId: "x",
+      type: "function_call",
+    });
+    await run.emit("tool", "start", "run-1", { toolCallId: "x", itemId: "x" });
+    await run.emit("codex_app_server.item", "completed", "run-1", {
+      itemId: "x",
+      type: "commandExecution",
+    });
+    await run.flush();
+    expect(run.forkSession).not.toHaveBeenCalled();
+    await run.emit("codex_app_server.item", "completed", "run-1", {
+      itemId: "x",
+      type: "function_call_output",
+    });
+    await run.flush();
+    expect(run.forkSession).toHaveBeenCalledOnce();
+  });
+
   it.each(["Looks fine to me.", "CORRECTION", "NO_CHANGE"])(
     "does not steer on a reply of %j",
     async (reply) => {
