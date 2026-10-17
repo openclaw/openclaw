@@ -26,54 +26,62 @@ function acceptsPaths(patterns: string[], files: readonly string[]) {
   );
 }
 
-describe("native locale refresh event scope", () => {
-  it.each([
-    [["apps/ios/README.md"], false],
-    [["apps/ios/AGENTS.md"], false],
-    [["apps/ios/README.md", "apps/ios/AGENTS.md"], false],
-    [["apps/ios/README.md", "apps/ios/Sources/App.swift"], true],
-    [["apps/ios/Info.plist"], true],
-    [["apps/ios/Localizable.xcstrings"], true],
-    [["apps/.i18n/native-source.json"], true],
-    [["scripts/native-app-i18n.ts"], true],
-    [[".github/workflows/native-app-locale-refresh.yml"], true],
-  ] as const)("routes %j", (files, expected) => {
-    const workflow = readWorkflow(".github/workflows/native-app-locale-refresh.yml");
-    expect(acceptsPaths(workflow.on.push.paths, files)).toBe(expected);
-    expect(workflow.on.workflow_dispatch).toBeDefined();
-  });
-});
-
-describe("plugin scaffold event scope", () => {
-  it.each([
-    [["src/plugin-sdk/AGENTS.md"], false],
-    [["src/plugin-sdk/index.ts"], true],
-    [["src/plugin-sdk/AGENTS.md", "src/plugin-sdk/index.ts"], true],
-    [["src/plugin-sdk/runtime-fixture.md"], true],
-    [[".github/workflows/plugin-init-scaffold-validation.yml"], true],
-  ] as const)("routes %j", (files, expected) => {
-    const workflow = readWorkflow(".github/workflows/plugin-init-scaffold-validation.yml");
+const locale = "native-app-locale-refresh";
+const scaffold = "plugin-init-scaffold-validation";
+const runtime = "node-runtime-conformance";
+it.each<[string, readonly string[], boolean]>([
+  [locale, ["apps/ios/README.md"], false],
+  [locale, ["apps/ios/AGENTS.md"], false],
+  [locale, ["apps/ios/README.md", "apps/ios/AGENTS.md"], false],
+  [locale, ["apps/ios/README.md", "apps/ios/Sources/App.swift"], true],
+  [locale, ["apps/ios/Info.plist"], true],
+  [locale, ["apps/ios/Localizable.xcstrings"], true],
+  [locale, ["apps/.i18n/native-source.json"], true],
+  [locale, ["scripts/native-app-i18n.ts"], true],
+  [locale, [".github/workflows/native-app-locale-refresh.yml"], true],
+  [scaffold, ["src/plugin-sdk/AGENTS.md"], false],
+  [scaffold, ["src/plugin-sdk/index.ts"], true],
+  [scaffold, ["src/plugin-sdk/AGENTS.md", "src/plugin-sdk/index.ts"], true],
+  [scaffold, ["src/plugin-sdk/runtime-fixture.md"], true],
+  [scaffold, [".github/workflows/plugin-init-scaffold-validation.yml"], true],
+  [runtime, ["patches/README.md"], false],
+  [runtime, ["patches/vitest@5.0.1.patch"], true],
+  [runtime, ["patches/README.md", "patches/vitest@5.0.1.patch"], true],
+  [runtime, ["patches/runtime-fixture.md"], true],
+  [runtime, ["crates/openclaw-node-host/SIDECAR_PROTOCOL.md"], false],
+  [
+    runtime,
+    ["crates/openclaw-node-host/SIDECAR_PROTOCOL.md", "crates/openclaw-node-host/src/main.rs"],
+    true,
+  ],
+  [runtime, ["crates/openclaw-node-host/Cargo.toml"], true],
+  [runtime, ["crates/openclaw-node-host/tests/fixtures/README.md"], true],
+  [runtime, [".github/workflows/node-runtime-conformance.yml"], true],
+])("%s routes %j", (name, files, expected) => {
+  const workflow = readWorkflow(`.github/workflows/${name}.yml`);
+  for (const event of name === locale ? ["push"] : ["push", "pull_request"]) {
+    expect(acceptsPaths(workflow.on[event].paths, files)).toBe(expected);
+  }
+  if (name === scaffold) {
     expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
-    for (const event of ["push", "pull_request"]) {
-      expect(acceptsPaths(workflow.on[event].paths, files)).toBe(expected);
-    }
-    expect(workflow.on.workflow_dispatch).toBeDefined();
+  }
+  expect(workflow.on.workflow_dispatch).toBeDefined();
+  if (name !== locale) {
     expect(workflow.on.schedule).toBeDefined();
-  });
+  }
 });
 
-async function scheduledScope(
-  options: {
-    files?: Array<{ filename: string; previous_filename?: string }>;
-    status?: string;
-    ageHours?: number;
-    skipFirst?: boolean;
-    unavailable?: boolean;
-    paths?: string;
-    missingProof?: boolean;
-    identical?: boolean;
-  } = {},
-) {
+type ScheduledScopeOptions = {
+  files?: Array<{ filename: string; previous_filename?: string }>;
+  status?: string;
+  ageHours?: number;
+  skipFirst?: boolean;
+  unavailable?: boolean;
+  paths?: string;
+  missingProof?: boolean;
+  identical?: boolean;
+};
+async function scheduledScope(options: ScheduledScopeOptions = {}) {
   const proof = {
     id: 90,
     event: "schedule",
@@ -90,9 +98,7 @@ async function scheduledScope(
     },
   ];
   const list = vi.fn().mockResolvedValue({
-    data: {
-      workflow_runs: options.skipFirst ? [{ ...proof, id: 99 }, proof] : [proof],
-    },
+    data: { workflow_runs: options.skipFirst ? [{ ...proof, id: 99 }, proof] : [proof] },
   });
   if (options.unavailable) {
     list.mockRejectedValue(new Error("unavailable"));
@@ -125,10 +131,7 @@ async function scheduledScope(
         actions: { listWorkflowRuns: list, listJobsForWorkflowRunAttempt: vi.fn() },
         repos: {
           compareCommitsWithBasehead: vi.fn().mockResolvedValue({
-            data: {
-              status: options.status ?? "ahead",
-              files: options.files ?? [],
-            },
+            data: { status: options.status ?? "ahead", files: options.files ?? [] },
           }),
         },
       },
@@ -138,26 +141,28 @@ async function scheduledScope(
 }
 
 describe("bounded scheduled proof reuse", () => {
-  it.each([
-    { label: "unchanged inputs", files: [{ filename: "docs/intro.md" }], expected: false },
-    { label: "changed contract", files: [{ filename: "src/contracts/node.ts" }], expected: true },
-    {
-      label: "renamed contract",
-      files: [{ filename: "retired.ts", previous_filename: "src/contracts/node.ts" }],
-      expected: true,
-    },
-    {
-      label: "truncated diff",
-      files: Array.from({ length: 300 }, (_, index) => ({ filename: `docs/${index}.md` })),
-      expected: true,
-    },
-    { label: "same SHA", identical: true, expected: false },
-    { label: "missing completed jobs", missingProof: true, expected: true },
-    { label: "diverged history", status: "diverged", expected: true },
-    { label: "daily external drift", ageHours: 25, expected: true },
-    { label: "unavailable proof", unavailable: true, expected: true },
-    { label: "skip-only success never advances the baseline", skipFirst: true, expected: false },
-  ])("$label", async ({ expected, ...options }) => {
+  it.each<[string, boolean, ScheduledScopeOptions]>([
+    ["unchanged inputs", false, { files: [{ filename: "docs/intro.md" }] }],
+    ["changed contract", true, { files: [{ filename: "src/contracts/node.ts" }] }],
+    [
+      "renamed contract",
+      true,
+      { files: [{ filename: "retired.ts", previous_filename: "src/contracts/node.ts" }] },
+    ],
+    [
+      "truncated diff",
+      true,
+      {
+        files: Array.from({ length: 300 }, (_, index) => ({ filename: `docs/${index}.md` })),
+      },
+    ],
+    ["same SHA", false, { identical: true }],
+    ["missing completed jobs", true, { missingProof: true }],
+    ["diverged history", true, { status: "diverged" }],
+    ["daily external drift", true, { ageHours: 25 }],
+    ["unavailable proof", true, { unavailable: true }],
+    ["skip-only success never advances the baseline", false, { skipFirst: true }],
+  ])("%s", async (_label, expected, options) => {
     const { output, notice, paginate } = await scheduledScope(options);
     expect(output).toHaveBeenCalledExactlyOnceWith("changed", expected);
     expect(notice).toHaveBeenCalledOnce();
@@ -209,37 +214,15 @@ describe("bounded scheduled proof reuse", () => {
             cancelled: () => false,
             needs: { scope: { outputs: { changed } } },
           });
-        expect(evaluate("schedule", "false")).toBe(false);
-        expect(evaluate("schedule", "true")).toBe(true);
-        expect(evaluate("pull_request", "")).toBe(true);
-        expect(evaluate("workflow_dispatch", "")).toBe(true);
+        expect([
+          evaluate("schedule", "false"),
+          evaluate("schedule", "true"),
+          evaluate("pull_request", ""),
+          evaluate("workflow_dispatch", ""),
+        ]).toEqual([false, true, true, true]);
       }
     },
   );
-});
-
-describe("node runtime event scope", () => {
-  it.each([
-    [["patches/README.md"], false],
-    [["patches/vitest@5.0.1.patch"], true],
-    [["patches/README.md", "patches/vitest@5.0.1.patch"], true],
-    [["patches/runtime-fixture.md"], true],
-    [["crates/openclaw-node-host/SIDECAR_PROTOCOL.md"], false],
-    [
-      ["crates/openclaw-node-host/SIDECAR_PROTOCOL.md", "crates/openclaw-node-host/src/main.rs"],
-      true,
-    ],
-    [["crates/openclaw-node-host/Cargo.toml"], true],
-    [["crates/openclaw-node-host/tests/fixtures/README.md"], true],
-    [[".github/workflows/node-runtime-conformance.yml"], true],
-  ] as const)("routes %j", (files, expected) => {
-    const workflow = readWorkflow(".github/workflows/node-runtime-conformance.yml");
-    for (const event of ["push", "pull_request"]) {
-      expect(acceptsPaths(workflow.on[event].paths, files)).toBe(expected);
-    }
-    expect(workflow.on.workflow_dispatch).toBeDefined();
-    expect(workflow.on.schedule).toBeDefined();
-  });
 });
 
 describe("workflow cost admission", () => {
@@ -300,10 +283,7 @@ describe("workflow cost admission", () => {
         core: { setOutput: output, warning },
         github: {
           paginate: lookup,
-          rest: {
-            pulls: { listFiles: vi.fn() },
-            repos: { compareCommitsWithBasehead: lookup },
-          },
+          rest: { pulls: { listFiles: vi.fn() }, repos: { compareCommitsWithBasehead: lookup } },
         },
       });
       expect(output).toHaveBeenCalledExactlyOnceWith("changed", changed);
@@ -339,15 +319,9 @@ describe("workflow cost admission", () => {
       "appcast-arm64.xml",
       "scripts/linux-updater-manifest.mjs",
     ]) {
-      expect(workflow.on.push.paths.some((pattern: string) => matchesGlob(filename, pattern))).toBe(
-        true,
-      );
+      expect(acceptsPaths(workflow.on.push.paths, [filename]), filename).toBe(true);
     }
-    expect(
-      workflow.on.push.paths.some((pattern: string) =>
-        matchesGlob("src/agents/example.ts", pattern),
-      ),
-    ).toBe(false);
+    expect(acceptsPaths(workflow.on.push.paths, ["src/agents/example.ts"])).toBe(false);
     const resolver = workflow.jobs.resolve.steps.find(
       (step: { id?: string }) => step.id === "inputs",
     );

@@ -12,7 +12,6 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { parse } from "yaml";
 import * as qaEvidence from "../../extensions/qa-lab/test-api.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
@@ -45,6 +44,14 @@ const MATURITY_GENERATED_PR_PATHS = [
   "docs/maturity/scorecard.md",
   "docs/maturity/taxonomy.md",
 ];
+
+function writeJson(file: string, value: unknown, suffix = "") {
+  writeFileSync(file, JSON.stringify(value) + suffix, "utf8");
+}
+
+function readJson(file: string) {
+  return JSON.parse(readFileSync(file, "utf8"));
+}
 
 function step<T extends { steps: WorkflowStep[] }>(job: T, name: string): T["steps"][number];
 function step(job: { steps: WorkflowStep[] }, name: string) {
@@ -131,10 +138,7 @@ function workflowOccurrenceEvidence(
 function writeWorkflowEvidenceApi(root: string, accessors = true) {
   const apiPath = path.join(root, "extensions/qa-lab/api.ts");
   mkdirSync(path.dirname(apiPath), { recursive: true });
-  writeFileSync(
-    path.join(root, "tsconfig.json"),
-    JSON.stringify({ extends: path.resolve("tsconfig.json") }),
-  );
+  writeJson(path.join(root, "tsconfig.json"), { extends: path.resolve("tsconfig.json") });
   const source = pathToFileURL(path.resolve("extensions/qa-lab/src/evidence-summary.ts")).href;
   // Historical checkouts can validate v2 without exporting the v3 readers.
   writeFileSync(
@@ -174,10 +178,9 @@ function runMantisEvidenceReader(
     );
   }
   const scenarioId = mantisScenarioId(kind);
-  writeFileSync(
-    path.join(outputDir, "discord-qa-summary.json"),
-    JSON.stringify({ scenarios: [{ id: scenarioId, status: "pass" }] }),
-  );
+  writeJson(path.join(outputDir, "discord-qa-summary.json"), {
+    scenarios: [{ id: scenarioId, status: "pass" }],
+  });
   const workflow = readWorkflow(`.github/workflows/mantis-discord-${kind}.yml`);
   const job = kind === "status-reactions" ? "run_status_reactions" : "run_thread_attachment";
   const script = expectDefined(
@@ -278,7 +281,7 @@ function runMaturityArtifactCopyScenario(
 }
 
 function readQaProfileEvidenceWorkflow() {
-  return parse(readFileSync(".github/workflows/qa-profile-evidence.yml", "utf8"));
+  return readWorkflow(".github/workflows/qa-profile-evidence.yml");
 }
 
 type QaProfileTimeoutFixtureMode = "natural-124" | "self-kill" | "term" | "kill";
@@ -374,9 +377,7 @@ timeout_outcome="none"`,
     },
   });
   const outputDir = path.join(selectedRoot, ".artifacts", "qa-e2e", "profile-all-42-1", "shard-01");
-  const status = JSON.parse(
-    readFileSync(path.join(outputDir, "qa-profile-run-status.json"), "utf8"),
-  ) as {
+  const status = readJson(path.join(outputDir, "qa-profile-run-status.json")) as {
     exitCode: number;
     target: { protocolBaseSha: string };
     timedOut: boolean;
@@ -463,21 +464,13 @@ function createQaProtocolTopology() {
 
   runGit(origin, ["checkout", "-q", "-b", "compatibility/restore", mainBase]);
   writeProtocolDescriptor(origin, [
-    {
-      name: "gateway.restart.preflight",
-      since: "<=2026.7",
-      compatibilityRestored: true,
-    },
+    { name: "gateway.restart.preflight", since: "<=2026.7", compatibilityRestored: true },
   ]);
   const compatibilityHead = commitProtocolFixture(origin, "restore compatibility method");
 
   runGit(origin, ["checkout", "-q", "-b", "compatibility/invalid", mainBase]);
   writeProtocolDescriptor(origin, [
-    {
-      name: "gateway.restart.invalid",
-      since: "2026.8",
-      compatibilityRestored: true,
-    },
+    { name: "gateway.restart.invalid", since: "2026.8", compatibilityRestored: true },
   ]);
   const invalidCompatibilityHead = commitProtocolFixture(
     origin,
@@ -558,28 +551,22 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, readFileSync(scriptPath, "utf8"));
   }
-  writeFileSync(
-    path.join(checkout, "tsconfig.json"),
-    JSON.stringify({
-      compilerOptions: {
-        paths: {
-          "@openclaw/normalization-core/record-coerce": [
-            "./packages/normalization-core/src/record-coerce.ts",
-          ],
-        },
+  writeJson(path.join(checkout, "tsconfig.json"), {
+    compilerOptions: {
+      paths: {
+        "@openclaw/normalization-core/record-coerce": [
+          "./packages/normalization-core/src/record-coerce.ts",
+        ],
       },
-    }),
-  );
+    },
+  });
   const nodeModules = path.join(checkout, "node_modules");
   if (!existsSync(nodeModules)) {
     symlinkSync(TYPESCRIPT_NODE_MODULES, nodeModules, "dir");
   }
   return runWorkflowShellScript(
     `${quoteShell(process.execPath)} --import ${quoteShell(TSX_IMPORT)} scripts/check-protocol-since.mts`,
-    {
-      cwd: checkout,
-      env: { ...process.env, PROTOCOL_SINCE_BASE_SHA: baseSha },
-    },
+    { cwd: checkout, env: { ...process.env, PROTOCOL_SINCE_BASE_SHA: baseSha } },
   );
 }
 describe("ci workflow guards", () => {
@@ -605,30 +592,26 @@ describe("ci workflow guards", () => {
         });
       }
 
-      runGit(topology.checkout, ["checkout", "-q", "--detach", topology.mainHead]);
-      const mainCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
-      expectSuccess(mainCheck);
-      expect(mainCheck.stdout).toContain("1 new core method");
-
-      runGit(topology.checkout, ["checkout", "-q", "--detach", topology.compatibilityHead]);
-      const compatibilityCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
-      expectSuccess(compatibilityCheck);
-      expect(compatibilityCheck.stdout).toContain("1 restored compatibility method");
-
-      runGit(topology.checkout, ["checkout", "-q", "--detach", topology.invalidCompatibilityHead]);
-      const invalidCompatibilityCheck = runProtocolSinceFixture(
-        topology.checkout,
-        topology.mainBase,
-      );
-      expect(invalidCompatibilityCheck.status).not.toBe(0);
-      expect(invalidCompatibilityCheck.stderr).toContain(
-        "restored compatibility methods must retain <= vintage metadata",
-      );
-
-      runGit(topology.checkout, ["checkout", "-q", "--detach", topology.releaseHead]);
-      const releaseCheck = runProtocolSinceFixture(topology.checkout, topology.mainBase);
-      expect(releaseCheck.status).not.toBe(0);
-      expect(releaseCheck.stderr).toContain("sessions.releaseOnly is missing since metadata");
+      for (const [revision, success, message] of [
+        [topology.mainHead, true, "1 new core method"],
+        [topology.compatibilityHead, true, "1 restored compatibility method"],
+        [
+          topology.invalidCompatibilityHead,
+          false,
+          "restored compatibility methods must retain <= vintage metadata",
+        ],
+        [topology.releaseHead, false, "sessions.releaseOnly is missing since metadata"],
+      ] as const) {
+        runGit(topology.checkout, ["checkout", "-q", "--detach", revision]);
+        const result = runProtocolSinceFixture(topology.checkout, topology.mainBase);
+        if (success) {
+          expectSuccess(result);
+          expect(result.stdout).toContain(message);
+        } else {
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain(message);
+        }
+      }
 
       for (const [expectedSha, inputRef, revision] of [
         ["not-a-sha", "main", topology.mainHead],
@@ -1173,17 +1156,8 @@ describe("ci workflow guards", () => {
       const manifestPath = path.join(root, "qa-profile-evidence-manifest.json");
       const protocolBaseSha = "b".repeat(40);
       const targetSha = "a".repeat(40);
-      const expectedCell = {
-        scenarioId: "scenario-one",
-        executionKind: "flow",
-        channel: null,
-      };
-      const fulfillment = {
-        total: 1,
-        fulfilled: 1,
-        missing: 0,
-        fulfillmentPercent: 100,
-      };
+      const expectedCell = { scenarioId: "scenario-one", executionKind: "flow", channel: null };
+      const fulfillment = { total: 1, fulfilled: 1, missing: 0, fulfillmentPercent: 100 };
       const features = { ...fulfillment, partial: 0 };
       const scorecard = {
         filters: { surface: null, category: null },
@@ -1191,23 +1165,13 @@ describe("ci workflow guards", () => {
         categories: features,
         features,
         coverageIds: fulfillment,
-        categoryReports: [
-          {
-            id: "surface.category",
-            surfaceId: "surface",
-            name: "Category",
-            status: "fulfilled",
-            features,
-            coverageIds: { ...fulfillment, secondaryOnly: 0 },
-            missingCoverageIds: [],
-          },
-        ],
+        categoryReports: [],
       };
 
       const writeEvidence = (status: "pass" | "fail" = "pass") => {
-        writeFileSync(
+        writeJson(
           evidencePath,
-          `${JSON.stringify({
+          {
             kind: "openclaw.qa.evidence-summary",
             schemaVersion: 2,
             generatedAt: "2026-08-05T00:00:00.000Z",
@@ -1238,8 +1202,8 @@ describe("ci workflow guards", () => {
               },
             },
             scorecard,
-          })}\n`,
-          "utf8",
+          },
+          "\n",
         );
       };
       const runProducer = (qaExitCode: string) =>
@@ -1272,25 +1236,25 @@ describe("ci workflow guards", () => {
             TARGET_SHA: targetSha,
           },
         });
+      const outputPath = path.join(root, "consumer-output");
+      const expectConsumerOutput = (expected: Record<string, string | number | boolean>) => {
+        writeFileSync(outputPath, "");
+        expectSuccess(runConsumer());
+        const output = readFileSync(outputPath, "utf8");
+        for (const [key, value] of Object.entries(expected)) {
+          expect(output).toContain(`${key}=${value}`);
+        }
+      };
 
       writeEvidence();
-      const completeProducer = runProducer("0");
-      expectSuccess(completeProducer);
+      expectSuccess(runProducer("0"));
       const completeManifest = readFileSync(manifestPath, "utf8");
-      expect(JSON.parse(completeManifest)).toMatchObject({
-        protocolBaseSha,
-        targetSha,
-      });
-      const completeConsumer = runConsumer();
-      expectSuccess(completeConsumer);
-      expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
-        "scorecard_passed=true",
-      );
+      expect(JSON.parse(completeManifest)).toMatchObject({ protocolBaseSha, targetSha });
+      expectConsumerOutput({ scorecard_passed: true });
 
-      const originalEvidence = JSON.parse(readFileSync(evidencePath, "utf8"));
-      writeFileSync(evidencePath, JSON.stringify({ ...originalEvidence, evidenceMode: "slim" }));
-      const oldApiSlim = runConsumer();
-      expectSuccess(oldApiSlim);
+      const originalEvidence = readJson(evidencePath);
+      writeJson(evidencePath, { ...originalEvidence, evidenceMode: "slim" });
+      expectSuccess(runConsumer());
       expect(readFileSync(manifestPath, "utf8")).toBe(completeManifest);
 
       const retryEvidence = {
@@ -1302,7 +1266,7 @@ describe("ci workflow guards", () => {
         profilePlan: originalEvidence.profilePlan,
         scorecard,
       };
-      writeFileSync(evidencePath, JSON.stringify(retryEvidence));
+      writeJson(evidencePath, retryEvidence);
       const missingReader = runConsumer();
       expect(missingReader.status).toBe(1);
       expect(`${missingReader.stdout}${missingReader.stderr}`).toContain(
@@ -1311,19 +1275,12 @@ describe("ci workflow guards", () => {
       writeWorkflowEvidenceApi(selectedRoot);
 
       for (const evidenceMode of ["full", "slim"] as const) {
-        writeFileSync(evidencePath, JSON.stringify({ ...retryEvidence, evidenceMode }));
-        const producer = runProducer("0");
-        expectSuccess(producer);
-        expect(JSON.parse(readFileSync(manifestPath, "utf8")).profilePlanSha256).toBe(
+        writeJson(evidencePath, { ...retryEvidence, evidenceMode });
+        expectSuccess(runProducer("0"));
+        expect(readJson(manifestPath).profilePlanSha256).toBe(
           JSON.parse(completeManifest).profilePlanSha256,
         );
-        writeFileSync(path.join(root, "consumer-output"), "");
-        const consumer = runConsumer();
-        expectSuccess(consumer);
-        const output = readFileSync(path.join(root, "consumer-output"), "utf8");
-        expect(output).toContain("scorecard_passed=true");
-        expect(output).toContain("passed_count=1");
-        expect(output).toContain("failed_count=0");
+        expectConsumerOutput({ scorecard_passed: true, passed_count: 1, failed_count: 0 });
       }
 
       for (const obligation of ["required", "advisory"] as const) {
@@ -1344,7 +1301,7 @@ describe("ci workflow guards", () => {
             ],
           },
         };
-        writeFileSync(evidencePath, JSON.stringify(declared));
+        writeJson(evidencePath, declared);
         const producer = runProducer("0");
         expectSuccess(producer);
         const consumer = runConsumer();
@@ -1370,52 +1327,33 @@ describe("ci workflow guards", () => {
           profilePlan: originalEvidence.profilePlan,
           scorecard,
         };
-        writeFileSync(evidencePath, JSON.stringify(parentFailure));
-        writeFileSync(path.join(root, "consumer-output"), "");
-        const consumer = runConsumer();
-        expectSuccess(consumer);
-        const output = readFileSync(path.join(root, "consumer-output"), "utf8");
-        expect(output).toContain("scorecard_passed=false");
-        expect(output).toContain("passed_count=1");
-        expect(output).toContain(`${status === "fail" ? "failed" : "blocked"}_count=1`);
+        writeJson(evidencePath, parentFailure);
+        expectConsumerOutput({
+          scorecard_passed: false,
+          passed_count: 1,
+          [`${status === "fail" ? "failed" : "blocked"}_count`]: 1,
+        });
       }
 
-      writeFileSync(evidencePath, JSON.stringify(retryEvidence));
-      writeFileSync(
-        manifestPath,
-        JSON.stringify({ ...JSON.parse(completeManifest), qaPassed: false }),
-      );
-      writeFileSync(path.join(root, "consumer-output"), "");
-      const failedProducer = runConsumer();
-      expectSuccess(failedProducer);
-      expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
-        "scorecard_passed=false",
-      );
-      writeFileSync(
-        manifestPath,
-        JSON.stringify({ ...JSON.parse(completeManifest), targetSha: protocolBaseSha }),
-      );
+      writeJson(evidencePath, retryEvidence);
+      writeJson(manifestPath, { ...JSON.parse(completeManifest), qaPassed: false });
+      expectConsumerOutput({ scorecard_passed: false });
+      writeJson(manifestPath, { ...JSON.parse(completeManifest), targetSha: protocolBaseSha });
       const wrongSource = runConsumer();
       expect(wrongSource.status).toBe(1);
       expect(`${wrongSource.stdout}${wrongSource.stderr}`).toContain("does not match selected ref");
       writeFileSync(manifestPath, completeManifest);
       const invalidBinding = structuredClone(retryEvidence);
       invalidBinding.entries[0]!.binding.occurrenceId = "foreign";
-      writeFileSync(evidencePath, JSON.stringify(invalidBinding));
+      writeJson(evidencePath, invalidBinding);
       expect(runConsumer().status).toBe(1);
 
       writeEvidence("fail");
-      writeFileSync(path.join(root, "consumer-output"), "", "utf8");
-      const failedEvidenceConsumer = runConsumer();
-      expectSuccess(failedEvidenceConsumer);
-      expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
-        "scorecard_passed=false",
-      );
-      expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain("failed_count=1");
+      expectConsumerOutput({ scorecard_passed: false, failed_count: 1 });
 
       const manifest = JSON.parse(completeManifest) as Record<string, unknown>;
       manifest.profilePlanSha256 = "0".repeat(64);
-      writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, "utf8");
+      writeJson(manifestPath, manifest, "\n");
       const mismatched = runConsumer();
       expect(mismatched.status).toBe(1);
       expect(`${mismatched.stdout}${mismatched.stderr}`).toContain(
@@ -1447,12 +1385,7 @@ describe("ci workflow guards", () => {
       );
 
       const passed = runWorkflowShellScript(gateScript, {
-        env: {
-          ...process.env,
-          BLOCKED_COUNT: "0",
-          FAILED_COUNT: "0",
-          SCORECARD_PASSED: "true",
-        },
+        env: { ...process.env, BLOCKED_COUNT: "0", FAILED_COUNT: "0", SCORECARD_PASSED: "true" },
       });
       expect(passed.status).toBe(0);
     },
@@ -1473,21 +1406,12 @@ describe("ci workflow guards", () => {
     () => {
       const otherWorkflow =
         "openclaw/openclaw/.github/workflows/openclaw-release-checks.yml@refs/heads/main";
-      for (const { callerWorkflowRef, jobWorkflowRef, publishPullRequest, allowed } of [
-        {
-          callerWorkflowRef: MATURITY_SCORECARD_WORKFLOW_REF,
-          publishPullRequest: true,
-          allowed: true,
-        },
-        { callerWorkflowRef: otherWorkflow, publishPullRequest: false, allowed: true },
-        { callerWorkflowRef: otherWorkflow, publishPullRequest: true, allowed: false },
-        {
-          callerWorkflowRef: MATURITY_SCORECARD_WORKFLOW_REF,
-          jobWorkflowRef: otherWorkflow,
-          publishPullRequest: true,
-          allowed: false,
-        },
-      ]) {
+      for (const [callerWorkflowRef, jobWorkflowRef, publishPullRequest, allowed] of [
+        [MATURITY_SCORECARD_WORKFLOW_REF, undefined, true, true],
+        [otherWorkflow, undefined, false, true],
+        [otherWorkflow, undefined, true, false],
+        [MATURITY_SCORECARD_WORKFLOW_REF, otherWorkflow, true, false],
+      ] as const) {
         const result = runMaturityInvocationScenario({
           callerEventName: "workflow_dispatch",
           callerWorkflowRef,
@@ -1556,28 +1480,22 @@ describe("ci workflow guards", () => {
       step(telegramWorkflow.jobs.run_telegram, "Revalidate candidate release provenance"),
     ];
 
-    expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.target_context_ref).toMatchObject({
-      required: false,
-      default: "",
-      type: "string",
-    });
+    for (const workflow of [fullReleaseWorkflow, releaseWorkflow, telegramWorkflow]) {
+      expect(workflow.on.workflow_dispatch.inputs.target_context_ref).toMatchObject({
+        required: false,
+        default: "",
+        type: "string",
+      });
+    }
     expect(fullReleaseDispatchStep.run).toContain('-f ref="$TARGET_SHA"');
     expect(fullReleaseDispatchStep.run).toContain('-f target_context_ref="$TARGET_CONTEXT_REF"');
     expect(fullReleaseDispatchStep.run).not.toContain(
       'release_checks_target_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"',
     );
-    expect(releaseWorkflow.on.workflow_dispatch.inputs.target_context_ref).toMatchObject({
-      required: false,
-      default: "",
-      type: "string",
+    expect(dispatchStep.env).toMatchObject({
+      TARGET_SHA: "${{ needs.resolve_target.outputs.revision }}",
+      TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
     });
-    expect(telegramWorkflow.on.workflow_dispatch.inputs.target_context_ref).toMatchObject({
-      required: false,
-      default: "",
-      type: "string",
-    });
-    expect(dispatchStep.env.TARGET_SHA).toBe("${{ needs.resolve_target.outputs.revision }}");
-    expect(dispatchStep.env.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
     expect(dispatchStep.run).toContain('-f target_context_ref="$TARGET_CONTEXT_REF"');
     expect(dispatchStep.run).toContain('-f target_ref="$TARGET_SHA"');
     expect(dispatchStep.run).not.toContain("telegram_target_ref=");
