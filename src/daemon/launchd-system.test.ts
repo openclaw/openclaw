@@ -16,12 +16,11 @@ function fsError(code: string, target: string): NodeJS.ErrnoException {
 
 vi.mock("node:fs/promises", () => {
   const mocked = {
-    readdir: vi.fn(async (dir: string) => {
-      const prefix = `${dir}/`;
-      return Array.from(state.files.keys())
-        .filter((file) => file.startsWith(prefix) && !file.slice(prefix.length).includes("/"))
-        .map((file) => file.slice(prefix.length));
-    }),
+    readdir: vi.fn(async (dir: string) =>
+      [...state.files.keys()]
+        .filter((file) => path.dirname(file) === dir)
+        .map((file) => path.basename(file)),
+    ),
     readFile: vi.fn(async (target: string) => {
       const file = state.files.get(target);
       if (!file || file.error) {
@@ -99,23 +98,21 @@ function runRenderedProbe(
   writeFileSync(probeLog, "");
   writeFileSync(path.join(root, "non-executable"), "#!/bin/sh\nexit 0\n", { mode: 0o600 });
   writeFileSync(path.join(daemonsDir, plistName), `${plistMode}\n`);
-  const shim = (name: string, body: string) => {
+  const shim = (name: string, event: string, body: string) => {
     const target = path.join(binDir, name);
-    writeFileSync(target, `#!/bin/sh\n${body}\n`, { mode: 0o700 });
+    const log = `printf '${event}\\n' >> "$OPENCLAW_TEST_PROBE_LOG"`;
+    writeFileSync(target, `#!/bin/sh\n${log}\n${body}\n`, { mode: 0o700 });
     chmodSync(target, 0o700);
     return target;
   };
   const plutilShim = shim(
     "plutil",
+    "scan",
     `
-printf 'scan\\n' >> "$OPENCLAW_TEST_PROBE_LOG"
 mode=$1
 for last; do :; done
 case "$last" in
-  *unreadable*)
-    printf '%s\\n' "Operation not permitted" >&2
-    exit 1
-    ;;
+  *unreadable*) printf '%s\\n' "Operation not permitted" >&2; exit 1 ;;
 esac
 fixture=$(/bin/cat "$last")
 case "$mode:$fixture" in
@@ -127,13 +124,7 @@ esac
 exit 1
 `,
   );
-  shim(
-    "launchctl",
-    `
-printf 'query\\n' >> "$OPENCLAW_TEST_PROBE_LOG"
-${launchctlBody}
-`,
-  );
+  shim("launchctl", "query", launchctlBody);
   if (plistMode === "unreadable") {
     chmodSync(path.join(daemonsDir, plistName), 0o000);
   }
@@ -169,9 +160,7 @@ beforeEach(() => {
   Object.defineProperty(process, "platform", { value: "darwin" });
 });
 
-afterEach(() => {
-  Object.defineProperty(process, "platform", { value: hostPlatform });
-});
+afterEach(() => Object.defineProperty(process, "platform", { value: hostPlatform }));
 
 it("fails closed when launchctl cannot classify system ownership", async () => {
   state.launchctl = { stdout: "", stderr: "Operation not permitted", code: 1 };
@@ -185,15 +174,14 @@ it("fails closed when launchctl cannot classify system ownership", async () => {
   });
 });
 
-it("treats a valid non-string Label as unable to own the gateway label", async () => {
-  plist("com.vendor.numeric-label", 42);
-  await expect(inspect()).resolves.toEqual(absent);
+it.each([
+  ["valid non-string Label", 42, undefined, true],
+  ["unreadable foreign plist", undefined, "EACCES", true],
+  ["read-only status probe", undefined, undefined, false],
+] as const)("reports no ownership for a %s", async (_name, value, error, scanInstalledPlists) => {
+  plist("com.vendor.foreign", value, error);
+  await expect(inspect({ scanInstalledPlists })).resolves.toEqual(absent);
   expect(execLaunchctl).toHaveBeenCalledTimes(1);
-});
-
-it("skips an unreadable foreign plist", async () => {
-  plist("com.vendor.locked", undefined, "EACCES");
-  await expect(inspect()).resolves.toEqual(absent);
   await expect(assertNoSystemLaunchDaemonOwnership(label)).resolves.toBeUndefined();
 });
 
@@ -215,11 +203,6 @@ it("detects a readable owner after an unreadable foreign plist", async () => {
     serviceTarget,
     plistPath: owner,
   });
-});
-
-it("can skip the installed-plist scan for read-only status probes", async () => {
-  plist(label);
-  await expect(inspect({ scanInstalledPlists: false })).resolves.toEqual(absent);
 });
 
 it("throws one typed recovery error and documents that force cannot bypass it", async () => {
@@ -248,21 +231,18 @@ it("executes the rendered probe across readable and unreadable plists", () => {
   );
 });
 
+const afterAbsent = (command: string) => `printf 'Could not find service\\n' >&2\n${command}`;
 it.each([
   ["loaded", "exit 0", "loaded system LaunchDaemon"],
   ["absent", absentQuery, ""],
   ["query error", 'printf "Operation not permitted\\n" >&2\nexit 1', "could not verify"],
-  ["signal", 'printf "Could not find service\\n" >&2\nkill -TERM $$', "could not verify"],
+  ["signal", afterAbsent("kill -TERM $$"), "could not verify"],
   [
     "execution failure",
-    'printf "Could not find service\\n" >&2\nexec "$OPENCLAW_TEST_PROBE_DIR/non-executable"',
+    afterAbsent('exec "$OPENCLAW_TEST_PROBE_DIR/non-executable"'),
     "could not verify",
   ],
-  [
-    "missing command",
-    'printf "Could not find service\\n" >&2\nexec "$OPENCLAW_TEST_PROBE_DIR/missing"',
-    "could not verify",
-  ],
+  ["missing command", afterAbsent('exec "$OPENCLAW_TEST_PROBE_DIR/missing"'), "could not verify"],
 ] as const)("executes the rendered ownership query with %s outcome", (scenario, body, detail) => {
   const result = runRenderedProbe("foreign.plist", "unlabeled", body);
   expect(result.conflict).toBe(detail ? "system/ai.openclaw.gateway" : "");

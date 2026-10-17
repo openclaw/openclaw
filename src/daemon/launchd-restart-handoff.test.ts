@@ -9,13 +9,10 @@ type SpawnCall = [string, string[], { env: Record<string, string | undefined> }]
 const spawnMock = vi.hoisted(() => vi.fn<(...args: SpawnCall) => unknown>());
 const unrefMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return {
-    ...actual,
-    spawn: spawnMock,
-  };
-});
+vi.mock("node:child_process", async (original) => ({
+  ...(await original<typeof import("node:child_process")>()),
+  spawn: spawnMock,
+}));
 
 import {
   scheduleDetachedLaunchdMaintenancePark,
@@ -43,22 +40,6 @@ function expectReload(
   }
   expect(result.log).toContain(code ? "restart failed" : "restart done");
   expect(result.log).not.toContain(code ? "restart done" : "restart failed");
-}
-
-async function expectSpawnEvent(event: "error" | "spawn", pid?: number) {
-  const listeners = new Map<string, () => void>();
-  spawnMock.mockReturnValue({
-    pid,
-    unref: unrefMock,
-    once: vi.fn((name: string, listener: () => void) => listeners.set(name, listener)),
-  });
-  const result = scheduleDetachedLaunchdRestartHandoff({ mode: "start-after-exit" });
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error(result.error);
-  }
-  listeners.get(event)?.();
-  await expect(result.value).resolves.toBe(event === "spawn");
 }
 
 const countCall = (command: string) => `    count_file="$LAUNCHCTL_STUB_DIR/${command}-count"
@@ -311,25 +292,21 @@ it("reload retry exhaustion exits nonzero instead of reporting a successful rest
 });
 
 it("sanitizes restart helper environment overrides before spawning", () => {
-  schedule({
-    env: {
-      ...defaultEnv,
-      PATH: "/tmp/evil-bin",
-      DYLD_INSERT_LIBRARIES: "/tmp/evil.dylib",
-      NPM_CONFIG_GLOBALCONFIG: "/tmp/evil-npmrc",
-    },
-    mode: "kickstart",
-  });
-
+  const unsafe = {
+    PATH: "/tmp/evil-bin",
+    DYLD_INSERT_LIBRARIES: "/tmp/evil.dylib",
+    NPM_CONFIG_GLOBALCONFIG: "/tmp/evil-npmrc",
+  };
+  schedule({ env: { ...defaultEnv, ...unsafe }, mode: "kickstart" });
   const [, args, options] = spawnCall();
   expect(args[1]).toContain("exec >>'/Users/test/.openclaw/logs/gateway-restart.log' 2>&1");
-  expect(args[1]).not.toContain("/tmp/evil-bin");
-  expect(args[1]).not.toContain("/tmp/evil.dylib");
-  expect(args[1]).not.toContain("/tmp/evil-npmrc");
-  expect(options.env.OPENCLAW_PROFILE).toBeUndefined();
+  for (const value of Object.values(unsafe)) {
+    expect(args[1]).not.toContain(value);
+  }
+  expect(options.env.PATH).not.toBe(unsafe.PATH);
   expect(options.env.DYLD_INSERT_LIBRARIES).toBeUndefined();
   expect(options.env.NPM_CONFIG_GLOBALCONFIG).toBeUndefined();
-  expect(options.env.PATH).not.toBe("/tmp/evil-bin");
+  expect(options.env.OPENCLAW_PROFILE).toBeUndefined();
 });
 
 it("rejects invalid launchd labels before spawning the helper", () => {
@@ -346,5 +323,17 @@ it("rejects invalid launchd labels before spawning the helper", () => {
 });
 
 it.each(["error", "spawn"] as const)("reports the helper %s event", async (event) => {
-  await expectSpawnEvent(event, event === "spawn" ? 4242 : undefined);
+  const listeners = new Map<string, () => void>();
+  spawnMock.mockReturnValue({
+    pid: event === "spawn" ? 4242 : undefined,
+    unref: unrefMock,
+    once: vi.fn((name: string, listener: () => void) => listeners.set(name, listener)),
+  });
+  const result = scheduleDetachedLaunchdRestartHandoff({ mode: "start-after-exit" });
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error(result.error);
+  }
+  listeners.get(event)?.();
+  await expect(result.value).resolves.toBe(event === "spawn");
 });
