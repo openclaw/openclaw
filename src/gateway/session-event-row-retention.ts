@@ -21,7 +21,3 @@ export function updateSessionEventRowRetention(entriesDelta: number, bytesDelta:
     });
   }).unref();
 }
-
-export function readSessionEventRowRetention() {
-  return { entries, bytes };
-}
