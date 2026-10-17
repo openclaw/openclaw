@@ -25,6 +25,15 @@ import { withQualifiedGatewaySessionEntry } from "./session-utils-store.js";
 const sessionEntry = { sessionId: "same-session", updatedAt: 1 };
 const memberIds = (rows: readonly { identityId: string }[] | undefined) =>
   rows?.map(({ identityId }) => identityId).toSorted();
+type Consume = Parameters<typeof withQualifiedGatewaySessionStoreTarget>[0]["consume"];
+type WorkerRead = typeof sessionEntryReaders.withSessionEntriesFromStoresInWorker;
+
+function interceptRead(wrap: (read: WorkerRead) => WorkerRead) {
+  const original = sessionEntryReaders.withSessionEntriesFromStoresInWorker;
+  return vi
+    .spyOn(sessionEntryReaders, "withSessionEntriesFromStoresInWorker")
+    .mockImplementation(wrap(original));
+}
 
 function makeSession(env: NodeJS.ProcessEnv) {
   const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
@@ -33,9 +42,7 @@ function makeSession(env: NodeJS.ProcessEnv) {
   const scope = { agentId: "main", sessionKey: key, env };
   const database = openOpenClawAgentDatabase({ agentId: "main", env });
   return {
-    cfg,
-    key,
-    env,
+    lookup: { cfg, key, env },
     scope,
     database,
     commit: (write: () => void) =>
@@ -51,11 +58,10 @@ async function withSession(run: (fixture: ReturnType<typeof makeSession>) => Pro
   await withOpenClawTestState({ scenario: "minimal" }, ({ env }) => run(makeSession(env)));
 }
 
-async function qualify(cfg: OpenClawConfig, key: string, env: NodeJS.ProcessEnv) {
+async function qualify(lookup: ReturnType<typeof makeSession>["lookup"]) {
+  const { key, env } = lookup;
   const selected = await resolveGatewaySessionStoreTargetWithStoreAsync({
-    cfg,
-    key,
-    env,
+    ...lookup,
     exactRead: true,
   });
   const qualified = await prepareQualifiedSessionEntryTarget(
@@ -63,11 +69,11 @@ async function qualify(cfg: OpenClawConfig, key: string, env: NodeJS.ProcessEnv)
     selected.capturedReadSources,
     env,
   );
-  return { selected, qualified };
+  return { target: qualified, logicalStorePath: selected.storePath, env };
 }
 
 it("reads current qualified facts and recovers lifecycle timestamps only when requested", async () => {
-  await withSession(async ({ cfg, key, env, scope, member }) => {
+  await withSession(async ({ lookup, scope, member }) => {
     const sessionId = "qualified-lifecycle";
     const entry = { sessionId, updatedAt: 2_000, lastInteractionAt: 1_500 };
     await replaceSessionEntry(scope, { ...entry, label: "before" });
@@ -75,13 +81,11 @@ it("reads current qualified facts and recovers lifecycle timestamps only when re
       { type: "session", id: sessionId, version: 3, timestamp: "1970-01-01T00:00:01.000Z" },
     ]);
     member("first-member");
-    const { selected, qualified } = await qualify(cfg, key, env);
+    const selected = await qualify(lookup);
     const read = (includeLifecycle = false) =>
       withQualifiedGatewaySessionEntry({
-        cfg,
-        target: qualified,
-        logicalStorePath: selected.storePath,
-        env,
+        ...selected,
+        cfg: lookup.cfg,
         includeMembership: true,
         includeLifecycle,
         assertConfigCurrent() {},
@@ -89,26 +93,19 @@ it("reads current qualified facts and recovers lifecycle timestamps only when re
           assertCurrent();
           return {
             label: current.entry?.label,
-            members: memberIds(members.get(key)),
+            members: memberIds(members.get(lookup.key)),
             timestamps: current.lifecycleTimestamps,
           };
         },
       });
-    await expect(read()).resolves.toEqual({
-      label: "before",
-      members: ["first-member"],
-      timestamps: {},
-    });
+    const before = { label: "before", members: ["first-member"], timestamps: {} };
+    await expect(read()).resolves.toEqual(before);
     await replaceSessionEntry(scope, { ...entry, label: "after" });
     member("second-member", 2);
-    await expect(read()).resolves.toEqual({
-      label: "after",
-      members: ["first-member", "second-member"],
-      timestamps: {},
-    });
+    const after = { ...before, label: "after", members: ["first-member", "second-member"] };
+    await expect(read()).resolves.toEqual(after);
     await expect(read(true)).resolves.toEqual({
-      label: "after",
-      members: ["first-member", "second-member"],
+      ...after,
       timestamps: { sessionStartedAt: 1_000, lastInteractionAt: 1_500 },
     });
   });
@@ -117,62 +114,46 @@ it("reads current qualified facts and recovers lifecycle timestamps only when re
 it.for(["membership", "explicit", "qualified"] as const)(
   "consumes facts committed before its %s-ordered snapshot",
   async (ordering) => {
-    await withSession(async ({ cfg, key, env, scope, commit, write, member }) => {
+    await withSession(async ({ lookup, scope, commit, write, member }) => {
+      const { key } = lookup;
       await replaceSessionEntry(scope, sessionEntry);
-      const { selected, qualified } = ordering === "qualified" ? await qualify(cfg, key, env) : {};
+      const selected = ordering === "qualified" ? await qualify(lookup) : undefined;
       const committedValues: string[] = [];
       const pendingValues = ["first-value", "second-value"];
-      const readEntries = sessionEntryReaders.withSessionEntriesFromStoresInWorker;
-      using _ = vi
-        .spyOn(sessionEntryReaders, "withSessionEntriesFromStoresInWorker")
-        .mockImplementation(async (inputs, consume, options) => {
-          const value = pendingValues.shift();
-          if (value) {
-            // Real writes win the FIFO before the reader starts its snapshot.
-            await commit(() => {
-              if (ordering !== "explicit") {
-                member(value);
-              } else {
-                write(value, 2);
-              }
-              committedValues.push(value);
-            });
-          }
-          return readEntries(inputs, consume, options);
-        });
+      const ordered = ordering === "explicit";
+      using _ = interceptRead((readEntries) => async (inputs, consume, options) => {
+        const value = pendingValues.shift();
+        if (value) {
+          // Real writes win the FIFO before the reader starts its snapshot.
+          await commit(() => {
+            if (!ordered) {
+              member(value);
+            } else {
+              write(value, 2);
+            }
+            committedValues.push(value);
+          });
+        }
+        return readEntries(inputs, consume, options);
+      });
       let consumptions = 0;
-      const consume: Parameters<typeof withQualifiedGatewaySessionStoreTarget>[0]["consume"] = (
-        target,
-        membership,
-        assertCurrent,
-      ) => {
+      const consume: Consume = (target, membership, assertCurrent) => {
         consumptions += 1;
         assertCurrent();
         expect(target.store[key]?.sessionId).toBe("same-session");
-        return ordering !== "explicit" ? memberIds(membership.get(key)) : target.store[key]?.label;
+        return ordered ? target.store[key]?.label : memberIds(membership.get(key));
       };
-      const result =
-        qualified && selected
-          ? await withQualifiedGatewaySessionStoreTarget({
-              target: qualified,
-              logicalStorePath: selected.storePath,
-              env,
-              includeMembership: true,
-              consume,
-            })
-          : await withGatewaySessionStoreTarget(
-              {
-                cfg,
-                key,
-                env,
-                includeMembership: ordering === "membership",
-                ordered: ordering === "explicit",
-              },
-              consume,
-            );
-      expect(result).toEqual(
-        ordering !== "explicit" ? committedValues.toSorted() : committedValues.at(-1),
-      );
+      const result = selected
+        ? await withQualifiedGatewaySessionStoreTarget({
+            ...selected,
+            includeMembership: true,
+            consume,
+          })
+        : await withGatewaySessionStoreTarget(
+            { ...lookup, includeMembership: !ordered, ordered },
+            consume,
+          );
+      expect(result).toEqual(ordered ? committedValues.at(-1) : committedValues.toSorted());
       expect(committedValues).toContain("first-value");
       expect(consumptions).toBe(1);
     });
@@ -180,41 +161,38 @@ it.for(["membership", "explicit", "qualified"] as const)(
 );
 
 it("consumes a fresh metadata snapshot before the next queued writer", async () => {
-  await withSession(async ({ cfg, key, env, scope, database, commit, write }) => {
+  await withSession(async ({ lookup, scope, database, commit, write }) => {
     replaceSessionEntrySync(scope, { ...sessionEntry, label: "initial" });
     const events: string[] = [];
     const writes: Promise<void>[] = [];
-    const readEntries = sessionEntryReaders.withSessionEntriesFromStoresInWorker;
-    const read = vi
-      .spyOn(sessionEntryReaders, "withSessionEntriesFromStoresInWorker")
-      .mockImplementation(async (inputs, consume, options) => {
-        await Promise.all(writes);
-        // Writer results settle before their FIFO drain releases the idle lane.
-        await SQLITE_SESSION_WRITER_QUEUES.get(database.path)?.drainPromise;
-        return readEntries(
-          inputs,
-          (prepared) => {
-            const revision = writes.length + 1;
-            const label = `write-${revision}`;
-            // Commit after snapshot capture, or queue behind a reader that owns the FIFO.
-            const pending = commit(() => {
-              write(label, revision + 1);
-              events.push(label);
-            });
-            writes.push(pending);
-            void pending.catch(() => {});
-            return consume(prepared);
-          },
-          options,
-        );
-      });
+    const read = interceptRead((readEntries) => async (inputs, consume, options) => {
+      await Promise.all(writes);
+      // Writer results settle before their FIFO drain releases the idle lane.
+      await SQLITE_SESSION_WRITER_QUEUES.get(database.path)?.drainPromise;
+      return readEntries(
+        inputs,
+        (prepared) => {
+          const revision = writes.length + 1;
+          const label = `write-${revision}`;
+          // Commit after snapshot capture, or queue behind a reader that owns the FIFO.
+          const pending = commit(() => {
+            write(label, revision + 1);
+            events.push(label);
+          });
+          writes.push(pending);
+          void pending.catch(() => {});
+          return consume(prepared);
+        },
+        options,
+      );
+    });
     try {
       const label = await withGatewaySessionStoreTarget(
-        { cfg, key, env },
+        lookup,
         (target, _membership, assertCurrent) => {
           assertCurrent();
           events.push("consume");
-          return target.store[key]?.label;
+          return target.store[lookup.key]?.label;
         },
       );
       await Promise.all(writes);
@@ -231,37 +209,32 @@ it("consumes a fresh metadata snapshot before the next queued writer", async () 
 it.each(["during", "repeated", "consume"] as const)(
   "consumes an ordered sharing snapshot with a native write %s admission",
   async (timing) => {
-    await withSession(async ({ cfg, key, env, scope, database, member }) => {
+    await withSession(async ({ lookup, scope, database, member }) => {
+      const { key } = lookup;
       await replaceSessionEntry(scope, sessionEntry);
       const committedMembers: string[] = [];
       const pendingMembers =
         timing === "repeated" ? ["first-member", "second-member"] : ["first-member"];
       let reads = 0;
-      const readEntries = sessionEntryReaders.withSessionEntriesFromStoresInWorker;
-      using _ = vi
-        .spyOn(sessionEntryReaders, "withSessionEntriesFromStoresInWorker")
-        .mockImplementation(async (inputs, consume, options) => {
-          reads += 1;
-          const write = () => {
-            const identityId = pendingMembers.shift();
-            if (identityId) {
-              member(identityId);
-              committedMembers.push(identityId);
-            }
-          };
-          return readEntries(inputs, consume, {
-            ...options,
-            onReadAdmitted() {
-              options?.onReadAdmitted?.();
-              if (timing === "during" || timing === "repeated") {
-                write();
+      using _ = interceptRead((readEntries) => async (inputs, consume, options) => {
+        reads += 1;
+        return readEntries(inputs, consume, {
+          ...options,
+          onReadAdmitted() {
+            options?.onReadAdmitted?.();
+            if (timing === "during" || timing === "repeated") {
+              const identityId = pendingMembers.shift();
+              if (identityId) {
+                member(identityId);
+                committedMembers.push(identityId);
               }
-            },
-          });
+            }
+          },
         });
+      });
       let consumptions = 0;
       const reading = withGatewaySessionStoreTarget(
-        { cfg, key, env, includeMembership: true },
+        { ...lookup, includeMembership: true },
         (target, membership, assertCurrent) => {
           consumptions += 1;
           if (timing === "consume") {
@@ -280,8 +253,7 @@ it.each(["during", "repeated", "consume"] as const)(
         expect(consumptions).toBe(timing === "consume" ? 1 : 0);
       } else {
         expect(await reading).toEqual(committedMembers.toSorted());
-        expect(reads).toBe(2);
-        expect(consumptions).toBe(1);
+        expect({ reads, consumptions }).toEqual({ reads: 2, consumptions: 1 });
       }
     });
   },

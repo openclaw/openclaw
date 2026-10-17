@@ -1,8 +1,8 @@
 import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { createRequireRecord } from "../../test/helpers/record.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -37,9 +37,7 @@ const secret = "history-fixture-shared-secret";
 const hiddenText = "example/historical remains ordinary message text";
 const historical = { provider: "example", model: "historical" };
 
-function record(value: unknown) {
-  return expectDefined(asOptionalRecord(value), "history record");
-}
+const record = createRequireRecord("record", "expected-record");
 
 function messages(value: unknown, count: number) {
   const body = record(value);
@@ -162,22 +160,15 @@ describe("HTTP historical model disclosure", () => {
       createdActor: { type: "human", source: "profile", id: readerId },
       visibility: "shared",
     });
-    for (const [id, provider, model, content] of [
-      ["hidden", "example", "historical", hiddenText],
-      ["allowed", "example", "allowed", "allowed model reply"],
-      ["bookkeeping", "openclaw", "delivery-mirror", "delivery bookkeeping reply"],
-      ["cleared", null, null, "cleared model metadata reply"],
-    ] as const) {
+    for (const [index, metadata] of [
+      { ...historical, content: hiddenText },
+      { provider: "example", model: "allowed" },
+      { provider: "openclaw", model: "delivery-mirror", api: OPENCLAW_TRANSCRIPT_ARTIFACT_API },
+      { provider: null, model: null },
+    ].entries()) {
       await appendTranscriptMessage(scope, {
-        eventId: `${sessionId}-${id}`,
-        message: {
-          role: "assistant",
-          provider,
-          model,
-          content,
-          stopReason: "stop",
-          ...(id === "bookkeeping" ? { api: OPENCLAW_TRANSCRIPT_ARTIFACT_API } : {}),
-        },
+        eventId: `${sessionId}-${index}`,
+        message: { role: "assistant", content: "reply", stopReason: "stop", ...metadata },
       });
     }
   });
@@ -250,6 +241,7 @@ describe("HTTP historical model disclosure", () => {
       { provider: "openclaw", model: "delivery-mirror" },
       { provider: null, model: null },
     ]);
+    rows.slice(4).forEach(expectHidden);
     return rows;
   }
 
@@ -303,8 +295,6 @@ describe("HTTP historical model disclosure", () => {
     await append("refresh private model reply", "file-only");
     const refreshedRows = expectRestrictedSnapshot(await stream.next(), 6);
     expect(refreshedRows.slice(0, 4)).toEqual(rows);
-    expectHidden(refreshedRows[4]);
-    expectHidden(refreshedRows[5]);
 
     const persisted = await loadTranscriptEvents(scope);
     expect(persisted.slice(0, saved.length)).toEqual(saved);
@@ -347,12 +337,7 @@ describe("HTTP historical model disclosure", () => {
           ? jsonHistory()
           : openStream().then((opened) => opened.next());
       try {
-        await Promise.race([
-          entered.promise,
-          pending.then(() => {
-            throw new Error("History did not reach held read");
-          }),
-        ]);
+        await awaitGateBeforeSettlement(entered.promise, pending, "History read not held");
         publishConfig(config());
       } finally {
         release.resolve();
@@ -360,9 +345,6 @@ describe("HTTP historical model disclosure", () => {
       }
       const payload = await pending;
       expectRestrictedSnapshot(payload, stream ? 5 : 4);
-      if (stream) {
-        expectHidden(messages(payload, 5)[4]);
-      }
     },
   );
 
@@ -388,8 +370,7 @@ describe("HTTP historical model disclosure", () => {
       record(await stream.next("message")).message,
       "publication after committed narrowing",
     );
-    const rows = expectRestrictedSnapshot(await jsonHistory(), 5);
-    expectHidden(rows[4]);
+    expectRestrictedSnapshot(await jsonHistory(), 5);
   });
 
   it("keeps committed restriction during tentative widening, then publishes committed widening", async () => {

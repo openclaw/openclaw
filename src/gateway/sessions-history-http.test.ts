@@ -73,17 +73,27 @@ async function seedSession(params?: { text?: string; sessionId?: string; updated
 }
 
 async function appendText(storePath: string, text: string, emitInlineMessage = true) {
+  return (await appendMessage(storePath, text, emitInlineMessage ? "inline" : "file-only"))
+    .messageId;
+}
+
+async function appendMessage(
+  storePath: string,
+  text: string,
+  updateMode: "inline" | "file-only" | "none",
+) {
+  const message = makeTranscriptAssistantMessage({ text });
   const appended = await appendExactAssistantMessageToSessionTranscript({
     sessionKey: SESSION_KEY,
     storePath,
-    message: makeTranscriptAssistantMessage({ text }),
-    updateMode: emitInlineMessage ? "inline" : "file-only",
+    message,
+    updateMode,
   });
   expect(appended.ok).toBe(true);
   if (!appended.ok) {
     throw new Error(`append failed: ${appended.reason}`);
   }
-  return appended.messageId;
+  return { ...appended, message };
 }
 
 function persistHistoryTurn(
@@ -152,6 +162,10 @@ async function openSessionHistorySse(
     query: params?.query,
     headers: { Accept: "text/event-stream" },
   });
+  return historyStream(res);
+}
+
+function historyStream(res: Response): SessionHistorySseStream {
   expect(res.status).toBe(200);
   const reader = res.body?.getReader();
   if (reader === undefined) {
@@ -284,12 +298,9 @@ describe("session history HTTP endpoints", () => {
           expect(response.headers.get("content-type"), accept).toContain(contentType);
           let body: SessionHistoryBody;
           if (contentType === "text/event-stream") {
-            const reader = response.body?.getReader();
-            expect(reader, accept).toBeDefined();
-            const event = await readSseEvent(reader!, { buffer: "" });
-            expect(event.event, accept).toBe("history");
-            body = event.data as SessionHistoryBody;
-            await reader!.cancel();
+            const stream = historyStream(response);
+            body = await readHistoryEvent(stream);
+            await stream.reader.cancel();
           } else {
             body = (await response.json()) as SessionHistoryBody;
           }
@@ -355,23 +366,24 @@ describe("session history HTTP endpoints", () => {
       return turn!;
     };
     const first = await persistAttributedTurn("first", "Historical Ada", "first turn");
+    const turn = (id: string, seq: number, name: string, text: string, avatarUrl: string) => ({
+      role: "user",
+      content: text,
+      __openclaw: {
+        id,
+        seq,
+        senderId: profile.id,
+        senderName: name,
+        senderUsername: "ada",
+        senderProfileAvatarUrl: avatarUrl,
+      },
+    });
 
     await withGatewayHarness(async (harness) => {
       const initialRest = await readSessionHistoryBody(harness.port, SESSION_KEY);
       await withHistoryStream(harness.port, async (stream) => {
         const initialSse = await readHistoryEvent(stream);
-        const oldExpected = {
-          role: "user",
-          content: "first turn",
-          __openclaw: {
-            id: first.messageId,
-            seq: 1,
-            senderId: profile.id,
-            senderName: "Historical Ada",
-            senderUsername: "ada",
-            senderProfileAvatarUrl: oldAvatarUrl,
-          },
-        };
+        const oldExpected = turn(first.messageId, 1, "Historical Ada", "first turn", oldAvatarUrl);
         expect(initialRest.messages?.[0]).toMatchObject(oldExpected);
         expect(initialSse.messages?.[0]).toMatchObject(oldExpected);
 
@@ -385,29 +397,15 @@ describe("session history HTTP endpoints", () => {
         const inlineEventPromise = readHistoryEvent(stream);
         const second = await persistAttributedTurn("second", "Current Ada", "second turn");
         const refreshEvent = await inlineEventPromise;
-        const newSecondExpected = {
-          ...oldExpected,
-          content: "second turn",
-          __openclaw: {
-            ...oldExpected["__openclaw"],
-            id: second.messageId,
-            seq: 2,
-            senderName: "Current Ada",
-            senderProfileAvatarUrl: newAvatarUrl,
-          },
-        };
-        const newFirstExpected = {
-          ...oldExpected,
-          __openclaw: {
-            ...oldExpected["__openclaw"],
-            senderProfileAvatarUrl: newAvatarUrl,
-          },
-        };
+        const expected = [
+          turn(first.messageId, 1, "Historical Ada", "first turn", newAvatarUrl),
+          turn(second.messageId, 2, "Current Ada", "second turn", newAvatarUrl),
+        ];
         for (const body of [
           refreshEvent,
           await readSessionHistoryBody(harness.port, SESSION_KEY),
         ]) {
-          expect(body.messages).toMatchObject([newFirstExpected, newSecondExpected]);
+          expect(body.messages).toMatchObject(expected);
         }
       });
     });
@@ -526,14 +524,12 @@ describe("session history HTTP endpoints", () => {
     const cases = [
       {
         body: "Verified sender body\n    indented line",
-        promptSessionKey: "agent:grimwald:asserted",
         sourceSessionKey: "agent:helper:ops",
         senderLabel: "Forwarded from helper",
         senderSession: { sessionKey: "agent:helper:ops", agentId: "helper" },
       },
       {
         body: "Unverified sender body\n    indented line",
-        promptSessionKey: "agent:grimwald:asserted",
         sourceSessionKey: undefined,
         senderLabel: "Forwarded agent message",
         senderSession: undefined,
@@ -541,7 +537,7 @@ describe("session history HTTP endpoints", () => {
     ];
     for (const entry of cases) {
       const persisted = await persistHistoryTurn(storePath, {
-        text: `[Inter-session message] sourceSession=${entry.promptSessionKey} sourceTool=sessions_send isUser=false\n${entry.body}`,
+        text: `[Inter-session message] sourceSession=agent:grimwald:asserted sourceTool=sessions_send isUser=false\n${entry.body}`,
         provenance: {
           kind: "inter_session",
           sourceTool: "sessions_send",
@@ -610,17 +606,7 @@ describe("session history HTTP endpoints", () => {
     await withGatewayHistoryStream(async (stream) => {
       await expectHistoryEventTexts(stream, ["archived before reset"]);
 
-      const activeMessage = makeTranscriptAssistantMessage({ text: "active after reset" });
-      const appended = await appendExactAssistantMessageToSessionTranscript({
-        sessionKey: SESSION_KEY,
-        storePath,
-        message: activeMessage,
-        updateMode: "none",
-      });
-      expect(appended.ok).toBe(true);
-      if (!appended.ok) {
-        throw new Error(`append failed: ${appended.reason}`);
-      }
+      const appended = await appendMessage(storePath, "active after reset", "none");
       emitSessionTranscriptUpdate({
         sessionFile: appended.target.sessionKey,
         sessionKey: SESSION_KEY,
@@ -629,7 +615,7 @@ describe("session history HTTP endpoints", () => {
           sessionId: appended.target.sessionId,
           sessionKey: appended.target.sessionKey,
         },
-        message: activeMessage,
+        message: appended.message,
         messageId: appended.messageId,
         messageSeq: 2,
       });
@@ -888,15 +874,15 @@ describe("session history HTTP endpoints", () => {
         .spyOn(sessionHistoryState, "readSessionHistorySnapshotAsync")
         .mockImplementationOnce(async (params) => {
           const snapshot = await readSnapshot(params);
-          await appendText(storePath, "committed during startup");
+          await appendText(storePath, "during startup");
           return snapshot;
         });
       await withHistoryStream(
         harness.port,
         async (stream) => {
-          await expectHistoryEventTexts(stream, ["first message", "committed during startup"]);
-          await appendText(storePath, "live after startup");
-          await expectHistoryEventTexts(stream, ["committed during startup", "live after startup"]);
+          await expectHistoryEventTexts(stream, ["first message", "during startup"]);
+          await appendText(storePath, "after startup");
+          await expectHistoryEventTexts(stream, ["during startup", "after startup"]);
         },
         "?limit=2",
       );
@@ -904,12 +890,12 @@ describe("session history HTTP endpoints", () => {
   });
 
   test("bounds retained SSE history without truncating full history or live updates", async () => {
-    const retainedMessageLimit = 1_000;
-    const initialMessageCount = retainedMessageLimit + 2;
+    const retainedLimit = 1_000;
+    const initialCount = retainedLimit + 2;
     const { storePath } = await seedSession();
     await replaceHistory(
       storePath,
-      Array.from({ length: initialMessageCount }, (_, index) => ({
+      Array.from({ length: initialCount }, (_, index) => ({
         id: `history-message-${index + 1}`,
         parentId: index === 0 ? null : `history-message-${index}`,
         message: makeTranscriptAssistantMessage({ text: `history message ${index + 1}` }),
@@ -934,13 +920,13 @@ describe("session history HTTP endpoints", () => {
     const retainedSnapshot = () => snapshotSpy.mock.results.at(-1)?.value;
     await withGatewayHistoryStream(async (stream, port) => {
       const initial = await readHistoryEvent(stream);
-      expectWindow(initial, initialMessageCount, "history message 1");
-      expectWindow(retainedSnapshot(), retainedMessageLimit, "history message 3");
+      expectWindow(initial, initialCount, "history message 1");
+      expectWindow(retainedSnapshot(), retainedLimit, "history message 3");
       await withHistoryStream(
         port,
         async (cursorStream) => {
-          expectWindow(await readHistoryEvent(cursorStream), initialMessageCount);
-          expectWindow(retainedSnapshot(), retainedMessageLimit, "history message 3");
+          expectWindow(await readHistoryEvent(cursorStream), initialCount);
+          expectWindow(retainedSnapshot(), retainedLimit, "history message 3");
 
           const messageId = await appendText(storePath, "live history message");
           const lastSequence = initial.messages?.at(-1)?.["__openclaw"]?.seq;
@@ -955,13 +941,9 @@ describe("session history HTTP endpoints", () => {
             const snapshot = result.value;
             return snapshot?.messages?.at(-1)?.content?.[0]?.text === "live history message";
           })?.value;
-          expectWindow(liveRetained, retainedMessageLimit, undefined, "live history message");
-          expectWindow(
-            await readHistoryEvent(cursorStream),
-            initialMessageCount,
-            "history message 1",
-          );
-          expectWindow(retainedSnapshot(), retainedMessageLimit);
+          expectWindow(liveRetained, retainedLimit, undefined, "live history message");
+          expectWindow(await readHistoryEvent(cursorStream), initialCount, "history message 1");
+          expectWindow(retainedSnapshot(), retainedLimit);
 
           const completeHistory = await vi.waitFor(
             () => readSessionHistoryBody(port, SESSION_KEY),
@@ -969,12 +951,12 @@ describe("session history HTTP endpoints", () => {
           );
           expectWindow(
             completeHistory,
-            initialMessageCount + 1,
+            initialCount + 1,
             "history message 1",
             "live history message",
           );
         },
-        `?cursor=${initialMessageCount + 1}`,
+        `?cursor=${initialCount + 1}`,
       );
     });
   });
@@ -984,13 +966,7 @@ describe("session history HTTP endpoints", () => {
 
     await withGatewayHistoryStream(async (stream) => {
       await expectHistoryEventTexts(stream, ["first message"]);
-      const appended = await appendExactAssistantMessageToSessionTranscript({
-        sessionKey: SESSION_KEY,
-        storePath,
-        message: makeTranscriptAssistantMessage({ text: "committed second message" }),
-        updateMode: "none",
-      });
-      expect(appended.ok).toBe(true);
+      await appendMessage(storePath, "committed second message", "none");
       emitSessionTranscriptUpdate({
         target: {
           agentId: "main",
@@ -1062,10 +1038,7 @@ describe("session history HTTP endpoints", () => {
           headers: { ...AUTH_HEADER, Accept: "text/event-stream" },
         },
       );
-      expect(res.status).toBe(200);
-      const reader = res.body?.getReader();
-      expect(reader).toBeDefined();
-      const stream = { reader: reader!, streamState: { buffer: "" } };
+      const stream = historyStream(res);
 
       await expectHistoryEventTexts(stream, ["bearer allowed history"]);
 
@@ -1081,4 +1054,3 @@ describe("session history HTTP endpoints", () => {
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
