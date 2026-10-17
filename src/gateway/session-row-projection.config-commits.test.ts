@@ -25,6 +25,7 @@ import { listProjectedSessions } from "./session-utils-list.js";
 // The threaded projection fixture has no Gateway host broker; lease behavior has its own suite.
 vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
   hasPluginLifecycleLease: () => false,
+  runAfterPluginLifecycleCommit: (run: () => unknown) => run(),
   runOutsidePluginLifecycleLease: (run: () => unknown) => run(),
   withPluginLifecycleLease: async (
     _options: unknown,
