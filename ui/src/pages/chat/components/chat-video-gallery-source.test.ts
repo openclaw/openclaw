@@ -5,30 +5,22 @@ import type { ImageLightboxItem } from "../../../components/image-lightbox.types
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
-import {
-  releaseChatMediaResourceOwner,
-  type AttachmentItem,
-  type ImageRenderOptions,
-} from "./chat-message-media.ts";
-
+import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
+import type { AttachmentItem, ImageRenderOptions } from "./chat-message-media.ts";
 let pause: ReturnType<typeof vi.spyOn>;
 let container: HTMLDivElement | undefined;
-let view: ReturnType<typeof mountSolid> | undefined;
 let disconnect: (() => void) | undefined;
-let update: (() => void) | undefined;
+const cleanups: (() => void)[] = [];
 afterEach(() => {
   disconnect?.();
   disconnect = undefined;
-  view?.unmount();
-  view = undefined;
-  releaseChatMediaResourceOwner(update);
-  update = undefined;
-  container?.remove();
+  for (const cleanup of cleanups.splice(0).toReversed()) {
+    cleanup();
+  }
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-
 function video(url: string, options: Partial<AttachmentItem["attachment"]> = {}): AttachmentItem {
   return { type: "attachment", attachment: { kind: "video", url, label: "Clip", ...options } };
 }
@@ -39,44 +31,45 @@ const ticket = (source: string, value: string, ttl = 300_000) => ({
 });
 async function open(
   attachment: AttachmentItem,
-  resolveArtifactDownload?: () => Promise<{ url: string; expiresAt: string }>,
+  resolveArtifactDownload?: ImageRenderOptions["resolveArtifactDownload"],
   gallery = [attachment],
 ) {
   pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
-  container = document.body.appendChild(document.createElement("div"));
-  let opened: ImageLightboxItem | undefined;
+  const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  update = () => {
+  const update = () => {
     setRevision((value) => value + 1);
     if (!getOwner()) {
       flush();
     }
   };
-  view = mountSolid(
-    () =>
-      createComponent(AssistantAttachments, {
-        attachments: [attachment],
-        get options(): ImageRenderOptions {
-          revision();
-          return {
-            mediaOwner: update,
-            resolveArtifactDownload,
-            galleryVideos: () => ({ index: 0, items: gallery }),
-            onOpenImage: (item) => {
-              opened = item;
-            },
-          };
-        },
-      }),
-    { container },
+  const view = mountSolid(() =>
+    createComponent(AssistantAttachments, {
+      attachments: [attachment],
+      get options(): ImageRenderOptions {
+        revision();
+        return {
+          mediaOwner: update,
+          resolveArtifactDownload,
+          galleryVideos: () => ({ index: 0, items: gallery }),
+          onOpenImage,
+        };
+      },
+    }),
   );
+  container = view.container;
+  cleanups.push(() => {
+    view.unmount();
+    releaseChatMediaResourceOwner(update);
+  });
   await vi.waitFor(() =>
     expect(container?.querySelector("openclaw-chat-video-player")).not.toBeNull(),
   );
   const player = container.querySelector("openclaw-chat-video-player")!;
   await player.updateComplete;
   player.onExpand?.(attachment.attachment.url);
+  const opened = onOpenImage.mock.lastCall?.[0];
   expect(opened?.connectVideo).toBeTypeOf("function");
   return opened!;
 }
@@ -84,12 +77,10 @@ async function open(
 it("renews a selected video's ticket without interrupting playback and releases renewal on close", async () => {
   vi.useFakeTimers();
   const source = outgoing();
-  const resolve = vi
-    .fn()
-    .mockResolvedValueOnce(ticket(source, "A", 31_000))
-    .mockResolvedValue(ticket(source, "B"));
-  const first = video("https://example.com/first.mp4", { label: "First" });
-  const next = video(source, { artifactId: "synthetic-video", mimeType: "video/mp4" });
+  const resolve = vi.fn().mockResolvedValue(ticket(source, "B"));
+  resolve.mockResolvedValueOnce(ticket(source, "A", 31_000));
+  const first = video("https://example.com/first.mp4");
+  const next = video(source, { artifactId: "synthetic-video" });
   const opened = await open(first, resolve, [first, next]);
   const item = await opened.gallery!.items[1]!();
   const media = container!.appendChild(document.createElement("video"));
@@ -114,38 +105,25 @@ it("renews a selected video's ticket without interrupting playback and releases 
   media.currentTime = 0;
   paused = true;
   media.dispatchEvent(new Event("loadedmetadata"));
-  expect(media.currentTime).toBe(8);
+  expect(media).toMatchObject({ currentTime: 8, paused: false });
   expect(play).toHaveBeenCalledOnce();
-  expect(paused).toBe(false);
   disconnect();
   disconnect = undefined;
   expect(media.hasAttribute("src")).toBe(false);
   expect(pause).toHaveBeenCalled();
-  // This neighbor has no inline subscriber. The transcript owner remains alive;
-  // only the selected connection can release its pending refresh timer here.
+  // The transcript owner remains alive; only closing this neighbor releases its timer.
   expect(vi.getTimerCount()).toBe(timersBeforeConnection);
   await vi.advanceTimersByTimeAsync(300_000);
   expect(resolve).toHaveBeenCalledTimes(2);
 });
 
 it("aborts selected rendition preparation and never assigns a late source after close", async () => {
-  // Direct expansion isolates the modal connection from inline viewport/readiness.
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => new Response(null, { status: 200 })),
-  );
+  const ready = new Response(null, { status: 200 });
+  const request = vi.fn<typeof fetch>().mockResolvedValue(ready);
+  vi.stubGlobal("fetch", request);
   const item = await open(video("https://example.com/clip.avi", { playback: "transcode" }));
-  let complete: ((response: Response) => void) | undefined;
-  let signal: AbortSignal | null | undefined;
-  vi.stubGlobal(
-    "fetch",
-    vi.fn((_url: unknown, init?: RequestInit) => {
-      signal = init?.signal;
-      return new Promise<Response>((resolve) => {
-        complete = resolve;
-      });
-    }),
-  );
+  const pending = Promise.withResolvers<Response>();
+  request.mockImplementation(() => pending.promise);
   const media = document.createElement("video");
   const notify = vi.fn();
   disconnect = item.connectVideo!(media, notify);
@@ -153,8 +131,8 @@ it("aborts selected rendition preparation and never assigns a late source after 
   expect(media.hasAttribute("src")).toBe(false);
   disconnect();
   disconnect = undefined;
-  expect(signal?.aborted).toBe(true);
-  complete?.(new Response(null, { status: 200 }));
+  expect(request.mock.lastCall?.[1]?.signal?.aborted).toBe(true);
+  pending.resolve(ready);
   await Promise.resolve();
   await Promise.resolve();
   expect(media.hasAttribute("src")).toBe(false);
@@ -163,36 +141,31 @@ it("aborts selected rendition preparation and never assigns a late source after 
 
 it("explicit retry clears a cached recoverable neighbor failure through its source owner", async () => {
   const url = outgoing();
-  const next = video(url, { artifactId: "synthetic-retry", label: "Next" });
-  const resolve = vi
-    .fn()
-    .mockRejectedValueOnce(new Error("Temporary failure"))
-    .mockResolvedValue(ticket(url, "recovered"));
-  const first = video("https://example.com/first.mp4", { label: "First" });
+  const next = video(url, { artifactId: "synthetic-retry" });
+  const resolve = vi.fn().mockResolvedValue(ticket(url, "recovered"));
+  resolve.mockRejectedValueOnce(new Error("Temporary failure"));
+  const first = video("https://example.com/first.mp4");
   const opened = await open(first, resolve, [first, next]);
   const background = vi.fn();
   const options = { resolveArtifactDownload: resolve, mediaOwner: background };
   const backgroundView = mountSolid(() =>
     createComponent(AssistantAttachments, { attachments: [next], options }),
   );
-  try {
-    await vi.waitFor(() =>
-      expect(
-        backgroundView.container.querySelector(".chat-assistant-attachment-card__retry"),
-      ).not.toBeNull(),
-    );
-    const item = await opened.gallery!.items[1]!();
-    const media = document.createElement("video");
-    const notify = vi.fn();
-    disconnect = item!.connectVideo!(media, notify);
-    expect(notify).toHaveBeenLastCalledWith("unavailable", true);
-    expect(resolve).toHaveBeenCalledTimes(1);
-    disconnect();
-    disconnect = item!.connectVideo!(media, notify, true);
-    await vi.waitFor(() => expect(media.src).toContain("mediaTicket=recovered"));
-    expect(resolve).toHaveBeenCalledTimes(2);
-  } finally {
+  cleanups.push(() => {
     backgroundView.unmount();
     releaseChatMediaResourceOwner(background);
-  }
+  });
+  const retry = () =>
+    backgroundView.container.querySelector(".chat-assistant-attachment-card__retry");
+  await vi.waitFor(() => expect(retry()).not.toBeNull());
+  const item = await opened.gallery!.items[1]!();
+  const media = document.createElement("video");
+  const notify = vi.fn();
+  disconnect = item!.connectVideo!(media, notify);
+  expect(notify).toHaveBeenLastCalledWith("unavailable", true);
+  expect(resolve).toHaveBeenCalledTimes(1);
+  disconnect();
+  disconnect = item!.connectVideo!(media, notify, true);
+  await vi.waitFor(() => expect(media.src).toContain("mediaTicket=recovered"));
+  expect(resolve).toHaveBeenCalledTimes(2);
 });

@@ -14,9 +14,16 @@ function assistantCards(content: unknown[], metadata: Record<string, unknown> = 
 }
 
 function expectNoBrowser(card: ToolCard | undefined) {
-  expect(card?.preview).toBeUndefined();
-  expect(card?.browserTab).toBeUndefined();
+  expect([card?.preview, card?.browserTab]).toEqual([undefined, undefined]);
 }
+
+const browserCard = (browserTab: unknown, fields: Record<string, unknown> = {}) =>
+  extractToolCards({
+    role: "toolResult",
+    toolName: "browser",
+    details: { browserTab },
+    ...fields,
+  })[0];
 
 function activity(toolCallId: string, phase: "start" | "end", summary?: string) {
   return {
@@ -36,71 +43,57 @@ describe("tool-card extraction", () => {
 
   it.each([
     ["browser", "read", true],
-    ["read", "browser", false],
+    ["read", "browser", true],
+    ["browser", undefined, false],
   ] as const)(
-    "uses the paired call origin %s instead of the result name %s",
-    (callName, resultName, browserOrigin) => {
+    "uses only a paired call origin: call=%s result=%s paired=%s",
+    (callName, resultName, paired) => {
+      const output = "Tool output";
       const cards = assistantCards([
-        { type: "toolcall", id: "origin-call", name: callName, arguments: {} },
+        { type: "toolcall", id: "origin", name: callName },
         {
           type: "tool_result",
-          tool_use_id: "origin-call",
+          [paired ? "tool_use_id" : "id"]: paired ? "origin" : "unpaired",
           name: resultName,
-          text: "paired output",
+          text: output,
           details: browserDetails,
         },
       ]);
-      expect(cards).toHaveLength(1);
-      expect(cards[0]).toMatchObject({ name: callName, outputText: "paired output" });
-      expect(cards[0]?.preview).toEqual(
+      expect(cards).toHaveLength(paired ? 1 : 2);
+      const card = cards.at(-1);
+      if (paired) {
+        expect(card?.name).toBe(callName);
+      }
+      expect(card?.outputText).toBe(output);
+      const browserOrigin = paired && callName === "browser";
+      expect(card?.preview).toEqual(
         browserOrigin ? { kind: "browser-tab", ...browserDetails.browserTab } : undefined,
       );
-      expect(cards[0]?.browserTab).toEqual(browserOrigin ? browserTarget : undefined);
+      expect(card?.browserTab).toEqual(browserOrigin ? browserTarget : undefined);
     },
   );
 
-  it("does not borrow browser origin from a call with a different ID", () => {
-    const cards = assistantCards([
-      { type: "toolcall", id: "browser-call", name: "browser", arguments: {} },
-      {
-        type: "tool_result",
-        id: "unknown-call",
-        text: "unpaired output",
-        details: browserDetails,
-      },
-    ]);
-    expect(cards).toHaveLength(2);
-    expect(cards[1]?.outputText).toBe("unpaired output");
-    expectNoBrowser(cards[1]);
-  });
-
   it("does not let nested content claim browser origin inside a non-browser tool envelope", () => {
-    const toolName = "browser.open";
-    const result = {
-      type: "tool_result",
-      name: "browser",
-      text: "nested output",
-      details: browserDetails,
-    };
     for (const nameField of ["toolName", "tool_name"]) {
-      const [card] = extractToolCards({
-        role: "toolResult",
-        [nameField]: toolName,
-        content: [result],
-      });
-      expect(card?.name).toBe("browser");
-      expect(card?.outputText).toBe("nested output");
-      expectNoBrowser(card);
-      const [paired] = extractToolCards({
-        role: "toolResult",
-        [nameField]: toolName,
-        content: [
-          { type: "toolcall", id: "nested-browser", name: "browser", arguments: {} },
-          { ...result, id: "nested-browser", text: "nested paired output" },
-        ],
-      });
-      expect(paired?.outputText).toBe("nested paired output");
-      expectNoBrowser(paired);
+      for (const paired of [false, true]) {
+        const output = paired ? "nested paired output" : "nested output";
+        const [card] = extractToolCards({
+          role: "toolResult",
+          [nameField]: "browser.open",
+          content: [
+            ...(paired ? [{ type: "toolcall", id: "nested", name: "browser" }] : []),
+            {
+              type: "tool_result",
+              name: "browser",
+              id: paired ? "nested" : undefined,
+              text: output,
+              details: browserDetails,
+            },
+          ],
+        });
+        expect(card).toMatchObject({ name: "browser", outputText: output });
+        expectNoBrowser(card);
+      }
     }
   });
 
@@ -115,18 +108,12 @@ describe("tool-card extraction", () => {
   });
 
   it("keeps routing and raw output without unsafe browser previews", () => {
-    const browserTab = { profile: "managed", target: "host", targetId: "tab-1" };
+    const browserTab = browserTarget;
     const url = "javascript:void(0)";
     const details = { browserTab: { ...browserTab, url } };
     const output = JSON.stringify({ url });
-    const [card] = extractToolCards({
-      role: "toolResult",
-      toolName: "browser",
-      content: output,
-      details,
-    });
-    expect(card?.outputText).toBe(output);
-    expect(card?.details).toEqual(details);
+    const card = browserCard(details.browserTab, { content: output });
+    expect([card?.outputText, card?.details]).toEqual([output, details]);
     expect(card?.preview).toBeUndefined();
     expect(card?.browserTab).toEqual(browserTab);
   });
@@ -139,8 +126,7 @@ describe("tool-card extraction", () => {
     { targetId: "t1", profile: "managed", target: "host", node: "node-a" },
     { targetId: "t".repeat(129), profile: "managed", target: "host" },
   ])("ignores malformed browser tabs (%j)", (browserTab) => {
-    const [card] = extractToolCards({ role: "tool", toolName: "browser", details: { browserTab } });
-    expectNoBrowser(card);
+    expectNoBrowser(browserCard(browserTab, { role: "tool" }));
   });
 
   it("retains exact bounded node identities without provider metadata", () => {
@@ -150,32 +136,18 @@ describe("tool-card extraction", () => {
       target: "node",
       node: "n".repeat(256),
     };
-    const [card] = extractToolCards({
-      role: "toolResult",
-      toolName: "browser",
-      details: {
-        browserTab: {
-          ...browserTab,
-          cdpUrl: "https://private.example/",
-          token: "not-a-real-token",
-        },
-      },
+    const card = browserCard({
+      ...browserTab,
+      cdpUrl: "https://private.example/",
+      token: "not-a-real-token",
     });
     expect(card?.browserTab).toEqual(browserTab);
     expect(card?.preview).toBeUndefined();
   });
 
   it("drops non-string browser metadata and gives canvas previews precedence", () => {
-    const browserTab = {
-      profile: "managed",
-      target: "host",
-      targetId: "tab-1",
-      url: 42,
-      title: [],
-    };
-    expect(
-      extractToolCards({ role: "tool", toolName: "browser", details: { browserTab } })[0]?.preview,
-    ).toBeUndefined();
+    const browserTab = { ...browserTarget, url: 42, title: [] };
+    expect(browserCard(browserTab, { role: "tool" })?.preview).toBeUndefined();
     const canvas = {
       kind: "canvas",
       view: { id: "cv_app" },
@@ -198,22 +170,22 @@ describe("tool-card extraction", () => {
 
   it("keeps a same-name result with different legacy call IDs separate from an open call", () => {
     const cards = assistantCards([
-      { type: "tool_use", id: "call-a", name: "read", input: { path: "a.txt" } },
+      { type: "tool_use", id: "call-a", name: "read" },
       { type: "tool_result", callId: "call-b", name: "read", text: "B failed", isError: true },
     ]);
 
-    expect(cards).toHaveLength(2);
-    expect(cards[0]).toMatchObject({ callId: "call-a", name: "read" });
-    expect(cards[0]?.completed).toBeUndefined();
-    expect(cards[0]?.outputText).toBeUndefined();
-    expect(cards[0]?.isError).toBeUndefined();
-    expect(cards[1]).toMatchObject({
-      callId: "call-b",
-      name: "read",
-      completed: true,
-      outputText: "B failed",
-      isError: true,
-    });
+    expect(
+      cards.map(({ callId, name, completed, outputText, isError }) => [
+        callId,
+        name,
+        completed,
+        outputText,
+        isError,
+      ]),
+    ).toEqual([
+      ["call-a", "read", undefined, undefined, undefined],
+      ["call-b", "read", true, "B failed", true],
+    ]);
   });
 
   it.each([
@@ -221,16 +193,11 @@ describe("tool-card extraction", () => {
     ["only the result owns an ID", {}, { tool_use_id: "call-b" }],
   ])("preserves legacy same-name fallback when %s", (_label, callId, resultId) => {
     const cards = assistantCards([
-      { type: "tool_use", ...callId, name: "read", input: { path: "legacy.txt" } },
+      { type: "tool_use", ...callId, name: "read" },
       { type: "tool_result", ...resultId, name: "read", text: "Legacy contents" },
     ]);
 
-    expect(cards).toHaveLength(1);
-    expect(cards[0]).toMatchObject({
-      name: "read",
-      completed: true,
-      outputText: "Legacy contents",
-    });
+    expect(cards).toMatchObject([{ name: "read", completed: true, outputText: "Legacy contents" }]);
   });
 
   it("does not reuse nameless same-name calls after an empty result", () => {
@@ -241,41 +208,37 @@ describe("tool-card extraction", () => {
       { type: "tool_result", name: "read", text: "Next contents" },
     ]);
 
-    expect(cards).toHaveLength(2);
-    expect(cards[0]?.inputText).toBe('{\n  "path": "empty.txt"\n}');
+    expect(cards.map(({ inputText, outputText }) => [inputText, outputText])).toEqual([
+      ['{\n  "path": "empty.txt"\n}', ""],
+      ['{\n  "path": "next.txt"\n}', "Next contents"],
+    ]);
     expect(cards[0]?.completed).toBe(true);
-    expect(cards[0]?.outputText).toBe("");
-    expect(cards[1]?.inputText).toBe('{\n  "path": "next.txt"\n}');
-    expect(cards[1]?.outputText).toBe("Next contents");
   });
 });
 
-describe("tool-card canvas URLs", () => {
-  it("accepts hosted canvas paths and scopes them through the canvas capability host", () => {
-    const entry = "/__openclaw__/canvas/documents/cv_demo/index.html";
-    const host = "http://127.0.0.1:19003/__openclaw__/cap/cap_123";
-    expect(resolveCanvasIframeUrl(entry)).toBe(entry);
-    expect(resolveCanvasIframeUrl(entry, host)).toBe(`${host}${entry}`);
-  });
-
-  it("rejects unsafe canvas frame URLs unless external embeds are explicitly enabled", () => {
-    expect(resolveCanvasIframeUrl("/not-canvas/snake.html")).toBeUndefined();
-    expect(resolveCanvasIframeUrl("https://example.com/evil.html")).toBeUndefined();
-    expect(resolveCanvasIframeUrl("file:///tmp/snake.html", undefined, true)).toBeUndefined();
-    expect(resolveCanvasIframeUrl("https://example.com/embed.html?x=1#y", undefined, true)).toBe(
-      "https://example.com/embed.html?x=1#y",
-    );
-  });
-});
+const entry = "/__openclaw__/canvas/documents/cv_demo/index.html";
+const host = "http://127.0.0.1:19003/__openclaw__/cap/cap_123";
+it.each([
+  [entry, undefined, false, entry],
+  [entry, host, false, `${host}${entry}`],
+  ["/not-canvas/snake.html", undefined, false, undefined],
+  ["https://example.com/evil.html", undefined, false, undefined],
+  ["file:///tmp/snake.html", undefined, true, undefined],
+  ["https://example.com/embed.html?x=1#y", undefined, true, "https://example.com/embed.html?x=1#y"],
+] as const)(
+  "scopes canvas URL %s to %s with external=%s",
+  (url, capabilityHost, external, expected) => {
+    expect(resolveCanvasIframeUrl(url, capabilityHost, external)).toBe(expected);
+  },
+);
 
 describe("tool card outcomes", () => {
   it("keeps error-shaped partial output nonterminal until the live result arrives", () => {
     const text = '{"error": "partial text"}';
-    // Update blocks cannot settle a live tool before resultReceived.
     const stream = (output: string, received: boolean) =>
       assistantCards(
         [
-          { type: "toolcall", name: "bash", arguments: { command: "sleep 5" } },
+          { type: "toolcall", name: "bash" },
           { type: "toolresult", name: "bash", text: output },
         ],
         {
@@ -285,9 +248,7 @@ describe("tool card outcomes", () => {
         },
       );
     const partial = stream(text, false);
-    expect(partial).toHaveLength(1);
-    expect(partial[0]).toMatchObject({ live: true, completed: false });
-    expect(partial[0]?.outputText).toBe(text);
+    expect(partial).toMatchObject([{ live: true, completed: false, outputText: text }]);
     expect(partial.map(isToolCardError)).toEqual([false]);
     expect(partial.map((card) => resolveToolCardOutcome(card, true))).toEqual(["running"]);
     expect(partial.map((card) => resolveToolCardOutcome(card, false))).toEqual(["unknown"]);
@@ -297,33 +258,32 @@ describe("tool card outcomes", () => {
     expect(done.map((card) => resolveToolCardOutcome(card, true))).toEqual(["succeeded"]);
   });
 
-  it.each(["start", "end"] as const)(
-    "distinguishes %s activity from terminal results without outcomes",
-    (phase) => {
+  it.each(["start", "end", "terminal"] as const)(
+    "keeps an unrecorded activity outcome unknown: %s",
+    (state) => {
+      const terminal = state === "terminal";
+      const id = terminal ? "call-done" : "call-live";
+      const phase = state === "start" ? "start" : "end";
       const [card] = assistantCards(
-        [{ type: "toolcall", id: "call-live", name: "bash", arguments: { command: "sleep 5" } }],
+        [
+          { type: "toolcall", id, name: "bash" },
+          ...(terminal ? [{ type: "toolresult", id, name: "bash", text: "ok" }] : []),
+        ],
         {
-          activity: [activity("call-live", phase)],
-          __openclawToolStreamLive: true,
-          __openclawToolStreamResultReceived: false,
+          activity: [activity(id, phase, terminal ? "Outcome unknown" : undefined)],
+          ...(!terminal
+            ? { __openclawToolStreamLive: true, __openclawToolStreamResultReceived: false }
+            : {}),
         },
       );
       expect(card?.activity?.status).toBeUndefined();
-      expect(resolveToolCardOutcome(card!, true)).toBe(phase === "end" ? "unknown" : "running");
+      if (!terminal) {
+        expect(resolveToolCardOutcome(card!, true)).toBe(state === "start" ? "running" : "unknown");
+      }
       expect(resolveToolCardOutcome(card!, false)).toBe("unknown");
-
-      const [terminal] = assistantCards(
-        [
-          { type: "toolcall", id: "call-done", name: "bash", arguments: { command: "echo ok" } },
-          { type: "toolresult", id: "call-done", name: "bash", text: "ok" },
-        ],
-        {
-          activity: [activity("call-done", "end", "Outcome unknown")],
-        },
-      );
-      expect(terminal).toMatchObject({ completed: true, outputText: "ok" });
-      expect(terminal?.activity?.status).toBeUndefined();
-      expect(resolveToolCardOutcome(terminal!, false)).toBe("unknown");
+      if (terminal) {
+        expect(card).toMatchObject({ completed: true, outputText: "ok" });
+      }
     },
   );
 });

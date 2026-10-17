@@ -9,8 +9,10 @@ import {
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
+
+type Page = CronJobsListResult<CronCompactJob>;
 
 function job(overrides: Partial<CronCompactJob> = {}): CronCompactJob {
   return {
@@ -31,10 +33,7 @@ function job(overrides: Partial<CronCompactJob> = {}): CronCompactJob {
   };
 }
 
-function page(
-  jobs: CronCompactJob[] = [],
-  overrides: Partial<CronJobsListResult<CronCompactJob>> = {},
-): CronJobsListResult<CronCompactJob> {
+function page(jobs: CronCompactJob[] = [], overrides: Partial<Page> = {}): Page {
   return {
     jobs,
     snapshotRevision: "fixture-1",
@@ -47,39 +46,32 @@ function page(
   };
 }
 
-const mounted: HTMLElement[] = [];
-const observers: MutationObserver[] = [];
-type Page = CronJobsListResult<CronCompactJob>;
+function sequence(...pages: (Page | Promise<Page>)[]) {
+  const request = createGatewayRequestMock();
+  for (const response of pages) {
+    request.mockResolvedValueOnce(response);
+  }
+  return request;
+}
 function component(
   request = createGatewayRequestMock(async () => page()),
   presented = true,
   offline = false,
 ) {
   const source = createApplicationGateway({
+    ...createApplicationGateway().gateway.snapshot,
     client: createTestGatewayClient(request),
     phase: offline ? "offline" : "connected",
-    offlineStable: false,
-    hello: null,
-    canvasPluginSurfaceUrl: null,
     assistantAgentId: "ops",
     sessionKey: "agent:ops:task",
-    lastError: null,
-    lastErrorCode: null,
   });
   type Props = Parameters<typeof ChatSummaryAutomations>[0];
-  let update!: (next: Partial<Props>) => void;
-  const view = mountSolid(() => {
-    const [props, setProps] = createSignal<Props>({
-      gateway: source.gateway,
-      sessionKey: "agent:ops:task",
-      presented,
-    });
-    update = (next) => {
-      setProps((current) => ({ ...current, ...next }));
-      flush();
-    };
-    return <ChatSummaryAutomations {...props()} />;
+  const [props, setProps] = createSignal<Props>({
+    gateway: source.gateway,
+    sessionKey: "agent:ops:task",
+    presented,
   });
+  const view = mountSolid(() => <ChatSummaryAutomations {...props()} />);
   const element = view.container.querySelector<HTMLElement>("openclaw-chat-summary-automations")!;
   return {
     ...source,
@@ -88,74 +80,28 @@ function component(
     element,
     find: <T extends HTMLElement = HTMLElement>(selector: string) =>
       element.querySelector<T>(selector),
-    ready: (text = "Check the task") => textReady(element, text),
+    ready: (text = "Check the task") =>
+      waitForSolid(() => {
+        expect(element.textContent).toContain(text);
+        expect(element.querySelector('[aria-busy="false"]')).not.toBeNull();
+      }),
     empty: () =>
-      observe(element, () => element.querySelector(".chat-summary__automations") === null),
+      waitForSolid(() => expect(element.querySelector(".chat-summary__automations")).toBeNull()),
     cron: (action = "updated") =>
       source.publishEvent({ type: "event", event: "cron", payload: { action } }),
-    update,
+    update: (next: Partial<Props>) => {
+      setProps((current) => ({ ...current, ...next }));
+      flush();
+    },
   };
 }
 
-function retrying() {
-  const pending = createDeferred<Page>();
-  return {
-    pending,
-    ...component(
-      createGatewayRequestMock()
-        .mockRejectedValueOnce(new Error("private server detail"))
-        .mockReturnValueOnce(pending.promise),
-    ),
-  };
-}
-
-// The rendered request state is the completion signal; no timer or polling loop.
-function observe(element: HTMLElement, ready: () => boolean): Promise<void> {
-  if (ready()) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    const observer = new MutationObserver(() => {
-      if (ready()) {
-        observer.disconnect();
-        resolve();
-      }
-    });
-    observers.push(observer);
-    observer.observe(element, {
-      attributes: true,
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
-  });
-}
-
-function textReady(element: HTMLElement, text: string) {
-  return observe(
-    element,
-    () =>
-      element.textContent?.includes(text) && element.querySelector('[aria-busy="false"]') !== null,
-  );
-}
-
-afterEach(() => {
-  for (const observer of observers.splice(0)) {
-    observer.disconnect();
-  }
-  for (const element of mounted.splice(0)) {
-    element.remove();
-  }
-});
+afterEach(() => document.body.replaceChildren());
 
 describe("Details compact automations", () => {
-  it("keeps its initial inventory through unrelated Gateway snapshots", async () => {
+  it.each([false, true])("coalesces hidden refreshes: %s", async (hiddenEvents) => {
     const pending = createDeferred<Page>();
-    const current = component(
-      createGatewayRequestMock()
-        .mockReturnValueOnce(pending.promise)
-        .mockResolvedValue(page([job()])),
-    );
+    const current = component(sequence(pending.promise).mockResolvedValue(page([job()])));
     flush();
     current.publish({ ...current.gateway.snapshot });
     expect(current.request).toHaveBeenCalledTimes(1);
@@ -164,12 +110,25 @@ describe("Details compact automations", () => {
     current.publish({ ...current.gateway.snapshot });
     expect(current.request).toHaveBeenCalledTimes(1);
     current.update({ presented: false });
+    if (hiddenEvents) {
+      current.cron();
+      current.cron();
+      flush();
+      expect(current.request).toHaveBeenCalledTimes(1);
+    }
     current.update({ presented: true });
     await current.ready();
     expect(current.request).toHaveBeenCalledTimes(2);
+    if (!hiddenEvents) {
+      current.cron();
+      await current.ready();
+      expect(current.request).toHaveBeenCalledTimes(3);
+    }
+    current.unmount();
     current.cron();
-    await current.ready();
-    expect(current.request).toHaveBeenCalledTimes(3);
+    current.publish(current.gateway.snapshot);
+    flush();
+    expect(current.request).toHaveBeenCalledTimes(hiddenEvents ? 2 : 3);
   });
 
   it("admits only presented session-scoped reads and uses the existing automation destination", async () => {
@@ -218,11 +177,7 @@ describe("Details compact automations", () => {
   });
 
   it("omits confirmed-empty sections and preserves manual collapse until the content disappears", async () => {
-    const current = component(
-      createGatewayRequestMock()
-        .mockResolvedValueOnce(page())
-        .mockResolvedValue(page([job()])),
-    );
+    const current = component(sequence(page()).mockResolvedValue(page([job()])));
     const { find } = current;
     flush();
     await current.empty();
@@ -248,12 +203,16 @@ describe("Details compact automations", () => {
     expect(find<HTMLDetailsElement>("details")?.open).toBe(true);
   });
 
-  it("keeps Retry focused while pending, preserves sibling disclosure, and moves focus only after its own success", async () => {
-    const current = retrying();
-    const { element, find, pending } = current;
+  it.each([false, true])("restores retry focus: moved=%s", async (moved) => {
+    const pending = createDeferred<Page>();
+    const current = component(
+      createGatewayRequestMock()
+        .mockRejectedValueOnce(new Error("private server detail"))
+        .mockReturnValueOnce(pending.promise),
+    );
+    const { element, find } = current;
     const sibling = document.createElement("details");
     sibling.open = false;
-    mounted.push(sibling);
     document.body.append(sibling);
     await current.ready("Couldn't load automations.");
     expect(element.textContent).not.toContain("private server detail");
@@ -266,38 +225,25 @@ describe("Details compact automations", () => {
     expect(retry.getAttribute("aria-disabled")).toBe("true");
     retry.click();
     expect(current.request).toHaveBeenCalledTimes(2);
-    pending.resolve(page([job()]));
-    await current.ready();
-    flush();
-    expect(document.activeElement).toBe(find(".chat-summary__automation"));
-    expect(sibling.open).toBe(false);
-  });
-
-  it("does not steal composer focus when a retry resolves after the user moves away", async () => {
-    const current = retrying();
-    await current.ready("Couldn't load automations.");
-    current.find<HTMLButtonElement>(".chat-summary__automation-retry")!.click();
     const composer = document.createElement("textarea");
     composer.value = "Keep my draft";
-    mounted.push(composer);
     document.body.append(composer);
-    composer.focus();
-    current.pending.resolve(page());
-    await current.empty();
-    expect(document.activeElement).toBe(composer);
+    if (moved) {
+      composer.focus();
+    }
+    pending.resolve(moved ? page() : page([job()]));
+    await (moved ? current.empty() : current.ready());
+    flush();
+    expect(document.activeElement).toBe(moved ? composer : find(".chat-summary__automation"));
     expect(composer.value).toBe("Keep my draft");
+    expect(sibling.open).toBe(false);
   });
 
   it("fences late pages on session and same-client reconnect boundaries", async () => {
     const retired = createDeferred<Page>();
     const reconnectRetired = createDeferred<Page>();
     const latest = createDeferred<Page>();
-    const current = component(
-      createGatewayRequestMock()
-        .mockReturnValueOnce(retired.promise)
-        .mockReturnValueOnce(reconnectRetired.promise)
-        .mockReturnValueOnce(latest.promise),
-    );
+    const current = component(sequence(retired.promise, reconnectRetired.promise, latest.promise));
     const { element } = current;
     flush();
     current.update({ sessionKey: "agent:ops:second" });
@@ -318,66 +264,48 @@ describe("Details compact automations", () => {
     expect(element.textContent).not.toMatch(/Wrong session|Retired connection/);
   });
 
-  it("coalesces hidden cron publications until presentation and removes subscriptions on unmount", async () => {
-    const current = component(createGatewayRequestMock(async () => page([job()])));
-    await current.ready();
-    current.update({ presented: false });
-    current.cron();
-    current.cron();
-    flush();
-    expect(current.request).toHaveBeenCalledTimes(1);
-    current.update({ presented: true });
-    await current.ready();
-    expect(current.request).toHaveBeenCalledTimes(2);
-    current.unmount();
-    current.cron();
-    current.publish(current.gateway.snapshot);
-    flush();
-    expect(current.request).toHaveBeenCalledTimes(2);
-  });
-
-  it("retains same-scope automation facts offline and clears them on session replacement", async () => {
-    const current = component(createGatewayRequestMock(async () => page([job()])));
+  it.each([false, true])("preserves offline inventory: loaded=%s", async (loaded) => {
+    const current = component(
+      createGatewayRequestMock(async () => page([job()])),
+      true,
+      !loaded,
+    );
     const { element } = current;
-    await current.ready();
-    current.publish({ ...current.gateway.snapshot, phase: "offline", client: null });
+    if (loaded) {
+      await current.ready();
+      current.publish({ ...current.gateway.snapshot, phase: "offline", client: null });
+    }
     flush();
-    expect(element.textContent).toContain("Check the task");
-    expect(element.textContent).not.toContain("Reconnect to load");
-    current.update({ sessionKey: "agent:ops:other" });
-    expect(element.textContent).not.toContain("Check the task");
-  });
-
-  it("does not invent empty inventory offline or for an unresolved session owner", async () => {
-    const current = component(undefined, true, true);
-    const { element } = current;
-    flush();
-    expect(element.textContent).toContain("Offline · last-known automations");
+    expect(element.textContent).toContain(
+      loaded ? "Check the task" : "Offline · last-known automations",
+    );
     expect(element.textContent).not.toContain("No automations");
-    expect(current.request).not.toHaveBeenCalled();
-    current.update({ sessionKey: "unresolved-session" });
-    current.publish({ ...current.gateway.snapshot, phase: "connected" });
-    flush();
-    expect(element.textContent).toContain("Automations unavailable for this session.");
-    expect(current.request).not.toHaveBeenCalled();
+    if (loaded) {
+      expect(element.textContent).not.toContain("Reconnect to load");
+    }
+    current.update({ sessionKey: loaded ? "agent:ops:other" : "unresolved-session" });
+    expect(element.textContent).not.toContain("Check the task");
+    if (!loaded) {
+      current.publish({ ...current.gateway.snapshot, phase: "connected" });
+      flush();
+      expect(element.textContent).toContain("Automations unavailable for this session.");
+      expect(current.request).not.toHaveBeenCalled();
+    }
   });
 
   it("uses the inventory continuation rather than silently dropping additional automations", async () => {
     const current = component(
-      createGatewayRequestMock()
-        .mockResolvedValueOnce(
-          page([job({ name: "First automation", enabled: false })], {
-            total: 2,
-            hasMore: true,
-            nextOffset: 1,
-          }),
-        )
-        .mockResolvedValueOnce(
-          page([job({ id: "second", name: "Second automation", runningAtMs: 42 })], {
-            offset: 1,
-            total: 2,
-          }),
-        ),
+      sequence(
+        page([job({ name: "First automation", enabled: false })], {
+          total: 2,
+          hasMore: true,
+          nextOffset: 1,
+        }),
+        page([job({ id: "second", name: "Second automation", runningAtMs: 42 })], {
+          offset: 1,
+          total: 2,
+        }),
+      ),
     );
     const { element, find } = current;
     await current.ready("First automation");
