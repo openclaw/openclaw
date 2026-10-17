@@ -88,6 +88,9 @@ function ultrafastCase(name: string, overrides: Partial<UltrafastCase> = {}): Ul
   };
 }
 
+const priorityCase = (name: string, overrides: Partial<UltrafastCase>) =>
+  ultrafastCase(name, { expected: "priority", expectedLimit: undefined, ...overrides });
+
 /** Exercise speed changes under the attempt suite's shared lifecycle and cleanup. */
 export function registerCodexFastModeTests({
   createRunPaths,
@@ -135,11 +138,7 @@ export function registerCodexFastModeTests({
     expect(requestParams(requests, "turn/start")).toMatchObject({ serviceTier: "priority" });
   });
   it.each([
-    ultrafastCase("explicit Ultrafast with the switch disabled", {
-      enableUltrafast: false,
-      expected: "priority",
-      expectedLimit: undefined,
-    }),
+    priorityCase("explicit Ultrafast with the switch disabled", { enableUltrafast: false }),
     ...[false, true].flatMap((fresh) =>
       [
         [700_000, 260_000],
@@ -155,24 +154,12 @@ export function registerCodexFastModeTests({
         }),
       ),
     ),
-    ultrafastCase("unsupported Ultrafast", {
-      supported: false,
-      expected: "priority",
-      expectedLimit: undefined,
-    }),
+    priorityCase("unsupported Ultrafast", { supported: false }),
     ultrafastCase("an adopted native model changed since the saved binding", {
       nativeOwned: "metadata",
     }),
-    ultrafastCase("an adopted native model with omitted metadata", {
-      expected: "priority",
-      expectedLimit: undefined,
-      nativeOwned: "omitted",
-    }),
-    ultrafastCase("Fast with the Ultrafast switch enabled", {
-      fastMode: true,
-      expected: "priority",
-      expectedLimit: undefined,
-    }),
+    priorityCase("an adopted native model with omitted metadata", { nativeOwned: "omitted" }),
+    priorityCase("Fast with the Ultrafast switch enabled", { fastMode: true }),
   ])("requires explicit Ultrafast for $name at the actual turn boundary", async (row) => {
     const { fresh, nativeOwned, expectedLimit } = row;
     const { sessionFile, workspaceDir } = createRunPaths();

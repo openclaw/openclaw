@@ -11,10 +11,10 @@ import {
 
 type OnEvent = NonNullable<ReturnType<typeof createTestParams>["onAgentEvent"]>;
 
-function eventsFor(calls: Parameters<OnEvent>[], stream: string, toolCallId: string) {
+function eventDataFor(calls: Parameters<OnEvent>[], stream: string, toolCallId: string) {
   return calls
-    .map(([event]) => event)
-    .filter((event) => event.stream === stream && event.data?.toolCallId === toolCallId);
+    .filter(([event]) => event.stream === stream && event.data?.toolCallId === toolCallId)
+    .map(([{ data }]) => data);
 }
 
 setupRunAttemptTestHooks();
@@ -26,13 +26,8 @@ it("keeps raw command detail behind the channel commandText policy", async () =>
   const onAgentEvent = vi.fn<OnEvent>();
   const progressReceived = createDeferred<void>();
   const onToolResult = vi.fn(() => progressReceived.resolve());
-  params.config = {
-    channels: {
-      telegram: {
-        streaming: { mode: "progress", progress: { commandText: "status" } },
-      },
-    },
-  };
+  const streaming = { mode: "progress", progress: { commandText: "status" } } as const;
+  params.config = { channels: { telegram: { streaming } } };
   params.messageChannel = "telegram";
   params.toolProgressDetail = "raw";
   params.verboseLevel = "full";
@@ -56,14 +51,14 @@ it("keeps raw command detail behind the channel commandText policy", async () =>
     text: "Bash",
     channelData: { openclawToolProgressId: "tool:private-command-1" },
   });
-  const toolStart = eventsFor(onAgentEvent.mock.calls, "tool", "private-command-1").find(
-    ({ data }) => data?.phase === "start",
+  const toolStart = eventDataFor(onAgentEvent.mock.calls, "tool", "private-command-1").find(
+    ({ phase }) => phase === "start",
   );
-  expect(toolStart?.data?.args).toEqual({
+  expect(toolStart?.args).toEqual({
     command: "printf raw-command-must-stay-private",
     cwd: params.workspaceDir,
   });
-  expect(toolStart?.data?.meta).toContain("raw-command-must-stay-private");
+  expect(toolStart?.meta).toContain("raw-command-must-stay-private");
 
   await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
   await run;
@@ -75,12 +70,8 @@ it("keeps every tool source available to channel policy and verbose callbacks", 
   let expectedToolCallId: string;
   let toolEnded = createDeferred<void>();
   let progressReceived = createDeferred<void>();
-  const onAgentEvent = vi.fn<NonNullable<typeof params.onAgentEvent>>((event) => {
-    if (
-      event.stream === "item" &&
-      event.data.phase === "end" &&
-      event.data.toolCallId === expectedToolCallId
-    ) {
+  const onAgentEvent = vi.fn<OnEvent>(({ stream, data }) => {
+    if (stream === "item" && data.phase === "end" && data.toolCallId === expectedToolCallId) {
       toolEnded.resolve();
     }
   });
@@ -100,31 +91,18 @@ it("keeps every tool source available to channel policy and verbose callbacks", 
   const cases: Array<[name: string, item?: JsonObject, completion?: JsonObject]> = [
     [
       "bash",
-      {
-        type: "commandExecution",
-        command: "printf private-command",
-        cwd: params.workspaceDir,
-      },
+      { type: "commandExecution", command: "pwd" },
       { aggregatedOutput: "done", exitCode: 0, durationMs: 1 },
     ],
     ["apply_patch", { type: "fileChange", changes: [{ path: "proof.txt", kind: "update" }] }],
     [
       "web_search",
-      {
-        type: "webSearch",
-        query: "OpenClaw repository",
-        action: { type: "search", query: "OpenClaw repository" },
-      },
+      { type: "webSearch", query: "query", action: { type: "search" } },
       { durationMs: 1 },
     ],
     [
-      "progressproof.parity_probe",
-      {
-        type: "mcpToolCall",
-        server: "progressproof",
-        tool: "parity_probe",
-        arguments: { marker: "telegram-progress" },
-      },
+      "mcp.probe",
+      { type: "mcpToolCall", server: "mcp", tool: "probe", arguments: {} },
       { result: { content: [{ type: "text", text: "ok" }] }, durationMs: 1 },
     ],
     ["agents_list"],
@@ -161,30 +139,25 @@ it("keeps every tool source available to channel policy and verbose callbacks", 
       });
     }
     await Promise.all([toolEnded.promise, progressReceived.promise]);
-    const toolEvents = eventsFor(onAgentEvent.mock.calls, "tool", toolCallId).filter(
-      ({ data }) => data?.name === name,
+    const toolEvents = eventDataFor(onAgentEvent.mock.calls, "tool", toolCallId).filter(
+      (data) => data.name === name,
     );
 
-    expect(
-      toolEvents.map(({ data }) => data?.phase),
-      name,
-    ).toEqual(["start", "result"]);
-    for (const event of toolEvents) {
-      expect(event.data, name).not.toHaveProperty("hideFromChannelProgress");
+    expect(toolEvents, name).toMatchObject([{ phase: "start" }, { phase: "result" }]);
+    for (const data of toolEvents) {
+      expect(data, name).not.toHaveProperty("hideFromChannelProgress");
     }
     expect(onToolResult.mock.calls.length, `${name} verbose callback`).toBe(resultCount + 1);
-    const prepared = eventsFor(onAgentEvent.mock.calls, "item", toolCallId).filter(
-      ({ data }) => !data.suppressChannelProgress,
+    const prepared = eventDataFor(onAgentEvent.mock.calls, "item", toolCallId).filter(
+      (data) => !data.suppressChannelProgress,
     );
-    expect(
-      prepared.map(({ data }) => [data.phase, data.itemId]),
-      name,
-    ).toEqual([
-      ["start", `tool:${toolCallId}`],
-      ["end", `tool:${toolCallId}`],
+    const itemId = `tool:${toolCallId}`;
+    expect(prepared, name).toMatchObject([
+      { phase: "start", itemId },
+      { phase: "end", itemId },
     ]);
     expect(onToolResult.mock.calls[resultCount]?.[0], name).toMatchObject({
-      channelData: { openclawToolProgressId: prepared[0]?.data.itemId },
+      channelData: { openclawToolProgressId: prepared[0]?.itemId },
     });
   }
 

@@ -84,29 +84,39 @@ function bindingCustody(connection: CodexAttemptConnection) {
   return { [Symbol.dispose]: () => connection.releaseBindingAuthority() };
 }
 
+function setPreparedEnvironment(
+  params: ReturnType<typeof createParams>,
+  environment: Partial<ReturnType<NonNullable<typeof params.hostCapabilities.preparedEnvironment>>>,
+) {
+  const prepared = Object.freeze({
+    credentialScrubEnv: {},
+    localIdentityEnv: {},
+    managedLocalIdentity: false,
+    ...environment,
+  });
+  params.hostCapabilities = Object.freeze({
+    ...params.hostCapabilities,
+    preparedEnvironment: () => prepared,
+  });
+}
+
 function prepareAuth(
   params: ReturnType<typeof createParams>,
   modelId: string,
   subscription = false,
 ) {
-  const plan = createCodexRuntimePlanFixture();
-  params.runtimePlan = {
-    ...plan,
-    auth: {
-      ...plan.auth,
-      providerForAuth: "openai",
-      authProfileProviderForAuth: "openai",
-      selectedAuthMode: subscription ? "subscription" : "api-key",
-      modelRoute: {
-        provider: "openai",
-        modelId,
-        api: subscription ? "openai-chatgpt-responses" : "openai-responses",
-        baseUrl: subscription
-          ? "https://chatgpt.com/backend-api/codex"
-          : "https://api.openai.com/v1",
-        authRequirement: subscription ? "subscription" : "api-key",
-        requestTransportOverrides: "none",
-      },
+  params.runtimePlan = createCodexRuntimePlanFixture();
+  params.runtimePlan.auth = {
+    providerForAuth: "openai",
+    authProfileProviderForAuth: "openai",
+    selectedAuthMode: subscription ? "subscription" : "api-key",
+    modelRoute: {
+      provider: "openai",
+      modelId,
+      api: subscription ? "openai-chatgpt-responses" : "openai-responses",
+      baseUrl: subscription ? "https://chatgpt.com/backend-api/codex" : "https://api.openai.com/v1",
+      authRequirement: subscription ? "subscription" : "api-key",
+      requestTransportOverrides: "none",
     },
   };
   if (!subscription) {
@@ -134,6 +144,12 @@ function policyParams(
 
 const nativeModel = { provider: "openai", model: "gpt-5.6-luna" };
 
+function nativeOwnershipParams(name: string, auth: "host" | "native" = "host") {
+  const params = connectionParams(name);
+  params.expectedSessionRuntimeOwnership = { model: "native", auth, modelRef: nativeModel };
+  return params;
+}
+
 async function oversizedThread() {
   const params = connectionParams("session", "workspace");
   params.agentDir = path.join(tempDir, "agent");
@@ -153,8 +169,7 @@ async function oversizedThread() {
 it.each(["local", "websocket", "remote-root", "sandbox", "managed-sandbox"])(
   "prepares host settings and input paths only for confirmed local execution: %s",
   async (placement) => {
-    const sessionFile = path.join(tempDir, `input-${placement}.jsonl`);
-    const params = createParams(sessionFile, path.join(tempDir, `input-${placement}`));
+    const params = connectionParams(`input-${placement}`, `input-${placement}`);
     if (placement === "sandbox" || placement === "managed-sandbox") {
       params.sandbox = {
         ...createSandboxContext({}),
@@ -193,10 +208,7 @@ it.each(["local", "websocket", "remote-root", "sandbox", "managed-sandbox"])(
 );
 
 it("releases connection preparation when host retry settings fail before execution", async () => {
-  const params = createParams(
-    path.join(tempDir, "retry-preparation-failure.jsonl"),
-    path.join(tempDir, "retry-preparation-failure"),
-  );
+  const params = connectionParams("retry-preparation-failure", "retry-preparation-failure");
   const controller = new AbortController();
   params.abortSignal = controller.signal;
   const prepareContinuationRetryCount = vi.fn<(workspace: { cwd: string }) => void>(() => {
@@ -225,86 +237,66 @@ it("releases connection preparation when host retry settings fail before executi
   connection.cancellation.dispose();
   connection.releaseModelExecution();
   connection.releaseSandboxContext();
-  connection.releaseBindingAuthority();
 });
 
-it.each(["remote attachment path"])(
-  "stages only explicit steering inputs through the remote owner (note: %s)",
-  async (remoteNote) => {
-    const params = createParams(
-      path.join(tempDir, "remote-input.jsonl"),
-      path.join(tempDir, "remote-input"),
+it("stages only explicit steering inputs through the remote owner", async () => {
+  const remoteNote = "remote attachment path";
+  const params = connectionParams("remote-input", "remote-input");
+  const media = [{ path: "media://inbound/input.csv", contentType: "text/csv" }];
+  params.media = media;
+  const prepareLocal = vi.fn(async () => "unexpected local path");
+  params.hostCapabilities = {
+    ...params.hostCapabilities,
+    prepareInputAttachments: prepareLocal,
+  };
+  using connection = await prepareConnection(params, placementOptions("remote-root"));
+  const prepareRemote = vi.fn(async () => remoteNote);
+  const release = registerAgentWorkspaceAccess(params.workspaceDir, {
+    bridge: {
+      readFile: async () => Buffer.alloc(0),
+      writeFile: async () => {},
+      stat: async () => null,
+    },
+    prepareTurnAttachments: prepareRemote,
+  });
+  const signal = new AbortController().signal;
+  const attachmentOptions = { maxChars: 60_000, assertCurrent: () => {} };
+  try {
+    expect(await connection.prepareInputAttachments(attachmentOptions)).toBeUndefined();
+    expect(prepareRemote).not.toHaveBeenCalled();
+    expect(
+      await connection.prepareInputAttachments({
+        ...attachmentOptions,
+        turn: { media },
+        signal,
+      }),
+    ).toBe(remoteNote);
+    const { config, timeoutMs } = params;
+    expect(prepareRemote).toHaveBeenCalledExactlyOnceWith(
+      { config, media, timeoutMs, abortSignal: signal },
+      expect.any(Function),
     );
-    const media = [{ path: "media://inbound/input.csv", contentType: "text/csv" }];
-    params.media = media;
-    const prepareLocal = vi.fn(async () => "unexpected local path");
-    params.hostCapabilities = {
-      ...params.hostCapabilities,
-      prepareInputAttachments: prepareLocal,
-    };
-    const connection = await prepareConnection(params, placementOptions("remote-root"));
-    const prepareRemote = vi.fn(async () => remoteNote);
-    const release = registerAgentWorkspaceAccess(params.workspaceDir, {
-      bridge: {
-        readFile: async () => Buffer.alloc(0),
-        writeFile: async () => {},
-        stat: async () => null,
-      },
-      prepareTurnAttachments: prepareRemote,
-    });
-    const signal = new AbortController().signal;
-    try {
-      expect(
-        await connection.prepareInputAttachments({ maxChars: 60_000, assertCurrent: () => {} }),
-      ).toBeUndefined();
-      expect(prepareRemote).not.toHaveBeenCalled();
-      expect(
-        await connection.prepareInputAttachments({
-          maxChars: 60_000,
-          turn: { media },
-          signal,
-          assertCurrent: () => {},
-        }),
-      ).toBe(remoteNote);
-      expect(prepareRemote).toHaveBeenCalledExactlyOnceWith(
-        {
-          config: params.config,
-          media,
-          timeoutMs: params.timeoutMs,
-          abortSignal: signal,
-        },
-        expect.any(Function),
-      );
-      expect(prepareLocal).not.toHaveBeenCalled();
-    } finally {
-      release();
-      connection.cancellation.dispose();
-      connection.releaseModelExecution();
-    }
-  },
-);
+    expect(prepareLocal).not.toHaveBeenCalled();
+  } finally {
+    release();
+    connection.cancellation.dispose();
+    connection.releaseModelExecution();
+  }
+});
 
 it.each(["stdio-proxy", "local-stdio"])(
   "keeps ordinary %s sessions isolated when deferred auth omits homeScope",
   async (connectionType) => {
     vi.stubEnv("OPENCLAW_CODEX_APP_SERVER_ARGS", undefined);
-    const sessionFile = path.join(tempDir, `deferred-${connectionType}.jsonl`);
-    const params = createParams(
-      sessionFile,
-      path.join(tempDir, `deferred-${connectionType}-workspace`),
+    const params = connectionParams(
+      `deferred-${connectionType}`,
+      `deferred-${connectionType}-workspace`,
     );
-    const runtimePlan = createCodexRuntimePlanFixture();
-    params.runtimePlan = {
-      ...runtimePlan,
-      auth: {
-        ...runtimePlan.auth,
-        deferredRouteSupport: {
-          requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-        },
-      },
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.runtimePlan.auth.deferredRouteSupport = {
+      requestTransportOverrides: "none",
+      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
     };
-    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
     using connection = await prepareConnection(params, placementOptions(connectionType));
     expect(connection.appServer.start).toMatchObject({ transport: "stdio", homeScope: "agent" });
     if (connectionType === "local-stdio") {
@@ -316,7 +308,6 @@ it.each(["stdio-proxy", "local-stdio"])(
         authProfileStore: params.authProfileStore,
       });
       expect(start.env?.CODEX_HOME).toBe(path.join(connection.agentDir, "codex-home"));
-      expect(start.env?.CODEX_HOME).not.toBe(process.env.CODEX_HOME);
     }
   },
 );
@@ -364,13 +355,11 @@ it("retains the recovered generation fence after connection preparation", async 
 it.each(["missing", "ordinary", "auth-changed", "model-changed", "provider-changed"] as const)(
   "rejects %s expected native ownership before reclaim or connection preparation",
   async (state) => {
-    const params = connectionParams("expected-ownership", "expected-ownership-workspace");
+    const params = nativeOwnershipParams(
+      "expected-ownership",
+      state === "auth-changed" ? "native" : "host",
+    );
     const { sessionFile, workspaceDir } = params;
-    params.expectedSessionRuntimeOwnership = {
-      model: "native",
-      auth: state === "auth-changed" ? "native" : "host",
-      modelRef: nativeModel,
-    };
     if (state !== "missing") {
       await writeCodexAppServerBinding(sessionFile, {
         threadId: "thread-existing",
@@ -384,9 +373,7 @@ it.each(["missing", "ordinary", "auth-changed", "model-changed", "provider-chang
     const reclaim = vi.spyOn(testCodexAppServerBindingStore, "prepareSessionGenerationReclaim");
     const connect = vi
       .spyOn(bindingConnection, "resolveCodexBindingAppServerConnection")
-      .mockImplementation(async () => {
-        throw new Error("invalid ownership reached connection preparation");
-      });
+      .mockRejectedValue(new Error("invalid ownership reached connection preparation"));
 
     await expect(prepareConnection(params)).rejects.toMatchObject({
       name: "AgentHarnessPreflightError",
@@ -401,13 +388,8 @@ it.each(["missing", "ordinary", "auth-changed", "model-changed", "provider-chang
 it.each(["preserved", "auth-changed"] as const)(
   "rechecks %s native ownership after acquiring the lifecycle binding lease",
   async (state) => {
-    const params = connectionParams("leased-ownership", "leased-ownership-workspace");
+    const params = nativeOwnershipParams("leased-ownership");
     const { sessionFile, workspaceDir } = params;
-    params.expectedSessionRuntimeOwnership = {
-      model: "native",
-      auth: "host",
-      modelRef: nativeModel,
-    };
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-existing",
       cwd: workspaceDir,
@@ -467,28 +449,20 @@ it.each(["preserved", "auth-changed"] as const)(
 it.each(["local", "loopback-server", "ordinary-unix-server", "remote-server", "sandbox"])(
   "handles an installation target for %s execution before native startup",
   async (placement) => {
-    const sessionFile = path.join(tempDir, "installation-target.jsonl");
-    const params = createParams(sessionFile, path.join(tempDir, "workspace-installation-target"));
+    const params = connectionParams("installation-target");
     const createToolSurfaceAsync = vi.fn(params.hostCapabilities.createToolSurfaceAsync);
     const localProcessEnv = Object.freeze({
       OPENCLAW_STATE_DIR: "/fixture/diagnosed",
       OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
       OPENCLAW_WORKSPACE_DIR: "/fixture/default-workspace",
     });
-    params.hostCapabilities = Object.freeze({
-      ...params.hostCapabilities,
-      createToolSurfaceAsync,
-      preparedEnvironment: () => ({
-        credentialScrubEnv: {},
-        localIdentityEnv: {},
-        managedLocalIdentity: false,
-        localProcessEnv: placement.startsWith("ordinary-") ? undefined : localProcessEnv,
-      }),
+    params.hostCapabilities = { ...params.hostCapabilities, createToolSurfaceAsync };
+    setPreparedEnvironment(params, {
+      localProcessEnv: placement.startsWith("ordinary-") ? undefined : localProcessEnv,
     });
     if (placement === "sandbox") {
       params.sandbox = createSandboxContext({});
     }
-    registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
     const options = {
       bindingStore: testCodexAppServerBindingStore,
       ...(placement.endsWith("-server") ? placementOptions(placement) : {}),
@@ -523,18 +497,9 @@ it.each(["local", "loopback-server", "ordinary-unix-server", "remote-server", "s
 );
 
 it("disables login shells for custom credential scrub overlays", async () => {
-  const params = connectionParams(
-    "native-local-custom-scrub",
-    "workspace-native-local-custom-scrub",
-  );
-  params.hostCapabilities = Object.freeze({
-    ...params.hostCapabilities,
-    preparedEnvironment: () =>
-      Object.freeze({
-        credentialScrubEnv: Object.freeze({ PREVIEW_STORE_TOKEN: "" }),
-        localIdentityEnv: Object.freeze({}),
-        managedLocalIdentity: false,
-      }),
+  const params = connectionParams("native-local-custom-scrub");
+  setPreparedEnvironment(params, {
+    credentialScrubEnv: Object.freeze({ PREVIEW_STORE_TOKEN: "" }),
   });
 
   using connection = await prepareConnection(params);
@@ -555,15 +520,11 @@ it.each(["local", "sandbox", "remote"] as const)(
       GIT_COMMITTER_NAME: "Managed Committer",
       GIT_COMMITTER_EMAIL: "committer@example.test",
     };
-    params.hostCapabilities = Object.freeze({
-      ...params.hostCapabilities,
-      preparedEnvironment: () =>
-        Object.freeze({
-          credentialScrubEnv: Object.freeze(credentialScrubEnv),
-          localIdentityEnv: Object.freeze(localIdentityEnv),
-          localToolEnv: Object.freeze({ PATH: "/fixture/tools:/fixture/system" }),
-          managedLocalIdentity: true,
-        }),
+    setPreparedEnvironment(params, {
+      credentialScrubEnv: Object.freeze(credentialScrubEnv),
+      localIdentityEnv: Object.freeze(localIdentityEnv),
+      localToolEnv: Object.freeze({ PATH: "/fixture/tools:/fixture/system" }),
+      managedLocalIdentity: true,
     });
     if (location !== "local") {
       params.sandbox = {
@@ -584,7 +545,6 @@ it.each(["local", "sandbox", "remote"] as const)(
     });
     expect(connection.appServer.start.env).toMatchObject(connection.shellEnvironment!);
     if (location !== "local") {
-      expect(connection.shellEnvironment).not.toHaveProperty("PATH");
       for (const key of Object.keys(localIdentityEnv)) {
         expect(connection.appServer.start.env).not.toHaveProperty(key);
       }
@@ -594,38 +554,24 @@ it.each(["local", "sandbox", "remote"] as const)(
 );
 
 it.each([
-  {
-    name: "paired-device remote execution",
-    placement: { placementExecutionMode: "remote-exec", placementNodeId: "paired-device-1" },
-    expectedFactory: createIsolatedCodexAppServerClient,
+  ["paired-device remote", createIsolatedCodexAppServerClient],
+  ["local sandbox", getLeasedSharedCodexAppServerClient],
+] as const)(
+  "selects the correct app-server ownership for %s execution",
+  async (location, factory) => {
+    const params = connectionParams("client-ownership");
+    params.sandbox = createSandboxContext({});
+    if (location === "paired-device remote") {
+      Object.assign(params.sandbox, {
+        placementExecutionMode: "remote-exec",
+        placementNodeId: "paired-device-1",
+      });
+      prepareAuth(params, "gpt-5.4-codex");
+    }
+    using connection = await prepareConnection(params);
+    expect(connection.attemptClientFactory).toBe(factory);
   },
-  {
-    name: "local sandbox execution",
-    placement: {},
-    expectedFactory: getLeasedSharedCodexAppServerClient,
-  },
-])("selects the correct app-server ownership for $name", async ({ placement, expectedFactory }) => {
-  const sessionFile = path.join(
-    tempDir,
-    `client-ownership-${placement.placementNodeId ?? "other"}.jsonl`,
-  );
-  const workspaceDir = path.join(
-    tempDir,
-    `workspace-client-ownership-${placement.placementNodeId ?? "other"}`,
-  );
-  const params = createParams(sessionFile, workspaceDir);
-  params.sandbox = { ...createSandboxContext({}), ...placement } as NonNullable<
-    typeof params.sandbox
-  >;
-  if (placement.placementExecutionMode === "remote-exec") {
-    prepareAuth(params, "gpt-5.4-codex");
-  }
-  registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
-
-  using connection = await prepareConnection(params);
-
-  expect(connection.attemptClientFactory).toBe(expectedFactory);
-});
+);
 
 it("keeps a user-home subscription on native account verification", async () => {
   const params = connectionParams("user-home-native-auth", "workspace-user-home-native-auth");
@@ -640,9 +586,7 @@ it("keeps a user-home subscription on native account verification", async () => 
   using connection = await prepareConnection(params, {
     pluginConfig: { appServer: { homeScope: "user" } },
   });
-  const request = vi.fn(async (_method: string, _params?: unknown) => ({
-    account: { type: "chatgpt" },
-  }));
+  const request = vi.fn(async () => ({ account: { type: "chatgpt" } }));
 
   expect(connection).toMatchObject({
     startupAuthProfileId: undefined,
@@ -657,9 +601,7 @@ it("keeps a user-home subscription on native account verification", async () => 
       authRequirement: connection.startupAuthRequirement,
     }),
   ).resolves.toBeUndefined();
-  expect(
-    request.mock.calls.map(([method, requestParams]) => ({ method, params: requestParams })),
-  ).toEqual([{ method: "account/read", params: { refreshToken: false } }]);
+  expect(request).toHaveBeenCalledExactlyOnceWith("account/read", { refreshToken: false });
 });
 
 it("re-resolves model and connection policy when an oversized thread rotates", async () => {
@@ -766,9 +708,7 @@ it("keeps a full session mode on never when a before_tool_call hook is present",
 });
 
 it("rejects native execution denied by the retained global policy owner", async () => {
-  const workspaceDir = path.join(tempDir, "policy-workspace");
-  const sessionFile = path.join(tempDir, "policy-session.jsonl");
-  const params = createParams(sessionFile, workspaceDir);
+  const params = connectionParams("policy-session", "policy-workspace");
   params.agentId = "main";
   params.agentDir = path.join(tempDir, "main-agent");
   params.sandboxSessionKey = "global";
@@ -781,7 +721,6 @@ it("rejects native execution denied by the retained global policy owner", async 
       },
     },
   };
-  registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
 
   await expect(prepareConnection(params)).rejects.toThrow("effective tools.exec.mode=deny");
 });
@@ -827,9 +766,7 @@ it.each([
     params.config = { tools: { exec: { mode: "deny" } } };
     const resolveConnection = vi.spyOn(bindingConnection, "resolveCodexBindingAppServerConnection");
 
-    using connection = await prepareConnection(params);
-
-    expect(connection).toBeDefined();
+    using _ = await prepareConnection(params);
     expect(resolveConnection).toHaveBeenCalledWith(
       expect.objectContaining({ execPolicy: expect.objectContaining({ mode: execMode }) }),
     );

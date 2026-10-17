@@ -11,46 +11,36 @@ import { expect, it, vi } from "vitest";
 import type { CodexCommandExecParams } from "./command-exec-protocol.js";
 import { agentMessage } from "./native-subagent-monitor.test-support.js";
 import { itemNotification } from "./protocol.test-helpers.js";
-import {
-  bindProductionHarnessHostCapabilitiesForTest,
-  createParams,
-  createStartedThreadHarness,
-  runCodexAppServerAttempt,
-  setupRunAttemptTestHooks,
-  tempDir,
-  threadStartResult,
-} from "./run-attempt-test-harness.js";
+import * as test from "./run-attempt-test-harness.js";
 import {
   attachSqliteSessionTarget,
   readTranscriptMessagesByIdentity,
 } from "./sqlite-session.test-helpers.js";
 
-setupRunAttemptTestHooks();
+test.setupRunAttemptTestHooks();
 
 const execFileAsync = promisify(execFile);
+const artifactName = "project-artifact.txt";
+
+async function writeArtifact(dir: string, contents: string) {
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, artifactName), contents);
+}
 
 it.each(["partial", "async", "denied", "cancel"] as const)(
   "delivers remote reply media without reading stale Gateway files: %s",
   async (scenario) => {
-    const workspaceDir = path.join(tempDir, "gateway-workspace");
-    const remoteWorkspaceRoot = path.join(tempDir, "codex-workspace");
-    const artifactName = "project-artifact.txt";
+    const workspaceDir = path.join(test.tempDir, "gateway-workspace");
+    const remoteWorkspaceRoot = path.join(test.tempDir, "codex-workspace");
     const remoteContents = "authoritative Codex project artifact\n";
-    await Promise.all(
-      (
-        [
-          [workspaceDir, "stale Gateway project artifact\n"],
-          [remoteWorkspaceRoot, remoteContents],
-        ] as const
-      ).map(async ([dir, contents]) => {
-        await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(path.join(dir, artifactName), contents);
-      }),
-    );
-    const params = createParams(path.join(tempDir, "final-media.jsonl"), workspaceDir);
+    await Promise.all([
+      writeArtifact(workspaceDir, "stale Gateway project artifact\n"),
+      writeArtifact(remoteWorkspaceRoot, remoteContents),
+    ]);
+    const params = test.createParams(path.join(test.tempDir, "final-media.jsonl"), workspaceDir);
     await attachSqliteSessionTarget(
       params,
-      path.join(tempDir, "final-media.sqlite"),
+      path.join(test.tempDir, "final-media.sqlite"),
       "final-media",
     );
     if (scenario === "denied") {
@@ -60,11 +50,11 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
     params.abortSignal = abort.signal;
     const onBlockReply = vi.fn<NonNullable<typeof params.onBlockReply>>();
     params.onBlockReply = onBlockReply;
-    await bindProductionHarnessHostCapabilitiesForTest(params);
+    await test.bindProductionHarnessHostCapabilitiesForTest(params);
     let remoteReads = 0;
-    const harness = createStartedThreadHarness(async (method, requestParams) => {
+    const harness = test.createStartedThreadHarness(async (method, requestParams) => {
       if (method === "thread/start") {
-        return threadStartResult("thread-1", { cwd: remoteWorkspaceRoot });
+        return test.threadStartResult("thread-1", { cwd: remoteWorkspaceRoot });
       }
       if (method === "command/exec") {
         // The only synthetic boundary is the remote transport: execute the native
@@ -83,7 +73,7 @@ it.each(["partial", "async", "denied", "cancel"] as const)(
       }
       return undefined;
     });
-    const run = runCodexAppServerAttempt(params, {
+    const run = test.runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { transport: "stdio", remoteWorkspaceRoot } },
     });
     await harness.waitForMethod("turn/start");
