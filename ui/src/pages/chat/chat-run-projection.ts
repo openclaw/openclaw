@@ -14,7 +14,7 @@ export function projectChatRun<T extends object>(host: T): T {
         if (getObserver()) {
           projection.read();
         }
-        return source.values[key];
+        return Reflect.get(source.values, key);
       },
     });
   }

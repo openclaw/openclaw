@@ -50,7 +50,7 @@ import {
   refreshChatModelAuthStatus,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
-import { mutateChatRunState } from "./chat-state-render.ts";
+import { mutateChatRunState, requestChatPageUpdate } from "./chat-state-render.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { createSessionEventState, renderedTranscript } from "./chat-state.test-support.ts";
 import { AssistantAttachments } from "./components/chat-message-attachments-solid.tsx";
@@ -2034,6 +2034,53 @@ describe("canonical session message recovery", () => {
 });
 
 describe("chat state render lifecycle", () => {
+  it.each(["legacy-first", "run-first", "terminal"] as const)(
+    "publishes mixed legacy and run updates through one frame: %s",
+    (order) => {
+      const frames = new Map<number, FrameRequestCallback>();
+      vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+        frames.set(1, callback);
+        return 1;
+      });
+      vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => frames.delete(id));
+      const state: { chatStream: string | null; requestUpdate: () => void } = {
+        chatStream: null,
+        requestUpdate: vi.fn<() => void>(),
+      };
+      const rendered: (string | null)[] = [];
+      const dispose = createRoot((stop) => {
+        projectChatRun(state);
+        createEffect(
+          () => state.chatStream,
+          (value) => {
+            rendered.push(value);
+          },
+        );
+        return stop;
+      });
+      onTestFinished(dispose);
+      flush();
+      const legacy = () => requestChatPageUpdate(state, "animation-frame");
+      const run = () =>
+        mutateChatRunState(state, () => (state.chatStream = "streaming"), "animation-frame");
+      for (const update of order === "run-first" ? [run, legacy] : [legacy, run]) {
+        update();
+      }
+      expect(frames.size).toBe(1);
+      expect(state.requestUpdate).not.toHaveBeenCalled();
+      expect(rendered).toEqual([null]);
+      const frame = frames.get(1)!;
+      if (order === "terminal") {
+        mutateChatRunState(state, () => (state.chatStream = "complete"));
+        expect(frames.size).toBe(0);
+      }
+      frame(0);
+      flush();
+      expect(state.requestUpdate).toHaveBeenCalledOnce();
+      expect(rendered).toEqual([null, order === "terminal" ? "complete" : "streaming"]);
+    },
+  );
+
   it("publishes run fields once per frame while preserving synchronous state and terminal ordering", () => {
     let nextFrame = 0;
     const frames = new Map<number, FrameRequestCallback>();
@@ -2139,7 +2186,9 @@ describe("chat state render lifecycle", () => {
   });
 
   function createObserverState(overrides: Partial<Record<keyof ChatPageHost, unknown>> = {}) {
-    const requestUpdate = (overrides.requestUpdate ?? vi.fn()) as ReturnType<typeof vi.fn>;
+    const requestUpdate = (overrides.requestUpdate ?? vi.fn<() => void>()) as ReturnType<
+      typeof vi.fn<() => void>
+    >;
     const state = {
       sessionKey: "agent:main:current",
       assistantAgentId: "main",

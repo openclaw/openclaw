@@ -85,7 +85,7 @@ afterEach(() => {
 describe("server-owned pending input display", () => {
   it("publishes custody changes through the run projection while retaining the pending view", () => {
     const host = makeChatHost({ sessionKey, currentSessionId: sessionId });
-    const rendered: string[][] = [];
+    const rendered: (readonly string[])[] = [];
     const dispose = createRoot((stop) => {
       projectChatRun(host);
       createEffect(

@@ -397,7 +397,7 @@ export function handlePageGatewayEvent(
     event.event === "session.operation" ||
     event.event === "session.message" ||
     event.event === "sessions.changed" ||
-    (event.event === "chat" && (event.payload as ChatEventPayload | undefined)?.state === "delta");
+    (event.event === "chat" && asNullableRecord(event.payload)?.state === "delta");
   mutateChatRunState(
     state,
     () => applyPageGatewayEvent(state, event, isPresented, sessionResult),

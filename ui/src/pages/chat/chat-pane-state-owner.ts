@@ -60,6 +60,7 @@ import type { ChatPaneConnectionScope, PaneSessionChangeOptions } from "./chat-p
 import { SessionParticipationTracker } from "./chat-pane-state.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { requestChatPageUpdate } from "./chat-state-render.ts";
 import type { ChatTypingActorState } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
@@ -106,7 +107,7 @@ export abstract class ChatPaneStateOwner {
       // live textarea while visibility change can still reach browser storage.
       state.handleChatDraftChange(liveDraft);
     }
-    state.requestUpdate?.();
+    requestChatPageUpdate(state);
   };
   start() {
     if (this.chatState.disposed) {

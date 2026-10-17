@@ -1,5 +1,3 @@
-import type { ChatPageHost } from "./chat-state-host.ts";
-
 const RUN_FIELDS = [
   "chatMessages",
   "chatPendingInputs",
@@ -21,25 +19,26 @@ const RUN_FIELDS = [
   "chatRunStatus",
   "chatSessionApprovalQueue",
   "waitingApprovalStatuses",
-] as const satisfies readonly (keyof ChatPageHost)[];
+] as const;
 
 type RunField = (typeof RUN_FIELDS)[number];
-type ChatRunFields = Partial<Pick<ChatPageHost, RunField>>;
+type ChatRunFields<T> = Partial<Pick<T, Extract<RunField, keyof T>>>;
 export type ChatRunPublication = "immediate" | "animation-frame";
 
-const presentations = new WeakMap<object, ChatRunPresentation>();
+const presentations = new WeakMap<object, ChatRunPresentation<object>>();
 
 /** Synchronous run state with one publication boundary for each accepted event. */
-class ChatRunPresentation {
-  readonly values: ChatRunFields = {};
+class ChatRunPresentation<T extends object> {
+  readonly values: ChatRunFields<T> = {};
   readonly fields = RUN_FIELDS;
   frame: number | null = null;
   private listeners = new Set<() => void>();
   private depth = 0;
   private changed = false;
   private cadence: ChatRunPublication | false = false;
+  private viewUpdate: (() => void) | undefined;
 
-  constructor(host: object) {
+  constructor(host: T) {
     const pendingFrame: unknown = Reflect.get(host, "chatStreamRenderFrame");
     this.frame = typeof pendingFrame === "number" ? pendingFrame : null;
     for (const key of RUN_FIELDS) {
@@ -51,9 +50,9 @@ class ChatRunPresentation {
       Object.defineProperty(host, key, {
         configurable: true,
         enumerable: true,
-        get: () => this.values[key],
-        set: (value: ChatRunFields[typeof key]) => {
-          if (Object.is(this.values[key], value)) {
+        get: () => Reflect.get(this.values, key),
+        set: (value: unknown) => {
+          if (Object.is(Reflect.get(this.values, key), value)) {
             return;
           }
           Object.defineProperty(this.values, key, { value });
@@ -123,11 +122,21 @@ class ChatRunPresentation {
       }
       return;
     }
-    this.cancelFrame();
+    this.clearFrame();
     this.notify();
   }
 
+  requestViewUpdate(update: () => void, mode: ChatRunPublication): void {
+    this.viewUpdate = update;
+    this.publish(mode);
+  }
+
   cancelFrame(): void {
+    this.clearFrame();
+    this.viewUpdate = undefined;
+  }
+
+  private clearFrame(): void {
     if (this.frame !== null) {
       globalThis.cancelAnimationFrame?.(this.frame);
       this.frame = null;
@@ -135,17 +144,21 @@ class ChatRunPresentation {
   }
 
   private notify(): void {
+    const update = this.viewUpdate;
+    this.viewUpdate = undefined;
     for (const listener of this.listeners) {
       listener();
     }
+    update?.();
   }
 }
 
-export function chatRunPresentation(host: object): ChatRunPresentation {
+export function chatRunPresentation<T extends object>(host: T): ChatRunPresentation<T> {
   let presentation = presentations.get(host);
   if (!presentation) {
     presentation = new ChatRunPresentation(host);
     presentations.set(host, presentation);
   }
-  return presentation;
+  // SAFETY: Each presentation is created from, and cached only by, this exact host object.
+  return presentation as ChatRunPresentation<T>;
 }
