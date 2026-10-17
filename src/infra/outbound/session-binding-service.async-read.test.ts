@@ -153,7 +153,7 @@ describe("awaited binding read ownership", () => {
     );
   });
 
-  it("warns once for actual legacy binding use while V2 construction and reads stay silent", async () => {
+  it("warns once per legacy binding method while V2 construction and reads stay silent", async () => {
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     const run = <T>(body: () => T) =>
       withPluginRuntimePluginScope({ pluginId: "binding-sdk-compat-fixture" }, body);
@@ -191,7 +191,26 @@ describe("awaited binding read ownership", () => {
         getSessionBindingService().touch("", undefined, record.conversation);
       });
       run(() => getSessionBindingService().resolveByConversation(record.conversation));
-      expect(warning).toHaveBeenCalledTimes(1);
+      expect(warning.mock.calls).toEqual([
+        [
+          expect.stringContaining(
+            "SessionBindingService.resolveByConversation is deprecated; use SessionBindingService.resolveByConversationAsync",
+          ),
+          { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+        ],
+        [
+          expect.stringContaining(
+            "SessionBindingAdapter.resolveByConversation is deprecated; use SessionBindingAdapterV2.resolveByConversationAsync",
+          ),
+          { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+        ],
+        [
+          expect.stringContaining(
+            "SessionBindingService.touch is deprecated; use SessionBindingService.touchAsync",
+          ),
+          { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+        ],
+      ]);
       expect(warning.mock.calls[0]?.[0]).toContain(
         "Plugin binding-sdk-compat-fixture: SessionBindingService.resolveByConversation",
       );

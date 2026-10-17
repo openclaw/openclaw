@@ -15,7 +15,6 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { projectsForGateway } from "../../lib/projects.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   summarizeSessionPullRequests,
@@ -82,9 +81,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   }
 
   protected subscribeSessionRepositoryContext(): void {
-    this.chatState.addCleanup(
-      projectsForGateway(this.context.gateway).subscribe(() => this.invalidate()),
-    );
     const sessionPullRequests = sessionPullRequestsForGateway(this.context.gateway);
     this.chatState.addCleanup(
       sessionPullRequests.subscribe(() => {

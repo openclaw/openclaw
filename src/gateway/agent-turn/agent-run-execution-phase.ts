@@ -566,8 +566,6 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                     prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority);
                   }
                 },
-                internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,
-                internalDeliverySuppressText: params.client?.internal?.internalDeliverySuppressText,
                 internalDeliverySuppressErrors:
                   params.client?.internal?.internalDeliverySuppressErrors,
                 suppressPromptPersistence: prepared.userTurn.suppressPromptPersistence,

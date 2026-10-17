@@ -56,6 +56,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/pages/chat/route-entry.ts":
+      // Pending New Session previews must render while the Chat route entry waits.
+      return "chat-route-entry";
     case "ui/src/pages/devices/devices-page.tsx":
       return "devices-page";
     case "ui/src/pages/plugins/plugins-page.tsx":
@@ -104,16 +107,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "chat-transcript-styles";
   }
 
-  if (
-    moduleIdIncludesPackage(id, "highlight.js") ||
-    moduleIdIncludesPackage(id, "markdown-it") ||
-    moduleIdIncludesPackage(id, "dompurify") ||
-    moduleIdIncludesPackage(id, "entities") ||
-    moduleIdIncludesPackage(id, "linkify-it") ||
-    moduleIdIncludesPackage(id, "mdurl") ||
-    moduleIdIncludesPackage(id, "punycode.js") ||
-    moduleIdIncludesPackage(id, "uc.micro")
-  ) {
+  // The composer uses MarkdownIt for synchronous emoji completion, but only
+  // transcript rendering needs highlighting and sanitization.
+  if (moduleIdIncludesPackage(id, "highlight.js") || moduleIdIncludesPackage(id, "dompurify")) {
     return "markdown-runtime";
   }
 

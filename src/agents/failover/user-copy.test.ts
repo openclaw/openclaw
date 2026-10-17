@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderFormatErrorCopy } from "./assistant-request-failure-copy.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
@@ -13,6 +14,31 @@ import {
 } from "./user-copy.js";
 
 describe("failover user copy", () => {
+  it.each([
+    ["Weekly usage limit exhausted; resets 2026-10-20 00:00:00 UTC.", false],
+    ["Weekly usage limit exhausted; resets 2026-10-20 00:00:00 UTC.", true],
+    ["您已达到每周/每月使用上限，您的限额将在 2026-10-20 00:00:00 重置。", false],
+    ["您已达到每周/每月使用上限，您的限额将在 2026-10-20 00:00:00 重置。", true],
+  ])(
+    "extracts only quota reset guidance after fallback: %s (structured=%s)",
+    (message, structured) => {
+      const raw = structured
+        ? `429 ${JSON.stringify({ error: { message }, request: { input: "PRIVATE_REQUEST_CANARY" } })}`
+        : `429 ${message}`;
+      expect(
+        renderRateLimitReplyCopy({
+          message: "All models failed (2)",
+          reason: "overloaded",
+          attempts: [
+            { provider: "zai", model: "fixture", reason: "rate_limit", error: raw },
+            { provider: "fallback", model: "fixture", reason: "overloaded", error: "overloaded" },
+          ],
+          sanitizeText: (text) => sanitizeUserFacingText(text, { errorContext: true }),
+        }),
+      ).toBe(`⚠️ ${message}`);
+    },
+  );
+
   it.each([
     [undefined, "Troubleshooting: run `openclaw logs --follow` in a terminal."],
     [
@@ -174,7 +200,6 @@ describe("failover user copy", () => {
           .join(" | ")}`,
         reason: "rate_limit",
         attempts,
-        sanitizeText: (text) => renderSanitizedUserFacingText(text, { errorContext: true }),
       }),
     ).toBe("⚠️ Rate limit reached. Please try again in 17 minutes.");
   });

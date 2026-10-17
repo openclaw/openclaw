@@ -8,8 +8,8 @@ import { flush } from "../../../test-helpers/solid-settle.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
+import { createChatTranscript, type ChatTranscript } from "./chat-transcript-controller.ts";
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
-import { createTranscriptTestOwner } from "./chat-transcript-owner.test-support.ts";
 import {
   publishTranscriptScroll,
   subscribeTranscriptScroll,
@@ -22,34 +22,18 @@ import {
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
 
-type TranscriptHostController = {
-  hostConnected?(): void;
-  hostDisconnected?(): void;
-  hostUpdated?(): void;
-};
-
 class RailScrollTestHost extends HTMLElement {
+  transcript?: ChatTranscript;
   readonly transcriptRoot = document.createElement("div");
   renderTranscript: () => JSX.Element = () => null;
   isUpdatePending = false;
   updateComplete = Promise.resolve(true);
-  private readonly controllers = new Set<TranscriptHostController>();
   private view?: ReturnType<typeof mountSolid>;
   private renderContent?: () => void;
 
-  addController(controller: TranscriptHostController) {
-    this.controllers.add(controller);
-  }
-
-  removeController(controller: TranscriptHostController) {
-    this.controllers.delete(controller);
-  }
-
   connectedCallback() {
     this.append(this.transcriptRoot);
-    for (const controller of this.controllers) {
-      controller.hostConnected?.();
-    }
+    this.transcript?.start();
     this.view = mountSolid(
       () => {
         const [revision, setRevision] = createSignal(0);
@@ -65,19 +49,17 @@ class RailScrollTestHost extends HTMLElement {
       },
       { container: this.transcriptRoot },
     );
-    this.requestUpdate();
+    this.requestRender();
   }
 
   disconnectedCallback() {
-    for (const controller of this.controllers) {
-      controller.hostDisconnected?.();
-    }
+    this.transcript?.dispose();
     this.view?.unmount();
     this.renderContent = undefined;
   }
 
-  // Controller receipts coalesce into the next host commit, as they did under Lit.
-  requestUpdate() {
+  // Transcript notifications coalesce into the next committed DOM update.
+  requestRender() {
     if (this.isUpdatePending) {
       return;
     }
@@ -91,9 +73,7 @@ class RailScrollTestHost extends HTMLElement {
 
   performUpdate() {
     this.renderContent?.();
-    for (const controller of this.controllers) {
-      controller.hostUpdated?.();
-    }
+    this.transcript?.update();
   }
 }
 
@@ -112,9 +92,13 @@ describe("conversation position rail scroll rendering", () => {
     const container = host.transcriptRoot;
     const performUpdate = vi.spyOn(host, "performUpdate");
     const recordViewport = vi.spyOn(TranscriptEndAnchor.prototype, "recordViewport");
-    const transcript = createTranscriptTestOwner(host, () => "rail-notification", {
-      canFollowEnd: () => false,
-    });
+    const transcript = (host.transcript = createChatTranscript(
+      () => host.requestRender(),
+      () => "rail-notification",
+      {
+        canFollowEnd: () => false,
+      },
+    ));
     const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
       kind: "content",
       key: `row-${index}`,
@@ -230,7 +214,7 @@ describe("conversation position rail scroll rendering", () => {
           Updated content
         </div>
       );
-      host.requestUpdate();
+      host.requestRender();
       await settleUpdates();
       clearRailReads();
       flushFrame();

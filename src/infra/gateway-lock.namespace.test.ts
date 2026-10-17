@@ -85,9 +85,10 @@ function mockLinuxNamespace(root: string) {
       platform: "linux",
       identity: "01234567-89ab-cdef-0123-456789abcdef",
     }));
-    const stat = fsSync.statSync.bind(fsSync);
-    vi.spyOn(fsSync, "statSync").mockImplementation((file, options) =>
-      stat(file === "/proc/self/ns/pid" ? root : file, options),
+    const namespaceLink = `pid:[${fsSync.statSync(root, { bigint: true }).ino}]`;
+    const readlink = fsSync.readlinkSync.bind(fsSync);
+    vi.spyOn(fsSync, "readlinkSync").mockImplementation((file, options) =>
+      file === "/proc/self/ns/pid" ? namespaceLink : readlink(file, options),
     );
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     readGatewayLockProcessNamespace();
@@ -109,6 +110,40 @@ describe("gateway lock namespaces", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("reads the Linux namespace identity without following its procfs magic link", () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const boot = vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader");
+    boot.mockReturnValue(() => ({
+      platform: "darwin",
+      identity: "01234567-89ab-cdef-0123-456789abcdef",
+    }));
+    readGatewayLockProcessNamespace();
+    platform.mockReturnValue("linux");
+    boot.mockReturnValue(() => ({
+      platform: "linux",
+      identity: "01234567-89ab-cdef-0123-456789abcdef",
+    }));
+    const readlink = fsSync.readlinkSync.bind(fsSync);
+    vi.spyOn(fsSync, "readlinkSync").mockImplementation((file, options) =>
+      file === "/proc/self/ns/pid" ? "pid:[4026532609]" : readlink(file, options),
+    );
+    const stat = fsSync.statSync.bind(fsSync);
+    vi.spyOn(fsSync, "statSync").mockImplementation((file, options) => {
+      if (file === "/proc/self/ns/pid") {
+        throw Object.assign(new Error("Cannot follow the namespace magic link"), {
+          code: "ENOENT",
+        });
+      }
+      return stat(file, options);
+    });
+    expect(readGatewayLockProcessNamespace()).toEqual({
+      host: os.hostname(),
+      platform: "linux",
+      identity: "01234567-89ab-cdef-0123-456789abcdef",
+      pidNsInode: "4026532609",
+    });
   });
 
   it("uses PID evidence only for local or legacy namespace identity", async () => {
@@ -149,64 +184,70 @@ describe("gateway lock namespaces", () => {
     }
   });
 
-  it("preserves fresh ownership and reclaims an expired heartbeat when the Linux PID namespace probe fails", async () => {
-    const env = await makeEnv();
-    const paths = resolveGatewayLockPaths(env, resolveTestLockDir(env));
-    const record = JSON.stringify({
-      ...createLockPayload({ configPath: paths.configPath, startTime: 1 }),
-      pid: 2_147_483_647,
-      processNamespace: {
-        host: os.hostname(),
+  it.each(["unreadable", "malformed"])(
+    "preserves fresh ownership and reclaims an expired heartbeat when the Linux PID namespace link is %s",
+    async (failure) => {
+      const env = await makeEnv();
+      const paths = resolveGatewayLockPaths(env, resolveTestLockDir(env));
+      const record = JSON.stringify({
+        ...createLockPayload({ configPath: paths.configPath, startTime: 1 }),
+        pid: 2_147_483_647,
+        processNamespace: {
+          host: os.hostname(),
+          platform: "linux",
+          identity: "01234567-89ab-cdef-0123-456789abcdef",
+          pidNsInode: "foreign",
+        },
+      });
+      await fs.mkdir(path.dirname(paths.ownerLockPath), { recursive: true });
+      await fs.writeFile(paths.ownerLockPath, record);
+      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      const boot = vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader");
+      boot.mockReturnValue(() => ({
+        platform: "darwin",
+        identity: "01234567-89ab-cdef-0123-456789abcdef",
+      }));
+      // A successful observation belongs to one platform; discard a prior Linux fixture's cache.
+      readGatewayLockProcessNamespace();
+      platform.mockReturnValue("linux");
+      boot.mockReturnValue(() => ({
         platform: "linux",
         identity: "01234567-89ab-cdef-0123-456789abcdef",
-        pidNsInode: "foreign",
-      },
-    });
-    await fs.mkdir(path.dirname(paths.ownerLockPath), { recursive: true });
-    await fs.writeFile(paths.ownerLockPath, record);
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    const boot = vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader");
-    boot.mockReturnValue(() => ({
-      platform: "darwin",
-      identity: "01234567-89ab-cdef-0123-456789abcdef",
-    }));
-    // A successful observation belongs to one platform; discard a prior Linux fixture's cache.
-    readGatewayLockProcessNamespace();
-    platform.mockReturnValue("linux");
-    boot.mockReturnValue(() => ({
-      platform: "linux",
-      identity: "01234567-89ab-cdef-0123-456789abcdef",
-    }));
-    const stat = fsSync.statSync.bind(fsSync);
-    vi.spyOn(fsSync, "statSync").mockImplementation((file, options) => {
-      if (file === "/proc/self/ns/pid") {
-        throw Object.assign(new Error("PID namespace unavailable"), { code: "EACCES" });
+      }));
+      const readlink = fsSync.readlinkSync.bind(fsSync);
+      vi.spyOn(fsSync, "readlinkSync").mockImplementation((file, options) => {
+        if (file === "/proc/self/ns/pid") {
+          if (failure === "malformed") {
+            return "pid:[not-an-inode]";
+          }
+          throw Object.assign(new Error("PID namespace unavailable"), { code: "EACCES" });
+        }
+        return readlink(file, options);
+      });
+      expect(readGatewayLockProcessNamespace()).toBeNull();
+      let unexpected: Awaited<ReturnType<typeof acquireForTest>> | undefined;
+      try {
+        await expect(
+          acquireForTest(env, { role: "sqlite-maintenance" }).then((owner) => {
+            unexpected = owner;
+            return owner;
+          }),
+        ).rejects.toThrow("cannot verify Gateway ownership from this process");
+      } finally {
+        await unexpected?.release();
       }
-      return stat(file, options);
-    });
-    expect(readGatewayLockProcessNamespace()).toBeNull();
-    let unexpected: Awaited<ReturnType<typeof acquireForTest>> | undefined;
-    try {
-      await expect(
-        acquireForTest(env, { role: "sqlite-maintenance" }).then((owner) => {
-          unexpected = owner;
-          return owner;
-        }),
-      ).rejects.toThrow("cannot verify Gateway ownership from this process");
-    } finally {
-      await unexpected?.release();
-    }
-    await expect(fs.readFile(paths.ownerLockPath, "utf8")).resolves.toBe(record);
-    const expired = new Date(Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1000);
-    await fs.utimes(paths.ownerLockPath, expired, expired);
-    const owner = expectGatewayLock(await acquireForTest(env, { role: "sqlite-maintenance" }));
-    try {
-      owner.assertCurrent();
-      expect(await fs.readFile(paths.ownerLockPath, "utf8")).not.toBe(record);
-    } finally {
-      await owner.release();
-    }
-  });
+      await expect(fs.readFile(paths.ownerLockPath, "utf8")).resolves.toBe(record);
+      const expired = new Date(Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1000);
+      await fs.utimes(paths.ownerLockPath, expired, expired);
+      const owner = expectGatewayLock(await acquireForTest(env, { role: "sqlite-maintenance" }));
+      try {
+        owner.assertCurrent();
+        expect(await fs.readFile(paths.ownerLockPath, "utf8")).not.toBe(record);
+      } finally {
+        await owner.release();
+      }
+    },
+  );
 
   it.each(["crashed", "renewing"] as const)(
     "bounds startup recovery for a %s foreign-namespace owner",

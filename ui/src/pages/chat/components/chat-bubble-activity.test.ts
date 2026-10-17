@@ -22,7 +22,7 @@ it("keeps streaming text and open status details stable behind the dot preview",
   let connected = false;
   onTestFinished(() => {
     render(null, container);
-    transcript.hostDisconnected();
+    transcript.dispose();
     container.remove();
   });
   const props: ChatThreadProps = {
@@ -39,10 +39,10 @@ it("keeps streaming text and open status details stable behind the dot preview",
   const draw = () => {
     render(renderChatThread(props, transcript), container);
     if (!connected) {
-      transcript.hostConnected();
+      transcript.start();
       connected = true;
     }
-    transcript.hostUpdated();
+    transcript.update();
   };
   draw();
   await waitForSolid(() => {
@@ -82,7 +82,7 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
   let connected = false;
   onTestFinished(() => {
     render(null, container);
-    transcript.hostDisconnected();
+    transcript.dispose();
     container.remove();
   });
   const props: ChatThreadProps = {
@@ -110,10 +110,10 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
   const draw = () => {
     render(renderChatThread({ ...props, onRequestUpdate: draw }, transcript), container);
     if (!connected) {
-      transcript.hostConnected();
+      transcript.start();
       connected = true;
     }
-    transcript.hostUpdated();
+    transcript.update();
   };
   draw();
   await waitForSolid(() => {

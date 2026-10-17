@@ -35,7 +35,6 @@ import { runLocalAgentCommand } from "./agent-command-local.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
   bindCommandHarnessCompletionAssertion,
-  resolveCommandRecoveryOptions,
   shouldPersistRestartRecoveryContextClaim,
 } from "./agent-command-restart-recovery.js";
 import { runAcpAgentCommand } from "./command/acp-execution.js";
@@ -105,7 +104,7 @@ async function agentCommandInternal(
   const preserveUserFacingSessionModelState =
     prepared.opts.preserveUserFacingSessionModelState === true;
   const lifecycleAbortController = new AbortController();
-  const preparedOpts = resolveCommandRecoveryOptions(prepared);
+  const preparedOpts = prepared.opts;
   const parentAbortSignal = preparedOpts.abortSignal;
   if (parentAbortSignal?.aborted) {
     lifecycleAbortController.abort(parentAbortSignal.reason);

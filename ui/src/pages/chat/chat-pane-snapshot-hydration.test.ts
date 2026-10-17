@@ -184,7 +184,7 @@ describe("stored chat snapshot hydration", () => {
         } else {
           view = mountChatThread(props, transcript);
         }
-        transcript.hostUpdated();
+        transcript.update();
         return view;
       };
       try {
@@ -196,7 +196,7 @@ describe("stored chat snapshot hydration", () => {
           ).not.toBeNull(),
         );
         const { container } = renderPane();
-        transcript.hostConnected();
+        transcript.start();
         flush();
         const displayed = expectDefined(
           container.querySelector<HTMLImageElement>(".chat-message-image"),
@@ -266,7 +266,7 @@ describe("stored chat snapshot hydration", () => {
       } finally {
         view?.unmount();
         releaseChatMediaResourceSubscriber(renderPane);
-        transcript.hostDisconnected();
+        transcript.dispose();
         remounted.disconnectedCallback();
         await store.flush();
         await clearStoredChatSnapshots();

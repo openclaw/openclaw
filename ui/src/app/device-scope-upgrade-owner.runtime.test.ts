@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayBrowserClient } from "../api/gateway.ts";
-import { ScopeUpgradeController } from "./device-scope-upgrade-controller.runtime.ts";
+import { ScopeUpgradeOwner } from "./device-scope-upgrade-owner.runtime.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 
 describe("scope upgrade transport recovery", () => {
@@ -29,21 +29,21 @@ describe("scope upgrade transport recovery", () => {
       lastError: null,
       lastErrorCode: null,
     };
-    const controller = new ScopeUpgradeController(snapshot, vi.fn());
+    const owner = new ScopeUpgradeOwner(snapshot, vi.fn());
     try {
-      controller.request();
+      owner.request();
       await vi.waitFor(() =>
-        expect(controller.state).toEqual({
+        expect(owner.state).toEqual({
           phase: "error",
           message: "Connection interrupted",
           retryable: true,
         }),
       );
-      controller.retry();
-      await vi.waitFor(() => expect(controller.state.phase).toBe("rejected"));
+      owner.retry();
+      await vi.waitFor(() => expect(owner.state.phase).toBe("rejected"));
       expect(request).toHaveBeenCalledTimes(2);
     } finally {
-      controller.dispose();
+      owner.dispose();
     }
   });
 });

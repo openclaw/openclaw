@@ -612,7 +612,7 @@ export abstract class ChatPaneStateOwner {
     public context: ApplicationContext,
   ) {}
 
-  private subscribedBoardProvider: BoardProvider | undefined;
+  subscribedBoardProvider: BoardProvider | undefined;
   private stopBoardSubscriptions: (() => void) | undefined;
 
   refreshBoardSubscriptions(): void {
@@ -625,14 +625,10 @@ export abstract class ChatPaneStateOwner {
     }
     this.stopBoardSubscriptions?.();
     this.subscribedBoardProvider = provider;
-    const stopSnapshot = provider.snapshot$.subscribe(this.invalidate);
-    const stopError = provider.loadError$.subscribe(this.invalidate);
-    const stopEvents = provider.events.subscribe((event) => this.handleBoardCommand(event));
-    this.stopBoardSubscriptions = () => {
-      stopSnapshot();
-      stopError();
-      stopEvents();
-    };
+    // Commands must reach the synchronous pane owner in order, including while parked.
+    this.stopBoardSubscriptions = provider.events.subscribe((event) =>
+      this.handleBoardCommand(event),
+    );
   }
 
   protected abstract refreshSessionPullRequests(options?: {
