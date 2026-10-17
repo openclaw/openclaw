@@ -43,7 +43,7 @@ serveOwnedWorkerTasks(
         return prepared.then(() => read(input, channel, control));
       }
       const handlers =
-        dedicatedRead || ("input" in input.command && stateReadRegistry.has(input.command))
+        dedicatedRead || stateReadRegistry.has(input.command)
           ? undefined
           : await import("./openclaw-state-read-handlers.js");
       const executeRead = async (): Promise<OpenClawStateReadReply> => {
@@ -93,7 +93,7 @@ serveOwnedWorkerTasks(
           );
           return { ok: true, type: command.type, sourceAdmitted: true, lease };
         }
-        if ("input" in command && stateReadRegistry.has(command)) {
+        if (stateReadRegistry.has(command)) {
           const result = withOpenClawStateReadOnlyLocation(
             ({ db }) => {
               sourceAdmitted = true;

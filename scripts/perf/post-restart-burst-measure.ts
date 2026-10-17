@@ -72,6 +72,16 @@ const fixture: unknown = JSON.parse(
 if (!isRecord(fixture) || fixture.format !== "openclaw-team-shape-v1") {
   throw new Error("--state-dir must contain a generated team-shape fixture; never use live state");
 }
+const worktreeProject = Array.isArray(fixture.projectWorktrees)
+  ? fixture.projectWorktrees[0]
+  : undefined;
+const worktreeProjectId =
+  isRecord(worktreeProject) && typeof worktreeProject.projectId === "string"
+    ? worktreeProject.projectId
+    : undefined;
+if (values["worktree-churn"] && !worktreeProjectId) {
+  throw new Error("Worktree churn requires a seeded project");
+}
 const output = path.join(root, `post-restart-burst-${Date.now()}`);
 mkdirSync(output);
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
@@ -868,10 +878,11 @@ async function scrapeWriterMetrics(name: string) {
     const match = /^openclaw_worker_queue_wait_seconds_(sum|count)\{([^}]+)\} ([\d.e+-]+)$/.exec(
       line,
     );
-    if (!match || !match[2].includes('kind="sqlite_writer"')) {
+    const labels = match?.[2];
+    if (!match || !labels?.includes('kind="sqlite_writer"')) {
       continue;
     }
-    const requestClass = /request_class="([^"]+)"/.exec(match[2])?.[1];
+    const requestClass = /request_class="([^"]+)"/.exec(labels)?.[1];
     if (!requestClass) {
       continue;
     }
@@ -892,14 +903,6 @@ async function settleWorktreeOperations<T>(operations: Promise<T>[]): Promise<T[
 async function measureWorktreeChurn() {
   await delay(Math.max(0, 120_000 - (performance.now() - restartAt)));
   const firstTwoMinutes = await scrapeWriterMetrics("worktree-first-120s");
-  if (
-    !Array.isArray(fixture.projectWorktrees) ||
-    !isRecord(fixture.projectWorktrees[0]) ||
-    typeof fixture.projectWorktrees[0].projectId !== "string"
-  ) {
-    throw new Error("Worktree churn requires a seeded project");
-  }
-  const projectId = fixture.projectWorktrees[0].projectId;
   const client = await connect(clientCount);
   try {
     const before = await scrapeWriterMetrics("worktree-burst-before");
@@ -908,8 +911,9 @@ async function measureWorktreeChurn() {
         const key = `agent:main:worktree-burst-${cohort}-${index}`;
         const created = await rpc(client, "sessions.create", {
           key,
-          projectId,
+          projectId: worktreeProjectId,
           worktree: true,
+          worktreeBaseRef: "main",
           worktreeName: `burst-${index}`,
           visibility: "shared",
           displayName: `Synthetic worktree ${index}`,
