@@ -89,12 +89,13 @@ concurrently with a bounded deadline per channel, including account resolution a
 status hooks. A timed-out channel returns its recorded state with a warning instead
 of preventing healthy channels from returning their results.
 If the gateway is unreachable, `channels status` falls back to config-only summaries
-instead of live check output.
+instead of live check output. An explicit `--probe` exits nonzero because the live
+checks could not run; ordinary status retains its successful config-only fallback.
 
 If the Gateway answers with an error, such as an unknown `--channel`, the command
 reports that error and exits nonzero instead of showing an unreachable fallback.
 
-Before checking channels, the command waits for local Gateway startup using the shared readiness budget and reports its observed phase. Startup still in progress at the deadline is a non-failing result, not an unreachable Gateway. In that case `--json` returns `{ "status": "starting", "startupPhase": "…" }`; rerun after startup to collect channel results.
+Before checking channels, the command waits for local Gateway startup using the shared readiness budget and reports its observed phase. Startup still in progress at the deadline is not treated as an unreachable Gateway. Ordinary status remains non-failing; an explicit `--probe` exits nonzero because its checks did not run. In that case `--json` returns `{ "status": "starting", "startupPhase": "…" }`; rerun after startup to collect channel results.
 
 The command reads existing local device authentication without creating an identity or persisting tokens returned by the Gateway, including when `--probe` is enabled.
 

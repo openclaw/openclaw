@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { ExitError } from "../runtime.js";
 import { channelsStatusCommand } from "./channels/status.js";
 import { createCapturingTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -258,6 +259,7 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(request?.params.timeoutMs).toBe(3750);
     expect(request?.timeoutMs).toBe(3750);
     expect(request?.sharedStateMode).toBe("read-only");
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   afterEach(() => {
@@ -283,6 +285,64 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.requireValidConfigFileSnapshot).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "fails uncompleted probes after fallback output (json=%s)",
+    async (json) => {
+      for (const error of [
+        createGatewayTransportError(),
+        new GatewaySecretRefUnavailableError("gateway.auth.password"),
+      ]) {
+        mocks.callGateway.mockRejectedValue(error);
+        fallbackConfig({ channels: {} });
+        for (const probe of [false, true]) {
+          const { runtime, logs } = createCapturingTestRuntime();
+          const exit = vi.fn();
+          await channelsStatusCommand({ probe, json }, { ...runtime, exit });
+          if (json) {
+            expect(JSON.parse(logs.at(-1) ?? "{}")).toMatchObject({
+              gatewayReachable: false,
+              configOnly: true,
+            });
+          } else {
+            expect(logs.join("\n")).toContain("showing config-only status");
+          }
+          if (probe) {
+            expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+          } else {
+            expect(exit).not.toHaveBeenCalled();
+          }
+        }
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "does not catch an incomplete startup probe exit (json=%s)",
+    async (json) => {
+      vi.mocked(waitForGatewayDiagnosticReadiness).mockResolvedValueOnce({
+        healthy: false,
+        waitOutcome: "still-starting",
+        startupPhase: "startup-sidecars",
+        elapsedMs: 60_000,
+        runtime: { status: "running", pid: 42 },
+        portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+        staleGatewayPids: [],
+      });
+      const exitError = new ExitError(1);
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(() => {
+          throw exitError;
+        }),
+      };
+      await expect(channelsStatusCommand({ probe: true, json }, runtime)).rejects.toBe(exitError);
+      expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.requireValidConfig).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps read-only fallback output when SecretRefs are unresolved", async () => {
     mocks.callGateway.mockRejectedValue(createGatewayTransportError());
