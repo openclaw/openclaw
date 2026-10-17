@@ -204,11 +204,7 @@ async function runManagedSweep(script: string, env: NodeJS.ProcessEnv, signal: A
     },
   });
   try {
-    return {
-      status: await withinTest(command, signal),
-      ...captured,
-      output: `${captured.stdout}\n${captured.stderr}`,
-    };
+    return { status: await withinTest(command, signal), ...captured };
   } finally {
     // The managed owner joins the shell tree after cancellation before temp files are removed.
     await command.catch(() => {});
@@ -256,6 +252,8 @@ function serverFixture(parent: string) {
     FAKE_BIN: path.join(parent, "bin"),
     SCRATCH_ROOT: path.join(parent, "scratch"),
     FIXTURE_DIR: path.join(parent, "scratch", "clawhub-fixture"),
+    KITCHEN_SINK_TMP_DIR: path.join(parent, "scratch"),
+    OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS: "1",
   };
   for (const dir of [env.FAKE_BIN, env.FIXTURE_DIR]) {
     mkdirSync(dir, { recursive: true });
@@ -437,7 +435,6 @@ it("scans only the configured kitchen-sink scratch root", () => {
 
 it("bounds irrelevant OpenClaw home traversal during log scans", () => {
   const { home, log, scan } = scanFixture();
-  mkdirSync(path.join(home, ".openclaw"), { recursive: true });
   log("scenario.log", "0 errors\n");
   for (let index = 0; index < 20; index += 1) {
     const dir = path.join(home, ".openclaw", `cache-${index}`);
@@ -551,8 +548,6 @@ it("cleans a ClawHub fixture server that times out before readiness", () => {
   const result = runSweepShell(
     `
 export PATH="$FAKE_BIN:$PATH"
-export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
-export OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS=1
 source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
 if start_kitchen_sink_clawhub_fixture_server "$FIXTURE_DIR"; then
   echo "fixture unexpectedly became ready" >&2
@@ -615,8 +610,6 @@ printf "%s\\n" "$ready" >&3
 mkfifo "$FIXTURE_READY_PATH"
 exec 3<>"$FIXTURE_READY_PATH"
 export PATH="$FAKE_BIN:$PATH"
-export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
-export OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS=1
 export OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES=64
 source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
 set +e

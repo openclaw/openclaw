@@ -78,16 +78,10 @@ it.each([false, true])("samples completed operations with splitFirst=%s", async 
     "sample",
   ]);
   const [first, warm] = phase.breakdown!;
-  expect(first).toMatchObject({
-    name: "plugin-tool-first",
-    ...receipt(1),
-    memoryChangeBytes: { rss: -20 },
-  });
-  expect(warm).toMatchObject({
-    name: "plugin-tool-warm",
-    ...receipt(19),
-    memoryChangeBytes: { rss: -10 },
-  });
+  expect(phase.breakdown).toMatchObject([
+    { name: "plugin-tool-first", ...receipt(1), memoryChangeBytes: { rss: -20 } },
+    { name: "plugin-tool-warm", ...receipt(19), memoryChangeBytes: { rss: -10 } },
+  ]);
   expect(first!.after).toBe(midpoint);
   expect(warm!.before).toBe(midpoint);
   expect(phase.before).toBe(before);
