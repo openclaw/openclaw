@@ -1,4 +1,3 @@
-// Matrix tests cover poll types plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildPollResultsSummary,
@@ -9,18 +8,50 @@ import {
   resolvePollReferenceEventId,
 } from "./poll-types.js";
 
+function makePoll(answers = ["a1", "a2"]) {
+  return {
+    question: "Lunch?",
+    kind: "m.poll.disclosed" as const,
+    maxSelections: 1,
+    answers: answers.map((id, index) => ({ id, text: index === 0 ? "Pizza" : "Sushi" })),
+  };
+}
+
+function vote(
+  sender: string,
+  origin_server_ts: number,
+  answers: string[],
+  type = "m.poll.response",
+) {
+  return {
+    event_id: `$vote${origin_server_ts}`,
+    sender,
+    origin_server_ts,
+    type,
+    content: {
+      [type]: { answers },
+      "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
+    },
+  };
+}
+
+function wirePoll(
+  ids: string[],
+  overrides: Partial<NonNullable<Parameters<typeof parsePollStart>[0]["m.poll.start"]>> = {},
+) {
+  return {
+    question: { "m.text": "Lunch?" },
+    kind: "m.poll.disclosed" as const,
+    max_selections: 1,
+    answers: ids.map((id, index) => ({ id, "m.text": index === 0 ? "Yes" : "No" })),
+    ...overrides,
+  };
+}
+
 describe("parsePollStart", () => {
   it("parses legacy m.poll payloads", () => {
     const summary = parsePollStart({
-      "m.poll": {
-        question: { "m.text": "Lunch?" },
-        kind: "m.poll.disclosed",
-        max_selections: 1,
-        answers: [
-          { id: "answer1", "m.text": "Yes" },
-          { id: "answer2", "m.text": "No" },
-        ],
-      },
+      "m.poll": wirePoll(["answer1", "answer2"]),
     });
 
     expect(summary?.question).toBe("Lunch?");
@@ -32,15 +63,7 @@ describe("parsePollStart", () => {
 
   it("caps invalid remote max selections to the available answer count", () => {
     const parsed = parsePollStart({
-      "m.poll.start": {
-        question: { "m.text": "Lunch?" },
-        kind: "m.poll.undisclosed",
-        max_selections: 99,
-        answers: [
-          { id: "a1", "m.text": "Yes" },
-          { id: "a2", "m.text": "No" },
-        ],
-      },
+      "m.poll.start": wirePoll(["a1", "a2"], { kind: "m.poll.undisclosed", max_selections: 99 }),
     });
 
     expect(parsed?.maxSelections).toBe(2);
@@ -48,21 +71,15 @@ describe("parsePollStart", () => {
 
   it("drops malformed answers instead of throwing on sender-controlled content", () => {
     const malformed: Array<[string, unknown]> = [
-      ["answers is a string", { question: { "m.text": "Q?" }, answers: "nope" }],
-      ["answers entries null", { question: { "m.text": "Q?" }, answers: [null] }],
-      [
-        "answer id non-string",
-        { question: { "m.text": "Q?" }, answers: [{ id: 42, "m.text": "a" }] },
-      ],
-      [
-        "question text non-string",
-        { question: { "m.text": 42 }, answers: [{ id: "a1", "m.text": "a" }] },
-      ],
-      [
-        "answer text non-string",
-        { question: { "m.text": "Q?" }, answers: [{ id: "a1", "m.text": 42 }] },
-      ],
-    ];
+      ["answers is a string", "nope"],
+      ["answers entries null", [null]],
+      ["answer id non-string", [{ id: 42, "m.text": "a" }]],
+      ["answer text non-string", [{ id: "a1", "m.text": 42 }]],
+    ].map(([label, answers]) => [String(label), { question: { "m.text": "Q?" }, answers }]);
+    malformed.push([
+      "question text non-string",
+      { question: { "m.text": 42 }, answers: [{ id: "a1", "m.text": "a" }] },
+    ]);
     for (const [label, poll] of malformed) {
       expect(() => parsePollStart({ "m.poll.start": poll } as never), label).not.toThrow();
       expect(parsePollStart({ "m.poll.start": poll } as never), label).toBeNull();
@@ -81,85 +98,37 @@ describe("parsePollStart", () => {
   });
 });
 
-describe("buildPollStartContent", () => {
-  it("preserves the requested multiselect cap instead of widening to all answers", () => {
-    const content = buildPollStartContent({
-      question: " Lunch? ",
-      options: [" Pizza ", " ", "Sushi", "Tacos"],
-      maxSelections: 2,
-    });
-
-    expect(content["m.poll.start"]?.max_selections).toBe(2);
-    expect(content["m.poll.start"]?.kind).toBe("m.poll.undisclosed");
-    expect(content["m.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
-    expect(content["org.matrix.msc1767.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
+it("buildPollStartContent: preserves the requested multiselect cap instead of widening to all answers", () => {
+  const content = buildPollStartContent({
+    question: " Lunch? ",
+    options: [" Pizza ", " ", "Sushi", "Tacos"],
+    maxSelections: 2,
   });
+
+  expect(content["m.poll.start"]?.max_selections).toBe(2);
+  expect(content["m.poll.start"]?.kind).toBe("m.poll.undisclosed");
+  expect(content["m.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
+  expect(content["org.matrix.msc1767.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
 });
 
-describe("poll relation parsing", () => {
-  it("extracts poll relation targets", () => {
-    expect(
-      resolvePollReferenceEventId({
-        "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-      }),
-    ).toBe("$poll");
-  });
+it("poll relation parsing: extracts poll relation targets", () => {
+  expect(
+    resolvePollReferenceEventId({
+      "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
+    }),
+  ).toBe("$poll");
 });
 
 describe("buildPollResultsSummary", () => {
   it("counts only the latest valid response from each sender", () => {
     const summary = buildPollResultsSummary({
       sender: "@alice:example.org",
-      poll: {
-        question: "Lunch?",
-        kind: "m.poll.disclosed",
-        maxSelections: 1,
-        answers: [
-          { id: "a1", text: "Pizza" },
-          { id: "a2", text: "Sushi" },
-        ],
-      },
+      poll: makePoll(),
       relationEvents: [
-        {
-          event_id: "$vote1",
-          sender: "@bob:example.org",
-          type: "m.poll.response",
-          origin_server_ts: 1,
-          content: {
-            "m.poll.response": { answers: ["a1"] },
-            "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-          },
-        },
-        {
-          event_id: "$vote2",
-          sender: "@bob:example.org",
-          type: "m.poll.response",
-          origin_server_ts: 2,
-          content: {
-            "m.poll.response": { answers: ["a2"] },
-            "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-          },
-        },
-        {
-          event_id: "$vote3",
-          sender: "@carol:example.org",
-          type: "m.poll.response",
-          origin_server_ts: 3,
-          content: {
-            "m.poll.response": { answers: [] },
-            "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-          },
-        },
-        {
-          event_id: "$vote4",
-          sender: "@dave:example.org",
-          type: "org.matrix.msc3381.poll.response",
-          origin_server_ts: 4,
-          content: {
-            "org.matrix.msc3381.poll.response": { answers: ["a1"] },
-            "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-          },
-        },
+        vote("@bob:example.org", 1, ["a1"]),
+        vote("@bob:example.org", 2, ["a2"]),
+        vote("@carol:example.org", 3, []),
+        vote("@dave:example.org", 4, ["a1"], "org.matrix.msc3381.poll.response"),
       ],
     });
 
@@ -183,15 +152,7 @@ describe("buildPollResultsSummary", () => {
     ];
     const summary = buildPollResultsSummary({
       sender: "@alice:example.org",
-      poll: {
-        question: "Lunch?",
-        kind: "m.poll.disclosed",
-        maxSelections: 1,
-        answers: [
-          { id: "answer1", text: "Pizza" },
-          { id: "answer2", text: "Sushi" },
-        ],
-      },
+      poll: makePoll(["answer1", "answer2"]),
       relationEvents: [
         ...endTimes.map((origin_server_ts, index) => ({
           event_id: "$end" + index,

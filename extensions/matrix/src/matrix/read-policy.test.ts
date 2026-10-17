@@ -38,6 +38,26 @@ function createClient(
   } as unknown as MatrixClient;
 }
 
+function matrixConfig(matrix: NonNullable<CoreConfig["channels"]>["matrix"]): CoreConfig {
+  return { channels: { matrix } };
+}
+
+type ReadParams = Parameters<typeof withAuthorizedMatrixReadTarget<string>>[0];
+function readTarget(
+  client: MatrixClient,
+  cfg: CoreConfig,
+  roomId: string,
+  params: Partial<Pick<ReadParams, "run" | "context" | "accountId">> = {},
+) {
+  return withAuthorizedMatrixReadTarget({
+    cfg,
+    roomId,
+    run: async () => "ok",
+    ...params,
+    opts: { client },
+  });
+}
+
 describe("Matrix read policy", () => {
   beforeEach(() => {
     installMatrixTestRuntime();
@@ -45,34 +65,15 @@ describe("Matrix read policy", () => {
 
   it("allows configured rooms and rejects other rooms before the read", async () => {
     const client = createClient(["@bot:example.org", "@alice:example.org", "@bob:example.org"]);
-    const cfg = {
-      channels: {
-        matrix: {
-          groupPolicy: "allowlist",
-          groups: {
-            "!allowed:example.org": {},
-          },
-        },
-      },
-    } as CoreConfig;
+    const cfg = matrixConfig({ groupPolicy: "allowlist", groups: { "!allowed:example.org": {} } });
     const read = vi.fn(async () => "ok");
 
-    await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg,
-        roomId: "!allowed:example.org",
-        opts: { client },
-        run: read,
-      }),
-    ).resolves.toBe("ok");
-    await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg,
-        roomId: "!blocked:example.org",
-        opts: { client },
-        run: read,
-      }),
-    ).rejects.toThrow("Matrix read target is not allowed.");
+    await expect(readTarget(client, cfg, "!allowed:example.org", { run: read })).resolves.toBe(
+      "ok",
+    );
+    await expect(readTarget(client, cfg, "!blocked:example.org", { run: read })).rejects.toThrow(
+      "Matrix read target is not allowed.",
+    );
     expect(read).toHaveBeenCalledTimes(1);
   });
 
@@ -122,28 +123,26 @@ describe("Matrix read policy", () => {
       ),
     );
     const read = vi.fn(async () => "ok");
-    const result = withAuthorizedMatrixReadTarget({
-      cfg: {
-        channels: {
-          matrix: {
-            groupPolicy: scenario.groupPolicy,
-            groups: { "!allowed:example.org": {} },
-            dm: { policy: "allowlist", allowFrom: ["@alice:example.org"] },
-          },
+    const result = readTarget(
+      client,
+      matrixConfig({
+        groupPolicy: scenario.groupPolicy,
+        groups: { "!allowed:example.org": {} },
+        dm: { policy: "allowlist", allowFrom: ["@alice:example.org"] },
+      }),
+      `user:${scenario.userId}`,
+      {
+        accountId: "default",
+        context: {
+          requesterAccountId: "default",
+          currentChannelProvider: "matrix",
+          currentChannelId: "!allowed:example.org",
+          currentChatType: "group",
+          conversationReadOrigin: "delegated",
         },
-      } as CoreConfig,
-      accountId: "default",
-      roomId: `user:${scenario.userId}`,
-      context: {
-        requesterAccountId: "default",
-        currentChannelProvider: "matrix",
-        currentChannelId: "!allowed:example.org",
-        currentChatType: "group",
-        conversationReadOrigin: "delegated",
+        run: read,
       },
-      opts: { client },
-      run: read,
-    });
+    );
 
     if (scenario.allowed) {
       await expect(result).resolves.toBe("ok");
@@ -160,21 +159,12 @@ describe("Matrix read policy", () => {
     const read = vi.fn(async () => "ok");
 
     await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg: {
-          channels: {
-            matrix: {
-              dm: {
-                policy: "open",
-                allowFrom: ["@bob:example.org"],
-              },
-            },
-          },
-        } as CoreConfig,
-        roomId: "!dm:example.org",
-        opts: { client },
-        run: read,
-      }),
+      readTarget(
+        client,
+        matrixConfig({ dm: { policy: "open", allowFrom: ["@bob:example.org"] } }),
+        "!dm:example.org",
+        { run: read },
+      ),
     ).rejects.toThrow("Matrix read target is not allowed.");
     expect(read).not.toHaveBeenCalled();
   });
@@ -183,21 +173,11 @@ describe("Matrix read policy", () => {
     const client = createClient(["@bot:example.org", "@alice:example.org"], true);
 
     await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg: {
-          channels: {
-            matrix: {
-              dm: {
-                policy: "pairing",
-                allowFrom: ["matrix:*"],
-              },
-            },
-          },
-        } as CoreConfig,
-        roomId: "!dm:example.org",
-        opts: { client },
-        run: async () => "ok",
-      }),
+      readTarget(
+        client,
+        matrixConfig({ dm: { policy: "pairing", allowFrom: ["matrix:*"] } }),
+        "!dm:example.org",
+      ),
     ).resolves.toBe("ok");
   });
 
@@ -229,19 +209,12 @@ describe("Matrix read policy", () => {
     const read = vi.fn(async () => "ok");
 
     await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg: {
-          channels: {
-            matrix: {
-              groupPolicy: "open",
-              dm: { policy: "disabled" },
-            },
-          },
-        } as CoreConfig,
-        roomId: "!unknown:example.org",
-        opts: { client },
-        run: read,
-      }),
+      readTarget(
+        client,
+        matrixConfig({ groupPolicy: "open", dm: { policy: "disabled" } }),
+        "!unknown:example.org",
+        { run: read },
+      ),
     ).rejects.toThrow("Matrix read target is not allowed.");
     expect(read).not.toHaveBeenCalled();
   });
@@ -249,38 +222,25 @@ describe("Matrix read policy", () => {
   it("allows the trusted current room without broadening other targets", async () => {
     const client = createClient(["@bot:example.org", "@alice:example.org", "@bob:example.org"]);
     const read = vi.fn(async () => "ok");
-    const cfg = {
-      channels: {
-        matrix: {
-          groupPolicy: "allowlist",
-          groups: {},
-        },
-      },
-    } as CoreConfig;
+    const cfg = matrixConfig({ groupPolicy: "allowlist", groups: {} });
 
     await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg,
-        roomId: "!current:example.org",
+      readTarget(client, cfg, "!current:example.org", {
         context: {
           currentChannelProvider: "matrix",
           currentChannelId: "!current:example.org",
           requesterAccountId: "default",
         },
-        opts: { client },
         run: read,
       }),
     ).resolves.toBe("ok");
     await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg,
-        roomId: "!other:example.org",
+      readTarget(client, cfg, "!other:example.org", {
         context: {
           currentChannelProvider: "matrix",
           currentChannelId: "!current:example.org",
           requesterAccountId: "default",
         },
-        opts: { client },
         run: read,
       }),
     ).rejects.toThrow("Matrix read target is not allowed.");
@@ -292,25 +252,20 @@ describe("Matrix read policy", () => {
     const read = vi.fn(async () => "ok");
 
     await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg: {
-          channels: {
-            matrix: {
-              groupPolicy: "disabled",
-              dm: { policy: "pairing", allowFrom: [] },
-            },
+      readTarget(
+        client,
+        matrixConfig({ groupPolicy: "disabled", dm: { policy: "pairing", allowFrom: [] } }),
+        "!current-dm:example.org",
+        {
+          context: {
+            currentChannelProvider: "matrix",
+            currentChannelId: "room:!current-dm:example.org",
+            currentChatType: "direct",
+            requesterAccountId: "default",
           },
-        } as CoreConfig,
-        roomId: "!current-dm:example.org",
-        context: {
-          currentChannelProvider: "matrix",
-          currentChannelId: "room:!current-dm:example.org",
-          currentChatType: "direct",
-          requesterAccountId: "default",
+          run: read,
         },
-        opts: { client },
-        run: read,
-      }),
+      ),
     ).resolves.toBe("ok");
     expect(getJoinedRoomMembers).not.toHaveBeenCalled();
   });
@@ -319,21 +274,11 @@ describe("Matrix read policy", () => {
     const client = createClient(["@bot:example.org", "@alice:example.org", "@bob:example.org"]);
 
     await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg: {
-          channels: {
-            matrix: {
-              groupPolicy: "open",
-              groups: {
-                "!other:example.org": {},
-              },
-            },
-          },
-        } as CoreConfig,
-        roomId: "!unmatched:example.org",
-        opts: { client },
-        run: async () => "ok",
-      }),
+      readTarget(
+        client,
+        matrixConfig({ groupPolicy: "open", groups: { "!other:example.org": {} } }),
+        "!unmatched:example.org",
+      ),
     ).resolves.toBe("ok");
   });
 
@@ -342,63 +287,40 @@ describe("Matrix read policy", () => {
     const client = createClient(
       ["@bot:example.org", "@alice:example.org", "@bob:example.org"],
       null,
-      {
-        canonicalAlias: "#ops:example.org",
-      },
+      { canonicalAlias: "#ops:example.org" },
       undefined,
       { resolveRoom },
     );
 
     await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg: {
-          channels: {
-            matrix: {
-              groupPolicy: "allowlist",
-              groups: {
-                "!ops:example.org": {},
-                "*": { enabled: false },
-              },
-            },
-          },
-        } as CoreConfig,
-        roomId: "#ops:example.org",
-        opts: { client },
-        run: async () => "ok",
-      }),
+      readTarget(
+        client,
+        matrixConfig({
+          groupPolicy: "allowlist",
+          groups: { "!ops:example.org": {}, "*": { enabled: false } },
+        }),
+        "#ops:example.org",
+      ),
     ).resolves.toBe("ok");
     expect(resolveRoom).toHaveBeenCalledWith("#ops:example.org");
   });
 
   it("treats explicitly configured two-member rooms as groups like ingress", async () => {
     const getJoinedRoomMembers = vi.fn(async () => ["@bot:example.org", "@alice:example.org"]);
-    const client = createClient(
-      [],
-      true,
-      {
-        canonicalAlias: "#ops:example.org",
-      },
-      undefined,
-      { getJoinedRoomMembers },
-    );
+    const client = createClient([], true, { canonicalAlias: "#ops:example.org" }, undefined, {
+      getJoinedRoomMembers,
+    });
 
     await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg: {
-          channels: {
-            matrix: {
-              groupPolicy: "allowlist",
-              groups: {
-                "#ops:example.org": {},
-              },
-              dm: { policy: "disabled" },
-            },
-          },
-        } as CoreConfig,
-        roomId: "!ops:example.org",
-        opts: { client },
-        run: async () => "ok",
-      }),
+      readTarget(
+        client,
+        matrixConfig({
+          groupPolicy: "allowlist",
+          groups: { "#ops:example.org": {} },
+          dm: { policy: "disabled" },
+        }),
+        "!ops:example.org",
+      ),
     ).resolves.toBe("ok");
     expect(getJoinedRoomMembers).not.toHaveBeenCalled();
   });
@@ -407,22 +329,11 @@ describe("Matrix read policy", () => {
     const client = createClient(["@bot:example.org", "@alice:example.org"], true);
 
     await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg: {
-          channels: {
-            matrix: {
-              groupPolicy: "allowlist",
-              groups: {
-                "*": {},
-              },
-              dm: { policy: "disabled" },
-            },
-          },
-        } as CoreConfig,
-        roomId: "!dm:example.org",
-        opts: { client },
-        run: async () => "ok",
-      }),
+      readTarget(
+        client,
+        matrixConfig({ groupPolicy: "allowlist", groups: { "*": {} }, dm: { policy: "disabled" } }),
+        "!dm:example.org",
+      ),
     ).rejects.toThrow("Matrix read target is not allowed.");
   });
 
@@ -435,22 +346,15 @@ describe("Matrix read policy", () => {
     );
 
     await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg: {
-          channels: {
-            matrix: {
-              dangerouslyAllowNameMatching: true,
-              groupPolicy: "allowlist",
-              groups: {
-                General: {},
-              },
-            },
-          },
-        } as CoreConfig,
-        roomId: "!general:example.org",
-        opts: { client },
-        run: async () => "ok",
-      }),
+      readTarget(
+        client,
+        matrixConfig({
+          dangerouslyAllowNameMatching: true,
+          groupPolicy: "allowlist",
+          groups: { General: {} },
+        }),
+        "!general:example.org",
+      ),
     ).resolves.toBe("ok");
   });
 
@@ -469,26 +373,21 @@ describe("Matrix read policy", () => {
       });
 
       await expect(
-        withAuthorizedMatrixReadTarget({
-          cfg: {
-            channels: {
-              matrix: {
-                groupPolicy: "open",
-                groups: {
-                  "!blocked:example.org": { enabled: false },
-                },
-              },
-            },
-          } as CoreConfig,
+        readTarget(
+          client,
+          matrixConfig({
+            groupPolicy: "open",
+            groups: { "!blocked:example.org": { enabled: false } },
+          }),
           roomId,
-          context: {
-            currentChannelProvider: "matrix",
-            currentChannelId: "!blocked:example.org",
-            requesterAccountId: "default",
+          {
+            context: {
+              currentChannelProvider: "matrix",
+              currentChannelId: "!blocked:example.org",
+              requesterAccountId: "default",
+            },
           },
-          opts: { client },
-          run: async () => "ok",
-        }),
+        ),
       ).rejects.toThrow("Matrix read target is not allowed.");
       expect(getRoomStateEvent).not.toHaveBeenCalled();
       expect(getJoinedRoomMembers).not.toHaveBeenCalled();
@@ -510,22 +409,15 @@ describe("Matrix read policy", () => {
       });
 
       await expect(
-        withAuthorizedMatrixReadTarget({
-          cfg: {
-            channels: {
-              matrix: {
-                groupPolicy: "open",
-                groups: {
-                  "!other-account:example.org": { account: "other" },
-                },
-              },
-            },
-          } as CoreConfig,
-          accountId: "default",
+        readTarget(
+          client,
+          matrixConfig({
+            groupPolicy: "open",
+            groups: { "!other-account:example.org": { account: "other" } },
+          }),
           roomId,
-          opts: { client },
-          run: async () => "ok",
-        }),
+          { accountId: "default" },
+        ),
       ).rejects.toThrow("Matrix read target is not allowed.");
       expect(getRoomStateEvent).not.toHaveBeenCalled();
       expect(getJoinedRoomMembers).not.toHaveBeenCalled();
@@ -547,46 +439,32 @@ describe("Matrix read policy", () => {
     const client = createClient(members, directFlag);
 
     await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg: {
-          channels: {
-            matrix: {
-              groupPolicy: "allowlist",
-              dm: { policy: "pairing", allowFrom: [] },
-            },
-          },
-        } as CoreConfig,
-        roomId: "!operator:example.org",
-        context: { conversationReadOrigin: "direct-operator" },
-        opts: { client },
-        run: async () => "ok",
-      }),
+      readTarget(
+        client,
+        matrixConfig({ groupPolicy: "allowlist", dm: { policy: "pairing", allowFrom: [] } }),
+        "!operator:example.org",
+        { context: { conversationReadOrigin: "direct-operator" } },
+      ),
     ).resolves.toBe("ok");
   });
 
   it.each([
     {
       name: "disabled room",
-      cfg: {
-        groupPolicy: "open",
-        groups: { "!blocked:example.org": { enabled: false } },
-      },
+      cfg: { groupPolicy: "open" as const, groups: { "!blocked:example.org": { enabled: false } } },
       members: ["@bot:example.org", "@alice:example.org", "@bob:example.org"],
     },
     {
       name: "wrong-account room",
       cfg: {
-        groupPolicy: "open",
+        groupPolicy: "open" as const,
         groups: { "!blocked:example.org": { account: "other" } },
       },
       members: ["@bot:example.org", "@alice:example.org", "@bob:example.org"],
     },
     {
       name: "disabled direct-message scope",
-      cfg: {
-        groupPolicy: "open",
-        dm: { policy: "disabled" },
-      },
+      cfg: { groupPolicy: "open" as const, dm: { policy: "disabled" as const } },
       members: ["@bot:example.org", "@alice:example.org"],
       directFlag: true,
     },
@@ -594,13 +472,9 @@ describe("Matrix read policy", () => {
     const client = createClient(members, directFlag ?? null);
 
     await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg: { channels: { matrix: cfg } } as CoreConfig,
+      readTarget(client, matrixConfig(cfg), "!blocked:example.org", {
         accountId: "default",
-        roomId: "!blocked:example.org",
         context: { conversationReadOrigin: "direct-operator" },
-        opts: { client },
-        run: async () => "ok",
       }),
     ).rejects.toThrow("Matrix read target is not allowed.");
   });

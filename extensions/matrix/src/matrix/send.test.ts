@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
-// Matrix tests cover send plugin behavior.
 import type * as TableRuntime from "openclaw/plugin-sdk/markdown-table-runtime";
 import type * as ChunkRuntime from "openclaw/plugin-sdk/reply-chunking";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
@@ -84,19 +83,17 @@ const runtimeStub = {
     current: () => loadConfigMock(),
   },
   media: {
-    mediaKindFromMime: (mime?: string | null) => mediaKindFromMimeMock(mime),
-    isVoiceCompatibleAudio: (opts: { contentType?: string | null; fileName?: string | null }) =>
-      isVoiceCompatibleAudioMock(opts),
-    getImageMetadata: (...args: unknown[]) => getImageMetadataMock(...args),
-    resizeToJpeg: (...args: unknown[]) => resizeToJpegMock(...args),
+    mediaKindFromMime: mediaKindFromMimeMock,
+    isVoiceCompatibleAudio: isVoiceCompatibleAudioMock,
+    getImageMetadata: getImageMetadataMock,
+    resizeToJpeg: resizeToJpegMock,
   },
   channel: {
     text: {
       resolveTextChunkLimit: resolveTextChunkLimitMock,
       resolveChunkMode: () => "length",
       chunkMarkdownText: (text: string) => (text ? [text] : []),
-      chunkMarkdownTextWithMode: (text: string, limit: number, mode: unknown) =>
-        chunkMarkdownTextWithModeMock(text, limit, mode),
+      chunkMarkdownTextWithMode: chunkMarkdownTextWithModeMock,
       resolveMarkdownTableMode: resolveMarkdownTableModeMock,
       convertMarkdownTables: (text: string) => text,
     },
@@ -104,6 +101,34 @@ const runtimeStub = {
 } as unknown as PluginRuntime;
 
 const requireRecord = createRequireRecord("object", "expected-label");
+
+function originalEvent() {
+  const original = createBundledReplacementEvent("$original");
+  delete original.unsigned;
+  return original;
+}
+
+function imageMedia(overrides: Partial<{ buffer: Buffer; fileName: string }> = {}) {
+  return {
+    buffer: Buffer.from("media"),
+    fileName: "photo.png",
+    contentType: "image/png",
+    kind: "image",
+    ...overrides,
+  };
+}
+
+function mockImageThumbnail() {
+  getImageMetadataMock
+    .mockResolvedValueOnce({ width: 1600, height: 1200 })
+    .mockResolvedValueOnce({ width: 800, height: 600 });
+}
+
+function expectNoMediaDispatch(onPlatformSendDispatch: ReturnType<typeof vi.fn>) {
+  expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+  expect(uploadContent).not.toHaveBeenCalled();
+  expect(sendMessage).not.toHaveBeenCalled();
+}
 
 function createMatrixTestDecryptionFailure(event: MatrixEvent) {
   const failed = new MatrixEvent({
@@ -147,12 +172,7 @@ function splitTextAtLimit(text: string, limit = text.length): string[] {
 
 function resetMatrixSendRuntimeMocks() {
   setMatrixRuntime(runtimeStub);
-  loadOutboundMediaFromUrlMock.mockReset().mockResolvedValue({
-    buffer: Buffer.from("media"),
-    fileName: "photo.png",
-    contentType: "image/png",
-    kind: "image",
-  });
+  loadOutboundMediaFromUrlMock.mockReset().mockResolvedValue(imageMedia());
   loadConfigMock.mockReset().mockReturnValue({});
   withResolvedRuntimeMatrixClientMock
     .mockReset()
@@ -284,11 +304,7 @@ describe("sendMessageMatrix durable delivery", () => {
 
   beforeEach(() => {
     stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-send-plan-"));
-    installMatrixTestRuntime({
-      stateDir,
-      cfg: {},
-      channel: runtimeStub.channel,
-    });
+    installMatrixTestRuntime({ stateDir, cfg: {}, channel: runtimeStub.channel });
     setMatrixRuntime({ ...getMatrixRuntime(), media: runtimeStub.media });
   });
 
@@ -382,9 +398,7 @@ describe("sendMessageMatrix durable delivery", () => {
     expect(
       onDeliveryResult.mock.calls.map(([result]) => [result.messageId, result.content]),
     ).toEqual([["$image", "first"]]);
-    expect(sentContent(0)["m.relates_to"]).toEqual({
-      "m.in_reply_to": { event_id: "$reply" },
-    });
+    expect(sentContent(0)["m.relates_to"]).toEqual({ "m.in_reply_to": { event_id: "$reply" } });
     expect(sentContent(1)).not.toHaveProperty("m.relates_to");
     withResolvedRuntimeMatrixClientMock.mockImplementationOnce(
       async (_opts: unknown, run: (resolved: typeof client) => Promise<unknown>) =>
@@ -432,10 +446,8 @@ describe("sendMessageMatrix media", () => {
     await expect(
       send("secret", { mediaUrl: "file:///tmp/photo.png", onPlatformSendDispatch }),
     ).rejects.toThrow(/enable encryption/i);
-    expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+    expectNoMediaDispatch(onPlatformSendDispatch);
     expect(loadOutboundMediaFromUrlMock).not.toHaveBeenCalled();
-    expect(uploadContent).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it.each([false, true])("rechecks encryption after media loading (crypto=%s)", async (crypto) => {
@@ -445,12 +457,7 @@ describe("sendMessageMatrix media", () => {
     }
     loadOutboundMediaFromUrlMock.mockImplementationOnce(async () => {
       vi.spyOn(client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
-      return {
-        buffer: Buffer.from("secret media"),
-        fileName: "secret.png",
-        contentType: "image/png",
-        kind: "image",
-      };
+      return imageMedia({ buffer: Buffer.from("secret media"), fileName: "secret.png" });
     });
     const onPlatformSendDispatch = vi.fn();
     const sending = send("secret", { mediaUrl: "file:///tmp/secret.png", onPlatformSendDispatch });
@@ -464,9 +471,7 @@ describe("sendMessageMatrix media", () => {
       expect(sentContent().url).toBeUndefined();
     } else {
       await expect(sending).rejects.toThrow(/enable encryption/i);
-      expect(uploadContent).not.toHaveBeenCalled();
-      expect(sendMessage).not.toHaveBeenCalled();
-      expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+      expectNoMediaDispatch(onPlatformSendDispatch);
     }
   });
 
@@ -476,9 +481,7 @@ describe("sendMessageMatrix media", () => {
       if (encrypted) {
         ({ client, sendMessage, uploadContent } = makeEncryptedMediaClient());
       }
-      getImageMetadataMock
-        .mockResolvedValueOnce({ width: 1600, height: 1200 })
-        .mockResolvedValueOnce({ width: 800, height: 600 });
+      mockImageThumbnail();
       resizeToJpegMock.mockResolvedValueOnce(Buffer.from("thumb"));
       uploadContent
         .mockResolvedValueOnce("mxc://example/main")
@@ -567,9 +570,7 @@ describe("sendMessageMatrix media", () => {
     (client as { crypto?: object }).crypto = {
       encryptMedia: vi.fn().mockResolvedValue(createEncryptedMediaPayload()),
     };
-    getImageMetadataMock
-      .mockResolvedValueOnce({ width: 1600, height: 1200 })
-      .mockResolvedValueOnce({ width: 800, height: 600 });
+    mockImageThumbnail();
     resizeToJpegMock.mockImplementationOnce(async () => {
       vi.spyOn(client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
       return Buffer.from("secret thumbnail");
@@ -588,17 +589,7 @@ describe("sendMessageMatrix media", () => {
   });
 
   it("uses explicit cfg for media sends instead of runtime loadConfig fallbacks", async () => {
-    const explicitCfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              mediaMaxMb: 1,
-            },
-          },
-        },
-      },
-    };
+    const explicitCfg = { channels: { matrix: { accounts: { ops: { mediaMaxMb: 1 } } } } };
 
     loadConfigMock.mockImplementation(() => {
       throw new Error("sendMessageMatrix should not reload runtime config when cfg is provided");
@@ -624,21 +615,14 @@ describe("sendMessageMatrix media", () => {
   });
 });
 
-describe("sendMessageMatrix mentions", () => {
-  it("does not emit mentions from fallback filenames when there is no caption", async () => {
-    loadOutboundMediaFromUrlMock.mockResolvedValue({
-      buffer: Buffer.from("media"),
-      fileName: "@room.png",
-      contentType: "image/png",
-      kind: "image",
-    });
+it("sendMessageMatrix mentions: does not emit mentions from fallback filenames when there is no caption", async () => {
+  loadOutboundMediaFromUrlMock.mockResolvedValue(imageMedia({ fileName: "@room.png" }));
 
-    await send("", { mediaUrl: "file:///tmp/room.png" });
+  await send("", { mediaUrl: "file:///tmp/room.png" });
 
-    expect(sentContent().body).toBe("@room.png");
-    expect(sentContent()["m.mentions"]).toEqual({});
-    expect(sentContent().formatted_body).toBeUndefined();
-  });
+  expect(sentContent().body).toBe("@room.png");
+  expect(sentContent()["m.mentions"]).toEqual({});
+  expect(sentContent().formatted_body).toBeUndefined();
 });
 
 describe("sendMessageMatrix threads", () => {
@@ -697,10 +681,7 @@ describe("sendSingleTextMessageMatrix", () => {
     resolveTextChunkLimitMock.mockReturnValue(5);
 
     await expect(
-      sendSingleTextMessageMatrix("room:!room:example", "123456", {
-        client,
-        cfg: {},
-      }),
+      sendSingleTextMessageMatrix("room:!room:example", "123456", { client, cfg: {} }),
     ).rejects.toThrow("Matrix single-message text exceeds limit");
 
     expect(sendMessage).not.toHaveBeenCalled();
@@ -714,12 +695,7 @@ describe("sendSingleTextMessageMatrix", () => {
     resolveMarkdownTableModeMock.mockImplementation(tableRuntime.resolveMarkdownTableMode);
     resolveTextChunkLimitMock.mockImplementation(chunkRuntime.resolveTextChunkLimit);
     const cfg: CoreConfig = {
-      channels: {
-        matrix: {
-          textChunkLimit: 8,
-          accounts: { retained: { textChunkLimit: 256 } },
-        },
-      },
+      channels: { matrix: { textChunkLimit: 8, accounts: { retained: { textChunkLimit: 256 } } } },
     };
     const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
       pluginId: "matrix",
@@ -787,10 +763,7 @@ describe("editMessageMatrix mentions", () => {
       content: { body: "Hello @alice:example.org", "m.mentions": {} },
     });
     delete original.unsigned;
-    getEvent.mockImplementation(async () => ({
-      ...original,
-      unsigned: undefined,
-    }));
+    getEvent.mockImplementation(async () => ({ ...original, unsigned: undefined }));
     getRelations.mockImplementation(async () => ({
       events: original.unsigned?.["m.relations"]?.["m.replace"]
         ? [original.unsigned["m.relations"]["m.replace"]]
@@ -829,8 +802,7 @@ describe("editMessageMatrix mentions", () => {
   });
 
   it("selects the latest valid edit across pages by timestamp and event ID", async () => {
-    const original = createBundledReplacementEvent("$original");
-    delete original.unsigned;
+    const original = originalEvent();
     getEvent.mockResolvedValue(original);
     const replacement = (eventId: string, timestamp: number, userIds: string[]) => ({
       ...original,
@@ -884,8 +856,7 @@ describe("editMessageMatrix mentions", () => {
   });
 
   it.each([false, true])("rejects the latest unreadable edit (pending=%s)", async (pending) => {
-    const original = createBundledReplacementEvent("$original");
-    delete original.unsigned;
+    const original = originalEvent();
     getEvent.mockResolvedValue(original);
     let encrypted = new MatrixEvent({
       event_id: "$unreadable",
@@ -903,8 +874,7 @@ describe("editMessageMatrix mentions", () => {
   });
 
   it.each(["failed", "pending"])("does not mutate a %s original", async (mode) => {
-    const original = createBundledReplacementEvent("$original");
-    delete original.unsigned;
+    const original = originalEvent();
     let encrypted = new MatrixEvent({
       event_id: original.event_id,
       sender: original.sender,
@@ -1011,12 +981,7 @@ describe("editMessageMatrix mentions", () => {
   });
 
   it("rejects thread edits when the original event is not already in that thread", async () => {
-    getEvent.mockResolvedValue({
-      content: {
-        body: "before",
-        msgtype: "m.text",
-      },
-    });
+    getEvent.mockResolvedValue({ content: { body: "before", msgtype: "m.text" } });
 
     await expect(edit("done", { threadId: "$thread" })).rejects.toThrow(
       "cannot add or change the original event thread relation",
@@ -1025,87 +990,75 @@ describe("editMessageMatrix mentions", () => {
   });
 });
 
-describe("sendPollMatrix mentions", () => {
-  it("adds m.mentions for poll fallback text", async () => {
-    await sendPollMatrix(
-      "room:!room:example",
-      { question: "@room lunch with @alice:example.org?", options: ["yes", "no"] },
-      {
-        client,
-        cfg: {},
-      },
-    );
+it("sendPollMatrix mentions: adds m.mentions for poll fallback text", async () => {
+  await sendPollMatrix(
+    "room:!room:example",
+    { question: "@room lunch with @alice:example.org?", options: ["yes", "no"] },
+    { client, cfg: {} },
+  );
 
-    expect(mockCallArg(sendEvent, "sendEvent", 0)).toBe("!room:example");
-    expect(mockCallArg(sendEvent, "sendEvent", 1)).toBe("m.poll.start");
-    const content = requireRecord(mockCallArg(sendEvent, "sendEvent", 2), "poll start content");
-    expect(content["m.mentions"]).toEqual({ room: true, user_ids: ["@alice:example.org"] });
-  });
+  expect(mockCallArg(sendEvent, "sendEvent", 0)).toBe("!room:example");
+  expect(mockCallArg(sendEvent, "sendEvent", 1)).toBe("m.poll.start");
+  const content = requireRecord(mockCallArg(sendEvent, "sendEvent", 2), "poll start content");
+  expect(content["m.mentions"]).toEqual({ room: true, user_ids: ["@alice:example.org"] });
 });
 
-describe("voteMatrixPoll", () => {
-  it("maps 1-based option indexes to Matrix poll answer ids", async () => {
-    getEvent.mockResolvedValue({
-      type: "m.poll.start",
-      content: {
-        "m.poll.start": {
-          question: { "m.text": "Lunch?" },
-          max_selections: 1,
-          answers: [
-            { id: "a1", "m.text": "Pizza" },
-            { id: "a2", "m.text": "Sushi" },
-          ],
-        },
+it("voteMatrixPoll: maps 1-based option indexes to Matrix poll answer ids", async () => {
+  getEvent.mockResolvedValue({
+    type: "m.poll.start",
+    content: {
+      "m.poll.start": {
+        question: { "m.text": "Lunch?" },
+        max_selections: 1,
+        answers: [
+          { id: "a1", "m.text": "Pizza" },
+          { id: "a2", "m.text": "Sushi" },
+        ],
       },
-    });
-
-    const result = await voteMatrixPoll("room:!room:example", "$poll", {
-      client,
-      cfg: {},
-      optionIndex: 2,
-    });
-
-    expect(sendEvent).toHaveBeenCalledWith("!room:example", "m.poll.response", {
-      "m.poll.response": { answers: ["a2"] },
-      "org.matrix.msc3381.poll.response": { answers: ["a2"] },
-      "m.relates_to": {
-        rel_type: "m.reference",
-        event_id: "$poll",
-      },
-    });
-    expect(result.eventId).toBe("evt-poll-vote");
-    expect(result.roomId).toBe("!room:example");
-    expect(result.pollId).toBe("$poll");
-    expect(result.answerIds).toEqual(["a2"]);
-    expect(result.labels).toEqual(["Sushi"]);
+    },
   });
+
+  const result = await voteMatrixPoll("room:!room:example", "$poll", {
+    client,
+    cfg: {},
+    optionIndex: 2,
+  });
+
+  expect(sendEvent).toHaveBeenCalledWith("!room:example", "m.poll.response", {
+    "m.poll.response": { answers: ["a2"] },
+    "org.matrix.msc3381.poll.response": { answers: ["a2"] },
+    "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
+  });
+  expect(result.eventId).toBe("evt-poll-vote");
+  expect(result.roomId).toBe("!room:example");
+  expect(result.pollId).toBe("$poll");
+  expect(result.answerIds).toEqual(["a2"]);
+  expect(result.labels).toEqual(["Sushi"]);
 });
 
-describe("sendTypingMatrix", () => {
-  it("passes account config through when resolving the typing client", async () => {
-    const cfg = { channels: { matrix: {} } } as unknown as import("../types.js").CoreConfig;
-    const setTyping = vi.fn().mockResolvedValue(undefined);
-    const typingClient = { setTyping } as unknown as import("./sdk.js").MatrixClient;
-    withResolvedRuntimeMatrixClientMock.mockImplementation(
-      async (
-        opts: Record<string, unknown>,
-        run: (resolved: import("./sdk.js").MatrixClient) => Promise<void>,
-      ) => {
-        expect(opts.cfg).toBe(cfg);
-        expect(opts.accountId).toBe("work");
-        expect(opts.timeoutMs).toBe(12_345);
-        expect(opts.readiness).toBe("none");
-        return await run(typingClient);
-      },
-    );
+it("sendTypingMatrix: passes account config through when resolving the typing client", async () => {
+  const cfg = { channels: { matrix: {} } } as unknown as import("../types.js").CoreConfig;
+  const setTyping = vi.fn().mockResolvedValue(undefined);
+  const typingClient = { setTyping } as unknown as import("./sdk.js").MatrixClient;
+  withResolvedRuntimeMatrixClientMock.mockImplementation(
+    async (
+      opts: Record<string, unknown>,
+      run: (resolved: import("./sdk.js").MatrixClient) => Promise<void>,
+    ) => {
+      expect(opts.cfg).toBe(cfg);
+      expect(opts.accountId).toBe("work");
+      expect(opts.timeoutMs).toBe(12_345);
+      expect(opts.readiness).toBe("none");
+      return await run(typingClient);
+    },
+  );
 
-    await sendTypingMatrix("room:!room:example", true, {
-      cfg,
-      accountId: "work",
-      timeoutMs: 12_345,
-    });
-
-    expect(setTyping).toHaveBeenCalledWith("!room:example", true, 12_345);
+  await sendTypingMatrix("room:!room:example", true, {
+    cfg,
+    accountId: "work",
+    timeoutMs: 12_345,
   });
+
+  expect(setTyping).toHaveBeenCalledWith("!room:example", true, 12_345);
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
