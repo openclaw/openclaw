@@ -25,7 +25,10 @@ async function importPluginModuleLoader(scope: string) {
   const owners = new WeakMap<Cache, ReturnType<typeof createPluginCache>>();
   return {
     ...actual,
-    getCachedPluginModuleLoader({ cache, ...options }: LoaderParams & { cache: Cache }) {
+    getCachedPluginModuleLoader(
+      this: void,
+      { cache, ...options }: LoaderParams & { cache: Cache },
+    ) {
       let owner = owners.get(cache);
       if (!owner) {
         owner = createPluginCache();

@@ -91,9 +91,9 @@ function createMaintenanceDeps() {
     broadcast: vi.fn(),
     refreshGatewayHealthSnapshot: vi.fn(state.refreshGatewayHealthSnapshot),
     logHealth: { info: vi.fn(), error: vi.fn() },
-    runWorktreeGc: vi.fn(async () => undefined),
-    runDeliveryQueueMediaGc: vi.fn(async () => undefined),
-    runManagedOutgoingMediaGc: vi.fn(async () => undefined),
+    runWorktreeGc: vi.fn(async (): Promise<void> => {}),
+    runDeliveryQueueMediaGc: vi.fn(async (): Promise<void> => {}),
+    runManagedOutgoingMediaGc: vi.fn(async (): Promise<void> => {}),
   };
 }
 

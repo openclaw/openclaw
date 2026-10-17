@@ -30,7 +30,7 @@ describe("progress card refresh control", () => {
       show();
       expect(container.querySelector(".session-progress-card__refresh")).toBeNull();
       await Promise.resolve();
-      const options = cardPart<HTMLButtonElement>(container, "options")!;
+      const options = cardPart(container, "options")!;
       const openMenu = async () => {
         if (options.getAttribute("aria-expanded") !== "true") {
           options.click();
@@ -41,7 +41,7 @@ describe("progress card refresh control", () => {
       await openMenu();
       const details = container.querySelector("details")!;
       const summary = container.querySelector("summary")!;
-      const button = cardPart<HTMLButtonElement>(container, "refresh")!;
+      const button = container.querySelector<HTMLButtonElement>(".session-progress-card__refresh")!;
       expect(button.closest(".session-progress-card__summary-expanded")).toBeNull();
       expect(button.textContent).toContain("Refresh task progress");
       expect(button.querySelector("svg path")).not.toBeNull();

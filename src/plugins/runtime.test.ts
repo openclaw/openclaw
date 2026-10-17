@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import { runGatewayCloseSteps } from "../gateway/server-shutdown.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -27,26 +26,24 @@ import {
 } from "./runtime.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
-function heldWork(afterRelease = () => {}) {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const finished = createDeferredCore();
-  const run = async () => {
-    entered.resolve();
-    try {
-      await release.promise;
-      afterRelease();
-    } finally {
-      finished.resolve();
+async function waitForCleanupSignal(signal: Promise<void>, label: string): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      signal,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 500);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
     }
-  };
-  return { entered, release, finished, run };
+  }
 }
 
 function createCleanupDatabase() {
   const db = new DatabaseSync(":memory:");
-  const reads: unknown[] = [];
-  const failures: unknown[] = [];
   const nativeState = resolveGlobalSingleton(
     Symbol.for("openclaw.test.actualPluginCleanupDatabase"),
     (): { database?: DatabaseSync; resets: number } => ({ resets: 0 }),
@@ -60,54 +57,7 @@ function createCleanupDatabase() {
   );
   nativeState.database = db;
   nativeState.resets = 0;
-  const close = () => {
-    if (db.isOpen) {
-      db.close();
-    }
-    nativeState.database = undefined;
-  };
-  const read = () => {
-    try {
-      reads.push(db.prepare("SELECT 1 AS value").get());
-    } catch (error) {
-      failures.push(error);
-    }
-  };
-  return { db, nativeState, close, read, reads, failures };
-}
-
-async function createDatabaseLifecycle(id: string) {
-  const { createPluginRegistry } = await import("./registry.js");
-  const { createPluginRuntime } = await import("./runtime/index.js");
-  const execution = await import("./command-execution-lock.js");
-  const { activatePluginRegistry } = await import("./loader-shared.js");
-  const builder = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: createPluginRuntime(),
-    activateGlobalSideEffects: false,
-  });
-  const record = createPluginRecord({ id });
-  builder.registry.plugins.push(record);
-  return {
-    registry: builder.registry,
-    lifecycle: builder.createApi(record, { config: {} }).lifecycle,
-    activatePluginRegistry,
-    ...execution,
-    ...createCleanupDatabase(),
-  };
-}
-
-function attachLifecycle(
-  registry: ReturnType<typeof createEmptyPluginRegistry>,
-  id: string,
-  cleanup: () => void | Promise<void>,
-  lifecycleId = id,
-) {
-  registry.runtimeLifecycles.push({
-    pluginId: id,
-    source: `/virtual/${id}/index.ts`,
-    lifecycle: { id: lifecycleId, cleanup },
-  });
+  return { db, nativeState };
 }
 
 describe("setActivePluginRegistry", () => {
@@ -143,8 +93,21 @@ describe("setActivePluginRegistry", () => {
   it("does not treat bundle-only loaded entries as imported runtime plugins", () => {
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(
-      createPluginRecord({ id: "bundle-only", format: "bundle" }),
-      createPluginRecord({ id: "runtime-plugin", format: "openclaw" }),
+      createPluginRecord({
+        id: "bundle-only",
+        name: "Bundle Only",
+        source: "/tmp/bundle",
+        origin: "bundled",
+        format: "bundle",
+        configSchema: true,
+      }),
+      createPluginRecord({
+        id: "runtime-plugin",
+        name: "Runtime Plugin",
+        source: "/tmp/runtime",
+        format: "openclaw",
+        configSchema: true,
+      }),
     );
 
     setActivePluginRegistry(registry);
@@ -152,34 +115,71 @@ describe("setActivePluginRegistry", () => {
     expect(listImportedRuntimePluginIds()).toEqual(["runtime-plugin"]);
   });
 
-  it.each([true, false])(
-    "continues cleanup when refreshing the same registry: %s",
-    async (same) => {
-      const first = heldWork();
-      const secondCleanupCalled = createDeferredCore();
-      onTestFinished(() => first.release.resolve());
-      const previous = createEmptyPluginRegistry();
-      previous.plugins.push(createPluginRecord({ id: "cleanup-refresh-race" }));
-      attachLifecycle(previous, "cleanup-refresh-race", first.run, "first-cleanup");
-      attachLifecycle(
-        previous,
-        "cleanup-refresh-race",
-        () => secondCleanupCalled.resolve(),
-        "second-cleanup",
-      );
-      const next = createEmptyPluginRegistry();
-
-      setActivePluginRegistry(previous);
-      setActivePluginRegistry(next);
-      // The race starts inside cleanup; cold lazy imports are not a cleanup deadline.
-      await first.entered.promise;
-
-      setActivePluginRegistry(same ? next : createEmptyPluginRegistry());
-      first.release.resolve();
-
-      await withTestTimeout(secondCleanupCalled.promise, 500, "second cleanup");
+  it.each([
+    {
+      name: "same active registry is refreshed",
+      refresh: (nextRegistry: ReturnType<typeof createEmptyPluginRegistry>) => {
+        setActivePluginRegistry(nextRegistry);
+      },
     },
-  );
+    {
+      name: "active registry advances again",
+      refresh: () => {
+        setActivePluginRegistry(createEmptyPluginRegistry());
+      },
+    },
+  ] as const)("continues cleanup when the $name", async ({ refresh }) => {
+    const firstCleanupStarted = createDeferredCore();
+    const firstCleanupReleased = createDeferredCore();
+    const secondCleanupCalled = createDeferredCore();
+    onTestFinished(() => firstCleanupReleased.resolve());
+    const previous = createEmptyPluginRegistry();
+    previous.plugins.push(
+      createPluginRecord({
+        id: "cleanup-refresh-race",
+        name: "Cleanup Refresh Race",
+        status: "loaded",
+      }),
+    );
+    previous.runtimeLifecycles = [
+      {
+        pluginId: "cleanup-refresh-race",
+        pluginName: "Cleanup Refresh Race",
+        lifecycle: {
+          id: "first-cleanup",
+          async cleanup() {
+            firstCleanupStarted.resolve();
+            await firstCleanupReleased.promise;
+          },
+        },
+        source: "/virtual/cleanup-refresh-race/index.ts",
+        rootDir: "/virtual/cleanup-refresh-race",
+      },
+      {
+        pluginId: "cleanup-refresh-race",
+        pluginName: "Cleanup Refresh Race",
+        lifecycle: {
+          id: "second-cleanup",
+          cleanup() {
+            secondCleanupCalled.resolve();
+          },
+        },
+        source: "/virtual/cleanup-refresh-race/index.ts",
+        rootDir: "/virtual/cleanup-refresh-race",
+      },
+    ];
+    const next = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(previous);
+    setActivePluginRegistry(next);
+    // The race starts inside cleanup; cold lazy imports are not a cleanup deadline.
+    await firstCleanupStarted.promise;
+
+    refresh(next);
+    firstCleanupReleased.resolve();
+
+    await waitForCleanupSignal(secondCleanupCalled.promise, "second cleanup");
+  });
 
   it.each(["instance", "runtime"] as const)(
     "keeps %s plugin cleanup admitted through the restart connection drain",
@@ -190,13 +190,24 @@ describe("setActivePluginRegistry", () => {
       registry.plugins.push(record);
       const instance = new PluginInstance(record.id, { record, registry });
       const initialize = createDeferredCore();
+      const cleanupStarted = createDeferredCore();
+      const finishCleanup = createDeferredCore();
       const cleaned = vi.fn();
-      const held = heldWork(cleaned);
-      const cleanup = () => trackAsyncWork(held.run);
+      const cleanup = () =>
+        trackAsyncWork(async () => {
+          cleanupStarted.resolve();
+          await finishCleanup.promise;
+          cleaned();
+        });
       if (kind === "instance") {
         instance.lifecycle.onDispose(cleanup);
       } else {
-        attachLifecycle(registry, record.id, cleanup, "tracked-store-close");
+        registry.runtimeLifecycles.push({
+          pluginId: record.id,
+          source: record.source,
+          rootDir: record.rootDir,
+          lifecycle: { id: "tracked-store-close", cleanup },
+        });
       }
       let retirement: ReturnType<typeof disposePluginRegistryInstances> | undefined;
       const request = owner.track(() => {
@@ -205,7 +216,7 @@ describe("setActivePluginRegistry", () => {
         });
         void retirement.catch(() => {});
       });
-      const disposeTerminalSessions = vi.fn();
+      let closed = false;
       const onError = vi.fn();
       const drain = runGatewayCloseSteps({
         owner: {
@@ -216,7 +227,9 @@ describe("setActivePluginRegistry", () => {
           runClosePrelude() {},
           sealAndJoinRegisteredSidecarStops() {},
         },
-        disposeTerminalSessions,
+        disposeTerminalSessions: () => {
+          closed = true;
+        },
         close: async () => {
           await retirement;
         },
@@ -225,21 +238,21 @@ describe("setActivePluginRegistry", () => {
       try {
         await request;
         await nextTurn();
-        expect(disposeTerminalSessions).not.toHaveBeenCalled();
+        expect(closed).toBe(false);
         initialize.resolve();
-        await held.entered.promise;
+        await cleanupStarted.promise;
         await nextTurn();
-        expect(disposeTerminalSessions).not.toHaveBeenCalled();
-        held.release.resolve();
+        expect(closed).toBe(false);
+        finishCleanup.resolve();
         await expect(retirement).resolves.toMatchObject({ failures: [] });
         await drain;
         expect(cleaned).toHaveBeenCalledOnce();
-        expect(disposeTerminalSessions).toHaveBeenCalledOnce();
+        expect(closed).toBe(true);
         expect(onError).not.toHaveBeenCalled();
         await expect(owner.track(() => undefined)).rejects.toThrow("Async work scope is closed");
       } finally {
         initialize.resolve();
-        held.release.resolve();
+        finishCleanup.resolve();
         await Promise.allSettled([retirement, drain]);
       }
     },
@@ -247,11 +260,22 @@ describe("setActivePluginRegistry", () => {
 
   it("joins a displaced cleanup scope created before package replacement", async () => {
     const registry = createEmptyPluginRegistry();
-    const held = heldWork();
-    attachLifecycle(registry, "released-scope", held.run);
+    const entered = createDeferredCore();
+    const finish = createDeferredCore();
+    registry.runtimeLifecycles.push({
+      pluginId: "released-scope",
+      source: "/virtual/released-scope/index.ts",
+      lifecycle: {
+        id: "held-cleanup",
+        cleanup: async () => {
+          entered.resolve();
+          await finish.promise;
+        },
+      },
+    });
     setActivePluginRegistry(registry);
     setActivePluginRegistry(createEmptyPluginRegistry());
-    await held.entered.promise;
+    await entered.promise;
     const pending = [...(getPluginRegistryState()?.retiredRegistryCleanups ?? [])].find(
       ([, cleanup]) => cleanup.registry === registry,
     );
@@ -262,11 +286,11 @@ describe("setActivePluginRegistry", () => {
     const closing = clearActivePluginRegistry();
     void closing.catch(() => {});
     try {
-      held.release.resolve();
+      finish.resolve();
       await expect(closing).resolves.toBeUndefined();
       expect(getActivePluginRegistry()).toBeNull();
     } finally {
-      held.release.resolve();
+      finish.resolve();
       await settled;
       await closing.catch(() => {});
       await clearActivePluginRegistry();
@@ -299,14 +323,18 @@ describe("setActivePluginRegistry", () => {
         }
       }
       if (kind !== "module abort descendant") {
-        attachLifecycle(registry, "reentrant-cleanup", cleanup);
+        registry.runtimeLifecycles.push({
+          pluginId: "reentrant-cleanup",
+          lifecycle: { id: "clear-successor", cleanup },
+          source: "/virtual/reentrant-cleanup/index.ts",
+        });
       }
       setActivePluginRegistry(registry);
       setActivePluginRegistry(createEmptyPluginRegistry());
 
       try {
         await started.promise;
-        await withTestTimeout(finished.promise, 500, "reentrant retired cleanup");
+        await waitForCleanupSignal(finished.promise, "reentrant retired cleanup");
         expect(cleanup).toHaveBeenCalledOnce();
         expect(getActivePluginRegistry()).toBeNull();
       } finally {
@@ -320,17 +348,28 @@ describe("setActivePluginRegistry", () => {
   it.each(["install", "staged", "clear"] as const)(
     "keeps an admitted command live through a reentrant retirement abort (%s)",
     async (retirement) => {
-      const fixture = await createDatabaseLifecycle("abort-cleanup-sqlite");
-      const { registry, lifecycle, db, nativeState, close } = fixture;
+      const { createPluginRegistry } = await import("./registry.js");
+      const { createPluginRuntime } = await import("./runtime/index.js");
+      const { activatePluginRegistry } = await import("./loader-shared.js");
+      const { withPluginCommandExecution } = await import("./command-execution-lock.js");
+      const builder = createPluginRegistry({
+        logger: { info() {}, warn() {}, error() {}, debug() {} },
+        runtime: createPluginRuntime(),
+        activateGlobalSideEffects: false,
+      });
+      const record = createPluginRecord({ id: "abort-cleanup-sqlite", status: "loaded" });
+      builder.registry.plugins.push(record);
+      const api = builder.createApi(record, { config: {} });
+      const { db, nativeState } = createCleanupDatabase();
       const cleanup = vi.fn(() => {
         expect(db.prepare("SELECT 2 AS value").get()).toEqual({ value: 2 });
       });
-      lifecycle.registerRuntimeLifecycle({ id: "abort-cleanup", cleanup });
-      setActivePluginRegistry(registry);
+      api.lifecycle.registerRuntimeLifecycle({ id: "abort-cleanup", cleanup });
+      setActivePluginRegistry(builder.registry);
       const successor = createEmptyPluginRegistry();
       const signal = capturePluginRegistryLifecycleSignal(
-        registry,
-        capturePluginRegistryLifecycleEpoch(registry),
+        builder.registry,
+        capturePluginRegistryLifecycleEpoch(builder.registry),
       );
       if (!signal) {
         throw new Error("Expected an active registry lifecycle signal");
@@ -343,11 +382,13 @@ describe("setActivePluginRegistry", () => {
       const escape = createDeferredCore();
       const commandRead = createDeferredCore();
       const releaseCommand = createDeferredCore();
-      const command = fixture.withPluginCommandExecution(registry, async () => {
+      const reads: unknown[] = [];
+      const failures: unknown[] = [];
+      const command = withPluginCommandExecution(builder.registry, async () => {
         if (retirement === "clear") {
           outerClear = clearActivePluginRegistry();
         } else if (retirement === "staged") {
-          fixture.activatePluginRegistry(successor, "successor", "explicit", "/virtual/successor");
+          activatePluginRegistry(successor, "successor", "explicit", "/virtual/successor");
         } else {
           setActivePluginRegistry(successor, "successor", "explicit", "/virtual/successor");
         }
@@ -355,14 +396,20 @@ describe("setActivePluginRegistry", () => {
           throw new Error("Expected synchronous retirement notification");
         }
         await Promise.race([innerClear, escape.promise]);
-        fixture.read();
+        try {
+          reads.push(db.prepare("SELECT 1 AS value").get());
+        } catch (error) {
+          failures.push(error);
+        }
         commandRead.resolve();
         await releaseCommand.promise;
       });
       try {
-        await withTestTimeout(commandRead.promise, 500, "command after retirement abort clear");
-        expect([fixture.failures, fixture.reads]).toEqual([[], [{ value: 1 }]]);
-        expect([db.isOpen, nativeState.resets]).toEqual([true, 0]);
+        await waitForCleanupSignal(commandRead.promise, "command after retirement abort clear");
+        expect(failures).toEqual([]);
+        expect(reads).toEqual([{ value: 1 }]);
+        expect(db.isOpen).toBe(true);
+        expect(nativeState.resets).toBe(0);
         expect(cleanup).not.toHaveBeenCalled();
         expect(captureActivePluginRegistrySnapshot()).toEqual({
           activeRegistry: null,
@@ -377,7 +424,10 @@ describe("setActivePluginRegistry", () => {
         await innerClear;
         await outerClear;
         await clearActivePluginRegistry();
-        close();
+        if (db.isOpen) {
+          db.close();
+        }
+        nativeState.database = undefined;
       }
       expect(cleanup).toHaveBeenCalledOnce();
       expect(nativeState.resets).toBe(1);
@@ -391,66 +441,100 @@ describe("setActivePluginRegistry", () => {
   )(
     "joins $lifetime lifecycle $owner before plugin-registry resets",
     async ({ lifetime, owner }) => {
-      const fixture = await createDatabaseLifecycle("cleanup-sqlite");
-      const { registry, lifecycle, db, nativeState, close } = fixture;
-      const held = heldWork(fixture.read);
+      const { createPluginRegistry } = await import("./registry.js");
+      const { createPluginRuntime } = await import("./runtime/index.js");
+      const { activatePluginRegistry } = await import("./loader-shared.js");
+      const { withPluginCommandExecution, getPluginCommandExecutionCount } =
+        await import("./command-execution-lock.js");
+      const builder = createPluginRegistry({
+        logger: { info() {}, warn() {}, error() {}, debug() {} },
+        runtime: createPluginRuntime(),
+        activateGlobalSideEffects: false,
+      });
+      const record = createPluginRecord({ id: "cleanup-sqlite", status: "loaded" });
+      builder.registry.plugins.push(record);
+      const api = builder.createApi(record, { config: {} });
+      const { db, nativeState } = createCleanupDatabase();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const finished = createDeferredCore();
+      const reads: unknown[] = [];
+      const failures: unknown[] = [];
+      const readAfterRelease = async () => {
+        entered.resolve();
+        try {
+          await release.promise;
+          reads.push(db.prepare("SELECT 1 AS value").get());
+        } catch (error) {
+          failures.push(error);
+        } finally {
+          finished.resolve();
+        }
+      };
       const cleanup = vi.fn(() => {
         if (owner === "callback") {
-          return held.run();
+          return readAfterRelease();
         }
-        void trackAsyncWork(held.run);
+        void trackAsyncWork(readAfterRelease);
         return undefined;
       });
-      lifecycle.registerRuntimeLifecycle({ id: "held-cleanup", cleanup });
-      setActivePluginRegistry(registry);
+      api.lifecycle.registerRuntimeLifecycle({ id: "held-cleanup", cleanup });
+      setActivePluginRegistry(builder.registry);
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const commandGate = createDeferredCore();
       const command =
         lifetime === "command-held"
-          ? fixture.withPluginCommandExecution(registry, () => commandGate.promise)
+          ? withPluginCommandExecution(builder.registry, () => commandGate.promise)
           : undefined;
       if (lifetime === "command-held") {
-        expect(fixture.getPluginCommandExecutionCount(registry)).toBe(1);
+        expect(getPluginCommandExecutionCount(builder.registry)).toBe(1);
       }
       if (lifetime !== "active") {
         const replacement = createEmptyPluginRegistry();
-        fixture.activatePluginRegistry(replacement, null, "default");
+        activatePluginRegistry(replacement, null, "default");
         expect(getActivePluginRegistry()).toBe(replacement);
-        expect(await fixture.withPluginCommandExecution(registry, () => undefined)).toEqual({
+        expect(await withPluginCommandExecution(builder.registry, () => undefined)).toEqual({
           admitted: false,
         });
         if (lifetime === "replaced") {
-          await held.entered.promise;
+          await entered.promise;
         }
       }
-      const closed = vi.fn();
-      const closing = clearActivePluginRegistry().then(closed);
+      let closed = false;
+      const closing = clearActivePluginRegistry().then(() => {
+        closed = true;
+      });
       try {
         if (lifetime === "command-held") {
           await vi.advanceTimersByTimeAsync(5000);
           expect(cleanup).not.toHaveBeenCalled();
           expect(db.isOpen).toBe(true);
-          expect(closed).not.toHaveBeenCalled();
+          expect(closed).toBe(false);
           commandGate.resolve();
           expect(await command).toEqual({ admitted: true, value: undefined });
         }
-        await held.entered.promise;
+        await entered.promise;
         await vi.advanceTimersByTimeAsync(5000);
         expect(getActivePluginRegistry()).toBeNull();
-        expect([db.isOpen, nativeState.resets]).toEqual([true, 0]);
-        expect(closed).not.toHaveBeenCalled();
+        expect(db.isOpen).toBe(true);
+        expect(nativeState.resets).toBe(0);
+        expect(closed).toBe(false);
       } finally {
         commandGate.resolve();
-        held.release.resolve();
+        release.resolve();
         await command;
-        await held.finished.promise;
+        await finished.promise;
         await Promise.allSettled(cleanup.mock.results.map((result) => result.value));
         await closing;
         vi.useRealTimers();
-        close();
+        if (db.isOpen) {
+          db.close();
+        }
+        nativeState.database = undefined;
       }
       expect(cleanup).toHaveBeenCalledOnce();
-      expect([fixture.failures, fixture.reads]).toEqual([[], [{ value: 1 }]]);
+      expect(failures).toEqual([]);
+      expect(reads).toEqual([{ value: 1 }]);
       expect(nativeState.resets).toBe(1);
     },
   );

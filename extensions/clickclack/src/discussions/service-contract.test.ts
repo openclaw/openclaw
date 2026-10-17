@@ -4,7 +4,7 @@ import {
   createInboundMessage,
   createInboundDiscussionBinding,
 } from "../inbound.test-support.js";
-import type { ClickClackChannel } from "../types.js";
+import type { ClickClackChannel, ClickClackMessage } from "../types.js";
 import {
   recordPendingDiscussionOpen,
   reserveDiscussionBindingGeneration,

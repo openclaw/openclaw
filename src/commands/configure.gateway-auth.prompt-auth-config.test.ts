@@ -21,40 +21,45 @@ const mocks = vi.hoisted(() => ({
   preferredProvider: vi.fn<() => Promise<string | undefined>>(async () => undefined),
 }));
 
+// mock-isolation: Auth wizard tests use in-memory profiles and must not read or write credentials.
 vi.mock("../agents/auth-profiles.js", () => ({
   persistAuthProfileBatch: vi.fn(async () => {}),
   ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles: {} })),
 }));
 
+// mock-isolation: Supply the selected auth choice without opening an interactive prompt.
 vi.mock("./auth-choice-prompt.js", () => ({
   promptAuthChoiceGrouped: mocks.authChoice,
 }));
 
+// mock-isolation: Capture auth selection without running provider authentication.
 vi.mock("./auth-choice.apply.js", () => ({ applyAuthChoice: mocks.applyAuth }));
 
+// mock-isolation: Provider preference is a fixture input, independent of installed plugins.
 vi.mock("../plugins/provider-auth-choice-preference.js", () => ({
   resolvePreferredProviderForAuthChoice: mocks.preferredProvider,
 }));
 
 vi.mock("../flows/model-picker.js", async (importOriginal) => {
-  const { applyModelAllowlist, applyModelFallbacksFromSelection } =
-    await importOriginal<typeof import("../flows/model-picker.js")>();
+  const actual = await importOriginal<typeof import("../flows/model-picker.js")>();
   return {
-    applyModelAllowlist,
-    applyModelFallbacksFromSelection,
+    ...actual,
     promptModelAllowlist: mocks.allowlist,
     promptDefaultModel: mocks.defaultModel,
   };
 });
 
+// mock-isolation: Use fixture providers without loading installed provider runtimes.
 vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProvidersCore: mocks.providers,
 }));
 
+// mock-isolation: Resolve the fixture wizard selection without discovering real plugins.
 vi.mock("../plugins/provider-wizard.js", () => ({
   resolveProviderPluginChoiceCore: mocks.providerChoice,
 }));
 
+// mock-isolation: Keep model catalogs deterministic and independent of the local installation.
 vi.mock("./models/list.manifest-catalog.js", () => ({
   loadStaticManifestCatalogRowsForList: mocks.catalog,
 }));

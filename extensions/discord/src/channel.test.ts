@@ -33,7 +33,9 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   return { ...actual, sleepWithAbort: sleepWithAbortMock };
 });
 
+// mock-isolation: Probe outcomes are synthetic; never contact Discord from channel tests.
 vi.mock("./probe.js", () => ({ probeDiscord: probeDiscordMock }));
+// mock-isolation: Startup assertions must not launch a live Discord monitor.
 vi.mock("./monitor/provider.runtime.js", () => ({
   monitorDiscordProvider: monitorDiscordProviderMock,
 }));
@@ -183,7 +185,12 @@ beforeAll(async () => {
   ({ setDiscordRuntime } = await import("./runtime.js"));
 });
 
-it.each([
+const guildPolicyCases: Array<{
+  name: string;
+  accountId: string;
+  warning: boolean;
+  discord: NonNullable<DiscordConfig>;
+}> = [
   {
     name: "named account override",
     accountId: "ops",
@@ -212,7 +219,8 @@ it.each([
     warning: false,
     discord: { token: "discord-token", groupPolicy: "allowlist", enabled: false },
   },
-] as const)(
+];
+it.each(guildPolicyCases)(
   "discordPlugin reports effective guild policy for $name without probing",
   async ({ discord, accountId, warning }) => {
     const cfg = createCfg(discord);
@@ -611,7 +619,12 @@ describe("discordPlugin outbound", () => {
     }
   });
 
-  it.each([
+  const startupSlotCases: Array<{
+    name: string;
+    defaultAccount: string | undefined;
+    accounts: NonNullable<NonNullable<DiscordConfig>["accounts"]>;
+    slots: string[];
+  }> = [
     {
       name: "configured default first",
       defaultAccount: "main",
@@ -638,13 +651,17 @@ describe("discordPlugin outbound", () => {
       accounts: { alpha: { enabled: true }, zeta: { token: "Bot zeta-token", enabled: true } },
       slots: ["zeta"],
     },
-  ])("assigns startup slots with $name", async ({ defaultAccount, accounts, slots }) => {
-    prepareDiscordStartupMocks();
-    const cfg = createCfg({ defaultAccount, accounts });
-    for (const [index, accountId] of slots.entries()) {
-      await expectDiscordStartupDelay(cfg, accountId, index * 10_000);
-    }
-  });
+  ];
+  it.each(startupSlotCases)(
+    "assigns startup slots with $name",
+    async ({ defaultAccount, accounts, slots }) => {
+      prepareDiscordStartupMocks();
+      const cfg = createCfg({ defaultAccount, accounts });
+      for (const [index, accountId] of slots.entries()) {
+        await expectDiscordStartupDelay(cfg, accountId, index * 10_000);
+      }
+    },
+  );
 });
 
 it.each([

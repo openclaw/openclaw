@@ -71,8 +71,10 @@ describe("gateway-smoke", () => {
     wss.on("connection", (ws: WebSocket) => {
       ws.on("message", (data: RawData) => {
         const text = Array.isArray(data)
-          ? Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf8")
-          : Buffer.from(data).toString("utf8");
+          ? Buffer.concat(data).toString("utf8")
+          : data instanceof ArrayBuffer
+            ? Buffer.from(data).toString("utf8")
+            : data.toString("utf8");
         const frame = JSON.parse(text) as {
           id: string;
           method: string;

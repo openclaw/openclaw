@@ -114,8 +114,8 @@ function cronStatus(jobs: number, enabled = true) {
   return { enabled, triggersEnabled: true, jobs };
 }
 
-function issues<T extends Element = HTMLElement>(element: ParentNode, suffix: string) {
-  return element.querySelector<T>(`.sidebar-issues-${suffix}`);
+function issues(element: ParentNode, suffix: string) {
+  return element.querySelector<HTMLElement>(`.sidebar-issues-${suffix}`);
 }
 
 function attention(element: ParentNode, kind: string) {
@@ -217,8 +217,8 @@ describe("sidebar attention refresh ownership", () => {
     provider.append(element);
     document.body.append(provider);
 
-    await waitForFast(() => expect(issues<HTMLButtonElement>(element, "button")).not.toBeNull());
-    const trigger = issues<HTMLButtonElement>(element, "button")!;
+    await waitForFast(() => expect(issues(element, "button")).not.toBeNull());
+    const trigger = issues(element, "button")!;
     return { element, provider, store, trigger };
   }
 
@@ -295,7 +295,7 @@ describe("sidebar attention refresh ownership", () => {
     expect(issues(element, "panel")).toBeNull();
     const onNavigate = vi.fn();
     element.onNavigate = onNavigate;
-    issues<HTMLButtonElement>(element, "button")!.click();
+    issues(element, "button")!.click();
     await waitForFast(() => expect(element.querySelector(".sidebar-mention-row a")).not.toBeNull());
     element.querySelector<HTMLAnchorElement>(".sidebar-mention-row a")!.click();
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith(
@@ -321,7 +321,7 @@ describe("sidebar attention refresh ownership", () => {
     provider.append(element);
     await waitForFast(() => expect(issues(element, "button")).not.toBeNull());
     expect(issues(element, "panel")).toBeNull();
-    const reconnectedTrigger = issues<HTMLButtonElement>(element, "button")!;
+    const reconnectedTrigger = issues(element, "button")!;
     expect(reconnectedTrigger.getAttribute("aria-expanded")).toBe("false");
     await openPanel(element, reconnectedTrigger);
   });
@@ -678,7 +678,7 @@ describe("sidebar attention refresh ownership", () => {
     vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue(new DOMRect(20, 10, 32, 32));
     trigger.click();
     await waitForFast(() => expect(attention(element, "cronFailed")).not.toBeNull());
-    const panel = issues<HTMLElement>(element, "panel")!;
+    const panel = issues(element, "panel")!;
     expect(panel.style).toMatchObject({ top: "50px", bottom: "" });
     expect(panel.style.getPropertyValue("--sidebar-issues-panel-top")).toBe("50px");
     expect(

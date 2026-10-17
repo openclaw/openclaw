@@ -49,7 +49,7 @@ const transport = await vi.hoisted(async () => {
       this.auth.add(handler);
       return { unbind: () => this.auth.delete(handler) };
     }
-    onAuthenticationFailure() {
+    onAuthenticationFailure(this: void) {
       return { unbind() {} };
     }
     onDisconnect = this.onAuthenticationFailure;

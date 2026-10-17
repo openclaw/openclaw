@@ -37,8 +37,8 @@ function expectLabel(indicator: Element | null | undefined, text: string) {
   ).toBe(text);
 }
 
-function badge<T extends Element = HTMLElement>(kind: string) {
-  return container.querySelector<T>(`.session-row-badge--${kind}`);
+function badge(kind: string) {
+  return container.querySelector<HTMLElement>(`.session-row-badge--${kind}`);
 }
 
 describe("session row placement badges", () => {
@@ -65,7 +65,7 @@ describe("session row placement badges", () => {
   it("renders outbox attention and stays quiet when empty", () => {
     renderBadges({ hasApproval: true, outboxAttentionCount: 3 });
 
-    const indicator = badge<HTMLElement>("attention");
+    const indicator = badge("attention");
     expectLabel(indicator, "3 messages need attention");
     expect(indicator?.textContent).toContain("3");
     const attentionIcon = indicator?.querySelector("svg");
@@ -90,7 +90,7 @@ describe("session row placement badges", () => {
 
   it("renders a cloud-worker placement as a globe", () => {
     renderBadges({ placementState: "active" });
-    const indicator = badge<HTMLElement>("cloud");
+    const indicator = badge("cloud");
     expect(indicator?.dataset.placementState).toBe("active");
     expectLabel(indicator, "Placement: active");
     expect(indicator?.querySelector("circle")).not.toBeNull();
@@ -144,7 +144,7 @@ describe("session row placement badges", () => {
     "keeps conflict attention for %s placement (child: %s, count: %s)",
     (placementState, isChild, count, label) => {
       renderBadges({ placementState, isChild, workspaceConflictCount: count });
-      const indicator = badge<HTMLElement>("cloud");
+      const indicator = badge("cloud");
       expect(indicator?.dataset.placementState).toBe(placementState);
       expect(indicator?.dataset.workspaceConflicts).toBe(String(count));
       expectLabel(indicator, label);
@@ -158,7 +158,7 @@ describe("session row placement badges", () => {
   ])("uses the cloud badge's $status tone for background pressure", ({ status, label }) => {
     renderBadges({ placementState: "active", diskSpaceStatus: status });
 
-    const indicator = badge<HTMLElement>("cloud");
+    const indicator = badge("cloud");
     expect(indicator?.dataset.diskSpaceStatus).toBe(status);
     expectLabel(indicator, `Placement: active · ${label}`);
     expect(container.querySelectorAll(".session-row-badge--cloud")).toHaveLength(1);

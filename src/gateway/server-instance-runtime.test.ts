@@ -372,7 +372,9 @@ it("preserves a trusted approval resolver display name", async () => {
 
 it("preserves the Gateway client's approval request deadline", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   const { promise: started, resolve: markStarted } = createDeferred();
   const { promise: handlerCanFinish, resolve: finishHandler } = createDeferred();
   const runtime = createRuntime({

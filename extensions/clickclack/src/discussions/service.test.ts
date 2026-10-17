@@ -14,10 +14,8 @@ import {
   testExternalRef,
 } from "./service-test-support.js";
 
-function legacyCreateResponse(
-  input: Parameters<ClickClackClient["createChannel"]>[1],
-): ClickClackChannel {
-  const response: ClickClackChannel = discussionChannel(input);
+function legacyCreateResponse(input: Parameters<ClickClackClient["createChannel"]>[1]) {
+  const response = discussionChannel(input);
   Reflect.deleteProperty(response, "display_title");
   return response;
 }

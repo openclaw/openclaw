@@ -127,6 +127,7 @@ function createFixture(
       await Promise.all([exec.drain(), plugin.drain()]);
     },
     resolve(
+      this: void,
       id: string,
       route: "channel" | "tool",
       isCurrent = () => true,

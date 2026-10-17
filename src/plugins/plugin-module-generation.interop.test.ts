@@ -20,9 +20,6 @@ function write(root: string, file: string, source: string) {
 }
 const fileUrl = (root: string, file: string) => pathToFileURL(path.join(root, file)).href;
 const valueModule = (value: number, name = "value") => `export const ${name} = ${value};`;
-function load<T>(root: string, entry = "entry.mjs", standalone = false): T {
-  return host(root, standalone).load(entry) as T;
-}
 async function expectImportedValue<T>(promise: Promise<ModuleValue<T>>, value: T) {
   await expect(promise).resolves.toMatchObject({ value });
 }
@@ -303,7 +300,7 @@ describe("native plugin generation interop", () => {
       "resolver.ts":
         "export const value = import.meta.resolve('missing-optional-dependency', { try: true }) ?? 42;",
     });
-    await expect(load<Reader>(root, "index.ts").read()).resolves.toBe(42);
+    await expect((host(root).load("index.ts") as Reader).read()).resolves.toBe(42);
   });
 
   it("links static ESM imports to an async CommonJS TypeScript child", async () => {
@@ -472,7 +469,7 @@ describe("native plugin generation interop", () => {
       });
       const pluginRoot = path.join(root, "plugin");
       const typed = path.join(root, `node_modules/peer-dependency/peer.${extension}`);
-      const plugin = load<Importer<ModuleValue<string>>>(pluginRoot, "entry.mjs", true);
+      const plugin = host(pluginRoot, true).load("entry.mjs") as Importer<ModuleValue<string>>;
       await expectImportedValue(plugin.read(pathToFileURL(typed).href), "typescript");
       await expectImportedValue(plugin.read("peer-dependency/native"), "javascript");
       await expectImportedValue(plugin.read(pathToFileURL(typed).href), "typescript");
@@ -500,7 +497,7 @@ describe("native plugin generation interop", () => {
         "node_modules/source-dependency/second.mjs": valueModule(84),
       });
       const pluginRoot = path.join(root, "plugin");
-      const plugin = load<Importer<ModuleValue>>(pluginRoot, "entry.mjs", true);
+      const plugin = host(pluginRoot, true).load("entry.mjs") as Importer<ModuleValue>;
       const first = path.join(root, "node_modules/source-dependency/first.mjs");
       const specifier =
         reference === "absolute" ? toSafeImportPath(first) : pathToFileURL(first).href;
@@ -602,10 +599,10 @@ describe("native plugin generation interop", () => {
         "entry.mjs",
         `export const read = async () => (await import(${JSON.stringify(specifier)})).value;`,
       );
-      const first = load<Reader>(root);
+      const first = host(root).load("entry.mjs") as Reader;
       fs.writeFileSync(dependency, valueModule(43));
       await expect(first.read()).resolves.toBe(42);
-      const second = load<Reader>(root);
+      const second = host(root).load("entry.mjs") as Reader;
       await expect(second.read()).resolves.toBe(43);
     },
   );
@@ -917,16 +914,17 @@ describe("native plugin generation interop", () => {
         'module.exports = { value: "require", token: {} };',
     });
     type Dependency = { value: string; token: object };
-    const entry = load<
-      Record<"imported" | "required" | "createdRequire" | "namespace", Dependency> & {
-        reexported: string;
-        shadowed: number;
-        readImported(): Dependency;
-        readRequired(): Dependency;
-        lazy: () => Promise<Dependency>;
-        lazyModule: () => Promise<Dependency & { required: Dependency }>;
-      }
-    >(root, "entry.ts");
+    const entry = host(root).load("entry.ts") as Record<
+      "imported" | "required" | "createdRequire" | "namespace",
+      Dependency
+    > & {
+      reexported: string;
+      shadowed: number;
+      readImported(): Dependency;
+      readRequired(): Dependency;
+      lazy: () => Promise<Dependency>;
+      lazyModule: () => Promise<Dependency & { required: Dependency }>;
+    };
     const imported = entry.readImported();
     const required = entry.readRequired();
     expect(entry.imported.value).toBe("require");

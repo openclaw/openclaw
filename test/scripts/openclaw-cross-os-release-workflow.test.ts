@@ -89,7 +89,7 @@ function expectRun(workflowJob: WorkflowJob, name: string, fragments: string[]) 
 function expectBefore(workflowJob: WorkflowJob, ...names: string[]) {
   const indices = names.map((name) => workflowJob.steps!.indexOf(step(workflowJob, name)));
   for (let index = 1; index < indices.length; index++) {
-    expect(indices[index - 1], names.join(" → ")).toBeLessThan(indices[index]);
+    expect(indices[index - 1]!, names.join(" → ")).toBeLessThan(indices[index]!);
   }
 }
 
@@ -446,7 +446,7 @@ describe("cross-OS release checks workflow", () => {
       ["package_sha256", "package.outputs.sha256", "packageSha256"],
       ["package_version", "package.outputs.package_version", "packageVersion"],
       ["source_sha", "package.outputs.source_sha", "packageSourceSha"],
-    ]) {
+    ] as const) {
       expect(producer.outputs?.[output], output).toBe(
         expressionBinding(
           `steps.${primary} || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').${fallback}`,

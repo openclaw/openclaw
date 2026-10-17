@@ -41,6 +41,7 @@ vi.mock("./configure.shared.js", () => ({
   confirm: mocks.confirm,
 }));
 
+// mock-isolation: Capture wizard notes without writing to the terminal.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 vi.mock("../infra/tailscale.js", () => ({

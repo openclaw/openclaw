@@ -149,7 +149,7 @@ export function progressCardFixture() {
     transcriptCleanups,
     createContainer,
     render,
-    createView(defaults: Partial<Input> = {}) {
+    createView(this: void, defaults: Partial<Input> = {}) {
       const container = createContainer();
       return {
         container,
@@ -157,7 +157,7 @@ export function progressCardFixture() {
           render(input && { ...defaults, ...input }, container),
       };
     },
-    mountCard(input: Partial<Input>) {
+    mountCard(this: void, input: Partial<Input>) {
       const container = createContainer();
       render(input, container);
       return container;
@@ -170,11 +170,8 @@ export function advance(ms: number) {
   flush();
 }
 
-export function cardPart<T extends Element = HTMLElement>(
-  root: ParentNode | null | undefined,
-  name: string,
-) {
-  return root?.querySelector<T>(`.session-progress-card__${name}`);
+export function cardPart(root: ParentNode | null | undefined, name: string) {
+  return root?.querySelector<HTMLElement>(`.session-progress-card__${name}`);
 }
 
 export function renderProgressCard(input: Input | null, container: HTMLElement) {

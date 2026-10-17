@@ -11,7 +11,7 @@ import "./session-progress-hovercard.runtime.tsx";
 function subscriptions<T>() {
   const listeners = new Set<(value: T) => void>();
   return {
-    subscribe(listener: (value: T) => void) {
+    subscribe(this: void, listener: (value: T) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },

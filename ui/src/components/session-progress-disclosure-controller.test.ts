@@ -22,7 +22,7 @@ function disclosure(context: ComposerProgressDisclosureContext = {}, collapsed =
     transcript: true,
   });
   const card = () => container.querySelector("details")!;
-  const body = () => cardPart<HTMLElement>(container, "body")!;
+  const body = () => cardPart(container, "body")!;
   return {
     container,
     card,
@@ -42,7 +42,7 @@ function disclosure(context: ComposerProgressDisclosureContext = {}, collapsed =
       card().querySelector("summary")!.dispatchEvent(event);
       return event.defaultPrevented;
     },
-    expectChoice(open: boolean, height = "") {
+    expectChoice(this: void, open: boolean, height = "") {
       expect(card()).toMatchObject({ open });
       expect(body().style.height).toBe(height);
     },

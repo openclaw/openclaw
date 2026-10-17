@@ -24,10 +24,11 @@ function cronItems(
   cronJobs: readonly CronAttentionJob[],
   now = 0,
   cronOwnerByJobId?: ReadonlyMap<string, string>,
+  cronSchedulerEnabled = true,
 ) {
   return buildSidebarAttentionEntries({
     cronJobs,
-    cronSchedulerEnabled: true,
+    cronSchedulerEnabled,
     cronOwnerByJobId,
     modelAuthStatus: null,
     now,
@@ -83,7 +84,7 @@ describe("sidebar attention projection", () => {
     const overdue = cronJob("overdue-id");
     overdue.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
 
-    expect(cronItems([overdue], 300_002, false)).not.toContainEqual(
+    expect(cronItems([overdue], 300_002, undefined, false)).not.toContainEqual(
       expect.objectContaining({ kind: "cronOverdue" }),
     );
   });
