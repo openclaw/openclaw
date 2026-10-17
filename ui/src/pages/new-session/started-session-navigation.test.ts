@@ -18,6 +18,11 @@ function created(context: Context, key = sessionKey) {
     initialRun: { status: "idle" },
   });
 }
+function expectCalls(context: Context, navigations = 1, creates = 1) {
+  expect(context.navigateAndWait).toHaveBeenCalledTimes(navigations);
+  expect(context.sessions.createResult).toHaveBeenCalledTimes(creates);
+}
+const route = (path: string, search = "", hash = "") => ({ pathname: path, search, hash });
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -40,11 +45,7 @@ describe("confirmed session navigation", () => {
           routeId,
           context,
           {},
-          {
-            pathname: options?.pathname ?? "/chat",
-            search: options?.search ?? "",
-            hash: options?.hash ?? "",
-          },
+          route(options?.pathname ?? "/chat", options?.search, options?.hash),
         );
         return committed;
       });
@@ -57,16 +58,7 @@ describe("confirmed session navigation", () => {
       if (retire === "stop") {
         lifecycle.abort();
       } else {
-        await context.router.navigate(
-          "chat",
-          context,
-          {},
-          {
-            pathname: "/chat/main/another-session",
-            search: "",
-            hash: "",
-          },
-        );
+        await context.router.navigate("chat", context, {}, route("/chat/main/another-session"));
       }
       await opening;
       expect(navigation.current).toBeNull();
@@ -107,10 +99,8 @@ describe("confirmed session navigation", () => {
 
     await flow.submit();
 
-    expect(context.sessions.createResult).toHaveBeenCalledOnce();
-    expect(context.navigateAndWait).toHaveBeenCalledOnce();
-    expect(flow.error).toBe("Chat route failed to load");
-    expect(flow.submitting).toBe(false);
+    expectCalls(context);
+    expect(flow).toMatchObject({ error: "Chat route failed to load", submitting: false });
     expect(flow.pendingMessage?.content).toContainEqual({ type: "text", text: "start this task" });
     expect(flow.completedSubmission?.key).toBe("agent:main:dashboard:created");
 
@@ -119,15 +109,13 @@ describe("confirmed session navigation", () => {
     expect(flow.submitBlock()?.gate).toBe("attachment-reads");
     expect(flow.canSubmit()).toBe(false);
     await flow.submit();
-    expect(context.sessions.createResult).toHaveBeenCalledOnce();
-    expect(context.navigateAndWait).toHaveBeenCalledOnce();
+    expectCalls(context);
     flow.attachmentDraft.reads.updatePending(readSignal, -1);
 
     expect(flow.canSubmit()).toBe(true);
     await flow.openSubmittedSession();
 
-    expect(context.navigateAndWait).toHaveBeenCalledTimes(2);
-    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    expectCalls(context, 2);
     expect(flow.error).toBeNull();
   });
 
@@ -136,6 +124,7 @@ describe("confirmed session navigation", () => {
       request: async (method) => (method === "agent.wait" ? { status: "ok", endedAt: 1 } : {}),
     });
     const key = "agent:main:dashboard:background-visible";
+    const prompt = { type: "text", text: "keep this background prompt visible" };
     Object.assign(context.gateway.snapshot.client!, {
       recoveryScope: "",
       recoveryScopeReady: false,
@@ -145,27 +134,20 @@ describe("confirmed session navigation", () => {
       key,
       initialRun: { status: "started", runId: "background-run" },
     });
-    flow.setMessage("keep this background prompt visible");
+    flow.setMessage(prompt.text);
     await flow.submit(undefined, true);
     expect(flow.message).toBe("");
-    expect(flow.pendingMessage?.content).toContainEqual({
-      type: "text",
-      text: "keep this background prompt visible",
-    });
+    expect(flow.pendingMessage?.content).toContainEqual(prompt);
     expect(flow.submitting).toBe(false);
     expect(context.navigateAndWait).not.toHaveBeenCalled();
     Object.assign(context.gateway.snapshot.client!, {
       recoveryScope: "principal-a",
       recoveryScopeReady: true,
     });
-    expect(flow.pendingMessage?.content).toContainEqual({
-      type: "text",
-      text: "keep this background prompt visible",
-    });
+    expect(flow.pendingMessage?.content).toContainEqual(prompt);
     vi.mocked(context.navigateAndWait).mockImplementation(readyChat);
     await flow.openSubmittedSession();
-    expect(context.navigateAndWait).toHaveBeenCalledOnce();
-    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    expectCalls(context);
     const auth = context.gateway.snapshot.hello!.auth!;
     auth.recoveryScope = "another-account";
     expect(flow.pendingMessage).toBeNull();
@@ -174,31 +156,28 @@ describe("confirmed session navigation", () => {
   });
 
   it.each([
-    {
-      scenario: "the Gateway handshake is replaced",
-      retire: ({ context }: Fixture) => {
+    [
+      "the Gateway handshake is replaced",
+      ({ context }: Fixture) => {
         const hello = context.gateway.snapshot.hello;
         if (hello) {
           context.gateway.snapshot.hello = { ...hello };
         }
       },
-    },
-    {
-      scenario: "the Gateway client is replaced",
-      retire: ({ context }: Fixture) => {
+    ],
+    [
+      "the Gateway client is replaced",
+      ({ context }: Fixture) => {
         const client = context.gateway.snapshot.client;
         if (client) {
           context.gateway.snapshot.client = new Proxy(client, {});
         }
       },
-    },
-    {
-      scenario: "the pending navigation is retired",
-      retire: ({ flow }: Fixture) => flow.invalidate(),
-    },
-  ])(
-    "retires a confirmed session handoff when $scenario during session selection",
-    async ({ retire }) => {
+    ],
+    ["the pending navigation is retired", ({ flow }: Fixture) => flow.invalidate()],
+  ] as const)(
+    "retires a confirmed session handoff when %s during session selection",
+    async (_scenario, retire) => {
       const fixture = createDraftFixture();
       const { context, flow } = fixture;
       created(context);
@@ -219,20 +198,16 @@ describe("confirmed session navigation", () => {
   );
 
   it.each([
-    {
-      scenario: "the requested session visibility changes",
-      retire: ({ flow }: Fixture) => flow.setVisibility("draft"),
-    },
-    {
-      scenario: "the requested session capabilities change",
-      retire: ({ capabilities }: Fixture) =>
-        capabilities.setToolOverrides({ skills: { release: false } }),
-    },
-    {
-      scenario: "the selected agent changes",
-      retire: ({ place }: Fixture) => place.selectAgentId("other"),
-    },
-  ])("never retries a committed session after $scenario", async ({ retire }) => {
+    [
+      "the requested session visibility changes",
+      ({ flow }: Fixture) => flow.setVisibility("draft"),
+    ],
+    [
+      "the requested session capabilities change",
+      ({ capabilities }: Fixture) => capabilities.setToolOverrides({ skills: { release: false } }),
+    ],
+    ["the selected agent changes", ({ place }: Fixture) => place.selectAgentId("other")],
+  ] as const)("never retries a committed session after %s", async (_scenario, retire) => {
     const fixture = createDraftFixture({
       scopes: ["operator.admin", "operator.read", "operator.write"],
       agents: [
@@ -256,8 +231,7 @@ describe("confirmed session navigation", () => {
     retire(fixture);
     expect(flow.canSubmit()).toBe(false);
     await flow.submit();
-    expect(context.sessions.createResult).toHaveBeenCalledOnce();
-    expect(context.navigateAndWait).toHaveBeenCalledOnce();
+    expectCalls(context);
     flow.setMessage("a new task");
     await flow.submit();
 

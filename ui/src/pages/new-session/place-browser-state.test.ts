@@ -19,13 +19,23 @@ const packages = {
   home: "/home/test",
   entries: [{ name: "app", path: "/workspace/packages/app" }],
 } satisfies FsListDirResult;
-const states: PlaceBrowserState[] = [];
+const listDirectory = vi.fn<(path?: string) => Promise<FsListDirResult>>();
+const onListing = vi.fn();
+let browser: PlaceBrowserState;
+const advance = (ms = PICKER_INPUT_DEBOUNCE_MS) => vi.advanceTimersByTimeAsync(ms);
+function expectListing(state: PlaceBrowserState, draft: string, listing: FsListDirResult) {
+  expect(state).toMatchObject({ draft, loading: false });
+  expect(state.listing).toEqual(listing);
+}
 
-beforeEach(() => vi.useFakeTimers());
+beforeEach(() => {
+  vi.useFakeTimers();
+  listDirectory.mockReset().mockResolvedValue(workspace);
+  onListing.mockReset();
+  browser = new PlaceBrowserState(listDirectory, vi.fn(), onListing);
+});
 afterEach(() => {
-  for (const state of states.splice(0)) {
-    state.reset();
-  }
+  browser.reset();
   try {
     expect(vi.getTimerCount()).toBe(0);
   } finally {
@@ -33,74 +43,60 @@ afterEach(() => {
   }
 });
 
-function fixture() {
-  const listDirectory = vi.fn<(path?: string) => Promise<FsListDirResult>>();
-  listDirectory.mockResolvedValue(workspace);
-  const onListing = vi.fn();
-  const browser = new PlaceBrowserState(listDirectory, vi.fn(), onListing);
-  states.push(browser);
-  return { browser, listDirectory, onListing };
-}
-
 async function pendingSearch(phase = "in-flight") {
-  const result = fixture();
-  await result.browser.navigate(workspace.path);
+  await browser.navigate(workspace.path);
   const stale = createDeferred<FsListDirResult>();
-  result.listDirectory.mockReturnValueOnce(stale.promise);
-  result.browser.setDraft("/stale/a");
+  listDirectory.mockReturnValueOnce(stale.promise);
+  browser.setDraft("/stale/a");
   if (phase === "in-flight") {
-    await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+    await advance();
   }
-  return { ...result, stale };
+  return stale;
 }
 
 describe("PlaceBrowserState", () => {
   it("coalesces directory edits, marks loading immediately, and preserves the raw draft", async () => {
-    const { browser, listDirectory, onListing } = fixture();
     await browser.navigate(workspace.path);
     listDirectory.mockResolvedValue(packages);
 
     browser.setDraft("/workspace/to/");
     expect(browser.loading).toBe(true);
     expect(browser.view().empty).toBe("none");
-    await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS - 1);
+    await advance(PICKER_INPUT_DEBOUNCE_MS - 1);
     browser.setDraft("  /workspace/packages/ap  ");
-    await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS - 1);
+    await advance(PICKER_INPUT_DEBOUNCE_MS - 1);
     expect(listDirectory).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
+    await advance(1);
 
     expect(listDirectory).toHaveBeenCalledTimes(2);
     expect(listDirectory).toHaveBeenLastCalledWith(packages.path);
-    expect(browser.draft).toBe("  /workspace/packages/ap  ");
-    expect(browser.listing).toEqual(packages);
-    expect(browser.loading).toBe(false);
+    expectListing(browser, "  /workspace/packages/ap  ", packages);
     expect(onListing).toHaveBeenLastCalledWith(packages);
   });
 
   it("drops an old response while a newer directory is still debouncing", async () => {
-    const { browser, listDirectory, onListing, stale } = await pendingSearch();
+    const stale = await pendingSearch();
     listDirectory.mockResolvedValueOnce(packages);
 
     browser.setDraft("/workspace/packages/ap");
     stale.resolve({ ...workspace, path: "/stale" });
-    await vi.advanceTimersByTimeAsync(0);
+    await advance(0);
     expect(browser.listing).toEqual(workspace);
     expect(browser.loading).toBe(true);
     expect(onListing).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
-    expect(browser.listing).toEqual(packages);
-    expect(browser.draft).toBe("/workspace/packages/ap");
+    await advance();
+    expectListing(browser, "/workspace/packages/ap", packages);
     expect(onListing).toHaveBeenCalledTimes(2);
   });
 
   it.each(["pending", "in-flight"])(
     "cancels a %s directory search when returning to the loaded directory",
     async (phase) => {
-      const { browser, listDirectory, onListing, stale } = await pendingSearch(phase);
+      const stale = await pendingSearch(phase);
 
       browser.setDraft("/workspace/to");
       stale.resolve({ ...workspace, path: "/stale" });
-      await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+      await advance();
       expect(listDirectory).toHaveBeenCalledTimes(phase === "pending" ? 1 : 2);
       expect(browser.listing).toEqual(workspace);
       expect(browser.loading).toBe(false);
@@ -111,35 +107,30 @@ describe("PlaceBrowserState", () => {
   );
 
   it("explicit navigation supersedes a pending directory search", async () => {
-    const { browser, listDirectory } = fixture();
     await browser.navigate(workspace.path);
     browser.setDraft("/stale/a");
     listDirectory.mockResolvedValue(packages);
 
     await browser.navigate(packages.path);
-    await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+    await advance();
     expect(listDirectory.mock.calls).toEqual([[workspace.path], [packages.path]]);
     expect(browser.draft).toBe(packages.path);
     expect(browser.view().entries).toEqual(packages.entries);
   });
 
   it("keeps failed typed directories as soft no-match results", async () => {
-    const { browser, listDirectory, onListing } = fixture();
     await browser.navigate(workspace.path);
     listDirectory.mockRejectedValueOnce(new Error("directory not found"));
 
     browser.setDraft("/missing/pa");
-    await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
-    expect(browser.listing).toEqual(workspace);
-    expect(browser.draft).toBe("/missing/pa");
+    await advance();
+    expectListing(browser, "/missing/pa", workspace);
     expect(browser.error).toBeNull();
-    expect(browser.loading).toBe(false);
     expect(browser.view().empty).toBe("no-matches");
     expect(onListing).toHaveBeenCalledTimes(1);
   });
 
   it("retains an explicit missing scope without changing the requested path", async () => {
-    const { browser, listDirectory, onListing } = fixture();
     listDirectory.mockRejectedValueOnce({
       code: "FORBIDDEN",
       message: "permission denied",
@@ -152,36 +143,28 @@ describe("PlaceBrowserState", () => {
 
     await browser.navigate("/missing");
     expect(listDirectory.mock.calls).toEqual([["/missing"]]);
-    expect(browser.listing).toBeNull();
-    expect(browser.draft).toBe("/missing");
+    expect(browser).toMatchObject({ listing: null, draft: "/missing", loading: false });
     expect(browser.error).toBe(
       "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
     );
-    expect(browser.loading).toBe(false);
     expect(onListing).not.toHaveBeenCalled();
   });
 
   it("opens HOME for a missing starting folder but reports explicit navigation failures", async () => {
     const message = "Error: ENOTDIR: not a directory";
-    const { browser, listDirectory } = fixture();
-    listDirectory.mockRejectedValueOnce(
-      new GatewayRequestError({ code: "INVALID_REQUEST", message }),
-    );
+
+    const missingFolder = new GatewayRequestError({ code: "INVALID_REQUEST", message });
+    listDirectory.mockRejectedValueOnce(missingFolder);
     await browser.navigate("/missing", "initial");
     expect(listDirectory.mock.calls).toEqual([["/missing"], [undefined]]);
-    expect(browser.draft).toBe(workspace.path);
-    expect(browser.error).toBeNull();
-    listDirectory.mockRejectedValueOnce(
-      new GatewayRequestError({ code: "INVALID_REQUEST", message }),
-    );
+    expect(browser).toMatchObject({ draft: workspace.path, error: null });
+    listDirectory.mockRejectedValueOnce(missingFolder);
     browser.setDraft("/missing");
     await browser.activate();
-    expect(browser.draft).toBe("/missing");
-    expect(browser.error).toBe("Couldn't list that folder.");
+    expect(browser).toMatchObject({ draft: "/missing", error: "Couldn't list that folder." });
   });
 
   it("wraps the highlight, completes with Tab, and opens the highlighted folder with Enter", async () => {
-    const { browser, listDirectory } = fixture();
     const appOld = { name: "app-old", path: "/workspace/app-old" };
     const app = { name: "app", path: "/workspace/app" };
     listDirectory.mockResolvedValueOnce({ ...workspace, entries: [appOld, app] });
@@ -219,20 +202,20 @@ describe("PlaceBrowserState", () => {
 
   it("opens HOME when Enter has an empty draft and no highlight", async () => {
     const draft = "  ";
-    const { browser, listDirectory } = fixture();
+
     browser.setDraft(draft);
     browser.moveHighlight(1);
     expect(browser.completeHighlighted()).toBe(false);
     expect(browser.draft).toBe(draft);
     expect(browser.usablePath()).toBe("");
     await browser.activate();
-    await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+    await advance();
     expect(listDirectory.mock.calls).toEqual([[undefined]]);
   });
 
   it("keeps a relative draft on Enter despite a highlighted folder", async () => {
     const draft = "relative";
-    const { browser, listDirectory } = fixture();
+
     await browser.navigate(workspace.path);
     browser.setDraft(draft);
     browser.moveHighlight(1);
@@ -240,25 +223,27 @@ describe("PlaceBrowserState", () => {
     expect(browser.usablePath()).toBeNull();
 
     await browser.activate();
-    await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+    await advance();
     expect(listDirectory).toHaveBeenCalledTimes(1);
     expect(browser.draft).toBe(draft);
     expect(browser.listing).toBe(workspace);
   });
 
   it.each(["pending", "in-flight"])("reset retires %s directory work", async (phase) => {
-    const { browser, listDirectory, onListing, stale } = await pendingSearch(phase);
+    const stale = await pendingSearch(phase);
 
     browser.reset();
     stale.resolve({ ...workspace, path: "/stale" });
-    await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
+    await advance();
     expect(listDirectory).toHaveBeenCalledTimes(phase === "pending" ? 1 : 2);
-    expect(browser.listing).toBeNull();
-    expect(browser.draft).toBe("");
-    expect(browser.loading).toBe(false);
-    expect(browser.error).toBeNull();
+    expect(browser).toMatchObject({
+      listing: null,
+      draft: "",
+      loading: false,
+      error: null,
+      activeIndex: -1,
+    });
     expect(browser.highlightedEntry()).toBeUndefined();
-    expect(browser.activeIndex).toBe(-1);
     expect(onListing).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });

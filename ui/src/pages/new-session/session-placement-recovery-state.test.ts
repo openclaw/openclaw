@@ -83,46 +83,42 @@ describe("pending session placement recovery state", () => {
     ).toBe(expected);
   });
 
-  it("preserves the requested permission mode in placement recovery", () => {
-    const pending = new PendingSessionPlacementRecoveryState();
-    const createParams = stageCreate(pending, {
-      message: "run remotely with guarded permissions",
-      createParams: {
-        agentId: "cloud",
-        message: "",
-        permissionMode: "guarded",
-        worktree: true,
-      },
-    });
-
-    expect(createParams).toMatchObject({ permissionMode: "guarded" });
-    expect(readRecovery(pending.sessionKey)).toMatchObject({
-      createParams: { permissionMode: "guarded" },
-    });
-  });
-
-  it.each(["codex"])("preserves draft model and runtime %s through recovery", (agentRuntime) => {
-    const pending = new PendingSessionPlacementRecoveryState();
-    const createParams = stageCreate(pending, {
-      target: { kind: "auto-device" },
-      createParams: buildDraftSessionCreateParams({
+  it.each([
+    ["permission mode", { permissionMode: "guarded" }, { permissionMode: "guarded" }],
+    [
+      "model/runtime",
+      buildDraftSessionCreateParams({
         agentId: "cloud",
         message: "keep the selected runtime",
         deferInitialTurn: true,
         model: "openai/gpt-5.6-sol",
-        agentRuntime,
+        agentRuntime: "codex",
         worktree: true,
       }),
+      { model: "openai/gpt-5.6-sol", agentRuntime: "codex" },
+    ],
+    [
+      "explicit names",
+      { displayName: "Repair naming", worktreeName: "my-explicit-branch" },
+      { displayName: "Repair naming", worktreeName: "my-explicit-branch" },
+    ],
+  ] as const)("preserves %s through staging, storage, and capture", (kind, params, expected) => {
+    const pending = new PendingSessionPlacementRecoveryState();
+    const createParams = stageCreate(pending, {
+      target:
+        kind === "model/runtime" ? { kind: "auto-device" } : { kind: "profile", profileId: "aws" },
+      attachments: kind === "explicit names" ? [{ type: "image" }] : undefined,
+      createParams: { agentId: "cloud", message: "", worktree: true, ...params },
     });
-
     expect(createParams).not.toBeNull();
-    expect(createParams?.model).toBe("openai/gpt-5.6-sol");
-    expect(createParams?.agentRuntime).toBe(agentRuntime);
-    expect(readRecovery(pending.sessionKey)).toMatchObject({
+    expect(createParams).toMatchObject(expected);
+    const snapshot = {
       phase: "creating",
-      createParams,
       message: "run remotely",
-    });
+      createParams: { ...createParams, ...expected, key: pending.sessionKey },
+    };
+    expect(readRecovery(pending.sessionKey)).toMatchObject(snapshot);
+    expect(pending.capture()).toMatchObject(snapshot);
   });
 
   it.each([false, true])(
@@ -164,32 +160,9 @@ describe("pending session placement recovery state", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("promotes the acknowledged server key before dispatch", () => {
-    const pending = new PendingSessionPlacementRecoveryState();
-    expect(stageCreate(pending)).not.toBeNull();
-    const provisionalSessionKey = pending.sessionKey;
-    const storage = sessionStorage;
-    const provisionalKey = exactKey(provisionalSessionKey);
-    const canonicalKey = exactKey(canonicalSessionKey);
-    interceptWrites((key, value) => {
-      if (key === canonicalKey && storage.getItem(provisionalKey) !== null) {
-        throw new DOMException("quota exceeded", "QuotaExceededError");
-      }
-      storage.setItem(key, value);
-    });
-
-    expect(pending.promoteToDispatching("agent:cloud:dashboard:server-key")).toBe(true);
-    expect(readRecovery(provisionalSessionKey)).toBeNull();
-    expect(readRecovery(canonicalSessionKey)).toMatchObject({
-      phase: "dispatching",
-      sessionKey: "agent:cloud:dashboard:server-key",
-    });
-    expect(pending.createParams).toBeUndefined();
-  });
-
-  it.each([false, true])(
-    "restores the provisional row when canonical promotion throws (committed=%s)",
-    (committed) => {
+  it.each(["success", "before-write", "after-write"] as const)(
+    "promotes the canonical key atomically (%s)",
+    (outcome) => {
       const pending = new PendingSessionPlacementRecoveryState();
       expect(stageCreate(pending)).not.toBeNull();
       const storage = sessionStorage;
@@ -198,19 +171,30 @@ describe("pending session placement recovery state", () => {
       const canonicalKey = exactKey(canonicalSessionKey);
       const raw = storage.getItem(provisionalKey);
       interceptWrites((key, value) => {
-        if (key === canonicalKey) {
-          if (committed) {
+        if (
+          key === canonicalKey &&
+          (outcome !== "success" || storage.getItem(provisionalKey) !== null)
+        ) {
+          if (outcome === "after-write") {
             storage.setItem(key, value);
           }
           throw new DOMException("quota exceeded", "QuotaExceededError");
         }
         storage.setItem(key, value);
       });
-
-      expect(pending.promoteToDispatching(canonicalSessionKey)).toBe(false);
-      expect(storage.getItem(provisionalKey)).toBe(raw);
-      expect(storage.getItem(canonicalKey)).toBeNull();
-      expect(pending.sessionKey).toBe(provisionalSessionKey);
+      expect(pending.promoteToDispatching(canonicalSessionKey)).toBe(outcome === "success");
+      if (outcome === "success") {
+        expect(readRecovery(provisionalSessionKey)).toBeNull();
+        expect(readRecovery(canonicalSessionKey)).toMatchObject({
+          phase: "dispatching",
+          sessionKey: canonicalSessionKey,
+        });
+        expect(pending.createParams).toBeUndefined();
+      } else {
+        expect(storage.getItem(provisionalKey)).toBe(raw);
+        expect(storage.getItem(canonicalKey)).toBeNull();
+        expect(pending.sessionKey).toBe(provisionalSessionKey);
+      }
     },
   );
 
@@ -240,32 +224,5 @@ describe("pending session placement recovery state", () => {
     expect(pending.promoteToDispatching("agent:cloud:dashboard:server-key")).toBe(true);
     expect(pending.sessionKey).toBe("agent:cloud:dashboard:server-key");
     expect(readRecovery(canonicalSessionKey)).toBeNull();
-  });
-
-  it("captures named creating recovery with its submitted payload", () => {
-    const pending = new PendingSessionPlacementRecoveryState();
-    expect(
-      stageCreate(pending, {
-        attachments: [{ type: "image" }],
-        createParams: {
-          agentId: "cloud",
-          message: "",
-          displayName: "Repair naming",
-          worktreeName: "my-explicit-branch",
-          worktree: true,
-        },
-      }),
-    ).not.toBeNull();
-
-    const captured = pending.capture();
-    expect(captured).toMatchObject({
-      phase: "creating",
-      message: "run remotely",
-      createParams: {
-        key: pending.sessionKey,
-        displayName: "Repair naming",
-        worktreeName: "my-explicit-branch",
-      },
-    });
   });
 });

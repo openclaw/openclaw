@@ -21,6 +21,8 @@ const projectMethods = [
 ];
 const adminScopes = ["operator.admin", "operator.read", "operator.write"];
 type Fixture = ReturnType<typeof createDraftFixture>;
+const replies = (methods: Record<string, () => Promise<unknown>>) => (method: string) =>
+  methods[method]?.() ?? Promise.resolve({});
 function withMessage(
   options: Parameters<typeof createDraftFixture>[0] = {},
   setup?: (fixture: Fixture) => void,
@@ -50,20 +52,15 @@ describe("DraftSubmissionFlow submit gates", () => {
         scopes: ["operator.sessions.read", "operator.sessions.write"],
         methods: projectMethods,
         selfUser: { id: "guest" },
-        request: (method) => {
-          if (method === "projects.list") {
-            return Promise.resolve({
-              projects: [{ id: "registered", displayName: "Registered Project", source }],
-            });
-          }
-          if (method === "projects.checkoutOptions") {
-            return availability.promise;
-          }
-          if (method === "worktrees.branches") {
-            return Promise.reject(new Error("missing scope: operator.write"));
-          }
-          return Promise.resolve({});
-        },
+        request: replies({
+          "projects.list": async () => ({
+            projects: [{ id: "registered", displayName: "Registered Project", source }],
+          }),
+          "projects.checkoutOptions": () => availability.promise,
+          "worktrees.branches": async () => {
+            throw new Error("missing scope: operator.write");
+          },
+        }),
       });
       const { place, flow, context, request } = fixture;
       await place.browser.refreshProjects();
@@ -280,9 +277,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       const { context, flow, place } = createDraftFixture({
         methods: ["sessions.create", "sessions.dispatch"],
         scopes: adminScopes,
-        modelCatalog: async () => ({
-          models: [unavailableModel("missing-auth")],
-        }),
+        modelCatalog: async () => ({ models: [unavailableModel("missing-auth")] }),
       });
       place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
       await vi.waitFor(() =>
@@ -350,51 +345,38 @@ describe("DraftSubmissionFlow submit gates", () => {
     },
   );
 
-  it("keeps every blocking gate visible: canSubmit and the reason derive from one table", () => {
-    const scenarios: Array<{ name: string; build: () => Fixture }> = [
-      { name: "empty draft", build: () => createDraftFixture() },
-      {
-        name: "gateway disconnected",
-        build: () => withMessage({ phase: "connecting" }),
-      },
-      {
-        name: "attachment reads pending",
-        build: () =>
-          withMessage({}, ({ flow }) =>
-            flow.attachmentDraft.reads.updatePending(flow.attachmentDraft.reads.readSignal, 1),
-          ),
-      },
-      {
-        name: "no agents on the gateway",
-        build: () => withMessage({ agents: [] }),
-      },
-      {
-        name: "sessions.create not advertised",
-        build: () => withMessage({ methods: [] }),
-      },
-      {
-        name: "submission outcome unknown",
-        build: () =>
-          withMessage({}, ({ flow }) => flow.markPendingPlacementUnavailable("gateway-changed")),
-      },
-    ];
-    for (const scenario of scenarios) {
-      const { flow } = scenario.build();
-      const block = flow.submitBlock();
-      expect(block, scenario.name).toBeDefined();
-      expect(flow.canSubmit(), scenario.name).toBe(false);
-      if (!(SILENT_SUBMIT_GATES as readonly string[]).includes(block?.gate ?? "")) {
-        // A reasoned gate must explain itself, and the Start tooltip must
-        // report the same first-gate reason canSubmit blocks on.
-        expect(block?.reason, scenario.name).toBeTruthy();
-        expect(flow.submitDisabledReason(), scenario.name).toBe(block?.reason);
-      }
+  it.each([
+    ["empty draft", () => createDraftFixture()],
+    ["gateway disconnected", () => withMessage({ phase: "connecting" })],
+    [
+      "attachment reads pending",
+      () =>
+        withMessage({}, ({ flow }) =>
+          flow.attachmentDraft.reads.updatePending(flow.attachmentDraft.reads.readSignal, 1),
+        ),
+    ],
+    ["no agents", () => withMessage({ agents: [] })],
+    ["sessions.create absent", () => withMessage({ methods: [] })],
+    [
+      "outcome unknown",
+      () => withMessage({}, ({ flow }) => flow.markPendingPlacementUnavailable("gateway-changed")),
+    ],
+  ] as const)("keeps the %s gate visible", (_name, build) => {
+    const { flow } = build();
+    const block = flow.submitBlock();
+    expect(block).toBeDefined();
+    expect(flow.canSubmit()).toBe(false);
+    if (!(SILENT_SUBMIT_GATES as readonly string[]).includes(block?.gate ?? "")) {
+      expect(block?.reason).toBeTruthy();
+      expect(flow.submitDisabledReason()).toBe(block?.reason);
     }
+  });
 
-    const ready = withMessage();
-    expect(ready.flow.submitBlock()).toBeUndefined();
-    expect(ready.flow.canSubmit()).toBe(true);
-    expect(ready.flow.submitDisabledReason()).toBeUndefined();
+  it("admits a ready draft without a disabled reason", () => {
+    const { flow } = withMessage();
+    expect(flow.submitBlock()).toBeUndefined();
+    expect(flow.canSubmit()).toBe(true);
+    expect(flow.submitDisabledReason()).toBeUndefined();
   });
 
   it.each(["unavailable", "rejected"] as const)(
@@ -416,12 +398,7 @@ describe("DraftSubmissionFlow submit gates", () => {
             model: { primary: "openai/gpt-5.6-luna" },
           },
         ],
-        request: (method) => {
-          if (method === "worktrees.branches") {
-            return branches;
-          }
-          return Promise.resolve({});
-        },
+        request: replies({ "worktrees.branches": () => branches }),
       });
       const { context, flow, place } = fixture;
       flow.setMessage("start something");
