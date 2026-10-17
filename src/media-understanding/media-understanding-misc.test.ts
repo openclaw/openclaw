@@ -9,13 +9,13 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { MediaAttachmentCache } from "./attachments.js";
-import { resolveMediaUnderstandingScope } from "./scope.js";
+import { resolveScopeDecision } from "./resolve.js";
 
 it("matches channel chatType explicitly", () => {
   expect(
-    resolveMediaUnderstandingScope({
+    resolveScopeDecision({
       scope: { rules: [{ action: "deny", match: { chatType: "channel" } }] },
-      chatType: "channel",
+      ctx: { ChatType: "channel" },
     }),
   ).toBe("deny");
 });
