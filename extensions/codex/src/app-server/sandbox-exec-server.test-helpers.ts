@@ -1,24 +1,18 @@
+import { once } from "node:events";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { vi } from "vitest";
 import type { RawData, WebSocket } from "ws";
+import type { RpcRequest, RpcResponse } from "./protocol-json.js";
 import { websocket } from "./sandbox-exec-server.websocket.js";
 import { requireObject, requireString } from "./sandbox-exec-server/json-rpc.js";
+import type { ManagedProcess } from "./sandbox-exec-server/types.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-type RpcResponse = {
-  id: number;
-  result?: unknown;
-  error?: { code: number; message: string };
-};
 type Backend = NonNullable<SandboxContext["backend"]>;
 type FsBridge = NonNullable<SandboxContext["fsBridge"]>;
-type ProcessRead = {
-  chunks?: Array<{ seq?: number; stream: string; chunk: string }>;
-  exited?: boolean;
-  exitCode?: number;
-  closed?: boolean;
-  nextSeq?: number;
-};
+type ProcessRead = Partial<
+  Pick<ManagedProcess, "chunks" | "exited" | "exitCode" | "closed" | "nextSeq">
+>;
 
 export function createSandboxContext(overrides: {
   buildExecSpec?: Backend["buildExecSpec"];
@@ -95,15 +89,12 @@ export function createClient(options: { serverVersion?: string } = {}) {
   };
 }
 
-export function execServerUrlFromClient(
-  client: ReturnType<typeof createClient>,
-  callIndex = 0,
-): string {
-  const params = requireObject(
-    client.request.mock.calls[callIndex]?.[1],
-    `environment/add ${callIndex}`,
+export function execServerUrlFromClient(client: ReturnType<typeof createClient>, callIndex = 0) {
+  return requireString(
+    requireObject(client.request.mock.calls[callIndex]?.[1], `environment/add ${callIndex}`)
+      .execServerUrl,
+    "execServerUrl",
   );
-  return requireString(params.execServerUrl, "execServerUrl");
 }
 
 export function codexFsSandboxContext(params: {
@@ -124,16 +115,12 @@ export function specialPath(kind: string, subpath?: string): unknown {
   return { type: "special", value: { kind, ...(subpath ? { subpath } : {}) } };
 }
 
-export function globPath(pattern: string): unknown {
-  return { type: "glob_pattern", pattern };
-}
+export const globPath = (pattern: string): unknown => ({ type: "glob_pattern", pattern });
 
-export function openSocket(url: string): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const socket = new websocket.WebSocket(url);
-    socket.once("open", () => resolve(socket));
-    socket.once("error", reject);
-  });
+export async function openSocket(url: string): Promise<WebSocket> {
+  const socket = new websocket.WebSocket(url);
+  await once(socket, "open");
+  return socket;
 }
 
 export function collectNotifications(
@@ -141,11 +128,7 @@ export function collectNotifications(
 ): Array<{ method: string; params?: unknown }> {
   const notifications: Array<{ method: string; params?: unknown }> = [];
   socket.on("message", (data) => {
-    const message = JSON.parse(Buffer.from(data as Buffer).toString("utf8")) as {
-      id?: number;
-      method?: string;
-      params?: unknown;
-    };
+    const message = JSON.parse(Buffer.from(data as Buffer).toString("utf8")) as Partial<RpcRequest>;
     if (message.id === undefined && message.method) {
       notifications.push({ method: message.method, params: message.params });
     }
@@ -155,7 +138,7 @@ export function collectNotifications(
 
 export async function readUntilClosed(socket: WebSocket, processId: string): Promise<ProcessRead> {
   let afterSeq = 0;
-  const chunks: Array<{ stream: string; chunk: string }> = [];
+  const chunks: NonNullable<ProcessRead["chunks"]> = [];
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const read = (await rpc(socket, "process/read", {
       processId,
@@ -171,10 +154,9 @@ export async function readUntilClosed(socket: WebSocket, processId: string): Pro
   throw new Error(`process ${processId} did not close`);
 }
 
-export function waitForSocketClose(socket: WebSocket): Promise<{ code: number }> {
-  return new Promise((resolve) => {
-    socket.once("close", (code) => resolve({ code }));
-  });
+export async function waitForSocketClose(socket: WebSocket): Promise<{ code: number }> {
+  const [code] = await once(socket, "close");
+  return { code };
 }
 
 export async function waitForHttpBodyDeltas(
