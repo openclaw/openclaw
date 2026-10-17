@@ -1,4 +1,5 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import "./database-suite-workers.test-support.js";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -736,6 +737,7 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
         },
       );
     },
-    240_000,
+    // Green CI runs 39068774273/39071119824 measured p95 at 151s for seven-store archive recovery.
+    320_000,
   );
 });
