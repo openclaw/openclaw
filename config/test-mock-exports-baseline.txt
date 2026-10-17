@@ -398,7 +398,6 @@
 ["extensions/copilot/src/tool-bridge.host-surface.test.ts","openclaw/plugin-sdk/agent-harness","2b0e09803695d608dd875d642df19d527726e4aefb3fae263d23c4fb97772ad1",1]
 ["extensions/crabbox/src/crabbox-model-run.test.ts","openclaw/plugin-sdk/secret-egress-runtime","a0cb79e58bc13c1b5a42ae1f79841d56ac5bbb8cd5903ffe8d31f4bfc80b9926",1]
 ["extensions/crabbox/src/crabbox-sandbox-backend.test.ts","openclaw/plugin-sdk/sandbox","2a6727f726a880b8bc70713b116115e1634aa6fc50e13ee279922946007e4117",1]
-["extensions/crabbox/src/crabbox-worker-provider-binary.test.ts","./crabbox-managed-binary.js","85c188b5ff62abb2449ae89defd3693dcc5f8a194f74ccfec61323a6d089b457",1]
 ["extensions/cua-computer/index.test.ts","./api.js","d80bab524f4ffc95d052ca839db7bd9ae2c239f511d5a9a6d58cc1c2bd72764b",1]
 ["extensions/cua-computer/index.test.ts","./src/driver-artifacts.js","916430c2420d578ddae09d3bdc6d80f37a90acca001ccfd744198895549b6fd7",1]
 ["extensions/cua-computer/src/doctor.test.ts","./driver-artifacts.js","19974445a9ae73de45e283c9f0c03db7ac6065975382d02a759d94874c5f538c",1]
