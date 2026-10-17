@@ -100,6 +100,29 @@ function expectDrained(
   expect(fixture.gate.state).toEqual({ completed: true, aborted: false });
 }
 
+function deadlineFixture(delay: number, wallClockMs: number, abortable = false) {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const started = createDeferred();
+  const slow = fakeTool("slow_leg", async (_toolCallId, _input, signal) => {
+    started.resolve();
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, delay);
+      if (abortable) {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      }
+    });
+    return jsonResult({ ok: true });
+  });
+  return { started, result: run([slow], "await slow_leg({}); return true;", { wallClockMs }) };
+}
+
 describe("headless Code Mode", () => {
   afterEach(async () => {
     vi.useRealTimers();
@@ -408,59 +431,29 @@ describe("headless Code Mode", () => {
   });
 
   it("enforces one wall-clock deadline across worker and tool legs", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const toolStarted = createDeferred();
-    const slow = fakeTool("slow_leg", async (_toolCallId, _input, signal) => {
-      toolStarted.resolve();
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, 30_000);
-        signal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            reject(new Error("aborted"));
-          },
-          { once: true },
-        );
-      });
-      return jsonResult({ ok: true });
-    });
-    const resultPromise = run([slow], "await slow_leg({}); return true;", {
-      wallClockMs: 15_000,
-    });
+    const fixture = deadlineFixture(30_000, 15_000, true);
 
     // Advance the shared deadline only after the real worker reaches the tool leg.
-    await toolStarted.promise;
+    await fixture.started.promise;
     await vi.advanceTimersByTimeAsync(15_000);
-    const result = expectFailed(await resultPromise);
+    const result = expectFailed(await fixture.result);
 
     expect(result).toMatchObject({ code: "timeout", toolCallCount: 1 });
   });
 
   it("honors cron payload wall-clock limits above the old headless cap", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const toolStarted = createDeferred();
-    const slow = fakeTool("slow_leg", async () => {
-      toolStarted.resolve();
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 330_000);
-      });
-      return jsonResult({ ok: true });
-    });
-    const resultPromise = run([slow], "await slow_leg({}); return true;", {
-      wallClockMs: 360_000,
-    });
+    const fixture = deadlineFixture(330_000, 360_000);
 
-    await toolStarted.promise;
+    await fixture.started.promise;
     let settled = false;
-    void resultPromise.finally(() => {
+    void fixture.result.finally(() => {
       settled = true;
     });
     await vi.advanceTimersByTimeAsync(300_000);
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(30_000);
 
-    const result = expectCompleted(await resultPromise);
+    const result = expectCompleted(await fixture.result);
     expect(result).toMatchObject({ value: true, toolCallCount: 1 });
   });
 
@@ -482,16 +475,13 @@ describe("headless Code Mode", () => {
 
   it("rejects schema-invalid nested input before headless tool execution", async () => {
     const strict: AnyAgentTool = {
-      name: "headless_strict",
-      label: "headless_strict",
-      description: "Strict headless test tool",
+      ...fakeTool("headless_strict", async () => jsonResult({ unexpected: true })),
       parameters: {
         type: "object",
         properties: { value: { type: "string" } },
         required: ["value"],
         additionalProperties: false,
       },
-      execute: vi.fn(async () => jsonResult({ unexpected: true })),
     };
     const result = await fail([strict], "return await headless_strict({ value: 42 });", {
       wallClockMs: 120_000,

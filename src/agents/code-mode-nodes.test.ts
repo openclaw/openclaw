@@ -27,11 +27,7 @@ const nodeSnapshot = [
     paired: true,
     ...node,
   })),
-  {
-    nodeId: "shadow-id",
-    paired: false,
-    connected: false,
-  },
+  { nodeId: "shadow-id", paired: false, connected: false },
 ];
 
 let applyCodeModeCatalog: typeof import("./code-mode.js").applyCodeModeCatalog;
@@ -114,17 +110,16 @@ describe("Code Mode nodes", () => {
         return { nodes: nodeSnapshot };
       }
       if (method === "node.invoke") {
-        const invocation = input as {
+        const { nodeId, command, params } = input as {
           nodeId: string;
           command: string;
           params: unknown;
         };
-        if (invocation.command === "danger.read") {
+        if (command === "danger.read") {
           throw new Error(
             'node command not allowed: "danger.read" is blocked by gateway.nodes.commands.deny',
           );
         }
-        const { nodeId, command, params } = invocation;
         return { payload: { nodeId, command, params } };
       }
       throw new Error(`unexpected gateway method: ${String(method)}`);
@@ -139,22 +134,20 @@ describe("Code Mode nodes", () => {
       `
         const listed = await nodes.list();
         const node = await nodes.get(listed.find(entry => entry.connected)?.id ?? "Desk");
-        const invoked = await node.invoke("device.status", { detail: true });
-        const directory = node.listDir ? await node.listDir("/tmp") : undefined;
         return {
           listed,
           id: node.id,
           name: node.name,
           methods: Object.keys(node).sort(),
-          invoked,
-          directory,
+          invoked: await node.invoke("device.status", { detail: true }),
+          directory: node.listDir ? await node.listDir("/tmp") : undefined,
           hasExec: "exec" in node,
         };
       `,
       harness,
     );
 
-    expect(details).toMatchObject({ status: "completed" });
+    expect(details.status).toBe("completed");
     expect(details.value).toEqual({
       listed: listedNodes,
       id: "node-1",
@@ -168,18 +161,15 @@ describe("Code Mode nodes", () => {
       },
       hasExec: false,
     });
-    expect(harness.nestedCalls).not.toHaveLength(0);
-    expect(harness.nestedCalls.every((call) => call.parentToolCallId === "code-nodes-call")).toBe(
-      true,
+    expect(new Set(harness.nestedCalls.map(({ parentToolCallId }) => parentToolCallId))).toEqual(
+      new Set(["code-nodes-call"]),
     );
   });
 
   it("omits listDir when the node does not advertise fs.listDir", async () => {
-    const details = await runUntilCompleted(
-      `const node = await nodes.get("node-2"); return Object.keys(node).sort();`,
-    );
-
-    expect(details.value).toEqual(["id", "invoke", "name"]);
+    expect(
+      (await runUntilCompleted('return Object.keys(await nodes.get("node-2")).sort();')).value,
+    ).toEqual(["id", "invoke", "name"]);
   });
 
   it.each([
@@ -211,9 +201,9 @@ describe("Code Mode nodes", () => {
   });
 
   it("rejects an ineligible exact id before matching an eligible node name", async () => {
-    const details = await runCaught('await nodes.get("shadow-id");');
-
-    expect(details.value).toBe('node "shadow-id" is not paired (paired node ids: node-1, node-2)');
+    expect((await runCaught('await nodes.get("shadow-id");')).value).toBe(
+      'node "shadow-id" is not paired (paired node ids: node-1, node-2)',
+    );
   });
 
   it.each([

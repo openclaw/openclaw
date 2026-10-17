@@ -14,6 +14,8 @@ import {
 } from "./code-mode.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
+const queuedValues = Array.from({ length: 20 }, (_, i) => String(i));
+
 function makeProbe(execute: AnyAgentTool["execute"] = async (_id, input) => jsonResult(input)) {
   return pluginToolWithExecute("probe", "Backpressure probe", execute);
 }
@@ -25,20 +27,18 @@ function harness(headless: boolean, limit: number, tool: AnyAgentTool) {
     code: string,
     signal?: AbortSignal,
     maxToolCalls = 200,
-  ): Promise<Record<string, unknown>> => {
-    if (headless) {
-      return await runCodeModeScriptHeadless({
-        ctx: createHeadlessCodeModeHarness([tool]),
-        code,
-        overrides: { maxPendingToolCalls: limit },
-        maxToolCalls,
-        signal,
-      });
-    }
-    return resultDetails(
-      await expectDefined(tools[0], "exec tool").execute("backpressure-exec", { code }, signal),
-    );
-  };
+  ): Promise<Record<string, unknown>> =>
+    headless
+      ? await runCodeModeScriptHeadless({
+          ctx: createHeadlessCodeModeHarness([tool]),
+          code,
+          overrides: { maxPendingToolCalls: limit },
+          maxToolCalls,
+          signal,
+        })
+      : resultDetails(
+          await expectDefined(tools[0], "exec tool").execute("backpressure-exec", { code }, signal),
+        );
 }
 
 afterEach(async () => {
@@ -84,14 +84,13 @@ it("drains 144 calls inline with 16 slots", async () => {
     release.resolve();
     await execution;
   }
-  const result = await execution;
   const expected = Array.from({ length: count }, (_, i) => ({ value: String(i) }));
-  expectCompleted(result, { value: expected.map((row) => row.value).join(",") });
+  expectCompleted(await execution, { value: expected.map((row) => row.value).join(",") });
   expect(inputs).toEqual([...expected, { value: expected.map((row) => row.value).join(",") }]);
   expect({ maximum, active }).toEqual({ maximum: limit, active: 0 });
 });
 
-it("refuses queue overflow even when the guest catches the error", async () => {
+it("rejects caught queue overflow and admits a fresh run", async () => {
   const tool = makeProbe(async () => jsonResult({}));
   const run = harness(false, 2, tool);
   const fanout = "for (let i = 0; i < 131; i++) void probe({ value: String(i) });";
@@ -103,10 +102,7 @@ it("refuses queue overflow even when the guest catches the error", async () => {
   expect(result.output).toEqual([
     { type: "text", text: expect.stringContaining("queue limit exceeded") },
   ]);
-  // A failed admission belongs to one VM, not the reusable worker.
-  expect(await run('return await probe({ value: "fresh" });')).toMatchObject({
-    status: "completed",
-  });
+  expect((await run('return await probe({ value: "fresh" });')).status).toBe("completed");
   expect(tool.execute).toHaveBeenCalledOnce();
 });
 
@@ -119,43 +115,37 @@ it("cancels queued timers without admitting them and drains live timer callbacks
       "const timers = Array.from({ length: 20 }, (_, i) => new Promise(resolve => setTimeout(async () => resolve(await probe({ value: String(i) })), 0)));" +
       "await first; return (await Promise.all(timers)).map(row => row.value);",
   );
-  expectCompleted(
-    result,
-    Array.from({ length: 20 }, (_, i) => String(i)),
-  );
+  expectCompleted(result, queuedValues);
   expect(tool.execute).toHaveBeenCalledTimes(21);
 });
 
-it.each([false, true])(
-  "drops queued calls when the owner aborts (headless=%s)",
-  async (headless) => {
-    const started = createDeferred<AbortSignal | undefined>();
-    const release = createDeferred();
-    const controller = new AbortController();
-    const tool = makeProbe(async (_id, _input, signal) => {
-      started.resolve(signal);
-      await release.promise;
-      return jsonResult({});
-    });
-    const run = harness(headless, 1, tool);
-    const execution = run(
-      "return await Promise.all(Array.from({ length: 20 }, (_, i) => probe({ value: String(i) })));",
-      controller.signal,
-    );
-    try {
-      await Promise.race([started.promise, execution]);
-      expect(tool.execute).toHaveBeenCalledOnce();
-      controller.abort();
-      expect(await execution).toMatchObject({ status: "failed", code: "aborted" });
-      expect((await started.promise)?.aborted).toBe(true);
-    } finally {
-      controller.abort();
-      release.resolve();
-      await execution;
-    }
+it.each([false, true])("drops queued calls on abort (headless=%s)", async (headless) => {
+  const started = createDeferred<AbortSignal | undefined>();
+  const release = createDeferred();
+  const controller = new AbortController();
+  const tool = makeProbe(async (_id, _input, signal) => {
+    started.resolve(signal);
+    await release.promise;
+    return jsonResult({});
+  });
+  const run = harness(headless, 1, tool);
+  const execution = run(
+    "return await Promise.all(Array.from({ length: 20 }, (_, i) => probe({ value: String(i) })));",
+    controller.signal,
+  );
+  try {
+    await Promise.race([started.promise, execution]);
     expect(tool.execute).toHaveBeenCalledOnce();
-  },
-);
+    controller.abort();
+    expect(await execution).toMatchObject({ status: "failed", code: "aborted" });
+    expect((await started.promise)?.aborted).toBe(true);
+  } finally {
+    controller.abort();
+    release.resolve();
+    await execution;
+  }
+  expect(tool.execute).toHaveBeenCalledOnce();
+});
 it("carries queued calls through a public exec/wait without replaying the prefix", async () => {
   const probe = makeProbe();
   const { run, resume } = createCatalogCodeModeHarness([probe]);
@@ -168,7 +158,7 @@ it("carries queued calls through a public exec/wait without replaying the prefix
   const result = await resume(parked);
   expectCompleted(
     result,
-    Array.from({ length: 20 }, (_, i) => ({ value: String(i) })),
+    queuedValues.map((value) => ({ value })),
   );
   expect(probe.execute).toHaveBeenCalledTimes(20);
 });
