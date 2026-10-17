@@ -2,10 +2,6 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { parseErrorResponse } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
-/**
- * Regression coverage for MCP HTTP fetch wrappers.
- * Verifies SSRF-guarded fetch, scoped dispatcher behavior, and same-origin headers.
- */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMcpHttpFetch,
@@ -44,32 +40,13 @@ class TestProxyAgent {
   constructor(readonly options: unknown) {}
 }
 
-function useBodylessForeignResponse(params: { text: string; contentLength?: string }) {
-  const text = vi.fn(async () => params.text);
-  const headers = new Headers({ "content-type": "application/json" });
-  if (params.contentLength !== undefined) {
-    headers.set("content-length", params.contentLength);
-  }
+function useFetch(fetch: (url: string | URL | Request, init?: RequestInit) => Promise<Response>) {
   testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
     Agent: TestAgent,
     EnvHttpProxyAgent: TestEnvHttpProxyAgent,
     ProxyAgent: TestProxyAgent,
-    fetch: async () =>
-      ({
-        status: 400,
-        statusText: "Bad Request",
-        headers,
-        body: null,
-        ok: false,
-        text,
-      }) as unknown as Response,
+    fetch,
   };
-  return text;
-}
-
-async function fetchOAuthRegistrationError(): Promise<Response> {
-  const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
-  return await fetch("https://auth.example.com/oauth/register", { method: "POST" });
 }
 
 function getDispatcher(init: unknown): unknown {
@@ -133,26 +110,17 @@ describe("MCP HTTP fetch helpers", () => {
 
   beforeEach(() => {
     fetchCalls.length = 0;
-    vi.stubEnv("HTTP_PROXY", "");
-    vi.stubEnv("HTTPS_PROXY", "");
-    vi.stubEnv("ALL_PROXY", "");
-    vi.stubEnv("http_proxy", "");
-    vi.stubEnv("https_proxy", "");
-    vi.stubEnv("all_proxy", "");
-    vi.stubEnv("NO_PROXY", "");
-    vi.stubEnv("no_proxy", "");
+    for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
+      vi.stubEnv(key, "");
+      vi.stubEnv(key.toLowerCase(), "");
+    }
     lookupMock.mockReset();
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     oauthResolveMock.mockReset();
-    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-      Agent: TestAgent,
-      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
-      ProxyAgent: TestProxyAgent,
-      fetch: async (url: string | URL | Request, init?: unknown) => {
-        fetchCalls.push({ url, init });
-        return new Response("ok");
-      },
-    };
+    useFetch(async (url, init) => {
+      fetchCalls.push({ url, init });
+      return new Response("ok");
+    });
   });
 
   afterEach(() => {
@@ -216,43 +184,34 @@ describe("MCP HTTP fetch helpers", () => {
 
   it("preserves POST bodies and bearer headers through the production OAuth fetch stack", async () => {
     oauthResolveMock.mockResolvedValueOnce("first-token").mockResolvedValueOnce("second-token");
-    const requests: Array<{
-      method: string;
-      body: string;
-      authorization: string | null;
-      cache: RequestCache;
-      credentials: RequestCredentials;
-      keepalive: boolean | undefined;
-      mode: RequestMode;
-    }> = [];
-    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-      Agent: TestAgent,
-      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
-      ProxyAgent: TestProxyAgent,
-      fetch: async (url: string | URL | Request, init?: RequestInit) => {
-        const request = new Request(url, init);
-        requests.push({
-          method: request.method,
-          body: await request.text(),
-          authorization: request.headers.get("authorization"),
-          cache: request.cache,
-          credentials: request.credentials,
-          keepalive: request.keepalive,
-          mode: request.mode,
-        });
-        return new Response(requests.length === 1 ? "unauthorized" : "ok", {
-          status: requests.length === 1 ? 401 : 200,
-        });
-      },
-    };
+    const requests: Array<
+      Pick<Request, "method" | "cache" | "credentials" | "mode"> & {
+        body: string;
+        authorization: string | null;
+        keepalive: boolean | undefined;
+      }
+    > = [];
+    useFetch(async (url, init) => {
+      const request = new Request(url, init);
+      requests.push({
+        method: request.method,
+        body: await request.text(),
+        authorization: request.headers.get("authorization"),
+        cache: request.cache,
+        credentials: request.credentials,
+        keepalive: request.keepalive,
+        mode: request.mode,
+      });
+      return new Response(requests.length === 1 ? "unauthorized" : "ok", {
+        status: requests.length === 1 ? 401 : 200,
+      });
+    });
     const resourceUrl = "https://mcp.example.com/mcp";
     // Removal: expect true after Bun exposes the Request.keepalive getter.
     const expectedKeepalive = process.versions.bun ? undefined : true;
     const fetch = withMcpOAuthBearer({
       fetchFn: buildMcpHttpFetch({ resourceUrl }),
-      authFetchFn: buildMcpOAuthHttpFetch({
-        resourceUrl,
-      }),
+      authFetchFn: buildMcpOAuthHttpFetch({ resourceUrl }),
       identity: operatorMcpOAuthIdentity("docs", resourceUrl),
     });
 
@@ -267,35 +226,35 @@ describe("MCP HTTP fetch helpers", () => {
     });
 
     expect(await response.text()).toBe("ok");
+    const expected = {
+      method: "POST",
+      body: '{"jsonrpc":"2.0","method":"tools/list"}',
+      cache: "no-store",
+      credentials: "include",
+      keepalive: expectedKeepalive,
+      mode: "cors",
+    };
     expect(requests).toEqual([
-      {
-        method: "POST",
-        body: '{"jsonrpc":"2.0","method":"tools/list"}',
-        authorization: "Bearer first-token",
-        cache: "no-store",
-        credentials: "include",
-        keepalive: expectedKeepalive,
-        mode: "cors",
-      },
-      {
-        method: "POST",
-        body: '{"jsonrpc":"2.0","method":"tools/list"}',
-        authorization: "Bearer second-token",
-        cache: "no-store",
-        credentials: "include",
-        keepalive: expectedKeepalive,
-        mode: "cors",
-      },
+      { ...expected, authorization: "Bearer first-token" },
+      { ...expected, authorization: "Bearer second-token" },
     ]);
   });
 
   it("never materializes a body-less foreign response with a lying safe length", async () => {
-    const text = useBodylessForeignResponse({
-      text: "x".repeat(1024 * 1024 + 1),
-      contentLength: "64",
-    });
-
-    const response = await fetchOAuthRegistrationError();
+    const text = vi.fn(async () => "x".repeat(1024 * 1024 + 1));
+    useFetch(
+      async () =>
+        ({
+          status: 400,
+          statusText: "Bad Request",
+          body: null,
+          ok: false,
+          text,
+          headers: new Headers({ "content-type": "application/json", "content-length": "64" }),
+        }) as unknown as Response,
+    );
+    const fetch = buildMcpHttpFetch({ resourceUrl: "https://mcp.example.com/mcp" });
+    const response = await fetch("https://auth.example.com/oauth/register", { method: "POST" });
 
     expect(response).toBeInstanceOf(Response);
     expect(response.status).toBe(400);
@@ -338,20 +297,12 @@ describe("MCP HTTP fetch helpers", () => {
 
   it("composes caller cancellation with the configured timeout", async () => {
     const controller = new AbortController();
-    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-      Agent: TestAgent,
-      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
-      ProxyAgent: TestProxyAgent,
-      fetch: async (_url: string | URL | Request, init?: unknown) => {
-        const signal =
-          typeof init === "object" && init !== null && "signal" in init
-            ? (init as { signal?: AbortSignal }).signal
-            : undefined;
-        controller.abort();
-        expect(signal?.aborted).toBe(true);
-        return new Response(null, { status: 204 });
-      },
-    };
+    useFetch(async (_url, init) => {
+      const signal = init?.signal;
+      controller.abort();
+      expect(signal?.aborted).toBe(true);
+      return new Response(null, { status: 204 });
+    });
     const fetch = buildMcpHttpFetch({
       resourceUrl: "https://mcp.example.com/mcp",
       timeoutMs: 60_000,

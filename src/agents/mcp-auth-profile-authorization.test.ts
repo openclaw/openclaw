@@ -30,6 +30,19 @@ import { persistAuthProfileBatch } from "./auth-profiles/upsert-with-lock.js";
 import { captureMcpAuthProfileAuthorization } from "./mcp-auth-profile-authorization.js";
 
 const { seedRoot, apiKey } = createAuthOwnerTestFixtures();
+type AuthRoot = Awaited<ReturnType<typeof seedRoot>>;
+async function withRoot(token: string, run: (root: AuthRoot) => Promise<void>) {
+  const root = await seedRoot(token);
+  await withEnvAsync(root.env, () => run(root));
+}
+function captureForRoot(
+  root: AuthRoot,
+  assertCurrent = source().assertCurrent,
+  profileId = "shared",
+) {
+  return captureMcpAuthProfileAuthorization({ profileId, agentDir: root.agentDir, assertCurrent });
+}
+const retired = expect.objectContaining({ code: "MCP_AUTHORIZATION_RETIRED" });
 function source() {
   let active = true;
   return {
@@ -60,8 +73,7 @@ describe("auth-profile authorization", () => {
   it.each(["personal", "env-only", "bounded-store"] as const)(
     "rejects missing or unavailable %s authorization without substituting ambient credentials",
     async (scope) => {
-      const root = await seedRoot("ambient-credential");
-      await withEnvAsync(root.env, async () => {
+      await withRoot("ambient-credential", async (root) => {
         const capture = () =>
           captureAuthProfileAuthorization({
             profileId:
@@ -86,8 +98,7 @@ describe("auth-profile authorization", () => {
   );
 
   it("enrolls inherited owners through the generic API and preserves MCP capture across processes", async () => {
-    const root = await seedRoot("original");
-    await withEnvAsync(root.env, async () => {
+    await withRoot("original", async (root) => {
       const caller = source();
       const authority = await captureAuthProfileAuthorization({
         profileId: "shared",
@@ -118,9 +129,7 @@ describe("auth-profile authorization", () => {
         );
         expect(output).toContain(id);
         caller.retire();
-        expect(authority.assertCurrent).toThrow(
-          expect.objectContaining({ code: "MCP_AUTHORIZATION_RETIRED" }),
-        );
+        expect(authority.assertCurrent).toThrow(retired);
       } finally {
         authority.dispose();
       }
@@ -131,29 +140,18 @@ describe("auth-profile authorization", () => {
   });
 
   it("does not revive an old handle after remove and same-byte reconnect", async () => {
-    const root = await seedRoot("original");
-    await withEnvAsync(root.env, async () => {
+    await withRoot("original", async (root) => {
       const caller = source();
-      const old = await captureMcpAuthProfileAuthorization({
-        profileId: "shared",
-        agentDir: root.agentDir,
-        assertCurrent: caller.assertCurrent,
-      });
+      const old = await captureForRoot(root, caller.assertCurrent);
       try {
         expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: ["shared"] })).toBe(true);
         await upsertAuthProfileWithLockOrThrow({
           profileId: "shared",
           credential: apiKey("original"),
         });
-        expect(old.assertCurrent).toThrow(
-          expect.objectContaining({ code: "MCP_AUTHORIZATION_RETIRED" }),
-        );
+        expect(old.assertCurrent).toThrow(retired);
         await expect(old.revalidate()).rejects.toMatchObject({ code: "MCP_AUTHORIZATION_RETIRED" });
-        const replacement = await captureMcpAuthProfileAuthorization({
-          profileId: "shared",
-          agentDir: root.agentDir,
-          assertCurrent: caller.assertCurrent,
-        });
+        const replacement = await captureForRoot(root, caller.assertCurrent);
         try {
           expect(replacement.authorizationId).not.toBe(old.authorizationId);
         } finally {
@@ -166,14 +164,9 @@ describe("auth-profile authorization", () => {
   });
 
   it("retires identical-byte replacement and rejects its stale observation without removal", async () => {
-    const root = await seedRoot("same-key");
-    await withEnvAsync(root.env, async () => {
+    await withRoot("same-key", async (root) => {
       const caller = source();
-      const authority = await captureMcpAuthProfileAuthorization({
-        profileId: "local",
-        agentDir: root.agentDir,
-        assertCurrent: caller.assertCurrent,
-      });
+      const authority = await captureForRoot(root, caller.assertCurrent, "local");
       const observation = retainAuthProfileAuthorizationObservation(root.agentPath, "local");
       try {
         const raw = readPersistedAuthProfileStoreRaw(root.agentDir);
@@ -186,9 +179,7 @@ describe("auth-profile authorization", () => {
         expect(() => publish(raw)).toThrow(
           expect.objectContaining({ code: "MCP_AUTHORIZATION_UNAVAILABLE" }),
         );
-        expect(authority.assertCurrent).toThrow(
-          expect.objectContaining({ code: "MCP_AUTHORIZATION_RETIRED" }),
-        );
+        expect(authority.assertCurrent).toThrow(retired);
       } finally {
         observation.dispose();
         authority.dispose();
@@ -197,8 +188,7 @@ describe("auth-profile authorization", () => {
   });
 
   it("keeps the same lifetime through the real refresh owner's claim and settlement", async () => {
-    const root = await seedRoot("unrelated");
-    await withEnvAsync(root.env, async () => {
+    await withRoot("unrelated", async (root) => {
       const credential: OAuthCredential = {
         type: "oauth",
         provider: "fixture",
@@ -246,11 +236,7 @@ describe("auth-profile authorization", () => {
         await expect(refresh).resolves.toMatchObject({ apiKey: "new-access" });
         await authority.revalidate();
         expect(authority.assertCurrent).not.toThrow();
-        const recaptured = await captureMcpAuthProfileAuthorization({
-          profileId: "fixture:oauth",
-          agentDir: root.agentDir,
-          assertCurrent: caller.assertCurrent,
-        });
+        const recaptured = await captureForRoot(root, caller.assertCurrent, "fixture:oauth");
         try {
           expect(recaptured.authorizationId).toBe(authority.authorizationId);
         } finally {
@@ -267,13 +253,8 @@ describe("auth-profile authorization", () => {
   it.each(["local", "shared"])(
     "fences %s worker commit admission and restores authorization on rollback",
     async (profileId) => {
-      const root = await seedRoot("rollback");
-      await withEnvAsync(root.env, async () => {
-        const authority = await captureMcpAuthProfileAuthorization({
-          profileId,
-          agentDir: root.agentDir,
-          assertCurrent: source().assertCurrent,
-        });
+      await withRoot("rollback", async (root) => {
+        const authority = await captureForRoot(root, undefined, profileId);
         const createAdmission = admission.createSqliteWorkerOperationAdmission;
         let refused = false;
         const spy = vi
@@ -315,8 +296,7 @@ describe("auth-profile authorization", () => {
   );
 
   it("enrolls an absent agent's inheritance tombstone through its native first-use owner", async () => {
-    const root = await seedRoot("inherited");
-    await withEnvAsync(root.env, async () => {
+    await withRoot("inherited", async (root) => {
       const caller = source();
       const agentDir = path.join(root.stateDir, "agents", "new-agent", "agent");
       const observe = directoryObservation.observeOwnedDirectory;
