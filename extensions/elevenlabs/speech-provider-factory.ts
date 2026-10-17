@@ -117,7 +117,8 @@ function normalizeElevenLabsProviderConfig(rawConfig: Record<string, unknown>) {
     baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(raw?.baseUrl)),
     voiceId: trimToUndefined(raw?.voiceId) ?? DEFAULT_ELEVENLABS_VOICE_ID,
     modelId:
-      normalizeElevenLabsTtsModelId(trimToUndefined(raw?.modelId)) ?? DEFAULT_ELEVENLABS_MODEL_ID,
+      normalizeElevenLabsTtsModelId(trimToUndefined(raw?.modelId) ?? trimToUndefined(raw?.model)) ??
+      DEFAULT_ELEVENLABS_MODEL_ID,
     seed: normalizeElevenLabsSeed(raw?.seed),
     applyTextNormalization: trimToUndefined(raw?.applyTextNormalization),
     languageCode: trimToUndefined(raw?.languageCode),
@@ -346,7 +347,10 @@ export function buildElevenLabsSpeechProvider({
           : { baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
         ...definedSettings({
           voiceId: trimToUndefined(talkProviderConfig.voiceId),
-          modelId: normalizeElevenLabsTtsModelId(trimToUndefined(talkProviderConfig.modelId)),
+          modelId: normalizeElevenLabsTtsModelId(
+            trimToUndefined(talkProviderConfig.modelId) ??
+              trimToUndefined(talkProviderConfig.model),
+          ),
           seed: normalizeElevenLabsSeed(talkProviderConfig.seed),
           applyTextNormalization: normalizeApplyTextNormalization(
             trimToUndefined(talkProviderConfig.applyTextNormalization),

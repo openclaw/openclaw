@@ -149,6 +149,26 @@ describe("elevenlabs speech provider", () => {
     expect(sentRequest().body).toHaveProperty("model_id", "eleven_flash_v2_5");
   });
 
+  it("accepts model as an alias for modelId in provider config", async () => {
+    await provider.synthesizeTelephony?.({
+      ...request,
+      providerConfig: { apiKey: "xi-test", model: "eleven_v3" } as Record<string, unknown>,
+    });
+    expect(sentRequest().body).toHaveProperty("model_id", "eleven_v3");
+  });
+
+  it("prefers modelId over model when both are set in provider config", async () => {
+    await provider.synthesizeTelephony?.({
+      ...request,
+      providerConfig: {
+        apiKey: "xi-test",
+        modelId: "eleven_flash_v2",
+        model: "eleven_v3",
+      } as Record<string, unknown>,
+    });
+    expect(sentRequest().body).toHaveProperty("model_id", "eleven_flash_v2");
+  });
+
   it("validates ElevenLabs voice ID length and character rules", () => {
     const cases = [
       { value: "a1b2c3d4e5", expected: true },
