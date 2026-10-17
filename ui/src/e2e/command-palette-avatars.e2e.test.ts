@@ -1,5 +1,5 @@
-import path from "node:path";
 import { expect, it } from "vitest";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -31,7 +31,6 @@ const snippets = [
   "After the migration, we are missing errors when a worker fails to start.",
   "The missing errors should appear in the session, not only in the logs.",
 ];
-
 const transcript = {
   sessions: rows.slice(1),
   results: rows.slice(1).map((row, index) => ({
@@ -44,9 +43,14 @@ const transcript = {
     score: 10 - index,
   })),
 };
+const agent = (id: string, name: string, avatarUrl: string, emoji: string) => ({
+  id,
+  name,
+  identity: { name, ...(avatarUrl ? { avatarUrl } : {}), emoji },
+});
 const agents = [
-  { id: "main", name: "Lobster", avatar: "/avatar/main", emoji: "🦞" },
-  { id: "reviewer", name: "Review bot", avatar: "", emoji: "🦀" },
+  agent("main", "Lobster", "/avatar/main", "🦞"),
+  agent("reviewer", "Review bot", "", "🦀"),
 ];
 suite.define(() => {
   it.each([
@@ -60,13 +64,10 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "agent.identity.get": {
-              cases: [
-                {
-                  match: { agentId: "main" },
-                  response: { agentId: "main", name: "Lobster", avatar: "/avatar/main" },
-                },
-                { response: { agentId: "reviewer", name: "Review bot", avatar: "" } },
-              ],
+              cases: agents.map(({ id, name, identity }, index) => ({
+                ...(index === 0 ? { match: { agentId: id } } : {}),
+                response: { agentId: id, name, avatar: identity.avatarUrl ?? "" },
+              })),
             },
             "sessions.list": {
               cases: [
@@ -82,11 +83,7 @@ suite.define(() => {
               defaultId: "main",
               mainKey: "main",
               scope: "per-sender",
-              agents: agents.map(({ id, name, avatar, emoji }) => ({
-                id,
-                name,
-                identity: { name, ...(avatar ? { avatarUrl: avatar } : {}), emoji },
-              })),
+              agents,
             },
             "models.list": {
               models: [{ provider: "fixture", id: "fixture-model", name: "Fixture model" }],
@@ -121,10 +118,7 @@ suite.define(() => {
               ),
           )
           .toBe(4);
-        await page.locator(".cmd-palette").screenshot({
-          animations: "disabled",
-          path: path.join(suite.artifactDir, "palette-" + width + "-" + mode + ".png"),
-        });
+        await waitForControlUiProofSurface(page.locator(".cmd-palette"), [results]);
         const transcriptRequests = await gateway.getRequests("sessions.search");
         expect(transcriptRequests).toHaveLength(1);
         expect(transcriptRequests[0]?.params).toEqual({
@@ -165,11 +159,6 @@ suite.define(() => {
         expect(await input.isVisible()).toBe(true);
         await gateway.setMethodResponse("sessions.search", {
           ...transcript,
-          results: transcript.results.map((result) =>
-            Object.assign({}, result, {
-              snippet: "The missing errors appear in this conversation.",
-            }),
-          ),
           truncated: true,
         });
         await input.fill("missing errors ");
@@ -184,10 +173,6 @@ suite.define(() => {
         expect(
           await page.getByText(/Search notices|Indexing older messages|may be incomplete/).count(),
         ).toBe(0);
-        await page.locator(".cmd-palette").screenshot({
-          animations: "disabled",
-          path: path.join(suite.artifactDir, "palette-limited-" + width + "-" + mode + ".png"),
-        });
         await input.focus();
         await input.press("ArrowDown");
         await input.press("Enter");

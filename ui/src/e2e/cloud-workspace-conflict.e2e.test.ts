@@ -1,8 +1,5 @@
-// Control UI browser proof covers the cloud-workspace conflict recovery lifecycle.
-import path from "node:path";
 import type { Page } from "playwright";
-import { assert, beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { assert, expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -10,13 +7,6 @@ const suite = createControlUiE2eSuite({
   name: "Control UI cloud workspace conflict recovery",
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
-});
-const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-let proofDir: string | undefined;
-beforeEach(() => {
-  proofDir = artifactRoot
-    ? createControlUiE2eArtifactDir("cloud-workspace-conflict", artifactRoot)
-    : undefined;
 });
 const sessionKey = "agent:main:conflict-proof";
 const workerFailureDiagnostic = [
@@ -39,7 +29,7 @@ const pageOptions = {
   serviceWorkers: "block",
   viewport: { height: 900, width: 1440 },
 } as const;
-function sessionList(label: string, placement: Record<string, unknown>, now: number) {
+function sessionList(label: string, placement: Record<string, unknown>, now = Date.now()) {
   const model = { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" };
   return {
     count: 1,
@@ -68,16 +58,11 @@ function sessionList(label: string, placement: Record<string, unknown>, now: num
   };
 }
 function sessionsList(includeConflict: boolean) {
-  const now = Date.now();
-  return sessionList(
-    includeConflict ? "Cloud conflict proof" : "Cloud conflict cleared",
-    {
-      state: "reclaimed",
-      generation: 1,
-      ...(includeConflict ? { workspaceResultConflict: conflict } : {}),
-    },
-    now,
-  );
+  return sessionList(includeConflict ? "Cloud conflict proof" : "Cloud conflict cleared", {
+    state: "reclaimed",
+    generation: 1,
+    ...(includeConflict ? { workspaceResultConflict: conflict } : {}),
+  });
 }
 function workerRecoverySessionsList(includeError: boolean, failedState = "failed") {
   const now = Date.now();
@@ -102,6 +87,13 @@ function workerRecoverySessionsList(includeError: boolean, failedState = "failed
 }
 
 type History = NonNullable<Parameters<typeof installMockGateway>[1]>["historyMessages"];
+const historyEvent = (customType: string, content: string, details?: unknown) => ({
+  role: "custom",
+  customType,
+  content,
+  details,
+  timestamp: Date.now() - 500,
+});
 async function openSession(
   page: Page,
   historyMessages: History,
@@ -117,31 +109,13 @@ async function openSession(
   );
   return gateway;
 }
-async function capture(page: Page, name: string): Promise<void> {
-  if (!proofDir) {
-    return;
-  }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(proofDir, name),
-  });
-}
 
 suite.define(() => {
   it("shows, dismisses, and reloads durable conflict recovery guidance", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       const gateway = await openSession(
         page,
-        [
-          {
-            role: "custom",
-            customType: "cloud-workspace-conflict",
-            content: "Cloud result applied with 2 conflicts.",
-            details: conflict,
-            timestamp: Date.now() - 500,
-          },
-        ],
+        [historyEvent("cloud-workspace-conflict", "2 cloud conflicts.", conflict)],
         sessionsList(true),
       );
 
@@ -153,7 +127,6 @@ suite.define(() => {
       await historyCard.waitFor();
       expect(await notice.textContent()).toContain("2 cloud workspace conflicts");
       expect(await historyCard.textContent()).toContain(conflict.stagedResultRef);
-      await capture(page, "01-live-conflict.png");
 
       await page.setViewportSize({ width: 390, height: 844 });
       const composer = page.locator(".agent-chat__composer-shell");
@@ -171,12 +144,11 @@ suite.define(() => {
         .toBeLessThanOrEqual(1);
       await expect
         .poll(() =>
-          title.evaluate((node) => ({
-            title: getComputedStyle(node).whiteSpace,
-            summary: getComputedStyle(node.nextElementSibling!).whiteSpace,
-          })),
+          title.evaluate((node) =>
+            [node, node.nextElementSibling!].map((item) => getComputedStyle(item).whiteSpace),
+          ),
         )
-        .toEqual({ title: "nowrap", summary: "nowrap" });
+        .toEqual(["nowrap", "nowrap"]);
       for (const item of [title, summary, dismiss]) {
         const [itemBox, noticeBox] = await Promise.all([item.boundingBox(), notice.boundingBox()]);
         assert(itemBox && noticeBox, "expected mobile conflict notice layout boxes");
@@ -185,12 +157,10 @@ suite.define(() => {
         expect(itemBox.y).toBeGreaterThanOrEqual(noticeBox.y);
         expect(itemBox.y + itemBox.height).toBeLessThanOrEqual(noticeBox.y + noticeBox.height);
       }
-      await capture(page, "02-mobile-live-conflict.png");
 
       await dismiss.click();
       await notice.waitFor({ state: "detached" });
       await historyCard.waitFor();
-      await capture(page, "03-dismissed-live-notice.png");
 
       await page.setViewportSize({ width: 1440, height: 900 });
       await gateway.setSessionsListResponse(sessionsList(false));
@@ -202,7 +172,6 @@ suite.define(() => {
       expect(await page.locator(".chat-workspace-conflict-event").textContent()).toContain(
         conflict.stagedResultRef,
       );
-      await capture(page, "04-reloaded-durable-history.png");
     });
   });
 
@@ -220,14 +189,7 @@ suite.define(() => {
     "renders durable $customType notices from transcript history",
     async ({ customType, content }) => {
       await suite.withPage(pageOptions, async ({ page }) => {
-        const gateway = await openSession(page, [
-          {
-            role: "custom",
-            customType,
-            content,
-            timestamp: Date.now() - 500,
-          },
-        ]);
+        await openSession(page, [historyEvent(customType, content)]);
         const notice = page.locator(".chat-group.other").filter({ hasText: content });
         await notice.waitFor({ timeout: 10_000 });
         expect(await page.locator(".chat-group.assistant").count()).toBe(0);
@@ -235,9 +197,6 @@ suite.define(() => {
         await notice.waitFor({ timeout: 10_000 });
         expect(await notice.count()).toBe(1);
         expect(await notice.locator(".chat-sender-name").textContent()).toBe("Error");
-        await gateway.waitForRequest("chat.startup");
-        await notice.hover();
-        await capture(page, `04-${customType}-history.png`);
       });
     },
   );
@@ -257,7 +216,6 @@ suite.define(() => {
           ]);
           await page.getByText("Remote work completed successfully.").waitFor({ timeout: 10_000 });
           await expect.poll(() => page.getByRole("alert").allTextContents()).toEqual([]);
-          await capture(page, "05-before-workspace-recovery-error.png");
 
           if (failedState === "request") {
             await gateway.setMethodResponse("sessions.patch", {
@@ -278,7 +236,6 @@ suite.define(() => {
           await alert.waitFor({ timeout: 10_000 });
           expect(await alert.textContent()).toContain("provider reported lease destroyed");
           expect(await alert.textContent()).not.toContain("stale terminal worker failure");
-          await capture(page, `05-${failedState}-collapsed-error.png`);
           const summary = alert.locator("summary");
           const copy = alert.getByRole("button", { name: "Copy error", exact: true });
           const diagnostic = alert.locator("pre");
@@ -301,12 +258,10 @@ suite.define(() => {
                 )
                 .toBe(true);
             }
-            await summary.focus();
-            await page.keyboard.press("Enter");
+            await summary.press("Enter");
             await diagnostic.waitFor({ state: "visible" });
             expect(await diagnostic.textContent()).toBe(expected);
             expect(await alert.locator("img").count()).toBe(0);
-            await capture(page, `05-${failedState}-${width}-expanded-before-geometry.png`);
             const bounds = await diagnostic.evaluate((node) => {
               const box = node.getBoundingClientRect();
               return {
@@ -336,8 +291,7 @@ suite.define(() => {
                 return selection?.toString();
               }),
             ).toBe(expected);
-            await copy.focus();
-            await page.keyboard.press("Enter");
+            await copy.press("Enter");
             await expect
               .poll(() => page.evaluate(() => navigator.clipboard.readText()))
               .toBe(expected);
@@ -345,9 +299,7 @@ suite.define(() => {
               window.getSelection()?.removeAllRanges();
               node.scrollTop = node.scrollHeight;
             });
-            await capture(page, `06-${failedState}-${width}-expanded-error.png`);
-            await summary.focus();
-            await page.keyboard.press("Space");
+            await summary.press("Space");
             await expect.poll(() => diagnostic.isVisible()).toBe(false);
             await alert
               .getByRole("button", { name: "Copy error", exact: true, includeHidden: true })

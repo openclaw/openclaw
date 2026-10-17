@@ -10,8 +10,11 @@ export async function verifyDurableComposerFences(page: Page) {
   const chatPersistenceHandle = await page.evaluateHandle<
     typeof import("../pages/chat/durable-composer-persistence.ts")
   >('import("/src/pages/chat/durable-composer-persistence.ts")');
+  const databaseHandle = await page.evaluateHandle<
+    typeof import("../lib/chat/control-ui-database.runtime.ts")
+  >('import("/src/lib/chat/control-ui-database.runtime.ts")');
   const result = await page.evaluate(
-    async ({ draftStore, newSession, chatPersistence }) => {
+    async ({ draftStore, newSession, chatPersistence, databaseApi }) => {
       type DraftState = ReturnType<
         ConstructorParameters<typeof newSession.NewSessionDraftPersistence>[0]
       >;
@@ -35,18 +38,11 @@ export async function verifyDurableComposerFences(page: Page) {
       ) => {
         const persistence = new newSession.NewSessionDraftPersistence(
           () => state,
-          (message, attachments) => {
-            state.message = message;
-            state.attachments = attachments;
-          },
+          (message, attachments) => Object.assign(state, { message, attachments }),
           () => undefined,
         );
         persistence.setOwner(scope.gatewayOwner, scope.recoveryScope);
-        if (select) {
-          persistence.selectRoute(scope.scopeKey);
-        } else {
-          persistence.activateRoute(scope.scopeKey);
-        }
+        persistence[select ? "selectRoute" : "activateRoute"](scope.scopeKey);
         return persistence;
       };
       const waitFor = async (predicate: () => Promise<boolean>) => {
@@ -134,12 +130,7 @@ export async function verifyDurableComposerFences(page: Page) {
         { expectedRevision: 0, writeId: "oversized" },
       );
       const oversizedRead = await draftStore.read(oversizedScope);
-      const oversizedState = {
-        message: "",
-        mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
-        attachments: [] as import("../lib/chat/chat-types.ts").ChatAttachment[],
-        incognito: false,
-      };
+      const oversizedState = { ...draftState(), mentions };
       const oversizedPersistence = activate(oversizedScope, oversizedState);
       await waitFor(async () => oversizedState.message === "@Alex oversized");
       // The live composer retains the payload even though storage kept only text.
@@ -162,12 +153,7 @@ export async function verifyDurableComposerFences(page: Page) {
       const oversizeConflictRead = await draftStore.read(oversizeConflictScope);
 
       const missingPayloadScope = scope("missing-payload-conflict");
-      await draftStore.seed(
-        missingPayloadScope,
-        "newer attachment draft",
-        60,
-        "newer-attachment-draft",
-      );
+      await draftStore.seed(missingPayloadScope, "newer attachment", 60, "newer-attachment");
       let missingPayloadErrors = 0;
       let missingPayloadConflicts = 0;
       const missingPayloadPersistence = new chatPersistence.DurableChatComposerPersistence(
@@ -189,14 +175,14 @@ export async function verifyDurableComposerFences(page: Page) {
       const missingPayloadRead = await draftStore.read(missingPayloadScope);
 
       const incognitoScope = scope("incognito-route", "incognito");
-      const incognitoState = draftState("normal before incognito");
+      const incognitoState = draftState("before incognito");
       const realNow = Date.now;
       const frozenNow = realNow();
       Date.now = () => frozenNow;
       await draftStore.retire({ ...incognitoScope, scopeKey: "fence-seed" }, frozenNow + 1_000);
       const incognitoPersistence = activate(incognitoScope, incognitoState, true);
       incognitoPersistence.noteUserMutation();
-      await waitForText(incognitoScope, () => "normal before incognito");
+      await waitForText(incognitoScope, () => "before incognito");
       incognitoState.incognito = true;
       await incognitoPersistence.setIncognito(true);
       await waitFor(async () => {
@@ -208,7 +194,7 @@ export async function verifyDurableComposerFences(page: Page) {
       const incognitoAfterToggle = await draftStore.read(incognitoScope);
       const incognitoRetainedMessage = incognitoState.message;
       if (incognitoRetainedMessage) {
-        incognitoState.message = "normal after incognito";
+        incognitoState.message = "after incognito";
         incognitoPersistence.noteUserMutation();
         await waitForText(incognitoScope, () => incognitoState.message);
       }
@@ -217,9 +203,9 @@ export async function verifyDurableComposerFences(page: Page) {
 
       const clearScope = scope("clear-route", "clear");
       const clear = await loadDraft(clearScope, "submitted draft", 70, "submitted-draft");
-      clear.state.message = "submitted draft after a conflict";
+      clear.state.message = "conflicted submission";
       clear.persistence.noteUserMutation();
-      await write(clearScope, 71, "concurrent other-tab write", {
+      await write(clearScope, 71, "other tab write", {
         expectedRevision: 70,
         writeId: "concurrent-writer",
       });
@@ -232,57 +218,24 @@ export async function verifyDurableComposerFences(page: Page) {
       const clearRead = await draftStore.read(clearScope);
 
       const staleClearScope = scope("stale-clear-route", "stale-clear");
-      const staleClear = await loadDraft(
-        staleClearScope,
-        "submitted stale draft",
-        80,
-        "submitted-stale-draft",
-      );
-      await write(staleClearScope, 81, "newer other-tab draft", {
+      const staleClear = await loadDraft(staleClearScope, "stale", 80, "stale-submission");
+      await write(staleClearScope, 81, "newer tab draft", {
         expectedRevision: 80,
-        writeId: "newer-other-tab-draft",
+        writeId: "newer-tab",
       });
       await staleClear.persistence.clearSubmittedDraft(staleClear.persistence.captureSubmission());
       const staleClearRead = await draftStore.read(staleClearScope);
 
       const resetLineageScope = scope("reset-lineage-route", "reset-lineage");
-      const resetLineage = await loadDraft(
-        resetLineageScope,
-        "cached predecessor",
-        90,
-        "cached-predecessor",
-      );
-      const databaseRequest = indexedDB.open("openclaw-control-ui");
-      const database = await new Promise<IDBDatabase>((resolve, reject) => {
-        databaseRequest.addEventListener("success", () => resolve(databaseRequest.result), {
-          once: true,
-        });
-        databaseRequest.addEventListener(
-          "error",
-          () => reject(databaseRequest.error ?? new Error("IndexedDB open failed")),
-          { once: true },
-        );
-      });
+      const resetLineage = await loadDraft(resetLineageScope, "cached", 90, "cached");
+      const database = await databaseApi.requestResult(indexedDB.open("openclaw-control-ui"));
       const deleteTransaction = database.transaction("composerDrafts", "readwrite");
       deleteTransaction
         .objectStore("composerDrafts")
-        .delete(
-          JSON.stringify([
-            resetLineageScope.gatewayOwner,
-            resetLineageScope.recoveryScope,
-            resetLineageScope.scopeKey,
-          ]),
-        );
-      await new Promise<void>((resolve, reject) => {
-        deleteTransaction.addEventListener("complete", () => resolve(), { once: true });
-        deleteTransaction.addEventListener(
-          "error",
-          () => reject(deleteTransaction.error ?? new Error("IndexedDB delete failed")),
-          { once: true },
-        );
-      });
+        .delete(chatPersistence.durableComposerScopeIdentity(resetLineageScope));
+      await databaseApi.transactionComplete(deleteTransaction);
       database.close();
-      resetLineage.state.message = "draft after authoritative deletion";
+      resetLineage.state.message = "after deletion";
       resetLineage.persistence.noteUserMutation();
       await waitForText(resetLineageScope, () => resetLineage.state.message);
       const resetLineageRead = await draftStore.read(resetLineageScope);
@@ -338,6 +291,7 @@ export async function verifyDurableComposerFences(page: Page) {
       draftStore: storeHandle,
       newSession: persistenceHandle,
       chatPersistence: chatPersistenceHandle,
+      databaseApi: databaseHandle,
     },
   );
 
@@ -351,16 +305,12 @@ export async function verifyDurableComposerFences(page: Page) {
     oversizeConflict: ["conflict", "found"],
     oversizeConflictText: "newer record",
     missingPayload: [1, 1, "found"],
-    missingPayloadText: "newer attachment draft",
+    missingPayloadText: "newer attachment",
     incognito: ["not-found", "found"],
-    incognitoMessages: [
-      "normal before incognito",
-      "normal after incognito",
-      "normal after incognito",
-    ],
+    incognitoMessages: ["before incognito", "after incognito", "after incognito"],
     clear: "not-found",
-    staleClear: ["found", "newer other-tab draft"],
-    resetLineage: ["found", "draft after authoritative deletion"],
+    staleClear: ["found", "newer tab draft"],
+    resetLineage: ["found", "after deletion"],
     expired: "not-found",
     active: 20,
   });

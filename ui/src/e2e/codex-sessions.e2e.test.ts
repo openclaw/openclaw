@@ -1,14 +1,11 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { assert, beforeEach, expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import type {
   SessionCatalog,
   SessionCatalogHost,
   SessionCatalogSession,
   SessionsCatalogHostEvent,
 } from "../../../packages/gateway-protocol/src/index.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   assertSessionSectionCountAlignment,
@@ -28,16 +25,8 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const catalogGroupingStorageKey = "openclaw:sidebar:sessions:catalog-grouping";
 const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
-let uiProofArtifactDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    uiProofArtifactDir = createControlUiE2eArtifactDir("native-session-discovery");
-  }
-});
-
 const catalogMethods = ["chat.metadata", "chat.startup", "sessions.catalog.list"];
 function makeNativeSession(
   threadId: string,
@@ -81,15 +70,6 @@ function liveSessions(key: string, displayName: string, updatedAt = Date.now(), 
   };
 }
 
-async function capture(target: Page | Locator, name: string, fullPage = false) {
-  if (captureUiProofEnabled) {
-    await target.screenshot({
-      animations: "disabled",
-      path: path.join(uiProofArtifactDir, name),
-      ...(fullPage ? { fullPage } : {}),
-    });
-  }
-}
 const projectLabel = (section: Locator, key: string) =>
   section
     .locator(`[data-session-catalog-project="${key}"] .sidebar-session-catalog-project__label`)
@@ -241,7 +221,6 @@ suite.define(() => {
       });
       expect(groupGap).toBeGreaterThan(0);
       expect(Math.round(catalogBox!.y - (liveRowsBox!.y + liveRowsBox!.height))).toBe(groupGap);
-      await capture(sessionGroups, "06-coding-catalog-spacing.png");
       await assertSessionSectionCountAlignment(page, ["work", "catalog:codex", "catalog:claude"]);
     } finally {
       await page.close();
@@ -277,7 +256,6 @@ suite.define(() => {
       await expandCodingSection(page);
       await page.getByText("Progressive node result", { exact: true }).waitFor();
       expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(1);
-      await capture(page, "05-progressive-host-result.png", true);
 
       await gateway.resolveDeferred("sessions.catalog.list", { catalogs: [] });
     } finally {
@@ -445,12 +423,6 @@ suite.define(() => {
         openclawProject.locator(".sidebar-session-catalog-project__label"),
       );
       expect(projectLabelTone.distanceToText).toBeLessThan(projectLabelTone.distanceToMuted);
-      if (captureUiProofEnabled) {
-        await writeFile(
-          path.join(uiProofArtifactDir, "project-label-tone.json"),
-          JSON.stringify(projectLabelTone, null, 2),
-        );
-      }
       expect(await projectLabel(section, "project:/Users/dev/other")).toBe("other");
       expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(1);
       const toggle = section.locator(".sidebar-session-group-toggle");
@@ -462,7 +434,6 @@ suite.define(() => {
       expect(await section.locator("[data-session-key]").count()).toBe(4);
       await expectListItems(localHostList, 3);
       expect(await readGrouping(page)).toBe("none");
-      await capture(section, "04-flat-session-hosts.png");
 
       await chooseGrouping(section, page, "Person");
       await expect.poll(() => projectHeads.count()).toBe(2);
@@ -501,8 +472,6 @@ suite.define(() => {
           collapsedSessionSectionsStorageKey,
         ),
       ).not.toContain("catalog-project:codex:gateway:local:project:/Users/dev/openclaw");
-
-      await capture(section, "03-content-bearing-session-hosts.png");
     } finally {
       await page.close();
     }
