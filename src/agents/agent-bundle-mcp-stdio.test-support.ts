@@ -35,6 +35,7 @@ export async function writeListToolsMcpServer(
       }>
     >;
     capabilities?: Record<string, unknown>;
+    instructions?: string;
     databasePath?: string;
     pidPath?: string;
     hangToolCallsUntilRestartMarkerPath?: string;
@@ -74,7 +75,7 @@ const {
   toolsByList, listToolsJsonRpcErrorMessage, toolPageCursors, callToolResult,
   callToolReleasePath, notifyListChangedReleasePath, resourcePageCursors,
   resourceReadResult, promptPageCursors, utilityListReleasePath, ignoreShutdown,
-  hangFirstInitializeMarkerPath, initializeReleaseToken,
+  hangFirstInitializeMarkerPath, initializeReleaseToken, instructions,
   notifyListChangedOnInitializedReleaseToken,
   delayMs = 0, initializeDelayMs = 0, hang = false, capabilities = { tools: {} },
   inputSchema = { type: "object", properties: {} },
@@ -155,6 +156,7 @@ function handle(message) {
         protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
         capabilities,
         serverInfo: { name: "test-list-tools", version: "1.0.0" },
+        ...(instructions === undefined ? {} : { instructions }),
       },
     };
     if (initializeReleaseToken) {

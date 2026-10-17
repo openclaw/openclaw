@@ -75,6 +75,9 @@ type ToolSearchExactCallOptions = Pick<
 function describeEntry(entry: ToolSearchCatalogEntry) {
   return {
     ...compactToolSearchCatalogEntry(entry),
+    // Deferred MCP tools never reach the system prompt; describe is the step
+    // before first use, so server guidance arrives here as untrusted output.
+    ...(entry.mcp?.serverInstructions ? { serverInstructions: entry.mcp.serverInstructions } : {}),
     parameters: entry.parameters ?? {},
     ...(entry.outputSchema ? { outputSchema: entry.outputSchema } : {}),
   };
