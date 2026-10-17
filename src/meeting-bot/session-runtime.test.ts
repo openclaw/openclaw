@@ -55,6 +55,50 @@ vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
 
 const { zoomMeetingsPlugin, teamsMeetingsPlugin } = await loadBrowserMeetingPlugins();
 
+const room = { url: "https://meeting.example/room", agentId: "main" };
+const notes = { url: "https://meeting.example/notes", agentId: "notes-agent" };
+const testBrowser = (
+  targetId: string,
+  overrides: Partial<NonNullable<TestSession["browser"]>> = {},
+) => ({
+  launched: true,
+  tab: { targetId, openedByPlugin: true },
+  ...overrides,
+});
+
+function createNotesRuntime(overrides: Partial<Parameters<typeof createTestRuntime>[0]>) {
+  return createTestRuntime({
+    joinTransport: async ({ session }) => {
+      session.browser = testBrowser("notes-tab");
+      return {};
+    },
+    releaseBrowserTab: async () => true,
+    ...overrides,
+  });
+}
+
+function transcriptSource(
+  session: TestSession,
+  sessionId: string,
+  source: { agentId?: string; channelId?: string } = {},
+) {
+  return {
+    sessionId,
+    source: {
+      providerId: "test-meeting",
+      agentId: session.agentId,
+      meetingUrl: session.url,
+      ...source,
+    },
+    startedAt: session.createdAt,
+  };
+}
+
+const transcriptStore = (stateDir: string) =>
+  new TranscriptsStore(path.join(stateDir, "transcripts"), {
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+
 describe("createMeetingSession", () => {
   it("preserves bidi realtime session fields", () => {
     const session = createMeetingSession({
@@ -133,25 +177,16 @@ describe("MeetingSessionRuntime durable transcripts", () => {
         epoch: "same-live-page",
         lines: [...lines],
       }));
-      const { runtime } = createTestRuntime({
+      const { runtime } = createNotesRuntime({
         captureTranscript,
         durableTranscripts: { stateDir },
         releaseBrowserTab,
-        joinTransport: async ({ session }) => {
-          session.browser = {
-            launched: true,
-            tab: { targetId: "policy-tab", openedByPlugin: true },
-          };
-          return {};
-        },
       });
       const { session } = await runtime.join({
         url: "https://meeting.example/policy",
         agentId: "notes-agent",
       });
-      const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
+      const store = transcriptStore(stateDir);
       const writeSession = store.writeSession.bind(store);
       const fault = vi
         .spyOn(TranscriptsStore.prototype, "writeSession")
@@ -165,15 +200,7 @@ describe("MeetingSessionRuntime durable transcripts", () => {
       const disabling = runtime.reconcileTranscriptPolicy(false);
       await expect(
         runtime.startTranscriptSource({
-          session: {
-            sessionId: "late-subscriber",
-            source: {
-              providerId: "test-meeting",
-              agentId: session.agentId,
-              meetingUrl: session.url,
-            },
-            startedAt: session.createdAt,
-          },
+          session: transcriptSource(session, "late-subscriber"),
           onUtterance: vi.fn(),
         }),
       ).resolves.toMatchObject({ ok: false });
@@ -207,78 +234,38 @@ describe("MeetingSessionRuntime durable transcripts", () => {
   it("persists joined agent-mode captions and writes summary rows on leave", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-meeting-notes-"));
     tempDirs.push(stateDir);
+    const first = {
+      at: "2026-07-23T12:00:00.000Z",
+      speaker: "Avery",
+      text: "We decided to ship the durable notes bridge.",
+    };
+    const second = {
+      at: "2026-07-23T12:00:05.000Z",
+      speaker: "Blake",
+      text: "Action: follow up with the docs.",
+    };
     const snapshots = [
-      {
-        droppedLines: 0,
-        epoch: "page-1",
-        lines: [
-          {
-            at: "2026-07-23T12:00:00.000Z",
-            speaker: "Avery",
-            text: "We decided to ship the durable notes bridge.",
-          },
-        ],
-      },
-      {
-        droppedLines: 0,
-        epoch: "page-1",
-        lines: [
-          {
-            at: "2026-07-23T12:00:00.000Z",
-            speaker: "Avery",
-            text: "We decided to ship the durable notes bridge.",
-          },
-          {
-            at: "2026-07-23T12:00:05.000Z",
-            speaker: "Blake",
-            text: "Action: follow up with the docs.",
-          },
-        ],
-      },
+      { droppedLines: 0, epoch: "page-1", lines: [first] },
+      { droppedLines: 0, epoch: "page-1", lines: [first, second] },
     ];
-    const { runtime } = createTestRuntime({
+    const { runtime } = createNotesRuntime({
       captureTranscript: async () => snapshots.shift(),
       durableTranscripts: { stateDir },
-      releaseBrowserTab: async () => true,
-      joinTransport: async ({ session }) => {
-        session.browser = {
-          launched: true,
-          tab: { targetId: "notes-tab", openedByPlugin: true },
-        };
-        return {};
-      },
     });
 
     const { session } = await runtime.join({
-      url: "https://meeting.example/notes?context=opaque-value",
-      agentId: "notes-agent",
+      ...notes,
+      url: `${notes.url}?context=opaque-value`,
     });
     await expect(
       runtime.startTranscriptSource({
-        session: {
-          sessionId: "external-mismatch",
-          source: {
-            providerId: "test-meeting",
-            agentId: "notes-agent",
-            channelId: "another-session",
-            meetingUrl: session.url,
-          },
-          startedAt: session.createdAt,
-        },
+        session: transcriptSource(session, "external-mismatch", { channelId: "another-session" }),
         onUtterance: vi.fn(),
       }),
     ).resolves.toMatchObject({ ok: false });
     await expect(
       runtime.startTranscriptSource({
-        session: {
-          sessionId: "external-agent-mismatch",
-          source: {
-            providerId: "test-meeting",
-            agentId: "another-agent",
-            meetingUrl: session.url,
-          },
-          startedAt: session.createdAt,
-        },
+        session: transcriptSource(session, "external-agent-mismatch", { agentId: "another-agent" }),
         onUtterance: vi.fn(),
       }),
     ).resolves.toMatchObject({
@@ -287,9 +274,7 @@ describe("MeetingSessionRuntime durable transcripts", () => {
     });
     await runtime.leave(session.id);
 
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const store = transcriptStore(stateDir);
     const storedSession = await store.readSession(session.id);
     expect(storedSession).toMatchObject({
       sessionId: session.id,
@@ -319,24 +304,13 @@ describe("MeetingSessionRuntime durable transcripts", () => {
     const blockedStateDir = path.join(tempDir, "not-a-directory");
     await fs.writeFile(blockedStateDir, "blocked", "utf8");
     const captureTranscript = vi.fn(async () => ({ droppedLines: 0, lines: [] }));
-    const { runtime } = createTestRuntime({
+    const { runtime } = createNotesRuntime({
       captureTranscript,
       durableTranscripts: { stateDir: blockedStateDir },
       transcribe: true,
-      releaseBrowserTab: async () => true,
-      joinTransport: async ({ session }) => {
-        session.browser = {
-          launched: true,
-          tab: { targetId: "notes-tab", openedByPlugin: true },
-        };
-        return {};
-      },
     });
 
-    const { session } = await runtime.join({
-      url: "https://meeting.example/notes",
-      agentId: "notes-agent",
-    });
+    const { session } = await runtime.join(notes);
     await runtime.leave(session.id);
 
     expect(captureTranscript).toHaveBeenCalledTimes(2);
@@ -354,36 +328,18 @@ describe("MeetingSessionRuntime durable transcripts", () => {
     };
     const snapshots = [empty, final];
     const releaseBrowserTab = vi.fn(async () => true);
-    const { runtime } = createTestRuntime({
+    const { runtime } = createNotesRuntime({
       captureTranscript: async () => snapshots.shift(),
       durableTranscripts: { stateDir },
       transcribe: true,
       releaseBrowserTab,
-      joinTransport: async ({ session }) => {
-        session.browser = {
-          launched: true,
-          tab: { targetId: "notes-tab", openedByPlugin: true },
-        };
-        return {};
-      },
     });
-    const { session } = await runtime.join({
-      url: "https://meeting.example/notes",
-      agentId: "notes-agent",
-    });
+    const { session } = await runtime.join(notes);
     const onUtterance = vi.fn(async () => {
       throw new Error("subscriber unavailable");
     });
     await runtime.startTranscriptSource({
-      session: {
-        sessionId: "external-final",
-        source: {
-          providerId: "test-meeting",
-          agentId: "notes-agent",
-          meetingUrl: session.url,
-        },
-        startedAt: session.createdAt,
-      },
+      session: transcriptSource(session, "external-final"),
       onUtterance,
     });
 
@@ -391,9 +347,7 @@ describe("MeetingSessionRuntime durable transcripts", () => {
     expect(session.state).toBe("ended");
     expect(releaseBrowserTab).toHaveBeenCalledOnce();
 
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const store = transcriptStore(stateDir);
     const stored = await store.readSession(session.id);
     expect(await store.readUtterancesForSession(stored!)).toHaveLength(1);
     expect(await store.readSummary(stored!)).toMatchObject({
@@ -421,10 +375,7 @@ describe("MeetingSessionRuntime failed joins", () => {
         },
         joinTransport: async ({ session }) => {
           launches += 1;
-          session.browser = {
-            launched: true,
-            tab: { targetId: `${session.id}-retry-tab`, openedByPlugin: true },
-          };
+          session.browser = testBrowser(`${session.id}-retry-tab`);
           if (failedJoin && launches === 1) {
             throw launchError;
           }
@@ -467,10 +418,7 @@ describe("MeetingSessionRuntime failed joins", () => {
     const releaseBrowserTab = vi.fn(async () => true);
     const joinTransport = vi.fn(
       async ({ session, context }: { session: TestSession; context: TestJoinContext }) => {
-        session.browser = {
-          launched: true,
-          tab: { targetId: session.id, openedByPlugin: true },
-        };
+        session.browser = testBrowser(session.id);
         context.attachRuntimeHandles(session, { stop });
         return {};
       },
@@ -482,12 +430,8 @@ describe("MeetingSessionRuntime failed joins", () => {
       },
       releaseBrowserTab,
     });
-    const first = await runtime.join({ url: "https://meeting.example/room", agentId: "main" });
-
-    const replacement = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "main",
-    });
+    const first = await runtime.join(room);
+    const replacement = await runtime.join(room);
 
     expect(first.session.state).toBe("ended");
     expect(replacement.session.id).not.toBe(first.session.id);
@@ -517,17 +461,12 @@ describe("MeetingSessionRuntime failed joins", () => {
       const { createdSessions, runtime } = createTestRuntime({
         releaseBrowserTab,
         joinTransport: async ({ session, context }) => {
-          session.browser = {
-            launched: true,
-            tab: { targetId: "partial-tab", openedByPlugin: true },
-          };
+          session.browser = testBrowser("partial-tab");
           context.attachRuntimeHandles(session, { stop });
           throw joinError;
         },
       });
-      await expect(
-        runtime.join({ url: "https://meeting.example/room", agentId: "main" }),
-      ).rejects.toBe(joinError);
+      await expect(runtime.join(room)).rejects.toBe(joinError);
       const pending = runtime.list();
       expect(pending).toEqual(createdSessions);
       expect(pending).toHaveLength(1);
@@ -563,10 +502,7 @@ describe("MeetingSessionRuntime failed joins", () => {
         return true;
       },
       joinTransport: async ({ session, context }) => {
-        session.browser = {
-          launched: true,
-          tab: { targetId: "partial-tab", openedByPlugin: true },
-        };
+        session.browser = testBrowser("partial-tab");
         context.attachRuntimeHandles(session, { stop });
         throw joinError;
       },
@@ -626,19 +562,14 @@ describe("MeetingSessionRuntime failed joins", () => {
       const joinTransport = vi.fn(
         async ({ session, context }: { session: TestSession; context: TestJoinContext }) => {
           const first = session.id === "session-1";
-          session.browser = {
-            launched: true,
-            tab: { targetId: first ? "retained-tab" : "replacement-tab", openedByPlugin: true },
-          };
+          session.browser = testBrowser(first ? "retained-tab" : "replacement-tab");
           context.attachRuntimeHandles(session, { stop: first ? oldStop : replacementStop });
           return {};
         },
       );
       const { createdSessions, runtime } = createTestRuntime({ releaseBrowserTab, joinTransport });
-      await runtime.join({ url: "https://meeting.example/room", agentId: "support" });
-      await expect(
-        runtime.join({ url: "https://meeting.example/room", agentId: "main" }),
-      ).rejects.toBe(stopFails ? stopError : settlementError);
+      await runtime.join({ ...room, agentId: "support" });
+      await expect(runtime.join(room)).rejects.toBe(stopFails ? stopError : settlementError);
       expect(oldStop).toHaveBeenCalledOnce();
       expect(joinTransport).toHaveBeenCalledTimes(stopFails ? 1 : 2);
       expect(releaseOrder).toEqual(
@@ -666,18 +597,12 @@ describe("MeetingSessionRuntime leave cleanup", () => {
     const { runtime } = createTestRuntime({
       releaseBrowserTab,
       joinTransport: async ({ session, context }) => {
-        session.browser = {
-          launched: true,
-          tab: { targetId: "leave-tab", openedByPlugin: true },
-        };
+        session.browser = testBrowser("leave-tab");
         context.attachRuntimeHandles(session, { stop });
         return {};
       },
     });
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "main",
-    });
+    const { session } = await runtime.join(room);
     const first = runtime.leave(session.id);
     await entered.promise;
     const second = runtime.leave(session.id);
@@ -694,8 +619,7 @@ describe("MeetingSessionRuntime leave cleanup", () => {
     const { runtime } = createTestRuntime({
       releaseBrowserTab: async () => true,
       joinTransport: async ({ session }) => {
-        session.browser = {
-          launched: true,
+        session.browser = testBrowser("leave-tab", {
           health: {
             inCall: true,
             micMuted: false,
@@ -704,15 +628,11 @@ describe("MeetingSessionRuntime leave cleanup", () => {
             speechBlockedMessage: "old speech block",
             speechBlockedReason: "old-speech-block",
           },
-          tab: { targetId: "leave-tab", openedByPlugin: true },
-        };
+        });
         return {};
       },
     });
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "main",
-    });
+    const { session } = await runtime.join(room);
 
     await expect(runtime.leave(session.id)).resolves.toMatchObject({
       browserLeft: true,
@@ -722,14 +642,13 @@ describe("MeetingSessionRuntime leave cleanup", () => {
             inCall: false,
             manualAction: undefined,
             speechReady: false,
+            micMuted: undefined,
+            speechBlockedReason: undefined,
+            speechBlockedMessage: undefined,
           },
         },
       },
     });
-    expect(session.browser?.health?.manualAction).toBeUndefined();
-    expect(session.browser?.health?.micMuted).toBeUndefined();
-    expect(session.browser?.health?.speechBlockedReason).toBeUndefined();
-    expect(session.browser?.health?.speechBlockedMessage).toBeUndefined();
   });
 
   it.each(["transport", "browser"])(
@@ -794,10 +713,7 @@ describe("MeetingSessionRuntime speech readiness", () => {
         return {};
       },
     });
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "main",
-    });
+    const { session } = await runtime.join(room);
 
     expect(runtime.refreshSpeechReadiness(session)).toEqual({
       ready: false,

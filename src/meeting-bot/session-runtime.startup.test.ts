@@ -20,6 +20,16 @@ import {
 } from "./session-runtime.test-support.js";
 import type { MeetingTranscriptSnapshot } from "./session-types.js";
 
+const participant = { url: "https://meeting.example/room", agentId: "operator" };
+
+async function captionFixture(
+  captureTranscript: NonNullable<Parameters<typeof createTestRuntime>[0]["captureTranscript"]>,
+) {
+  const { runtime } = createParticipationTestRuntime({ captureTranscript, transcribe: true });
+  const { session } = await runtime.join(participant);
+  return { runtime, session };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -279,10 +289,7 @@ describe("MeetingSessionRuntime startup custody", () => {
 describe("MeetingSessionRuntime participation ownership", () => {
   it("revokes participation as soon as leave starts, while an admitted claim is awaiting storage", async () => {
     const { runtime, store, execute } = createParticipationTestRuntime();
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "operator",
-    });
+    const { session } = await runtime.join(participant);
     const { promise: pending, resolve: release } = createDeferredCore();
     const { promise: entered, resolve: claimed } = createDeferredCore();
     const register = store.registerIfAbsent;
@@ -309,10 +316,7 @@ describe("MeetingSessionRuntime participation ownership", () => {
 
   it("does not transfer an observed source to a replacement browser tab", async () => {
     const { runtime, execute } = createParticipationTestRuntime();
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "operator",
-    });
+    const { session } = await runtime.join(participant);
     const sourceId = runtime.observeParticipationSource(session.id, {
       id: "message",
       epoch: "page",
@@ -441,14 +445,7 @@ describe("MeetingSessionRuntime participation ownership", () => {
         pendingLines: [{ text: "Please wait", source: { ...source, revision: "3" } }],
       },
     ];
-    const { runtime } = createParticipationTestRuntime({
-      captureTranscript: async () => snapshots.shift(),
-      transcribe: true,
-    });
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "operator",
-    });
+    const { runtime, session } = await captionFixture(async () => snapshots.shift());
     await runtime.transcript(session.id);
     expect(runtime.participationContext(session.id)).toMatchObject({ sourceOrder: 1, sources: [] });
     await runtime.transcript(session.id);
@@ -487,14 +484,7 @@ describe("MeetingSessionRuntime participation ownership", () => {
       { droppedLines: 0, epoch: "new-page", lines: [], pendingLines: [] },
       oldSnapshot,
     ];
-    const { runtime } = createParticipationTestRuntime({
-      captureTranscript: async () => snapshots.shift(),
-      transcribe: true,
-    });
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "operator",
-    });
+    const { runtime, session } = await captionFixture(async () => snapshots.shift());
     await runtime.transcript(session.id);
     const sourceId = runtime.participationContext(session.id).sources[0]?.sourceId;
     expect(sourceId).toBeTruthy();

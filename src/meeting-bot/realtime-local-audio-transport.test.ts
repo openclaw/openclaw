@@ -69,52 +69,40 @@ function createTransportWith(
   });
 }
 
-function createTransport(outputStdin: TestStdin, replacementStdin = createStdin(true)) {
+function createTransport(
+  outputStdin = createStdin(true),
+  overrides: Partial<Parameters<typeof createLocalMeetingRealtimeAudioTransport>[0]> = {},
+) {
   const output = createProcess({ stdin: outputStdin });
   const input = createProcess({ stdout: new EventEmitter() });
-  const replacementOutput = createProcess({ stdin: replacementStdin });
+  const replacementOutput = createProcess({ stdin: createStdin(true) });
   const spawn = vi.fn().mockReturnValueOnce(output).mockReturnValueOnce(input);
   spawn.mockReturnValueOnce(replacementOutput);
-  const transport = createTransportWith({ spawn: spawn as never });
+  const transport = createTransportWith({ spawn: spawn as never, ...overrides });
   return { replacementOutput, spawn, transport };
 }
 
 describe("local meeting realtime audio transport", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
+  afterEach(() => vi.restoreAllMocks());
+
+  it("stops output after input spawn throws even when output spawn failed", () => {
+    const output = createProcess({ stdin: createStdin(true) });
+    output.kill.mockReturnValueOnce(false);
+    const failure = new Error("input spawn failed");
+    const spawn = vi
+      .fn()
+      .mockReturnValueOnce(output)
+      .mockImplementationOnce(() => {
+        throw failure;
+      });
+
+    expect(() => createTransportWith({ spawn: spawn as never })).toThrow(failure);
+    expect(output.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(() => output.emit("error", new Error("output spawn failed"))).not.toThrow();
   });
 
-  it.each([true])(
-    "stops output after input spawn throws (output spawn failed: %s)",
-    (outputSpawnFailed) => {
-      const output = createProcess({ stdin: createStdin(true) });
-      if (outputSpawnFailed) {
-        output.kill.mockReturnValueOnce(false);
-      }
-      const failure = new Error("input spawn failed");
-      const spawn = vi
-        .fn()
-        .mockReturnValueOnce(output)
-        .mockImplementationOnce(() => {
-          throw failure;
-        });
-
-      expect(() => createTransportWith({ spawn: spawn as never })).toThrow(failure);
-      expect(output.kill).toHaveBeenCalledWith("SIGTERM");
-      if (outputSpawnFailed) {
-        expect(() => output.emit("error", new Error("output spawn failed"))).not.toThrow();
-      }
-    },
-  );
-
   it("keeps empty barge-in validation lazy until monitoring starts", async () => {
-    const output = createProcess({ stdin: createStdin(true) });
-    const input = createProcess({ stdout: new EventEmitter() });
-    const spawn = vi.fn().mockReturnValueOnce(output).mockReturnValueOnce(input);
-    const transport = createTransportWith({
-      bargeInInputCommand: [],
-      spawn: spawn as never,
-    });
+    const { spawn, transport } = createTransport(undefined, { bargeInInputCommand: [] });
 
     expect(spawn).toHaveBeenCalledTimes(2);
     expect(() => transport.startBargeInMonitor?.(() => false)).toThrow(
@@ -202,15 +190,11 @@ describe("local meeting realtime audio transport", () => {
     });
     transport.startBargeInMonitor?.(() => false);
 
-    expect(spawn).toHaveBeenNthCalledWith(1, "play", ["--device", "output name", ""], {
-      stdio: ["pipe", "ignore", "pipe"],
-    });
-    expect(spawn).toHaveBeenNthCalledWith(2, "capture", ["--device", "input name", ""], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    expect(spawn).toHaveBeenNthCalledWith(3, "barge", ["--device", "barge name", ""], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    expect(spawn.mock.calls).toEqual([
+      ["play", ["--device", "output name", ""], { stdio: ["pipe", "ignore", "pipe"] }],
+      ["capture", ["--device", "input name", ""], { stdio: ["ignore", "pipe", "pipe"] }],
+      ["barge", ["--device", "barge name", ""], { stdio: ["ignore", "pipe", "pipe"] }],
+    ]);
 
     for (const [command, label] of [
       ["play", "audio output"],
