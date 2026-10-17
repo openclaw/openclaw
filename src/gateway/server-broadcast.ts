@@ -10,11 +10,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
-import {
-  acceptsPresenceDeltas,
-  preparePresenceDelivery,
-  type PresenceDeliverySnapshot,
-} from "./presence-delivery.js";
+import { acceptsPresenceDeltas, preparePresenceDelivery } from "./presence-delivery.js";
 import { concatGatewayFrame } from "./serialized-json.js";
 import {
   createGatewayLiveTextDelivery,
@@ -41,7 +37,7 @@ import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { closeGatewayTransportWithGrace } from "./server/connection-transport-close.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
+import type { GatewayWsClient, PresenceDeliverySnapshot } from "./server/ws-types.js";
 import { prepareSessionEventMetrics } from "./session-event-metrics.js";
 import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";

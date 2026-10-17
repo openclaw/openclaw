@@ -7,12 +7,7 @@ import type {
   PresenceReset,
 } from "../../packages/gateway-protocol/src/presence-deltas.js";
 import { getSystemPresenceKey, type SystemPresence } from "../infra/system-presence.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
-
-export type PresenceDeliverySnapshot = {
-  version: number;
-  rows: Map<string, SystemPresence>;
-};
+import type { GatewayWsClient, PresenceDeliverySnapshot } from "./server/ws-types.js";
 
 export function acceptsPresenceDeltas(client: Pick<GatewayWsClient, "connect">): boolean {
   return hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.PRESENCE_DELTAS);
