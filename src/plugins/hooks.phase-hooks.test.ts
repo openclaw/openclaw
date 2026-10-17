@@ -19,7 +19,7 @@ import type {
 
 type PromptHook = Pick<
   PluginHookRegistration<"before_prompt_build">,
-  "handler" | "requiresToolAuthority" | "priority"
+  "handler" | "requiresToolAuthority" | "priority" | "timeoutMs"
 >;
 const phaseEvent = { prompt: "test", messages: [] };
 function promptRunner(hooks: PromptHook[]) {
@@ -112,6 +112,7 @@ describe("prompt phase hooks", () => {
     const enrichment = vi.fn<PromptHook["handler"]>((_event, ctx) => {
       expect(ctx.toolAuthority?.allows("memory_search")).toBe(false);
       expect(ctx.toolAuthority?.allows("message")).toBe(true);
+      expect(ctx.toolAuthority?.list?.()).toEqual(["message"]);
       return { prependContext: "authorized context", systemPrompt: "ignored override" };
     });
     const runner = promptRunner([
@@ -127,16 +128,68 @@ describe("prompt phase hooks", () => {
     });
     const retained = enrichment.mock.calls[0]?.[1].toolAuthority;
     expect(() => retained?.assertActive()).toThrow("no longer active");
+    expect(() => retained?.list?.()).toThrow("no longer active");
+  });
+
+  it("enumerates the normalized frozen tool surface that membership checks use", async () => {
+    const enrichment = vi.fn<PromptHook["handler"]>((_event, ctx) => {
+      const names = ctx.toolAuthority?.list?.() ?? [];
+      expect(names).toEqual(["memory_search", "message", "web_search"]);
+      expect(Object.isFrozen(names)).toBe(true);
+      expect(() => (names as string[]).push("exec")).toThrow(TypeError);
+      expect(ctx.toolAuthority?.list?.()).toBe(names);
+      expect(names.every((name) => ctx.toolAuthority?.allows(name))).toBe(true);
+      expect(ctx.toolAuthority?.allows("exec")).toBe(false);
+      return { prependContext: "authorized context" };
+    });
+    const runner = promptRunner([{ requiresToolAuthority: true, handler: enrichment }]);
+    await expect(
+      runner.runAuthorizedPromptBuild(
+        event,
+        {},
+        {
+          ...authority,
+          activeToolNames: [" Web_Search ", "message", "memory_search", "message", ""],
+        },
+      ),
+    ).resolves.toEqual({ prependContext: "authorized context" });
+    expect(enrichment).toHaveBeenCalledOnce();
+  });
+
+  it("rejects retained tool enumeration after an authorized handler times out", async () => {
+    vi.useFakeTimers();
+    try {
+      let retained: { list?(): readonly string[] } | undefined;
+      const runner = promptRunner([
+        {
+          requiresToolAuthority: true,
+          timeoutMs: 5,
+          handler: (_event, ctx) => {
+            retained = ctx.toolAuthority;
+            return new Promise<PluginHookBeforePromptBuildResult>(() => {});
+          },
+        },
+      ]);
+      const run = runner.runAuthorizedPromptBuild(event, {}, authority);
+      expect(retained?.list?.()).toEqual(["message"]);
+      await vi.advanceTimersByTimeAsync(5);
+      await expect(run).resolves.toBeUndefined();
+      expect(() => retained?.list?.()).toThrow("no longer active");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects stale enrichment and never starts its successor after host authority closes", async () => {
     const started = createDeferred();
     const gate = createDeferred();
     const later = vi.fn(() => ({ prependContext: "later context" }));
+    let retained: { list?(): readonly string[] } | undefined;
     const runner = promptRunner([
       {
         requiresToolAuthority: true,
-        handler: async () => {
+        handler: async (_event, ctx) => {
+          retained = ctx.toolAuthority;
           started.resolve();
           await gate.promise;
           return { prependContext: "stale context" };
@@ -159,6 +212,7 @@ describe("prompt phase hooks", () => {
     );
     await started.promise;
     active = false;
+    expect(() => retained?.list?.()).toThrow("host turn authority is no longer active");
     gate.resolve();
     await expect(run).rejects.toThrow("host turn authority is no longer active");
     expect(later).not.toHaveBeenCalled();
