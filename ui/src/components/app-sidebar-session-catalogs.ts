@@ -140,7 +140,11 @@ export function catalogErrorMessages(catalog: SessionCatalog): string[] {
       messages.add(formatUiError(`[${error.code}] ${error.message}`));
     }
   };
-  add(catalog.error);
+  // Pending discovery is a healthy in-flight catalog, not a provider failure: the
+  // gateway already marks its hosts pending, so the sidebar must not warn here (#172473).
+  if (catalog.error?.code !== "catalog_pending") {
+    add(catalog.error);
+  }
   for (const host of catalog.hosts) {
     // A disconnected empty host is normal fleet state, not a provider failure.
     // Cached rows still expose the host-level offline badge when the host is visible.
