@@ -771,10 +771,14 @@ describe("prepared Docker publication", () => {
       { architecture: "arm64", runner: "ubuntu-24.04-arm" },
     ]);
     const builders = steps.filter((step) => step.uses?.startsWith("docker/build-push-action@"));
+    expect(builders).toHaveLength(2);
     for (const step of builders) {
       expect(step.with).toMatchObject({
         context: "source",
         platforms: "linux/${{ matrix.architecture }}",
+        push: false,
+        sbom: true,
+        provenance: "mode=max",
       });
       expectLines(step.with?.["build-args"], [
         "GITHUB_ACTIONS=true",
@@ -838,16 +842,24 @@ describe("prepared Docker publication", () => {
       ).toBe(true);
       expect([job.environment, job.concurrency]).toEqual([undefined, undefined]);
       expect(job.steps?.some((step) => step.uses?.startsWith("docker/login-action@"))).toBe(false);
+      for (const step of job.steps ?? []) {
+        if (step.uses?.startsWith("docker/build-push-action@")) {
+          expect(step.with).toMatchObject({ push: false, sbom: true, provenance: "mode=max" });
+        }
+      }
     }
     expect(publish.jobs.prepare.uses).toBe("./.github/workflows/docker-release-prepare.yml");
     expect(publish.jobs.prepare.secrets).toBeUndefined();
+    expect(publish.concurrency).toBeUndefined();
     const approval = publish.jobs.approve;
     const writer = publish.jobs.publish;
     expect(approval, "approval must not hold the global publication lock").toBeDefined();
+    expect(approval.environment).toBe("docker-release");
     expect(approval.needs).toEqual(["validate_release_identity", "prepare"]);
     expect(approval.concurrency).toBeUndefined();
     expect(approval.permissions).toEqual({});
     expect(JSON.stringify(approval)).not.toContain("secrets.");
+    expect(writer.environment).toBeUndefined();
     expect(writer.needs).toEqual(["validate_release_identity", "prepare", "approve"]);
     for (const [identity, prepared, approved, cancelled, canApprove, canPublish] of [
       ["success", "success", "success", false, true, true],
@@ -871,6 +883,11 @@ describe("prepared Docker publication", () => {
       expect(evaluate(approval.if)).toBe(canApprove);
       expect(evaluate(writer.if)).toBe(canPublish);
     }
+    expect(writer.concurrency).toEqual({
+      group: "docker-release-publish",
+      "cancel-in-progress": false,
+      queue: "max",
+    });
     expect(
       Object.entries(publish.jobs)
         .filter(
