@@ -1,4 +1,3 @@
-// Whatsapp tests cover on message.audio preflight plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const events: string[] = [];
@@ -93,10 +92,6 @@ import { createTestWebAudioInboundMessage } from "../../inbound/test-message.tes
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { createWebOnMessageHandler } from "./on-message.js";
 
-function makeAudioMsg(): AdmittedWebInboundMessage {
-  return createTestWebAudioInboundMessage();
-}
-
 function makeGroupAudioMsg(): AdmittedWebInboundMessage {
   return createTestWebAudioInboundMessage({
     platform: { chatJid: "1203630@g.us" },
@@ -133,18 +128,6 @@ function makeBlockedDirectAudioMsg(): AdmittedWebInboundMessage {
       },
     },
   });
-}
-
-function mockObjectArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex = 0) {
-  const call = mockFn.mock.calls.at(callIndex);
-  if (!call) {
-    throw new Error(`Expected ${label} call ${callIndex}`);
-  }
-  const arg = call.at(0);
-  if (!arg || typeof arg !== "object") {
-    throw new Error(`Expected ${label} call ${callIndex} object argument`);
-  }
-  return arg as Record<string, unknown>;
 }
 
 function makeHandler(overrides: Partial<Parameters<typeof createWebOnMessageHandler>[0]> = {}) {
@@ -187,28 +170,34 @@ describe("createWebOnMessageHandler audio preflight", () => {
       events.push("stt");
       return "transcribed voice note";
     });
-    processMessageMock.mockReset();
-    processMessageMock.mockResolvedValue(true);
-    createStatusReactionControllerMock.mockReset();
-    createStatusReactionControllerMock.mockResolvedValue(statusReactionController);
+    processMessageMock.mockReset().mockResolvedValue(true);
+    createStatusReactionControllerMock.mockReset().mockResolvedValue(statusReactionController);
     Object.values(statusReactionController).forEach((mock) => mock.mockClear());
     ackReactionHandle.remove.mockClear();
     updateLastRouteInBackgroundMock.mockReset();
-    resolveGroupActivationForMock.mockReset();
-    resolveGroupActivationForMock.mockResolvedValue("always");
+    resolveGroupActivationForMock.mockReset().mockResolvedValue("always");
   });
 
   it("sends ack reaction before audio preflight for voice notes", async () => {
-    const handler = makeHandler();
-
-    await handler(makeAudioMsg());
+    await makeHandler()(createTestWebAudioInboundMessage());
 
     expect(events).toEqual(["ack", "stt"]);
     expect(processMessageMock).toHaveBeenCalledTimes(1);
-    const processParams = mockObjectArg(processMessageMock, "processMessage");
+    const processParams = processMessageMock.mock.calls[0]![0];
     expect(processParams.preflightAudioTranscript).toBe("transcribed voice note");
     expect(processParams.ackAlreadySent).toBe(true);
     expect(processParams.ackReaction).toBe(ackReactionHandle);
+    // Regression #79778: echoTranscript needs the routing context at preflight.
+    expect(transcribeFirstAudioMock.mock.calls[0]![0].ctx).toEqual({
+      media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg; codecs=opus", kind: "audio" }],
+      From: "+15550000002",
+      To: "+15550000001",
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "+15550000002",
+      AccountId: "default",
+    });
   });
 
   it("sends queued status reaction before audio preflight when status reactions are enabled", async () => {
@@ -223,22 +212,20 @@ describe("createWebOnMessageHandler audio preflight", () => {
       } as never,
     });
 
-    await handler(makeAudioMsg());
+    await handler(createTestWebAudioInboundMessage());
 
     expect(events).toEqual(["status-queued", "stt"]);
     expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
     expect(createStatusReactionControllerMock).toHaveBeenCalledTimes(1);
     expect(processMessageMock).toHaveBeenCalledTimes(1);
-    const processParams = mockObjectArg(processMessageMock, "processMessage");
+    const processParams = processMessageMock.mock.calls[0]![0];
     expect(processParams.preflightAudioTranscript).toBe("transcribed voice note");
     expect(processParams.statusReactionController).toBe(statusReactionController);
     expect(processParams.ackAlreadySent).toBeUndefined();
   });
 
   it("drops blocked DM admission before ack, preflight, or dispatch", async () => {
-    const handler = makeHandler();
-
-    await handler(makeBlockedDirectAudioMsg());
+    await makeHandler()(makeBlockedDirectAudioMsg());
 
     expect(events).toStrictEqual([]);
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
@@ -282,41 +269,11 @@ describe("createWebOnMessageHandler audio preflight", () => {
 
   it("removes preflight ack when group voice transcript still misses mention gating", async () => {
     resolveGroupActivationForMock.mockResolvedValue("mention");
-    const handler = makeHandler();
-
-    await handler(makeGroupAudioMsg());
+    await makeHandler()(makeGroupAudioMsg());
 
     expect(events).toEqual(["ack", "stt"]);
     expect(ackReactionHandle.remove).toHaveBeenCalledTimes(1);
     expect(updateLastRouteInBackgroundMock).not.toHaveBeenCalled();
     expect(processMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("passes routing ctx fields to transcribeFirstAudio so echoTranscript can deliver (#79778)", async () => {
-    let capturedCtx: unknown;
-    transcribeFirstAudioMock.mockImplementation(async ({ ctx }: { ctx: unknown }) => {
-      capturedCtx = ctx;
-      return "transcribed voice note";
-    });
-    const handler = makeHandler();
-
-    await handler(makeAudioMsg());
-
-    expect(capturedCtx).toEqual({
-      media: [
-        {
-          path: "/tmp/voice.ogg",
-          contentType: "audio/ogg; codecs=opus",
-          kind: "audio",
-        },
-      ],
-      From: "+15550000002",
-      To: "+15550000001",
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      OriginatingTo: "+15550000002",
-      AccountId: "default",
-    });
   });
 });

@@ -139,6 +139,15 @@ function statusReactionFixture() {
   });
   return { controller, reactions, restoration, nextRestoration };
 }
+async function reactionPlan(queued = false) {
+  const status = statusReactionFixture();
+  const reply = await fixture({ statusReactionController: status.controller });
+  if (queued) {
+    reply.plan.finalize({ deferredToActiveRun: "followup", counts: {} });
+    await status.restoration;
+  }
+  return { ...status, ...reply };
+}
 function beginQueuedDelivery(plan: ReturnType<typeof createWhatsAppReplyPlan>) {
   const settle = plan.replyOptions.queuedDeliveryCorrelations?.[0]?.begin();
   if (typeof settle !== "function") {
@@ -509,45 +518,32 @@ describe("WhatsApp reply delivery", () => {
     expect(deliverReply).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      mentioned: true,
-      command: false,
-      mode: "message_tool_only",
+  it("selects message-tool-only delivery for a mentioned group message", async () => {
+    const { plan } = await fixture({
+      cfg: {
+        channels: { whatsapp: { streaming: { block: { enabled: true } } } },
+        messages: { groupChat: { visibleReplies: "message_tool" } },
+      },
+      context: {
+        Body: "hi",
+        ChatType: "group",
+        WasMentioned: true,
+        CommandAuthorized: false,
+      },
+    });
+    expect(plan.replyOptions).toMatchObject({
+      sourceReplyDeliveryMode: "message_tool_only",
       suppressTyping: false,
       disableBlockStreaming: true,
-    },
-  ])(
-    "selects group delivery for mentioned=$mentioned command=$command",
-    async ({ mentioned, command, mode, suppressTyping, disableBlockStreaming }) => {
-      const { plan } = await fixture({
-        cfg: {
-          channels: { whatsapp: { streaming: { block: { enabled: true } } } },
-          messages: { groupChat: { visibleReplies: "message_tool" } },
-        },
-        context: {
-          Body: command ? "/status" : "hi",
-          ChatType: "group",
-          WasMentioned: mentioned,
-          CommandAuthorized: command,
-          ...(command ? { CommandSource: "text" } : {}),
-        },
-      });
-      expect(plan.replyOptions).toMatchObject({
-        sourceReplyDeliveryMode: mode,
-        suppressTyping,
-        disableBlockStreaming,
-      });
-    },
-  );
+    });
+  });
   it.each([
     { visibleReplySent: true, emoji: "✅" },
     { visibleReplySent: false, emoji: "❌" },
   ])(
     "waits for queued delivery before showing $emoji (visible=$visibleReplySent)",
     async ({ visibleReplySent, emoji }) => {
-      const { controller, reactions, restoration, nextRestoration } = statusReactionFixture();
-      const { plan } = await fixture({ statusReactionController: controller });
+      const { plan, reactions, restoration, nextRestoration } = await reactionPlan();
       expect(plan.finalize({ deferredToActiveRun: "followup", counts: {} })).toBe(false);
       await restoration;
       expect(reactions).toEqual(["👀"]);
@@ -562,8 +558,7 @@ describe("WhatsApp reply delivery", () => {
     },
   );
   it("preserves queued delivery settled before the original dispatch finalizes", async () => {
-    const { controller, reactions, restoration } = statusReactionFixture();
-    const { plan } = await fixture({ statusReactionController: controller });
+    const { plan, reactions, restoration } = await reactionPlan();
     plan.replyOptions.onAgentRunTerminalOutcome?.("completed");
     beginQueuedDelivery(plan)({ visibleReplySent: true, failed: false });
     expect(reactions).toEqual([]);
@@ -575,9 +570,8 @@ describe("WhatsApp reply delivery", () => {
     { outcome: "delivered", visibleReplySent: true, failed: false },
     { outcome: "terminally failed", visibleReplySent: false, failed: true },
   ])("leaves held delivery neutral after a later $outcome receipt", async (terminal) => {
-    const { controller, reactions, restoration } = statusReactionFixture();
+    const { plan, controller, reactions, restoration } = await reactionPlan();
     const clear = vi.spyOn(controller, "clear");
-    const { plan } = await fixture({ statusReactionController: controller });
     plan.finalize({ deferredToActiveRun: "followup", counts: {} });
     await restoration;
     const settle = beginQueuedDelivery(plan);
@@ -593,8 +587,7 @@ describe("WhatsApp reply delivery", () => {
     expect(clear).toHaveBeenCalledOnce();
   });
   it("shows execution failure immediately and does not replace it with delivery success", async () => {
-    const { controller, reactions, restoration } = statusReactionFixture();
-    const { plan } = await fixture({ statusReactionController: controller });
+    const { plan, controller, reactions, restoration } = await reactionPlan();
     plan.replyOptions.onAgentRunTerminalOutcome?.("failed");
     await restoration;
     expect(reactions).toEqual(["❌", "👀"]);
@@ -603,10 +596,8 @@ describe("WhatsApp reply delivery", () => {
     expect(controller.restoreInitial).toHaveBeenCalledOnce();
   });
   it("keeps a deferred retry pending and matches direct dispatch for a settled silent turn", async () => {
-    const queued = statusReactionFixture();
-    const { plan } = await fixture({ statusReactionController: queued.controller });
-    plan.finalize({ deferredToActiveRun: "followup", counts: {} });
-    await queued.restoration;
+    const queued = await reactionPlan(true);
+    const { plan } = queued;
     beginQueuedDelivery(plan)();
     expect(queued.reactions).toEqual(["👀"]);
 
@@ -616,25 +607,20 @@ describe("WhatsApp reply delivery", () => {
     await completed;
     expect(queued.reactions).toEqual(["👀", "❌", "👀"]);
 
-    const direct = statusReactionFixture();
-    const { plan: directPlan } = await fixture({ statusReactionController: direct.controller });
-    directPlan.finalize({ counts: {} });
+    const direct = await reactionPlan();
+    direct.plan.finalize({ counts: {} });
     await direct.restoration;
     expect(direct.reactions).toEqual(["❌", "👀"]);
   });
   it("shows an error when an accepted follow-up is evicted before it runs", async () => {
-    const { controller, reactions, restoration, nextRestoration } = statusReactionFixture();
-    const { plan } = await fixture({ statusReactionController: controller });
-    plan.finalize({ deferredToActiveRun: "followup", counts: {} });
-    await restoration;
+    const { plan, reactions, nextRestoration } = await reactionPlan(true);
     const completed = nextRestoration();
     plan.replyOptions.onFollowupQueueDisposition?.("queue-cap-old");
     await completed;
     expect(reactions).toEqual(["👀", "❌", "👀"]);
   });
   it("keeps a queue-cap rejection failed even when its notice is delivered", async () => {
-    const { controller, reactions, restoration } = statusReactionFixture();
-    const { plan, deliver } = await fixture({ statusReactionController: controller });
+    const { plan, deliver, reactions, restoration } = await reactionPlan();
     plan.replyOptions.onFollowupQueueDisposition?.("queue-cap-new");
     await deliver({ text: "The message queue is full." });
     expect(plan.finalize({ counts: { final: 1 } })).toBe(true);
@@ -642,9 +628,9 @@ describe("WhatsApp reply delivery", () => {
     expect(reactions).toEqual(["❌", "👀"]);
   });
   it("keeps visible delivery successful while marking a failed run as an error", async () => {
-    const { controller, reactions, restoration } = statusReactionFixture();
     readAgentRunTerminalOutcome.mockReturnValueOnce("failed");
-    const { plan, deliver, deliverReply } = await fixture({ statusReactionController: controller });
+    const { plan, controller, deliver, deliverReply, reactions, restoration } =
+      await reactionPlan();
     await deliver({ text: "visible failure" });
     expect(plan.finalize({ queuedFinal: false, counts: { final: 1 } })).toBe(true);
     await restoration;

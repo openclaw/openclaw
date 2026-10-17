@@ -31,6 +31,62 @@ const sessionKey = "agent:main:whatsapp:direct:+1000";
 
 const recordChannelActivity = vi.hoisted(() => vi.fn());
 
+function mockMedia(kind: "audio" | "video") {
+  vi.mocked(loadWebMedia).mockResolvedValueOnce({
+    buffer: Buffer.from(kind === "audio" ? "voice" : "video"),
+    contentType: kind === "audio" ? "audio/ogg" : "video/mp4",
+    kind,
+  });
+}
+
+async function expectObserved(
+  {
+    pluginHook,
+    internalHook,
+  }: { pluginHook: ReturnType<typeof vi.fn>; internalHook: ReturnType<typeof vi.fn> },
+  messageId: string,
+  success: boolean,
+) {
+  await vi.waitFor(() => {
+    expect(pluginHook).toHaveBeenCalledOnce();
+    expect(internalHook).toHaveBeenCalledOnce();
+  });
+  expect(pluginHook).toHaveBeenCalledWith(
+    expect.objectContaining({ messageId, success }),
+    expect.objectContaining({ messageId }),
+  );
+}
+
+function expectActivity() {
+  expect(recordChannelActivity).toHaveBeenCalledExactlyOnceWith({
+    channel: "whatsapp",
+    accountId: "default",
+    direction: "outbound",
+  });
+}
+
+function guardActivity(message: string) {
+  recordChannelActivity.mockReset().mockImplementation(() => {
+    if (recordChannelActivity.mock.calls.length > 1) {
+      throw new Error(message);
+    }
+  });
+}
+
+function producerApi(messages: WAMessage[]) {
+  const sendMessage = vi.fn<Parameters<typeof createWebSendApi>[0]["sock"]["sendMessage"]>();
+  for (const message of messages) {
+    sendMessage.mockResolvedValueOnce(message);
+  }
+  return {
+    sendMessage,
+    sendApi: createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate: vi.fn(async () => undefined) },
+      defaultAccountId: "default",
+    }),
+  };
+}
+
 vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   const actual = await vi.importActual<
     typeof import("openclaw/plugin-sdk/channel-activity-runtime")
@@ -183,78 +239,60 @@ afterEach(() => {
 });
 
 describe("WhatsApp canonical message_sent delivery", () => {
-  it.each([
-    {
-      replacement: ["/tmp/c.jpg"],
-      sent: ["/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.jpg"],
-      deferredIds: ["sent-1", "sent-2"],
-      replacementId: "sent-3",
-    },
-  ])(
-    "finalizes every deferred attachment through core after replacement $replacement",
-    async ({ replacement, sent: expectedSent, deferredIds, replacementId }) => {
-      const sent: string[] = [];
-      vi.mocked(loadWebMedia).mockImplementation(async (url) => ({
-        buffer: Buffer.from(url),
-        contentType: "image/jpeg",
-        kind: "image",
-      }));
-      const sendMedia = vi.fn<AdmittedWebInboundMessage["platform"]["sendMedia"]>(
-        async (content) => {
-          if (!("image" in content) || !Buffer.isBuffer(content.image)) {
-            throw new Error("expected image transport payload");
-          }
-          sent.push(content.image.toString());
-          return normalizeWhatsAppSendResult(
-            { key: { id: `sent-${sent.length}` } } as WAMessage,
-            "media",
-          );
-        },
-      );
-      const reply = vi.fn<AdmittedWebInboundMessage["platform"]["reply"]>();
-      const { failure, pluginHook, internalHook, onDelivered, settledResult } =
-        await dispatchObservedPlatformReply({
-          payload: { text: "Here are the images", mediaUrls: replacement },
-          deferredMediaUrls: ["/tmp/a.jpg", "/tmp/b.jpg"],
-          platform: { reply, sendMedia },
-        });
-
-      expect(failure).toMatchObject({ dispatched: true });
-      expect(sent).toEqual(expectedSent);
-      expect(reply).not.toHaveBeenCalled();
-      expect(settledResult).toEqual({ visibleReplySent: true });
-      expect(onDelivered).toHaveBeenCalledTimes(2);
-      const [, info, finalized] = onDelivered.mock.calls[1]!;
-      expect(info.kind).toBe("tool");
-      expect(finalized?.finalization).toBeUndefined();
-      if (deferredIds.length) {
-        expect(finalized).toMatchObject({
-          visibleReplySent: true,
-          content: "",
-          messageIds: deferredIds,
-          receipt: { platformMessageIds: deferredIds },
-        });
-      } else {
-        expect(finalized).toEqual({ visibleReplySent: false, finalization: undefined });
+  it("finalizes every deferred attachment through core after replacement", async () => {
+    const replacement = ["/tmp/c.jpg"];
+    const deferredIds = ["sent-1", "sent-2"];
+    const sent: string[] = [];
+    vi.mocked(loadWebMedia).mockImplementation(async (url) => ({
+      buffer: Buffer.from(url),
+      contentType: "image/jpeg",
+      kind: "image",
+    }));
+    const sendMedia = vi.fn<AdmittedWebInboundMessage["platform"]["sendMedia"]>(async (content) => {
+      if (!("image" in content) || !Buffer.isBuffer(content.image)) {
+        throw new Error("expected image transport payload");
       }
-      const observedIds = [replacementId, ...deferredIds.slice(0, 1)];
-      await vi.waitFor(() => {
-        expect(pluginHook).toHaveBeenCalledTimes(observedIds.length);
-        expect(internalHook).toHaveBeenCalledTimes(observedIds.length);
-      });
-      expect(pluginHook.mock.calls.map(([event]) => [event.messageId, event.success])).toEqual(
-        observedIds.map((id) => [id, true]),
+      sent.push(content.image.toString());
+      return normalizeWhatsAppSendResult(
+        { key: { id: `sent-${sent.length}` } } as WAMessage,
+        "media",
       );
-    },
-  );
+    });
+    const reply = vi.fn<AdmittedWebInboundMessage["platform"]["reply"]>();
+    const { failure, pluginHook, internalHook, onDelivered, settledResult } =
+      await dispatchObservedPlatformReply({
+        payload: { text: "Here are the images", mediaUrls: replacement },
+        deferredMediaUrls: ["/tmp/a.jpg", "/tmp/b.jpg"],
+        platform: { reply, sendMedia },
+      });
+
+    expect(failure).toMatchObject({ dispatched: true });
+    expect(sent).toEqual(["/tmp/a.jpg", "/tmp/b.jpg", "/tmp/c.jpg"]);
+    expect(reply).not.toHaveBeenCalled();
+    expect(settledResult).toEqual({ visibleReplySent: true });
+    expect(onDelivered).toHaveBeenCalledTimes(2);
+    const [, info, finalized] = onDelivered.mock.calls[1]!;
+    expect(info.kind).toBe("tool");
+    expect(finalized?.finalization).toBeUndefined();
+    expect(finalized).toMatchObject({
+      visibleReplySent: true,
+      content: "",
+      messageIds: deferredIds,
+      receipt: { platformMessageIds: deferredIds },
+    });
+    const observedIds = ["sent-3", "sent-1"];
+    await vi.waitFor(() => {
+      expect(pluginHook).toHaveBeenCalledTimes(observedIds.length);
+      expect(internalHook).toHaveBeenCalledTimes(observedIds.length);
+    });
+    expect(pluginHook.mock.calls.map(([event]) => [event.messageId, event.success])).toEqual(
+      observedIds.map((id) => [id, true]),
+    );
+  });
 
   it("preserves accepted voice receipts through real dispatch after caption rejection", async () => {
     recordChannelActivity.mockClear();
-    vi.mocked(loadWebMedia).mockResolvedValueOnce({
-      buffer: Buffer.from("voice"),
-      contentType: "audio/ogg",
-      kind: "audio",
-    });
+    mockMedia("audio");
     const sendMedia = vi.fn(async () =>
       normalizeWhatsAppSendResult({ key: { id: "dispatch-voice-accepted" } } as WAMessage, "media"),
     );
@@ -278,44 +316,23 @@ describe("WhatsApp canonical message_sent delivery", () => {
     expect(failure).toHaveProperty("cause", expect.any(PlatformMessageNotDispatchedError));
     expect(sendMedia).toHaveBeenCalledOnce();
     expect(reply).toHaveBeenCalledExactlyOnceWith("caption", undefined);
-    expect(recordChannelActivity).toHaveBeenCalledExactlyOnceWith({
-      channel: "whatsapp",
-      accountId: "default",
-      direction: "outbound",
-    });
+    expectActivity();
   });
 
   it("records activity once for producer-backed media without duplicate bookkeeping", async () => {
-    recordChannelActivity.mockReset();
-    recordChannelActivity.mockImplementation(() => {
-      if (recordChannelActivity.mock.calls.length > 1) {
-        throw new Error("outer owner duplicated producer activity bookkeeping");
-      }
-    });
+    guardActivity("outer owner duplicated producer activity bookkeeping");
     const messageId = "dispatch-producer-media-guarded";
-    const sendMessage = vi.fn(
-      async () =>
-        ({
-          key: {
-            id: messageId,
-            remoteJid: "1000@s.whatsapp.net",
-            fromMe: true,
-            participant: "observer@s.whatsapp.net",
-          },
-        }) as WAMessage,
-    );
-    const sendApi = createWebSendApi({
-      sock: {
-        sendMessage,
-        sendPresenceUpdate: vi.fn(async () => undefined),
+    const { sendMessage, sendApi } = producerApi([
+      {
+        key: {
+          id: messageId,
+          remoteJid: "1000@s.whatsapp.net",
+          fromMe: true,
+          participant: "observer@s.whatsapp.net",
+        },
       },
-      defaultAccountId: "default",
-    });
-    vi.mocked(loadWebMedia).mockResolvedValueOnce({
-      buffer: Buffer.from("video"),
-      contentType: "video/mp4",
-      kind: "video",
-    });
+    ]);
+    mockMedia("video");
     const reply = vi.fn<AdmittedWebInboundMessage["platform"]["reply"]>();
     const sendMedia = vi.fn<AdmittedWebInboundMessage["platform"]["sendMedia"]>(async (payload) => {
       if (!("video" in payload) || !Buffer.isBuffer(payload.video)) {
@@ -342,14 +359,7 @@ describe("WhatsApp canonical message_sent delivery", () => {
       dispatched: true,
       dispatchResult: { queuedFinal: true },
     });
-    await vi.waitFor(() => {
-      expect(pluginHook).toHaveBeenCalledOnce();
-      expect(internalHook).toHaveBeenCalledOnce();
-    });
-    expect(pluginHook).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId, success: true }),
-      expect.objectContaining({ messageId }),
-    );
+    await expectObserved({ pluginHook, internalHook }, messageId, true);
     expect(deliveryResult).toMatchObject({
       receipt: {
         primaryPlatformMessageId: messageId,
@@ -385,49 +395,19 @@ describe("WhatsApp canonical message_sent delivery", () => {
     expect(sendMedia).toHaveBeenCalledOnce();
     expect(reply).not.toHaveBeenCalled();
     expect(replyLogger.warn).not.toHaveBeenCalled();
-    expect(recordChannelActivity).toHaveBeenCalledExactlyOnceWith({
-      channel: "whatsapp",
-      accountId: "default",
-      direction: "outbound",
-    });
+    expectActivity();
     recordChannelActivity.mockReset();
   });
 
   it("shares one logical activity scope across real separately accepted voice and caption sends", async () => {
-    recordChannelActivity.mockReset();
-    recordChannelActivity.mockImplementation(() => {
-      if (recordChannelActivity.mock.calls.length > 1) {
-        throw new Error("caption producer incorrectly repeated logical activity bookkeeping");
-      }
-    });
-    vi.mocked(loadWebMedia).mockResolvedValueOnce({
-      buffer: Buffer.from("voice"),
-      contentType: "audio/ogg",
-      kind: "audio",
-    });
-    const sendMessage = vi
-      .fn()
-      .mockResolvedValueOnce({
-        key: {
-          id: "dispatch-scoped-voice",
-          remoteJid: "1000@s.whatsapp.net",
-          fromMe: true,
-        },
-      } as WAMessage)
-      .mockResolvedValueOnce({
-        key: {
-          id: "dispatch-scoped-caption",
-          remoteJid: "1000@s.whatsapp.net",
-          fromMe: true,
-        },
-      } as WAMessage);
-    const sendApi = createWebSendApi({
-      sock: {
-        sendMessage,
-        sendPresenceUpdate: vi.fn(async () => undefined),
-      },
-      defaultAccountId: "default",
-    });
+    guardActivity("caption producer incorrectly repeated logical activity bookkeeping");
+    mockMedia("audio");
+    const messageIds = ["dispatch-scoped-voice", "dispatch-scoped-caption"];
+    const { sendMessage, sendApi } = producerApi(
+      messageIds.map((id) => ({
+        key: { id, remoteJid: "1000@s.whatsapp.net", fromMe: true },
+      })),
+    );
     const sendMedia = vi.fn<AdmittedWebInboundMessage["platform"]["sendMedia"]>(async (payload) => {
       if (!("audio" in payload) || !Buffer.isBuffer(payload.audio)) {
         throw new Error("expected a real WhatsApp voice payload");
@@ -454,60 +434,34 @@ describe("WhatsApp canonical message_sent delivery", () => {
       dispatchResult: { queuedFinal: true },
     });
     expect(deliveryResult).toMatchObject({
-      messageIds: ["dispatch-scoped-voice", "dispatch-scoped-caption"],
+      messageIds,
       receipt: {
         primaryPlatformMessageId: "dispatch-scoped-voice",
-        platformMessageIds: ["dispatch-scoped-voice", "dispatch-scoped-caption"],
-        parts: [
+        platformMessageIds: messageIds,
+        parts: ["media", "text"].map((kind, index) =>
           expect.objectContaining({
-            platformMessageId: "dispatch-scoped-voice",
-            raw: expect.objectContaining({ meta: expect.objectContaining({ kind: "media" }) }),
+            platformMessageId: messageIds[index],
+            raw: expect.objectContaining({ meta: expect.objectContaining({ kind }) }),
           }),
-          expect.objectContaining({
-            platformMessageId: "dispatch-scoped-caption",
-            raw: expect.objectContaining({ meta: expect.objectContaining({ kind: "text" }) }),
-          }),
-        ],
-        raw: [
-          expect.objectContaining({
-            messageId: "dispatch-scoped-voice",
-            toJid: "1000@s.whatsapp.net",
-          }),
-          expect.objectContaining({
-            messageId: "dispatch-scoped-caption",
-            toJid: "1000@s.whatsapp.net",
-          }),
-        ],
+        ),
+        raw: messageIds.map((messageId) =>
+          expect.objectContaining({ messageId, toJid: "1000@s.whatsapp.net" }),
+        ),
       },
     });
-    await vi.waitFor(() => {
-      expect(pluginHook).toHaveBeenCalledOnce();
-      expect(internalHook).toHaveBeenCalledOnce();
-    });
-    expect(pluginHook).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: "dispatch-scoped-voice", success: true }),
-      expect.objectContaining({ messageId: "dispatch-scoped-voice" }),
-    );
+    await expectObserved({ pluginHook, internalHook }, "dispatch-scoped-voice", true);
     expect(sendMessage).toHaveBeenCalledTimes(2);
     expect(sendMedia).toHaveBeenCalledOnce();
     expect(reply).toHaveBeenCalledExactlyOnceWith("voice caption", undefined);
     expect(replyLogger.warn).not.toHaveBeenCalled();
-    expect(recordChannelActivity).toHaveBeenCalledExactlyOnceWith({
-      channel: "whatsapp",
-      accountId: "default",
-      direction: "outbound",
-    });
+    expectActivity();
     recordChannelActivity.mockReset();
   });
 
   it("keeps the first accepted chunk visible to observers when a later chunk throws a nested partial", async () => {
     recordChannelActivity.mockClear();
     const bookkeepingError = new Error("second accepted chunk bookkeeping failed");
-    vi.mocked(loadWebMedia).mockResolvedValueOnce({
-      buffer: Buffer.from("voice"),
-      contentType: "audio/ogg",
-      kind: "audio",
-    });
+    mockMedia("audio");
     const firstChunk = normalizeWhatsAppSendResult(
       { key: { id: "dispatch-first-chunk" } } as WAMessage,
       "media",
@@ -547,21 +501,10 @@ describe("WhatsApp canonical message_sent delivery", () => {
       "dispatch-second-chunk",
     ]);
     expect(failure).toHaveProperty("cause", bookkeepingError);
-    await vi.waitFor(() => {
-      expect(pluginHook).toHaveBeenCalledOnce();
-      expect(internalHook).toHaveBeenCalledOnce();
-    });
-    expect(pluginHook).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: "dispatch-first-chunk", success: false }),
-      expect.objectContaining({ messageId: "dispatch-first-chunk" }),
-    );
+    await expectObserved({ pluginHook, internalHook }, "dispatch-first-chunk", false);
     expect(sendMedia).toHaveBeenCalledOnce();
     expect(reply).toHaveBeenCalledOnce();
-    expect(recordChannelActivity).toHaveBeenCalledExactlyOnceWith({
-      channel: "whatsapp",
-      accountId: "default",
-      direction: "outbound",
-    });
+    expectActivity();
   });
 
   it("preserves inner accepted media receipts and one activity attempt through full dispatch", async () => {
@@ -570,18 +513,8 @@ describe("WhatsApp canonical message_sent delivery", () => {
     recordChannelActivity.mockImplementationOnce(() => {
       throw bookkeepingError;
     });
-    vi.mocked(loadWebMedia).mockResolvedValueOnce({
-      buffer: Buffer.from("voice"),
-      contentType: "audio/ogg",
-      kind: "audio",
-    });
-    const sendApi = createWebSendApi({
-      sock: {
-        sendMessage: vi.fn(async () => ({ key: { id: "dispatch-nested-media" } }) as WAMessage),
-        sendPresenceUpdate: vi.fn(async () => undefined),
-      },
-      defaultAccountId: "default",
-    });
+    mockMedia("audio");
+    const { sendApi } = producerApi([{ key: { id: "dispatch-nested-media" } }]);
     const sendMedia = vi.fn(async () =>
       sendApi.sendMessage("+1000", "", Buffer.from("voice"), "audio/ogg"),
     );
@@ -599,21 +532,10 @@ describe("WhatsApp canonical message_sent delivery", () => {
     expect(failure.deliveryResult.messageIds).toEqual(["dispatch-nested-media"]);
     expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual(["dispatch-nested-media"]);
     expect(failure).toHaveProperty("cause", bookkeepingError);
-    await vi.waitFor(() => {
-      expect(pluginHook).toHaveBeenCalledOnce();
-      expect(internalHook).toHaveBeenCalledOnce();
-    });
-    expect(pluginHook).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: "dispatch-nested-media", success: false }),
-      expect.objectContaining({ messageId: "dispatch-nested-media" }),
-    );
+    await expectObserved({ pluginHook, internalHook }, "dispatch-nested-media", false);
     expect(sendMedia).toHaveBeenCalledOnce();
     expect(reply).not.toHaveBeenCalled();
     expect(replyLogger.warn).not.toHaveBeenCalled();
-    expect(recordChannelActivity).toHaveBeenCalledExactlyOnceWith({
-      channel: "whatsapp",
-      accountId: "default",
-      direction: "outbound",
-    });
+    expectActivity();
   });
 });

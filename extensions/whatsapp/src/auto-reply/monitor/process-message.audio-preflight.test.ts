@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestWebAudioInboundMessage } from "../../inbound/test-message.test-helper.js";
 
-// Mock the lazy-loaded audio preflight runtime boundary
 const transcribeFirstAudioMock = vi.fn();
 const maybeSendAckReactionMock = vi.fn();
 
@@ -9,11 +8,8 @@ vi.mock("./audio-preflight.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
 }));
 
-// Controllable shouldComputeCommandAuthorized for command-sync tests
-let shouldComputeCommandResult = false;
 let shouldComputeCommandBodies: string[] = [];
 
-// Minimal mocks for process-message dependencies
 vi.mock("../../accounts.js", () => ({
   resolveWhatsAppAccount: () => ({
     accountId: "default",
@@ -87,7 +83,7 @@ vi.mock("./runtime-api.js", async (importOriginal) => ({
   resolvePinnedMainDmOwnerFromAllowlist: () => null,
   shouldComputeCommandAuthorized: (body: string) => {
     shouldComputeCommandBodies.push(body);
-    return shouldComputeCommandResult || body.startsWith("/");
+    return body.startsWith("/");
   },
   shouldLogVerbose: () => false,
   type: undefined,
@@ -133,49 +129,32 @@ import { createWhatsAppReplyPlan } from "./inbound-dispatch.js";
 import { processMessage } from "./process-message.js";
 
 type WebInboundMsg = Parameters<typeof processMessage>[0]["msg"];
-type TestRoute = Parameters<typeof processMessage>[0]["route"];
-
-type AudioMessageOverrides = Partial<WebInboundMsg> & {
+type AudioMessageOverrides = {
   body?: string;
   mediaPath?: string;
   mediaType?: string;
 };
 
 function makeAudioMsg(overrides: AudioMessageOverrides = {}): WebInboundMsg {
-  const { body, mediaPath, mediaType, event, payload, platform, ...messageOverrides } = overrides;
-  const resolvedMediaPath = Object.hasOwn(overrides, "mediaPath") ? mediaPath : "/tmp/voice.ogg";
-  const resolvedMediaType = Object.hasOwn(overrides, "mediaType")
-    ? mediaType
-    : "audio/ogg; codecs=opus";
+  const {
+    body = "",
+    mediaPath,
+    mediaType,
+  } = { mediaPath: "/tmp/voice.ogg", mediaType: "audio/ogg; codecs=opus", ...overrides };
   return createTestWebAudioInboundMessage({
-    event,
     payload: {
-      body: body ?? "",
+      body,
       media: {
-        type: resolvedMediaType,
-        path: resolvedMediaPath,
-        kind: resolvedMediaType?.startsWith("audio/")
+        type: mediaType,
+        path: mediaPath,
+        kind: mediaType?.startsWith("audio/")
           ? "audio"
-          : resolvedMediaType?.startsWith("image/")
+          : mediaType?.startsWith("image/")
             ? "image"
             : "unknown",
-        ...payload?.media,
       },
-      ...payload,
     },
-    platform,
-    ...messageOverrides,
-  }) as WebInboundMsg;
-}
-
-function makeRoute(overrides: Partial<TestRoute> = {}): TestRoute {
-  return {
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    mainSessionKey: "agent:main:main",
-    accountId: "default",
-    ...overrides,
-  } as TestRoute;
+  });
 }
 
 function makeParams(msgOverrides: AudioMessageOverrides = {}) {
@@ -186,7 +165,12 @@ function makeParams(msgOverrides: AudioMessageOverrides = {}) {
       commands: { useAccessGroups: false },
     } as never,
     msg: makeAudioMsg(msgOverrides),
-    route: makeRoute(),
+    route: {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      accountId: "default",
+    } as Parameters<typeof processMessage>[0]["route"],
     groupHistoryKey: "whatsapp:default:+15550000002",
     groupHistories: new Map(),
     groupMemberNames: new Map(),
@@ -232,9 +216,7 @@ function expectContextFields(context: Record<string, unknown>, fields: Record<st
 describe("processMessage audio preflight transcription", () => {
   beforeEach(() => {
     transcribeFirstAudioMock.mockReset();
-    maybeSendAckReactionMock.mockReset();
-    maybeSendAckReactionMock.mockResolvedValue(null);
-    shouldComputeCommandResult = false;
+    maybeSendAckReactionMock.mockReset().mockResolvedValue(null);
     shouldComputeCommandBodies = [];
     vi.mocked(createWhatsAppReplyPlan).mockClear();
   });

@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 
 const {
@@ -103,20 +102,18 @@ vi.mock("../../identity.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../reconnect.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../reconnect.js")>();
-  return { ...actual, newConnectionId: () => "test-conn-id" };
-});
-
-vi.mock("../../session.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../session.js")>();
-  return { ...actual, formatError: (e: unknown) => String(e) };
-});
-
-vi.mock("../deliver-reply.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../deliver-reply.js")>();
-  return { ...actual, deliverWebReply: async () => {} };
-});
+vi.mock("../../reconnect.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../reconnect.js")>()),
+  newConnectionId: () => "test-conn-id",
+}));
+vi.mock("../../session.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../session.js")>()),
+  formatError: (e: unknown) => String(e),
+}));
+vi.mock("../deliver-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../deliver-reply.js")>()),
+  deliverWebReply: async () => {},
+}));
 
 vi.mock("../loggers.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../loggers.js")>();
@@ -126,10 +123,10 @@ vi.mock("../loggers.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./ack-reaction.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./ack-reaction.js")>();
-  return { ...actual, maybeSendAckReaction: async () => {} };
-});
+vi.mock("./ack-reaction.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./ack-reaction.js")>()),
+  maybeSendAckReaction: async () => {},
+}));
 
 vi.mock("./inbound-context.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./inbound-context.js")>();
@@ -149,10 +146,10 @@ vi.mock("./last-route.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./message-line.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./message-line.js")>();
-  return { ...actual, buildInboundLine: buildInboundLineMock };
-});
+vi.mock("./message-line.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./message-line.js")>()),
+  buildInboundLine: buildInboundLineMock,
+}));
 
 vi.mock("./runtime-api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./runtime-api.js")>();
@@ -227,9 +224,6 @@ function makeBaseMsg(overrides: { body?: string; commandBody?: string } = {}) {
       senderJid: "15550002222@s.whatsapp.net",
       senderE164: "+15550002222",
       senderName: "Alice",
-      sendComposing: async () => {},
-      reply: async () => createAcceptedWhatsAppSendResult("text", "r1"),
-      sendMedia: async () => createAcceptedWhatsAppSendResult("media", "m1"),
     },
     admission: {
       accountId: "default",
@@ -292,30 +286,16 @@ function callProcessMessage(
   });
 }
 
-function mockCallArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex = 0, argIndex = 0) {
-  const call = mockFn.mock.calls.at(callIndex);
-  if (!call) {
-    throw new Error(`Expected ${label} call ${callIndex}`);
-  }
-  if (!(argIndex in call)) {
-    throw new Error(`Expected ${label} call ${callIndex} argument ${argIndex}`);
-  }
-  return call[argIndex];
-}
-
 describe("processMessage group system prompt wiring", () => {
   beforeEach(() => {
     buildContextMock.mockReset();
     dispatchBufferedReplyMock.mockClear();
-    isControlCommandMessageMock.mockReset();
-    isControlCommandMessageMock.mockReturnValue(false);
-    resolvePolicyMock.mockReset();
-    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    isControlCommandMessageMock.mockReset().mockReturnValue(false);
+    resolvePolicyMock.mockReset().mockReturnValue(makePolicy(makeAccount()));
     replyPlanParamsMock.mockClear();
     runChannelInboundEventParamsMock.mockClear();
     runMessageReceivedMock.mockClear();
-    shouldComputeCommandAuthorizedMock.mockReset();
-    shouldComputeCommandAuthorizedMock.mockReturnValue(false);
+    shouldComputeCommandAuthorizedMock.mockReset().mockReturnValue(false);
     trackBackgroundTaskMock.mockClear();
     buildInboundLineMock.mockReset().mockReturnValue("hi");
     shouldLogVerboseMock.mockReset().mockReturnValue(false);
@@ -341,13 +321,7 @@ describe("processMessage group system prompt wiring", () => {
 
     await callProcessMessage();
 
-    expect(
-      (
-        mockCallArg(buildContextMock, "buildWhatsAppInboundContext") as {
-          groupSystemPrompt?: string;
-        }
-      ).groupSystemPrompt,
-    ).toBe("from config");
+    expect(buildContextMock.mock.calls[0]?.[0].groupSystemPrompt).toBe("from config");
   });
 
   it("keeps generated media notices out of command input", async () => {
@@ -363,7 +337,7 @@ describe("processMessage group system prompt wiring", () => {
 
     expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/reset", {});
     expect(isControlCommandMessageMock).toHaveBeenCalledWith("/reset", {});
-    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+    expect(buildContextMock.mock.calls[0]?.[0]).toMatchObject({
       bodyForAgent: "/reset\n\n[whatsapp attachment unavailable]",
       command: { kind: "text-slash", authorized: true, body: "/reset" },
       rawBody: "/reset",
@@ -377,7 +351,7 @@ describe("processMessage group system prompt wiring", () => {
     const info = vi.fn();
     await callProcessMessage({ msg: makeBaseMsg({ body }), replyLoggerInfo: info });
 
-    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+    expect(buildContextMock.mock.calls[0]?.[0]).toMatchObject({
       bodyForAgent: body,
       combinedBody: body,
       rawBody: body,
@@ -407,7 +381,7 @@ describe("processMessage group system prompt wiring", () => {
 
     await callProcessMessage({ groupHistories });
 
-    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+    expect(buildContextMock.mock.calls[0]?.[0]).toMatchObject({
       groupHistory: entries,
     });
     expect(groupHistories.get(historyKey)).toEqual([]);
@@ -491,10 +465,7 @@ describe("processMessage group system prompt wiring", () => {
         },
       );
       expect(internalReceived).toHaveBeenCalledTimes(1);
-      const internalEvent = mockCallArg(internalReceived, "internal message received") as Record<
-        string,
-        unknown
-      >;
+      const internalEvent = internalReceived.mock.calls[0]![0];
       expect(internalEvent.timestamp).toBeInstanceOf(Date);
       expect({ ...internalEvent, timestamp: undefined }).toEqual({
         type: "message",
@@ -539,20 +510,13 @@ describe("processMessage group system prompt wiring", () => {
 
     await callProcessMessage({ msg, dispatchReplyFromConfig });
 
-    const runParams = mockCallArg(runChannelInboundEventParamsMock, "runChannelInboundEvent") as {
-      raw?: unknown;
-      turnAdoptionLifecycle?: unknown;
-    };
-    const replyPlanParams = mockCallArg(replyPlanParamsMock, "createWhatsAppReplyPlan") as {
-      turnAdoptionLifecycle?: unknown;
-    };
+    const runParams = runChannelInboundEventParamsMock.mock.calls[0]![0];
+    const replyPlanParams = replyPlanParamsMock.mock.calls[0]![0];
     expect(runParams.turnAdoptionLifecycle).toBe(replyPlanParams.turnAdoptionLifecycle);
     expect(dispatchReplyFromConfig).toHaveBeenCalledOnce();
     expect(trackBackgroundTaskMock).toHaveBeenCalledTimes(1);
-    expect(mockCallArg(trackBackgroundTaskMock, "trackBackgroundTask")).toBeInstanceOf(Set);
-    expect(mockCallArg(trackBackgroundTaskMock, "trackBackgroundTask", 0, 1)).toBeInstanceOf(
-      Promise,
-    );
+    expect(trackBackgroundTaskMock.mock.calls[0]?.[0]).toBeInstanceOf(Set);
+    expect(trackBackgroundTaskMock.mock.calls[0]?.[1]).toBeInstanceOf(Promise);
     expect(runParams.raw).not.toHaveProperty("platform");
     expect(runParams.raw).not.toHaveProperty("admission");
   });

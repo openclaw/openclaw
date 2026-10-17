@@ -89,113 +89,64 @@ const boundSessionKey = "agent:sandboxed-agent:acp:binding:whatsapp:work:abc123"
 const directConversationId = "+15551234567";
 const groupConversationId = "120363001234567890@g.us";
 
-const configuredBindingRecord = {
-  bindingId: `config:acp:whatsapp:work:${directConversationId}`,
-  targetSessionKey: boundSessionKey,
-  targetKind: "session",
-  conversation: {
-    channel: "whatsapp",
-    accountId: "work",
-    conversationId: directConversationId,
-  },
-  status: "active",
-  boundAt: 0,
-  metadata: {
-    source: "config",
-    mode: "oneshot",
-    agentId: "sandboxed-agent",
-  },
-} as const;
-
-const configuredStatefulTarget = {
-  kind: "stateful",
-  driverId: "acp",
-  sessionKey: boundSessionKey,
-  agentId: "sandboxed-agent",
-} as const;
-
-const configuredBindingResolution = {
-  conversation: {
-    channel: "whatsapp",
-    accountId: "work",
-    conversationId: directConversationId,
-  },
-  compiledBinding: {
-    channel: "whatsapp",
-    accountPattern: "work",
-    binding: {
-      type: "acp",
+function configuredBinding(conversationId: string, kind: "direct" | "group") {
+  const conversation = { channel: "whatsapp", accountId: "work", conversationId };
+  const record = {
+    bindingId: `config:acp:whatsapp:work:${conversationId}`,
+    targetSessionKey: boundSessionKey,
+    targetKind: "session",
+    conversation,
+    status: "active",
+    boundAt: 0,
+    metadata: {
+      source: "config",
+      mode: "oneshot",
       agentId: "sandboxed-agent",
-      match: {
-        channel: "whatsapp",
-        accountId: "work",
-        peer: { kind: "direct", id: directConversationId },
-      },
     },
-    bindingConversationId: directConversationId,
-    target: { conversationId: directConversationId },
+  } as const;
+  const statefulTarget = {
+    kind: "stateful",
+    driverId: "acp",
+    sessionKey: boundSessionKey,
     agentId: "sandboxed-agent",
-    provider: {
-      compileConfiguredBinding: () => ({ conversationId: directConversationId }),
-      matchInboundConversation: () => ({ conversationId: directConversationId }),
-    },
-    targetFactory: {
-      driverId: "acp",
-      materialize: () => ({
-        record: configuredBindingRecord,
-        statefulTarget: configuredStatefulTarget,
-      }),
-    },
-  },
-  match: { conversationId: "+15551234567" },
-  record: configuredBindingRecord,
-  statefulTarget: configuredStatefulTarget,
-} as const;
+  } as const;
 
-const configuredGroupBindingRecord = {
-  ...configuredBindingRecord,
-  bindingId: `config:acp:whatsapp:work:${groupConversationId}`,
-  conversation: {
-    channel: "whatsapp",
-    accountId: "work",
-    conversationId: groupConversationId,
-  },
-} as const;
-
-const configuredGroupBindingResolution = {
-  ...configuredBindingResolution,
-  conversation: {
-    channel: "whatsapp",
-    accountId: "work",
-    conversationId: groupConversationId,
-  },
-  compiledBinding: {
-    ...configuredBindingResolution.compiledBinding,
-    binding: {
-      ...configuredBindingResolution.compiledBinding.binding,
-      match: {
-        channel: "whatsapp",
-        accountId: "work",
-        peer: { kind: "group", id: groupConversationId },
+  return {
+    conversation,
+    compiledBinding: {
+      channel: "whatsapp",
+      accountPattern: "work",
+      binding: {
+        type: "acp",
+        agentId: "sandboxed-agent",
+        match: {
+          channel: "whatsapp",
+          accountId: "work",
+          peer: { kind, id: conversationId },
+        },
+      },
+      bindingConversationId: conversationId,
+      target: { conversationId },
+      agentId: "sandboxed-agent",
+      provider: {
+        compileConfiguredBinding: () => ({ conversationId }),
+        matchInboundConversation: () => ({ conversationId }),
+      },
+      targetFactory: {
+        driverId: "acp",
+        materialize: () => ({
+          record,
+          statefulTarget,
+        }),
       },
     },
-    bindingConversationId: groupConversationId,
-    target: { conversationId: groupConversationId },
-    provider: {
-      compileConfiguredBinding: () => ({ conversationId: groupConversationId }),
-      matchInboundConversation: () => ({ conversationId: groupConversationId }),
-    },
-    targetFactory: {
-      driverId: "acp",
-      materialize: () => ({
-        record: configuredGroupBindingRecord,
-        statefulTarget: configuredStatefulTarget,
-      }),
-    },
-  },
-  match: { conversationId: groupConversationId },
-  record: configuredGroupBindingRecord,
-} as const;
+    match: { conversationId },
+    record,
+    statefulTarget,
+  } as const;
+}
+const configuredBindingResolution = configuredBinding(directConversationId, "direct");
+const configuredGroupBindingResolution = configuredBinding(groupConversationId, "group");
 
 type ConfiguredBindingResolution = NonNullable<ConfiguredBindingRouteResult["bindingResolution"]>;
 
@@ -215,20 +166,10 @@ function resolvedConfiguredRoute(
   });
 }
 
-function createCfg(): Record<string, unknown> {
-  return {
-    bindings: [
-      {
-        type: "acp",
-        agentId: "sandboxed-agent",
-        match: {
-          channel: "whatsapp",
-          accountId: "work",
-          peer: { kind: "direct", id: "+15551234567" },
-        },
-      },
-    ],
-  };
+function createCfg(kind: "direct" | "group" = "direct"): Record<string, unknown> {
+  const resolution =
+    kind === "direct" ? configuredBindingResolution : configuredGroupBindingResolution;
+  return { bindings: [resolution.compiledBinding.binding] };
 }
 
 function createGroupCfg(): Record<string, unknown> {
@@ -237,17 +178,7 @@ function createGroupCfg(): Record<string, unknown> {
     channels: { whatsapp: { groupPolicy: "open", accounts: { work: {} } } },
     broadcast: { "120363001234567890@g.us": ["main", "backup"] },
     agents: { entries: { main: {}, backup: {}, "sandboxed-agent": {} } },
-    bindings: [
-      {
-        type: "acp",
-        agentId: "sandboxed-agent",
-        match: {
-          channel: "whatsapp",
-          accountId: "work",
-          peer: { kind: "group", id: "120363001234567890@g.us" },
-        },
-      },
-    ],
+    ...createCfg("group"),
   };
 }
 
@@ -276,37 +207,36 @@ function createHandler(warn = vi.fn(), cfg: Record<string, unknown> = createCfg(
   };
 }
 
-function createMessage() {
+type TestMessageOverrides = NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>;
+
+function createMessage(overrides: TestMessageOverrides = {}) {
   return createTestWebInboundMessage({
+    ...overrides,
     admission: {
       accountId: "work",
-      conversation: {
-        kind: "direct",
-        id: "15551234567@s.whatsapp.net",
-      },
-      sender: {
-        id: "15551234567@s.whatsapp.net",
-      },
+      conversation: { kind: "direct", id: "15551234567@s.whatsapp.net" },
+      sender: { id: "15551234567@s.whatsapp.net" },
+      ...overrides.admission,
     },
     platform: {
       chatJid: "15551234567@s.whatsapp.net",
       recipientJid: "15559876543@s.whatsapp.net",
+      ...overrides.platform,
     },
   });
 }
 
-type TestMessageOverrides = NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>;
-
 function createGroupMessage(overrides: TestMessageOverrides = {}) {
   const { admission, platform, ...message } = overrides;
-  return createTestWebInboundMessage({
+  return createMessage({
     ...message,
     admission: {
       ...admission,
       accountId: "work",
+      sender: { id: groupConversationId, ...admission?.sender },
       conversation: {
         kind: "group",
-        id: "120363001234567890@g.us",
+        id: groupConversationId,
         ...admission?.conversation,
       },
       senderAccess: {
@@ -315,25 +245,14 @@ function createGroupMessage(overrides: TestMessageOverrides = {}) {
       },
     },
     platform: {
-      chatJid: "120363001234567890@g.us",
-      recipientJid: "15559876543@s.whatsapp.net",
+      chatJid: groupConversationId,
       ...platform,
     },
   });
 }
 
 function createGroupAudioMessage() {
-  return createTestWebInboundMessage({
-    admission: {
-      accountId: "work",
-      conversation: {
-        kind: "group",
-        id: "120363001234567890@g.us",
-      },
-      senderAccess: {
-        reasonCode: "group_policy_allowed",
-      },
-    },
+  return createGroupMessage({
     payload: {
       body: "",
       media: {
@@ -342,32 +261,20 @@ function createGroupAudioMessage() {
         kind: "audio",
       },
     },
-    platform: {
-      chatJid: "120363001234567890@g.us",
-      recipientJid: "15559876543@s.whatsapp.net",
-    },
   });
 }
 
 describe("createWebOnMessageHandler configured ACP bindings", () => {
   beforeEach(() => {
-    processMessageMock.mockReset();
-    processMessageMock.mockResolvedValue(true);
-    resolveGroupActivationForMock.mockReset();
-    resolveGroupActivationForMock.mockResolvedValue("always");
+    processMessageMock.mockReset().mockResolvedValue(true);
+    resolveGroupActivationForMock.mockReset().mockResolvedValue("always");
     updateLastRouteInBackgroundMock.mockReset();
-    transcribeFirstAudioMock.mockReset();
-    transcribeFirstAudioMock.mockResolvedValue("openclaw please handle this");
-    maybeSendAckReactionMock.mockReset();
-    maybeSendAckReactionMock.mockResolvedValue(null);
-    createStatusReactionControllerMock.mockReset();
-    createStatusReactionControllerMock.mockResolvedValue(null);
-    resolveAgentRouteMock.mockReset();
-    resolveAgentRouteMock.mockReturnValue(baseRoute);
-    ensureConfiguredBindingRouteReadyMock.mockReset();
-    ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
-    resolveConfiguredBindingRouteMock.mockReset();
-    resolveConfiguredBindingRouteMock.mockImplementation(resolvedConfiguredRoute());
+    transcribeFirstAudioMock.mockReset().mockResolvedValue("openclaw please handle this");
+    maybeSendAckReactionMock.mockReset().mockResolvedValue(null);
+    createStatusReactionControllerMock.mockReset().mockResolvedValue(null);
+    resolveAgentRouteMock.mockReset().mockReturnValue(baseRoute);
+    ensureConfiguredBindingRouteReadyMock.mockReset().mockResolvedValue({ ok: true });
+    resolveConfiguredBindingRouteMock.mockReset().mockImplementation(resolvedConfiguredRoute());
   });
 
   it("dispatches two same-content messages with distinct native ids in order", async () => {
@@ -379,18 +286,14 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
     const { handler } = createHandler(vi.fn(), createCfg());
 
     const messageForId = (id: string) =>
-      createTestWebInboundMessage({
+      createMessage({
         admission: {
-          accountId: "work",
           conversation: { kind: "direct", id: sentConversation },
           sender: { id: sentConversation },
         },
         event: { id },
         payload: { body: "Done." },
-        platform: {
-          chatJid: sentConversation,
-          recipientJid: "15559876543@s.whatsapp.net",
-        },
+        platform: { chatJid: sentConversation },
       });
 
     await handler(messageForId("in-2"));
@@ -413,14 +316,9 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
 
     expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
     expect(processMessageMock).toHaveBeenCalledTimes(1);
-    expect(processMessageMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        route: expect.objectContaining({
-          sessionKey: baseRoute.sessionKey,
-          matchedBy: baseRoute.matchedBy,
-        }),
-      }),
-    );
+    expect(processMessageMock.mock.calls[0]?.[0]).toMatchObject({
+      route: { sessionKey: baseRoute.sessionKey, matchedBy: baseRoute.matchedBy },
+    });
   });
 
   it("waits for group admission before ensuring a configured ACP binding target", async () => {
