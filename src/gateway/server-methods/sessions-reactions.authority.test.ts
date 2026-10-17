@@ -18,7 +18,8 @@ import * as sharingPreparation from "../session-sharing-preparation.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
 import {
   appendMessage,
-  call,
+  setReaction,
+  listReactions,
   client,
   context,
   roleConfig,
@@ -35,8 +36,8 @@ afterEach(() => {
 });
 
 describe("reaction access preparation", () => {
-  it("lists and commits member reactions without caller-thread SQL", async () => {
-    await withReactionState(async () => {
+  it("lists and commits member reactions without caller-thread SQL", () =>
+    withReactionState(async () => {
       await seedSession({ visibility: "read-only" });
       addSessionMember(transcriptScope, { identityId: "alice", addedBy: "owner" });
       const messageId = await appendMessage();
@@ -50,21 +51,8 @@ describe("reaction access preparation", () => {
         const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
         const exec = vi.spyOn(DatabaseSync.prototype, "exec");
         try {
-          expect(
-            (
-              await call(
-                "session.reactions.set",
-                { sessionKey, messageId, emoji: "👍" },
-                client("alice"),
-                requestContext,
-              )
-            )[0],
-          ).toBe(true);
-          expect(
-            (
-              await call("session.reactions.list", { sessionKey }, client("alice"), requestContext)
-            )[1],
-          ).toMatchObject({
+          expect((await setReaction(messageId, {}, client("alice"), requestContext))[0]).toBe(true);
+          expect((await listReactions(client("alice"), requestContext))[1]).toMatchObject({
             sessionId,
             reactions: { [messageId]: [{ emoji: "👍", count: 1 }] },
           });
@@ -77,16 +65,15 @@ describe("reaction access preparation", () => {
       } finally {
         projection.dispose();
       }
-    });
-  });
+    }));
 
-  it("awaits membership preparation and rejects failed or revoked preparations", async () => {
-    await withReactionState(async () => {
+  it("awaits membership preparation and rejects failed or revoked preparations", () =>
+    withReactionState(async () => {
       await seedSession({ visibility: "read-only" });
       addSessionMember(transcriptScope, { identityId: "alice", addedBy: "owner" });
       const messageId = await appendMessage();
       const requestContext = context();
-      await call("session.reactions.list", { sessionKey }, client("alice"), requestContext);
+      await listReactions(client("alice"), requestContext);
       const projection = getSessionRowProjection(requestContext)!;
       const prepare = projection.prepareMembership.bind(projection);
       for (const outcome of ["ready", "rejected", "profile-changed"] as const) {
@@ -105,12 +92,7 @@ describe("reaction access preparation", () => {
           });
         const read = vi.spyOn(transcriptReaders, "readSessionMessageByIdAsync");
         sessionChanges.emit({ agentId: "main", sessionKey, factsInvalidated: true });
-        const pending = call(
-          "session.reactions.set",
-          { sessionKey, messageId, emoji: "👍" },
-          reactor,
-          requestContext,
-        );
+        const pending = setReaction(messageId, {}, reactor, requestContext);
         try {
           await awaitGateBeforeSettlement(
             entered.promise,
@@ -132,11 +114,10 @@ describe("reaction access preparation", () => {
         preparation.mockRestore();
         read.mockRestore();
       }
-    });
-  });
+    }));
 
-  it("rechecks current membership, policy, source, and caller after message preparation", async () => {
-    await withReactionState(async () => {
+  it("rechecks current membership, policy, source, and caller after message preparation", () =>
+    withReactionState(async () => {
       const readMessage = transcriptReaders.readSessionMessageByIdAsync;
       for (const change of ["member", "dirty", "profile", "policy", "projection", "run"] as const) {
         const key = `agent:main:revoke-${change}`;
@@ -150,7 +131,7 @@ describe("reaction access preparation", () => {
         const requestContext = context(cfg);
         requestContext.getRuntimeConfig = () => cfg;
         const reactor = client("alice");
-        await call("session.reactions.list", { sessionKey: key }, reactor, requestContext);
+        await listReactions(reactor, requestContext, key);
         const projection = getSessionRowProjection(requestContext)!;
         const entered = createDeferredCore();
         const release = createDeferredCore();
@@ -179,26 +160,16 @@ describe("reaction access preparation", () => {
           };
         }
         let invalidateOnCheck = false;
-        const pending = call(
-          "session.reactions.set",
-          { sessionKey: key, messageId, emoji: "👍" },
-          reactor,
-          requestContext,
-          () => {
-            if (invalidateOnCheck) {
-              invalidateOnCheck = false;
-              const target = projection.sharingTarget({ key, agentId: "main" })!;
-              sessionChanges.emit({ all: true, scope: "stores" });
-              expect(projection.hasMembership(target.storePath, target.storeKey, "alice")).toBe(
-                true,
-              );
-              expect(projection.sharingTargetState({ key, agentId: "main" }).status).toBe(
-                "pending",
-              );
-            }
-            return true;
-          },
-        );
+        const pending = setReaction(messageId, { sessionKey: key }, reactor, requestContext, () => {
+          if (invalidateOnCheck) {
+            invalidateOnCheck = false;
+            const target = projection.sharingTarget({ key, agentId: "main" })!;
+            sessionChanges.emit({ all: true, scope: "stores" });
+            expect(projection.hasMembership(target.storePath, target.storeKey, "alice")).toBe(true);
+            expect(projection.sharingTargetState({ key, agentId: "main" }).status).toBe("pending");
+          }
+          return true;
+        });
         try {
           await awaitGateBeforeSettlement(
             entered.promise,
@@ -231,19 +202,13 @@ describe("reaction access preparation", () => {
         expect(requestContext.broadcast).not.toHaveBeenCalled();
         expect(await transcriptReaders.readSessionReactionsAsync(scope)).toEqual({});
       }
-    });
-  });
-  it("does not disclose a list whose session becomes private while reading", async () => {
-    await withReactionState(async () => {
+    }));
+  it("does not disclose a list whose session becomes private while reading", () =>
+    withReactionState(async () => {
       await seedSession();
       const messageId = await appendMessage();
       const requestContext = context();
-      await call(
-        "session.reactions.set",
-        { sessionKey, messageId, emoji: "👍" },
-        client("alice"),
-        requestContext,
-      );
+      await setReaction(messageId, {}, client("alice"), requestContext);
       const readReactions = transcriptReaders.readSessionReactionsAsync;
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -255,12 +220,7 @@ describe("reaction access preparation", () => {
           return result;
         },
       );
-      const pending = call(
-        "session.reactions.list",
-        { sessionKey },
-        client("alice"),
-        requestContext,
-      );
+      const pending = listReactions(client("alice"), requestContext);
       try {
         await awaitGateBeforeSettlement(
           entered.promise,
@@ -272,14 +232,13 @@ describe("reaction access preparation", () => {
         release.resolve();
       }
       expect(await pending).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
-    });
-  });
+    }));
 
-  it("keeps an absent target bound through asynchronous fallback publication", async () => {
-    await withReactionState(async () => {
+  it("keeps an absent target bound through asynchronous fallback publication", () =>
+    withReactionState(async () => {
       await seedSession();
       const requestContext = context();
-      await call("session.reactions.list", { sessionKey }, client("alice"), requestContext);
+      await listReactions(client("alice"), requestContext);
       const key = "agent:main:previously-absent";
       const prepareFacts = sharingPreparation.prepareSessionMutationFacts;
       const entered = createDeferredCore();
@@ -293,12 +252,7 @@ describe("reaction access preparation", () => {
         },
       );
       const read = vi.spyOn(transcriptReaders, "readSessionReactionsAsync");
-      const pending = call(
-        "session.reactions.list",
-        { sessionKey: key },
-        client("alice"),
-        requestContext,
-      );
+      const pending = listReactions(client("alice"), requestContext, key);
       try {
         await awaitGateBeforeSettlement(
           entered.promise,
@@ -311,6 +265,5 @@ describe("reaction access preparation", () => {
       }
       expect(await pending).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
       expect(read).not.toHaveBeenCalled();
-    });
-  });
+    }));
 });

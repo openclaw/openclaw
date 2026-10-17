@@ -73,6 +73,25 @@ const cfg: OpenClawConfig = {
 const selectionX = { provider: "fixture", model: "x", thinkLevel: "low" } as const;
 const selectionY = { provider: "fixture", model: "y", thinkLevel: "high" } as const;
 const selectionZ = { provider: "fixture", model: "z", thinkLevel: "off" } as const;
+const scope = { agentId: "main", sessionKey };
+const queuedAccount = {
+  model: "y",
+  modelOverrideSource: "auto" as const,
+  hasAutoFallbackProvenance: true,
+  authProfileId: "fixture:queued-account",
+  authProfileIdSource: "user" as const,
+};
+
+function admissionDefaults(state: OpenClawTestState) {
+  return {
+    typing: createTypingController({}),
+    typingMode: "never" as const,
+    defaultModel: "configured",
+    sessionKey,
+    storePath: path.join(state.sessionsDir(), "sessions.json"),
+    sessionEntry: loadSessionEntry(scope),
+  };
+}
 
 afterEach(() => {
   clearFollowupQueue(sessionKey);
@@ -133,7 +152,7 @@ it("preserves requested thinking when switching away from and back to a reasonin
     await seedSession("high");
     for (const model of ["fixture/z", "fixture/x"]) {
       expect((await patchSession({ model }))[0]).toBe(true);
-      expect(loadSessionEntry({ agentId: "main", sessionKey })?.thinkingLevel).toBe("high");
+      expect(loadSessionEntry(scope)?.thinkingLevel).toBe("high");
     }
   });
 });
@@ -187,14 +206,7 @@ it("keeps admitted A on X, starts queued B on Y, and applies a later Z only to w
       try {
         const result = await admitFollowupTurn({
           queued,
-          defaults: {
-            typing: createTypingController({}),
-            typingMode: "never",
-            defaultModel: "configured",
-            sessionKey,
-            storePath: path.join(state.sessionsDir(), "sessions.json"),
-            sessionEntry: loadSessionEntry({ agentId: "main", sessionKey }),
-          },
+          defaults: admissionDefaults(state),
         });
         expect(result.kind).toBe("admitted");
         if (result.kind !== "admitted") {
@@ -267,9 +279,7 @@ it.each([
       const ordinary = enqueue(state, "ordinary", { thinkLevel: "high" });
 
       expect((await patchSession(patch))[0]).toBe(true);
-      expect(loadSessionEntry({ agentId: "main", sessionKey })?.thinkingLevel).toBe(
-        patch.thinkingLevel ?? undefined,
-      );
+      expect(loadSessionEntry(scope)?.thinkingLevel).toBe(patch.thinkingLevel ?? undefined);
       expect(ordinary.run).toMatchObject({ model, thinkLevel: expected });
       expect(explicit.run).toMatchObject({ model, thinkLevel: "low", thinkLevelOverride: "low" });
       expect(defaults.run).toMatchObject({
@@ -285,16 +295,9 @@ it.each([
 it("changes only effort on a queued fallback route", async () => {
   await withState(async (state) => {
     await seedSession();
-    const route = {
-      model: "y",
-      modelOverrideSource: "auto" as const,
-      hasAutoFallbackProvenance: true,
-      authProfileId: "fixture:queued-account",
-      authProfileIdSource: "user" as const,
-    };
-    const queued = enqueue(state, "keep queued route", route);
+    const queued = enqueue(state, "keep queued route", queuedAccount);
     expect((await patchSession({ thinkingLevel: "high" }))[0]).toBe(true);
-    expect(queued.run).toMatchObject({ ...route, thinkLevel: "high" });
+    expect(queued.run).toMatchObject({ ...queuedAccount, thinkLevel: "high" });
   });
 });
 
@@ -322,7 +325,7 @@ it.each([null, "fixture/configured", "Fixture/configured", "preferred"])(
         hasAutoFallbackProvenance: true,
       });
       expect((await patchSession({ model, thinkingLevel: null }, config))[0]).toBe(true);
-      const stored = loadSessionEntry({ agentId: "main", sessionKey });
+      const stored = loadSessionEntry(scope);
       expect(stored?.modelOverride).toBeUndefined();
       expect(stored?.providerOverride).toBeUndefined();
       expect(stored?.modelOverrideSource).toBe("default");
@@ -355,11 +358,11 @@ it.each([
   await withState(async (state) => {
     await seedSession();
     const queued = enqueue(state, "unchanged");
-    const before = loadSessionEntry({ agentId: "main", sessionKey });
+    const before = loadSessionEntry(scope);
     const response = await patchSession(patch);
     expect(response[0]).toBe(false);
     expect(response[2]?.message).toContain(error);
-    expect(loadSessionEntry({ agentId: "main", sessionKey })).toEqual(before);
+    expect(loadSessionEntry(scope)).toEqual(before);
     expect(queued.run).toMatchObject(selectionX);
   });
 });
@@ -374,12 +377,8 @@ it.each([
     await withState(async (state) => {
       await seedSession();
       const route = {
-        model: "y",
+        ...queuedAccount,
         requestedRouteResolution: "resolved" as const,
-        modelOverrideSource: "auto" as const,
-        hasAutoFallbackProvenance: true,
-        authProfileId: "fixture:queued-account",
-        authProfileIdSource: "user" as const,
         autoFallbackPrimaryProbe: {
           provider: "fixture",
           model: "y",
@@ -394,10 +393,7 @@ it.each([
         thinkLevel: "medium",
         thinkLevelOverride: "default",
       });
-      const sessionEntry = expectDefined(
-        loadSessionEntry({ agentId: "main", sessionKey }),
-        "session entry",
-      );
+      const sessionEntry = expectDefined(loadSessionEntry(scope), "session entry");
       const reply = await handleDirectiveOnly({
         cfg,
         agentId: "main",
@@ -424,7 +420,7 @@ it.each([
       expect(reply?.text).toContain(
         command === "/think invalid" ? "Unrecognized thinking level" : "Thinking level",
       );
-      expect(loadSessionEntry({ agentId: "main", sessionKey })?.thinkingLevel).toBe(stored);
+      expect(loadSessionEntry(scope)?.thinkingLevel).toBe(stored);
       expect(ordinary.run).toMatchObject({ ...route, thinkLevel: expected });
       expect(explicit.run).toMatchObject({
         ...route,
@@ -505,10 +501,7 @@ it.each([
               const availableCatalog = await owner.available(agentId);
               // The real patch has committed, but still holds lifecycle ordering
               // while preparing its queue publication. Let B try to start here.
-              if (
-                !held &&
-                loadSessionEntry({ agentId: "main", sessionKey })?.thinkingLevel === "high"
-              ) {
+              if (!held && loadSessionEntry(scope)?.thinkingLevel === "high") {
                 held = true;
                 committed.resolve();
                 await releaseRefresh.promise;
@@ -534,12 +527,7 @@ it.each([
         starting = admitFollowupTurn({
           queued: b,
           defaults: {
-            typing: createTypingController({}),
-            typingMode: "never",
-            defaultModel: "configured",
-            sessionKey,
-            storePath: path.join(state.sessionsDir(), "sessions.json"),
-            sessionEntry: loadSessionEntry({ agentId: "main", sessionKey }),
+            ...admissionDefaults(state),
             opts: {
               onQueuedFollowupAdmitted: async () => {
                 // Source adoption is awaited after admission. A newer write here

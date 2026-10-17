@@ -37,6 +37,15 @@ afterEach(async () => {
 const cfg = {};
 const scope = { agentId: "main", sessionKey: "agent:main:public-example" };
 const sessionId = "public-example-generation";
+const ownerEntry = {
+  sessionId,
+  updatedAt: 1,
+  createdActor: { type: "human", source: "profile", id: "owner" },
+} as const;
+const grant = () =>
+  expectDefined(loadSessionEntry(scope)?.publicShare, "persisted public share grant");
+const resolveToken = (share: { token: string } | undefined) =>
+  publicSessionTokens.resolvePublicSessionShareToken(share?.token ?? "");
 
 async function call(
   method: "session.publicShare.set" | "session.members.listEvidence" | "session.visibility.set",
@@ -60,15 +69,17 @@ async function call(
 
 async function createSession() {
   setRuntimeConfigSnapshot(cfg);
-  await upsertSessionEntryCore(scope, {
-    sessionId,
-    updatedAt: 1,
-    createdActor: { type: "human", source: "profile", id: "owner" },
-  });
+  await upsertSessionEntryCore(scope, ownerEntry);
 }
 
 async function setPublic(enabled: boolean, client?: GatewayClient, expectedSessionId = sessionId) {
   return call("session.publicShare.set", { ...scope, expectedSessionId, enabled }, client);
+}
+
+async function setShared() {
+  expect((await call("session.visibility.set", { ...scope, visibility: "shared" }))?.[0]).toBe(
+    true,
+  );
 }
 
 describe("world-readable session publication management", () => {
@@ -78,17 +89,12 @@ describe("world-readable session publication management", () => {
       const published = await setPublic(true);
       expect(published?.[0]).toBe(true);
       const result = Value.Decode(SessionPublicShareSetResultSchema, published?.[1]);
-      const firstGrant = expectDefined(
-        loadSessionEntry(scope)?.publicShare,
-        "persisted public share grant",
-      );
+      const firstGrant = grant();
       expect(result.publicShare).toEqual({
         token: expect.stringMatching(/^v1\.[A-Za-z0-9_-]+$/u),
         createdAt: firstGrant.createdAt,
       });
-      expect(
-        await publicSessionTokens.resolvePublicSessionShareToken(result.publicShare?.token ?? ""),
-      ).toEqual({
+      expect(await resolveToken(result.publicShare)).toEqual({
         ...scope,
         sessionId,
         shareId: firstGrant.id,
@@ -107,9 +113,7 @@ describe("world-readable session publication management", () => {
         listed?.[1],
       ).publicShare;
       expect(listedShare?.createdAt).toBe(result.publicShare?.createdAt);
-      expect(
-        await publicSessionTokens.resolvePublicSessionShareToken(listedShare?.token ?? ""),
-      ).toEqual({
+      expect(await resolveToken(listedShare)).toEqual({
         ...scope,
         sessionId,
         shareId: firstGrant.id,
@@ -123,18 +127,9 @@ describe("world-readable session publication management", () => {
         SessionPublicShareSetResultSchema,
         (await setPublic(true))?.[1],
       );
-      const republishedGrant = expectDefined(
-        loadSessionEntry(scope)?.publicShare,
-        "republished public share grant",
-      );
+      const republishedGrant = grant();
       expect(republishedGrant.id).not.toBe(firstGrantId);
-      expect(
-        (
-          await publicSessionTokens.resolvePublicSessionShareToken(
-            republished.publicShare?.token ?? "",
-          )
-        )?.shareId,
-      ).toBe(republishedGrant.id);
+      expect((await resolveToken(republished.publicShare))?.shareId).toBe(republishedGrant.id);
     });
   });
 
@@ -169,19 +164,9 @@ describe("world-readable session publication management", () => {
       const firstConfig = configFor(firstStorePath);
       const secondConfig = configFor(secondStorePath);
       setRuntimeConfigSnapshot(firstConfig);
-      const entry = {
-        sessionId,
-        updatedAt: 1,
-        createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
-      };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath: firstStorePath },
-        entry,
-      );
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath: secondStorePath },
-        entry,
-      );
+      for (const storePath of [firstStorePath, secondStorePath]) {
+        await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, ownerEntry);
+      }
       let currentConfig = firstConfig;
       const requestContext = sessionSharingTestContext(vi.fn(), firstConfig);
       requestContext.getRuntimeConfig = () => currentConfig;
@@ -210,12 +195,11 @@ describe("world-readable session publication management", () => {
       ).rejects.toThrow("Session access facts are unavailable");
 
       expect(responses).toEqual([]);
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey, storePath: firstStorePath })?.publicShare,
-      ).toBeUndefined();
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey, storePath: secondStorePath })?.publicShare,
-      ).toBeUndefined();
+      for (const storePath of [firstStorePath, secondStorePath]) {
+        expect(
+          loadSessionEntry({ agentId: "main", sessionKey, storePath })?.publicShare,
+        ).toBeUndefined();
+      }
     });
   });
 
@@ -229,9 +213,7 @@ describe("world-readable session publication management", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         await createSession();
         await closeOpenClawAgentDatabasesAsync();
-        expect(
-          (await call("session.visibility.set", { ...scope, visibility: "shared" }))?.[0],
-        ).toBe(true);
+        await setShared();
         expect(loadSessionEntry(scope)?.createdActor?.id).toBe("owner");
         const resetSession = () =>
           upsertSessionEntryCore(scope, {
@@ -275,9 +257,7 @@ describe("world-readable session publication management", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await createSession();
       await closeOpenClawAgentDatabasesAsync();
-      expect((await call("session.visibility.set", { ...scope, visibility: "shared" }))?.[0]).toBe(
-        true,
-      );
+      await setShared();
       expect(loadSessionEntry(scope)?.visibility).toBeUndefined();
       const run = sharingLifecycle.runExclusiveSessionLifecycleMutation;
       vi.spyOn(sharingLifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(
@@ -286,9 +266,7 @@ describe("world-readable session publication management", () => {
           return run(operation, params);
         },
       );
-      expect((await call("session.visibility.set", { ...scope, visibility: "shared" }))?.[0]).toBe(
-        true,
-      );
+      await setShared();
       expect(loadSessionEntry(scope)?.visibility).toBe("shared");
     });
   });
@@ -299,7 +277,7 @@ describe("world-readable session publication management", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         await createSession();
         await setPublic(true);
-        const grant = expectDefined(loadSessionEntry(scope)?.publicShare, "published grant");
+        const publishedGrant = grant();
         if (restoredGrant) {
           await setPublic(false);
         }
@@ -307,7 +285,7 @@ describe("world-readable session publication management", () => {
           const read = sharingStore.readSessionMembersInWorker;
           vi.spyOn(sharingStore, "readSessionMembersInWorker").mockImplementationOnce(
             async (input) => {
-              await upsertSessionEntryCore(scope, { publicShare: grant });
+              await upsertSessionEntryCore(scope, { publicShare: publishedGrant });
               return read(input);
             },
           );
@@ -337,11 +315,7 @@ describe("world-readable session publication management", () => {
         agentId: "main",
         sessionKey: `agent:main:${"🙂".repeat(2_000)}`,
       };
-      await upsertSessionEntryCore(oversizedScope, {
-        sessionId,
-        updatedAt: 1,
-        createdActor: { type: "human", source: "profile", id: "owner" },
-      });
+      await upsertSessionEntryCore(oversizedScope, ownerEntry);
 
       await expect(
         call("session.publicShare.set", {

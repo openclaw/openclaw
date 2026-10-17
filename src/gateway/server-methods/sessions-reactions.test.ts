@@ -26,6 +26,8 @@ import {
 import {
   appendMessage,
   call,
+  setReaction,
+  listReactions,
   client,
   context,
   roleConfig,
@@ -108,85 +110,28 @@ afterEach(() => {
 });
 
 describe("session reaction handlers", () => {
-  it("enforces session participation and operator caps before committing reactions", async () => {
-    await withReactionState(async () => {
+  it("enforces session participation and operator caps before committing reactions", () =>
+    withReactionState(async () => {
       const cases = [
-        { name: "draft owner", identity: "owner", visibility: "draft", allowed: true },
-        { name: "draft admin", identity: "admin", admin: true, visibility: "draft", allowed: true },
-        {
-          name: "draft member",
-          identity: "member",
-          member: true,
-          visibility: "draft",
-          allowed: false,
-        },
-        {
-          name: "read-only member",
-          identity: "member",
-          member: true,
-          visibility: "read-only",
-          allowed: true,
-        },
-        { name: "shared viewer", identity: "viewer", visibility: "shared", allowed: true },
-        {
-          name: "write-capped shared viewer",
-          identity: "viewer",
-          cap: "write",
-          visibility: "shared",
-          allowed: true,
-        },
-        {
-          name: "suggest-capped suggest viewer",
-          identity: "viewer",
-          cap: "suggest",
-          visibility: "suggest",
-          allowed: true,
-        },
-        {
-          name: "view-capped suggest viewer",
-          identity: "viewer",
-          cap: "view",
-          visibility: "suggest",
-          allowed: false,
-          viewDenied: true,
-        },
-        {
-          name: "view-capped owner",
-          identity: "owner",
-          cap: "view",
-          visibility: "shared",
-          allowed: true,
-        },
-        {
-          name: "none-capped viewer",
-          identity: "viewer",
-          cap: "none",
-          visibility: "shared",
-          allowed: false,
-        },
-        {
-          name: "none-capped owner",
-          identity: "owner",
-          cap: "none",
-          visibility: "shared",
-          allowed: false,
-        },
-        {
-          name: "suggest-capped shared viewer",
-          identity: "viewer",
-          cap: "suggest",
-          visibility: "shared",
-          allowed: false,
-        },
-        { name: "read-only viewer", identity: "viewer", visibility: "read-only", allowed: false },
+        ["owner", "draft", undefined, true],
+        ["admin", "draft", undefined, true],
+        ["member", "draft", undefined, false],
+        ["member", "read-only", undefined, true],
+        ["viewer", "shared", undefined, true],
+        ["viewer", "shared", "write", true],
+        ["viewer", "suggest", "suggest", true],
+        ["viewer", "suggest", "view", false],
+        ["owner", "shared", "view", true],
+        ["viewer", "shared", "none", false],
+        ["owner", "shared", "none", false],
+        ["viewer", "shared", "suggest", false],
+        ["viewer", "read-only", undefined, false],
       ] as const;
-      for (const [index, scenario] of cases.entries()) {
+      for (const [index, [identity, visibility, cap, allowed]] of cases.entries()) {
+        const name = `${cap ?? "uncapped"} ${visibility} ${identity}`;
         const key = `agent:main:reaction-access-${index}`;
-        const scope = await seedSession(
-          { visibility: scenario.visibility, sessionId: `access-${index}` },
-          key,
-        );
-        if ("member" in scenario) {
+        const scope = await seedSession({ visibility, sessionId: `access-${index}` }, key);
+        if (identity === "member") {
           addSessionMember(scope, {
             identityId: "member",
             addedBy: "owner",
@@ -194,43 +139,33 @@ describe("session reaction handlers", () => {
           });
         }
         const messageId = await appendMessage(undefined, scope);
-        const requestContext = context("cap" in scenario ? roleConfig(scenario.cap) : {});
-        const result = await call(
-          "session.reactions.set",
-          { sessionKey: key, messageId, emoji: "👍" },
-          client(scenario.identity, scenario.identity, "admin" in scenario),
+        const requestContext = context(cap ? roleConfig(cap) : {});
+        const result = await setReaction(
+          messageId,
+          { sessionKey: key },
+          client(identity, identity, identity === "admin"),
           requestContext,
         );
-        expect(result[0], scenario.name).toBe(scenario.allowed);
-        if ("viewDenied" in scenario) {
+        expect(result[0], name).toBe(allowed);
+        if (cap === "view" && identity === "viewer") {
           expect(result[2]).toMatchObject({
             code: "FORBIDDEN",
             message: "your operator role permits viewing sessions only",
           });
         }
-        if (!scenario.allowed) {
-          expect(requestContext.broadcast, scenario.name).not.toHaveBeenCalled();
-          expect(peekSystemEventEntries(key), scenario.name).toEqual([]);
+        if (!allowed) {
+          expect(requestContext.broadcast, name).not.toHaveBeenCalled();
+          expect(peekSystemEventEntries(key), name).toEqual([]);
         }
       }
-    });
-  });
+    }));
 
-  it("lets read-only viewers list everyone's reactions while hiding none-capped and incognito sessions", async () => {
-    await withReactionState(async () => {
+  it("lets read-only viewers list everyone's reactions while hiding none-capped and incognito sessions", () =>
+    withReactionState(async () => {
       await seedSession({ visibility: "read-only" });
       const messageId = await appendMessage();
-      await call(
-        "session.reactions.set",
-        { sessionKey, messageId, emoji: "👍" },
-        client("owner", "Owner"),
-      );
-      const listed = await call(
-        "session.reactions.list",
-        { sessionKey },
-        client("viewer"),
-        context(roleConfig("view")),
-      );
+      await setReaction(messageId, {}, client("owner", "Owner"));
+      const listed = await listReactions(client("viewer"), context(roleConfig("view")));
       expect(listed).toMatchObject([
         true,
         {
@@ -240,12 +175,7 @@ describe("session reaction handlers", () => {
           },
         },
       ]);
-      const hidden = await call(
-        "session.reactions.list",
-        { sessionKey },
-        client("viewer"),
-        context(roleConfig("none")),
-      );
+      const hidden = await listReactions(client("viewer"), context(roleConfig("none")));
       expect(hidden[0]).toBe(false);
       expect(hidden[2]).toMatchObject({
         code: "INVALID_REQUEST",
@@ -273,33 +203,22 @@ describe("session reaction handlers", () => {
         });
       }
       const admin = client("admin", "Admin", true);
-      expect(
-        (
-          await call(
-            "session.reactions.set",
-            { sessionKey: incognitoKey, messageId: incognitoMessageId, emoji: "👍" },
-            admin,
-          )
-        )[0],
-      ).toBe(true);
+      expect((await setReaction(incognitoMessageId, { sessionKey: incognitoKey }, admin))[0]).toBe(
+        true,
+      );
       expect(
         (await call("session.reactions.list", { sessionKey: incognitoKey }, admin))[1],
       ).toMatchObject({
         sessionId: "incognito-reactions",
         reactions: { [incognitoMessageId]: [{ count: 1 }] },
       });
-    });
-  });
+    }));
 
-  it("requires an identified author and one emoji grapheme", async () => {
-    await withReactionState(async () => {
+  it("requires an identified author and one emoji grapheme", () =>
+    withReactionState(async () => {
       await seedSession();
       const messageId = await appendMessage();
-      const unidentified = await call(
-        "session.reactions.set",
-        { sessionKey, messageId, emoji: "👍" },
-        null,
-      );
+      const unidentified = await setReaction(messageId, {}, null);
       expect(unidentified[2]).toMatchObject({
         code: "INVALID_REQUEST",
         message: "identified reaction author required",
@@ -316,27 +235,18 @@ describe("session reaction handlers", () => {
         `🏴${"\u{e0067}".repeat(31)}\u{e007f}`,
       ]) {
         const requestContext = context();
-        const result = await call(
-          "session.reactions.set",
-          { sessionKey, messageId, emoji },
-          client("alice"),
-          requestContext,
-        );
+        const result = await setReaction(messageId, { emoji }, client("alice"), requestContext);
         expect(result[0], JSON.stringify(emoji)).toBe(false);
         expect(result[2]).toMatchObject({ code: "INVALID_REQUEST" });
         expect(requestContext.broadcast).not.toHaveBeenCalled();
       }
       for (const emoji of ["👍", "❤️", "👩🏽‍💻", "1️⃣", "🇦🇹"]) {
-        expect(
-          (await call("session.reactions.set", { sessionKey, messageId, emoji }))[0],
-          emoji,
-        ).toBe(true);
+        expect((await setReaction(messageId, { emoji }))[0], emoji).toBe(true);
       }
-    });
-  });
+    }));
 
-  it("rejects missing, tool, and previous-session message ids", async () => {
-    await withReactionState(async () => {
+  it("rejects missing, tool, and previous-session message ids", () =>
+    withReactionState(async () => {
       await seedSession();
       const toolId = await appendMessage({
         role: "toolResult",
@@ -352,21 +262,15 @@ describe("session reaction handlers", () => {
       });
       const requestContext = context();
       for (const messageId of ["unknown", toolId, oldMessageId]) {
-        const result = await call(
-          "session.reactions.set",
-          { sessionKey, messageId, emoji: "👍" },
-          client("alice"),
-          requestContext,
-        );
+        const result = await setReaction(messageId, {}, client("alice"), requestContext);
         expect(result[2]).toMatchObject({ code: "INVALID_REQUEST", message: "unknown message" });
       }
       expect(requestContext.broadcast).not.toHaveBeenCalled();
       expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-    });
-  });
+    }));
 
-  it("broadcasts committed summaries and queues next-turn system events without changing transcript bytes", async () => {
-    await withReactionState(async () => {
+  it("broadcasts committed summaries and queues next-turn system events without changing transcript bytes", () =>
+    withReactionState(async () => {
       await seedSession();
       const messageId = await appendMessage();
       const transcript = loadTranscriptEventsSync(transcriptScope);
@@ -381,9 +285,9 @@ describe("session reaction handlers", () => {
         const reactions = remove
           ? []
           : [{ emoji: "👍", count: 1, identities: [{ id: "alice", label: "Alice" }] }];
-        const response = await call(
-          "session.reactions.set",
-          { sessionKey: "main", messageId, emoji: "👍", remove },
+        const response = await setReaction(
+          messageId,
+          { sessionKey: "main", remove },
           client("alice", "Alice"),
           requestContext,
         );
@@ -420,9 +324,9 @@ describe("session reaction handlers", () => {
       // Repeating the last addition changes nothing, so nothing is announced.
       const broadcasts = vi.mocked(requestContext.broadcast).mock.calls.length;
       expect(
-        await call(
-          "session.reactions.set",
-          { sessionKey: "main", messageId, emoji: "👍" },
+        await setReaction(
+          messageId,
+          { sessionKey: "main" },
           client("alice", "Alice"),
           requestContext,
         ),
@@ -437,45 +341,27 @@ describe("session reaction handlers", () => {
       expect(peekSystemEventEntries(sessionKey)).toEqual([]);
       expect(runMessageAction).not.toHaveBeenCalled();
       expect(loadTranscriptEventsSync(transcriptScope)).toEqual(transcript);
-    });
-  });
+    }));
 
-  it("reports own prompts and assistant replies with author label fallbacks", async () => {
-    await withReactionState(async () => {
+  it("reports own prompts and assistant replies with author label fallbacks", () =>
+    withReactionState(async () => {
       await seedSession();
-      for (const [message, author] of [
-        [
-          {
-            role: "user",
-            content: "own prompt",
-            __openclaw: { senderName: "Alice", senderId: "alice" },
-          },
-          "Alice",
-        ],
-        [
-          {
-            role: "user",
-            content: "username prompt",
-            __openclaw: { senderUsername: "riley", senderId: "peer-id" },
-          },
-          "riley",
-        ],
-        [{ role: "user", content: "id prompt", __openclaw: { senderId: "peer-id" } }, "peer-id"],
-        [{ role: "assistant", content: "assistant reply" }, "assistant"],
+      for (const [role, metadata, author] of [
+        ["user", { senderName: "Alice", senderId: "alice" }, "Alice"],
+        ["user", { senderUsername: "riley", senderId: "peer-id" }, "riley"],
+        ["user", { senderId: "peer-id" }, "peer-id"],
+        ["assistant", undefined, "assistant"],
       ] as const) {
-        const messageId = await appendMessage(message);
-        expect(
-          (await call("session.reactions.set", { sessionKey, messageId, emoji: "🎉" }))[0],
-        ).toBe(true);
+        const messageId = await appendMessage({ role, content: "prompt", __openclaw: metadata });
+        expect((await setReaction(messageId, { emoji: "🎉" }))[0]).toBe(true);
         expect(drainSystemEventEntries(sessionKey)).toMatchObject([
           { text: `Control UI reaction added: 🎉 by Alice on msg ${messageId} from ${author}` },
         ]);
       }
-    });
-  });
+    }));
 
-  it("uses the kernel's newest surviving emoji for a single-slot replacement", async () => {
-    await withReactionState(async () => {
+  it("uses the kernel's newest surviving emoji for a single-slot replacement", () =>
+    withReactionState(async () => {
       registerReactionChannel(true, "single");
       const { messageId, config } = await seedChannelMessage();
       runOpenClawAgentWriteTransaction(
@@ -505,9 +391,9 @@ describe("session reaction handlers", () => {
         { agentId: "main" },
       );
       const write = vi.spyOn(reactionStore, "setSessionReactionAsync");
-      const response = await call(
-        "session.reactions.set",
-        { sessionKey, messageId, emoji: "🚀", remove: true },
+      const response = await setReaction(
+        messageId,
+        { emoji: "🚀", remove: true },
         client("alice"),
         context(config),
       );
@@ -528,11 +414,10 @@ describe("session reaction handlers", () => {
       );
       expect(await write.mock.results[0]?.value).toMatchObject({ newestRemainingEmoji: "👍" });
       expect(response[1]).not.toHaveProperty("newestRemainingEmoji");
-    });
-  });
+    }));
 
-  it("serializes different emoji in a single channel slot without blocking other messages", async () => {
-    await withReactionState(async () => {
+  it("serializes different emoji in a single channel slot without blocking other messages", () =>
+    withReactionState(async () => {
       registerReactionChannel(true, "single");
       const { messageId, config, conversationRef } = await seedChannelMessage();
       const otherMessageId = await appendMessage({
@@ -563,12 +448,7 @@ describe("session reaction handlers", () => {
         return { kind: "action", payload: { ok: true } };
       });
       const set = (id: string, emoji: string) =>
-        call(
-          "session.reactions.set",
-          { sessionKey, messageId: id, emoji },
-          client("alice"),
-          requestContext,
-        );
+        setReaction(id, { emoji }, client("alice"), requestContext);
       const first = set(messageId, "🎉");
       await firstEntered.promise;
       const second = set(messageId, "👍");
@@ -583,64 +463,50 @@ describe("session reaction handlers", () => {
         await Promise.all([first, second]);
       }
       expect(delivered).toEqual(["🚀", "🎉", "👍"]);
-    });
-  });
+    }));
 
-  it.each([true])(
-    "rechecks reactor authority at channel I/O after commit (revoked: %s)",
-    async (revoked) => {
-      await withReactionState(async () => {
-        registerReactionChannel();
-        const { messageId, config } = await seedChannelMessage();
-        const requestContext = context(config);
-        const reactor = client("alice");
-        const handoffEntered = createDeferredCore();
-        const releaseHandoff = createDeferredCore();
-        const channelRequest = vi.fn();
-        runMessageAction.mockImplementationOnce(async (input: MessageActionInput) => {
-          handoffEntered.resolve();
-          await releaseHandoff.promise;
-          input.assertDirectAdapterHandoff?.();
-          channelRequest(input.params);
-          return { kind: "action", payload: { ok: true } };
-        });
-        const pending = call(
-          "session.reactions.set",
-          { sessionKey, messageId, emoji: "👍" },
-          reactor,
-          requestContext,
-        );
-        await handoffEntered.promise;
-        try {
-          expect(requestContext.broadcast).toHaveBeenCalledTimes(1);
-          expect((await call("session.reactions.list", { sessionKey }))[1]).toMatchObject({
-            reactions: { [messageId]: [{ emoji: "👍", count: 1 }] },
-          });
-          expect(channelRequest).not.toHaveBeenCalled();
-          if (revoked) {
-            reactor.invalidated = true;
-          }
-        } finally {
-          releaseHandoff.resolve();
-        }
-        const result = await pending;
-        expect(result).toMatchObject([
-          true,
-          {
-            reactions: [{ emoji: "👍", count: 1 }],
-            mirror: revoked
-              ? { status: "failed", reason: "reaction author or session authority changed" }
-              : { status: "delivered" },
-          },
-        ]);
-        expect(channelRequest).toHaveBeenCalledTimes(revoked ? 0 : 1);
-        expect(runMessageAction).toHaveBeenCalledTimes(1);
+  it("rechecks revoked reactor authority at channel I/O after commit", () =>
+    withReactionState(async () => {
+      registerReactionChannel();
+      const { messageId, config } = await seedChannelMessage();
+      const requestContext = context(config);
+      const reactor = client("alice");
+      const handoffEntered = createDeferredCore();
+      const releaseHandoff = createDeferredCore();
+      const channelRequest = vi.fn();
+      runMessageAction.mockImplementationOnce(async (input: MessageActionInput) => {
+        handoffEntered.resolve();
+        await releaseHandoff.promise;
+        input.assertDirectAdapterHandoff?.();
+        channelRequest(input.params);
+        return { kind: "action", payload: { ok: true } };
       });
-    },
-  );
+      const pending = setReaction(messageId, {}, reactor, requestContext);
+      await handoffEntered.promise;
+      try {
+        expect(requestContext.broadcast).toHaveBeenCalledTimes(1);
+        expect((await listReactions())[1]).toMatchObject({
+          reactions: { [messageId]: [{ emoji: "👍", count: 1 }] },
+        });
+        expect(channelRequest).not.toHaveBeenCalled();
+        reactor.invalidated = true;
+      } finally {
+        releaseHandoff.resolve();
+      }
+      const result = await pending;
+      expect(result).toMatchObject([
+        true,
+        {
+          reactions: [{ emoji: "👍", count: 1 }],
+          mirror: { status: "failed", reason: "reaction author or session authority changed" },
+        },
+      ]);
+      expect(channelRequest).not.toHaveBeenCalled();
+      expect(runMessageAction).toHaveBeenCalledTimes(1);
+    }));
 
-  it("rechecks the source conversation after awaited action preparation", async () => {
-    await withReactionState(async () => {
+  it("rechecks the source conversation after awaited action preparation", () =>
+    withReactionState(async () => {
       registerReactionChannel();
       for (const change of [
         "removed",
@@ -687,14 +553,7 @@ describe("session reaction handlers", () => {
           channelRequest(input.params);
           return { kind: "action", payload: { ok: true } };
         });
-        expect(
-          await call(
-            "session.reactions.set",
-            { sessionKey, messageId, emoji: "👍" },
-            client("alice"),
-            context(config),
-          ),
-        ).toMatchObject([
+        expect(await setReaction(messageId, {}, client("alice"), context(config))).toMatchObject([
           true,
           {
             reactions: [{ emoji: "👍", count: 1 }],
@@ -707,11 +566,10 @@ describe("session reaction handlers", () => {
         expect(runMessageAction).toHaveBeenCalledTimes(1);
         expect(channelRequest).not.toHaveBeenCalled();
       }
-    });
-  });
+    }));
 
-  it("keeps one bot reaction per emoji while any reactor remains, in commit order", async () => {
-    await withReactionState(async () => {
+  it("keeps one bot reaction per emoji while any reactor remains, in commit order", () =>
+    withReactionState(async () => {
       registerReactionChannel();
       const { messageId, config } = await seedChannelMessage();
       const requestContext = context(config);
@@ -728,12 +586,7 @@ describe("session reaction handlers", () => {
         })
         .mockResolvedValue({ kind: "action", payload: { ok: true } });
       const set = (profile: string, remove: boolean) =>
-        call(
-          "session.reactions.set",
-          { sessionKey, messageId, emoji: "👍", remove },
-          client(profile, profile),
-          requestContext,
-        );
+        setReaction(messageId, { remove }, client(profile, profile), requestContext);
       // Alice's add is still in flight at the channel when Bob joins and Alice leaves.
       const aliceAdd = set("alice", false);
       await firstEntered.promise;
@@ -756,21 +609,15 @@ describe("session reaction handlers", () => {
           ([input]) => (input as { params: { remove: boolean } }).params.remove,
         ),
       ).toEqual([false, true]);
-    });
-  });
+    }));
 
-  it("keeps local reactions successful when channel mirroring fails or cannot be supported", async () => {
-    await withReactionState(async () => {
+  it("keeps local reactions successful when channel mirroring fails or cannot be supported", () =>
+    withReactionState(async () => {
       registerReactionChannel();
       const { messageId, config } = await seedChannelMessage();
       const requestContext = context(config);
       runMessageAction.mockRejectedValueOnce(new Error("channel offline"));
-      const failed = await call(
-        "session.reactions.set",
-        { sessionKey, messageId, emoji: "👍" },
-        client("alice"),
-        requestContext,
-      );
+      const failed = await setReaction(messageId, {}, client("alice"), requestContext);
       expect(failed).toMatchObject([
         true,
         {
@@ -784,9 +631,9 @@ describe("session reaction handlers", () => {
         if (skippedConfig === config) {
           registerReactionChannel(false);
         }
-        const result = await call(
-          "session.reactions.set",
-          { sessionKey, messageId, emoji: "🎉" },
+        const result = await setReaction(
+          messageId,
+          { emoji: "🎉" },
           client("alice"),
           context(skippedConfig),
         );
@@ -796,6 +643,5 @@ describe("session reaction handlers", () => {
         ]);
       }
       expect(runMessageAction).toHaveBeenCalledTimes(1);
-    });
-  });
+    }));
 });

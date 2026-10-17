@@ -169,73 +169,60 @@ it.each([
 });
 
 it.each([
-  { label: "the same model and auth profile", patch: {}, entry: {}, preserved: true },
-  {
-    label: "a different model",
-    patch: { model: "fixture/other@fixture:selected" },
-    entry: { modelOverride: "other" },
-    preserved: false,
-  },
-  {
-    label: "a different auth profile",
-    patch: { model: `${model}@fixture:other` },
-    entry: { authProfileOverride: "fixture:other" },
-    preserved: false,
-  },
-  {
-    label: "an explicit runtime",
-    patch: { agentRuntime: "native-fixture" },
-    entry: {},
-    preserved: false,
-  },
-  {
-    label: "a cleared runtime",
-    patch: { agentRuntime: null },
-    entry: { agentRuntimeOverride: undefined },
-    preserved: false,
-  },
-  {
-    label: "a native consent grant",
-    patch: { nativeRuntimeConsent: "native-fixture" },
-    entry: {},
-    preserved: false,
-  },
-] satisfies {
-  label: string;
-  patch: Partial<SessionsPatchParams>;
-  entry: Partial<SessionEntry>;
-  preserved: boolean;
-}[])("handles $label when runtime preparation is unavailable", async (testCase) => {
-  const message = "A runtime is not available. Refresh the model catalog and choose again.";
-  preparation.prepare.mockResolvedValue({ status: "rejected", reason: "invalid-runtime", message });
-  const expectedEntry: SessionEntry = {
-    ...original,
-    permissionMode: "full",
-    sandboxMode: "off",
-    authProfileOverride: "fixture:selected",
-    agentRuntimeOverride: "native-fixture",
-  };
-  const entry: SessionEntry = { ...expectedEntry, ...testCase.entry };
-  const result = await prepareSessionPatchRuntimeSelection({
-    cfg,
-    agentId: "main",
-    patch: { key, model: `${model}@fixture:selected`, ...testCase.patch },
-    entry,
-    expectedEntry,
-    callerCanConsent: true,
-  });
+  ["the same model and auth profile", {}, {}, true],
+  [
+    "a different model",
+    { model: "fixture/other@fixture:selected" },
+    { modelOverride: "other" },
+    false,
+  ],
+  [
+    "a different auth profile",
+    { model: `${model}@fixture:other` },
+    { authProfileOverride: "fixture:other" },
+    false,
+  ],
+  ["an explicit runtime", { agentRuntime: "native-fixture" }, {}, false],
+  ["a cleared runtime", { agentRuntime: null }, { agentRuntimeOverride: undefined }, false],
+  ["a native consent grant", { nativeRuntimeConsent: "native-fixture" }, {}, false],
+] satisfies [string, Partial<SessionsPatchParams>, Partial<SessionEntry>, boolean][])(
+  "handles %s when runtime preparation is unavailable",
+  async (_label, patch, overrides, preserved) => {
+    const message = "A runtime is not available. Refresh the model catalog and choose again.";
+    preparation.prepare.mockResolvedValue({
+      status: "rejected",
+      reason: "invalid-runtime",
+      message,
+    });
+    const expectedEntry: SessionEntry = {
+      ...original,
+      permissionMode: "full",
+      sandboxMode: "off",
+      authProfileOverride: "fixture:selected",
+      agentRuntimeOverride: "native-fixture",
+    };
+    const entry: SessionEntry = { ...expectedEntry, ...overrides };
+    const result = await prepareSessionPatchRuntimeSelection({
+      cfg,
+      agentId: "main",
+      patch: { key, model: `${model}@fixture:selected`, ...patch },
+      entry,
+      expectedEntry,
+      callerCanConsent: true,
+    });
 
-  if (testCase.preserved) {
-    expect(result.ok).toBe(true);
-    expect(entry.agentRuntimeOverride).toBe("native-fixture");
-    if (!result.ok) {
-      throw new Error("Expected the existing selection to be preserved");
+    if (preserved) {
+      expect(result.ok).toBe(true);
+      expect(entry.agentRuntimeOverride).toBe("native-fixture");
+      if (!result.ok) {
+        throw new Error("Expected the existing selection to be preserved");
+      }
+      expect(result.validate?.()).toBeUndefined();
+    } else {
+      expect(result).toMatchObject({ ok: false, error: { message } });
     }
-    expect(result.validate?.()).toBeUndefined();
-  } else {
-    expect(result).toMatchObject({ ok: false, error: { message } });
-  }
-});
+  },
+);
 
 it.each([false, true])(
   "accepts an unrestricted local candidate (dormant node=%s)",
