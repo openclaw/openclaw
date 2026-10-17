@@ -129,7 +129,6 @@ public struct OpenClawChatView: View {
     @State private var isUserScrolling = false
     @State private var isKeyboardVisible = false
     @State private var hoveredMessageID: UUID?
-    @State private var restoresLiveEdgeAfterKeyboardShows = false
     @State private var expandedUserMessageIDs: Set<UUID> = []
     @State private var searchMessageID: UUID?
     @State private var isSearchPresented = false
@@ -296,28 +295,60 @@ public struct OpenClawChatView: View {
 extension OpenClawChatView {
     private var content: some View {
         let transcript = self.transcriptPresentation
-        return VStack(spacing: 0) {
-            self.messageList(transcript: transcript)
-                #if os(macOS)
-                    .modifier(ChatTranscriptSearch(
-                        rows: transcript.rows,
-                        sessionKey: self.viewModel.sessionKey,
-                        isEnabled: self.isDesktopLayout && self.showsComposer,
-                        focusRequest: self.windowCommands?.findRequest ?? 0,
-                        selectedMessageID: self.$searchMessageID,
-                        isPresented: self.$isSearchPresented,
-                        onSelect: self.revealSearchMessage))
-                    .onChange(of: self.windowCommands?.composerFocusRequest) { _, _ in
-                        self.composerFocusRequest += 1
-                    }
-                    .onChange(of: self.searchMessageID) { previousID, _ in
-                        self.scrollCommand.cancel(targetID: previousID)
-                    }
-                    .onChange(of: self.isSearchPresented) { wasPresented, isPresented in
-                        if wasPresented, !isPresented { self.composerFocusRequest += 1 }
-                    }
-                #endif
-                    .padding(.horizontal, self.isTabletLayout ? 0 : Layout.outerPaddingHorizontal)
+        return self.conversationLayout(transcript: transcript)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { self.contentWidth = $0 }
+            .environment(\.openClawAssistantUsesReadingColumn, self.isTabletLayout)
+    }
+
+    @ViewBuilder
+    private func conversationLayout(transcript: TranscriptPresentation) -> some View {
+        let messages = self.messageList(transcript: transcript)
+            #if os(macOS)
+                .modifier(ChatTranscriptSearch(
+                    rows: transcript.rows,
+                    sessionKey: self.viewModel.sessionKey,
+                    isEnabled: self.isDesktopLayout && self.showsComposer,
+                    focusRequest: self.windowCommands?.findRequest ?? 0,
+                    selectedMessageID: self.$searchMessageID,
+                    isPresented: self.$isSearchPresented,
+                    onSelect: self.revealSearchMessage))
+                .onChange(of: self.windowCommands?.composerFocusRequest) { _, _ in
+                    self.composerFocusRequest += 1
+                }
+                .onChange(of: self.searchMessageID) { previousID, _ in
+                    self.scrollCommand.cancel(targetID: previousID)
+                }
+                .onChange(of: self.isSearchPresented) { wasPresented, isPresented in
+                    if wasPresented, !isPresented { self.composerFocusRequest += 1 }
+                }
+            #endif
+                .padding(
+                .horizontal,
+                self.isTabletLayout || self.usesFullScreenConversationLayout ? 0 : Layout.outerPaddingHorizontal)
+        #if os(iOS)
+        if #available(iOS 26.0, *), self.usesFullScreenConversationLayout {
+            messages.safeAreaBar(edge: .bottom, spacing: 0) {
+                self.bottomContent
+            }
+        } else {
+            VStack(spacing: 0) {
+                messages
+                self.bottomContent
+            }
+            .padding(.top, Layout.outerPaddingVertical)
+        }
+        #else
+        VStack(spacing: 0) {
+            messages
+            self.bottomContent
+        }
+        .padding(.top, Layout.outerPaddingVertical)
+        #endif
+    }
+
+    private var bottomContent: some View {
+        VStack(spacing: 0) {
             if !self.usesInlineProgressCard {
                 self.progressCard
                     .frame(maxWidth: self.readingColumnWidth)
@@ -341,10 +372,6 @@ extension OpenClawChatView {
                     .padding(.bottom, self.isTabletLayout || self.isDesktopLayout ? 12 : Layout.outerPaddingVertical)
             }
         }
-        .padding(.top, Layout.outerPaddingVertical)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { self.contentWidth = $0 }
-        .environment(\.openClawAssistantUsesReadingColumn, self.isTabletLayout)
     }
 
     @ViewBuilder
@@ -406,27 +433,7 @@ extension OpenClawChatView {
     @ViewBuilder
     private var subagentWaitRow: some View {
         if let wait = self.viewModel.subagentWait {
-            HStack(spacing: 7) {
-                ChatWorkingClawView(seed: "subagent-wait", parked: true)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Waiting on subagents")
-                        .font(OpenClawChatTypography.caption)
-                        .foregroundStyle(.secondary)
-                    if let child = wait.child {
-                        Button {
-                            self.viewModel.switchSession(to: child.key)
-                        } label: {
-                            Text(child.name)
-                                .font(OpenClawChatTypography.caption)
-                                .underline()
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("chat-subagent-wait-child")
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 4)
+            ChatSubagentWaitRow(wait: wait) { self.viewModel.switchSession(to: $0) }
         }
     }
 
@@ -443,36 +450,35 @@ extension OpenClawChatView {
         }
     }
 
+    @ViewBuilder
     private func messageList(transcript: TranscriptPresentation) -> some View {
+        #if os(iOS)
+        if self.usesFullScreenConversationLayout {
+            // Native size-change anchoring needs a full-height content canvas when
+            // a short transcript becomes scrollable as the keyboard appears.
+            GeometryReader { geometry in
+                self.messageList(
+                    transcript: transcript,
+                    minimumContentHeight: geometry.size.height)
+            }
+        } else {
+            self.messageList(transcript: transcript, minimumContentHeight: nil)
+        }
+        #else
+        self.messageList(transcript: transcript, minimumContentHeight: nil)
+        #endif
+    }
+
+    private func messageList(transcript: TranscriptPresentation, minimumContentHeight: CGFloat?) -> some View {
         let hasVisibleContent = !transcript.rows.isEmpty || self.hasVisibleTransientContent
         return ZStack {
             ScrollView {
-                LazyVStack(spacing: self.isDesktopLayout ? 16 : Layout.messageSpacing) {
-                    self.messageListRows(transcript: transcript, hasVisibleContent: hasVisibleContent)
-
-                    if self.usesInlineProgressCard {
-                        self.progressCard
-                    }
-                    if !self.showsComposer, !self.viewModel.hasBlockingRunActivity {
-                        self.turnRecapRow
-                    }
-                    self.subagentWaitRow
-
-                    Color.clear
-                        #if os(macOS)
-                            .frame(height: Layout.messageListPaddingBottom)
-                        #else
-                            .frame(height: Layout.messageListPaddingBottom + 1)
-                        #endif
-                        .id(self.scrollerBottomID)
-                }
-                .padding(.top, self.isDesktopLayout ? 24 : Layout.messageListPaddingTop)
-                .frame(maxWidth: self.readingColumnWidth)
-                .padding(
-                    .horizontal,
-                    self.isTabletLayout ? self.tabletHorizontalMargin :
-                        (self.isDesktopLayout ? 16 : Layout.messageListPaddingHorizontal))
-                .frame(maxWidth: .infinity)
+                self.messageScrollContent(transcript: transcript, hasVisibleContent: hasVisibleContent)
+                    .padding(.top, self.isDesktopLayout ? 24 : Layout.messageListPaddingTop)
+                    .frame(maxWidth: self.readingColumnWidth)
+                    .padding(.horizontal, self.messageListHorizontalMargin)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: minimumContentHeight, alignment: .top)
             }
             .accessibilityIdentifier("chat-transcript")
             #if !os(macOS)
@@ -481,8 +487,15 @@ extension OpenClawChatView {
             .safeAreaInset(edge: .top, spacing: 0) {
                 self.messageListNoticeBanner(hasVisibleContent: hasVisibleContent)
             }
+            #if os(iOS)
+            .defaultScrollAnchor(
+                self.followTarget == .latest && !self.isUserScrolling && self.searchMessageID == nil ? .bottom : nil,
+                for: .sizeChanges)
+            #endif
             .onScrollGeometryChange(for: Bool.self) { geometry in
-                let distanceFromBottom = geometry.contentSize.height - geometry.visibleRect.maxY
+                // Safe-area insets can expand visibleRect underneath the footer and keyboard.
+                let visibleBottom = geometry.contentOffset.y + geometry.containerSize.height
+                let distanceFromBottom = geometry.contentSize.height - visibleBottom
                 return distanceFromBottom <= Layout.liveEdgeThreshold
             } action: { _, isAtLiveEdge in
                 self.isAtLiveEdge = isAtLiveEdge
@@ -494,9 +507,6 @@ extension OpenClawChatView {
             }
             .onScrollPhaseChange { _, phase in
                 guard self.hasPerformedInitialScroll else { return }
-                if phase == .interacting {
-                    self.restoresLiveEdgeAfterKeyboardShows = false
-                }
                 if chatReaderScrollReleasesFollow(phase) {
                     self.scrollCommand.cancel()
                     self.isUserScrolling = true
@@ -567,24 +577,58 @@ extension OpenClawChatView {
         }
         #if canImport(UIKit) && !os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-            self.restoresLiveEdgeAfterKeyboardShows =
-                self.followTarget == .latest && !self.isUserScrolling && self.searchMessageID == nil
             self.isKeyboardVisible = true
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
-            guard self.restoresLiveEdgeAfterKeyboardShows else { return }
-            self.restoresLiveEdgeAfterKeyboardShows = false
-            guard self.searchMessageID == nil else { return }
-            self.isUserScrolling = false
-            self.followTarget = .latest
-            self.hasNewerContentBelow = false
-            self.moveScrollPosition(to: self.scrollerBottomID)
-        }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            self.restoresLiveEdgeAfterKeyboardShows = false
             self.isKeyboardVisible = false
         }
         #endif
+    }
+
+    @ViewBuilder
+    private func messageScrollContent(
+        transcript: TranscriptPresentation,
+        hasVisibleContent: Bool) -> some View
+    {
+        #if os(iOS)
+        // Keep the bottom target materialized independently of the lazy rows'
+        // estimated layout while native bars change the visible scroll area.
+        VStack(spacing: Layout.messageSpacing) {
+            LazyVStack(spacing: Layout.messageSpacing) {
+                self.messageListRows(transcript: transcript, hasVisibleContent: hasVisibleContent)
+                if self.usesInlineProgressCard {
+                    self.progressCard
+                }
+                if !self.showsComposer, !self.viewModel.hasBlockingRunActivity {
+                    self.turnRecapRow
+                }
+                self.subagentWaitRow
+            }
+            self.messageListBottomAnchor
+        }
+        #else
+        LazyVStack(spacing: self.isDesktopLayout ? 16 : Layout.messageSpacing) {
+            self.messageListRows(transcript: transcript, hasVisibleContent: hasVisibleContent)
+            if self.usesInlineProgressCard {
+                self.progressCard
+            }
+            if !self.showsComposer, !self.viewModel.hasBlockingRunActivity {
+                self.turnRecapRow
+            }
+            self.subagentWaitRow
+            self.messageListBottomAnchor
+        }
+        #endif
+    }
+
+    private var messageListBottomAnchor: some View {
+        Color.clear
+            #if os(macOS)
+                .frame(height: Layout.messageListPaddingBottom)
+            #else
+                .frame(height: Layout.messageListPaddingBottom + 1)
+            #endif
+            .id(self.scrollerBottomID)
     }
 
     @ViewBuilder
@@ -1556,6 +1600,22 @@ private struct ChatNoticeBanner: View {
 }
 
 extension OpenClawChatView {
+    private var usesFullScreenConversationLayout: Bool {
+        #if os(iOS)
+        if #available(iOS 26.0, *) {
+            return self.style == .standard && self.composerChrome == .clean && self.showsComposer
+        }
+        #endif
+        return false
+    }
+
+    private var messageListHorizontalMargin: CGFloat {
+        if self.isTabletLayout { return self.tabletHorizontalMargin }
+        if self.isDesktopLayout { return 16 }
+        return Layout.messageListPaddingHorizontal +
+            (self.usesFullScreenConversationLayout ? Layout.outerPaddingHorizontal : 0)
+    }
+
     private var isTabletLayout: Bool {
         #if os(iOS)
         UIDevice.current.userInterfaceIdiom == .pad

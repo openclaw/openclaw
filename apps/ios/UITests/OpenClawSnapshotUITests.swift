@@ -814,6 +814,66 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "system-notices-recollapsed")
     }
 
+    func testKeyboardKeepsInitiallyShortTranscriptAboveComposer() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone short keyboard proof")
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            appearance: "light",
+            additionalArguments: [
+                "--openclaw-short-chat-lines", "8",
+                "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let latest = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "SHORT_KEYBOARD_LATEST"))
+            .firstMatch
+        XCTAssertTrue(latest.waitForExistence(timeout: 8))
+        let composer = app.otherElements["chat-composer-surface"].firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY + 1)
+        self.attachScreenshot(named: "short-chat-before-keyboard")
+        let before = XCTAttachment(string: "latest=\(latest.frame) composer=\(composer.frame)")
+        before.name = "short-chat-before-geometry"
+        before.lifetime = .keepAlways
+        add(before)
+        let input = self.chatMessageInput(in: app)
+        self.waitForEnabled(input)
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "short-chat-after-keyboard")
+        let after = XCTAttachment(string: "latest=\(latest.frame) composer=\(composer.frame)")
+        after.name = "short-chat-after-geometry"
+        after.lifetime = .keepAlways
+        add(after)
+        XCTAssertLessThanOrEqual(
+            latest.frame.maxY,
+            composer.frame.minY + 1,
+            "The latest reply must end above the composer after opening the keyboard")
+    }
+
+    func testKeyboardPreservesTranscriptThatStillFits() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone short keyboard proof")
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            appearance: "light",
+            additionalArguments: [
+                "--openclaw-short-chat-lines", "0",
+                "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let latest = app.staticTexts["SHORT_KEYBOARD_LATEST"].firstMatch
+        XCTAssertTrue(latest.waitForExistence(timeout: 8))
+        let original = latest.frame
+        self.attachScreenshot(named: "very-short-before-keyboard")
+        let input = self.chatMessageInput(in: app)
+        self.waitForEnabled(input)
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 3))
+        let composer = app.otherElements["chat-composer-surface"].firstMatch
+        XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY + 1)
+        XCTAssertEqual(latest.frame.minY, original.minY, accuracy: 1)
+        self.attachScreenshot(named: "very-short-after-keyboard")
+    }
+
     func testKeyboardOpenPreservesTranscriptAndFollowsLiveEdgeAfterSend() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone keyboard proof only")
         self.launchApp(
