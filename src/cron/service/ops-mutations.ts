@@ -283,6 +283,7 @@ async function updateLoadedJob(params: {
     id,
     patch,
     options: {
+      reauthorizeChannelRequester: opts?.reauthorizeChannelRequester,
       inferenceBinding: opts?.inferenceBinding,
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,

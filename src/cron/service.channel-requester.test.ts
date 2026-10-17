@@ -202,6 +202,52 @@ describe("CronService authenticated channel requester", () => {
     }
   });
 
+  it("binds legacy requester provenance without replacing the executable definition", async () => {
+    const { storePath } = await makeStorePath();
+    const cron = createCronService(storePath);
+    try {
+      const created = await cron.add(requesterDeclaration(), {
+        scheduledToolPolicy: requesterPolicy,
+        createdActor: { type: "human", source: "channel", id: "historical-creator" },
+        toolsAllowProvenance: {
+          version: 1,
+          source: "final-executable-surface",
+          callerOrigin: { kind: "unknown" },
+        },
+      });
+      const before = (await loadCronStore(storePath)).jobs[0]!;
+      await cron.updateWithPrecondition(created.id, {}, () => {}, {
+        reauthorizeChannelRequester: true,
+        toolsAllowProvenance: {
+          version: 1,
+          source: "authenticated-requester",
+          callerOrigin: { kind: "external", channel: "discord" },
+          channelRequester,
+        },
+      });
+      const after = (await loadCronStore(storePath)).jobs[0]!;
+      const {
+        toolsAllowProvenance: _beforeProvenance,
+        updatedAtMs: _beforeTime,
+        ...beforeDefinition
+      } = before;
+      const {
+        toolsAllowProvenance: _afterProvenance,
+        updatedAtMs: _afterTime,
+        ...afterDefinition
+      } = after;
+      expect(afterDefinition).toEqual(beforeDefinition);
+      expect(after.toolsAllowProvenance).toEqual({
+        version: 1,
+        source: "final-executable-surface",
+        callerOrigin: { kind: "external", channel: "discord" },
+        channelRequester,
+      });
+    } finally {
+      cron.stop();
+    }
+  });
+
   it("persists and rebinds a finite authenticated requester cap", async () => {
     const { storePath } = await makeStorePath();
     const cron = createCronService(storePath);

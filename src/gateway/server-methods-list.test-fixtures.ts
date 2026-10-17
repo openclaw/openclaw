@@ -55,7 +55,7 @@ device.pair.reject device.pair.remove device.pair.rename device.token.rotate dev
 node.rename node.list node.describe node.pluginSurface.refresh node.pluginTools.update
 node.skills.update node.pending.drain node.pending.enqueue node.invoke node.pending.pull
 node.pending.ack node.invoke.progress node.invoke.result node.event cron.get cron.list
-cron.status cron.scratch.get cron.scratch.set cron.add cron.update cron.remove cron.run
+cron.status cron.scratch.get cron.scratch.set cron.add cron.reauthorizeChannelRequester cron.update cron.remove cron.run
 cron.runs gateway.identity.get gateway.restart.preflight gateway.restart.request system-presence
 system-event message.action conversations.send conversations.turn conversations.turn.cancel send
 agent agent.identity.get agent.wait chat.history chat.startup chat.metadata chat.message.get

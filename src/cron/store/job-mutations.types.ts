@@ -19,6 +19,7 @@ type CronJobMutationOptions = Pick<
   | "toolsAllowExecTarget"
 > & {
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
+  reauthorizeChannelRequester?: boolean;
   captured: boolean;
   runtimeAuthority?: CronRuntimeAuthority;
 };

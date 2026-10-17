@@ -482,7 +482,7 @@ describe("original caller through Cron creator transports", () => {
           expect(before).toMatchObject([
             {
               name: "Live creator",
-              createdActor: CREATOR,
+              ...(origin === "local" ? {} : { createdActor: CREATOR }),
               sessionKey: SESSION,
               sessionTarget: "current",
               payload: {
@@ -502,6 +502,10 @@ describe("original caller through Cron creator transports", () => {
               },
             },
           ]);
+          if (origin === "local") {
+            // This fixture has local authority without a current operator profile.
+            expect(before[0]).not.toHaveProperty("createdActor");
+          }
           expect(before[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
           expect(before[0]?.runtimeAuthority).toBeUndefined();
           hold = true;

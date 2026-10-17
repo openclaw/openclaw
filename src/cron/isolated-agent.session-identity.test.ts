@@ -1,6 +1,6 @@
+import fs from "node:fs/promises";
 // Isolated agent session identity tests cover stable session ids for cron runs.
 import "./isolated-agent.mocks.js";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
@@ -8,6 +8,7 @@ import { SessionManager } from "../agents/sessions/index.js";
 import * as thinking from "../auto-reply/thinking.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { linkUserChannelIdentity } from "../state/user-channel-identities.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog.js";
@@ -165,10 +166,37 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         const storePath = await writeSessionStore(home, { delivery: { kind: "internal" } });
         const profile = ensureProfileForEmail("cron-creator@example.test");
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-        const createdActor = { type: "human" as const, source, id: profile.id };
+        const createdActor = {
+          type: "human" as const,
+          source,
+          id: source === "channel" ? "U-CREATOR" : profile.id,
+        };
+        linkUserChannelIdentity(profile.id, {
+          channelId: "slack",
+          accountId: "default",
+          senderId: "U-CREATOR",
+        });
         const job: CronStoredJob = {
-          ...makeJob({ kind: "agentTurn", message: "persist this turn" }),
+          ...makeJob({ kind: "agentTurn", message: "persist this turn", toolsAllow: ["read"] }),
           createdActor,
+          owner: { agentId: "main", sessionKey: "agent:main:source", accountId: "default" },
+          scheduledToolPolicy: {
+            version: 1,
+            mode: "account",
+            ownerSessionKey: "agent:main:source",
+            ownerAccountId: "default",
+          },
+          toolsAllowProvenance: {
+            version: 1,
+            source: "final-executable-surface",
+            callerOrigin: { kind: "external", channel: "slack" },
+            channelRequester: {
+              version: 1,
+              channel: "slack",
+              accountId: "default",
+              senderId: "U-CREATOR",
+            },
+          },
           delivery: { mode: "none" },
         };
         const cfg = makeCfg(home, storePath, {

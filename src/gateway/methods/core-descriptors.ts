@@ -327,6 +327,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["cron.scratch.get", "cron", "operator.admin", "2026.7"],
   ["cron.scratch.set", "cron", "operator.admin", "2026.7"],
   ["cron.add", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["cron.reauthorizeChannelRequester", "cron", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["cron.update", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["cron.remove", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["cron.run", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],

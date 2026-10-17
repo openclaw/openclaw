@@ -11,7 +11,6 @@ import {
 } from "../../agents/prepared-model-runtime.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
@@ -21,6 +20,7 @@ import {
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronCreatorSandbox } from "../creator-sandbox.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
@@ -178,7 +178,10 @@ export async function prepareCronRunContext(params: {
 
   async function prepareAdmittedSession() {
     const now = Date.now();
-    const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
+    const { sandbox, assertCurrent: assertCreatorCurrent } = await resolveCronCreatorSandbox(
+      runtimeCfg,
+      input.job,
+    );
     const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
     const cronSession = await prepareCronSession({
       cfg: runtimeCfg,
@@ -671,6 +674,7 @@ export async function prepareCronRunContext(params: {
               : undefined,
           cronSession,
           sessionWorkAdmission,
+          assertCreatorCurrent,
           persistSessionEntry,
           preRunSessionPersisted,
           runContinuationSession,

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -12,6 +13,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import { linkUserChannelIdentity } from "../../state/user-channel-identities.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   readCronRunHistoryPageForTests,
   readCronRunRecordsForTests,
@@ -49,7 +56,9 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });
 
@@ -102,6 +111,18 @@ describe("scheduled account policy outcomes", () => {
       callerOrigin,
     }) => {
       const { storePath } = fixtures.makeStorePath();
+      vi.stubEnv(
+        "OPENCLAW_STATE_DIR",
+        path.join(path.dirname(storePath), `${path.basename(storePath)}-state`),
+      );
+      if (callerOrigin?.kind === "external" && callerOrigin.channel === "whatsapp") {
+        const profile = ensureProfileForEmail("account-requester@example.test");
+        linkUserChannelIdentity(profile.id, {
+          channelId: "whatsapp",
+          accountId: "work",
+          senderId: "sender",
+        });
+      }
       const cfg: OpenClawConfig = { channels: { whatsapp: { accounts: { work: {} } } } };
       setRuntimeConfigSnapshot(cfg);
       const job: CronStoredJob = {
@@ -129,6 +150,16 @@ describe("scheduled account policy outcomes", () => {
                 version: 1,
                 source: "final-executable-surface",
                 callerOrigin,
+                ...(callerOrigin.kind === "external" && callerOrigin.channel === "whatsapp"
+                  ? {
+                      channelRequester: {
+                        version: 1 as const,
+                        channel: "whatsapp",
+                        accountId: "work",
+                        senderId: "sender",
+                      },
+                    }
+                  : {}),
               },
             }
           : {}),

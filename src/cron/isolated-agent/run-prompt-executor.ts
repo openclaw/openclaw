@@ -213,6 +213,7 @@ export function createCronPromptExecutor(
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
     const cronAdmission = prepareCronRunAdmission({
       admissionSource: params.admissionSource,
+      assertSourceCurrent: params.assertCreatorCurrent,
       deliveryAttemptFence: params.deliveryAttemptFence,
       cfg: params.cfgWithAgentDefaults,
       agentId: params.agentId,
@@ -380,6 +381,7 @@ export function createCronPromptExecutor(
             "Automation candidate is incompatible with its recorded inference account and route.",
           );
         }
+        params.assertCreatorCurrent();
         inferenceAuthorization?.assertCurrent();
         assertCronRuntimeAuthorityCandidate({
           authority: params.job.runtimeAuthority,
@@ -510,6 +512,7 @@ export function createCronPromptExecutor(
                 runId,
               },
               async (assertSettlementCurrent) => {
+                params.assertCreatorCurrent();
                 const diagnosticOwner = deferredLifecycle.handoffToCli();
                 const cliSessionBinding = params.cronSession.isNewSession
                   ? undefined
@@ -625,6 +628,7 @@ export function createCronPromptExecutor(
         });
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.
+        params.assertCreatorCurrent();
         const result = await runEmbeddedAgent({
           ...buildCommonRunParams(),
           promptCacheKey,
