@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.ts";
 import * as toast from "../../lib/toast.ts";
 import {
   holdPreferenceClear,
@@ -8,6 +7,7 @@ import {
   resetWorktreeMocks,
   startAcceptedWorktree,
   acceptedNameWarning,
+  preferenceGate,
 } from "./draft-worktree-checks.test-support.ts";
 import { identityPreferences } from "./draft-worktree-preferences.test-support.ts";
 import {
@@ -33,10 +33,7 @@ const hasPreference = (entry: unknown, key: string, value: string) =>
   entry !== null && typeof entry === "object" && Reflect.get(entry, key) === value;
 
 async function independentDrafts(prefs: ReturnType<typeof identityPreferences>, sequential = true) {
-  const first = prefs.make();
-  if (sequential) {
-    await prefs.ready(first);
-  }
+  const first = sequential ? await readyPreferenceDraft(prefs) : prefs.make();
   const next = prefs.make();
   expect(first.context.gateway).not.toBe(next.context.gateway);
   expect(first.context.gateway.snapshot.client).not.toBe(next.context.gateway.snapshot.client);
@@ -58,12 +55,10 @@ it.each(["repository", "model", "empty base", "base before read"] as const)(
       change === "base before read" ? undefined : async () => ({ models }),
     );
     const { first, next } = await independentDrafts(prefs);
-    const started = createDeferred();
-    const release = createDeferred();
+    const { started, release, wait } = preferenceGate();
     if (change === "base before read") {
       vi.mocked(first.context.sessions.createResult).mockImplementation(async () => {
-        started.resolve();
-        await release.promise;
+        await wait();
         return acceptedWorktreeSession;
       });
     } else {
@@ -131,8 +126,7 @@ it.each(["accepted clear", "ordinary edit"] as const)(
   "bounds %s contention without replaying creation",
   async (operation) => {
     const prefs = identityPreferences();
-    const first = await readyPreferenceDraft(prefs);
-    const next = await readyPreferenceDraft(prefs);
+    const { first, next } = await independentDrafts(prefs);
     const accepted = operation === "accepted clear";
     let attempts = 0;
     prefs.beforeSave.mockImplementation(async ({ entries }) => {
@@ -172,16 +166,12 @@ it.each(["explicit", "implicit", "cleared"] as const)(
   async (base) => {
     const prefs = identityPreferences();
     let first = await readyPreferenceDraft(prefs);
-    const independent = base === "cleared" ? prefs.make() : undefined;
-    if (independent) {
-      await prefs.ready(independent);
-    }
+    const independent = base === "cleared" ? await readyPreferenceDraft(prefs) : undefined;
     if (base === "implicit") {
       first.place.setBaseRef("");
       await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ baseRef: "" }));
       disposeWorktreeDraft(first);
-      first = prefs.make();
-      await prefs.ready(first);
+      first = await readyPreferenceDraft(prefs);
       expect(first.place.baseRef).toBe("");
     }
     selectCloudWorktree(first);
@@ -227,28 +217,26 @@ it.each(["explicit", "implicit", "cleared"] as const)(
 it("keeps accepted names retired when older model saves commit last", async () => {
   const prefs = identityPreferences(true, async () => ({ models }));
   const { first, next } = await independentDrafts(prefs, false);
-  const modelSaveStarted = createDeferred();
-  const releaseModelSave = createDeferred();
+  const modelSave = preferenceGate();
   let heldModelSave = false;
   prefs.beforeSave.mockImplementation(async (params) => {
     const entry = params.entries["new-session.v1:main"];
     if (!heldModelSave && hasPreference(entry, "model", "openai/gpt-5.6-sol")) {
       heldModelSave = true;
       expect(entry).toMatchObject({ worktreeName: "first-task" });
-      modelSaveStarted.resolve();
-      await releaseModelSave.promise;
+      await modelSave.wait();
     }
   });
   const writes = vi.spyOn(next.gateway, "persistPreference");
   await chooseModel(next);
   try {
-    await modelSaveStarted.promise;
+    await modelSave.started.promise;
     await startAcceptedWorktree(first);
     expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
     expect(first.flow.error).toBeNull();
     expect(prefs.stored()).toMatchObject({ worktreeName: "" });
   } finally {
-    releaseModelSave.resolve();
+    modelSave.release.resolve();
     await Promise.all(writes.mock.results.map((result) => result.value));
   }
   expect(next.context.sessions.createResult).not.toHaveBeenCalled();

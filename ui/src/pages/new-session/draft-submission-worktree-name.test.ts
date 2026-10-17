@@ -16,7 +16,7 @@ import {
 
 afterEach(resetWorktreeMocks);
 
-async function namedWorktreeFixture(explicitBase = true, name = "first-task", restore = false) {
+async function namedWorktreeFixture(explicitBase = true, restore = false) {
   const fixture = createDraftFixture({
     scopes: ["operator.admin", "operator.read", "operator.write"],
     methods: ["sessions.create", "sessions.dispatch"],
@@ -39,7 +39,7 @@ async function namedWorktreeFixture(explicitBase = true, name = "first-task", re
     if (explicitBase) {
       fixture.place.setBaseRef("main");
     }
-    fixture.place.setWorktreeName(name);
+    fixture.place.setWorktreeName(explicitBase ? "first-task" : "  first-task  ");
   }
   fixture.flow.setMessage("first task");
   vi.mocked(fixture.context.navigateAndWait).mockImplementation(async () => {
@@ -49,10 +49,7 @@ async function namedWorktreeFixture(explicitBase = true, name = "first-task", re
 }
 
 it.each([true, false])("consumes accepted names, explicit base=%s", async (explicitBase) => {
-  const { create, flow, place } = await namedWorktreeFixture(
-    explicitBase,
-    explicitBase ? "first-task" : "  first-task  ",
-  );
+  const { create, flow, place } = await namedWorktreeFixture(explicitBase);
   if (!explicitBase) {
     expect(browserPreference()?.baseRef).toBeUndefined();
   }
@@ -71,7 +68,7 @@ it.each([true, false])("consumes accepted names, explicit base=%s", async (expli
     );
     expect(place).toMatchObject({ worktree: true, baseRef: "main" });
     expect(browserPreference()).toMatchObject({ worktree: true, baseRef: "main" });
-    const next = await namedWorktreeFixture(true, "", true);
+    const next = await namedWorktreeFixture(true, true);
     next.flow.setMessage("next task");
     next.create.mockResolvedValue(acceptedWorktreeSession);
     await next.flow.submit(undefined, true);
@@ -148,7 +145,7 @@ it.each([false, true])("retries frozen placement, restored=%s", async (restored)
   if (restored) {
     disposeWorktreeDraft(first);
   }
-  const retry = restored ? await namedWorktreeFixture(true, "", true) : first;
+  const retry = restored ? await namedWorktreeFixture(true, true) : first;
   if (restored) {
     expect(retry.flow.pendingPlacement.sessionKey).toBe(original!.key);
     expect(retry.place.worktreeName).toBe("");
@@ -157,13 +154,8 @@ it.each([false, true])("retries frozen placement, restored=%s", async (restored)
   acceptIdlePlacement(retry);
   expect(retry.flow.submitDisabledReason()).toBeUndefined();
   await retry.flow.submit(undefined, true);
-  if (restored) {
-    expect(retry.create).toHaveBeenCalledExactlyOnceWith(original, {
-      reconciliation: "background",
-    });
-  } else {
-    expect(retry.create.mock.calls[1]![0]).toEqual(original);
-  }
+  expect(retry.create).toHaveBeenCalledTimes(restored ? 1 : 2);
+  expect(retry.create).toHaveBeenLastCalledWith(original, { reconciliation: "background" });
   expect(start).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
       recovery: expect.objectContaining({ sessionKey: original!.key, phase: "dispatching" }),

@@ -13,6 +13,14 @@ import { managedModelControls, controlQueries } from "./model-control-view-queri
 import { contextWith, renderControl } from "./model-control.test-support.ts";
 import { NewSessionPlaceControls } from "./target-controls-view.tsx";
 const modelRef = "openai/hosted-model";
+const createSelection = { message: "hello", visibility: "normal" as const };
+const nativeRuntime = (id = "openclaw", mode: "worker-turn" | "remote-exec" = "worker-turn") => ({
+  id,
+  source: "model" as const,
+  cloudPlacementSupported: true,
+  cloudPlacementExecutionMode: mode,
+  devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+});
 
 const runtime = {
   id: "agentsapi",
@@ -25,16 +33,11 @@ const model: ModelCatalogEntry = {
   name: "Hosted model",
   provider: "openai",
   available: true,
-  agentRuntime: {
-    id: "openclaw",
-    source: "model",
-    cloudPlacementSupported: true,
-    cloudPlacementExecutionMode: "worker-turn",
-    devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-  },
+  agentRuntime: nativeRuntime(),
   runtimeChoices: [{ agentRuntime: runtime, available: true }],
 };
 const agent = { id: "main", model: { primary: modelRef } };
+const preferred = { model: modelRef, agentRuntime: "agentsapi" };
 const managed = managedModelControls();
 afterEach(() => {
   managed.reset();
@@ -62,11 +65,11 @@ function renderPlace(
   mountSolid(() => createComponent(NewSessionPlaceControls, { params }), { container: element });
   return element;
 }
-const catalogWith = (overrides: Partial<ModelCatalogEntry>) => ({
+const catalog = (overrides: Partial<ModelCatalogEntry>) => ({
   models: [{ ...model, ...overrides }],
 });
 const unavailableCatalog = (unavailableReason: ModelCatalogEntry["unavailableReason"]) =>
-  catalogWith({ runtimeChoices: [{ agentRuntime: runtime, available: false, unavailableReason }] });
+  catalog({ runtimeChoices: [{ agentRuntime: runtime, available: false, unavailableReason }] });
 const modelAccount = (suffix: string, label: string, authType: string) => ({
   authProfileId: `personal:person-a:openai:${suffix}`,
   provider: "openai",
@@ -101,10 +104,7 @@ it("keeps explicit runtime intent across a late catalog, permission loss, and re
   expect(control.agentRuntime).toBe("agentsapi");
   expect(control.modelSelectionBlockedReason(agent)).toBeTruthy();
   const { control: restored } = modelControl(context);
-  restored.load(context, "main", true, {
-    agent,
-    preference: { model: modelRef, agentRuntime: "agentsapi" },
-  });
+  restored.load(context, "main", true, { agent, preference: preferred });
   await vi.waitFor(() => expect(restored.agentRuntime).toBe("agentsapi"));
   expect(restored.modelSelectionBlockedReason(agent)).toBeTruthy();
   expect(restored.selectHostedEnvironment("agentsapi")).toBe(false);
@@ -118,10 +118,7 @@ it("uses model-picker changes and configured defaults as the environment authori
   expect(control.resolveAgentRuntime()?.workspaceEnvironment).toEqual(runtime.workspaceEnvironment);
   expect(control.selectHostEnvironment()).toBe(true);
   expect(control.agentRuntime).toBe("openclaw");
-  control.load(context, "other", true, {
-    agent: { id: "other", model: { primary: modelRef } },
-    preference: { model: modelRef, agentRuntime: "agentsapi" },
-  });
+  control.load(context, "other", true, { agent: { ...agent, id: "other" }, preference: preferred });
   await vi.waitFor(() => expect(control.resolveAgentRuntime()?.id).toBe("agentsapi"));
   expect(control.modelForSubmission()).toBe(modelRef);
 });
@@ -184,6 +181,7 @@ it("retains the explicit API-key account through hosted selection and rejects a 
   expect(control.selectHostedEnvironment("agentsapi")).toBe(false);
 });
 it("keeps terminal placement when a hosted draft changes to a same-agent catalog target", async () => {
+  const folder = "/local/project";
   const data: NewSessionRouteData = {
     agentId: "main",
     requestedAgentId: "main",
@@ -200,7 +198,7 @@ it("keeps terminal placement when a hosted draft changes to a same-agent catalog
   });
   state.adoptAgentDefaults();
   await vi.waitFor(() => expect(state.modelControl.hostedEnvironments()).toHaveLength(1));
-  state.applyFolder("/local/project");
+  state.applyFolder(folder);
   await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
   state.selectWorktree(true);
   state.selectHostedEnvironment("agentsapi");
@@ -212,21 +210,13 @@ it("keeps terminal placement when a hosted draft changes to a same-agent catalog
     terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
   });
   state.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
-  expect(state).toMatchObject({
-    hostedEnvironment: undefined,
-    folder: "/local/project",
-    worktree: true,
-  });
+  expect(state).toMatchObject({ hostedEnvironment: undefined, folder, worktree: true });
   const element = renderPlace({ ...fixture, place: state }, data);
   expect(element.querySelector("#new-session-project-trigger")).not.toBeNull();
   expect(element.querySelector("#new-session-checkout-trigger")).not.toBeNull();
   expect(
-    buildSelectedSessionCreateParams(state, {
-      catalogId: "native-cli",
-      message: "hello",
-      visibility: "normal",
-    }),
-  ).toMatchObject({ catalogId: "native-cli", cwd: "/local/project", worktree: true });
+    buildSelectedSessionCreateParams(state, { ...createSelection, catalogId: "native-cli" }),
+  ).toMatchObject({ catalogId: "native-cli", cwd: folder, worktree: true });
 });
 it("describes Auto using the eligible host runtime while a hosted workspace is selected", async () => {
   const f = createDraftFixture({
@@ -243,13 +233,7 @@ it("describes Auto using the eligible host runtime while a hosted workspace is s
     }),
     agents: [{ ...agent, workspace: "/workspace" }],
     modelCatalog: async () =>
-      catalogWith({
-        agentRuntime: {
-          ...model.agentRuntime!,
-          id: "remote-runtime",
-          cloudPlacementExecutionMode: "remote-exec",
-        },
-      }),
+      catalog({ agentRuntime: nativeRuntime("remote-runtime", "remote-exec") }),
   });
   managed.track(f.place.modelControl);
   await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
@@ -276,21 +260,8 @@ it("suppresses remote clone and worktree payloads while preserving place intent"
   const before = state.preferenceSelection();
   state.selectHostedEnvironment("agentsapi");
   expect(state).toMatchObject({ remotePlacement: false, deviceId: "", worktree: false });
-  const payload = buildSelectedSessionCreateParams(state, {
-    message: "hello",
-    visibility: "normal",
-  });
-  expect(payload).toMatchObject({ model: modelRef, agentRuntime: "agentsapi", message: "hello" });
-  for (const key of [
-    "cwd",
-    "projectId",
-    "projectGitUrl",
-    "repository",
-    "worktree",
-    "worktreeSource",
-  ]) {
-    expect(payload).not.toHaveProperty(key);
-  }
+  const payload = buildSelectedSessionCreateParams(state, createSelection);
+  expect(payload).toStrictEqual({ agentId: "main", message: "hello", ...preferred });
   expect(state.preferenceSelection().remoteProject).toEqual(before.remoteProject);
   state.selectDevice("desktop");
   expect(state.modelControl.resolveAgentRuntime()?.id).toBe("openclaw");

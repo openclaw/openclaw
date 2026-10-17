@@ -21,6 +21,7 @@ import {
   selectCloudWorktree,
   submitPendingWorktree,
 } from "./draft-worktree-submission.test-support.ts";
+import { testModel } from "./model-control-view-queries.test-support.ts";
 import { renderControl } from "./model-control.test-support.ts";
 
 afterEach(resetWorktreeMocks);
@@ -38,11 +39,8 @@ it.each([
   async ({ identified, fastMode, speedOption }) => {
     const { prefs, first } = await preferenceDraft(identified, async () => ({
       models: [
-        { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
-        {
-          id: "gpt-5.6-sol",
-          name: "GPT-5.6 Sol",
-          provider: "openai",
+        testModel("openai", "gpt-5.6-luna"),
+        testModel("openai", "gpt-5.6-sol", {
           reasoning: true,
           available: true,
           serviceTiers: ["ultrafast"],
@@ -50,7 +48,7 @@ it.each([
             { id: "low", label: "Low" },
             { id: "high", label: "High" },
           ],
-        },
+        }),
       ],
     }));
     const { admitted, submitting } = await submitPendingWorktree(first);
@@ -261,16 +259,13 @@ it.each(["name", "base"])("orders accepted clear before newer %s edits", async (
   await Promise.all([submitting, writes.mock.results.at(-1)?.value]);
   if (edit === "name") {
     expect(prefs.stored()).toMatchObject({ worktreeName: "next-task", baseRef: "main" });
+    expect(next.place.worktreeName).toBe("next-task");
   } else {
     expect(prefs.stored()).toMatchObject({ baseRef: "next-base" });
     expect(prefs.stored()).not.toHaveProperty("worktreeName");
+    expect(next.place).toMatchObject({ worktreeName: "", baseRef: "next-base" });
   }
   expect(observer.place.worktreeName).toBe("");
-  if (edit === "base") {
-    expect(next.place).toMatchObject({ worktreeName: "", baseRef: "next-base" });
-  } else {
-    expect(next.place.worktreeName).toBe("next-task");
-  }
   expect(concurrentWrites).toBe(1);
 });
 
