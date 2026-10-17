@@ -560,9 +560,33 @@ describe("tui command handlers", () => {
     } else {
       expect(h.dropPendingUser).not.toHaveBeenCalled();
       expect(h.state.sessionProjection?.entries).toHaveLength(1);
-      expect(h.setActivityStatus).toHaveBeenLastCalledWith("idle");
+      expect(h.setActivityStatus).toHaveBeenLastCalledWith("idle", "completed");
     }
   });
+
+  it.each(["active", "pending"] as const)(
+    "keeps %s work visible after another send completes with a terminal ACK",
+    async (remaining) => {
+      const loadHistory = vi.fn<() => Promise<void>>(async () => {
+        h.state.activeChatRunId = remaining === "active" ? "other-run" : null;
+        h.state.pendingSubmit =
+          remaining === "pending"
+            ? { phase: "accepted", runId: "other-run", draftText: null }
+            : null;
+        h.state.activityStatus = remaining === "active" ? "streaming" : "waiting";
+        h.setActivityStatus.mockClear();
+      });
+      const h = createHarness({
+        activeChatRunId: "other-run",
+        sendChat: vi.fn(async ({ runId }: { runId: string }) => ({ runId, status: "ok" })),
+        loadHistory,
+      });
+      await h.handleCommand("hello");
+      expect(loadHistory).toHaveBeenCalledOnce();
+      expect(h.setActivityStatus).not.toHaveBeenCalled();
+      expect(h.state.activityStatus).toBe(remaining === "active" ? "streaming" : "waiting");
+    },
+  );
 
   it("ignores a terminal ACK after its history reload switches sessions", async () => {
     const history = createDeferred();

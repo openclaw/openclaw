@@ -953,8 +953,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         if (terminalAckFailure) {
           chatLog.addSystem(`send failed: ${TERMINAL_CHAT_SEND_FAILURE_MESSAGE}`);
           setActivityStatus("error");
-        } else {
-          setActivityStatus("idle");
+        } else if (!state.activeChatRunId && !hasPendingSubmit(state)) {
+          setActivityStatus("idle", "completed");
         }
         tui.requestRender();
         return;
