@@ -209,7 +209,7 @@ function LoadedContextPanel(props: {
   const state = createMemo(() => {
     const contextWeight = props.weight;
     const usage = props.usage;
-    const injectedChars = contextWeight.injectedWorkspaceFiles.reduce(
+    const injectedFileChars = contextWeight.injectedWorkspaceFiles.reduce(
       (sum, file) =>
         file.injectionStatus === "native_unverified" ? sum : sum + file.injectedChars,
       0,
@@ -236,7 +236,7 @@ function LoadedContextPanel(props: {
       {
         className: "files",
         labelKey: "usage.details.files",
-        tokens: charsToTokens(injectedChars),
+        tokens: charsToTokens(injectedFileChars),
         entries: contextWeight.injectedWorkspaceFiles.map(({ name, injectedChars }) => ({
           name,
           chars: injectedChars,
@@ -261,7 +261,7 @@ function LoadedContextPanel(props: {
           Math.max(
             0,
             contextWeight.systemPrompt.chars -
-              injectedChars -
+              injectedFileChars -
               contextWeight.skills.promptChars -
               contextWeight.tools.listChars,
           ),
