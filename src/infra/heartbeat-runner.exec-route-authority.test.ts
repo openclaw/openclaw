@@ -27,6 +27,54 @@ const captured = {
   threadId: 47,
 };
 const marker = "EXEC_CAPTURED_TOPIC_RESULT";
+const explicitHeartbeat = {
+  every: "5m",
+  target: "telegram",
+  to: "1234567890",
+  accountId: "personal",
+} as const;
+const capturedSession = {
+  sessionId: "sid",
+  lastChannel: "telegram",
+  lastTo: captured.to,
+  lastAccountId: "work",
+  lastThreadId: 47,
+};
+function installTelegram(plugin: typeof heartbeatRunnerTelegramPlugin) {
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]));
+}
+type Sandbox = Parameters<Parameters<typeof withTempHeartbeatSandbox>[0]>[0];
+function withExecFixture(
+  fn: (
+    fixture: Sandbox & {
+      cfg: ReturnType<typeof heartbeatTestConfig>;
+      seed: (entry?: Parameters<typeof seedSessionStore>[2], key?: string) => Promise<void>;
+      run: (
+        options: Partial<Parameters<typeof runHeartbeatOnce>[0]>,
+      ) => ReturnType<typeof runHeartbeatOnce>;
+    },
+  ) => Promise<void>,
+) {
+  return withTempHeartbeatSandbox(async (fixture) => {
+    const { tmpDir, storePath } = fixture;
+    const cfg = heartbeatTestConfig(tmpDir, "telegram", "telegram", storePath);
+    await fn({
+      ...fixture,
+      cfg,
+      seed: (entry = capturedSession, key = sessionKey) => seedSessionStore(storePath, key, entry),
+      run: (options) =>
+        runHeartbeatOnce({
+          cfg,
+          agentId: "main",
+          sessionKey,
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          ...options,
+        }),
+    });
+  });
+}
 
 beforeEach(() => {
   setActivePluginRegistry(
@@ -56,11 +104,10 @@ it.each([
     heartbeat: { target: "whatsapp", to: "+15555550166", accountId: "personal" },
   },
 ] as const)("exec capture outranks $name", async ({ heartbeat }) => {
-  await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-    const cfg = heartbeatTestConfig(tmpDir, "last", "telegram", storePath);
+  await withExecFixture(async ({ cfg, replySpy, run, seed }) => {
     cfg.agents!.defaults!.heartbeat = { every: "5m", ...heartbeat };
     cfg.commands = { ownerAllowFrom: ["telegram:1234567890"] };
-    await seedSessionStore(storePath, sessionKey, {
+    await seed({
       sessionId: "sid",
       lastChannel: "telegram",
       lastTo: "telegram:-1003774691294:topic:2175",
@@ -74,18 +121,8 @@ it.each([
     });
     const telegram = vi.fn().mockResolvedValue({ messageId: "sent", chatId: "-1003774691294" });
     const whatsapp = vi.fn().mockResolvedValue({ messageId: "wrong-route" });
-    const contexts: Array<Parameters<typeof replySpy>[0]> = [];
-    replySpy.mockImplementation(async (ctx) => {
-      contexts.push(ctx);
-      return { text: marker };
-    });
-    const result = await runHeartbeatOnce({
-      cfg,
-      agentId: "main",
-      sessionKey,
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
+    replySpy.mockResolvedValue({ text: marker });
+    const result = await run({
       deps: { getReplyFromConfig: replySpy, telegram, whatsapp },
     });
     expect(result.status).toBe("ran");
@@ -96,8 +133,8 @@ it.each([
       { accountId: "work", messageThreadId: 47 },
     ]);
     expect(whatsapp).not.toHaveBeenCalled();
-    expect(contexts[0]?.Body).toContain(marker);
-    expect(contexts[0]).toMatchObject({
+    expect(replySpy.mock.calls[0]?.[0]?.Body).toContain(marker);
+    expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
       OriginatingChannel: "telegram",
       OriginatingTo: captured.to,
       AccountId: "work",
@@ -111,8 +148,8 @@ it.each([
 it.each(["none", "direct-policy", "alerts-disabled"])(
   "exec capture preserves %s suppression",
   async (suppression) => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = heartbeatTestConfig(tmpDir, "telegram", "telegram", storePath);
+    await withExecFixture(async ({ cfg, replySpy, run, seed }) => {
+      await seed();
       cfg.agents!.defaults!.heartbeat = {
         every: "5m",
         target: suppression === "none" ? "none" : "telegram",
@@ -126,13 +163,6 @@ it.each(["none", "direct-policy", "alerts-disabled"])(
           useIndicator: false,
         };
       }
-      await seedSessionStore(storePath, sessionKey, {
-        sessionId: "sid",
-        lastChannel: "telegram",
-        lastTo: captured.to,
-        lastAccountId: "work",
-        lastThreadId: 47,
-      });
       enqueueSystemEvent(`Exec completed (suppressed, code 0) :: ${marker}`, {
         sessionKey,
         contextKey: "exec:fixture-2",
@@ -146,13 +176,7 @@ it.each(["none", "direct-policy", "alerts-disabled"])(
         expect(ctx.Body).not.toContain(marker);
         return { text: "HEARTBEAT_OK" };
       });
-      await runHeartbeatOnce({
-        cfg,
-        agentId: "main",
-        sessionKey,
-        source: "exec-event",
-        intent: "event",
-        reason: "exec-event",
+      await run({
         deps: { getReplyFromConfig: replySpy, telegram },
       });
       expect(telegram).not.toHaveBeenCalled();
@@ -161,21 +185,9 @@ it.each(["none", "direct-policy", "alerts-disabled"])(
 );
 
 it("scheduled work retains the configured explicit destination while exec is deferred", async () => {
-  await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-    const cfg = heartbeatTestConfig(tmpDir, "telegram", "telegram", storePath);
-    cfg.agents!.defaults!.heartbeat = {
-      every: "5m",
-      target: "telegram",
-      to: "1234567890",
-      accountId: "personal",
-    };
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "sid",
-      lastChannel: "telegram",
-      lastTo: captured.to,
-      lastAccountId: "work",
-      lastThreadId: 47,
-    });
+  await withExecFixture(async ({ cfg, replySpy, run, seed }) => {
+    cfg.agents!.defaults!.heartbeat = { ...explicitHeartbeat };
+    await seed();
     const completion = `Exec completed (deferred, code 0) :: ${marker}`;
     enqueueSystemEvent(completion, { sessionKey, deliveryContext: captured });
     const telegram = vi.fn().mockResolvedValue({ messageId: "scheduled" });
@@ -189,10 +201,7 @@ it("scheduled work retains the configured explicit destination while exec is def
       expect(ctx.MessageThreadId).toBeUndefined();
       return { text: "Scheduled check complete." };
     });
-    await runHeartbeatOnce({
-      cfg,
-      agentId: "main",
-      sessionKey,
+    await run({
       source: "cron",
       intent: "task",
       reason: "cron:scheduled",
@@ -211,74 +220,50 @@ it("scheduled work retains the configured explicit destination while exec is def
 it.each(["chat", "thread", "configuration"] as const)(
   "exec authority fences post-await %s refinement",
   async (change) => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = heartbeatTestConfig(tmpDir, "last", "telegram", storePath);
-      await seedSessionStore(storePath, sessionKey, {
-        sessionId: "sid",
-        lastChannel: "telegram",
-        lastTo: captured.to,
-        lastAccountId: "work",
-        lastThreadId: 47,
-      });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "telegram",
-            source: "test",
-            plugin: {
-              ...heartbeatRunnerTelegramPlugin,
-              messaging: {
-                ...heartbeatRunnerTelegramPlugin.messaging,
-                resolveOutboundSessionRoute: async (
-                  params: Parameters<
-                    NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
-                  >[0],
-                ) => {
-                  await Promise.resolve();
-                  if (change === "configuration") {
-                    Object.assign(cfg.agents!.defaults!.heartbeat!, {
-                      target: "telegram",
-                      to: "1234567890",
-                      accountId: "personal",
-                    });
-                  }
-                  return {
-                    sessionKey,
-                    baseSessionKey: sessionKey,
-                    peer: { kind: "group", id: "-1003774691294" },
-                    chatType: "group",
-                    from: captured.to,
-                    to: change === "chat" ? "1234567890" : params.target,
-                    threadId: change === "thread" ? 99 : (params.threadId ?? undefined),
-                  };
-                },
-              },
-            },
+    await withExecFixture(async ({ cfg, replySpy, run, seed }) => {
+      await seed();
+      cfg.agents!.defaults!.heartbeat!.target = "last";
+      installTelegram({
+        ...heartbeatRunnerTelegramPlugin,
+        messaging: {
+          ...heartbeatRunnerTelegramPlugin.messaging,
+          resolveOutboundSessionRoute: async (
+            params: Parameters<
+              NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
+            >[0],
+          ) => {
+            await Promise.resolve();
+            if (change === "configuration") {
+              Object.assign(cfg.agents!.defaults!.heartbeat!, {
+                target: "telegram",
+                to: "1234567890",
+                accountId: "personal",
+              });
+            }
+            return {
+              sessionKey,
+              baseSessionKey: sessionKey,
+              peer: { kind: "group", id: "-1003774691294" },
+              chatType: "group",
+              from: captured.to,
+              to: change === "chat" ? "1234567890" : params.target,
+              threadId: change === "thread" ? 99 : (params.threadId ?? undefined),
+            };
           },
-        ]),
-      );
+        },
+      });
       enqueueSystemEvent(`Exec completed (refinement, code 0) :: ${marker}`, {
         sessionKey,
         contextKey: "exec:fixture-3",
         deliveryContext: captured,
       });
       const telegram = vi.fn().mockResolvedValue({ messageId: "sent" });
-      const contexts: Array<Parameters<typeof replySpy>[0]> = [];
-      replySpy.mockImplementation(async (ctx) => {
-        contexts.push(ctx);
-        return { text: change === "configuration" ? marker : "HEARTBEAT_OK" };
-      });
-      await runHeartbeatOnce({
-        cfg,
-        agentId: "main",
-        sessionKey,
-        source: "exec-event",
-        intent: "event",
-        reason: "exec-event",
+      replySpy.mockResolvedValue({ text: change === "configuration" ? marker : "HEARTBEAT_OK" });
+      await run({
         deps: { getReplyFromConfig: replySpy, telegram },
       });
       if (change === "configuration") {
-        expect(contexts[0]).toMatchObject({
+        expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
           OriginatingTo: captured.to,
           AccountId: "work",
           MessageThreadId: 47,
@@ -289,7 +274,7 @@ it.each(["chat", "thread", "configuration"] as const)(
           { accountId: "work", messageThreadId: 47 },
         ]);
       } else {
-        expect(contexts[0]?.Body).not.toContain(marker);
+        expect(replySpy.mock.calls[0]?.[0]?.Body).not.toContain(marker);
         expect(telegram).not.toHaveBeenCalled();
       }
     });
@@ -297,32 +282,18 @@ it.each(["chat", "thread", "configuration"] as const)(
 );
 
 it("does not replace an unavailable captured account with a configured heartbeat account", async () => {
-  await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-    const cfg = heartbeatTestConfig(tmpDir, "telegram", "telegram", storePath);
-    cfg.agents!.defaults!.heartbeat = {
-      every: "5m",
-      target: "telegram",
-      to: "1234567890",
-      accountId: "personal",
-    };
-    await seedSessionStore(storePath, sessionKey, {
+  await withExecFixture(async ({ cfg, replySpy, run, seed }) => {
+    cfg.agents!.defaults!.heartbeat = { ...explicitHeartbeat };
+    await seed({
       sessionId: "sid",
       lastChannel: "telegram",
       lastTo: captured.to,
       lastAccountId: "personal",
     });
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: {
-            ...heartbeatRunnerTelegramPlugin,
-            config: { ...heartbeatRunnerTelegramPlugin.config, listAccountIds: () => ["personal"] },
-          },
-        },
-      ]),
-    );
+    installTelegram({
+      ...heartbeatRunnerTelegramPlugin,
+      config: { ...heartbeatRunnerTelegramPlugin.config, listAccountIds: () => ["personal"] },
+    });
     enqueueSystemEvent(`Exec completed (account, code 0) :: ${marker}`, {
       sessionKey,
       contextKey: "exec:fixture-4",
@@ -333,13 +304,7 @@ it("does not replace an unavailable captured account with a configured heartbeat
       expect(ctx.Body).not.toContain(marker);
       return { text: "HEARTBEAT_OK" };
     });
-    await runHeartbeatOnce({
-      cfg,
-      agentId: "main",
-      sessionKey,
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
+    await run({
       deps: { getReplyFromConfig: replySpy, telegram },
     });
     expect(telegram).not.toHaveBeenCalled();
@@ -349,26 +314,12 @@ it("does not replace an unavailable captured account with a configured heartbeat
 it.each(["generic-exec-text", "cron-exec-text"] as const)(
   "does not grant exec authority to %s event context",
   async (kind) => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = heartbeatTestConfig(tmpDir, "telegram", "telegram", storePath);
-      cfg.agents!.defaults!.heartbeat = {
-        every: "5m",
-        target: "telegram",
-        to: "1234567890",
-        accountId: "personal",
-      };
-      await seedSessionStore(storePath, sessionKey, {
-        sessionId: "sid",
-        lastChannel: "telegram",
-        lastTo: captured.to,
-        lastAccountId: "work",
-        lastThreadId: 47,
-      });
+    await withExecFixture(async ({ cfg, replySpy, run, seed }) => {
+      await seed();
+      cfg.agents!.defaults!.heartbeat = { ...explicitHeartbeat };
       const cron = kind.startsWith("cron");
       enqueueSystemEvent(
-        kind.endsWith("exec-text")
-          ? "Exec completed (ordinary-notice, code 0) :: ordinary configured notification"
-          : "Reminder: ordinary configured notification",
+        "Exec completed (ordinary-notice, code 0) :: ordinary configured notification",
         {
           sessionKey,
           deliveryContext: captured,
@@ -384,10 +335,7 @@ it.each(["generic-exec-text", "cron-exec-text"] as const)(
         );
         return { text: "Ordinary notification." };
       });
-      await runHeartbeatOnce({
-        cfg,
-        agentId: "main",
-        sessionKey,
+      await run({
         source: cron ? "cron" : "hook",
         intent: "immediate",
         reason: cron ? "cron:ordinary" : "hook:ordinary",
@@ -403,16 +351,18 @@ it.each(["generic-exec-text", "cron-exec-text"] as const)(
 );
 
 it("does not spin route follow-ups for excluded isolated base generic groups", async () => {
-  await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-    const cfg = heartbeatTestConfig(tmpDir, "last", "telegram", storePath);
-    cfg.agents!.defaults!.heartbeat!.isolatedSession = true;
+  await withExecFixture(async ({ cfg, replySpy, run, seed }) => {
+    Object.assign(cfg.agents!.defaults!.heartbeat!, { target: "last", isolatedSession: true });
     const baseKey = resolveMainSessionKey(cfg);
-    await seedSessionStore(storePath, baseKey, {
-      sessionId: "sid",
-      lastChannel: "telegram",
-      lastTo: captured.to,
-      lastAccountId: "work",
-    });
+    await seed(
+      {
+        sessionId: "sid",
+        lastChannel: "telegram",
+        lastTo: captured.to,
+        lastAccountId: "work",
+      },
+      baseKey,
+    );
     const texts = ["ordinary excluded notice one", "ordinary excluded notice two"];
     for (const [index, text] of texts.entries()) {
       enqueueSystemEvent(text, {
@@ -428,9 +378,7 @@ it("does not spin route follow-ups for excluded isolated base generic groups", a
       return { text: "HEARTBEAT_OK" };
     });
     const telegram = vi.fn();
-    await runHeartbeatOnce({
-      cfg,
-      agentId: "main",
+    await run({
       deps: { getReplyFromConfig: replySpy, telegram },
       sessionKey: baseKey,
       source: "cron",

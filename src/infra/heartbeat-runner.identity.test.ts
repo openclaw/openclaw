@@ -27,6 +27,15 @@ import {
 
 installHeartbeatRunnerTestRuntime({ includeSlack: true });
 
+function identityConfig(
+  workspace: string,
+  store: string,
+  heartbeat?: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["heartbeat"],
+  session: OpenClawConfig["session"] = {},
+): OpenClawConfig {
+  return { agents: { defaults: { workspace, heartbeat } }, session: { store, ...session } };
+}
+
 function mockReplyWithSystemEvents(replySpy: HeartbeatReplySpy, cfg: OpenClawConfig) {
   const blocks: Array<string | undefined> = [];
   replySpy.mockImplementation(async (ctx, opts) => {
@@ -56,18 +65,15 @@ describe("runHeartbeatOnce identity", () => {
   it("keeps isolated global delivery and identity in the selected agent store", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
       const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions.json");
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: { every: "5m", target: "last", isolatedSession: true },
-          },
-          entries: {
-            main: {},
-            historian2: { identity: { name: "Pulse", emoji: "📟" } },
-          },
-        },
-        session: { scope: "global", dmScope: "per-channel-peer", store: storeTemplate },
+      const cfg = identityConfig(
+        tmpDir,
+        storeTemplate,
+        { every: "5m", target: "last", isolatedSession: true },
+        { scope: "global", dmScope: "per-channel-peer" },
+      );
+      cfg.agents!.entries = {
+        main: {},
+        historian2: { identity: { name: "Pulse", emoji: "📟" } },
       };
       const mainStorePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main" });
       const historianScope = {
@@ -138,15 +144,12 @@ describe("runHeartbeatOnce identity", () => {
     "preserves the queue of a session named heartbeat with isolation %s",
     async (isolatedSession) => {
       await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-        const cfg: OpenClawConfig = {
-          agents: {
-            defaults: {
-              workspace: tmpDir,
-              heartbeat: { every: "5m", target: "none", session: "heartbeat", isolatedSession },
-            },
-          },
-          session: { store: storePath },
-        };
+        const cfg = identityConfig(tmpDir, storePath, {
+          every: "5m",
+          target: "none",
+          session: "heartbeat",
+          isolatedSession,
+        });
         replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
 
         const result = await runHeartbeatOnce({
@@ -170,13 +173,8 @@ describe("runHeartbeatOnce identity", () => {
   it("keeps a global hook event owned by another agent queued for its owner", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
       const storeTemplate = path.join(tmpDir, "agents", "{agentId}", "sessions.json");
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: { workspace: tmpDir },
-          entries: { main: {}, alpha: {}, beta: {} },
-        },
-        session: { scope: "global", store: storeTemplate },
-      };
+      const cfg = identityConfig(tmpDir, storeTemplate, undefined, { scope: "global" });
+      cfg.agents!.entries = { main: {}, alpha: {}, beta: {} };
       for (const agentId of ["alpha", "beta"]) {
         await seedSessionStore(
           resolveSessionStorePathCore(storeTemplate, { agentId }),
@@ -225,19 +223,11 @@ describe("runHeartbeatOnce", () => {
   it("uses the delivery target as sender when lastTo differs", async () => {
     await withTempHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
-        const cfg: OpenClawConfig = {
-          agents: {
-            defaults: {
-              workspace: tmpDir,
-              heartbeat: {
-                every: "5m",
-                target: "slack",
-                to: "C0A9P2N8QHY",
-              },
-            },
-          },
-          session: { store: storePath },
-        };
+        const cfg = identityConfig(tmpDir, storePath, {
+          every: "5m",
+          target: "slack",
+          to: "C0A9P2N8QHY",
+        });
 
         await seedMainSessionStore(storePath, cfg, {
           lastChannel: "telegram",
@@ -246,8 +236,7 @@ describe("runHeartbeatOnce", () => {
         });
 
         replySpy.mockImplementation(async (ctx: { To?: string; From?: string }) => {
-          expect(ctx.To).toBe("C0A9P2N8QHY");
-          expect(ctx.From).toBe("C0A9P2N8QHY");
+          expect(ctx).toMatchObject({ To: "C0A9P2N8QHY", From: "C0A9P2N8QHY" });
           return { text: "ok" };
         });
 
