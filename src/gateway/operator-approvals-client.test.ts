@@ -1,5 +1,3 @@
-// Operator approvals client tests cover connect lifecycle, request framing,
-// scope-upgrade errors, and graceful shutdown behavior for approval operations.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
 
@@ -20,10 +18,7 @@ const bootstrapState = vi.hoisted(() => ({
 }));
 
 class MockGatewayClient {
-  private readonly opts: Record<string, unknown>;
-
-  constructor(opts: Record<string, unknown>) {
-    this.opts = opts;
+  constructor(private readonly opts: Record<string, unknown>) {
     clientState.options = opts;
   }
 
@@ -98,11 +93,6 @@ async function runOperatorApprovalsGatewayClient(
   );
 }
 
-function expectRuntimeTokenApprovalClient(): void {
-  expect(typeof clientState.options?.approvalRuntimeToken).toBe("string");
-  expect(clientState.options?.deviceIdentity).toBeNull();
-}
-
 describe("withOperatorApprovalsGatewayClient", () => {
   beforeEach(() => {
     clientState.options = null;
@@ -136,54 +126,26 @@ describe("withOperatorApprovalsGatewayClient", () => {
     expect(clientState.stopAndWaitSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps device identity and omits approval runtime token for remote shared-auth approval clients", async () => {
-    bootstrapState.url = "wss://gateway.example/ws";
-    bootstrapState.urlSource = "config gateway.remote.url";
-    bootstrapState.tlsFingerprint = "sha256:remote";
-
-    await runOperatorApprovalsGatewayClient();
-
-    expect(clientState.options).not.toHaveProperty("deviceIdentity", null);
-    expect(clientState.options?.deviceIdentity).toBeUndefined();
-    expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
-    expect(clientState.options?.tlsFingerprint).toBe("sha256:remote");
-  });
-
-  it("keeps device identity for env loopback approval clients without runtime authority", async () => {
-    bootstrapState.url = "ws://127.0.0.1:18789";
-    bootstrapState.urlSource = "env OPENCLAW_GATEWAY_URL";
-
-    await runOperatorApprovalsGatewayClient();
-
-    expect(clientState.options?.deviceIdentity).toBeUndefined();
-    expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
-  });
-
   it.each([
-    {
-      name: "explicit loopback gateway URL overrides",
-      url: "ws://127.0.0.1:18789",
-      urlSource: "cli --url",
-      gatewayUrl: "ws://127.0.0.1:18789",
-    },
-    {
-      name: "remote explicit gateway URL overrides",
-      url: "wss://gateway.example/ws",
-      urlSource: "cli --url",
-      gatewayUrl: "wss://gateway.example/ws",
-    },
-    {
-      name: "configured remote loopback gateway URLs",
-      url: "ws://127.0.0.1:18789",
-      urlSource: "config gateway.remote.url",
-    },
-  ])("omits approval runtime token for $name", async ({ url, urlSource, gatewayUrl }) => {
-    bootstrapState.url = url;
-    bootstrapState.urlSource = urlSource;
+    ["config gateway.remote.url", "wss://gateway.example/ws", undefined, "sha256:remote"],
+    ["env OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:18789", undefined, undefined],
+    ["cli --url", "ws://127.0.0.1:18789", "ws://127.0.0.1:18789", undefined],
+    ["cli --url", "wss://gateway.example/ws", "wss://gateway.example/ws", undefined],
+    ["config gateway.remote.url", "ws://127.0.0.1:18789", undefined, undefined],
+  ] as const)(
+    "omits process-local authority for %s (%s)",
+    async (urlSource, url, gatewayUrl, fingerprint) => {
+      bootstrapState.url = url;
+      bootstrapState.urlSource = urlSource;
+      bootstrapState.tlsFingerprint = fingerprint;
 
-    await runOperatorApprovalsGatewayClient(gatewayUrl ? { gatewayUrl } : {});
-    expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
-  });
+      await runOperatorApprovalsGatewayClient(gatewayUrl ? { gatewayUrl } : {});
+      expect(clientState.options).not.toHaveProperty("deviceIdentity", null);
+      expect(clientState.options?.deviceIdentity).toBeUndefined();
+      expect(clientState.options).not.toHaveProperty("approvalRuntimeToken");
+      expect(clientState.options?.tlsFingerprint).toBe(fingerprint);
+    },
+  );
 
   it("keeps approval runtime token for local fallback gateway URLs", async () => {
     bootstrapState.url = "ws://127.0.0.1:18789";
@@ -191,7 +153,8 @@ describe("withOperatorApprovalsGatewayClient", () => {
 
     await runOperatorApprovalsGatewayClient();
 
-    expectRuntimeTokenApprovalClient();
+    expect(typeof clientState.options?.approvalRuntimeToken).toBe("string");
+    expect(clientState.options?.deviceIdentity).toBeNull();
   });
 
   it("surfaces close failures before hello", async () => {

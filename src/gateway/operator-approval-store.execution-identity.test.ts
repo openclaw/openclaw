@@ -75,6 +75,37 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
+function identityFixture() {
+  const options = databaseOptions();
+  const owner = {
+    expectedKind: "exec",
+    runtimeEpoch: "runtime-a",
+    databaseOptions: options,
+  } as const;
+  return {
+    options,
+    insert: (id: string) =>
+      insertOperatorApproval({ approval: approval(id, token()), databaseOptions: options }),
+    resolve: (id: string) =>
+      resolveOperatorApproval({
+        id,
+        decision: "allow-once",
+        resolver: { kind: "device", id: "reviewer" },
+        nowMs: 2_000,
+        ...owner,
+      }),
+    consume: (id: string, consumerId = "consumer") =>
+      consumeOperatorApprovalAllowOnce({
+        id,
+        consumerId,
+        nowMs: 3_000,
+        ...owner,
+      }),
+    get: (id: string) =>
+      getOperatorApprovalDetailed({ id, nowMs: 3_000, databaseOptions: options }),
+  };
+}
+
 describe("operator approval execution identity", () => {
   it("rolls back the parent when the child insert is forced to fail", () => {
     const options = databaseOptions();
@@ -109,11 +140,9 @@ describe("operator approval execution identity", () => {
   });
 
   it("keeps parent decision and consume semantics independent of child/audit rows", async () => {
-    const options = databaseOptions();
+    const { options, insert, resolve, consume, get } = identityFixture();
     for (const id of ["missing-child", "corrupt-child", "deleted-audit"]) {
-      expect(
-        await insertOperatorApproval({ approval: approval(id, token()), databaseOptions: options }),
-      ).toMatchObject({ outcome: "inserted" });
+      expect(await insert(id)).toMatchObject({ outcome: "inserted" });
     }
     const db = openOpenClawStateDatabase(options).db;
     db.prepare("DELETE FROM operator_approval_execution_identities WHERE approval_id = ?").run(
@@ -132,41 +161,17 @@ describe("operator approval execution identity", () => {
     `);
 
     for (const id of ["missing-child", "corrupt-child", "deleted-audit"]) {
-      expect(
-        await resolveOperatorApproval({
-          id,
-          decision: "allow-once",
-          resolver: { kind: "device", id: "reviewer" },
-          expectedKind: "exec",
-          runtimeEpoch: "runtime-a",
-          nowMs: 2_000,
-          databaseOptions: options,
-        }),
-      ).toMatchObject({ outcome: "resolved" });
-      expect(
-        await consumeOperatorApprovalAllowOnce({
-          id,
-          consumerId: "consumer",
-          expectedKind: "exec",
-          runtimeEpoch: "runtime-a",
-          nowMs: 3_000,
-          databaseOptions: options,
-        }),
-      ).toMatchObject({ outcome: "consumed" });
-      expect(
-        await getOperatorApprovalDetailed({ id, nowMs: 3_000, databaseOptions: options }),
-      ).toMatchObject({
+      expect(await resolve(id)).toMatchObject({ outcome: "resolved" });
+      expect(await consume(id)).toMatchObject({ outcome: "consumed" });
+      expect(await get(id)).toMatchObject({
         outcome: "found",
         record: { decision: "allow-once", consumedBy: "consumer" },
       });
     }
   });
   it("preserves companion identity through an older approval reader write and candidate reopen", async () => {
-    const options = databaseOptions();
-    await insertOperatorApproval({
-      approval: approval("older-reader", token()),
-      databaseOptions: options,
-    });
+    const { options, insert, consume, get } = identityFixture();
+    await insert("older-reader");
     const candidate = openOpenClawStateDatabase(options);
     const version = candidate.db.prepare("PRAGMA user_version").get();
     const binding = candidate.db
@@ -206,33 +211,17 @@ describe("operator approval execution identity", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
-    expect(
-      await getOperatorApprovalDetailed({
-        id: "older-reader",
-        nowMs: 3_000,
-        databaseOptions: options,
-      }),
-    ).toMatchObject({
+    expect(await get("older-reader")).toMatchObject({
       outcome: "found",
       record: { decision: "allow-once", resolver: { id: "older-reviewer" } },
     });
-    expect(
-      await consumeOperatorApprovalAllowOnce({
-        id: "older-reader",
-        consumerId: "candidate-consumer",
-        expectedKind: "exec",
-        runtimeEpoch: "runtime-a",
-        nowMs: 3_000,
-        databaseOptions: options,
-      }),
-    ).toMatchObject({ outcome: "consumed" });
-    expect(
-      await getOperatorApprovalDetailed({
-        id: "older-reader",
-        nowMs: 3_000,
-        databaseOptions: options,
-      }),
-    ).toMatchObject({ outcome: "found", record: { consumedBy: "candidate-consumer" } });
+    expect(await consume("older-reader", "candidate-consumer")).toMatchObject({
+      outcome: "consumed",
+    });
+    expect(await get("older-reader")).toMatchObject({
+      outcome: "found",
+      record: { consumedBy: "candidate-consumer" },
+    });
     const reopened = openOpenClawStateDatabase(options).db;
     expect(reopened.prepare("SELECT * FROM operator_approval_execution_identities").all()).toEqual(
       binding,
