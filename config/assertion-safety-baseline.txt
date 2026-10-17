@@ -952,7 +952,6 @@ extensions/zalouser/src/session-state.ts	2
 extensions/zalouser/src/setup-surface.ts	4
 extensions/zalouser/src/text-styles-inline.ts	1
 extensions/zalouser/src/text-styles-ranges.ts	1
-extensions/zalouser/src/text-styles-source.ts	1
 extensions/zalouser/src/tool.ts	1
 extensions/zalouser/src/zalo-js.ts	7
 extensions/zalouser/src/zca-client.ts	1
