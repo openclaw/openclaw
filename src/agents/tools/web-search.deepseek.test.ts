@@ -5,6 +5,7 @@ import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../../config/validation.js";
+import { listSearchProviderOptions } from "../../flows/search-setup.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { resolveManifestContractOwnerPluginId } from "../../plugins/plugin-registry-contributions.js";
 import { createResolverContext } from "../../secrets/runtime-shared.js";
@@ -103,6 +104,15 @@ describe("DeepSeek web_search production integration", () => {
   it("discovers the manifest contract and validates plugin-owned configuration", () => {
     const config = searchConfig();
     const metadata = loadPluginMetadataSnapshot({ config, env: process.env });
+    expect(
+      listSearchProviderOptions(config).filter((entry) => entry.id === "deepseek"),
+    ).toMatchObject([
+      {
+        pluginId: "deepseek",
+        label: "DeepSeek",
+        credentialPath: "plugins.entries.deepseek.config.webSearch.apiKey",
+      },
+    ]);
     expect(
       resolveManifestContractOwnerPluginId({
         config,

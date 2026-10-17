@@ -443,6 +443,36 @@ describe("runSearchSetupFlow", () => {
     });
   });
 
+  it("offers and installs DeepSeek search before its plugin is installed", async () => {
+    await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
+      webSearchProviderMocks.resolvePluginWebSearchProviders.mockReturnValue([]);
+      const select = vi.fn().mockResolvedValueOnce("deepseek");
+      const text = vi.fn().mockResolvedValue("synthetic-deepseek-search-key");
+      const result = await runSearchSetupFlow(
+        {},
+        createNonExitingRuntime(),
+        createWizardPrompter({ select, text }),
+      );
+      expect(select).toHaveBeenCalledWith(
+        expect.objectContaining({
+          options: expect.arrayContaining([expect.objectContaining({ value: "deepseek" })]),
+        }),
+      );
+      expect(result.outcome).toBe("completed");
+      expect(result.config.tools?.web?.search).toMatchObject({
+        provider: "deepseek",
+        enabled: true,
+      });
+      expect(result.config.plugins?.entries?.deepseek?.config).toEqual({
+        webSearch: { apiKey: "synthetic-deepseek-search-key" },
+      });
+      expect(latestPluginInstallRequest().entry).toMatchObject({
+        pluginId: "deepseek",
+        install: { npmSpec: "@openclaw/deepseek-provider" },
+      });
+    });
+  });
+
   it("forwards the persistent-effect guard to external provider installation", async () => {
     const select = vi.fn().mockResolvedValueOnce("brave");
     const text = vi.fn().mockResolvedValue("brave-test-key");
