@@ -618,4 +618,148 @@ describe("config cli roster integration", () => {
       expect(errors).toEqual([]);
     });
   });
+
+  it("rejects emptying the roster in preview just like the commit (#133895)", async () => {
+    const raw = JSON.stringify({ agents: { entries: { main: {} } } });
+    const retentionDiagnostic =
+      "Config write would drop agent roster entries without an explicit deletion: main.";
+    await withConfig(raw, async ({ configPath }) => {
+      const args = ["config", "set", "agents.entries", "{}", "--replace", "--strict-json"];
+      // The commit rejects dropping the last roster entry; preview must match.
+      // The non-JSON preview surfaces the guard's own diagnostic unchanged.
+      await reject(invoke([...args, "--dry-run"]));
+      expect(errors.join("\n")).toContain(retentionDiagnostic);
+      expect(read(configPath)).toBe(raw);
+      logs.length = 0;
+      errors.length = 0;
+      // The JSON preview preserves the completed validation summary and
+      // appends the retention refusal instead of reporting an unevaluated
+      // all-false result.
+      await reject(invoke([...args, "--dry-run", "--json"]));
+      const jsonSummary = logs
+        .filter((line) => line.startsWith("{"))
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find((value) => typeof value.operations === "number");
+      expect(jsonSummary).toMatchObject({
+        ok: false,
+        operations: 1,
+        inputModes: ["json"],
+        checks: { schema: true },
+      });
+      // The retention guard throws an ordinary error, so the appended
+      // refusal classifies as "schema", matching the generic handler;
+      // "conflict" is reserved for ConfigMutationConflictError.
+      expect(jsonSummary?.errors).toContainEqual({
+        kind: "schema",
+        message: retentionDiagnostic,
+      });
+      expect(JSON.stringify(jsonSummary)).toContain(retentionDiagnostic);
+      expect(read(configPath)).toBe(raw);
+      logs.length = 0;
+      errors.length = 0;
+      await reject(invoke(args));
+      expect(read(configPath)).toBe(raw);
+      expect(logs.join("\n")).not.toContain("Updated");
+    });
+  });
+
+  it("previews an include-owned edit without tripping the root persistence guard", async () => {
+    const includeRaw = '{"level":"info"}\n';
+    const raw =
+      JSON.stringify({
+        agents: { entries: { main: {} } },
+        logging: { $include: "logging.json" },
+      }) + "\n";
+    await withConfig(raw, async ({ configPath, tempDir }) => {
+      const includePath = path.join(tempDir, "logging.json");
+      fs.writeFileSync(includePath, includeRaw);
+      const args = ["config", "set", "logging.level", '"debug"', "--strict-json"];
+      // The commit routes this edit to the owning include, so the preview must
+      // skip the root-only persistence projection and succeed without writing.
+      await invoke([...args, "--dry-run"]);
+      expect(read(configPath)).toBe(raw);
+      expect(read(includePath)).toBe(includeRaw);
+      await invoke(args);
+      expect(read(configPath)).toBe(raw);
+      expect(JSON5.parse(read(includePath))).toEqual({ level: "debug" });
+    });
+  });
+
+  it("previews an include-owned edit that topology preparation reshapes at the root", async () => {
+    const raw =
+      JSON.stringify({
+        agents: {
+          entries: { main: {} },
+          defaults: { sessionStore: { agentId: "main" } },
+        },
+        session: { $include: "session.json" },
+      }) + "\n";
+    await withConfig(raw, async ({ configPath, tempDir }) => {
+      const includePath = path.join(tempDir, "session.json");
+      const storeA = path.join(fs.realpathSync(tempDir), "a.sqlite");
+      const storeB = path.join(fs.realpathSync(tempDir), "b.sqlite");
+      const includeRaw = `${JSON.stringify({ store: storeA })}\n`;
+      fs.writeFileSync(includePath, includeRaw);
+      const args = ["config", "set", "session.store", JSON.stringify(storeB), "--strict-json"];
+      // Topology preparation removes the root-level session-store owner, so a
+      // post-topology routing decision would see changes in both agents and
+      // session and wrongly reject. The commit routes to the include writer
+      // before topology preparation; the preview must decide from the same
+      // pre-topology candidate.
+      await invoke([...args, "--dry-run"]);
+      expect(read(configPath)).toBe(raw);
+      expect(read(includePath)).toBe(includeRaw);
+      await invoke(args);
+      expect(read(configPath)).toBe(raw);
+      expect(JSON5.parse(read(includePath))).toEqual({ store: storeB });
+    });
+  });
+
+  it("previews a no-op include-owned assignment without persistence rejection", async () => {
+    const includeRaw = '{"level":"info"}\n';
+    const raw =
+      JSON.stringify({
+        agents: { entries: { main: {} } },
+        logging: { $include: "logging.json" },
+      }) + "\n";
+    await withConfig(raw, async ({ configPath, tempDir }) => {
+      const includePath = path.join(tempDir, "logging.json");
+      fs.writeFileSync(includePath, includeRaw);
+      const args = ["config", "set", "logging.level", '"info"', "--strict-json"];
+      // The committing command reports "No change" before persistence; the
+      // preview must preserve that no-op path instead of rejecting the
+      // include-owned explicit set.
+      await invoke([...args, "--dry-run"]);
+      expect(read(configPath)).toBe(raw);
+      expect(read(includePath)).toBe(includeRaw);
+      await invoke(args);
+      expect(read(configPath)).toBe(raw);
+      expect(read(includePath)).toBe(includeRaw);
+      expect(logs.join("\n")).toContain("No change");
+    });
+  });
+
+  it("previews an agents-include roster expansion under explicit ownership", async () => {
+    const raw = JSON.stringify({ agents: { $include: "agents.json" } }) + "\n";
+    await withConfig(raw, async ({ configPath, tempDir }) => {
+      const includePath = path.join(tempDir, "agents.json");
+      const includeRaw =
+        JSON.stringify({ ownership: "explicit", entries: { main: { name: "before" } } }) + "\n";
+      fs.writeFileSync(includePath, includeRaw);
+      const args = ["config", "set", "agents.entries.work", '{"name":"worker"}', "--strict-json"];
+      // Entering multi-agent makes topology preparation derive
+      // persistCanonicalAgentRoster, but the commit selects the include writer
+      // before topology preparation without that derived flag. The preview
+      // must route the same way instead of forcing the root writer.
+      await invoke([...args, "--dry-run"]);
+      expect(read(configPath)).toBe(raw);
+      expect(read(includePath)).toBe(includeRaw);
+      await invoke(args);
+      expect(read(configPath)).toBe(raw);
+      expect(JSON5.parse(read(includePath))).toEqual({
+        ownership: "explicit",
+        entries: { main: { name: "before" }, work: { name: "worker" } },
+      });
+    });
+  });
 });
