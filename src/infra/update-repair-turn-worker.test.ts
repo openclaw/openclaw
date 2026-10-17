@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import * as sqliteSnapshotSource from "./sqlite-snapshot-source.js";
 import type { UpdateRepairTurnMessage } from "./update-repair-protocol.js";
 import { runDelegatedUpdateRepairTurn } from "./update-repair-turn-worker.js";
@@ -32,6 +35,10 @@ const selected = {
   route: { model: "repair", provider: "fixture" },
   modelFallbacks: [],
 };
+const completed = {
+  toolCalls: 0,
+  envelope: { model: "repair", provider: "fixture", final: "No changes", status: "ok" },
+};
 const connected = Object.getOwnPropertyDescriptor(process, "connected");
 beforeEach(() => {
   Object.defineProperty(process, "connected", { configurable: true, value: true });
@@ -39,10 +46,7 @@ beforeEach(() => {
   runtime.prepareUpdateRepairInference.mockResolvedValue(selected);
   runtime.runUpdateRepairTurn.mockImplementation(async ({ isCurrent }) => {
     isCurrent();
-    return {
-      toolCalls: 0,
-      envelope: { model: "repair", provider: "fixture", final: "No changes", status: "ok" },
-    };
+    return completed;
   });
 });
 afterEach(() => {
@@ -63,19 +67,38 @@ type AuthorityCase = {
 };
 const revoked = "requester-revoked";
 const profile = { ...requester, authorizationSource: "profile:synthetic" };
+const chat = (name: string, overrides: Partial<AuthorityCase> = {}): AuthorityCase => ({
+  name,
+  trigger: "chat",
+  recorded: requester,
+  sent: requester,
+  ...overrides,
+});
+
+function withRun(
+  operation: (state: OpenClawTestState, runId: string) => Promise<void>,
+  input = chat(""),
+) {
+  return withOpenClawTestState({ layout: "home" }, async (state) => {
+    await state.writeConfig({ commands: { ownerAllowFrom: ["owner", "other-owner"] } });
+    const run = createUpdateRun(
+      { trigger: input.trigger, origin: { requester: input.recorded } },
+      { env: state.env },
+    );
+    recordUpdateRunPhase(run.runId, "repairing", undefined, { env: state.env });
+    await operation(state, run.runId);
+  });
+}
 
 describe("delegated repair requester binding", () => {
   it.each<AuthorityCase>([
-    { name: "omitted chat requester", trigger: "chat", recorded: requester, refusal: revoked },
-    {
-      name: "substituted chat requester",
-      trigger: "chat",
-      recorded: requester,
+    chat("omitted chat requester", { sent: undefined, refusal: revoked }),
+    chat("substituted chat requester", {
       sent: { ...requester, senderId: "other-owner" },
       refusal: revoked,
-    },
+    }),
     { name: "requester added to CLI", trigger: "cli", sent: requester, refusal: revoked },
-    { name: "chat owner", trigger: "chat", recorded: requester, sent: requester },
+    chat("chat owner"),
     { name: "local CLI", trigger: "cli" },
     {
       name: "internal channel",
@@ -89,82 +112,51 @@ describe("delegated repair requester binding", () => {
       recorded: { senderId: "operator" },
       sent: { senderId: "operator" },
     },
-    {
-      name: "changed origin",
-      trigger: "chat",
-      recorded: requester,
-      sent: requester,
-      change: "origin",
-      refusal: revoked,
-    },
-    {
-      name: "changed policy",
-      trigger: "chat",
-      recorded: requester,
-      sent: requester,
-      change: "policy",
-      refusal: revoked,
-    },
-    {
-      name: "profile without native continuation",
-      trigger: "chat",
+    chat("changed origin", { change: "origin", refusal: revoked }),
+    chat("changed policy", { change: "policy", refusal: revoked }),
+    chat("profile without native continuation", {
       recorded: profile,
       sent: profile,
       refusal: "Requester continuation requires its admitted Gateway update owner.",
-    },
-  ])(
-    "checks $name before allowing inference effects",
-    async ({ trigger, recorded, sent, change, refusal }) => {
-      await withOpenClawTestState({ layout: "home" }, async (state) => {
-        await state.writeConfig({ commands: { ownerAllowFrom: ["owner", "other-owner"] } });
-        const run = createUpdateRun(
-          { trigger, origin: { requester: recorded } },
-          { env: state.env },
-        );
-        recordUpdateRunPhase(run.runId, "repairing", undefined, { env: state.env });
-        if (change) {
-          runtime.prepareUpdateRepairInference.mockImplementationOnce(async () => {
-            if (change === "origin") {
-              recordUpdateRunPhase(
-                run.runId,
-                "repairing",
-                {
-                  origin: { requester: { ...requester, senderId: "other-owner" } },
-                },
-                { env: state.env },
-              );
-            } else {
-              await state.writeConfig({ commands: { ownerAllowFrom: ["other-owner"] } });
-            }
-            return selected;
-          });
-        }
-        const onRoute = vi.fn();
-        const result = await runDelegatedUpdateRepairTurn(
-          message(run.runId, state, sent),
-          state.env,
-          new AbortController().signal,
-          onRoute,
-        );
-        if (refusal) {
-          expect(result).toMatchObject({ status: "aborted", reason: refusal });
-          expect(runtime.runUpdateRepairTurn).not.toHaveBeenCalled();
-          expect(onRoute).not.toHaveBeenCalled();
-          if (!change) {
-            expect(runtime.prepareUpdateRepairInference).not.toHaveBeenCalled();
+    }),
+  ])("checks $name before allowing inference effects", async (input) => {
+    const { sent, change, refusal } = input;
+    await withRun(async (state, runId) => {
+      if (change) {
+        runtime.prepareUpdateRepairInference.mockImplementationOnce(async () => {
+          if (change === "origin") {
+            recordUpdateRunPhase(
+              runId,
+              "repairing",
+              {
+                origin: { requester: { ...requester, senderId: "other-owner" } },
+              },
+              { env: state.env },
+            );
+          } else {
+            await state.writeConfig({ commands: { ownerAllowFrom: ["other-owner"] } });
           }
-        } else {
-          expect(result).toMatchObject({ status: "completed", toolCalls: 0 });
+          return selected;
+        });
+      }
+      const onRoute = vi.fn();
+      const result = await runTurn(runId, state, sent, onRoute);
+      if (refusal) {
+        expect(result).toMatchObject({ status: "aborted", reason: refusal });
+        expect(runtime.runUpdateRepairTurn).not.toHaveBeenCalled();
+        expect(onRoute).not.toHaveBeenCalled();
+        if (!change) {
+          expect(runtime.prepareUpdateRepairInference).not.toHaveBeenCalled();
         }
-      });
-    },
-  );
+      } else {
+        expect(result).toMatchObject({ status: "completed", toolCalls: 0 });
+      }
+    }, input);
+  });
 
   it("keeps in-turn liveness cheap and refuses revoked authority before tool effects", async () => {
-    await withOpenClawTestState({ layout: "home" }, async (state) => {
+    await withRun(async (state, runId) => {
       await state.writeConfig({ commands: { ownerAllowFrom: ["owner"] } });
-      const run = createUpdateRun({ trigger: "chat", origin: { requester } }, { env: state.env });
-      recordUpdateRunPhase(run.runId, "repairing", undefined, { env: state.env });
       // Like the delegated worker, read the updater's ledger without holding its writer.
       await closeOpenClawStateDatabaseAsync();
       const snapshots = vi.spyOn(sqliteSnapshotSource, "prepareSqliteReadOnlyLocationSync");
@@ -179,17 +171,9 @@ describe("delegated repair requester binding", () => {
           await state.writeConfig({ commands: { ownerAllowFrom: ["other-owner"] } });
           // Tool admission uses the full predicate, so a revoked owner stops the next effect.
           expect(isCurrent).toThrow(revoked);
-          return {
-            toolCalls: 0,
-            envelope: { model: "repair", provider: "fixture", final: "No changes", status: "ok" },
-          };
+          return completed;
         });
-        const result = await runDelegatedUpdateRepairTurn(
-          message(run.runId, state, requester),
-          state.env,
-          new AbortController().signal,
-          vi.fn(),
-        );
+        const result = await runTurn(runId, state, requester);
         expect(result).toMatchObject({ status: "aborted", reason: revoked });
         expect(snapshots).toHaveBeenCalled();
       } finally {
@@ -199,12 +183,13 @@ describe("delegated repair requester binding", () => {
   });
 });
 
-function message(
+function runTurn(
   runId: string,
-  state: { stateDir: string; configPath: string; workspaceDir: string },
+  state: OpenClawTestState,
   admitted: UpdateRepairTurnMessage["requester"],
-): UpdateRepairTurnMessage {
-  return {
+  onRoute = vi.fn(),
+) {
+  const message: UpdateRepairTurnMessage = {
     type: "turn",
     runId,
     requester: admitted,
@@ -215,4 +200,5 @@ function message(
     timeoutMs: 30_000,
     maxToolCalls: 0,
   };
+  return runDelegatedUpdateRepairTurn(message, state.env, new AbortController().signal, onRoute);
 }

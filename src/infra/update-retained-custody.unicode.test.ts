@@ -117,15 +117,41 @@ function snapshot(file: string) {
   const stat = fs.statSync(file);
   return { bytes: fs.readFileSync(file), dev: stat.dev, ino: stat.ino };
 }
+function unchanged(...files: string[]) {
+  const read = () => ({ files: files.map(snapshot), names: fs.readdirSync(dir), rows: rows() });
+  const before = read();
+  return () => expect(read()).toEqual(before);
+}
+function normalizationWitness() {
+  fs.writeFileSync(path.join(dir, "évidence"), "");
+  const observedName = fs.readdirSync(dir)[0]!;
+  const alternate = observedName.normalize(
+    observedName === observedName.normalize("NFC") ? "NFD" : "NFC",
+  );
+  return { observedName, alternate };
+}
+async function blockedConfig(
+  message: string | RegExp,
+  wrap: (fn: () => Promise<void>) => Promise<void> = (fn) => fn(),
+) {
+  const callback = vi.fn(async () => undefined);
+  const result = await wrap(() => withConfigWriteLock(nfd, callback, {})).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  expect(result).toBeInstanceOf(Error);
+  if (typeof message === "string") {
+    expect(String(result)).toContain(message);
+  } else {
+    expect(String(result)).toMatch(message);
+  }
+  expect(callback).not.toHaveBeenCalled();
+}
 function sharedAlias(suffix: string) {
   fs.writeFileSync(
     nfc + suffix,
     suffix
-      ? JSON.stringify({
-          pid: 10000001,
-          starttime: 1,
-          createdAt: "2000-01-01T00:00:00Z",
-        })
+      ? JSON.stringify({ pid: 10000001, starttime: 1, createdAt: "2000-01-01T00:00:00Z" })
       : "{}",
   );
   // Actual canonical alias on normalizing hosts; real same-inode hardlink on
@@ -133,7 +159,7 @@ function sharedAlias(suffix: string) {
   if (!fs.existsSync(nfd + suffix)) {
     fs.linkSync(nfc + suffix, nfd + suffix);
   }
-  expect(fs.statSync(nfc + suffix).ino).toBe(fs.statSync(nfd + suffix).ino);
+  expect(snapshot(nfd + suffix)).toEqual(snapshot(nfc + suffix));
 }
 async function withService(fn: () => Promise<void>) {
   return withGatewayServiceOperationLock({}, async (assertService) => {
@@ -147,20 +173,12 @@ describe("Unicode borrower identity before lock creation (pure)", () => {
     "refuses unknown NFC/NFD absence before config or service-nested sidecar creation (%s)",
     async (phase) => {
       const lease = seedRetained(acquire(), phase);
-      const beforeRows = rows();
+      const assertUnchanged = unchanged();
       for (const wrap of [(fn: () => Promise<void>) => fn(), withService]) {
-        const callback = vi.fn(async () => undefined);
-        const result = await wrap(() => withConfigWriteLock(nfd, callback, {})).then(
-          () => undefined,
-          (error: unknown) => error,
-        );
         // Keep callback admission and physical sidecar creation separate. Old
         // code can reject after creating a sidecar without entering callback.
-        expect(callback).not.toHaveBeenCalled();
-        expect(fs.readdirSync(dir)).toEqual([]);
-        expect(result).toBeInstanceOf(Error);
-        expect(String(result)).toMatch(/alias identity|native custody/);
-        expect(rows()).toBe(beforeRows);
+        await blockedConfig(/alias identity|native custody/, wrap);
+        assertUnchanged();
         expect(store.release(lease)).toBe(false);
         expect(
           fs
@@ -175,57 +193,34 @@ describe("Unicode borrower identity before lock creation (pure)", () => {
     "preserves same-inode Unicode identity and bytes through wrappers (%s)",
     async (suffix) => {
       sharedAlias(suffix);
-      const original = snapshot(nfc + suffix);
       seedRetained();
-      const beforeRows = rows();
-      const callback = vi.fn(async () => undefined);
-      await expect(withService(() => withConfigWriteLock(nfd, callback, {}))).rejects.toThrow(
-        "native custody",
-      );
-      expect(callback).not.toHaveBeenCalled();
-      expect(snapshot(nfc + suffix)).toEqual(original);
-      expect(snapshot(nfd + suffix)).toEqual(original);
+      const assertUnchanged = unchanged(nfc + suffix, nfd + suffix);
+      await blockedConfig("native custody", withService);
+      assertUnchanged();
       if (!suffix) {
         expect(fs.existsSync(nfd + ".lock")).toBe(false);
       }
-      expect(rows()).toBe(beforeRows);
     },
   );
 
   it("uses read-only path-local normalization evidence when available", async () => {
-    const witness = path.join(dir, "\u00e9vidence");
-    fs.writeFileSync(witness, "");
-    const names = fs.readdirSync(dir);
-    const observedName = names[0]!;
-    const alternative =
-      observedName === observedName.normalize("NFC")
-        ? observedName.normalize("NFD")
-        : observedName.normalize("NFC");
-    const insensitive = fs.existsSync(path.join(dir, alternative));
+    const { alternate } = normalizationWitness();
+    const insensitive = fs.existsSync(path.join(dir, alternate));
     const lease = seedRetained();
-    const beforeRows = rows();
+    const assertUnchanged = unchanged();
     if (insensitive) {
-      const callback = vi.fn(async () => undefined);
-      await expect(withConfigWriteLock(nfd, callback, {})).rejects.toThrow("native custody");
-      expect(callback).not.toHaveBeenCalled();
+      await blockedConfig("native custody");
     } else {
       await withConfigWriteLock(nfd, async () => undefined, {});
     }
-    expect(fs.readdirSync(dir)).toEqual(names);
-    expect(rows()).toBe(beforeRows);
+    assertUnchanged();
     expect(store.release(lease)).toBe(false);
   });
 
   it.each([true, false])(
     "mixed case/Unicode aliases require both semantics (modeled case-insensitive=%s)",
     (caseInsensitive) => {
-      const witness = path.join(dir, "évidence");
-      fs.writeFileSync(witness, "");
-      const observedName = fs.readdirSync(dir)[0]!;
-      const alternate =
-        observedName === observedName.normalize("NFC")
-          ? observedName.normalize("NFD")
-          : observedName.normalize("NFC");
+      const { observedName, alternate } = normalizationWitness();
       const lstat = fs.lstatSync.bind(fs);
       // Model normalization-insensitive sibling lookup independently of case.
       vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
@@ -239,7 +234,7 @@ describe("Unicode borrower identity before lock creation (pure)", () => {
         .spyOn(pathCase, "tryResolvePathCaseInsensitive")
         .mockReturnValue(caseInsensitive);
       seedRetained();
-      const before = rows();
+      const assertUnchanged = unchanged();
       const alias = path.join(dir, path.basename(nfd).toUpperCase());
       if (caseInsensitive) {
         expect(() => store.assertSourceUnborrowed(alias)).toThrow("native custody");
@@ -247,15 +242,12 @@ describe("Unicode borrower identity before lock creation (pure)", () => {
         expect(() => store.assertSourceUnborrowed(alias)).not.toThrow();
       }
       expect(detector).toHaveBeenCalled();
-      expect(fs.readdirSync(dir)).toEqual([observedName]);
-      expect(rows()).toBe(before);
+      assertUnchanged();
     },
   );
 
   it("unreadable normalization evidence refuses before sidecar creation", async () => {
-    const witness = path.join(dir, "évidence");
-    fs.writeFileSync(witness, "");
-    const names = fs.readdirSync(dir);
+    normalizationWitness();
     const lstat = fs.lstatSync.bind(fs);
     vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
       if (typeof args[0] === "string" && path.basename(args[0]).normalize("NFC") === "évidence") {
@@ -266,12 +258,9 @@ describe("Unicode borrower identity before lock creation (pure)", () => {
       return Reflect.apply(lstat, fs, args);
     });
     seedRetained();
-    const before = rows();
-    const callback = vi.fn(async () => undefined);
-    await expect(withConfigWriteLock(nfd, callback, {})).rejects.toThrow(/alias identity/);
-    expect(callback).not.toHaveBeenCalled();
-    expect(fs.readdirSync(dir)).toEqual(names);
-    expect(rows()).toBe(before);
+    const assertUnchanged = unchanged();
+    await blockedConfig(/alias identity/);
+    assertUnchanged();
   });
 
   it("preserves affirmative distinct target and sidecar objects (modeled sensitive lookup)", () => {
@@ -280,12 +269,8 @@ describe("Unicode borrower identity before lock creation (pure)", () => {
       fs.writeFileSync(file, "{}");
       fs.writeFileSync(file + ".lock", "held-sidecar");
     }
-    const before = [
-      snapshot(nfc),
-      snapshot(nfc + ".lock"),
-      snapshot(other),
-      snapshot(other + ".lock"),
-    ];
+    const files = [nfc, nfc + ".lock", other, other + ".lock"];
+    const before = files.map(snapshot);
     const stat = fs.statSync.bind(fs);
     vi.spyOn(fs, "statSync").mockImplementation((...args) => {
       const [file, ...rest] = args;
@@ -295,16 +280,11 @@ describe("Unicode borrower identity before lock creation (pure)", () => {
       ]);
     });
     seedRetained();
-    const beforeRows = rows();
+    const assertUnchanged = unchanged();
     expect(() => store.assertSourceUnborrowed(nfd)).not.toThrow();
     expect(() => store.assertSourceUnborrowed(nfc)).toThrow("native custody");
-    expect([
-      snapshot(nfc),
-      snapshot(nfc + ".lock"),
-      snapshot(other),
-      snapshot(other + ".lock"),
-    ]).toEqual(before);
-    expect(rows()).toBe(beforeRows);
+    expect(files.map(snapshot)).toEqual(before);
+    assertUnchanged();
   });
 
   it("preserves Unicode sidecar identity at final stale removal", async () => {
@@ -334,10 +314,9 @@ describe("Unicode borrower identity before lock creation (pure)", () => {
 
   it("retains config and service sidecars when Unicode custody arises during an interval", async () => {
     const parent = acquire();
-    let configBefore: ReturnType<typeof snapshot> | undefined;
-    let serviceBefore: ReturnType<typeof snapshot> | undefined;
-    let beforeRows = "";
-    let service = "";
+    let assertUnchanged = () => {
+      throw new Error("config callback did not capture held sidecars");
+    };
     await expect(
       withService(() =>
         withConfigWriteLock(
@@ -346,12 +325,11 @@ describe("Unicode borrower identity before lock creation (pure)", () => {
             if (!fs.existsSync(nfc + ".lock")) {
               fs.linkSync(nfd + ".lock", nfc + ".lock");
             }
-            configBefore = snapshot(nfd + ".lock");
-            service = heldServiceLockCoordinate(fixture.root);
-            serviceBefore = snapshot(service + ".lock");
+            expect(snapshot(nfc + ".lock")).toEqual(snapshot(nfd + ".lock"));
+            const service = heldServiceLockCoordinate(fixture.root);
             source.serviceKey = service;
             seedRetained(parent, "admitted");
-            beforeRows = rows();
+            assertUnchanged = unchanged(nfd + ".lock", nfc + ".lock", service + ".lock");
             const nested = vi.fn(async () => undefined);
             await expect(withService(nested)).rejects.toThrow("native custody");
             expect(nested).not.toHaveBeenCalled();
@@ -360,9 +338,6 @@ describe("Unicode borrower identity before lock creation (pure)", () => {
         ),
       ),
     ).rejects.toThrow(/native custody|release/);
-    expect(snapshot(nfd + ".lock")).toEqual(configBefore);
-    expect(snapshot(nfc + ".lock")).toEqual(configBefore);
-    expect(snapshot(service + ".lock")).toEqual(serviceBefore);
-    expect(rows()).toBe(beforeRows);
+    assertUnchanged();
   });
 });

@@ -16,22 +16,36 @@ import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.j
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+const workerCode = "export const generation = 'retained';\n";
+async function writeFile(root: string, relative: string, content: string | Buffer) {
+  const file = path.join(root, relative);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, content);
+  return file;
+}
+const inode = (file: string) => {
+  const { dev, ino } = fsSync.statSync(file);
+  return [dev, ino];
+};
+const manifest = (id: string, extra = {}) =>
+  JSON.stringify({ id, configSchema: { type: "object" }, ...extra });
+
 async function fixture(setup?: (source: string) => Promise<void>) {
   const root = await fs.realpath(dirs.make("retained-runtime-link-"));
   const source = path.join(root, "source");
   const targetStateDir = path.join(root, "retained");
   const candidateRoot = path.join(root, "candidate");
   const destination = path.join(targetStateDir, "package");
-  await fs.mkdir(path.join(source, "dist", "state"), { recursive: true });
-  await fs.mkdir(path.join(source, "node_modules", ".bin"), { recursive: true });
   await fs.mkdir(candidateRoot);
-  const worker = path.join(source, "dist", "state", "worker.js");
-  await fs.writeFile(worker, "export const generation = 'retained';\n");
+  const worker = await writeFile(source, "dist/state/worker.js", workerCode);
   await fs.chmod(worker, 0o444);
   // pnpm stores publish package files as hard links of one inode.
   await fs.link(worker, path.join(source, "dist", "worker-alias.js"));
-  const launcher = path.join(source, "node_modules", ".bin", "tool");
-  await fs.writeFile(launcher, `#!/bin/sh\nexec "$basedir/../tool/cli.js"\n`);
+  const launcher = await writeFile(
+    source,
+    "node_modules/.bin/tool",
+    `#!/bin/sh\nexec "$basedir/../tool/cli.js"\n`,
+  );
   await fs.symlink(
     path.join("..", "dist", "state", "worker.js"),
     path.join(source, "node_modules", "link.js"),
@@ -48,6 +62,8 @@ async function fixture(setup?: (source: string) => Promise<void>) {
     worker,
     launcher,
     destination,
+    retained: (relative: string) => path.join(destination, relative),
+    original: (relative: string) => path.join(source, relative),
     plan,
     link: (assertCurrent = () => {}) =>
       linkUpdateCandidatePluginTrees(plan, {
@@ -70,9 +86,7 @@ it.each([
     const files = new Map([
       [
         "openclaw.plugin.json",
-        JSON.stringify({
-          id: "fixture",
-          configSchema: { type: "object" },
+        manifest("fixture", {
           providerCatalogEntry: "src/catalog.ts",
           capabilityCatalogEntry: "src/capabilities.ts",
           skills: ["./skills"],
@@ -124,18 +138,11 @@ it.each([
       ["dist/control-ui/index.js", "export {};\n"],
       ["dist/control-ui/chunks/shared.js", "export {};\n"],
       ["dist/control-ui/theme.css", ":root {}\n"],
-      [
-        "dist/control-ui/icons/openclaw.plugin.json",
-        JSON.stringify({ id: "icons", configSchema: { type: "object" } }),
-      ],
+      ["dist/control-ui/icons/openclaw.plugin.json", manifest("icons")],
       ["dist/control-ui/icons/assets/activity/shared.js", "export {};\n"],
       [
         `${nestedBrowser}/openclaw.plugin.json`,
-        JSON.stringify({
-          id: "nested",
-          configSchema: { type: "object" },
-          controlUi: { entry: "dist/control-ui/index.js" },
-        }),
+        manifest("nested", { controlUi: { entry: "dist/control-ui/index.js" } }),
       ],
       [`${nestedBrowser}/dist/control-ui/index.js`, "export {};\n"],
       [
@@ -153,15 +160,12 @@ it.each([
     const relativePlugin = path.join("extensions", "fixture");
     const f = await fixture(async (source) => {
       for (const [relativePath, content] of files) {
-        const file = path.join(source, relativePlugin, relativePath);
-        await fs.mkdir(path.dirname(file), { recursive: true });
-        await fs.writeFile(file, content);
+        await writeFile(source, path.join(relativePlugin, relativePath), content);
       }
       for (const relative of payloads) {
-        const file = path.join(source, relativePlugin, relative);
-        await fs.mkdir(path.dirname(file), { recursive: true });
-        await fs.writeFile(
-          file,
+        await writeFile(
+          source,
+          path.join(relativePlugin, relative),
           relative.endsWith(".bin") ? Buffer.alloc(2 * 1024 * 1024) : "{}\n",
         );
       }
@@ -204,11 +208,8 @@ it.each([
           expect(file.ok).toBe(!preexistingHardlink);
           expect(fsSync.readFileSync(path.join(rootDir, relativePath), "utf8")).toBe(content);
           if (relativePath === "node_modules/native-addon/package.json") {
-            const source = fsSync.statSync(path.join(f.source, relativePlugin, relativePath));
-            const retained = fsSync.statSync(
-              path.join(f.destination, relativePlugin, relativePath),
-            );
-            expect([retained.dev, retained.ino]).not.toEqual([source.dev, source.ino]);
+            const relative = path.join(relativePlugin, relativePath);
+            expect(inode(f.retained(relative))).not.toEqual(inode(f.original(relative)));
           }
         }
       });
@@ -270,9 +271,7 @@ it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
       : [];
     const f = await fixture(async (source) => {
       for (const file of nestedFiles) {
-        const destination = path.join(source, file);
-        await fs.mkdir(path.dirname(destination), { recursive: true });
-        await fs.writeFile(destination, `// ${file}\n`);
+        const destination = await writeFile(source, file, `// ${file}\n`);
         await fs.chmod(destination, 0o444);
       }
       if (overlay) {
@@ -322,9 +321,9 @@ it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
     const retainedStat = await fs.stat(retainedWorker, { bigint: true });
     if (mode === "native") {
       expect(retainedStat.ino).toBe(before.ino);
-      expect(
-        (await fs.stat(path.join(f.destination, "dist/worker-alias.js"), { bigint: true })).ino,
-      ).toBe(before.ino);
+      expect((await fs.stat(f.retained("dist/worker-alias.js"), { bigint: true })).ino).toBe(
+        before.ino,
+      );
     } else {
       expect(retainedStat.ino).not.toBe(before.ino);
     }
@@ -335,7 +334,7 @@ it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
         f.plan.entries.filter((entry) => entry.kind === "directory").length + 1,
       );
       for (const file of nestedFiles) {
-        const retained = path.join(f.destination, file);
+        const retained = f.retained(file);
         expect(await fs.readFile(retained, "utf8")).toBe(`// ${file}\n`);
         expect((await fs.stat(retained)).mode & 0o777).toBe(0o444);
       }
@@ -343,7 +342,7 @@ it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
         (await fs.stat(path.dirname(path.join(f.destination, nestedFiles[0]!)))).mode & 0o777,
       ).toBe(0o751);
     }
-    const retainedLauncher = path.join(f.destination, "node_modules/.bin/tool");
+    const retainedLauncher = f.retained("node_modules/.bin/tool");
     expect((await fs.stat(retainedLauncher)).ino).not.toBe((await fs.stat(f.launcher)).ino);
     expect(await fs.readFile(f.launcher, "utf8")).toContain('"$basedir/../tool/cli.js"');
     expect(await fs.readlink(path.join(f.destination, "node_modules/link.js"))).toBe(
@@ -352,9 +351,7 @@ it.each(["native", "overlay", "fallback-first", "fallback-second"] as const)(
     const displaced = `${f.source}.previous`;
     await fs.rename(f.source, displaced);
     await fs.rm(displaced, { recursive: true });
-    expect(await fs.readFile(retainedWorker, "utf8")).toBe(
-      "export const generation = 'retained';\n",
-    );
+    expect(await fs.readFile(retainedWorker, "utf8")).toBe(workerCode);
   },
 );
 
@@ -445,12 +442,8 @@ it.each(["next-entry", "copy-publication"] as const)(
 
 async function fileWindowFixture() {
   const f = await fixture(async (source) => {
-    await fs.mkdir(path.join(source, "parallel"));
     for (let index = 0; index < 9; index += 1) {
-      await fs.writeFile(
-        path.join(source, "parallel", `${index}.js`),
-        `export default ${index};\n`,
-      );
+      await writeFile(source, `parallel/${index}.js`, `export default ${index};\n`);
     }
   });
   const parent = path.join(f.source, "parallel");

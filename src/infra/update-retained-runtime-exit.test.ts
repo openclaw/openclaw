@@ -9,6 +9,40 @@ const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 let base: string;
 let root: string;
 
+function run(script: string, level = "warn") {
+  return spawnNodeEvalSync(script, {
+    imports: [import.meta.resolve("tsx")],
+    input: "",
+    timeout: 20_000,
+    env: {
+      PATH: process.env.PATH,
+      HOME: base,
+      TMPDIR: base,
+      OPENCLAW_STATE_DIR: path.join(base, "state"),
+      OPENCLAW_CONFIG_PATH: path.join(base, "state/openclaw.json"),
+      XDG_CACHE_HOME: path.join(base, "cache"),
+      OPENCLAW_LOG_LEVEL: level,
+    },
+  });
+}
+
+function expectExit(result: ReturnType<typeof spawnNodeEvalSync>, code: number) {
+  expect(result.error, result.stdout + result.stderr).toBeUndefined();
+  expect(result.status, result.stderr).toBe(code);
+  expect(result.signal, result.stderr).toBeNull();
+}
+
+const runtimeImports = `
+     import path from "node:path";
+     import { pathToFileURL } from "node:url";
+     import { withRetainedUpdateRuntime } from ${JSON.stringify(new URL("./update-retained-runtime.ts", import.meta.url).href)};
+`;
+const exitImports = `${runtimeImports}
+     import { BroadcastChannel } from "node:worker_threads";
+     import { captureRuntimeWorkerSource } from ${JSON.stringify(new URL("./runtime-worker-generation.ts", import.meta.url).href)};
+     import { defaultRuntime } from ${JSON.stringify(new URL("../runtime.ts", import.meta.url).href)};
+`;
+
 it.each([false, true])(
   "keeps cold workers runnable and restores the invoking directory when available (removed=%s)",
   async (removed) => {
@@ -16,13 +50,10 @@ it.each([false, true])(
     await fs.cp(root, install, { recursive: true });
     const launch = path.join(install, "invocation");
     await fs.mkdir(launch);
-    const result = spawnNodeEvalSync(
-      `import assert from "node:assert/strict";
+    const result = run(
+      `${runtimeImports}import assert from "node:assert/strict";
        import fs from "node:fs";
-       import path from "node:path";
-       import { pathToFileURL } from "node:url";
        import { Worker } from "node:worker_threads";
-       import { withRetainedUpdateRuntime } from ${JSON.stringify(new URL("./update-retained-runtime.ts", import.meta.url).href)};
        import { resolveUserPath } from ${JSON.stringify(new URL("./home-dir.ts", import.meta.url).href)};
        import { resolveSessionStorePathCore } from ${JSON.stringify(new URL("../config/sessions/paths.ts", import.meta.url).href)};
        const install = ${JSON.stringify(install)};
@@ -55,24 +86,9 @@ it.each([false, true])(
          assert.equal(process.cwd(), original);
        }
        console.log("cold worker and cwd custody verified");`,
-      {
-        imports: [import.meta.resolve("tsx")],
-        input: "",
-        timeout: 20_000,
-        env: {
-          PATH: process.env.PATH,
-          HOME: base,
-          TMPDIR: base,
-          OPENCLAW_STATE_DIR: path.join(base, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(base, "state/openclaw.json"),
-          XDG_CACHE_HOME: path.join(base, "cache"),
-          OPENCLAW_LOG_LEVEL: "silent",
-        },
-      },
+      "silent",
     );
-    expect(result.error, result.stderr).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.signal, result.stderr).toBeNull();
+    expectExit(result, 0);
     expect(result.stdout).toContain("cold worker and cwd custody verified");
   },
 );
@@ -126,18 +142,13 @@ it.skipIf(process.platform === "win32").each([
   async ({ scenario, code }) => {
     const databasePath = path.join(base, `${scenario}.sqlite`);
     const reportedCode = scenario === "failed-settlement" ? 0 : code;
-    const result = spawnNodeEvalSync(
-      `import assert from "node:assert/strict";
-     import path from "node:path";
+    const result = run(
+      `${exitImports}import assert from "node:assert/strict";
      import { DatabaseSync } from "node:sqlite";
      import { mock } from "node:test";
-     import { pathToFileURL } from "node:url";
-     import { BroadcastChannel, Worker } from "node:worker_threads";
-     import { withRetainedUpdateRuntime } from ${JSON.stringify(new URL("./update-retained-runtime.ts", import.meta.url).href)};
-     import { captureRuntimeWorkerSource } from ${JSON.stringify(new URL("./runtime-worker-generation.ts", import.meta.url).href)};
+     import { Worker } from "node:worker_threads";
      import { openSqliteWorkerStore, runSqliteWorkerStoreOperation } from ${JSON.stringify(new URL("./sqlite-worker-store.ts", import.meta.url).href)};
      import { exitCliAfterOutput, runCliWithExitFinalization, watchCliExitAfterOutput } from ${JSON.stringify(new URL("../cli/one-shot-exit.ts", import.meta.url).href)};
-     import { defaultRuntime } from ${JSON.stringify(new URL("../runtime.ts", import.meta.url).href)};
      const root = ${JSON.stringify(root)};
      const scenario = ${JSON.stringify(scenario)};
      const databasePath = ${JSON.stringify(databasePath)};
@@ -218,24 +229,8 @@ it.skipIf(process.platform === "win32").each([
      channel.close();
      mock.restoreAll();
      process.stdout.write("natural finalization completed\\n");`,
-      {
-        imports: [import.meta.resolve("tsx")],
-        input: "",
-        timeout: 20_000,
-        env: {
-          PATH: process.env.PATH,
-          HOME: base,
-          TMPDIR: base,
-          OPENCLAW_STATE_DIR: path.join(base, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(base, "state/openclaw.json"),
-          XDG_CACHE_HOME: path.join(base, "cache"),
-          OPENCLAW_LOG_LEVEL: "warn",
-        },
-      },
     );
-    expect(result.error, result.stdout + result.stderr).toBeUndefined();
-    expect(result.status, result.stderr).toBe(code);
-    expect(result.signal, result.stderr).toBeNull();
+    expectExit(result, code);
     expect(result.stdout).toContain(`update result: ${reportedCode}`);
     expect(result.stdout).toContain("native retirement still joined");
     expect(result.stdout).toContain("natural finalization completed");
@@ -293,17 +288,11 @@ it.skipIf(process.platform === "win32").each([
   "settles workers and records deferred runtime cleanup before $exit exits",
   async ({ exit, code }) => {
     const databasePath = path.join(base, `${exit}.sqlite`);
-    const result = spawnNodeEvalSync(
-      `import fs from "node:fs/promises";
-     import path from "node:path";
-     import { pathToFileURL } from "node:url";
-     import { BroadcastChannel } from "node:worker_threads";
-     import { withRetainedUpdateRuntime } from ${JSON.stringify(new URL("./update-retained-runtime.ts", import.meta.url).href)};
-     import { captureRuntimeWorkerSource } from ${JSON.stringify(new URL("./runtime-worker-generation.ts", import.meta.url).href)};
+    const result = run(
+      `${exitImports}import fs from "node:fs/promises";
      import { openSqliteWorkerStore } from ${JSON.stringify(new URL("./sqlite-worker-store.ts", import.meta.url).href)};
      import { installCliSignalExitHandlers, registerSignalExitGate } from ${JSON.stringify(new URL("../cli/signal-exit-barrier.ts", import.meta.url).href)};
      import { exitCliAfterOutput, runCliWithExitFinalization } from ${JSON.stringify(new URL("../cli/one-shot-exit.ts", import.meta.url).href)};
-     import { defaultRuntime } from ${JSON.stringify(new URL("../runtime.ts", import.meta.url).href)};
      const root = ${JSON.stringify(root)};
      const outcome = ${JSON.stringify(exit)};
      const uninstall = installCliSignalExitHandlers();
@@ -339,24 +328,8 @@ it.skipIf(process.platform === "win32").each([
      channel.close();
      uninstall();
      process.stdout.write("natural finalization completed\\n");`,
-      {
-        imports: [import.meta.resolve("tsx")],
-        input: "",
-        timeout: 20_000,
-        env: {
-          PATH: process.env.PATH,
-          HOME: base,
-          TMPDIR: base,
-          OPENCLAW_STATE_DIR: path.join(base, "state"),
-          OPENCLAW_CONFIG_PATH: path.join(base, "state/openclaw.json"),
-          XDG_CACHE_HOME: path.join(base, "cache"),
-          OPENCLAW_LOG_LEVEL: "warn",
-        },
-      },
     );
-    expect(result.error, result.stderr).toBeUndefined();
-    expect(result.status, result.stderr).toBe(code);
-    expect(result.signal, result.stderr).toBeNull();
+    expectExit(result, code);
     expect(result.stdout).toMatch(/"retained":\["openclaw-update-runtime-[A-Za-z0-9]{6}"\]/u);
     expect(result.stdout).toContain("natural finalization completed");
     if (exit !== "failure-report") {

@@ -53,23 +53,21 @@ vi.mock("../system-agent/inference-route.js", () => ({
 }));
 
 const runtime: RuntimeEnv = { log() {}, error() {}, exit() {} };
-const config: OpenClawConfig = {
-  agents: {
-    defaults: {
-      systemAgent: { agentId: "owner" },
-      model: { primary: "alpha/default", fallbacks: ["alpha/default-fallback"] },
+function ownerConfig(primary: string, fallbacks: string[]): OpenClawConfig {
+  return {
+    agents: {
+      defaults: { systemAgent: { agentId: "owner" } },
+      entries: { owner: { model: { primary, fallbacks } } },
     },
-    entries: {
-      owner: {
-        model: {
-          primary: "zeta/primary@owner-profile",
-          fallbacks: ["zeta/backup", "zeta/spare"],
-        },
-      },
-      other: { model: "alpha/other" },
-    },
-  },
+  };
+}
+const config = ownerConfig("zeta/primary@owner-profile", ["zeta/backup", "zeta/spare"]);
+config.agents!.defaults!.model = {
+  primary: "alpha/default",
+  fallbacks: ["alpha/default-fallback"],
 };
+config.agents!.entries!.other = { model: "alpha/other" };
+const probedModels = () => mocks.probe.mock.calls.map(([params]) => params.route.modelLabel);
 
 function select(cfg = config, options: { signal?: AbortSignal; timeoutMs?: number } = {}) {
   return selectUpdateRepairInference({
@@ -91,10 +89,7 @@ describe("update repair inference", () => {
     mocks.probe.mockResolvedValueOnce({ ok: false, status: "format", error: "bad model" });
     const result = await select();
 
-    expect(mocks.probe.mock.calls.map(([params]) => params.route.modelLabel)).toEqual([
-      "zeta/primary",
-      "zeta/backup",
-    ]);
+    expect(probedModels()).toEqual(["zeta/primary", "zeta/backup"]);
     expect(mocks.probe.mock.calls[0]?.[0].route).toMatchObject({
       authProfileId: "owner-profile",
       agentDir: "/isolated/owner",
@@ -120,12 +115,7 @@ describe("update repair inference", () => {
     );
     const result = await select();
 
-    expect(mocks.probe.mock.calls.map(([params]) => params.route.modelLabel)).toEqual([
-      "zeta/primary",
-      "zeta/backup",
-      "zeta/spare",
-      "alpha/other",
-    ]);
+    expect(probedModels()).toEqual(["zeta/primary", "zeta/backup", "zeta/spare", "alpha/other"]);
     expect(result).toMatchObject({
       ok: true,
       route: { agentId: "other", agentDir: "/isolated/other" },
@@ -134,17 +124,12 @@ describe("update repair inference", () => {
 
   it("skips unauthenticated, CLI, manifest non-tool and custom non-tool routes before probing", async () => {
     const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { systemAgent: { agentId: "owner" } },
-        entries: {
-          owner: {
-            model: {
-              primary: "zeta/no-auth",
-              fallbacks: ["local-cli/model", "zeta/text-only", "custom/text-only", "zeta/tools"],
-            },
-          },
-        },
-      },
+      ...ownerConfig("zeta/no-auth", [
+        "local-cli/model",
+        "zeta/text-only",
+        "custom/text-only",
+        "zeta/tools",
+      ]),
       models: {
         providers: {
           custom: {
@@ -172,9 +157,7 @@ describe("update repair inference", () => {
     const result = await select(cfg);
 
     expect(result).toMatchObject({ ok: true, route: { model: "tools" } });
-    expect(mocks.probe.mock.calls.map(([params]) => params.route.modelLabel)).toEqual([
-      "zeta/tools",
-    ]);
+    expect(probedModels()).toEqual(["zeta/tools"]);
     expect(mocks.hasAuth.mock.calls.map(([params]) => params.modelId)).toEqual([
       "no-auth",
       "tools",

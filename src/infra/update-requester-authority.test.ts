@@ -23,6 +23,7 @@ import {
   createManagedUpdateRequesterAuthority,
   createManagedUpdateRequesterContinuationAuthority,
   prepareManagedUpdateRequesterIdentity,
+  type UpdateRequester,
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
 import {
@@ -51,12 +52,45 @@ describe("managed update requester authority", () => {
   let env: NodeJS.ProcessEnv;
   const requester = { channel: "synthetic", senderId: "owner" };
   const allowed = JSON.stringify({ commands: { ownerAllowFrom: ["owner"] } });
+  const target = () => ({ installRoot: root, stateDir: root, configPath, workspaceDir: root });
+  const writeConfig = (config: OpenClawConfig | string) =>
+    fs.writeFile(configPath, typeof config === "string" ? config : JSON.stringify(config));
+  const authorityFor = (identity: UpdateRequester = requester) =>
+    createManagedUpdateRequesterAuthority(identity, env);
+  const create = (identity?: UpdateRequester) =>
+    createUpdateRun(
+      { trigger: "chat", ...(identity ? { origin: { requester: identity } } : {}) },
+      { env },
+    );
+  function assertCurrent(isCurrent: () => boolean) {
+    if (!isCurrent()) {
+      throw new UpdateRequesterRevokedError();
+    }
+    return true;
+  }
+  async function expectAborted(
+    isCurrent: () => boolean,
+    reason = "requester-revoked",
+    repairTarget = target(),
+    onEvent?: Parameters<typeof runUpdateRepairLoop>[0]["onEvent"],
+  ) {
+    const validate = vi.fn();
+    const result = await runUpdateRepairLoop({
+      target: repairTarget,
+      context: { error: "Synthetic validation failure", phase: "validating" },
+      isCurrent,
+      validate,
+      onEvent,
+    });
+    expect(result).toMatchObject({ status: "aborted", reason, attempts: [] });
+    expect(validate).not.toHaveBeenCalled();
+  }
 
   beforeEach(async () => {
     root = tempDirs.make("update-requester-authority-");
     configPath = path.join(root, "openclaw.json");
     env = { HOME: root, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
-    await fs.writeFile(configPath, allowed);
+    await writeConfig(allowed);
     vi.mocked(ensureCliPluginRegistryLoaded).mockReset().mockResolvedValue(undefined);
   });
 
@@ -78,7 +112,7 @@ describe("managed update requester authority", () => {
         },
       },
     };
-    await fs.writeFile(configPath, JSON.stringify(config));
+    await writeConfig(config);
     const options = { env };
     const ada = ensureProfileForEmail("ada@example.test", options);
     const grace = ensureProfileForEmail("grace@example.test", options);
@@ -121,19 +155,16 @@ describe("managed update requester authority", () => {
         vi.stubEnv("OPENCLAW_STATE_DIR", copied);
         vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(copied, "openclaw.json"));
       }
-      const authority = await createManagedUpdateRequesterAuthority(fixture.requester, env);
+      const authority = await authorityFor(fixture.requester);
       expect(authority.isCurrent()).toBe(true);
-      const run = createUpdateRun(
-        { trigger: "chat", origin: { requester: authority.requester } },
-        { env },
-      );
+      const run = create(authority.requester);
       const retained = getUpdateRun(run.runId, { env })?.origin.requester;
       expect(retained).toEqual(fixture.requester);
       const message = updateRepairParentMessageSchema.parse({
         type: "start",
         runId: run.runId,
         requester: retained,
-        target: { installRoot: root, stateDir: root, configPath, workspaceDir: root },
+        target: target(),
         failure: { error: "Synthetic validation failure" },
         context: { phase: "validating" },
         budget: {},
@@ -152,27 +183,10 @@ describe("managed update requester authority", () => {
       } else {
         setUserProfileRole(fixture.ada.id, "member", fixture.options);
       }
-      const delegated = await createManagedUpdateRequesterAuthority(message.requester, env);
+      const delegated = await authorityFor(message.requester);
       expect(authority.isCurrent()).toBe(false);
       expect(delegated.isCurrent()).toBe(false);
-      const validate = vi.fn();
-      const result = await runUpdateRepairLoop({
-        target: message.target,
-        context: { error: "Synthetic validation failure", phase: "validating" },
-        isCurrent: () => {
-          if (!delegated.isCurrent()) {
-            throw new UpdateRequesterRevokedError();
-          }
-          return true;
-        },
-        validate,
-      });
-      expect(result).toMatchObject({
-        status: "aborted",
-        reason: "requester-revoked",
-        attempts: [],
-      });
-      expect(validate).not.toHaveBeenCalled();
+      await expectAborted(() => assertCurrent(delegated.isCurrent), undefined, message.target);
     },
   );
 
@@ -182,7 +196,7 @@ describe("managed update requester authority", () => {
     const record = createPluginRecord({ id: "required-update-access" });
     builder.registry.plugins.push(record);
     fixture.config.gateway!.roles!.definitions.admin!.accessPolicyPlugin = record.id;
-    await fs.writeFile(configPath, JSON.stringify(fixture.config));
+    await writeConfig(fixture.config);
     let grant = new AbortController();
     const authorize = vi.fn(() => {
       const admittedGrant = grant;
@@ -196,31 +210,14 @@ describe("managed update requester authority", () => {
       .registerGatewayAccessPolicy({ authorize });
     setActivePluginRegistry(builder.registry);
     try {
-      const authority = await createManagedUpdateRequesterAuthority(fixture.requester, env);
+      const authority = await authorityFor(fixture.requester);
       expect(authority.isCurrent()).toBe(true);
       grant.abort();
       grant = new AbortController();
       expect(authority.isCurrent()).toBe(false);
-      const validate = vi.fn();
-      const result = await runUpdateRepairLoop({
-        target: { installRoot: root, stateDir: root, configPath, workspaceDir: root },
-        context: { error: "Synthetic validation failure", phase: "validating" },
-        isCurrent: () => {
-          if (!authority.isCurrent()) {
-            throw new UpdateRequesterRevokedError();
-          }
-          return true;
-        },
-        validate,
-      });
-      expect(result).toMatchObject({
-        status: "aborted",
-        reason: "requester-revoked",
-        attempts: [],
-      });
-      expect(validate).not.toHaveBeenCalled();
+      await expectAborted(() => assertCurrent(authority.isCurrent));
       expect(authorize).toHaveBeenCalledTimes(1);
-      const next = await createManagedUpdateRequesterAuthority(fixture.requester, env);
+      const next = await authorityFor(fixture.requester);
       expect(next.isCurrent()).toBe(true);
       expect(authorize).toHaveBeenCalledTimes(2);
       expect(authority.isCurrent()).toBe(false);
@@ -237,22 +234,19 @@ describe("managed update requester authority", () => {
     async ({ source, retainedRuns }) => {
       const fixture = await linkedAdmins();
       if (source === "configured-owner") {
-        await fs.writeFile(configPath, allowed);
+        await writeConfig(allowed);
       }
       const identity = await prepareManagedUpdateRequesterIdentity(
         source === "profile" ? fixture.requester : requester,
         env,
       );
       for (let index = 2; index < retainedRuns; index++) {
-        const historical = createUpdateRun({ trigger: "chat" }, { env });
+        const historical = create();
         finishUpdateRun(historical.runId, { status: "failed", reason: "doctor-failed" }, { env });
       }
-      const previous = createUpdateRun({ trigger: "chat" }, { env });
+      const previous = create();
       finishUpdateRun(previous.runId, { status: "failed", reason: "doctor-failed" }, { env });
-      const current = createUpdateRun(
-        { trigger: "chat", origin: { requester: fixture.requester } },
-        { env },
-      );
+      const current = create(fixture.requester);
       recordUpdateRunStep(
         current.runId,
         {
@@ -263,11 +257,7 @@ describe("managed update requester authority", () => {
         { env },
       );
       const maintenance = createOpenClawDatabaseMaintenanceScope({
-        assertOwnerCurrent: () => {
-          if (!identity.isCurrentIdentity()) {
-            throw new UpdateRequesterRevokedError();
-          }
-        },
+        assertOwnerCurrent: () => assertCurrent(identity.isCurrentIdentity),
       });
       try {
         expect(maintenance.run(() => getUpdateRun(current.runId, { env }))).toMatchObject({
@@ -279,7 +269,7 @@ describe("managed update requester authority", () => {
         });
         expect(getUpdateRun(previous.runId, { env })?.status).toBe("failed");
         unlinkUserChannelIdentity(fixture.ada.id, fixture.identity, fixture.options);
-        await fs.writeFile(configPath, JSON.stringify({ commands: { ownerAllowFrom: ["other"] } }));
+        await writeConfig({ commands: { ownerAllowFrom: ["other"] } });
         expect(() => maintenance.run(() => getUpdateRun(current.runId, { env }))).toThrow(
           UpdateRequesterRevokedError,
         );
@@ -291,14 +281,11 @@ describe("managed update requester authority", () => {
 
   it("does not infer linked-profile authority for a source-less released driver", async () => {
     const fixture = await linkedAdmins();
-    const legacy = await createManagedUpdateRequesterAuthority(fixture.channelRequester, env);
+    const legacy = await authorityFor(fixture.channelRequester);
     expect(legacy.isCurrent()).toBe(false);
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ commands: { ownerAllowFrom: [fixture.identity.senderId] } }),
-    );
+    await writeConfig({ commands: { ownerAllowFrom: [fixture.identity.senderId] } });
     expect(legacy.isCurrent()).toBe(true);
-    const modern = await createManagedUpdateRequesterAuthority(fixture.requester, env);
+    const modern = await authorityFor(fixture.requester);
     expect(modern.isCurrent()).toBe(false);
   });
 
@@ -306,10 +293,7 @@ describe("managed update requester authority", () => {
     "requires the original managed update owner, not a %s substitute",
     async (substitute) => {
       const fixture = await linkedAdmins();
-      const run = createUpdateRun(
-        { trigger: "chat", origin: { requester: fixture.requester } },
-        { env },
-      );
+      const run = create(fixture.requester);
       const reject = (executor: { assertCurrent: () => void }) =>
         expect(
           createManagedUpdateRequesterContinuationAuthority(
@@ -343,35 +327,26 @@ describe("managed update requester authority", () => {
       if (failure === "registry") {
         vi.mocked(ensureCliPluginRegistryLoaded).mockRejectedValueOnce(error);
       } else if (failure === "config preparation") {
-        await fs.writeFile(configPath, "{");
+        await writeConfig("{");
       }
-      const authority = await createManagedUpdateRequesterAuthority(requester, env);
+      const authority = await authorityFor();
       if (failure === "config recheck") {
         expect(authority.isCurrent()).toBe(true);
-        await fs.writeFile(configPath, "{");
+        await writeConfig("{");
       }
       expect(() => authority.isCurrent()).toThrow(failure === "registry" ? error : "JSON5");
       if (failure === "registry") {
-        const validate = vi.fn();
         const onEvent = vi.fn();
-        const result = await runUpdateRepairLoop({
-          target: { installRoot: root, stateDir: root, configPath, workspaceDir: root },
-          context: { error: "Synthetic validation failure", phase: "validating" },
-          isCurrent: authority.isCurrent,
-          validate,
-          onEvent,
-        });
-        expect(result).toMatchObject({ status: "aborted", reason: error.message, attempts: [] });
+        await expectAborted(authority.isCurrent, error.message, undefined, onEvent);
         expect(onEvent).toHaveBeenCalledWith({
           type: "stopped",
           status: "aborted",
           reason: error.message,
         });
-        expect(validate).not.toHaveBeenCalled();
       } else if (failure === "config recheck") {
-        await fs.writeFile(configPath, allowed);
+        await writeConfig(allowed);
         expect(authority.isCurrent()).toBe(true);
-        await fs.writeFile(configPath, JSON.stringify({ commands: { ownerAllowFrom: ["other"] } }));
+        await writeConfig({ commands: { ownerAllowFrom: ["other"] } });
         expect(authority.isCurrent()).toBe(false);
       }
     },
