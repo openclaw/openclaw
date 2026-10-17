@@ -78,6 +78,7 @@ import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 import { registerNativeCancellationCases } from "./subagent-spawn.cancellation.test-support.js";
 import { registerGuestSpawnCases } from "./subagent-spawn.guest.test-support.js";
 import { registerParticipantSpawnCases } from "./subagent-spawn.participants.test-support.js";
+import { registerNativePluginSpawnCases } from "./subagent-spawn.plugin-native.test-support.js";
 import {
   createBoundSpawnInvocation,
   createBoundWorker,
@@ -376,15 +377,24 @@ async function createGuestParent(audit = true) {
 }
 
 describe("recursive spawn production boundary", () => {
-  registerRequestCustodySpawnCases({
+  const boundSpawnFixture = {
     createBoundParent,
     createBoundGateway,
     closeBoundGateway,
     throwBoundFailures,
+    runEmbeddedAgent,
+  };
+  registerNativePluginSpawnCases({
+    ...boundSpawnFixture,
+    settleRootWork: (keepObserving) => settleRootWork(keepObserving),
+    waitForEmbeddedRun,
+  });
+
+  registerRequestCustodySpawnCases({
+    ...boundSpawnFixture,
     parentSessionKey,
     parentRunId,
     assertNoModelExecution: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
-    runEmbeddedAgent,
   });
 
   registerGuestSpawnCases({
@@ -418,13 +428,7 @@ describe("recursive spawn production boundary", () => {
     runEmbeddedAgent,
     throwBoundFailures,
   });
-  registerOperatorSpawnRollbackCases({
-    createBoundParent,
-    createBoundGateway,
-    closeBoundGateway,
-    throwBoundFailures,
-    runEmbeddedAgent,
-  });
+  registerOperatorSpawnRollbackCases(boundSpawnFixture);
   registerNativeCancellationCases({
     createBoundParent,
     createBoundGateway,
