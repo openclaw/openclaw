@@ -40,9 +40,27 @@ describe("Telegram client cancellation and custody", () => {
     // the installed fetch implements the standard fetch contract used here.
     return (undiciFetch as unknown as typeof globalThis.fetch)(input, requestInit);
   };
+  const clientFor = (options: Partial<Parameters<typeof createTelegramClientFetch>[0]> = {}) =>
+    createTelegramClientFetch({ fetchImpl: asTelegramClientFetch(fetch), ...options });
   const sockets = new Set<Socket>();
   const responses = new Set<ServerResponse>();
   const requests: string[] = [];
+  const observeResponse = (sending: Promise<Response>) =>
+    sending
+      .then((response) => response.json())
+      .then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+  async function waitForPreparation(started: Promise<void>, sending: Promise<unknown>) {
+    await Promise.race([
+      started,
+      sending.then(() => {
+        throw new Error("transport settled before authority preparation");
+      }),
+    ]);
+    expect(requests).toEqual([]);
+  }
   let arrived = createDeferred<void>();
   let hold: "headers" | "body" | undefined;
   const server = createServer((request, response) => {
@@ -129,20 +147,9 @@ describe("Telegram client cancellation and custody", () => {
           cancel: cancelUpload,
         }),
       };
-      const sending = guardedFetch(`${apiRoot}/sendMessage`, init, dispatcher)
-        .then((response) => response.json())
-        .then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
+      const sending = observeResponse(guardedFetch(`${apiRoot}/sendMessage`, init, dispatcher));
       try {
-        await Promise.race([
-          started.promise,
-          sending.then(() => {
-            throw new Error("transport settled before authority preparation");
-          }),
-        ]);
-        expect(requests).toEqual([]);
+        await waitForPreparation(started.promise, sending);
         release.resolve();
         const outcome = await sending;
         if ("error" in outcome) {
@@ -195,29 +202,18 @@ describe("Telegram client cancellation and custody", () => {
         }
         return fetch(input, init);
       };
-      const client = createTelegramClientFetch({
+      const client = clientFor({
         fetchImpl: asTelegramClientFetch(raw),
         transport: { sourceFetch: raw, forceFallback: () => true },
       });
-      const sending = client(`${apiRoot}/sendMessage`)
-        .then((response) => response.json())
-        .then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
-      const settledBeforePreparation = () =>
-        sending.then(() => {
-          throw new Error("raw source settled without its prepared handoff");
-        });
+      const sending = observeResponse(client(`${apiRoot}/sendMessage`));
       try {
-        await Promise.race([firstStarted.promise, settledBeforePreparation()]);
+        await waitForPreparation(firstStarted.promise, sending);
         expect(rawCalls).toBe(0);
-        expect(requests).toEqual([]);
         firstRelease.resolve();
         if (expected.refuseAt !== 1) {
-          await Promise.race([retryStarted.promise, settledBeforePreparation()]);
+          await waitForPreparation(retryStarted.promise, sending);
           expect(rawCalls).toBe(1);
-          expect(requests).toEqual([]);
           retryRelease.resolve();
         }
         expect(await sending).toEqual(
@@ -247,10 +243,10 @@ describe("Telegram client cancellation and custody", () => {
       );
       const transportFetch: typeof globalThis.fetch = (input, init) =>
         guardedFetch(input, init, dispatcher);
-      const client = createTelegramClientFetch({
+      const client = clientFor({
         fetchImpl: asTelegramClientFetch(transportFetch),
         shutdownSignal: shutdown.signal,
-      })!;
+      });
       const response = await client(`${apiRoot}/getChat`, { signal: request.signal });
       const body = response.text();
       const failure = expect(body).rejects.toBeInstanceOf(Error);
@@ -268,7 +264,7 @@ describe("Telegram client cancellation and custody", () => {
     const deadline = 45000;
     hold = "headers";
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const client = createTelegramClientFetch({ fetchImpl: asTelegramClientFetch(fetch) })!;
+    const client = clientFor();
     let settled = false;
     const sending = client(`${apiRoot}/getUpdates`).finally(() => {
       settled = true;
@@ -286,15 +282,14 @@ describe("Telegram client cancellation and custody", () => {
     hold = "headers";
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const reasons: string[] = [];
-    const client = createTelegramClientFetch({
-      fetchImpl: asTelegramClientFetch(fetch),
+    const client = clientFor({
       transport: {
         forceFallback: (reason) => {
           reasons.push(reason);
           return true;
         },
       },
-    })!;
+    });
     const sending = client(`${apiRoot}/deleteWebhook`);
     await arrived.promise;
     await vi.advanceTimersByTimeAsync(15000);
@@ -307,7 +302,7 @@ describe("Telegram client cancellation and custody", () => {
     const bodiesClosed: Promise<void>[] = [];
     let calls = 0;
     let fallbacks = 0;
-    const client = createTelegramClientFetch({
+    const client = clientFor({
       fetchImpl: asTelegramClientFetch(async () => {
         calls++;
         const closed = createDeferred<void>();
@@ -322,7 +317,7 @@ describe("Telegram client cancellation and custody", () => {
       transport: {
         forceFallback: () => fallbacks++ === 0,
       },
-    })!;
+    });
     const sending = client(`${apiRoot}/sendMessage`);
     await expect(sending).rejects.toBeInstanceOf(TelegramRequestNotStartedError);
     await Promise.all(bodiesClosed);
@@ -341,10 +336,10 @@ describe("Telegram client cancellation and custody", () => {
         }
         return fetch(input, init);
       };
-      const client = createTelegramClientFetch({
+      const client = clientFor({
         fetchImpl: asTelegramClientFetch(fetchWithEdgeError),
         transport: { forceFallback: () => fallback },
-      })!;
+      });
       const sending = client(`${apiRoot}/sendMessage`);
       if (fallback) {
         expect(await (await sending).json()).toEqual({ accepted: true });

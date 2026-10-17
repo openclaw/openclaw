@@ -2,6 +2,8 @@ import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
+import type * as MediaRuntime from "openclaw/plugin-sdk/media-runtime";
+import type * as ModelsRuntime from "openclaw/plugin-sdk/models-provider-runtime";
 import {
   createChannelIngressQueueForTests,
   resetPluginStateStoreForTests,
@@ -16,6 +18,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import type * as SkillRuntime from "openclaw/plugin-sdk/skill-commands-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, vi } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
@@ -34,44 +37,35 @@ import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
-const saveRemoteMedia = vi.fn();
-const transcribeFirstAudio = vi.fn<
-  typeof import("openclaw/plugin-sdk/media-runtime").transcribeFirstAudio
->(async (...args) => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
-    "openclaw/plugin-sdk/media-runtime",
-  );
-  return await actual.transcribeFirstAudio(...args);
-});
+const {
+  saveRemoteMedia,
+  transcribeFirstAudio,
+  buildModelsProviderData,
+  prepareSkillCommandsForAgents,
+} = vi.hoisted(() => ({
+  saveRemoteMedia: vi.fn<typeof MediaRuntime.saveRemoteMedia>(),
+  transcribeFirstAudio: vi.fn<typeof MediaRuntime.transcribeFirstAudio>(),
+  buildModelsProviderData: vi.fn<typeof ModelsRuntime.buildPreparedModelsProviderData>(),
+  prepareSkillCommandsForAgents: vi.fn<typeof SkillRuntime.prepareSkillCommandsForAgents>(),
+}));
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
-  saveRemoteMedia: (...args: unknown[]) => saveRemoteMedia(...args),
-  transcribeFirstAudio: (...args: Parameters<typeof transcribeFirstAudio>) =>
-    transcribeFirstAudio(...args),
+  ...(await importOriginal<typeof MediaRuntime>()),
+  saveRemoteMedia,
+  transcribeFirstAudio,
 }));
 const http = useTelegramHttpFixture();
 
 type ReplyResolver = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["replyResolver"]>;
 const replySpy = vi.fn<ReplyResolver>();
-const { buildModelsProviderData, prepareSkillCommandsForAgents } = vi.hoisted(() => ({
-  buildModelsProviderData:
-    vi.fn<
-      typeof import("openclaw/plugin-sdk/models-provider-runtime").buildPreparedModelsProviderData
-    >(),
-  prepareSkillCommandsForAgents:
-    vi.fn<
-      typeof import("openclaw/plugin-sdk/skill-commands-runtime").prepareSkillCommandsForAgents
-    >(),
-}));
 const pendingUpdates = new Set<Promise<void>>();
 const pendingMenuSyncs = new Set<Promise<void>>();
 
 vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>()),
+  ...(await importOriginal<typeof ModelsRuntime>()),
   buildPreparedModelsProviderData: buildModelsProviderData,
 }));
 vi.mock("openclaw/plugin-sdk/skill-commands-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/skill-commands-runtime")>()),
+  ...(await importOriginal<typeof SkillRuntime>()),
   prepareSkillCommandsForAgents,
 }));
 vi.mock("./bot-native-command-menu.js", async (importOriginal) => {
@@ -180,14 +174,13 @@ export async function createBot(
       out: { maxConcurrent: 1 },
     }),
   );
-  const botInfo = {
-    ...telegramBotInfoForTest,
-    id: resolveTelegramBotUserIdFromToken(token) ?? telegramBotInfoForTest.id,
-    has_topics_enabled: dmTopicsEnabled,
-  };
   const bot = await createTelegramBot({
     token,
-    botInfo,
+    botInfo: {
+      ...telegramBotInfoForTest,
+      id: resolveTelegramBotUserIdFromToken(token) ?? telegramBotInfoForTest.id,
+      has_topics_enabled: dmTopicsEnabled,
+    },
     config: cfg,
     accountId,
     fetchAbortSignal: abort.signal,
@@ -244,14 +237,9 @@ export async function admitSpooledUpdate(
 
 let messageId = 10000;
 
-/**
- * Deliver Telegram's JSON form of an update through the same `handleUpdate` path the durable
- * ingress drain uses. grammY's webhook adapter adds a 10 s wall-clock deadline that cold worker
- * preparation can exceed on loaded CI, so only webhook-contract tests should use it.
- */
+// Use the ingress path without grammY's wall-clock webhook deadline on cold workers.
 export async function deliverTelegramUpdate(bot: Bot, update: object): Promise<void> {
-  // Round-trip the wire body: Telegram JSON omits undefined-only fields, and like the webhook
-  // adapter it is trusted as an Update without runtime validation.
+  // Round-trip Telegram's JSON shape, omitting undefined fields just like the webhook adapter.
   await bot.handleUpdate(await new Response(JSON.stringify(update)).json());
 }
 
@@ -311,9 +299,9 @@ beforeEach(async () => {
   replySpy.mockReset().mockResolvedValue({ text: "Test response" });
   transcribeFirstAudio.mockReset();
   prepareSkillCommandsForAgents.mockReset().mockImplementation(async (...args) => {
-    const actual = await vi.importActual<
-      typeof import("openclaw/plugin-sdk/skill-commands-runtime")
-    >("openclaw/plugin-sdk/skill-commands-runtime");
+    const actual = await vi.importActual<typeof SkillRuntime>(
+      "openclaw/plugin-sdk/skill-commands-runtime",
+    );
     return await actual.prepareSkillCommandsForAgents(...args);
   });
   buildModelsProviderData.mockReset().mockResolvedValue({
