@@ -12,7 +12,7 @@ import { formatUsageReportLines } from "../infra/provider-usage.format.js";
 import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { buildPluginCompatibilityNotices, withPluginDiagnosticsReport } from "../plugins/status.js";
-import { type RuntimeEnv } from "../runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { buildWorkspaceSkillReadiness } from "../skills/discovery/status.js";
 import { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
 import {
