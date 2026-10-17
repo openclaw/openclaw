@@ -14,6 +14,23 @@ const serviceEnv = (scenario: string) => ({
   LOGNAME: "service",
   SUDO_USER: undefined,
 });
+const missing = () => Object.assign(new Error("missing"), { code: "ENOENT" });
+function missingFiles(accessible?: string, readable?: string) {
+  mockProcessPlatform("linux");
+  vi.spyOn(fs, "readFile").mockImplementation(async (file) => {
+    if (file !== readable) {
+      throw missing();
+    }
+    return "[Service]\nExecStart=/usr/bin/node /old/openclaw/dist/index.js gateway\n";
+  });
+  vi.spyOn(fs, "access").mockImplementation(async (file) => {
+    if (file !== accessible) {
+      throw missing();
+    }
+  });
+  vi.spyOn(fs, "readdir").mockResolvedValue([]);
+}
+const execSpy = async () => vi.spyOn(await import("./exec-file.js"), "execFileUtf8");
 
 beforeEach(() => {
   mockSystemAccountHome();
@@ -28,26 +45,13 @@ describe("readGatewayServiceState absence", () => {
     { scope: "system", manager: "missing-tools" },
     { scope: "system", manager: "not-booted" },
   ])("reports a stale $scope unit with $manager", async ({ scope, manager }) => {
-    mockProcessPlatform("linux");
     const env = serviceEnv(`${scope}-${manager}`);
     const unitPath =
       scope === "user"
         ? `${env.HOME}/.config/systemd/user/openclaw-gateway.service`
         : "/etc/systemd/system/openclaw-gateway.service";
-    const missing = () => Object.assign(new Error("missing"), { code: "ENOENT" });
-    vi.spyOn(fs, "readFile").mockImplementation(async (file) => {
-      if (file !== unitPath) {
-        throw missing();
-      }
-      return "[Service]\nExecStart=/usr/bin/node /old/openclaw/dist/index.js gateway\n";
-    });
-    vi.spyOn(fs, "access").mockImplementation(async (file) => {
-      if (file !== unitPath) {
-        throw missing();
-      }
-    });
-    vi.spyOn(fs, "readdir").mockResolvedValue([]);
-    vi.spyOn(await import("./exec-file.js"), "execFileUtf8").mockImplementation(async () => ({
+    missingFiles(unitPath, unitPath);
+    (await execSpy()).mockImplementation(async () => ({
       code: 1,
       termination: manager === "missing-tools" ? "error" : "exit",
       errorCode: manager === "missing-tools" ? "ENOENT" : undefined,
@@ -55,19 +59,20 @@ describe("readGatewayServiceState absence", () => {
       stderr: "System has not been booted with systemd as init system (PID 1). Can't operate.",
     }));
     const state = await readGatewayServiceState(resolveGatewayService(), { env });
-    expect(state.systemdInstallation?.kind).toBe(scope);
-    expect(state.installed).toBe(true);
-    expect(state.inspectionReason).toBe("service-manager-unavailable");
-    expect(state.runtime?.inspectionReason).toBe("service-manager-unavailable");
+    expect(state).toMatchObject({
+      systemdInstallation: { kind: scope },
+      installed: true,
+      inspectionReason: "service-manager-unavailable",
+      runtime: { inspectionReason: "service-manager-unavailable" },
+    });
   });
 
   it("retains proven manager absence without a recorded unit", async () => {
     mockProcessPlatform("linux");
-    const missing = () => Object.assign(new Error("missing"), { code: "ENOENT" });
     vi.spyOn(fs, "lstat").mockRejectedValue(missing());
     vi.spyOn(fs, "access").mockRejectedValue(missing());
     vi.spyOn(fs, "readdir").mockResolvedValue([]);
-    const native = vi.spyOn(await import("./exec-file.js"), "execFileUtf8");
+    const native = await execSpy();
     const state = await readGatewayServiceState(resolveGatewayService(), {
       env: { ...serviceEnv("no-manager-or-unit"), DBUS_SESSION_BUS_ADDRESS: undefined },
     });
@@ -102,23 +107,13 @@ describe("readGatewayServiceState absence", () => {
   });
 
   it("does not require a user bus to inspect a running system service", async () => {
-    mockProcessPlatform("linux");
-    const missing = () => Object.assign(new Error("missing"), { code: "ENOENT" });
-    vi.spyOn(fs, "readFile").mockRejectedValue(missing());
-    vi.spyOn(fs, "access").mockImplementation(async (file) => {
-      if (file !== "/etc/systemd/system/openclaw-gateway.service") {
-        throw missing();
-      }
-    });
-    vi.spyOn(fs, "readdir").mockResolvedValue([]);
-    vi.spyOn(await import("./exec-file.js"), "execFileUtf8").mockImplementation(
-      async (command) => ({
-        code: command === "busctl" ? 1 : 0,
-        termination: "exit",
-        stdout: command === "busctl" ? "" : "LoadState=loaded\nActiveState=active\nMainPID=42\n",
-        stderr: command === "busctl" ? "Failed to connect to bus: No such file or directory" : "",
-      }),
-    );
+    missingFiles("/etc/systemd/system/openclaw-gateway.service");
+    (await execSpy()).mockImplementation(async (command) => ({
+      code: command === "busctl" ? 1 : 0,
+      termination: "exit",
+      stdout: command === "busctl" ? "" : "LoadState=loaded\nActiveState=active\nMainPID=42\n",
+      stderr: command === "busctl" ? "Failed to connect to bus: No such file or directory" : "",
+    }));
     const state = await readGatewayServiceState(resolveGatewayService(), {
       env: serviceEnv("running-system-service"),
     });
@@ -126,31 +121,25 @@ describe("readGatewayServiceState absence", () => {
     expect(state.inspectionReason).toBeUndefined();
   });
 
-  it.each([["user bus", "systemd-user-bus-unavailable"]])(
-    "reports missing %s instead of recommending an impossible fresh install",
-    async (missingPiece, reason) => {
-      mockProcessPlatform("linux");
-      const missing = () => Object.assign(new Error("missing"), { code: "ENOENT" });
-      vi.spyOn(fs, "readFile").mockRejectedValue(missing());
-      vi.spyOn(fs, "access").mockRejectedValue(missing());
-      vi.spyOn(fs, "readdir").mockResolvedValue([]);
-      const run = vi.spyOn(await import("./exec-file.js"), "execFileUtf8");
-      run.mockImplementation(async (command) => ({
-        code: command === "busctl" ? 1 : 0,
-        termination: command === "busctl" && missingPiece === "busctl" ? "error" : "exit",
-        errorCode: command === "busctl" && missingPiece === "busctl" ? "ENOENT" : undefined,
-        stdout:
-          command === "busctl" ? "" : "LoadState=not-found\nActiveState=inactive\nSubState=dead\n",
-        stderr: command === "busctl" ? "Failed to connect to bus: No such file or directory" : "",
-      }));
-      const state = await readGatewayServiceState(resolveGatewayService(), {
-        env: serviceEnv(reason),
-      });
-      expect(state.inspectionReason).toBe(reason);
-      expect(state.runtime?.missingUnit).not.toBe(true);
-      expect(state.runtime?.status).toBe("unknown");
-    },
-  );
+  it("reports a missing user bus instead of recommending an impossible fresh install", async () => {
+    missingFiles();
+    const reason = "systemd-user-bus-unavailable";
+    const run = await execSpy();
+    run.mockImplementation(async (command) => ({
+      code: command === "busctl" ? 1 : 0,
+      termination: "exit",
+      errorCode: undefined,
+      stdout:
+        command === "busctl" ? "" : "LoadState=not-found\nActiveState=inactive\nSubState=dead\n",
+      stderr: command === "busctl" ? "Failed to connect to bus: No such file or directory" : "",
+    }));
+    const state = await readGatewayServiceState(resolveGatewayService(), {
+      env: serviceEnv(reason),
+    });
+    expect(state.inspectionReason).toBe(reason);
+    expect(state.runtime?.missingUnit).not.toBe(true);
+    expect(state.runtime?.status).toBe("unknown");
+  });
 
   it.each(["revoked", "expired"])(
     "preserves the admitted binding and deadline through an absent projection (%s)",
@@ -194,16 +183,9 @@ describe("readGatewayServiceState absence", () => {
           timeoutMs: 1000,
         },
       );
-      if (condition === "current") {
-        await expect(observed).resolves.toMatchObject({
-          command: null,
-          runtime: { status: "stopped", missingUnit: true },
-        });
-      } else {
-        await expect(observed).rejects.toThrow(
-          condition === "revoked" ? "original binding retired" : "deadline expired",
-        );
-      }
+      await expect(observed).rejects.toThrow(
+        condition === "revoked" ? "original binding retired" : "deadline expired",
+      );
       expect(readCommand).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ systemdReadBinding: binding }),
@@ -216,22 +198,9 @@ describe("readGatewayServiceState absence", () => {
   it.each(["absent", "system-loaded", "system-unavailable"])(
     "preserves strict Linux service absence only with both scopes verified (%s)",
     async (condition) => {
-      mockProcessPlatform("linux");
-      const missing = () => Object.assign(new Error("missing"), { code: "ENOENT" });
-      vi.spyOn(fs, "readFile").mockRejectedValue(missing());
-      vi.spyOn(fs, "access").mockRejectedValue(missing());
-      vi.spyOn(fs, "readdir").mockResolvedValue([]);
-      const present = await fs.lstat(process.cwd());
-      vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
-        if (
-          condition === "system-definition" &&
-          String(target) === "/etc/systemd/system/openclaw-gateway.service"
-        ) {
-          return present;
-        }
-        throw missing();
-      });
-      const run = vi.spyOn(await import("./exec-file.js"), "execFileUtf8");
+      missingFiles();
+      vi.spyOn(fs, "lstat").mockRejectedValue(missing());
+      const run = await execSpy();
       run.mockImplementation(async (command, args) => {
         const system = args.includes("--system");
         const success = (type: string, data: unknown) => ({
@@ -246,7 +215,7 @@ describe("readGatewayServiceState absence", () => {
           stdout: "",
           stderr,
         });
-        if (condition === (system ? "system-unavailable" : "user-unavailable")) {
+        if (system && condition === "system-unavailable") {
           return failure("Failed to connect to bus: No such file or directory");
         }
         if (args.includes("Version")) {
@@ -283,9 +252,7 @@ describe("readGatewayServiceState absence", () => {
         requireEffective: true,
         requireLoadedCommand: true,
       });
-      if (condition === "user-unavailable") {
-        await expect(result).rejects.toThrow();
-      } else if (condition === "absent") {
+      if (condition === "absent") {
         await expect(result).resolves.toMatchObject({
           installed: false,
           command: null,

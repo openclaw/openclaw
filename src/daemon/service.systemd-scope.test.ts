@@ -32,15 +32,75 @@ const success = (stdout: string): ExecResult => ({
   stdout,
   stderr: "",
 });
+function systemProperties(
+  home: string,
+  target: SystemdServiceReadTarget,
+  argv: string[],
+  running: boolean,
+) {
+  return {
+    UnitPath: property("as", [home]),
+    FragmentPath: property("s", target.unitPath),
+    DropInPaths: property("as", []),
+    NeedDaemonReload: property("b", false),
+    ExecStart: execStart(argv),
+    WorkingDirectory: property("s", home),
+    Environment: property("as", []),
+    EnvironmentFiles: property("a(sb)", []),
+    UnsetEnvironment: property("as", []),
+    User: property("s", "gateway"),
+    Id: property("s", target.unitName),
+    LoadState: property("s", "loaded"),
+    ActiveState: property("s", running ? "active" : "inactive"),
+    SubState: property("s", running ? "running" : "dead"),
+    StartLimitBurst: property("u", 5),
+    ActiveEnterTimestampMonotonic: property("t", 100),
+    InactiveEnterTimestampMonotonic: property("t", 200),
+    UnitFileState: property("s", "enabled"),
+    RefuseManualStart: property("b", false),
+    CanStart: property("b", true),
+    Result: property("s", "success"),
+    NRestarts: property("u", 0),
+    MainPID: property("u", running ? 4242 : 0),
+    ExecMainStatus: property("i", 0),
+    ExecMainCode: property("i", 1),
+    KillMode: property("s", "control-group"),
+    TasksCurrent: property("t", running ? 1 : 0),
+    MemoryCurrent: property("t", 0),
+    ControlGroup: property("s", `/system.slice/${target.unitName}`),
+  };
+}
+const execStart = (argv: string[]) =>
+  property("a(sasbttttuii)", [[argv[0], argv, false, 0, 0, 0, 0, 0, 0, 0]]);
+function systemAccount(home: string) {
+  mockProcessPlatform("linux");
+  vi.spyOn(os, "userInfo").mockReturnValue({
+    username: "gateway",
+    uid: 2001,
+    gid: 2001,
+    homedir: home,
+    shell: "/bin/sh",
+  });
+}
+const inspectionEnv = (home: string) => ({
+  HOME: home,
+  USER: "unrelated-login-name",
+  USERPROFILE: undefined,
+  OPENCLAW_HOME: undefined,
+  OPENCLAW_STATE_DIR: undefined,
+  OPENCLAW_CONFIG_PATH: undefined,
+  OPENCLAW_PROFILE: undefined,
+  OPENCLAW_SYSTEMD_UNIT: undefined,
+  OPENCLAW_SUPERVISOR_MODE: undefined,
+  OPENCLAW_SERVICE_MARKER: undefined,
+  OPENCLAW_SERVICE_KIND: undefined,
+});
 
 type ScopeCase = {
   file: string;
   instance: string;
   running: boolean;
-  unit?: string;
-  launch?: "direct" | "default-profile" | "runtime-flags";
   other?:
-    | "named-env"
     | "named-argv"
     | "profile-file"
     | "other-state"
@@ -48,7 +108,6 @@ type ScopeCase = {
     | "same-default"
     | "unavailable"
     | "wrapper"
-    | "budget"
     | "handoff-budget"
     | "default-budget"
     | "node";
@@ -76,26 +135,17 @@ it.each<ScopeCase>([
     other,
   })),
 ])(
-  "inspects $instance with running=$running unit=$unit other=$other launch=$launch and preserves its sealed definition",
-  async ({ file, instance, running, unit, other, launch }) => {
+  "inspects $instance with running=$running other=$other and preserves its sealed definition",
+  async ({ file, instance, running, other }) => {
     let elapsedMs = 0;
     let targetReads = 0;
-    if (other === "budget" || other === "handoff-budget" || other === "default-budget") {
+    if (other === "handoff-budget" || other === "default-budget") {
       vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
     }
     const home = await fs.realpath(dirs.make("openclaw-system-maintenance-"));
     const root = path.join(home, "package");
     const entrypoint = path.join(root, "openclaw.mjs");
-    const programArguments =
-      launch === "direct"
-        ? [entrypoint, "gateway"]
-        : [
-            process.execPath,
-            ...(launch === "runtime-flags" ? ["--max-old-space-size=512"] : []),
-            entrypoint,
-            "gateway",
-            ...(launch === "default-profile" ? ["--profile", "default"] : []),
-          ];
+    const programArguments = [process.execPath, entrypoint, "gateway"];
     const target: SystemdServiceReadTarget = {
       scope: "system",
       unitName: instance,
@@ -146,47 +196,13 @@ it.each<ScopeCase>([
     vi.spyOn(fs, "access").mockRejectedValue(
       Object.assign(new Error("missing"), { code: "ENOENT" }),
     );
-    mockProcessPlatform("linux");
-    vi.spyOn(os, "userInfo").mockReturnValue({
-      username: "gateway",
-      uid: 2001,
-      gid: 2001,
-      homedir: home,
-      shell: "/bin/sh",
-    });
-    const properties: Record<string, unknown> = {
-      UnitPath: property("as", [home]),
-      FragmentPath: property("s", target.unitPath),
-      DropInPaths: property("as", []),
-      NeedDaemonReload: property("b", false),
-      ExecStart: property("a(sasbttttuii)", [
-        [programArguments[0], programArguments, false, 0, 0, 0, 0, 0, 0, 0],
-      ]),
-      WorkingDirectory: property("s", home),
-      Environment: property("as", []),
-      EnvironmentFiles: property("a(sb)", []),
-      UnsetEnvironment: property("as", []),
-      User: property("s", "gateway"),
-      Id: property("s", target.unitName),
-      LoadState: property("s", "loaded"),
-      ActiveState: property("s", running ? "active" : "inactive"),
-      SubState: property("s", running ? "running" : "dead"),
-      StartLimitBurst: property("u", 5),
-      ActiveEnterTimestampMonotonic: property("t", 100),
-      InactiveEnterTimestampMonotonic: property("t", 200),
-      UnitFileState: property("s", "enabled"),
-      RefuseManualStart: property("b", false),
-      CanStart: property("b", true),
-      Result: property("s", "success"),
-      NRestarts: property("u", 0),
-      MainPID: property("u", running ? 4242 : 0),
-      ExecMainStatus: property("i", 0),
-      ExecMainCode: property("i", 1),
-      KillMode: property("s", "control-group"),
-      TasksCurrent: property("t", running ? 1 : 0),
-      MemoryCurrent: property("t", 0),
-      ControlGroup: property("s", `/system.slice/${target.unitName}`),
-    };
+    systemAccount(home);
+    const properties: Record<string, unknown> = systemProperties(
+      home,
+      target,
+      programArguments,
+      running,
+    );
     const otherObject = "/org/freedesktop/systemd1/unit/other_2eservice";
     const otherProperties: Record<string, unknown> = {
       ...properties,
@@ -195,10 +211,7 @@ it.each<ScopeCase>([
       User: property("s", other === "other-account" ? "another-account" : "gateway"),
       Environment: property(
         "as",
-        other === "named-env" ||
-          other === "budget" ||
-          other === "handoff-budget" ||
-          other === "default-budget"
+        other === "handoff-budget" || other === "default-budget"
           ? ["OPENCLAW_PROFILE=darlene"]
           : other === "other-state"
             ? [`OPENCLAW_STATE_DIR=${path.join(home, ".openclaw-darlene")}`]
@@ -207,25 +220,12 @@ it.each<ScopeCase>([
               : [],
       ),
       EnvironmentFiles: property("a(sb)", other === "profile-file" ? [[otherEnvPath, false]] : []),
-      ExecStart: property("a(sasbttttuii)", [
-        [
-          other === "wrapper" ? "/usr/bin/env" : process.execPath,
-          [
-            ...(other === "wrapper" ? ["/usr/bin/env", "OPENCLAW_PROFILE=darlene"] : []),
-            process.execPath,
-            entrypoint,
-            ...(other === "named-argv" ? ["--profile", "darlene"] : []),
-            ...(other === "node" ? ["node", "run"] : ["gateway"]),
-          ],
-          false,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-        ],
+      ExecStart: execStart([
+        ...(other === "wrapper" ? ["/usr/bin/env", "OPENCLAW_PROFILE=darlene"] : []),
+        process.execPath,
+        entrypoint,
+        ...(other === "named-argv" ? ["--profile", "darlene"] : []),
+        ...(other === "node" ? ["node", "run"] : ["gateway"]),
       ]),
     };
     exec.mockReset().mockImplementation(async (command, args) => {
@@ -242,9 +242,6 @@ it.each<ScopeCase>([
         return success(JSON.stringify(property("u", [0])));
       }
       if (args.includes("GetUnit")) {
-        if (other === "budget") {
-          elapsedMs += 40;
-        }
         if (other === "default-budget") {
           elapsedMs += 4000;
         }
@@ -284,153 +281,133 @@ it.each<ScopeCase>([
           .join("\n"),
       );
     });
-    await withEnvAsync(
-      {
-        HOME: home,
-        USER: "unrelated-login-name",
-        USERPROFILE: undefined,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_STATE_DIR: undefined,
-        OPENCLAW_CONFIG_PATH: undefined,
-        OPENCLAW_PROFILE: undefined,
-        OPENCLAW_SYSTEMD_UNIT: unit,
-        OPENCLAW_SUPERVISOR_MODE: undefined,
-        OPENCLAW_SERVICE_MARKER: undefined,
-        OPENCLAW_SERVICE_KIND: undefined,
-      },
-      async () => {
-        if (
-          other === "same-default" ||
-          other === "unavailable" ||
-          other === "wrapper" ||
-          other === "budget" ||
-          other === "handoff-budget" ||
-          other === "default-budget"
-        ) {
-          await expect(
-            readGatewayServiceState(resolveGatewayService(), {
+    await withEnvAsync(inspectionEnv(home), async () => {
+      if (
+        other === "same-default" ||
+        other === "unavailable" ||
+        other === "wrapper" ||
+        other === "handoff-budget" ||
+        other === "default-budget"
+      ) {
+        await expect(
+          readGatewayServiceState(resolveGatewayService(), {
+            requireEffective: true,
+            requireLoadedCommand: true,
+            ...(other === "handoff-budget" ? { timeoutMs: 50 } : {}),
+          }),
+        ).rejects.toThrow(
+          other === "same-default"
+            ? "Multiple systemd Gateway units"
+            : other === "handoff-budget" || other === "default-budget"
+              ? "inspection deadline expired"
+              : other === "wrapper"
+                ? "launcher identity is unknown"
+                : "could not be inspected",
+        );
+        expect(
+          exec.mock.calls.some(([, args]) => args.includes("GetUnit") && args.at(-1) === otherName),
+        ).toBe(true);
+        if (other === "default-budget") {
+          const targetQuery = exec.mock.calls.find(
+            ([, args]) => args.includes("GetUnit") && args.at(-1) === target.unitName,
+          );
+          expect(targetQuery).toBeDefined();
+          expect(targetQuery?.[2]?.timeout).toBeLessThanOrEqual(1000);
+        }
+        return;
+      }
+      const state = await readGatewayServiceState(resolveGatewayService(), {
+        requireEffective: true,
+        requireLoadedCommand: true,
+      });
+      expect(state).toMatchObject({
+        systemdInstallation: { kind: "system", system: target },
+        env: { OPENCLAW_SYSTEMD_UNIT: target.unitName },
+        installed: true,
+        running,
+        loadState: { status: "loaded" },
+        runtime: {
+          status: running ? "running" : "stopped",
+          systemd: { scope: "system", unit: target.unitName, managerUid: 0 },
+        },
+        definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
+      });
+      if (file === "openclaw.service") {
+        const actualInstallationDiscovery = systemdScope.findSystemdGatewayInstallation;
+        const installationDiscovery = vi.spyOn(systemdScope, "findSystemdGatewayInstallation");
+        try {
+          for (const selection of [
+            "discovered",
+            "supplied",
+            "delegated",
+            "none",
+            "dueling",
+            "explicit",
+          ] as const) {
+            const supplied: SystemdGatewayInstallation | undefined =
+              selection === "none" || selection === "explicit"
+                ? { kind: "none" }
+                : selection === "dueling"
+                  ? { kind: "dueling", user: { ...target, scope: "user" }, system: target }
+                  : selection === "discovered"
+                    ? undefined
+                    : { kind: "system", system: target };
+            const service = { ...resolveGatewayService() };
+            if (selection === "delegated") {
+              const readCommand = service.readCommand;
+              service.readCommand = (...args) => readCommand(...args);
+            }
+            const shouldDiscover =
+              selection === "discovered" || selection === "none" || selection === "dueling";
+            installationDiscovery.mockReset();
+            if (shouldDiscover) {
+              installationDiscovery.mockImplementation(actualInstallationDiscovery);
+            } else {
+              installationDiscovery.mockRejectedValue(
+                new Error("Supplied target must retain its scope"),
+              );
+            }
+            const selectedState = await readGatewayServiceState(service, {
               requireEffective: true,
               requireLoadedCommand: true,
-              ...(other === "budget" || other === "handoff-budget" ? { timeoutMs: 50 } : {}),
-            }),
-          ).rejects.toThrow(
-            other === "same-default"
-              ? "Multiple systemd Gateway units"
-              : other === "budget" || other === "handoff-budget" || other === "default-budget"
-                ? "inspection deadline expired"
-                : other === "wrapper"
-                  ? "launcher identity is unknown"
-                  : "could not be inspected",
-          );
-          expect(
-            exec.mock.calls.some(
-              ([, args]) => args.includes("GetUnit") && args.at(-1) === otherName,
-            ),
-          ).toBe(true);
-          if (other === "default-budget") {
-            const targetQuery = exec.mock.calls.find(
-              ([, args]) => args.includes("GetUnit") && args.at(-1) === target.unitName,
-            );
-            expect(targetQuery).toBeDefined();
-            expect(targetQuery?.[2]?.timeout).toBeLessThanOrEqual(1000);
+              systemdInstallation: supplied,
+              systemdReadTarget: selection === "explicit" ? target : undefined,
+            });
+            expect(installationDiscovery, selection).toHaveBeenCalledTimes(shouldDiscover ? 1 : 0);
+            expect(selectedState, selection).toMatchObject({
+              systemdInstallation:
+                selection === "explicit" ? { kind: "none" } : { kind: "system", system: target },
+              installed: true,
+              running: false,
+              loadState: { status: "loaded" },
+              runtime: {
+                status: "stopped",
+                systemd: { scope: "system", unit: target.unitName, managerUid: 0 },
+              },
+              definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
+            });
           }
-          return;
+        } finally {
+          installationDiscovery.mockRestore();
         }
-        const state = await readGatewayServiceState(resolveGatewayService(), {
-          requireEffective: true,
-          requireLoadedCommand: true,
-        });
-        expect(state).toMatchObject({
-          systemdInstallation: { kind: "system", system: target },
-          env: { OPENCLAW_SYSTEMD_UNIT: target.unitName },
-          installed: true,
-          running,
-          loadState: { status: "loaded" },
-          runtime: {
-            status: running ? "running" : "stopped",
-            systemd: { scope: "system", unit: target.unitName, managerUid: 0 },
-          },
-          definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
-        });
-        if (file === "openclaw.service") {
-          const actualInstallationDiscovery = systemdScope.findSystemdGatewayInstallation;
-          const installationDiscovery = vi.spyOn(systemdScope, "findSystemdGatewayInstallation");
-          try {
-            for (const selection of [
-              "discovered",
-              "supplied",
-              "delegated",
-              "none",
-              "dueling",
-              "explicit",
-            ] as const) {
-              const supplied: SystemdGatewayInstallation | undefined =
-                selection === "none" || selection === "explicit"
-                  ? { kind: "none" }
-                  : selection === "dueling"
-                    ? { kind: "dueling", user: { ...target, scope: "user" }, system: target }
-                    : selection === "discovered"
-                      ? undefined
-                      : { kind: "system", system: target };
-              const service = { ...resolveGatewayService() };
-              if (selection === "delegated") {
-                const readCommand = service.readCommand;
-                service.readCommand = (...args) => readCommand(...args);
-              }
-              const shouldDiscover =
-                selection === "discovered" || selection === "none" || selection === "dueling";
-              installationDiscovery.mockReset();
-              if (shouldDiscover) {
-                installationDiscovery.mockImplementation(actualInstallationDiscovery);
-              } else {
-                installationDiscovery.mockRejectedValue(
-                  new Error("Supplied target must retain its scope"),
-                );
-              }
-              const selectedState = await readGatewayServiceState(service, {
-                requireEffective: true,
-                requireLoadedCommand: true,
-                systemdInstallation: supplied,
-                systemdReadTarget: selection === "explicit" ? target : undefined,
-              });
-              expect(installationDiscovery, selection).toHaveBeenCalledTimes(
-                shouldDiscover ? 1 : 0,
-              );
-              expect(selectedState, selection).toMatchObject({
-                systemdInstallation:
-                  selection === "explicit" ? { kind: "none" } : { kind: "system", system: target },
-                installed: true,
-                running: false,
-                loadState: { status: "loaded" },
-                runtime: {
-                  status: "stopped",
-                  systemd: { scope: "system", unit: target.unitName, managerUid: 0 },
-                },
-                definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
-              });
-            }
-          } finally {
-            installationDiscovery.mockRestore();
-          }
-        }
-        const admitted = await maybeStopManagedServiceBeforeMutableUpdate({
-          root,
-          updateInstallKind: "package",
-          shouldRestart: true,
-          phase: "inspect",
-          jsonMode: true,
-        });
-        expect(admitted).toMatchObject({
-          inspected: true,
-          runtimeInspected: true,
-          running,
-          offline: !running,
-          serviceManagerUid: 0,
-          serviceUpdateVerdict: { kind: "owned", refreshDefinition: false },
-        });
-        expect(admitted.blockMessage).toBeUndefined();
-      },
-    );
+      }
+      const admitted = await maybeStopManagedServiceBeforeMutableUpdate({
+        root,
+        updateInstallKind: "package",
+        shouldRestart: true,
+        phase: "inspect",
+        jsonMode: true,
+      });
+      expect(admitted).toMatchObject({
+        inspected: true,
+        runtimeInspected: true,
+        running,
+        offline: !running,
+        serviceManagerUid: 0,
+        serviceUpdateVerdict: { kind: "owned", refreshDefinition: false },
+      });
+      expect(admitted.blockMessage).toBeUndefined();
+    });
     expect(
       exec.mock.calls.every(([command, args]) =>
         command === "systemctl"
@@ -493,47 +470,13 @@ it("reads the system template instance while a separate user Gateway is installe
       sourcePath: templateUnit,
     },
   ]);
-  mockProcessPlatform("linux");
-  vi.spyOn(os, "userInfo").mockReturnValue({
-    username: "gateway",
-    uid: 2001,
-    gid: 2001,
-    homedir: home,
-    shell: "/bin/sh",
-  });
-  const properties: Record<string, unknown> = {
-    UnitPath: property("as", [home]),
-    FragmentPath: property("s", templateUnit),
-    DropInPaths: property("as", []),
-    NeedDaemonReload: property("b", false),
-    ExecStart: property("a(sasbttttuii)", [
-      [process.execPath, [process.execPath, entrypoint, "gateway"], false, 0, 0, 0, 0, 0, 0, 0],
-    ]),
-    WorkingDirectory: property("s", home),
-    Environment: property("as", []),
-    EnvironmentFiles: property("a(sb)", []),
-    UnsetEnvironment: property("as", []),
-    User: property("s", "gateway"),
-    Id: property("s", instanceName),
-    LoadState: property("s", "loaded"),
-    ActiveState: property("s", "active"),
-    SubState: property("s", "running"),
-    StartLimitBurst: property("u", 5),
-    ActiveEnterTimestampMonotonic: property("t", 100),
-    InactiveEnterTimestampMonotonic: property("t", 200),
-    UnitFileState: property("s", "enabled"),
-    RefuseManualStart: property("b", false),
-    CanStart: property("b", true),
-    Result: property("s", "success"),
-    NRestarts: property("u", 0),
-    MainPID: property("u", 4242),
-    ExecMainStatus: property("i", 0),
-    ExecMainCode: property("i", 1),
-    KillMode: property("s", "control-group"),
-    TasksCurrent: property("t", 1),
-    MemoryCurrent: property("t", 0),
-    ControlGroup: property("s", `/system.slice/${instanceName}`),
-  };
+  systemAccount(home);
+  const properties: Record<string, unknown> = systemProperties(
+    home,
+    { scope: "system", unitName: instanceName, unitPath: templateUnit },
+    [process.execPath, entrypoint, "gateway"],
+    true,
+  );
   exec.mockReset().mockImplementation(async (command, args) => {
     if (command === "systemctl" && args[0] === "is-enabled") {
       return success("enabled\n");
@@ -584,35 +527,20 @@ it("reads the system template instance while a separate user Gateway is installe
     unitPath: discoveredTemplateUnit,
   });
   expect(bindings.some((binding) => binding.scope === "user")).toBe(true);
-  await withEnvAsync(
-    {
-      HOME: home,
-      USER: "unrelated-login-name",
-      USERPROFILE: undefined,
-      OPENCLAW_HOME: undefined,
-      OPENCLAW_STATE_DIR: undefined,
-      OPENCLAW_CONFIG_PATH: undefined,
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_SYSTEMD_UNIT: undefined,
-      OPENCLAW_SUPERVISOR_MODE: undefined,
-      OPENCLAW_SERVICE_MARKER: undefined,
-      OPENCLAW_SERVICE_KIND: undefined,
-    },
-    async () => {
-      const state = await readGatewayServiceState(resolveGatewayService(), {
-        env: systemBinding?.env,
-        systemdReadTarget: systemBinding?.systemdReadTarget,
-        requireEffective: true,
-        requireLoadedCommand: true,
-      });
-      expect(state.running).toBe(true);
-      expect(state.runtime).toMatchObject({
-        status: "running",
-        systemd: { scope: "system", unit: instanceName, managerUid: 0 },
-      });
-      expect(state.command?.programArguments).toEqual([process.execPath, entrypoint, "gateway"]);
-    },
-  );
+  await withEnvAsync(inspectionEnv(home), async () => {
+    const state = await readGatewayServiceState(resolveGatewayService(), {
+      env: systemBinding?.env,
+      systemdReadTarget: systemBinding?.systemdReadTarget,
+      requireEffective: true,
+      requireLoadedCommand: true,
+    });
+    expect(state.running).toBe(true);
+    expect(state.runtime).toMatchObject({
+      status: "running",
+      systemd: { scope: "system", unit: instanceName, managerUid: 0 },
+    });
+    expect(state.command?.programArguments).toEqual([process.execPath, entrypoint, "gateway"]);
+  });
   expect(exec.mock.calls.some(([, args]) => args.at(-1) === "openclaw@.service")).toBe(false);
   expect(
     exec.mock.calls.some(([, args]) => args.includes(instanceName) || args.at(-1) === instanceName),

@@ -54,6 +54,18 @@ vi.mock("./schtasks-runtime.js", async (original) => ({
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const originalXml =
   "<Task><Settings><Enabled>false</Enabled></Settings><Actions><Exec><Command>original</Command></Exec></Actions></Task>";
+const hiddenLauncher = "original hidden launcher";
+const transactionHooks = (): GatewayServiceDefinitionTransactionHooks => ({
+  assertCurrent: () => {},
+  beforeWrite: async () => {},
+  filePrepared: async () => {},
+  fileWritten: async () => {},
+  taskPrepared: async () => {},
+  taskWritten: async () => {},
+});
+const isStagedScript = (file: unknown, scriptPath: string) =>
+  typeof file === "string" &&
+  file.startsWith(path.join(path.dirname(scriptPath), `.${path.basename(scriptPath)}.openclaw`));
 beforeEach(() => {
   native.exec.mockReset();
   native.run.mockReset().mockResolvedValue("scheduled-task");
@@ -81,7 +93,7 @@ async function fixture(enabled = false) {
     }),
   });
   await fs.writeFile(scriptPath, original);
-  await fs.writeFile(launcherPath, "original hidden launcher");
+  await fs.writeFile(launcherPath, hiddenLauncher);
   const registration = { xml: savedXml };
   native.exec.mockImplementation(async (command) => {
     assertGatewayServiceUpdateCurrent();
@@ -107,12 +119,12 @@ async function fixture(enabled = false) {
   };
   const assertRestored = async () => {
     expect(await fs.readFile(scriptPath)).toEqual(original);
-    expect(await fs.readFile(launcherPath, "utf8")).toBe("original hidden launcher");
+    expect(await fs.readFile(launcherPath, "utf8")).toBe(hiddenLauncher);
     expect(registration.xml).toBe(savedXml);
   };
   const assertBackups = async () => {
     expect(await fs.readFile(`${scriptPath}.bak`)).toEqual(original);
-    expect(await fs.readFile(`${launcherPath}.bak`, "utf8")).toBe("original hidden launcher");
+    expect(await fs.readFile(`${launcherPath}.bak`, "utf8")).toBe(hiddenLauncher);
     expect((await fs.readFile(`${scriptPath}.task.xml.bak`)).subarray(2).toString("utf16le")).toBe(
       savedXml,
     );
@@ -309,14 +321,7 @@ it.each(["stopped", "running", "unknown"] as const)(
       }
       return false;
     });
-    const definitionTransaction: GatewayServiceDefinitionTransactionHooks = {
-      assertCurrent: () => {},
-      beforeWrite: async () => {},
-      filePrepared: async () => {},
-      fileWritten: async () => {},
-      taskPrepared: async () => {},
-      taskWritten: async () => {},
-    };
+    const definitionTransaction = transactionHooks();
     const install = installScheduledTask({ ...args, definitionTransaction });
     if (evidence === "unknown") {
       await expect(install).rejects.toThrow("Stopped-state ownership cannot be acquired");
@@ -358,7 +363,7 @@ it("restores Password-task launchers after failed activation without re-register
   await expect(installScheduledTask(f.args)).rejects.toThrow("activation rejected");
   expect(f.registration.xml).toBe(originalTask);
   expect(await fs.readFile(f.scriptPath)).toEqual(f.original);
-  expect(await fs.readFile(f.launcherPath, "utf8")).toBe("original hidden launcher");
+  expect(await fs.readFile(f.launcherPath, "utf8")).toBe(hiddenLauncher);
   expect(native.exec.mock.calls.some(([args]) => args[0] === "/Create")).toBe(false);
 });
 
@@ -430,13 +435,7 @@ it.each([
   const open = fs.open;
   vi.spyOn(fs, "open").mockImplementation(async (...parameters) => {
     const handle = await open(...parameters);
-    if (
-      phase === "before-publication" &&
-      typeof parameters[0] === "string" &&
-      parameters[0].startsWith(
-        path.join(path.dirname(scriptPath), `.${path.basename(scriptPath)}.openclaw`),
-      )
-    ) {
+    if (phase === "before-publication" && isStagedScript(parameters[0], scriptPath)) {
       const sync = handle.sync.bind(handle);
       vi.spyOn(handle, "sync").mockImplementation(async () => {
         await sync();
@@ -515,13 +514,7 @@ it.each(["before-rename", "after-rename", "foreign-after-rename"])(
     });
     vi.spyOn(fs, "open").mockImplementation(async (...parameters) => {
       const handle = await open(...parameters);
-      if (
-        parameters[1] === "wx" &&
-        typeof parameters[0] === "string" &&
-        parameters[0].startsWith(
-          path.join(path.dirname(scriptPath), `.${path.basename(scriptPath)}.openclaw`),
-        )
-      ) {
+      if (parameters[1] === "wx" && isStagedScript(parameters[0], scriptPath)) {
         const close = handle.close.bind(handle);
         vi.spyOn(handle, "close").mockImplementation(async () => {
           await close();
@@ -555,7 +548,7 @@ it.each(["before-rename", "after-rename", "foreign-after-rename"])(
     if (phase === "foreign-after-rename") {
       expect((await fs.stat(scriptPath)).ino).toBe(foreignInode);
       expect(await fs.readFile(scriptPath)).not.toEqual(original);
-      expect(await fs.readFile(launcherPath, "utf8")).toBe("original hidden launcher");
+      expect(await fs.readFile(launcherPath, "utf8")).toBe(hiddenLauncher);
     } else {
       await assertRestored();
       expect((await fs.stat(scriptPath)).mode & 0o7777).toBe(originalMode);
@@ -646,17 +639,13 @@ it.each(["publication", "activation"])(
     let revoked = false;
     const written: string[] = [];
     const definitionTransaction: GatewayServiceDefinitionTransactionHooks = {
-      assertCurrent: () => {},
-      beforeWrite: async () => {},
-      filePrepared: async () => {},
+      ...transactionHooks(),
       fileWritten: async (file) => {
         written.push(file);
         if (phase === "publication" && file === scriptPath) {
           revoked = true;
         }
       },
-      taskPrepared: async () => {},
-      taskWritten: async () => {},
     };
     native.run.mockImplementation(async () => {
       revoked = true;

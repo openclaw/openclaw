@@ -60,6 +60,10 @@ function command(kind: "gateway" | "node"): GatewayServiceCommandConfig {
 
 const portCalls = () =>
   native.mock.calls.filter(([, args]) => args?.join(" ").includes("Get-NetTCPConnection"));
+const snapshot = (...entries: Array<{ ProcessId?: number; CommandLine: string | null }>) =>
+  JSON.stringify([{ ProcessId: 111, CommandLine: "powershell.exe Get-CimInstance" }, ...entries]);
+const observe = (kind: "gateway" | "node" = "gateway", installed = command(kind)) =>
+  resolveFallbackRuntime({ OPENCLAW_SERVICE_KIND: kind }, installed, "observe", 100);
 
 beforeEach(() => {
   mockProcessPlatform("win32");
@@ -67,9 +71,7 @@ beforeEach(() => {
   now = processElapsed = portElapsed = portExit = schedulerElapsed = 0;
   schedulerMissing = true;
   portError = portThrow = undefined;
-  processOutput = JSON.stringify([
-    { ProcessId: 111, CommandLine: "powershell.exe Get-CimInstance" },
-  ]);
+  processOutput = snapshot();
   portOutput = "0\r\n";
   native.mockReset();
   native.mockImplementation((_executable, args) => {
@@ -98,17 +100,9 @@ describe("bounded Startup runtime observations", () => {
   it.each(["gateway", "node"] as const)(
     "ignores the System Idle Process when proving stopped %s runtime within the shared budget",
     async (kind) => {
-      processOutput = JSON.stringify([
-        { ProcessId: 0, CommandLine: null },
-        { ProcessId: 111, CommandLine: "powershell.exe Get-CimInstance" },
-      ]);
+      processOutput = snapshot({ ProcessId: 0, CommandLine: null });
       processElapsed = 40.25;
-      const runtime = await resolveFallbackRuntime(
-        { OPENCLAW_SERVICE_KIND: kind },
-        command(kind),
-        "observe",
-        100,
-      );
+      const runtime = await observe(kind);
       expect(runtime.status).toBe("stopped");
       expect(runtime.missingUnit).not.toBe(true);
       expect(portCalls()).toHaveLength(kind === "gateway" ? 1 : 0);
@@ -126,12 +120,7 @@ describe("bounded Startup runtime observations", () => {
         { ProcessId: 111, CommandLine: null },
         { ProcessId: 4242, CommandLine: installed.programArguments.join(" ") },
       ]);
-      const runtime = await resolveFallbackRuntime(
-        { OPENCLAW_SERVICE_KIND: kind },
-        installed,
-        "observe",
-        100,
-      );
+      const runtime = await observe(kind, installed);
       expect(runtime).toMatchObject({ status: "running", pid: 4242 });
       expect(portCalls()).toHaveLength(0);
     },
@@ -153,10 +142,7 @@ describe("bounded Startup runtime observations", () => {
     ).map(([kind, label, entry]) => ({
       kind,
       label,
-      output: JSON.stringify([
-        { ProcessId: 111, CommandLine: "powershell.exe Get-CimInstance" },
-        entry,
-      ]),
+      output: snapshot(entry),
     })),
     ...["", "[]", "[{}]", "not-json"].map((output) => ({
       kind: "gateway" as const,
@@ -165,40 +151,21 @@ describe("bounded Startup runtime observations", () => {
     })),
   ])("keeps $kind snapshots with $label unknown", async ({ kind, output }) => {
     processOutput = output;
-    const runtime = await resolveFallbackRuntime(
-      { OPENCLAW_SERVICE_KIND: kind },
-      command(kind),
-      "observe",
-      100,
-    );
+    const runtime = await observe(kind);
     expect(runtime.status).toBe("unknown");
     expect(runtime.missingUnit).not.toBe(true);
     expect(portCalls()).toHaveLength(0);
   });
 
   it.each([
-    { label: "busy listener", output: "1", exit: 0, processMs: 0, portMs: 0, timeout: 100 },
-    { label: "unverifiable count", output: "", exit: 0, processMs: 0, portMs: 0, timeout: 100 },
-    { label: "native failure", output: "0", exit: 1, processMs: 0, portMs: 0, timeout: 100 },
-    {
-      label: "sub-millisecond remainder",
-      output: "0",
-      exit: 0,
-      processMs: 99.75,
-      portMs: 0,
-      timeout: undefined,
-    },
-    {
-      label: "late free observation",
-      output: "0",
-      exit: 0,
-      processMs: 30,
-      portMs: 71,
-      timeout: 70,
-    },
-  ])(
-    "does not report stopped after $label",
-    async ({ output, exit, processMs, portMs, timeout }) => {
+    ["busy listener", "1", 0, 0, 0, 100],
+    ["unverifiable count", "", 0, 0, 0, 100],
+    ["native failure", "0", 1, 0, 0, 100],
+    ["sub-millisecond remainder", "0", 0, 99.75, 0, undefined],
+    ["late free observation", "0", 0, 30, 71, 70],
+  ] as const)(
+    "does not report stopped after %s",
+    async (_label, output, exit, processMs, portMs, timeout) => {
       portOutput = output;
       portExit = exit;
       if (exit) {

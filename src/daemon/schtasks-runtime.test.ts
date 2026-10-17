@@ -14,6 +14,16 @@ import { readGatewayServiceLoadState } from "./service-load-state.js";
 
 const spawnSync = vi.hoisted(() => vi.fn());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const found = (state: unknown, extra = {}) => ({
+  status: 0,
+  stdout: JSON.stringify({ state, ...extra }),
+});
+const timedOut = () => ({
+  status: null,
+  stdout: "",
+  stderr: "",
+  error: Object.assign(new Error("Native probe timed out"), { code: "ETIMEDOUT" }),
+});
 
 vi.mock("node:child_process", async () => ({
   ...(await vi.importActual<typeof import("node:child_process")>("node:child_process")),
@@ -53,10 +63,8 @@ describe("scheduled task runtime derivation", () => {
   ])(
     "derives runtime from state %j rather than history %j",
     async (state, result, status, name) => {
-      spawnSync.mockReturnValue({
-        status: 0,
-        stdout: JSON.stringify({
-          state,
+      spawnSync.mockReturnValue(
+        found(state, {
           lastRunResult: result,
           lastRunTime: false,
           taskPath: "OpenClaw Gateway",
@@ -69,7 +77,7 @@ describe("scheduled task runtime derivation", () => {
             },
           ],
         }),
-      });
+      );
       await expect(readRuntime()).resolves.toMatchObject({
         status,
         state: name,
@@ -110,11 +118,8 @@ describe("scheduled task runtime derivation", () => {
 
   it("requires current Scheduler running state before retiring the Startup owner", async () => {
     spawnSync
-      .mockReturnValueOnce({
-        status: 0,
-        stdout: JSON.stringify({ state: 3, lastRunResult: 267009 }),
-      })
-      .mockReturnValueOnce({ status: 0, stdout: JSON.stringify({ state: 4, lastRunResult: 0 }) });
+      .mockReturnValueOnce(found(3, { lastRunResult: 267009 }))
+      .mockReturnValueOnce(found(4, { lastRunResult: 0 }));
     await expect(waitForScheduledTaskRunningEvidence({})).resolves.toBe(true);
     expect(spawnSync).toHaveBeenCalledTimes(2);
   });
@@ -127,13 +132,7 @@ describe("scheduled task runtime derivation", () => {
     vi.setSystemTime(0);
     spawnSync.mockImplementation((_command, _args, options) => {
       vi.setSystemTime(Date.now() + Math.min(task.responseAfterMs, options.timeout));
-      return task.responseAfterMs > options.timeout
-        ? {
-            status: null,
-            stdout: "",
-            error: Object.assign(new Error("Native probe timed out"), { code: "ETIMEDOUT" }),
-          }
-        : { status: 0, stdout: JSON.stringify({ state: 3 }) };
+      return task.responseAfterMs > options.timeout ? timedOut() : found(3);
     });
     try {
       expect(isScheduledTaskDefinitelyNotRunning("OpenClaw Gateway")).toBe(task.expected);
@@ -152,14 +151,7 @@ describe("scheduled task runtime derivation", () => {
     vi.setSystemTime(0);
     spawnSync.mockImplementation((_command, _args, options) => {
       vi.setSystemTime(Date.now() + (task.elapsedMs ?? options.timeout));
-      return task.elapsedMs === undefined
-        ? {
-            status: null,
-            stdout: "",
-            stderr: "",
-            error: Object.assign(new Error("Native probe timed out"), { code: "ETIMEDOUT" }),
-          }
-        : { status: 0, stdout: JSON.stringify({ state: 4 }) };
+      return task.elapsedMs === undefined ? timedOut() : found(4);
     });
     try {
       await expect(waitForScheduledTaskRunningEvidence({})).resolves.toBe(task.expected);
@@ -192,24 +184,20 @@ describe("Scheduled Task load-state inspection", () => {
     }
     return env;
   }
+  const loadState = (env: Awaited<ReturnType<typeof loadEnv>>, timeoutMs?: number) =>
+    readGatewayServiceLoadState({ isLoaded: isScheduledTaskInstalled }, { env, timeoutMs });
 
-  it.each([
-    { timeoutMs: undefined, responseAfterMs: 45_000, expected: "loaded" },
-    { timeoutMs: undefined, responseAfterMs: 60_001, expected: "unknown" },
-    { timeoutMs: 200, responseAfterMs: 100, expected: "loaded" },
-    { timeoutMs: 20_000, responseAfterMs: 45_000, expected: "unknown" },
-    { timeoutMs: 200, responseAfterMs: 200, expected: "unknown", observation: "found" },
-    { timeoutMs: 200, responseAfterMs: 200, expected: "unknown", observation: "missing" },
-    {
-      timeoutMs: 200,
-      responseAfterMs: 150,
-      expected: "unknown",
-      observation: "missing",
-      accessMs: 51,
-    },
+  it.each<[number | undefined, number, "loaded" | "unknown", ("found" | "missing")?, number?]>([
+    [undefined, 45_000, "loaded"],
+    [undefined, 60_001, "unknown"],
+    [200, 100, "loaded"],
+    [20_000, 45_000, "unknown"],
+    [200, 200, "unknown", "found"],
+    [200, 200, "unknown", "missing"],
+    [200, 150, "unknown", "missing", 51],
   ])(
-    "bounds native registration taking $responseAfterMs ms by allowance $timeoutMs",
-    async ({ timeoutMs, responseAfterMs, expected, observation, accessMs }) => {
+    "bounds native registration by allowance %s (response %s ms, %s, %s, access %s ms)",
+    async (timeoutMs, responseAfterMs, expected, observation, accessMs) => {
       const env = await loadEnv(observation !== undefined);
       if (accessMs !== undefined) {
         vi.spyOn(fs, "access").mockImplementation(async () => {
@@ -219,19 +207,12 @@ describe("Scheduled Task load-state inspection", () => {
       spawnSync.mockImplementation((_command, _args, options) => {
         now += Math.min(responseAfterMs, options.timeout);
         return responseAfterMs > options.timeout
-          ? {
-              status: null,
-              stdout: "",
-              error: Object.assign(new Error("synthetic native timeout"), { code: "ETIMEDOUT" }),
-            }
+          ? timedOut()
           : observation === "missing"
             ? { status: 1, stdout: "-2147024894" }
-            : { status: 0, stdout: JSON.stringify({ state: 3 }) };
+            : found(3);
       });
-      const loaded = await readGatewayServiceLoadState(
-        { isLoaded: isScheduledTaskInstalled },
-        { env, timeoutMs },
-      );
+      const loaded = await loadState(env, timeoutMs);
       expect(loaded.status).toBe(expected);
       expect(now).toBe(Math.min(responseAfterMs, timeoutMs ?? 60_000) + (accessMs ?? 0));
       if (expected === "unknown" && accessMs === undefined) {
@@ -255,10 +236,7 @@ describe("Scheduled Task load-state inspection", () => {
     async ({ hresult, startup, expected }) => {
       const env = await loadEnv(startup);
       spawnSync.mockReturnValue({ status: 1, stdout: hresult, stderr: "native-secret-canary" });
-      const loaded = await readGatewayServiceLoadState(
-        { isLoaded: isScheduledTaskInstalled },
-        { env, timeoutMs: 200 },
-      );
+      const loaded = await loadState(env, 200);
       expect(loaded.status).toBe(expected);
       if (expected === "unknown") {
         expect(loaded).toMatchObject({
