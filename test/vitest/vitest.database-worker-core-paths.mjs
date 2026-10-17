@@ -70,6 +70,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/worker-task-pool.sqlite-idle.test.ts",
   "src/state/openclaw-state-db.postgres.test.ts",
   "src/state/openclaw-agent-db.postgres.test.ts",
+  "src/state/openclaw-agent-doctor-media.postgres.test.ts",
   "src/state/openclaw-agent-db-engine.postgres.test.ts",
   "src/gateway/server-database-engine.postgres.test.ts",
   "src/infra/postgres-sync/locks.test.ts",
