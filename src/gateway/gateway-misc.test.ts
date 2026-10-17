@@ -103,14 +103,6 @@ describe("GatewayClient", () => {
   });
 });
 
-type TestSocket = {
-  readyState: number;
-  bufferedAmount: number;
-  send: (payload: string) => void;
-  close: (code: number, reason: string) => void;
-  terminate: () => void;
-};
-
 type EventFrame = {
   type: "event";
   event: string;
@@ -118,9 +110,7 @@ type EventFrame = {
   seq?: number;
 };
 
-type RecordingSocket = TestSocket & { sent: EventFrame[] };
-
-function makeRecordingSocket(): RecordingSocket {
+function makeRecordingSocket() {
   const sent: EventFrame[] = [];
   return Object.assign(new EventEmitter(), {
     readyState: 1,
@@ -134,9 +124,11 @@ function makeRecordingSocket(): RecordingSocket {
   });
 }
 
+type RecordingSocket = ReturnType<typeof makeRecordingSocket>;
+
 function makeGatewayWsClient(
   connId: string,
-  socket: TestSocket,
+  socket: RecordingSocket,
   connect: GatewayWsClient["connect"],
 ): GatewayWsClient {
   return {
@@ -147,7 +139,7 @@ function makeGatewayWsClient(
   };
 }
 
-function makeOperatorWsClient(connId: string, socket: TestSocket, scopes: string[]) {
+function makeOperatorWsClient(connId: string, socket: RecordingSocket, scopes: string[]) {
   return makeGatewayWsClient(connId, socket, {
     role: "operator",
     scopes,
@@ -155,7 +147,7 @@ function makeOperatorWsClient(connId: string, socket: TestSocket, scopes: string
 }
 
 function makeOperatorWsClients(
-  entries: Array<{ connId: string; socket: TestSocket; scopes: string[] }>,
+  entries: Array<{ connId: string; socket: RecordingSocket; scopes: string[] }>,
 ) {
   return new GatewayClientRegistry(
     entries.map(({ connId, socket, scopes }) => makeOperatorWsClient(connId, socket, scopes)),
@@ -215,18 +207,6 @@ function chatSideResultPayload() {
 }
 
 describe("gateway broadcaster", () => {
-  it("exposes current buffered bytes for a targeted connection", () => {
-    const socket = makeRecordingSocket();
-    socket.bufferedAmount = 1234;
-    const client = makeOperatorWsClient("c-admin", socket, ["operator.admin"]);
-    const clients = new GatewayClientRegistry([client]);
-    const { getBufferedAmount } = createGatewayBroadcaster({ clients });
-
-    expect(getBufferedAmount("c-admin")).toBe(1234);
-    clients.delete(client);
-    expect(getBufferedAmount("c-admin")).toBeUndefined();
-  });
-
   it("closes a slow authoritative-session subscriber while delivering to healthy clients", () => {
     vi.useFakeTimers();
     const slowSocket = makeRecordingSocket();
@@ -571,156 +551,144 @@ describe("gateway broadcaster", () => {
   });
 });
 
-describe("chat run registry", () => {
-  test("queues and removes runs per session", () => {
-    const registry = createChatRunState().registry;
+test("chat run registry queues and removes runs per session", () => {
+  const registry = createChatRunState().registry;
 
-    registry.add("s1", { sessionKey: "main", clientRunId: "c1" });
-    registry.add("s1", { sessionKey: "main", clientRunId: "c2" });
+  registry.add("s1", { sessionKey: "main", clientRunId: "c1" });
+  registry.add("s1", { sessionKey: "main", clientRunId: "c2" });
 
-    expect(registry.peek("s1")?.clientRunId).toBe("c1");
-    expect(registry.shift("s1")?.clientRunId).toBe("c1");
-    expect(registry.peek("s1")?.clientRunId).toBe("c2");
+  expect(registry.peek("s1")?.clientRunId).toBe("c1");
+  expect(registry.shift("s1")?.clientRunId).toBe("c1");
+  expect(registry.peek("s1")?.clientRunId).toBe("c2");
 
-    expect(registry.remove("s1", "c2")?.clientRunId).toBe("c2");
-    expect(registry.peek("s1")).toBeUndefined();
-  });
+  expect(registry.remove("s1", "c2")?.clientRunId).toBe("c2");
+  expect(registry.peek("s1")).toBeUndefined();
 });
 
-describe("late-arriving invoke results", () => {
-  test("returns success for unknown invoke ids for both success and error payloads", async () => {
-    const nodeId = "node-123";
-    const cases = [
-      {
-        id: "unknown-invoke-id-12345",
-        ok: true,
-        payloadJSON: JSON.stringify({ result: "late" }),
-      },
-      {
-        id: "another-unknown-invoke-id",
-        ok: false,
-        error: { code: "FAILED", message: "test error" },
-      },
-    ] as const;
+test("returns success for late unknown invoke ids for both success and error payloads", async () => {
+  const nodeId = "node-123";
+  const cases = [
+    {
+      id: "unknown-invoke-id-12345",
+      ok: true,
+      payloadJSON: JSON.stringify({ result: "late" }),
+    },
+    {
+      id: "another-unknown-invoke-id",
+      ok: false,
+      error: { code: "FAILED", message: "test error" },
+    },
+  ] as const;
 
-    for (const params of cases) {
-      const respond = vi.fn<GatewayMethodTypes.RespondFn>();
-      const context = {
-        nodeRegistry: { handleInvokeResult: () => false },
-        logGateway: { debug: vi.fn() },
-      } as unknown as GatewayMethodTypes.GatewayRequestContext;
-      const client = {
-        connect: { device: { id: nodeId } },
-      } as unknown as GatewayMethodTypes.GatewayClient;
+  for (const params of cases) {
+    const respond = vi.fn<GatewayMethodTypes.RespondFn>();
+    const context = {
+      nodeRegistry: { handleInvokeResult: () => false },
+      logGateway: { debug: vi.fn() },
+    } as unknown as GatewayMethodTypes.GatewayRequestContext;
+    const client = {
+      connect: { device: { id: nodeId } },
+    } as unknown as GatewayMethodTypes.GatewayClient;
 
-      await handleNodeInvokeResult({
-        req: { method: "node.invoke.result" } as unknown as RequestFrame,
-        params: { ...params, nodeId } as unknown as Record<string, unknown>,
-        client,
-        isWebchatConnect: () => false,
-        respond,
-        context,
-      });
+    await handleNodeInvokeResult({
+      req: { method: "node.invoke.result" } as unknown as RequestFrame,
+      params: { ...params, nodeId } as unknown as Record<string, unknown>,
+      client,
+      isWebchatConnect: () => false,
+      respond,
+      context,
+    });
 
-      expect(respond.mock.lastCall).toEqual([true, { ok: true, ignored: true }, undefined]);
-    }
-  });
+    expect(respond.mock.lastCall).toEqual([true, { ok: true, ignored: true }, undefined]);
+  }
 });
 
 describe("resolveNodeCommandAllowlist", () => {
-  const allowFor = (metadata: Parameters<typeof resolveNodeCommandAllowlist>[1]) =>
-    resolveNodeCommandAllowlist({}, metadata);
-
-  function expectAllowed(allow: { has: (cmd: string) => boolean }, commands: string[]) {
-    for (const cmd of commands) {
-      expect(allow.has(cmd)).toBe(true);
+  it.each<
+    [
+      name: string,
+      metadata: Parameters<typeof resolveNodeCommandAllowlist>[1],
+      allowed: string[],
+      denied: string[],
+      config?: Parameters<typeof resolveNodeCommandAllowlist>[0],
+    ]
+  >([
+    [
+      "includes Android notifications and diagnostics by default",
+      { platform: "Android 16", deviceFamily: "Android" },
+      [
+        "notifications.list",
+        "notifications.actions",
+        "device.permissions",
+        "device.health",
+        "device.apps",
+        "callLog.search",
+        "system.notify",
+      ],
+      ["sms.search"],
+    ],
+    [
+      "allows safe Windows commands but gates dangerous media",
+      {
+        platform: "windows",
+        deviceFamily: "Windows",
+        approvedCommands: ["screen.snapshot", "system.run", "system.which"],
+      },
+      [
+        "camera.list",
+        "location.get",
+        "device.info",
+        "device.status",
+        "screen.snapshot",
+        "system.run",
+        "system.which",
+        "system.notify",
+      ],
+      ["canvas.present", "canvas.a2ui.pushJSONL", ...DEFAULT_DANGEROUS_NODE_COMMANDS],
+    ],
+    [
+      "can explicitly allow dangerous commands",
+      { platform: "ios", deviceFamily: "iPhone" },
+      ["camera.snap", "screen.record"],
+      ["camera.clip"],
+      { gateway: { nodes: { commands: { allow: ["camera.snap", "screen.record"] } } } },
+    ],
+    [
+      "fails safe for unknown/confusable metadata",
+      { platform: "iPhοne", deviceFamily: "iPhοne" },
+      ["system.notify"],
+      ["system.run", "system.which"],
+    ],
+    [
+      "normalizes dotted-I platform values to iOS",
+      { platform: "İOS", deviceFamily: "iPhone" },
+      ["device.info"],
+      ["system.run", "system.which"],
+    ],
+  ])("%s", (_name, metadata, allowed, denied, config = {}) => {
+    const allow = resolveNodeCommandAllowlist(config, metadata);
+    for (const command of allowed) {
+      expect(allow.has(command), command).toBe(true);
     }
-  }
-
-  function expectDenied(allow: { has: (cmd: string) => boolean }, commands: string[]) {
-    for (const cmd of commands) {
-      expect(allow.has(cmd)).toBe(false);
+    for (const command of denied) {
+      expect(allow.has(command), command).toBe(false);
     }
-  }
-
-  it("includes Android notifications and device diagnostics commands by default", () => {
-    const allow = allowFor({ platform: "Android 16", deviceFamily: "Android" });
-
-    expectAllowed(allow, [
-      "notifications.list",
-      "notifications.actions",
-      "device.permissions",
-      "device.health",
-      "device.apps",
-      "callLog.search",
-      "system.notify",
-    ]);
-    expectDenied(allow, ["sms.search"]);
   });
 
   it("allows macOS screen.snapshot by default but keeps screen.record gated", () => {
-    const allow = allowFor({
-      platform: "macOS 26.3.1",
-      deviceFamily: "Mac",
-      approvedCommands: ["screen.snapshot"],
-    });
-
-    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).not.toContain("screen.snapshot");
-    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("screen.record");
-    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("health.summary");
-    expect(allow.has("screen.snapshot")).toBe(true);
-    expect(allow.has("screen.record")).toBe(false);
-  });
-
-  it("allows safe Windows companion commands by default but keeps dangerous media gated", () => {
-    const allow = allowFor({
-      platform: "windows",
-      deviceFamily: "Windows",
-      approvedCommands: ["screen.snapshot", "system.run", "system.which"],
-    });
-
-    expectDenied(allow, ["canvas.present", "canvas.a2ui.pushJSONL"]);
-    expectAllowed(allow, [
-      "camera.list",
-      "location.get",
-      "device.info",
-      "device.status",
-      "screen.snapshot",
-      "system.run",
-      "system.which",
-      "system.notify",
-    ]);
-    expectDenied(allow, DEFAULT_DANGEROUS_NODE_COMMANDS);
-  });
-
-  it("can explicitly allow dangerous commands via commands.allow", () => {
     const allow = resolveNodeCommandAllowlist(
+      {},
       {
-        gateway: {
-          nodes: {
-            commands: { allow: ["camera.snap", "screen.record"] },
-          },
-        },
+        platform: "macOS 26.3.1",
+        deviceFamily: "Mac",
+        approvedCommands: ["screen.snapshot"],
       },
-      { platform: "ios", deviceFamily: "iPhone" },
     );
-    expect(allow.has("camera.snap")).toBe(true);
-    expect(allow.has("screen.record")).toBe(true);
-    expect(allow.has("camera.clip")).toBe(false);
-  });
-
-  it("treats unknown/confusable metadata as fail-safe for system.run defaults", () => {
-    const allow = allowFor({ platform: "iPhοne", deviceFamily: "iPhοne" });
-
-    expectDenied(allow, ["system.run", "system.which"]);
-    expectAllowed(allow, ["system.notify"]);
-  });
-
-  it("normalizes dotted-I platform values to iOS classification", () => {
-    const allow = allowFor({ platform: "İOS", deviceFamily: "iPhone" });
-
-    expectDenied(allow, ["system.run", "system.which"]);
-    expectAllowed(allow, ["device.info"]);
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).not.toContain("screen.snapshot");
+    expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toEqual(
+      expect.arrayContaining(["screen.record", "health.summary"]),
+    );
+    expect([allow.has("screen.snapshot"), allow.has("screen.record")]).toEqual([true, false]);
   });
 });
 

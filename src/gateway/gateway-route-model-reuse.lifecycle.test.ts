@@ -5,7 +5,7 @@ import { createServer, type RequestListener, type Server } from "node:http";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { expect, test, vi, type TestContext } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClientRequestOptions } from "./client.js";
@@ -189,23 +189,14 @@ test("cancellation during agent.wait joins the registered route body before tear
           "bounds stable resolution reuse and refreshes generation facts without suppressing dynamic preparation",
         );
         expect(route).toBeTypeOf("function");
-        outcome = route!(routeContext).then(
-          () => {
-            bodySettled = true;
-          },
-          (error: unknown) => {
-            bodySettled = true;
-            return error;
-          },
-        );
-        const endedEarly = outcome.then((error) => {
-          if (error instanceof Error) {
-            throw error;
-          }
-          throw new Error("Route body ended before the controlled gate", { cause: error });
+        const running = route!(routeContext).finally(() => {
+          bodySettled = true;
         });
-        void endedEarly.catch(() => {});
-        await Promise.race([rpcEntered.promise, endedEarly]);
+        outcome = running;
+        void running.catch(() => {});
+        const reached = (gate: Promise<void>) =>
+          awaitGateBeforeSettlement(gate, running, "Route body ended before the controlled gate");
+        await reached(rpcEntered.promise);
 
         const callsBeforeCancellation = request.mock.calls.length;
         cancel.abort(cancellation);
@@ -216,18 +207,18 @@ test("cancellation during agent.wait joins the registered route body before tear
           teardownSettled = true;
         });
         void teardown.catch(() => {});
-        await Promise.race([clientClosing.promise, endedEarly]);
+        await reached(clientClosing.promise);
         await expectHeld();
         expect(cleanupInstance).not.toHaveBeenCalled();
         expect(existsSync(stateDir)).toBe(true);
 
         releaseClient.resolve();
-        await Promise.race([instanceClosing.promise, endedEarly]);
+        await reached(instanceClosing.promise);
         await expectHeld();
         expect(provider?.listening).toBe(true);
         releaseInstance.resolve();
 
-        expect(await outcome).toBe(rpcFailure);
+        await expect(outcome).rejects.toBe(rpcFailure);
         await teardown;
         expect(signal.reason).toBe(cancellation);
         expect(stopAndWait).toHaveBeenCalledOnce();

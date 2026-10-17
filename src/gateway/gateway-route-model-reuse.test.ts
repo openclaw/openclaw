@@ -25,6 +25,8 @@ const PROVIDERS = ["route-proof-stable", "route-proof-dynamic"] as const;
 const PLUGIN_ID = "route-model-proof";
 const capacityModelId = (index: number) => `capacity-${index}`;
 type Counts = Record<string, { resolve: number; prepare: number }>;
+const byProvider = <T>(value: (provider: string) => T, suffix = "") =>
+  Object.fromEntries(PROVIDERS.map((provider) => [`${provider}${suffix}`, value(provider)]));
 
 // This fixture records calls through the public provider and Gateway APIs. Its
 // model output remains deterministic; observation never changes routing policy.
@@ -225,26 +227,16 @@ it(
             entries: { main: {} },
           },
           auth: {
-            profiles: Object.fromEntries(
-              PROVIDERS.map((provider) => [
-                `${provider}:proof`,
-                { provider, mode: "api_key" as const },
-              ]),
-            ),
+            profiles: byProvider((provider) => ({ provider, mode: "api_key" as const }), ":proof"),
           },
           models: {
             mode: "replace",
-            providers: Object.fromEntries(
-              PROVIDERS.map((provider) => [
-                provider,
-                {
-                  baseUrl: `http://127.0.0.1:${address.port}/v1`,
-                  api: "openai-responses" as const,
-                  models: definitions,
-                  request: { allowPrivateNetwork: true },
-                },
-              ]),
-            ),
+            providers: byProvider(() => ({
+              baseUrl: `http://127.0.0.1:${address.port}/v1`,
+              api: "openai-responses" as const,
+              models: definitions,
+              request: { allowPrivateNetwork: true },
+            })),
           },
           plugins: {
             allow: [PLUGIN_ID],
@@ -259,11 +251,9 @@ it(
         await gateway.state.writeAuthProfiles(
           {
             version: 1,
-            profiles: Object.fromEntries(
-              PROVIDERS.map((provider) => [
-                `${provider}:proof`,
-                { type: "api_key" as const, provider, key: "qa-route-model-key" },
-              ]),
+            profiles: byProvider(
+              (provider) => ({ type: "api_key" as const, provider, key: "qa-route-model-key" }),
+              ":proof",
             ),
           },
           "main",
