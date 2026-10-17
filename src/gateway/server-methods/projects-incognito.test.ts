@@ -5,6 +5,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -19,6 +20,18 @@ import {
   resolveRepositoryIdentity,
   withProjectState,
 } from "./projects.test-support.js";
+
+function putSession(
+  state: Parameters<Parameters<typeof withProjectState>[0]>[0],
+  sessionKey: string,
+  fields: Partial<SessionEntry> = {},
+  agentId?: string,
+) {
+  return upsertSessionEntryCore(
+    { env: state.env, sessionKey, agentId },
+    { sessionId: sessionKey, updatedAt: 1, incognito: true, ...fields },
+  );
+}
 
 async function expectCheckoutInUse(
   repo: string,
@@ -63,71 +76,49 @@ afterEach(() => {
   memorySessionActorOwners.reset();
 });
 
-test.each(["existing", "after-check"])(
-  "projects.remove preserves a checkout referenced by an %s memory session in another agent",
-  async (timing) => {
-    await withProjectState(async (state) => {
-      const { repo, project } = await clonedProject(state, "memory-project", "Memory project");
-      const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
-      setRuntimeConfigSnapshot(cfg);
-      const sessionKey = "agent:main:dashboard:incognito-project";
-      const otherKey = "agent:other:dashboard:incognito-reference";
-      await upsertSessionEntryCore(
-        { env: state.env, sessionKey },
-        { sessionId: "project", updatedAt: 1, incognito: true },
-      );
-      const addReference = () =>
-        upsertSessionEntryCore(
-          { agentId: "other", env: state.env, sessionKey: otherKey },
-          { sessionId: "reference", updatedAt: 1, incognito: true, spawnedCwd: repo },
-        );
-      if (timing === "existing") {
-        await addReference();
-      }
-      using _ = observeSecondRemovalCheck(async () => {
-        if (timing === "after-check") {
-          await addReference();
-        }
-      });
-      await expectCheckoutInUse(repo, project.id, cfg, otherKey);
-    });
-  },
-);
-
-test.each(["durable", "memory", "memory-changed-after-check"])(
+test.each(["durable", "memory", "memory-after-check", "other-existing", "other-after-check"])(
   "projects.remove preserves a checkout referenced by a %s session",
   async (mode) => {
     return withProjectState(async (state) => {
       const { repo, project } = await clonedProject(state, "session-project", "Session project");
       const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
       setRuntimeConfigSnapshot(cfg);
+      const otherAgent = mode.startsWith("other-");
+      const afterCheck = mode.endsWith("after-check");
       const sessionKey =
         mode === "durable"
           ? "agent:main:project-session"
           : "agent:main:dashboard:incognito-project-session";
-      await upsertSessionEntryCore(
-        { agentId: "main", env: state.env, sessionKey },
+      const referenceKey = otherAgent
+        ? "agent:other:dashboard:incognito-reference"
+        : afterCheck
+          ? `${sessionKey}-new`
+          : sessionKey;
+      await putSession(
+        state,
+        sessionKey,
         {
-          sessionId: "project-session",
-          updatedAt: 1,
-          ...(mode !== "memory-changed-after-check" && { spawnedCwd: repo }),
-          ...(mode !== "durable" && { incognito: true as const }),
+          ...(!otherAgent && !afterCheck && { spawnedCwd: repo }),
+          incognito: mode === "durable" ? undefined : true,
         },
+        "main",
       );
+      const addReference = () =>
+        putSession(
+          state,
+          referenceKey,
+          { spawnedCwd: repo, updatedAt: 2 },
+          otherAgent ? "other" : "main",
+        );
+      if (otherAgent && !afterCheck) {
+        await addReference();
+      }
       using _ = observeSecondRemovalCheck(async () => {
-        if (mode === "memory-changed-after-check") {
-          await upsertSessionEntryCore(
-            { agentId: "main", env: state.env, sessionKey: `${sessionKey}-new` },
-            { sessionId: "project-new", updatedAt: 2, incognito: true, spawnedCwd: repo },
-          );
+        if (afterCheck) {
+          await addReference();
         }
       });
-      await expectCheckoutInUse(
-        repo,
-        project.id,
-        cfg,
-        mode === "memory-changed-after-check" ? `${sessionKey}-new` : sessionKey,
-      );
+      await expectCheckoutInUse(repo, project.id, cfg, referenceKey);
     });
   },
 );
@@ -142,23 +133,14 @@ test.each(["unchanged", "unrelated visibility", "contributing visibility"])(
       const folder = path.join(state.workspaceDir, "private-project");
       await fs.mkdir(folder, { recursive: true });
       const sessionKey = "agent:main:dashboard:incognito-project-recent";
-      await upsertSessionEntryCore(
-        { env: state.env, sessionKey },
-        {
-          sessionId: "project-recent",
-          updatedAt: 1,
-          incognito: true,
-          spawnedCwd: folder,
-          execCwd: folder,
-          createdActor: { type: "human", source: "profile", id: profile.id },
-        },
-      );
+      await putSession(state, sessionKey, {
+        spawnedCwd: folder,
+        execCwd: folder,
+        createdActor: { type: "human", source: "profile", id: profile.id },
+      });
       const unrelatedKey = `${sessionKey}-unrelated`;
       if (change === "unrelated visibility") {
-        await upsertSessionEntryCore(
-          { env: state.env, sessionKey: unrelatedKey },
-          { sessionId: "unrelated", updatedAt: 1, incognito: true },
-        );
+        await putSession(state, unrelatedKey);
       }
       listRegistryRecords.mockImplementationOnce(async () => {
         if (change !== "unchanged") {
