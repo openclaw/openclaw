@@ -21,6 +21,8 @@ import {
   writeSubagentSessionEntry,
   settleSubagentRegistryPersistenceWork,
 } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-handoff.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
 import {
@@ -164,11 +166,12 @@ describe("private subagent completion processing receipts", () => {
     } satisfies EmbeddedAgentRunResult;
   }
 
-  it("keeps private completion streams out of a subscribed conversation before its next public turn", async () => {
+  it("keeps private completion streams and retained followups private before the next public turn", async () => {
     const { ws } = await harness.openClient({ scopes: ["operator.admin"] });
     onTestFinished(() => ws.close());
     expect((await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey })).ok).toBe(true);
     const frames: unknown[] = [];
+    const followupDelivery: Array<boolean | undefined> = [];
     ws.on("message", (frame) => frames.push(JSON.parse(frame.toString())));
     const privateText = "Internal review note after the permitted message-tool update";
     const publicText = "The next ordinary answer is visible";
@@ -178,6 +181,22 @@ describe("private subagent completion processing receipts", () => {
       await command.onExecutionStarted?.();
       const text = command.privateCompletion ? privateText : publicText;
       const currentRunId = expectDefined(command.runId, "Expected admitted run id");
+      const operationalRunInstance = expectDefined(
+        command.operationalRunInstance,
+        "Expected admitted operational instance",
+      );
+      const followupTarget = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey,
+          operationalRunInstance,
+          receiptAuthority: () =>
+            kernel.gatewayRequestContext.chatAbortControllers.get(currentRunId)
+              ?.operationalRunInstance === operationalRunInstance && !command.abortSignal?.aborted,
+        },
+        () => captureSessionEventTargetForHost("main", sessionKey),
+      );
+      followupDelivery.push(followupTarget.deliver);
       emitAgentEvent({ runId: currentRunId, stream: "lifecycle", data: { phase: "start" } });
       emitAgentEvent({
         runId: currentRunId,
@@ -215,6 +234,7 @@ describe("private subagent completion processing receipts", () => {
     ).toMatchObject({ status: "ok" });
     await visible;
     expect(JSON.stringify(frames)).not.toContain(privateText);
+    expect(followupDelivery).toEqual([false, undefined]);
   });
 
   it("binds a settle handoff to the source accepted by pending-input replay", async () => {

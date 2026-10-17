@@ -234,6 +234,8 @@ export async function prepareAgentRunDispatch(
         ...(params.suppressVisibleSessionEffects ? {} : { sessionKey: params.resolvedSessionKey }),
         agentId: activeRunAbort.entry.agentId,
         isControlUiVisible: controlUiVisible,
+        // Retained watchdog and tool completions must not add delivery to private intake.
+        ...(params.privateCompletion ? { sessionEventDelivery: false } : {}),
         ...(privateConversationWork
           ? { projectSessionMessages: false, projectSessionActive: false }
           : {}),
