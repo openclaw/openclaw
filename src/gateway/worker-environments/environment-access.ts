@@ -40,6 +40,7 @@ export type WorkerEnvironmentNodeTunnel = Pick<
 
 /** Lease teardown joins every transport sharing that environment owner. */
 export function createWorkerEnvironmentTransportLifecycle(options: {
+  store: Pick<WorkerEnvironmentStore, "get">;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: Pick<NodeWorkerTunnelManager, "stop">;
   nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
@@ -71,9 +72,11 @@ export function createWorkerEnvironmentTransportLifecycle(options: {
         "Worker computer cleanup",
       );
     } catch (error) {
-      // Only dedicated machines receive provider teardown reasons. Shared hosts
-      // still require cleanup acknowledgement before their worker can be retired.
-      if (reason === undefined) {
+      const record = options.store.get(environmentId);
+      const providerOwnsMachine = record?.sharedHost === false && record.nodeDeviceId !== null;
+      // A teardown reason does not establish host isolation. Shared or unknown
+      // hosts still need cleanup acknowledgement before their worker can retire.
+      if (reason === undefined || !providerOwnsMachine) {
         throw error;
       }
       options.logger?.warn(

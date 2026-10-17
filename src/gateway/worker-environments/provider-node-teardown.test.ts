@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createWorkerEnvironmentTransportLifecycle } from "./environment-access.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import * as nodeTunnelSupport from "./node-worker-tunnel.test-support.js";
 import * as support from "./service.test-support.js";
@@ -54,6 +55,47 @@ async function disconnectedNodeOwner(environmentId: string, sharedHost: boolean 
 
 describe("worker provider node teardown", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it.each([true, null])(
+    "rejects stalled computer cleanup for host isolation %s despite a provider stop reason",
+    async (sharedHost) => {
+      const environmentId = "shared-wedged-desktop";
+      await support.seedReadyNodeDesktop(environmentId);
+      const record = await support.testState.store.transition({
+        environmentId,
+        from: "ready",
+        to: "attached",
+        patch: { ...support.attachedPatch(environmentId, "session-1"), sharedHost },
+      });
+      const driverFinished = createDeferred();
+      const warn = vi.fn();
+      const transports = createWorkerEnvironmentTransportLifecycle({
+        store: support.testState.store,
+        nodeTunnelManager: { stop: async () => {} },
+        closeEnvironmentComputers: () => driverFinished.promise,
+        logger: { warn },
+      });
+      if (!transports) {
+        throw new Error("Expected worker transport lifecycle");
+      }
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const stopped = transports
+        .stop(environmentId, record.ownerEpoch, "provider-destroying")
+        .catch((error: unknown) => error);
+      try {
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(await stopped).toMatchObject({
+          message: "Worker computer cleanup timed out after 60000ms",
+        });
+        expect(warn).not.toHaveBeenCalled();
+      } finally {
+        driverFinished.resolve();
+        vi.useRealTimers();
+        await stopped;
+      }
+    },
+  );
+
   it.each(["stop", "force"] as const)(
     "continues %s after a computer driver never settles",
     async (entrance) => {
