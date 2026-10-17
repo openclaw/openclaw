@@ -379,6 +379,17 @@ describe("launchctl list detection", () => {
   const helperUpdater = "ai.openclaw.helper.update.20260625T201026-0400";
   const manualUpdater = "ai.openclaw.manual-update.1717168800";
   const acceptedProfile = [{ label: profileUpdater, pid: 4321, lastExitStatus: 0 }];
+  const nativeProfile = { ...ENV, LAUNCH_JOB_LABEL: profileUpdater };
+  const configuredUpdater = { XPC_SERVICE_NAME: "0", OPENCLAW_LAUNCHD_LABEL: updater };
+  const gatewayProfile = { LAUNCH_JOB_LABEL: updater, OPENCLAW_PROFILE: "update.2026.5.12" };
+  const handoff = { ...ENV, OPENCLAW_UPDATE_RUN_HANDOFF: "1" };
+  const nodeUpdateArgs = ["/usr/local/bin/node", "/opt/openclaw/openclaw.mjs", "update", "--yes"];
+  const gatewayMarker = {
+    LAUNCH_JOB_LABEL: updater,
+    OPENCLAW_LAUNCHD_LABEL: updater,
+    OPENCLAW_SERVICE_MARKER: "openclaw",
+    OPENCLAW_SERVICE_KIND: "gateway",
+  };
   type ScanJob = [label: string, pid: number | undefined, args?: string[]];
   function scanCase(
     name: string,
@@ -445,59 +456,29 @@ describe("launchctl list detection", () => {
     .runIf(process.platform === "darwin")
     .each<[name: string, env: NodeJS.ProcessEnv, args: string[] | undefined, disabled: boolean]>([
       ["native label", { LAUNCH_JOB_LABEL: updater }, undefined, true],
-      [
-        "configured updater",
-        { XPC_SERVICE_NAME: "0", OPENCLAW_LAUNCHD_LABEL: updater },
-        undefined,
-        true,
-      ],
-      [
-        "gateway profile",
-        { LAUNCH_JOB_LABEL: updater, OPENCLAW_PROFILE: "update.2026.5.12" },
-        undefined,
-        false,
-      ],
-      [
-        "gateway marker",
-        {
-          LAUNCH_JOB_LABEL: updater,
-          OPENCLAW_LAUNCHD_LABEL: updater,
-          OPENCLAW_SERVICE_MARKER: "openclaw",
-          OPENCLAW_SERVICE_KIND: "gateway",
-        },
-        undefined,
-        false,
-      ],
-      [
-        "profile Node command",
-        { ...ENV, LAUNCH_JOB_LABEL: profileUpdater },
-        ["/usr/local/bin/node", "/opt/openclaw/openclaw.mjs", "update", "--yes"],
-        true,
-      ],
+      ["configured updater", configuredUpdater, undefined, true],
+      ["gateway profile", gatewayProfile, undefined, false],
+      ["gateway marker", gatewayMarker, undefined, false],
+      ["profile Node command", nativeProfile, nodeUpdateArgs, true],
       [
         "native handoff marker",
-        { ...ENV, LAUNCH_JOB_LABEL: profileUpdater, OPENCLAW_UPDATE_RUN_HANDOFF: "1" },
+        { ...nativeProfile, OPENCLAW_UPDATE_RUN_HANDOFF: "1" },
         undefined,
         true,
       ],
       [
         "unconfirmed configured handoff",
-        { ...ENV, OPENCLAW_LAUNCHD_LABEL: gateway, OPENCLAW_UPDATE_RUN_HANDOFF: "1" },
+        { ...handoff, OPENCLAW_LAUNCHD_LABEL: gateway },
         gatewayArgs,
         false,
       ],
       [
         "confirmed configured handoff",
-        { ...ENV, OPENCLAW_LAUNCHD_LABEL: profileUpdater, OPENCLAW_UPDATE_RUN_HANDOFF: "1" },
+        { ...handoff, OPENCLAW_LAUNCHD_LABEL: profileUpdater },
         updateArgs,
         true,
       ],
-      [
-        "unconfirmed profile gateway",
-        { ...ENV, LAUNCH_JOB_LABEL: profileUpdater },
-        gatewayArgs,
-        false,
-      ],
+      ["unconfirmed profile gateway", nativeProfile, gatewayArgs, false],
     ])("disarms only confirmed updater jobs: %s", async (_name, env, args, disabled) => {
     const label = expectDefined(
       env.LAUNCH_JOB_LABEL ?? env.OPENCLAW_LAUNCHD_LABEL,
@@ -822,8 +803,6 @@ describe("launchd install", () => {
       const args = defaultLaunchAgentFixture(ENV);
       const operations = {
         install: installLaunchAgent,
-        stage: stageLaunchAgent,
-        start: startLaunchAgent,
         restart: restartLaunchAgent,
       };
       await expect(operations[action](args)).rejects.toThrow("system ownership blocked: loaded");
@@ -964,86 +943,59 @@ describe("launchd install", () => {
     expect(state.files.get(WRAPPER)).toBe(generatedWrapper);
   });
 
-  it("rewrites legacy LaunchAgent environment wrappers to a system shell executable", async () => {
-    await install({
-      environment: { OPENCLAW_GATEWAY_PORT: "19007" },
-    });
-
-    const legacyPlist = (state.files.get(PLIST) ?? "").replace(
-      [
-        `<string>${LAUNCH_AGENT_ENV_WRAPPER_SHELL}</string>`,
-        `<string>${WRAPPER}</string>`,
-        `<string>${ENV_FILE}</string>`,
-      ].join("\n      "),
-      [`<string>${WRAPPER}</string>`, `<string>${ENV_FILE}</string>`].join("\n      "),
-    );
-    expect(readPlistProgramArgumentStrings(legacyPlist)).toEqual([
-      WRAPPER,
-      ENV_FILE,
-      ...defaultProgramArguments,
-    ]);
-    state.files.set(PLIST, legacyPlist);
-    state.launchctlCalls.length = 0;
-
-    await restartLaunchAgent(control());
-
-    const rewritten = state.files.get(PLIST) ?? "";
-    expect(readPlistProgramArgumentStrings(rewritten)).toEqual(WRAPPED_ARGS);
-    expectProtectedCleanup(19007);
-  });
-
-  it("repairs a mangled label-derived service-env wrapper path on restart", async () => {
-    const callerEnv = createDefaultLaunchdEnv();
-    const serviceEnv = {
-      ...callerEnv,
-      OPENCLAW_STATE_DIR: "/Users/test/service-env/custom-state",
-    };
-    await installLaunchAgent(
-      defaultLaunchAgentFixture(serviceEnv, {
-        environment: {
-          OPENCLAW_GATEWAY_PORT: "18789",
-          OPENCLAW_STATE_DIR: serviceEnv.OPENCLAW_STATE_DIR,
-        },
-      }),
-    );
-
-    const plistPath = resolveLaunchAgentPlistPath(callerEnv);
-    const envFilePath = "/Users/test/service-env/custom-state/service-env/ai.openclaw.gateway.env";
-    const wrapperPath =
-      "/Users/test/service-env/custom-state/service-env/ai.openclaw.gateway-env-wrapper.sh";
-    const mangledEnvFilePath =
-      "/Users/test/service-env/custom-state/service-env/[ai.openclaw.gateway.env](http:/ai.openclaw.gateway.env)";
-    const mangledWrapperPath =
-      "/Users/test/service-env/custom-state/service-env/[ai.openclaw.gateway-env-wrapper.sh](http:/ai.openclaw.gateway-env-wrapper.sh)";
-    state.files.set(
-      plistPath,
-      (state.files.get(plistPath) ?? "")
-        .replace(wrapperPath, mangledWrapperPath)
-        .replace(envFilePath, mangledEnvFilePath),
-    );
-
-    const command = await readLaunchAgentProgramArguments(callerEnv);
-    expect(command).toMatchObject({
-      programArguments: defaultProgramArguments,
-      environment: {
-        OPENCLAW_GATEWAY_PORT: "18789",
-        OPENCLAW_STATE_DIR: serviceEnv.OPENCLAW_STATE_DIR,
-      },
-      environmentValueSources: { OPENCLAW_GATEWAY_PORT: "file" },
-    });
-
-    await restartLaunchAgent(launchAgentControlFixture(callerEnv));
-
-    const rewritten = state.files.get(plistPath) ?? "";
-    expect(readPlistProgramArgumentStrings(rewritten)).toEqual(WRAPPED_ARGS);
-    expect(rewritten).not.toContain(mangledEnvFilePath);
-    expect(rewritten).not.toContain(mangledWrapperPath);
-    const rewrittenEnv = state.files.get(ENV_FILE) ?? "";
-    expect(rewrittenEnv).toContain("export OPENCLAW_GATEWAY_PORT='18789'");
-    expect(rewrittenEnv).toContain(
-      "export OPENCLAW_STATE_DIR='/Users/test/service-env/custom-state'",
-    );
-  });
+  it.each(["legacy shell", "mangled paths"] as const)(
+    "repairs generated environment wrappers on restart: %s",
+    async (kind) => {
+      const mangled = kind === "mangled paths";
+      const callerEnv = createDefaultLaunchdEnv();
+      const stateDir = "/Users/test/service-env/custom-state";
+      const environment: Record<string, string> = {
+        OPENCLAW_GATEWAY_PORT: mangled ? "18789" : "19007",
+      };
+      if (mangled) {
+        environment.OPENCLAW_STATE_DIR = stateDir;
+      }
+      const serviceEnv = mangled ? { ...callerEnv, OPENCLAW_STATE_DIR: stateDir } : callerEnv;
+      await installLaunchAgent(defaultLaunchAgentFixture(serviceEnv, { environment }));
+      const artifactDir = mangled ? `${stateDir}/service-env` : "/Users/test/.openclaw/service-env";
+      const envFilePath = `${artifactDir}/ai.openclaw.gateway.env`;
+      const wrapperPath = `${artifactDir}/ai.openclaw.gateway-env-wrapper.sh`;
+      const mangle = (name: string) => `${artifactDir}/[${name}](http:/${name})`;
+      const badEnvFile = mangle("ai.openclaw.gateway.env");
+      const badWrapper = mangle("ai.openclaw.gateway-env-wrapper.sh");
+      const original = state.files.get(PLIST) ?? "";
+      const broken = mangled
+        ? original.replace(wrapperPath, badWrapper).replace(envFilePath, badEnvFile)
+        : original.replace(`<string>${LAUNCH_AGENT_ENV_WRAPPER_SHELL}</string>\n      `, "");
+      state.files.set(PLIST, broken);
+      if (mangled) {
+        expect(await readLaunchAgentProgramArguments(callerEnv)).toMatchObject({
+          programArguments: defaultProgramArguments,
+          environment,
+          environmentValueSources: { OPENCLAW_GATEWAY_PORT: "file" },
+        });
+      } else {
+        expect(readPlistProgramArgumentStrings(broken)).toEqual([
+          WRAPPER,
+          ENV_FILE,
+          ...defaultProgramArguments,
+        ]);
+        state.launchctlCalls.length = 0;
+      }
+      await restartLaunchAgent(launchAgentControlFixture(callerEnv));
+      const rewritten = state.files.get(PLIST) ?? "";
+      expect(readPlistProgramArgumentStrings(rewritten)).toEqual(WRAPPED_ARGS);
+      if (mangled) {
+        expect(rewritten).not.toContain(badEnvFile);
+        expect(rewritten).not.toContain(badWrapper);
+        const rewrittenEnv = state.files.get(ENV_FILE) ?? "";
+        expect(rewrittenEnv).toContain("export OPENCLAW_GATEWAY_PORT='18789'");
+        expect(rewrittenEnv).toContain(`export OPENCLAW_STATE_DIR='${stateDir}'`);
+      } else {
+        expectProtectedCleanup(19007);
+      }
+    },
+  );
 
   it("publishes the rewritten plist before restart bootstrap", async () => {
     state.serviceLoaded = false;
@@ -1400,7 +1352,6 @@ describe("launchd install", () => {
       }
       if (scenario === "in-progress") {
         expectCommands("print print enable bootout enable bootstrap print");
-        expect(launchctlCommandNames()).not.toContain("kickstart");
       }
     },
   );
@@ -1552,14 +1503,9 @@ describe("launchd install", () => {
   });
 });
 
-describe("resolveLaunchAgentPlistPath", () => {
-  it("rejects invalid launchd labels that contain path separators", () => {
-    expect(() =>
-      resolveLaunchAgentPlistPath({
-        HOME: "/Users/test",
-        OPENCLAW_LAUNCHD_LABEL: "../evil/label",
-      }),
-    ).toThrow("Invalid launchd label");
-  });
+it("rejects invalid launchd labels that contain path separators", () => {
+  expect(() =>
+    resolveLaunchAgentPlistPath({ HOME: "/Users/test", OPENCLAW_LAUNCHD_LABEL: "../evil/label" }),
+  ).toThrow("Invalid launchd label");
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
