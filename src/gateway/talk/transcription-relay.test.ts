@@ -68,8 +68,10 @@ function createBroadcastContext() {
   return { context, events, logGateway };
 }
 
-async function createStartedRelaySession(
+function createRelay(
+  context: Parameters<typeof createTalkTranscriptionRelaySession>[0]["context"],
   sttSession: ReturnType<typeof createSttSessionMock>,
+  connId = "conn-1",
   providerConfig: Record<string, unknown> = {},
   onRequest?: (req: RealtimeTranscriptionSessionCreateRequest) => void,
 ) {
@@ -78,18 +80,27 @@ async function createStartedRelaySession(
     request = value;
     onRequest?.(value);
   });
-  const { context, events, logGateway } = createBroadcastContext();
   const session = createTalkTranscriptionRelaySession({
     context,
-    connId: "conn-1",
+    connId,
     provider,
     providerConfig,
   });
-  await Promise.resolve();
   if (!request) {
     throw new Error("Missing transcription request");
   }
-  return { provider, events, logGateway, session, request };
+  return { provider, session, request };
+}
+
+async function createStartedRelaySession(
+  sttSession: ReturnType<typeof createSttSessionMock>,
+  providerConfig: Record<string, unknown> = {},
+  onRequest?: (req: RealtimeTranscriptionSessionCreateRequest) => void,
+) {
+  const broadcast = createBroadcastContext();
+  const relay = createRelay(broadcast.context, sttSession, "conn-1", providerConfig, onRequest);
+  await Promise.resolve();
+  return { ...broadcast, ...relay };
 }
 
 type RelaySession = ReturnType<typeof createTalkTranscriptionRelaySession>;
@@ -251,7 +262,7 @@ describe("talk transcription gateway relay", () => {
     }
   });
 
-  it.each(["synchronous", "asynchronous"] as const)(
+  it.each(["synchronous", "asynchronous", "prior-final"] as const)(
     "delivers a %s provider final before gracefully closing an active transcription turn",
     async (delivery) => {
       vi.useFakeTimers();
@@ -259,7 +270,9 @@ describe("talk transcription gateway relay", () => {
       sttSession.close.mockImplementation(() => {
         const deliverFirst = () => request?.onTranscript?.("first provider transcript");
         const deliverSecond = () => request?.onTranscript?.("second provider transcript");
-        if (delivery === "synchronous") {
+        if (delivery === "prior-final") {
+          deliverSecond();
+        } else if (delivery === "synchronous") {
           deliverFirst();
           deliverSecond();
         } else {
@@ -270,6 +283,9 @@ describe("talk transcription gateway relay", () => {
       const { events, session, request } = await createStartedRelaySession(sttSession);
 
       sendAudio(session);
+      if (delivery === "prior-final") {
+        request.onTranscript?.("first provider transcript");
+      }
       await stop(session);
       expect(hasType(events, "close")).toBe(false);
       expect(() => sendAudio(session)).toThrow("Unknown transcription Talk session");
@@ -295,13 +311,14 @@ describe("talk transcription gateway relay", () => {
           ),
         );
       expect(terminalEvents).toEqual([
-        "input.audio.committed",
+        ...(delivery === "prior-final" ? [] : ["input.audio.committed"]),
         "transcript.done",
         "turn.ended",
         "transcript.done",
         "turn.ended",
         "session.closed",
       ]);
+      expect(findPayloadByType(events, "close").reason).toBe("completed");
       expect(sttSession.close).toHaveBeenCalledOnce();
 
       const eventCount = events.length;
@@ -309,29 +326,6 @@ describe("talk transcription gateway relay", () => {
       expect(events).toHaveLength(eventCount);
     },
   );
-
-  it("drains later provider finals after an earlier transcript already ended its turn", async () => {
-    vi.useFakeTimers();
-    const sttSession = createSttSessionMock();
-    sttSession.close.mockImplementationOnce(() => {
-      request?.onTranscript?.("second provider transcript");
-    });
-    const { events, session, request } = await createStartedRelaySession(sttSession);
-
-    sendAudio(session);
-    request?.onTranscript?.("first provider transcript");
-    await stop(session);
-
-    const transcripts = relayPayloads(events).filter(
-      (payload) => isRecord(payload.talkEvent) && payload.talkEvent.type === "transcript.done",
-    );
-    expect(transcripts.map((payload) => payload.text)).toEqual([
-      "first provider transcript",
-      "second provider transcript",
-    ]);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(findPayloadByType(events, "close").reason).toBe("completed");
-  });
 
   it("closes a provider immediately when its transcription session never received audio", async () => {
     const sttSession = createSttSessionMock();
@@ -432,9 +426,9 @@ describe("talk transcription gateway relay", () => {
 
   it("closes a draining provider immediately when its browser owner disconnects", async () => {
     const sttSession = createSttSessionMock();
-    sttSession.close.mockImplementationOnce(() => {
-      queueMicrotask(() => request?.onTranscript?.("disconnected provider transcript"));
-    });
+    sttSession.close.mockImplementationOnce(() =>
+      queueMicrotask(() => request.onTranscript?.("disconnected provider transcript")),
+    );
     const { events, logGateway, session, request } = await createStartedRelaySession(sttSession);
 
     sendAudio(session);
@@ -516,24 +510,17 @@ describe("talk transcription gateway relay", () => {
     ]);
     const { broadcastToConnIds } = createGatewayBroadcaster({ clients });
     const context = { broadcastToConnIds, getRuntimeConfig: () => ({}) } as never;
-    const requests = new Map<string, RealtimeTranscriptionSessionCreateRequest>();
-    const createSession = (connId: string) =>
-      createTalkTranscriptionRelaySession({
-        context,
-        connId,
-        provider: createTranscriptionProvider(createSttSessionMock(), (request) => {
-          requests.set(connId, request);
-        }),
-        providerConfig: {},
-      });
-    const slowSession = createSession("conn-slow");
-    const healthySession = createSession("conn-healthy");
+    const { session: slowSession, request: slowRequest } = createRelay(
+      context,
+      createSttSessionMock(),
+      "conn-slow",
+    );
+    const { session: healthySession, request: healthyRequest } = createRelay(
+      context,
+      createSttSessionMock(),
+      "conn-healthy",
+    );
     await Promise.resolve();
-    const slowRequest = requests.get("conn-slow");
-    const healthyRequest = requests.get("conn-healthy");
-    if (!slowRequest || !healthyRequest) {
-      throw new Error("expected transcription providers for both browser connections");
-    }
 
     try {
       slowRequest.onSpeechStart?.();
@@ -592,18 +579,10 @@ describe("talk transcription gateway relay", () => {
       throw new Error("late connect failure");
     });
     const unrelated = createSttSessionMock();
-    const requests: RealtimeTranscriptionSessionCreateRequest[] = [];
     const { context, events, logGateway } = createBroadcastContext();
-    const createSession = (connId: string, sttSession: ReturnType<typeof createSttSessionMock>) =>
-      createTalkTranscriptionRelaySession({
-        context,
-        connId,
-        provider: createTranscriptionProvider(sttSession, (request) => requests.push(request)),
-        providerConfig: {},
-      });
-    const firstSession = createSession("conn-owner", firstOwned);
-    const secondSession = createSession("conn-owner", secondOwned);
-    const unrelatedSession = createSession("conn-other", unrelated);
+    const { session: firstSession, request } = createRelay(context, firstOwned, "conn-owner");
+    const { session: secondSession } = createRelay(context, secondOwned, "conn-owner");
+    const { session: unrelatedSession } = createRelay(context, unrelated, "conn-other");
     for (const session of [firstSession, secondSession]) {
       rememberUnifiedTalkSession(session.transcriptionSessionId, {
         kind: "transcription-relay",
@@ -659,10 +638,10 @@ describe("talk transcription gateway relay", () => {
       ),
     ).toBe(false);
     const eventCountAfterClose = events.length;
-    requests[0]?.onSpeechStart?.();
-    requests[0]?.onPartial?.("late partial");
-    requests[0]?.onTranscript?.("late transcript");
-    requests[0]?.onError?.(new Error("late provider error"));
+    request.onSpeechStart?.();
+    request.onPartial?.("late partial");
+    request.onTranscript?.("late transcript");
+    request.onError?.(new Error("late provider error"));
     await Promise.resolve();
     expect(events).toHaveLength(eventCountAfterClose);
 
