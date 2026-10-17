@@ -18,6 +18,7 @@ import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 import { resolvePluginTools } from "./tools.js";
+import { readToolTestEvents } from "./tools.test-support.js";
 
 const tempDirs = createTempDirTracker();
 const pluginId = "approval-effect-probe";
@@ -164,14 +165,7 @@ async function exerciseProbe(params: {
   const broker = new EmbeddedPluginApprovalBroker();
   setEmbeddedMode(true);
   setEmbeddedPluginApprovalBroker(broker);
-  const readTrace = (): Array<{ stage: string; value: string }> =>
-    fs.existsSync(trace)
-      ? fs
-          .readFileSync(trace, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line))
-      : [];
+  const readTrace = () => readToolTestEvents<{ stage: string; value: string }>(trace);
   let settled = false;
   const expectPending = (stages: string[]) => {
     expect({ settled, written: fs.existsSync(output), trace: readTrace() }).toEqual({

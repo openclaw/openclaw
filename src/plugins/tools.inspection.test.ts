@@ -19,6 +19,7 @@ import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.
 import { withPluginRuntimeGenerationRegistryScope } from "./runtime/generation-state.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import { acquirePluginToolInspectionRegistry } from "./tools.js";
+import { readToolTestEvents } from "./tools.test-support.js";
 import { resolveRuntimeWebSearchProviders } from "./web-search-providers.runtime.js";
 
 afterEach(() => {
@@ -93,14 +94,9 @@ type ToolEvent = {
 };
 
 function readEvents(file: string, kind?: string): ToolEvent[] {
-  return fs.existsSync(file)
-    ? fs
-        .readFileSync(file, "utf8")
-        .trim()
-        .split("\n")
-        .map((line): ToolEvent => JSON.parse(line))
-        .filter((event) => kind === undefined || event.kind === kind)
-    : [];
+  return readToolTestEvents<ToolEvent>(file).filter(
+    (event) => kind === undefined || event.kind === kind,
+  );
 }
 
 async function withInspectionState(run: (state: OpenClawTestState) => Promise<void>) {
@@ -112,6 +108,10 @@ async function withInspectionState(run: (state: OpenClawTestState) => Promise<vo
       await cache[Symbol.asyncDispose]();
     }
   });
+}
+
+function pluginConfig(paths: string[], allow: string[]): OpenClawConfig["plugins"] {
+  return { allow, load: { paths }, slots: { memory: "none" } };
 }
 
 it.each(
@@ -133,15 +133,23 @@ it.each(
       });
       const config: OpenClawConfig = {
         agents: { entries: { main: { workspace: state.workspaceDir } } },
-        plugins: {
-          allow: ["project"],
-          load: { paths: [pluginPath] },
-          slots: { memory: "none" },
-        },
+        plugins: pluginConfig([pluginPath], ["project"]),
       };
       const ready = createDeferred();
       const waiting = createDeferred();
       let complete = false;
+      const releaseWorkspace = async (
+        pending: PromiseLike<unknown>,
+        phase: "factory" | "execute",
+      ) => {
+        await Promise.race([waiting.promise, pending]);
+        expect(readEvents(events, phase)).toEqual([]);
+        if (phase === "factory") {
+          fs.writeFileSync(path.join(state.workspaceDir, "input.txt"), "late workspace content");
+        }
+        complete = true;
+        ready.resolve();
+      };
       const sessionKey = "agent:main:readiness";
       const scope = {
         context: { config, agentId: "main", workspaceDir: state.workspaceDir },
@@ -194,24 +202,14 @@ it.each(
                   }),
             );
             if (factoryReadsWorkspace) {
-              await Promise.race([waiting.promise, pending]);
-              expect(readEvents(events, "factory")).toEqual([]);
-              fs.writeFileSync(
-                path.join(state.workspaceDir, "input.txt"),
-                "late workspace content",
-              );
-              complete = true;
-              ready.resolve();
+              await releaseWorkspace(pending, "factory");
             }
             const tool = (await pending).find((candidate) => candidate.name === "project_tool");
             assert(tool, "registered project tool remains available");
             const [bound] = host!.hostCapabilities.bindToolSurface([tool]);
             const result = bound!.execute("read", {});
             if (workspaceAccess === "execute") {
-              await Promise.race([waiting.promise, result]);
-              expect(readEvents(events, "execute")).toEqual([]);
-              complete = true;
-              ready.resolve();
+              await releaseWorkspace(result, "execute");
             }
             if (workspaceAccess === false) {
               await Promise.race([waiting.promise, result]);
@@ -258,7 +256,7 @@ it("registers the selected fleet once, preserves agent factories, and settles fa
           beta: { workspace: state.path("beta") },
         },
       },
-      plugins: { allow: ids, load: { paths }, slots: { memory: "none" } },
+      plugins: pluginConfig(paths, ids),
     };
     const scopes = ["alpha", "beta"].map((agentId) => ({
       context: {
@@ -367,11 +365,10 @@ it("refuses a selected workspace source outside the prepared inspection inventor
   await withInspectionState(async (state) => {
     const events = state.path("tool-events.jsonl");
     const configFor = (label: string): OpenClawConfig => ({
-      plugins: {
-        allow: ["shared"],
-        slots: { memory: "none" },
-        load: { paths: [writeToolPlugin({ root: state.path(label), id: "shared", events })] },
-      },
+      plugins: pluginConfig(
+        [writeToolPlugin({ root: state.path(label), id: "shared", events })],
+        ["shared"],
+      ),
     });
     const config = configFor("original");
     const other = configFor("replacement");

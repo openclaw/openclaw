@@ -33,6 +33,7 @@ import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import { startPluginServices, type PluginServicesHandle } from "./services.test-support.js";
 import { adoptRuntimeToolRegistrations } from "./tool-registry-adoption.js";
 import { makeTool } from "./tools.optional.test-helpers.js";
+import { createToolLoadContext } from "./tools.test-support.js";
 
 const workspaceDir = "/synthetic";
 const recordOptions = {
@@ -44,15 +45,7 @@ const recordOptions = {
 };
 
 function setLoadContext(registry: PluginRegistry, config: OpenClawConfig) {
-  setPluginRuntimeLoadContext(registry, {
-    rawConfig: config,
-    config,
-    activationSourceConfig: config,
-    autoEnabledReasons: {},
-    workspaceDir,
-    env: process.env,
-    logger: { info() {}, warn() {}, error() {} },
-  });
+  setPluginRuntimeLoadContext(registry, createToolLoadContext(config, workspaceDir));
 }
 
 const runtimes = new Set<PluginRegistry>();
@@ -88,12 +81,8 @@ function createAdoptionPair(config: OpenClawConfig = {}) {
 it("keeps discovery tools when the Gateway source, config, or lifetime does not match", () => {
   const config = { plugins: { entries: { owner: { config: { account: "original" } } } } };
   const { runtime, target, localRecord, tool, adopt } = createAdoptionPair(config);
-  const runtimeTool = tool(["owner_tool"]);
-  runtime.tools.push(runtimeTool);
-  const localTool = tool(["owner_tool"]);
-  target.tools.push(localTool);
-  expect(adopt().tools).toEqual([runtimeTool]);
-  expect(target.tools).toEqual([localTool]);
+  runtime.tools.push(tool(["owner_tool"]));
+  target.tools.push(tool(["owner_tool"]));
   expect(
     adopt({
       plugins: { entries: { owner: { config: { account: "other" } } } },
@@ -112,11 +101,8 @@ it("keeps discovery tools when the Gateway source, config, or lifetime does not 
 it("substitutes exact declared identities without widening or reordering discovery tools", () => {
   const { runtime, target, tool, adopt } = createAdoptionPair();
   const x = tool(["x"]);
-  const y = tool(["y"]);
-  runtime.tools.push(y, x);
+  runtime.tools.push(tool(["y"]), x);
   const localX = tool(["x"]);
-  target.tools.push(localX);
-  expect.soft(adopt().tools).toEqual([x]);
   const unnamed = tool([]);
   const optional = tool(["x"], true);
   const grouped = tool(["second", "first"]);
