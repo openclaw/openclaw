@@ -6,6 +6,7 @@ import { asSafeIntegerInRange } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   OpenKeyedStoreOptions,
+  PluginStateActionAuthority,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -209,11 +210,13 @@ export async function writeMatrixIdbSnapshotJson(params: {
   snapshotJson: string;
   databaseCount: number;
   stateRuntime?: MatrixSnapshotStateRuntime;
+  authority?: PluginStateActionAuthority;
 }): Promise<void> {
   const store = (
     params.stateRuntime ?? getMatrixRuntime().state
   ).openKeyedStoreV2<MatrixIdbSnapshotRecord>(
     openMatrixIdbSnapshotStoreOptions(params.storageRootDir),
+    params.authority,
   );
   const rows = buildIdbSnapshotRows(params.snapshotJson, params.databaseCount);
   await writeMatrixStateChunks(store, rows, idbChunkKeyPrefix());
