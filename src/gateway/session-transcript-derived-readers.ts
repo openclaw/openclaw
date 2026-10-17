@@ -137,8 +137,44 @@ export function createSessionTranscriptUsageAccumulator(source: TranscriptUsageS
   const totals: Pick<SessionTranscriptUsageSnapshot, (typeof summedFields)[number]> = {};
   let estimatedTranscriptChars = 0;
   let sawEstimateModelIdentity = false;
-  const add = (message: unknown): void => {
+  // Per-entry counts for the current estimate window, so a boundary can keep
+  // the retained tail it names instead of restarting from zero.
+  const estimateWindow: Array<{ id?: string; chars: number; modelIdentity: boolean }> = [];
+  const restartEstimateWindow = (marker: Record<string, unknown>): void => {
+    const firstKeptEntryId =
+      typeof marker.firstKeptEntryId === "string" ? marker.firstKeptEntryId : undefined;
+    const keptIndex = firstKeptEntryId
+      ? estimateWindow.findIndex((entry) => entry.id === firstKeptEntryId)
+      : -1;
+    // Same contract as the tree selector: an unknown kept target drops the
+    // whole pre-boundary window.
+    const kept = keptIndex >= 0 ? estimateWindow.slice(keptIndex) : [];
+    estimateWindow.length = 0;
+    estimateWindow.push(...kept);
+    estimatedTranscriptChars = kept.reduce((total, entry) => total + entry.chars, 0);
+    // The compaction summary stays in the model context until the next
+    // boundary, so it counts even though it is not a message entry.
+    const summary = typeof marker.summary === "string" ? marker.summary.trim() : "";
+    if (marker.type === "compaction" && summary) {
+      estimatedTranscriptChars += estimateStringChars(summary);
+    }
+    // A boundary is only written by a live model session, so a window it
+    // leaves with counted text stays estimate-eligible even when no
+    // model-tagged assistant survived the cut. Without this, a read between
+    // the boundary and the next assistant reply drops the estimate for
+    // summary-only or retained-user-only windows.
+    sawEstimateModelIdentity =
+      kept.some((entry) => entry.modelIdentity) || estimatedTranscriptChars > 0;
+  };
+  const add = (message: unknown, entryId?: string): void => {
     if (source === "artifact" && isRecord(message)) {
+      // A compaction/reset boundary starts a fresh context window: content
+      // before it is superseded history except the retained tail the marker
+      // names. Usage snapshots below still aggregate across the whole record.
+      if (message.type === "compaction" || message.type === "reset") {
+        restartEstimateWindow(message);
+        return;
+      }
       const provider = typeof message.provider === "string" ? message.provider.trim() : undefined;
       const model = typeof message.model === "string" ? message.model.trim() : undefined;
       if (
@@ -147,8 +183,14 @@ export function createSessionTranscriptUsageAccumulator(source: TranscriptUsageS
       ) {
         const estimatedChars = estimateTranscriptMessageChars(message);
         estimatedTranscriptChars += estimatedChars;
-        sawEstimateModelIdentity ||=
+        const modelIdentity =
           message.role === "assistant" && estimatedChars > 0 && Boolean(provider || model);
+        sawEstimateModelIdentity ||= modelIdentity;
+        estimateWindow.push({ id: entryId, chars: estimatedChars, modelIdentity });
+      } else if (entryId !== undefined) {
+        // Uncounted roles stay addressable: a boundary may name one as its
+        // first kept entry, and the counted tail behind it survives the cut.
+        estimateWindow.push({ id: entryId, chars: 0, modelIdentity: false });
       }
     }
     const snapshot = extractTranscriptUsageSnapshot(message, source);
