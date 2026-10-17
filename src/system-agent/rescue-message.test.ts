@@ -28,17 +28,22 @@ type TestConfig = Record<string, unknown>;
 
 const readLastAuditEntry = () => listSystemAgentAuditEntriesForTests().at(-1)?.value ?? {};
 
-// mock-isolation: Rescue must not operate real agents, daemons, CLIs, TUI, or providers.
 const runPluginInstallCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+// mock-isolation: Keep agent creation and its persistent stores outside rescue approval proof.
 vi.mock("../agents/agent-create.js", () => ({ createAgent: vi.fn() }));
+// mock-isolation: Rescue approval must not manipulate the machine's daemon lifecycle.
 vi.mock("../cli/daemon-cli/lifecycle.js", () => ({
   runDaemonRestart: vi.fn(),
   runDaemonStart: vi.fn(),
   runDaemonStop: vi.fn(),
 }));
+// mock-isolation: Supply external plugin-list output without loading the host CLI registry.
 vi.mock("../cli/plugins-list-command.js", () => ({ runPluginsListCommand: vi.fn() }));
+// mock-isolation: Supply external plugin-search output without loading the host CLI registry.
 vi.mock("../cli/plugins-search-command.js", () => ({ runPluginsSearchCommand: vi.fn() }));
+// mock-isolation: Remote rescue must never initialize the local terminal UI.
 vi.mock("../tui/tui.js", () => ({ runTui: vi.fn() }));
+// mock-isolation: Keep live provider inference outside conversational approval proof.
 vi.mock("./setup-inference.js", () => ({ verifySetupInferenceConfig: vi.fn() }));
 
 const mockConfig = vi.hoisted(() => {

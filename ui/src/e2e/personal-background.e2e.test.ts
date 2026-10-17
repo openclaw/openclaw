@@ -222,13 +222,12 @@ suite.define(() => {
             historyMessages: [
               chatMessage("assistant", "## A readable conversation\n\nText.\n\n- Item."),
             ],
-            methodResponses: { "users.prefs.set": { status: "ok" } },
+            methodResponses: {
+              "config.get": configResponse({ themeMode: mode }, "personal-background"),
+              "users.prefs.get": preferenceReply({ "ui.theme": "claw", "ui.themeMode": mode }),
+              "users.prefs.set": { status: "ok" },
+            },
           });
-          await gateway.setMethodResponse(
-            "config.get",
-            configResponse({ themeMode: mode }, "personal-background"),
-          );
-          await updateSnapshot(gateway, null, null, mode);
           const section = await visitAppearance(page, true);
           await gateway.waitForRequest("users.background.get");
           expect(await section.locator("[data-background-source]").count()).toBe(3);

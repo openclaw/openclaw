@@ -160,9 +160,10 @@ describe("sessions tool self-archive", () => {
     const { sessionKey, sessionId, createTool, beginAdmission, archiveRequest, update, load } =
       await createArchiveSession("detached-self-archive");
     const runAbort = new AbortController();
+    const archiveAbort = new Error("archive stopped the active turn");
     const callGateway = vi.fn(async () => {
       await update({ sessionId, updatedAt: 2, archivedAt: Date.now() });
-      runAbort.abort(new Error("archive stopped the active turn"));
+      runAbort.abort(archiveAbort);
       return { ok: true };
     });
     const tool = createTool(callGateway as never);
@@ -172,7 +173,7 @@ describe("sessions tool self-archive", () => {
       const projected = await Promise.race([
         archive(tool, "archive-current"),
         new Promise<never>((_resolve, reject) => {
-          runAbort.signal.addEventListener("abort", () => reject(runAbort.signal.reason), {
+          runAbort.signal.addEventListener("abort", () => reject(archiveAbort), {
             once: true,
           });
         }),

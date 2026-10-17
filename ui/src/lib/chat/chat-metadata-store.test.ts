@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+  type GatewayRequestMock,
+} from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { loadModelCatalog, peekModelCatalog } from "../model-catalog-store.ts";
 import {
@@ -22,10 +26,10 @@ const agentScope = { agentId: "main" };
 type Scope = Parameters<typeof loadChatMetadata>[1];
 const releases: (() => void)[] = [];
 const pendingReads: Promise<unknown>[] = [];
-let request: ReturnType<typeof vi.fn>;
+let request: GatewayRequestMock;
 let client: GatewayBrowserClient;
 beforeEach(() => {
-  request = vi.fn();
+  request = vi.fn<GatewayRequestHandler>();
   client = createTestGatewayClient(request);
 });
 

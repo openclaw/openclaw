@@ -62,9 +62,9 @@ export function memoryForgetHarness() {
     ) => recordMemoryEntryOrigins({ agentId, origins }),
     readEntries: <T>(namespace: string) =>
       readMemoryCoreWorkspaceEntries<T>({ namespace, workspaceDir: fixture.workspaceDir }),
-    writeEntries: <T>(namespace: string, entries: Array<{ key: string; value: T }>) =>
+    writeEntries: (namespace: string, entries: Array<{ key: string; value: unknown }>) =>
       writeMemoryCoreWorkspaceEntries({ namespace, workspaceDir: fixture.workspaceDir, entries }),
-    writeEntry: <T>(namespace: string, key: string, value: T) =>
+    writeEntry: (namespace: string, key: string, value: unknown) =>
       writeMemoryCoreWorkspaceEntry({ namespace, workspaceDir: fixture.workspaceDir, key, value }),
     archive: (sessionId: string) =>
       deleteSessionEntry({

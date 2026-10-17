@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -192,8 +193,13 @@ describe("memory forget", () => {
         indexData.provenance(chunkId, "owner", sessionKind);
       }
       db.exec("DROP TABLE IF EXISTS memory_session_tombstones");
-      const revision = () =>
-        db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()?.revision;
+      const revision = () => {
+        const value = db
+          .prepare("SELECT revision FROM memory_index_state WHERE id = 1")
+          .get()?.revision;
+        assert(typeof value === "number");
+        return value;
+      };
       const revisionBefore = revision();
 
       const preview = await forget(true);

@@ -57,12 +57,14 @@ const emptyCatalogs = { listPlugins: () => [], listChannels: () => [], listProvi
 function skill(
   overrides: Partial<clawHubSkills.ClawHubSkillSearchResult> = {},
 ): clawHubSkills.ClawHubSkillSearchResult {
+  const ownerHandle = overrides.ownerHandle ?? "demo-owner";
+  const slug = overrides.slug ?? "notes-tools";
   return {
     registry: "https://clawhub.ai",
     score: 1,
-    slug: "notes-tools",
-    installRef: "@demo-owner/notes-tools",
-    ownerHandle: "demo-owner",
+    slug,
+    installRef: `@${ownerHandle}/${slug}`,
+    ownerHandle,
     displayName: "Notes Tools",
     ...overrides,
   };

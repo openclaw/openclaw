@@ -16,10 +16,12 @@ import {
 const suite = createChatFlowE2eSuite();
 const desktop = { width: 1280, height: 900 };
 const phone = { width: 390, height: 650 };
-const withPage = (
+const withPage = async (
   options: Parameters<typeof suite.withPage>[0],
   run: Parameters<typeof suite.withPage>[1],
-) => suite.withPage({ viewport: desktop, locale: "en-US", ...options }, run);
+): Promise<void> => {
+  await suite.withPage({ viewport: desktop, locale: "en-US", ...options }, run);
+};
 const selected = "agent:main:card-selected";
 const watched = "agent:main:card-viewing";
 const recentLabel = "Review the complete cross-platform launch readiness checklist before release";

@@ -8,6 +8,7 @@ import {
   createAuthProfileStoreFixture,
 } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   captureSqliteDatabaseAdmissions,
   retireSqliteDatabaseAdmissionForPath,
@@ -65,7 +66,7 @@ function repairJournal(
   return repairDoctorAgentDeletionJournal({ preflight, shouldRepair, env });
 }
 
-function reconstructionRow(db: DatabaseSync) {
+function reconstructionRow(db: EngineConnection) {
   return db
     .prepare(
       "SELECT report_json FROM migration_sources WHERE migration_kind = 'agent-deletion-journal-reconstruction'",
@@ -75,7 +76,7 @@ function reconstructionRow(db: DatabaseSync) {
 
 const readFiles = (files: string[]) => files.map((file) => fs.readFileSync(file));
 const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
-const journalRow = (db: DatabaseSync, agentId: string) =>
+const journalRow = (db: EngineConnection, agentId: string) =>
   db.prepare("SELECT * FROM agent_deletion_journal WHERE agent_id = ?").get(agentId);
 
 function makeState(prefix: string, canonical = true) {
