@@ -33,6 +33,32 @@ export function telegramTurn(sessionKey: string, body: string, from: string) {
   };
 }
 
+type Scope = { agentId: string; storePath: string; sessionKey: string };
+
+async function admit(scope: Scope, sessionId: string, resetTriggered: boolean) {
+  const admitted = await admitReplyTurn({ ...scope, sessionId, kind: "visible", resetTriggered });
+  if (admitted.status !== "owned" || !admitted.databaseClaim) {
+    throw new Error("Fixture requires a retained reply admission");
+  }
+  return { ...admitted, databaseClaim: admitted.databaseClaim };
+}
+
+function initialize(
+  scope: Scope,
+  admitted: Awaited<ReturnType<typeof admit>>,
+  body: string,
+  from: string,
+  reset?: { mode: "idle"; idleMinutes: number },
+) {
+  return runWithReplyOperationLifecycleAdmission(admitted.operation, () =>
+    initSessionState({
+      cfg: { session: { store: scope.storePath, ...(reset ? { reset } : {}) } },
+      ctx: telegramTurn(scope.sessionKey, body, from),
+      replyOperation: admitted.operation,
+    }),
+  );
+}
+
 export function registerSessionInitializationAdmissionTests({
   makeStorePath,
 }: {
@@ -53,23 +79,14 @@ export function registerSessionInitializationAdmissionTests({
           sessionStartedAt: Date.now(),
         });
       }
-      const admitted = await admitReplyTurn({
-        ...scope,
-        sessionId: originalId,
-        kind: "visible",
-        resetTriggered: kind !== "created",
-      });
-      if (admitted.status !== "owned" || !admitted.databaseClaim) {
-        throw new Error("Fixture requires a retained reply admission");
-      }
+      const admitted = await admit(scope, originalId, kind !== "created");
       const previousReader = getReplyOperationSessionReader(admitted.operation);
       try {
-        const initialized = await runWithReplyOperationLifecycleAdmission(admitted.operation, () =>
-          initSessionState({
-            cfg: { session: { store: storePath } },
-            ctx: telegramTurn(sessionKey, kind === "created" ? "hello" : "/new", "handoff-user"),
-            replyOperation: admitted.operation,
-          }),
+        const initialized = await initialize(
+          scope,
+          admitted,
+          kind === "created" ? "hello" : "/new",
+          "handoff-user",
         );
         expect(initialized.sessionEntry.lifecycleRevision).not.toBe("before-initialization");
         expect(initialized.sessionId === originalId).toBe(
@@ -126,15 +143,7 @@ export function registerSessionInitializationAdmissionTests({
         updatedAt: Date.now(),
         sessionStartedAt: Date.now(),
       });
-      const admitted = await admitReplyTurn({
-        ...scope,
-        sessionId,
-        kind: "visible",
-        resetTriggered: true,
-      });
-      if (admitted.status !== "owned" || !admitted.databaseClaim) {
-        throw new Error("Fixture requires a retained reply admission");
-      }
+      const admitted = await admit(scope, sessionId, true);
       const previous = admitted.databaseClaim;
       if (!("kind" in previous) || !previous.afterTransition) {
         admitted.operation.complete();
@@ -167,13 +176,7 @@ export function registerSessionInitializationAdmissionTests({
       let initialization: ReturnType<typeof initSessionState> | undefined;
       let closing: ReturnType<typeof waitForReplyRunSuccessorAdmission> | undefined;
       try {
-        initialization = runWithReplyOperationLifecycleAdmission(admitted.operation, () =>
-          initSessionState({
-            cfg: { session: { store: storePath } },
-            ctx: telegramTurn(sessionKey, "/new", "close-user"),
-            replyOperation: admitted.operation,
-          }),
-        );
+        initialization = initialize(scope, admitted, "/new", "close-user");
         void initialization.catch(() => {});
         const next = await withinTest(
           awaitGateBeforeSettlement(
@@ -242,23 +245,13 @@ export function registerSessionInitializationAdmissionTests({
       },
     });
     expect(loadSessionEntry(scope)?.sessionStartedAt).toBeUndefined();
-    const admitted = await admitReplyTurn({
-      ...scope,
-      kind: "visible",
-      resetTriggered: false,
-    });
-    if (admitted.status !== "owned" || !admitted.databaseClaim) {
-      throw new Error("Fixture requires a retained reply admission");
-    }
+    const admitted = await admit(scope, sessionId, false);
     const separateHeaderPhase = vi.spyOn(lifecycleReads, "resolveSessionLifecycleTimestampsAsync");
     try {
-      const initialized = await runWithReplyOperationLifecycleAdmission(admitted.operation, () =>
-        initSessionState({
-          cfg: { session: { store: storePath, reset: { mode: "idle", idleMinutes: 60 } } },
-          ctx: telegramTurn(sessionKey, "hello", "header-user"),
-          replyOperation: admitted.operation,
-        }),
-      );
+      const initialized = await initialize(scope, admitted, "hello", "header-user", {
+        mode: "idle",
+        idleMinutes: 60,
+      });
       expect(initialized.isNewSession).toBe(false);
       expect(initialized.sessionEntry).toMatchObject({
         sessionId,

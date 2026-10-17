@@ -7,7 +7,6 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -119,32 +118,28 @@ describe("runWithSessionInitConflictRetry", () => {
   });
 
   it("does not retry non-conflict errors", async () => {
-    let calls = 0;
-    const attempt = async () => {
-      calls += 1;
-      throw new Error("reply session initialization aborted");
-    };
+    const attempt = vi
+      .fn<() => Promise<never>>()
+      .mockRejectedValue(new Error("reply session initialization aborted"));
     await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).rejects.toThrow(
       "reply session initialization aborted",
     );
-    expect(calls).toBe(1);
+    expect(attempt).toHaveBeenCalledOnce();
   });
 
   it("stops retrying when the abort signal fires", async () => {
     const controller = new AbortController();
-    let calls = 0;
-    const attempt = async () => {
-      calls += 1;
+    const attempt = vi.fn(async () => {
       controller.abort();
       throw new ReplySessionInitConflictError(SESSION_KEY);
-    };
+    });
     await expect(
       runWithSessionInitConflictRetry(attempt, {
         signal: controller.signal,
         sleep: instantSleep,
       }),
     ).rejects.toBeInstanceOf(ReplySessionInitConflictError);
-    expect(calls).toBe(1);
+    expect(attempt).toHaveBeenCalledOnce();
   });
 
   it("applies capped exponential backoff between attempts", async () => {
@@ -169,8 +164,25 @@ describe("runWithSessionInitConflictRetry", () => {
 
 describe("initSessionState conflict retry wiring", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-late-conflict-");
+  function fixture() {
+    const scope = {
+      sessionKey: SESSION_KEY,
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
+    };
+    return {
+      ...scope,
+      read: () => loadSessionEntry({ ...scope, readConsistency: "latest" }),
+      initialize: (params: Partial<Parameters<typeof initSessionState>[0]> = {}) =>
+        initSessionState({
+          cfg: { session: { store: scope.storePath } },
+          commandAuthorized: true,
+          ctx: { Body: "hello", SessionKey: SESSION_KEY },
+          ...params,
+        }),
+    };
+  }
   it("preserves the session generation when registered mandatory cleanup fails, then retries", async () => {
-    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const { storePath, read: readSession, initialize } = fixture();
     const registry = createEmptyPluginRegistry();
     const failure = new AgentHarnessSessionCleanupError("native session still running");
     let cleanupAvailable = false;
@@ -182,8 +194,6 @@ describe("initSessionState conflict retry wiring", () => {
         updatedAt: Date.now() - 86_400_000,
       },
     );
-    const readSession = () =>
-      loadSessionEntry({ readConsistency: "latest", sessionKey: SESSION_KEY, storePath });
     const original = readSession();
     await withPluginRuntimeRegistryScope(registry, async () => {
       registerAgentHarness({
@@ -199,16 +209,15 @@ describe("initSessionState conflict retry wiring", () => {
           }
         },
       });
-      const initialize = () =>
-        initSessionState({
+      const reset = () =>
+        initialize({
           cfg: { session: { store: storePath, reset: { mode: "idle", idleMinutes: 30 } } },
-          commandAuthorized: true,
           ctx: { Body: "/new", SessionKey: SESSION_KEY },
         });
-      await expect(initialize()).rejects.toBe(failure);
+      await expect(reset()).rejects.toBe(failure);
       expect(readSession()).toEqual(original);
       cleanupAvailable = true;
-      const resumed = await initialize();
+      const resumed = await reset();
       expect(resumed.isNewSession).toBe(true);
       expect(readSession()).toMatchObject({
         sessionId: resumed.sessionId,
@@ -219,8 +228,7 @@ describe("initSessionState conflict retry wiring", () => {
   });
 
   it("retries a late same-session lifecycle conflict without losing either update", async () => {
-    const root = sessionDirs.make();
-    const storePath = path.join(root, "sessions.json");
+    const { storePath, read, initialize } = fixture();
     let lateWrites = 0;
     commitConflictControl.commitCalls = 0;
     commitConflictControl.beforeEntryMutation = ({ sessionKey, storePath: targetStorePath }) => {
@@ -260,9 +268,7 @@ describe("initSessionState conflict retry wiring", () => {
         },
       );
 
-      const result = await initSessionState({
-        cfg: { session: { store: storePath } } as OpenClawConfig,
-        commandAuthorized: true,
+      const result = await initialize({
         ctx: {
           Body: "hello",
           SessionKey: SESSION_KEY,
@@ -272,42 +278,28 @@ describe("initSessionState conflict retry wiring", () => {
 
       expect(commitConflictControl.commitCalls).toBe(3);
       expect(lateWrites).toBe(2);
-      expect(result.sessionEntry).toMatchObject({
+      const expected = {
         displayName: "reply initialization update",
         lastHeartbeatSentAt: 102,
         lastHeartbeatText: "concurrent metadata 2",
         sessionId: "existing-session",
-      });
-      expect(
-        loadSessionEntry({ readConsistency: "latest", sessionKey: SESSION_KEY, storePath }),
-      ).toMatchObject({
-        displayName: "reply initialization update",
-        lastHeartbeatSentAt: 102,
-        lastHeartbeatText: "concurrent metadata 2",
-        sessionId: "existing-session",
-      });
+      };
+      expect(result.sessionEntry).toMatchObject(expected);
+      expect(read()).toMatchObject(expected);
     } finally {
       commitConflictControl.beforeEntryMutation = undefined;
     }
   });
 
   it("cancels the production backoff through the initializer signal", async () => {
-    const root = sessionDirs.make();
+    const { initialize } = fixture();
     const controller = new AbortController();
     commitConflictControl.abortController = controller;
     commitConflictControl.commitCalls = 0;
     commitConflictControl.remainingFailures = 2;
 
     try {
-      const initializing = initSessionState({
-        cfg: { session: { store: path.join(root, "sessions.json") } } as OpenClawConfig,
-        commandAuthorized: true,
-        ctx: {
-          Body: "hello",
-          SessionKey: SESSION_KEY,
-        },
-        signal: controller.signal,
-      });
+      const initializing = initialize({ signal: controller.signal });
 
       await expect(initializing).rejects.toThrow("aborted");
       expect(commitConflictControl.commitCalls).toBe(2);

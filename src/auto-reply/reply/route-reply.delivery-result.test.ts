@@ -1,4 +1,3 @@
-// Tests routeReply delivery evidence and editable message identity.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -40,8 +39,10 @@ vi.mock("../../infra/outbound/deliver.js", () => ({
 const { routeReply: routeReplyRuntime } = await import("./route-reply.js");
 type RouteReplyParams = Parameters<typeof routeReplyRuntime>[0];
 const routeReply = (
-  params: Omit<RouteReplyParams, "replyKind"> & { replyKind?: RouteReplyParams["replyKind"] },
-) => routeReplyRuntime({ replyKind: "final", ...params });
+  params: Omit<RouteReplyParams, "replyKind" | "channel" | "to" | "cfg"> &
+    Partial<Pick<RouteReplyParams, "replyKind" | "channel" | "to" | "cfg">>,
+) =>
+  routeReplyRuntime({ replyKind: "final", channel: "telegram", to: "chat-1", cfg: {}, ...params });
 
 function createChannelPlugin(id: ChannelPlugin["id"], label: string): ChannelPlugin {
   return createChannelTestPluginBase({
@@ -51,22 +52,30 @@ function createChannelPlugin(id: ChannelPlugin["id"], label: string): ChannelPlu
   });
 }
 
+function suppressDelivery(reason: string) {
+  mocks.deliverOutboundPayloads.mockImplementationOnce(
+    async ({
+      onPayloadDeliveryOutcome,
+    }: {
+      onPayloadDeliveryOutcome?: (outcome: unknown) => void;
+    }) => {
+      onPayloadDeliveryOutcome?.({ index: 0, status: "suppressed", reason });
+      return [];
+    },
+  );
+}
+
 describe("routeReply delivery result", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   beforeEach(() => {
     setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          plugin: createChannelPlugin("telegram", "Telegram"),
+      createTestRegistry(
+        (["telegram", "whatsapp"] as const).map((id) => ({
+          pluginId: id,
+          plugin: createChannelPlugin(id, id === "telegram" ? "Telegram" : "WhatsApp"),
           source: "test",
-        },
-        {
-          pluginId: "whatsapp",
-          plugin: createChannelPlugin("whatsapp", "WhatsApp"),
-          source: "test",
-        },
-      ]),
+        })),
+      ),
     );
     mocks.deliverOutboundPayloads.mockReset();
     mocks.deliverOutboundPayloads.mockResolvedValue([]);
@@ -128,20 +137,7 @@ describe("routeReply delivery result", () => {
       if (outcome === "invisible") {
         mocks.deliverOutboundPayloads.mockResolvedValueOnce([]);
       } else if (outcome === "no-identity") {
-        mocks.deliverOutboundPayloads.mockImplementationOnce(
-          async ({
-            onPayloadDeliveryOutcome,
-          }: {
-            onPayloadDeliveryOutcome?: (outcome: unknown) => void;
-          }) => {
-            onPayloadDeliveryOutcome?.({
-              index: 0,
-              status: "suppressed",
-              reason: "adapter_returned_no_identity",
-            });
-            return [];
-          },
-        );
+        suppressDelivery("adapter_returned_no_identity");
       } else if (outcome === "not-dispatched") {
         mocks.deliverOutboundPayloads.mockRejectedValueOnce(notDispatched);
       } else if (outcome === "unknown") {
@@ -242,27 +238,8 @@ describe("routeReply delivery result", () => {
   ] as const)(
     "returns intentional suppression reason %s without claiming delivery",
     async (reason) => {
-      mocks.deliverOutboundPayloads.mockImplementationOnce(
-        async ({
-          onPayloadDeliveryOutcome,
-        }: {
-          onPayloadDeliveryOutcome?: (outcome: unknown) => void;
-        }) => {
-          onPayloadDeliveryOutcome?.({
-            index: 0,
-            status: "suppressed",
-            reason,
-          });
-          return [];
-        },
-      );
-
-      const res = await routeReply({
-        payload: { text: "hello" },
-        channel: "telegram",
-        to: "chat-1",
-        cfg: {} as never,
-      });
+      suppressDelivery(reason);
+      const res = await routeReply({ payload: { text: "hello" } });
 
       expect(res).toEqual({
         ok: true,
@@ -321,9 +298,6 @@ describe("routeReply delivery result", () => {
         { text: "hello" },
         { sessionWriterDeliveryAuthority: authority },
       ),
-      channel: "telegram",
-      to: "chat-1",
-      cfg: {} as never,
     });
 
     const call = mocks.deliverOutboundPayloads.mock.calls[0];
@@ -348,12 +322,7 @@ describe("routeReply delivery result", () => {
     });
     mocks.deliverOutboundPayloads.mockRejectedValueOnce(failure);
 
-    const res = await routeReply({
-      payload: { text: "hello" },
-      channel: "telegram",
-      to: "chat-1",
-      cfg: {} as never,
-    });
+    const res = await routeReply({ payload: { text: "hello" } });
 
     expect(res).toEqual({
       ok: false,

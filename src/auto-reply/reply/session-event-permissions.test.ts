@@ -12,7 +12,6 @@ import { buildEmbeddedAttemptToolRunContext } from "../../agents/embedded-agent-
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
-import { readToolAllowlistIntersection } from "../../agents/tool-policy-shared.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -41,7 +40,10 @@ import {
 import { readCursor } from "../../sessions/session-state-events.test-support.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import * as routedReplies from "./route-reply.js";
 import * as sessionEventHandoff from "./session-event-handoff.js";
 import {
@@ -66,8 +68,37 @@ await Promise.all([
   ),
 ]);
 
-function describeToolCap(allow: readonly string[] | undefined) {
-  return { allow, intersections: allow ? readToolAllowlistIntersection(allow) : undefined };
+async function configureEventState(
+  state: OpenClawTestState,
+  overrides: Partial<OpenClawConfig> = {},
+) {
+  const config: OpenClawConfig = {
+    agents: {
+      entries: { main: { workspace: state.workspaceDir } },
+      defaults: {
+        workspace: state.workspaceDir,
+        skipBootstrap: true,
+        model: { primary: "mock-openai/gpt-5.6-luna" },
+        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
+      },
+    },
+    plugins: { enabled: false },
+    skills: { load: { watch: false } },
+    ...overrides,
+  };
+  setRuntimeConfigSnapshot(config);
+  await state.writeConfig(config);
+  openOpenClawStateDatabase();
+  return config;
+}
+
+async function startEmbeddedTurn(params: RunEmbeddedAgentParams, label: string) {
+  const admission = expectDefined(params.preparedRunAdmission, label);
+  const context = await admission.admit("gateway", params.runId);
+  params.onExecutionPhase?.({ phase: "model_call_started" });
+  await params.onExecutionStarted?.();
+  await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+  return context;
 }
 
 async function enqueueGuardedCliWatchdog(params: {
@@ -76,7 +107,6 @@ async function enqueueGuardedCliWatchdog(params: {
   sessionKey: string;
   entry: SessionEntry;
   signal: AbortSignal;
-  diagnostic: Record<string, unknown>;
 }) {
   const { prepareSystemAgentRunAdmission } = await import("../../agents/admitted-run-context.js");
   const { testing: cliBackends } = await import("../../agents/cli-backends.test-support.js");
@@ -115,10 +145,6 @@ async function enqueueGuardedCliWatchdog(params: {
   let receipt: ReturnType<typeof enqueueSessionEventForHost> | undefined;
   const enqueue = executeDeps.enqueueSessionEvent;
   const observer = vi.spyOn(executeDeps, "enqueueSessionEvent").mockImplementation((...args) => {
-    params.diagnostic.target = {
-      tools: describeToolCap(args[1].expectedTarget?.toolsAllow),
-      settings: args[1].expectedTarget?.settings,
-    };
     receipt = enqueue(...args);
     return receipt;
   });
@@ -169,10 +195,6 @@ async function enqueueGuardedCliWatchdog(params: {
       runId,
       abortSignal: params.signal,
     });
-    params.diagnostic.prepared = {
-      tools: describeToolCap(context.sessionEventSourcePolicy?.toolsAllow),
-      settings: context.sessionEventSourcePolicy?.settings,
-    };
     await expect(runPreparedCliAgent(context)).rejects.toThrow("produced no output");
     return expectDefined(receipt, "ordinary watchdog occurrence");
   } finally {
@@ -202,14 +224,9 @@ it.for([
   "preserves session event admission policy: $error",
   async ({ entry, error, retryable }, { signal }) => {
     await withOpenClawTestState({ label: "session-event-refusal" }, async (state) => {
-      const config: OpenClawConfig = {
+      await configureEventState(state, {
         agents: { entries: { main: { workspace: state.workspaceDir } } },
-        plugins: { enabled: false },
-        skills: { load: { watch: false } },
-      };
-      setRuntimeConfigSnapshot(config);
-      await state.writeConfig(config);
-      openOpenClawStateDatabase();
+      });
       const scope = { agentId: "main", sessionKey: "agent:main:event-refusal" };
       await replaceSessionEntry(scope, { sessionId: "event-refusal", updatedAt: 1, ...entry });
       runEmbeddedAgentMock.mockReset();
@@ -253,24 +270,9 @@ it.for([
     const fixtureWork = withOpenClawTestState(
       { label: "session-event-permissions", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
-        const config: OpenClawConfig = {
-          agents: {
-            entries: { main: { workspace: state.workspaceDir } },
-            defaults: {
-              workspace: state.workspaceDir,
-              skipBootstrap: true,
-              model: { primary: "mock-openai/gpt-5.6-luna" },
-              models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-            },
-          },
+        const config = await configureEventState(state, {
           tools: { profile: "coding", codeMode: false, toolSearch: false },
-          skills: { load: { watch: false } },
-          plugins: { enabled: false },
-        };
-        setRuntimeConfigSnapshot(config);
-        await state.writeConfig(config);
-        // Gateway boot admits shared state before accepting events; the agent store stays cold.
-        openOpenClawStateDatabase();
+        });
         await fs.mkdir(state.workspaceDir, { recursive: true });
         const filePath = path.join(state.workspaceDir, "completion.txt");
         await fs.writeFile(filePath, "original\n");
@@ -327,7 +329,6 @@ it.for([
           await setMode(change === "downgrade" ? "read-only" : "full");
         }
         let attempted = false;
-        const diagnostic: Record<string, unknown> = {};
         let observedMode: SessionEntry["permissionMode"];
         let retainedWriteRejected = false;
         const retainedDowngrade =
@@ -335,14 +336,7 @@ it.for([
         runEmbeddedAgentMock
           .mockReset()
           .mockImplementation(async (params: RunEmbeddedAgentParams) => {
-            const admission = expectDefined(
-              params.preparedRunAdmission,
-              "ordinary reply admission",
-            );
-            const admittedRunContext = await admission.admit("gateway", params.runId);
-            params.onExecutionPhase?.({ phase: "model_call_started" });
-            await params.onExecutionStarted?.();
-            await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+            const admittedRunContext = await startEmbeddedTurn(params, "ordinary reply admission");
             const workspace = await resolveAttemptWorkspaceSandbox({
               ...params,
               admittedRunContext,
@@ -419,12 +413,6 @@ it.for([
                 boundTools,
                 construction.runtimeToolAllowlist,
               );
-              Object.assign(diagnostic, {
-                model: { tools: describeToolCap(params.toolsAllow), mode: params.permissionMode },
-                projection: describeToolCap(construction.runtimeToolAllowlist),
-                constructedToolNames: boundTools.map((tool) => tool.name),
-                finalToolNames: tools.map((tool) => tool.name),
-              });
               const read = expectDefined(
                 tools.find((tool) => tool.name === "read"),
                 "read tool",
@@ -516,7 +504,6 @@ it.for([
                   sessionKey: scope.sessionKey,
                   entry: expectDefined(loadSessionEntry(scope), "full-permission destination"),
                   signal,
-                  diagnostic,
                 })
               : enqueueSessionEventForHost(text, {
                   ...scope,
@@ -592,7 +579,7 @@ it.for([
           return;
         }
         expect(accepted).toEqual({ ok: true });
-        const evidence = JSON.stringify({ outcome, diagnostic });
+        const evidence = JSON.stringify(outcome);
         expect(await fs.readFile(filePath, "utf8"), evidence).toBe(
           change === "allowed" || change === "new-session" || remapped || toolOnly
             ? "completed\n"
@@ -653,23 +640,9 @@ it.for([
     await withOpenClawTestState(
       { label: "session-event-notice-adoption", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
-        const config: OpenClawConfig = {
-          agents: {
-            entries: { main: { workspace: state.workspaceDir } },
-            defaults: {
-              workspace: state.workspaceDir,
-              skipBootstrap: true,
-              model: { primary: "mock-openai/gpt-5.6-luna" },
-              models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-            },
-          },
+        await configureEventState(state, {
           messages: { queue: { cap: watchCount, drop: "new" } },
-          plugins: { enabled: false },
-          skills: { load: { watch: false } },
-        };
-        setRuntimeConfigSnapshot(config);
-        await state.writeConfig(config);
-        openOpenClawStateDatabase();
+        });
         const scope = { agentId: "main", sessionKey: "agent:main:notice-watcher" };
         await replaceSessionEntry(scope, {
           sessionId: "notice-watcher",
@@ -694,11 +667,7 @@ it.for([
         runEmbeddedAgentMock
           .mockReset()
           .mockImplementation(async (params: RunEmbeddedAgentParams) => {
-            const admission = expectDefined(params.preparedRunAdmission, "normal reply admission");
-            await admission.admit("gateway", params.runId);
-            params.onExecutionPhase?.({ phase: "model_call_started" });
-            await params.onExecutionStarted?.();
-            await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+            await startEmbeddedTurn(params, "normal reply admission");
             starts.push(params.prompt);
             if (starts.length === 1) {
               firstStarted.resolve();
@@ -902,23 +871,7 @@ it.for([
     const fixtureWork = withOpenClawTestState(
       { label: "hook-terminal-first-use", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
-        const config: OpenClawConfig = {
-          agents: {
-            entries: { main: { workspace: state.workspaceDir } },
-            defaults: {
-              workspace: state.workspaceDir,
-              skipBootstrap: true,
-              model: { primary: "mock-openai/gpt-5.6-luna" },
-              models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-            },
-          },
-          ...(row.global ? { session: { scope: "global" as const } } : {}),
-          plugins: { enabled: false },
-          skills: { load: { watch: false } },
-        };
-        setRuntimeConfigSnapshot(config);
-        await state.writeConfig(config);
-        openOpenClawStateDatabase();
+        await configureEventState(state, row.global ? { session: { scope: "global" } } : {});
         const scope = { agentId: "main", sessionKey: row.global ? "global" : "agent:main:main" };
         expect(loadSessionEntry(scope)).toBeUndefined();
         const summary =
@@ -936,14 +889,7 @@ it.for([
         runEmbeddedAgentMock
           .mockReset()
           .mockImplementation(async (params: RunEmbeddedAgentParams) => {
-            const admission = expectDefined(
-              params.preparedRunAdmission,
-              "ordinary terminal admission",
-            );
-            await admission.admit("gateway", params.runId);
-            params.onExecutionPhase?.({ phase: "model_call_started" });
-            await params.onExecutionStarted?.();
-            await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+            await startEmbeddedTurn(params, "ordinary terminal admission");
             return { payloads: [{ text: "Terminal event observed" }], meta: { durationMs: 1 } };
           });
         const enqueued = createDeferred<ReturnType<typeof enqueueSessionEventForHost>>();
