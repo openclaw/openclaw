@@ -182,9 +182,7 @@ export function createSqliteDatabaseWriteReceipts(owner: {
     };
     if (
       !stageSqliteTransactionState(database, {
-        stage() {},
         commit: retire,
-        rollback() {},
       }) &&
       !connection.isTransaction
     ) {
