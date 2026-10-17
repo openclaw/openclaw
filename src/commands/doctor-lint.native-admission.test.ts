@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { runtimeToolSchemaCheck } from "../flows/doctor-tool-schema-check.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 import type { HealthCheckContext } from "../flows/health-checks.js";
@@ -44,6 +43,15 @@ afterEach(() => {
   clearHealthChecksForTest();
 });
 
+function writeFiles(root: string, files: Record<string, string | object>) {
+  for (const [file, contents] of Object.entries(files)) {
+    fs.writeFileSync(
+      path.join(root, file),
+      typeof contents === "string" ? contents : JSON.stringify(contents),
+    );
+  }
+}
+
 it("keeps private Doctor native admissions out of the caller and persisted index with prepared metadata", async () => {
   await withOpenClawTestState(
     {
@@ -61,24 +69,19 @@ it("keeps private Doctor native admissions out of the caller and persisted index
         pluginId,
         version: "1.0.0",
       });
-      const packageJson = path.join(packageDir, "package.json");
-      fs.writeFileSync(
-        packageJson,
-        JSON.stringify({ ...JSON.parse(fs.readFileSync(packageJson, "utf8")), type: "module" }),
-      );
-      fs.writeFileSync(
-        path.join(packageDir, "openclaw.plugin.json"),
-        JSON.stringify({
+      writeFiles(packageDir, {
+        "package.json": {
+          ...JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8")),
+          type: "module",
+        },
+        "openclaw.plugin.json": {
           id: pluginId,
           contracts: { tools: [toolName] },
           configSchema: { type: "object", additionalProperties: false },
-        }),
-      );
-      fs.writeFileSync(path.join(packageDir, "README.md"), "Native companion fixture.\n");
-      fs.writeFileSync(path.join(packageDir, "dist", "fixture.bin"), "native fixture bytes");
-      fs.writeFileSync(
-        path.join(packageDir, "dist", "index.js"),
-        `
+        },
+        "README.md": "Native companion fixture.\n",
+        "dist/fixture.bin": "native fixture bytes",
+        "dist/index.js": `
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -101,14 +104,12 @@ export default {
   },
 };
 `,
-      );
+      });
       const config: OpenClawConfig = {
         agents: {
           ownership: "explicit",
           defaults: { systemAgent: { agentId: "main" }, model: "fixture/local" },
-          entries: {
-            main: { workspace: state.workspaceDir, tools: { allow: [toolName] } },
-          },
+          entries: { main: { workspace: state.workspaceDir, tools: { allow: [toolName] } } },
         },
         models: {
           providers: {
@@ -137,12 +138,12 @@ export default {
           slots: { memory: "none" },
         },
       };
-      const installRecords: Record<string, PluginInstallRecord> = {
-        // ClawHub npm artifacts use managed capture custody, not retained npm references.
-        [pluginId]: { source: "clawhub", installPath: packageDir },
-      };
       await state.writeConfig(config);
-      await seedInstalledPluginIndex(installRecords, { config, env: state.env });
+      // ClawHub npm artifacts use managed capture custody, not retained npm references.
+      await seedInstalledPluginIndex(
+        { [pluginId]: { source: "clawhub", installPath: packageDir } },
+        { config, env: state.env },
+      );
       const parent = createPluginCache();
       const fresh = createPluginCache();
       const readIndex = () => readPersistedInstalledPluginIndexRowSync({ env: state.env });
@@ -158,11 +159,10 @@ export default {
       const check = {
         ...runtimeToolSchemaCheck,
         detect(ctx: HealthCheckContext) {
-          const preparedContext = {
+          return runtimeToolSchemaCheck.detect({
             ...ctx,
             runWithPluginMetadataSnapshot: prepared.run,
-          };
-          return runtimeToolSchemaCheck.detect(preparedContext);
+          });
         },
       };
       contributions.resolve.mockResolvedValue([check]);
@@ -224,7 +224,6 @@ export default {
         }
         await inspect(fresh);
       } finally {
-        stdout.mockRestore();
         await Promise.all([parent, fresh].map((cache) => retirePluginCache(cache)));
       }
     },
@@ -238,18 +237,17 @@ it("keeps native plugin captures alive after Doctor retires its private state sn
     await closeOpenClawStateDatabaseAsync();
     const plugin = state.path("channel-plugin");
     fs.mkdirSync(plugin);
-    fs.writeFileSync(path.join(plugin, "package.json"), '{"name":"channel-fixture"}');
-    fs.writeFileSync(path.join(plugin, "README.md"), "channel companion");
-    fs.writeFileSync(path.join(plugin, "addon.node"), "synthetic native bytes");
-    fs.writeFileSync(
-      path.join(plugin, "index.cjs"),
-      `const fs = require("node:fs");
+    writeFiles(plugin, {
+      "package.json": { name: "channel-fixture" },
+      "README.md": "channel companion",
+      "addon.node": "synthetic native bytes",
+      "index.cjs": `const fs = require("node:fs");
        const path = require("node:path");
        exports.read = () => {
          const native = fs.realpathSync(path.join(__dirname, "addon.node"));
          return fs.readFileSync(path.join(path.dirname(native), "README.md"), "utf8");
        };`,
-    );
+    });
     const cache = createPluginCache();
     const instances: PluginInstance[] = [];
     const load = () => {
@@ -264,7 +262,7 @@ it("keeps native plugin captures alive after Doctor retires its private state sn
     let snapshotHasCaptures = false;
     contributions.resolve.mockResolvedValue([
       {
-        id: "core/doctor/runtime-tool-schemas",
+        id: runtimeToolSchemaCheck.id,
         kind: "core",
         description: "Inspect channel plugin",
         async detect() {
@@ -277,15 +275,14 @@ it("keeps native plugin captures alive after Doctor retires its private state sn
       },
     ]);
     clearHealthChecksForTest();
-    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    vi.spyOn(process.stdout, "write").mockReturnValue(true);
     try {
       await withPluginCache(cache, async () => {
-        expect(
-          await runDoctorLintCliInProcess(createTestRuntime(), {
-            json: true,
-            onlyIds: ["core/doctor/runtime-tool-schemas"],
-          }),
-        ).toBe(0);
+        const exitCode = await runDoctorLintCliInProcess(createTestRuntime(), {
+          json: true,
+          onlyIds: [runtimeToolSchemaCheck.id],
+        });
+        expect(exitCode).toBe(0);
         expect(privateState).not.toBe(state.stateDir);
         expect(fs.existsSync(privateState)).toBe(false);
         expect(first?.read()).toBe("channel companion");
@@ -294,12 +291,10 @@ it("keeps native plugin captures alive after Doctor retires its private state sn
         expect(load().read()).toBe("channel companion");
       });
     } finally {
-      stdout.mockRestore();
       for (const instance of instances) {
         await instance.dispose();
       }
       await retirePluginCache(cache);
-      clearHealthChecksForTest();
     }
   });
 });

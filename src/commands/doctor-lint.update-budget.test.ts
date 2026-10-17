@@ -26,6 +26,8 @@ const observed = vi.hoisted(() => ({
   runtimePreparations: 0,
   reports: 0,
 }));
+const warning = (checkId: string, fields: object) =>
+  expect.objectContaining({ checkId, severity: "warning", ...fields });
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
@@ -47,7 +49,6 @@ vi.mock("../flows/bundled-health-checks.js", async (importOriginal) => {
   return {
     ...actual,
     registerBundledHealthChecks({ cfg }: { cfg: OpenClawConfig }) {
-      // Charge synchronous plugin preparation without delaying the test process.
       observed.now += Object.keys(cfg.agents?.entries ?? {}).length * 1_000;
       registerHealthCheck({
         id: "fixture/fleet-inspection",
@@ -78,17 +79,10 @@ afterEach(() => {
   clearHealthChecksForTest();
 });
 
-type DriverFixture = {
-  /** Drivers since 2026.10.1 record this receipt before copying private state. */
-  snapshotReceipt?: boolean;
-  /** Time since `validating` started, including snapshot and earlier commands. */
-  validationElapsedMs?: number;
-};
-
 async function runLintFixture(
   agentCount: number,
   options: DoctorLintCliOptions = {},
-  { snapshotReceipt = false, validationElapsedMs = 20_000 }: DriverFixture = {},
+  { snapshotReceipt = false, validationElapsedMs = 20_000 } = {},
 ) {
   const processTempDir = os.tmpdir();
   return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -162,9 +156,15 @@ async function runLintFixture(
         severityMin: "error",
         ...options,
       });
+      const text = String(stdout.mock.calls.at(-1)?.[0]);
+      const report = parseReleasedDoctorLintReport(text);
       return {
         exitCode,
-        stdout: String(stdout.mock.calls.at(-1)?.[0]),
+        stdout: text,
+        report,
+        deferred: report.warnings.filter(
+          (finding) => finding.errorCode === "update-inspection-deferred",
+        ),
         elapsedMs: observed.now - startedAt,
         budget,
         budgetResolvedAt,
@@ -183,11 +183,10 @@ it.each([3, 480])(
   "keeps published-driver lint within budget and reports deferred work for %i agents",
   async (agentCount) => {
     const result = await runLintFixture(agentCount);
-    const report = parseReleasedDoctorLintReport(result.stdout);
+    const { report } = result;
     expect(result.exitCode, result.stdout).toBe(0);
-    expect(report).toMatchObject({ ok: true, findings: [] });
+    expect(report).toMatchObject({ ok: true, findings: [], checksRun: agentCount === 3 ? 2 : 0 });
     expect(result.elapsedMs).toBeLessThan(298_000);
-    expect(report.checksRun).toBe(agentCount === 3 ? 2 : 0);
     expect(report.warnings).toEqual([
       agentCount === 3
         ? {
@@ -195,9 +194,7 @@ it.each([3, 480])(
             severity: "warning",
             message: "Synthetic optional plugin diagnostic.",
           }
-        : expect.objectContaining({
-            checkId: "core/doctor/lint-inspection",
-            severity: "warning",
+        : warning("core/doctor/lint-inspection", {
             errorCode: "update-inspection-deferred",
             requirement: "update-validation-budget",
             fixHint: expect.stringContaining("openclaw doctor"),
@@ -215,31 +212,30 @@ it.each([
     // #170333: snapshot 122s + candidate-doctor 153s before lint started. The
     // copied ledger has no candidate-doctor-lint step; it ends at the snapshot.
     const result = await runLintFixture(3, {}, { snapshotReceipt, validationElapsedMs: 280_000 });
-    const report = parseReleasedDoctorLintReport(result.stdout);
+    const { report, budgetResolvedAt } = result;
     expect(result.exitCode, result.stdout).toBe(0);
     expect(report.ok).toBe(true);
-    const deferred = report.warnings.filter(
-      (finding) => finding.errorCode === "update-inspection-deferred",
+    const { deferred } = result;
+    expect(report.checksRun).toBe(snapshotReceipt ? 2 : 0);
+    expect(result.budget?.source).toBe(
+      snapshotReceipt ? "validation-command" : "validation-ledger",
+    );
+    expect(result.budget?.commandStartedAtMs).toBe(
+      snapshotReceipt ? budgetResolvedAt - 1_000 : undefined,
     );
     if (snapshotReceipt) {
-      expect(result.budget).toMatchObject({ source: "validation-command" });
-      expect(result.budget?.commandStartedAtMs).toBe(result.budgetResolvedAt - 1_000);
-      // Disposal keeps nearly the full fresh command budget, not a ms-scale clamp.
-      expect(result.budget!.disposalDeadlineMs! - result.budgetResolvedAt).toBe(287_000);
-      expect(result.inheritedBudget?.commandStartedAtMs).toBe(result.budgetResolvedAt - 5_000);
-      expect(result.inheritedBudget?.disposalDeadlineMs).toBe(result.budgetResolvedAt + 283_000);
+      expect(result.budget?.disposalDeadlineMs).toBe(budgetResolvedAt + 287_000);
+      expect(result.inheritedBudget).toMatchObject({
+        commandStartedAtMs: budgetResolvedAt - 5_000,
+        disposalDeadlineMs: budgetResolvedAt + 283_000,
+      });
       expect(deferred).toEqual([]);
-      expect(report.checksRun).toBe(2);
     } else {
-      expect(result.budget).toMatchObject({ source: "validation-ledger" });
-      expect(result.budget?.commandStartedAtMs).toBeUndefined();
       expect(deferred).toEqual([
-        expect.objectContaining({
-          checkId: "core/doctor/lint-inspection",
+        warning("core/doctor/lint-inspection", {
           message: expect.stringContaining("(validation-ledger)"),
         }),
       ]);
-      expect(report.checksRun).toBe(0);
     }
   },
 );
@@ -248,21 +244,22 @@ it.each(["selected", "required-error"])(
   "defers optional rehearsal inspection without weakening lint gates (%s)",
   async (mode) => {
     const runtimeCheckId = "core/doctor/runtime-tool-schemas";
+    const makeCheck = (
+      name: string,
+      updateWork?: DoctorHealthCheck["updateWork"],
+      defaultEnabled = true,
+    ) => ({ id: `core/doctor/${name}`, updateWork, defaultEnabled });
     const optional = [
-      { id: runtimeCheckId, updateWork: { kind: "inspection", scope: "agent" } },
-      { id: "core/doctor/standalone", updateWork: { kind: "standalone" } },
-      {
-        id: "core/doctor/opt-in",
-        updateWork: { kind: "inspection", scope: "run" },
-        defaultEnabled: false,
-      },
-      { id: "core/doctor/skipped", updateWork: { kind: "inspection", scope: "run" } },
-    ] satisfies Array<Omit<DoctorHealthCheck, "kind" | "description" | "detect">>;
+      makeCheck("runtime-tool-schemas", { kind: "inspection", scope: "agent" }),
+      makeCheck("standalone", { kind: "standalone" }),
+      makeCheck("opt-in", { kind: "inspection", scope: "run" }, false),
+      makeCheck("skipped", { kind: "inspection", scope: "run" }),
+    ];
     const required = [
-      { id: "core/doctor/unclassified" },
-      { id: "core/doctor/startup", updateWork: { kind: "startup" } },
-      { id: "core/doctor/finalize", updateWork: { kind: "finalize" } },
-    ] satisfies Array<Omit<DoctorHealthCheck, "kind" | "description" | "detect">>;
+      makeCheck("unclassified"),
+      makeCheck("startup", { kind: "startup" }),
+      makeCheck("finalize", { kind: "finalize" }),
+    ];
     const detected: string[] = [];
     const requiredStarted = createDeferredCore();
     const requiredContinuation = createDeferredCore();
@@ -277,7 +274,6 @@ it.each(["selected", "required-error"])(
             await requiredContinuation.promise;
           }
           if (check.id === runtimeCheckId) {
-            // Charge the reported cold inspection cost without a timer or delay.
             observed.now += 72_000;
           }
           return mode === "required-error" && check.id === "core/doctor/finalize"
@@ -306,7 +302,7 @@ it.each(["selected", "required-error"])(
       result = await pendingLint;
     }
     expect(observed.reports).toBe(1);
-    const report = parseReleasedDoctorLintReport(result.stdout);
+    const { report } = result;
     const deferred = mode !== "selected";
     const failed = mode === "required-error";
     expect(result.exitCode, result.stdout).toBe(failed ? 1 : 0);
@@ -325,14 +321,10 @@ it.each(["selected", "required-error"])(
           ]
         : [],
     );
-    expect(
-      report.warnings.filter((finding) => finding.errorCode === "update-inspection-deferred"),
-    ).toEqual(
+    expect(result.deferred).toEqual(
       deferred
         ? [runtimeCheckId, "core/doctor/standalone"].map((checkId) =>
-            expect.objectContaining({
-              checkId,
-              severity: "warning",
+            warning(checkId, {
               requirement: "update-validation-scope",
               message: expect.stringContaining("after update activation"),
               fixHint: expect.stringContaining(`--only ${checkId}`),
