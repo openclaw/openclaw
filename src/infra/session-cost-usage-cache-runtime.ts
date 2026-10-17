@@ -46,6 +46,8 @@ type UsageCostRefreshState = {
   env?: NodeJS.ProcessEnv;
   sessionActor?: SessionActorStorageBinding;
   fullRefreshRequested: boolean;
+  fullRefreshStartMs?: number;
+  fullRefreshEndMs?: number;
   pendingSessionFiles: Map<string, { firstAt: number; lastAt: number } | null>;
   pendingRebuildRows: Map<string, SessionCostUsageRollupRow>;
   storePath: string;
@@ -62,6 +64,8 @@ type UsageCostRefreshRequest = Pick<UsageCostRefreshState, "agentId" | "config" 
   env?: NodeJS.ProcessEnv;
   sessionActor?: SessionActorStorageBinding;
   sessionFiles?: string[];
+  startMs?: number;
+  endMs?: number;
   rebuildRows?: SessionCostUsageRollupRow[];
   /** Defer transcript publications to an idle gap; on-demand reads flush them. */
   coalesce?: boolean;
@@ -175,6 +179,8 @@ async function loadAggregateCostUsageSummary(
         agentDir: prepared.agentDir,
         databasePath,
         storePath,
+        startMs: params.startMs,
+        endMs: params.endMs,
         sessionActor: prepared.sessionActor,
       })
     : undefined;
@@ -203,6 +209,8 @@ async function loadAggregateCostUsageSummary(
       config: params.config,
       agentId: params.agentId,
       storePath,
+      startMs: params.startMs,
+      endMs: params.endMs,
       rebuildRows: invalidRows,
       sessionActor: prepared.sessionActor,
     });
@@ -378,6 +386,16 @@ function mergeUsageCostRefreshRequest(
     state.pendingSessionFiles.set(row.key, null);
   }
   if (!params.sessionFiles) {
+    state.fullRefreshStartMs = state.fullRefreshRequested
+      ? state.fullRefreshStartMs === undefined || params.startMs === undefined
+        ? undefined
+        : Math.min(state.fullRefreshStartMs, params.startMs)
+      : params.startMs;
+    state.fullRefreshEndMs = state.fullRefreshRequested
+      ? state.fullRefreshEndMs === undefined || params.endMs === undefined
+        ? undefined
+        : Math.max(state.fullRefreshEndMs, params.endMs)
+      : params.endMs;
     state.fullRefreshRequested = true;
     return;
   }
@@ -496,12 +514,18 @@ async function runQueuedUsageCostRefresh(
         if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
           const priorityFiles = [...state.readingSessionFiles.keys()];
           const fullRefreshRequested = state.fullRefreshRequested && priorityFiles.length === 0;
+          const fullRefreshStartMs = state.fullRefreshStartMs;
+          const fullRefreshEndMs = state.fullRefreshEndMs;
+          const boundedFullRefresh =
+            fullRefreshRequested &&
+            (fullRefreshStartMs !== undefined || fullRefreshEndMs !== undefined);
           partialBatch = !fullRefreshRequested;
           const sessionFiles: string[] = [];
           if (fullRefreshRequested) {
             // Keep dirty publications explicit: discovery may leave them beyond its batch.
             for (const file of state.pendingSessionFiles.keys()) {
-              if (!state.dirtySessionFiles.has(file)) {
+              // A bounded aggregate cannot supersede an explicit out-of-window selector.
+              if (!boundedFullRefresh && !state.dirtySessionFiles.has(file)) {
                 state.pendingSessionFiles.delete(file);
               }
             }
@@ -523,6 +547,8 @@ async function runQueuedUsageCostRefresh(
           const rebuildRows = [...state.pendingRebuildRows.values()];
           if (fullRefreshRequested) {
             state.fullRefreshRequested = false;
+            state.fullRefreshStartMs = undefined;
+            state.fullRefreshEndMs = undefined;
           }
           state.runningSessionFiles = fullRefreshRequested ? "all" : new Set(sessionFiles);
           const remainingRollupIds = new Set<string>();
@@ -532,6 +558,8 @@ async function runQueuedUsageCostRefresh(
             databasePath: state.databasePath,
             storePath: state.storePath,
             sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
+            startMs: fullRefreshRequested ? fullRefreshStartMs : undefined,
+            endMs: fullRefreshRequested ? fullRefreshEndMs : undefined,
             maxFiles: USAGE_COST_REFRESH_BATCH_SIZE,
             onRemaining: (files) => {
               for (const { sessionFile, rollupId } of files) {
@@ -551,7 +579,13 @@ async function runQueuedUsageCostRefresh(
           }
           if (result === "busy") {
             if (fullRefreshRequested) {
-              state.fullRefreshRequested = true;
+              mergeUsageCostRefreshRequest(state, {
+                agentId: state.agentId,
+                config: state.config,
+                storePath: state.storePath,
+                startMs: fullRefreshStartMs,
+                endMs: fullRefreshEndMs,
+              });
             } else {
               state.pendingSessionFiles = new Map([
                 ...sessionFiles.map((file) => [file, null] as const),
@@ -567,6 +601,7 @@ async function runQueuedUsageCostRefresh(
             if (
               (fullRefreshRequested || sessionFiles.includes(row.key)) &&
               !remainingRollupIds.has(row.key) &&
+              !state.pendingSessionFiles.has(row.key) &&
               state.pendingRebuildRows.get(row.key) === row
             ) {
               state.pendingRebuildRows.delete(row.key);

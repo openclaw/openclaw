@@ -638,3 +638,43 @@ test("keeps same-agent refreshes owned by independent scopes", async ({
   await second.drain();
   expect(completed).toEqual(["first", "second"]);
 });
+
+test("keeps a newer selected rebuild row after a bounded full refresh returns busy", async ({
+  usage: {
+    files: [sessionFile],
+    request,
+    refresh,
+    hold,
+  },
+}) => {
+  const olderRow = { key: sessionFile, updatedAt: 1, valueJson: "older cached row" };
+  const newerRow = { key: sessionFile, updatedAt: 2, valueJson: "newer cached row" };
+  const firstAttempt = hold("busy");
+  refresh.mockReturnValueOnce(firstAttempt.promise).mockResolvedValue("refreshed");
+  request({ sessionFiles: [sessionFile], rebuildRows: [olderRow] });
+  request({ startMs: 10, endMs: 20 });
+  await tick(0, 1);
+  expect(refresh.mock.calls[0]?.[0]).toMatchObject({
+    startMs: 10,
+    endMs: 20,
+    rebuildRows: [olderRow],
+  });
+  request({ sessionFiles: [sessionFile], rebuildRows: [newerRow] });
+  firstAttempt.resolve("busy");
+  await tick(49, 1);
+  await tick(1, 2);
+  await tick(1, 3);
+  expect(refresh.mock.calls[1]?.[0]).toMatchObject({
+    startMs: 10,
+    endMs: 20,
+    rebuildRows: [newerRow],
+  });
+  expect(refresh.mock.calls[1]?.[0].sessionFiles).toBeUndefined();
+  expect(refresh.mock.calls[2]?.[0]).toMatchObject({
+    sessionFiles: [sessionFile],
+    rebuildRows: [newerRow],
+  });
+  expect(refresh.mock.calls[2]?.[0].startMs).toBeUndefined();
+  expect(refresh.mock.calls[2]?.[0].endMs).toBeUndefined();
+  expectNoTimers();
+});

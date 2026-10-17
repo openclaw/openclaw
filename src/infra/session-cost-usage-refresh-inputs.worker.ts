@@ -13,6 +13,7 @@ import {
   assertCanonicalSqliteSessionKeysCurrent,
   readWithCanonicalSessionAdmission,
 } from "../config/sessions/session-canonical-key.js";
+import type { SessionTranscriptEventTimeRange } from "../config/sessions/transcript-event-time.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { SessionMetadataUnavailableError } from "../state/session-metadata-unavailable-error.js";
@@ -72,6 +73,7 @@ export function createUsageCostCollectionAccess(params: {
   control: WorkerTaskControl;
   target: (agentId: string, storePath: string) => UsageCostWorkerDatabase;
   readStore: <T>(agentId: string, storePath: string, read: () => T) => Promise<T>;
+  preflightSqliteEventTime?: UsageCostCollectionAccess["preflightSqliteEventTime"];
 }) {
   const { input, control, target, readStore } = params;
   const { location, operation } = input;
@@ -95,6 +97,7 @@ export function createUsageCostCollectionAccess(params: {
   }
   const access: UsageCostCollectionAccess = {
     env,
+    preflightSqliteEventTime: params.preflightSqliteEventTime,
     materializeArchive: (sourcePath) =>
       control.runNativeSection(() => materializeSessionArchiveForRead(sourcePath)),
     listSqliteMetadataStores: () => input.archiveStorePaths,
@@ -188,11 +191,15 @@ export function createUsageCostCollectionAccess(params: {
     },
   };
 
-  const inventory = async (sessionsDir?: string) =>
+  const inventory = async (
+    eventTimeRange?: SessionTranscriptEventTimeRange,
+    sessionsDir?: string,
+  ) =>
     listUsageCountedTranscriptStats(location.agentId, {
       ...access,
       storePath: location.storePath,
       sessionsDir,
+      eventTimeRange,
     });
   return {
     access,

@@ -21,6 +21,7 @@ import {
 } from "./session-cost-usage-cache.kernel.js";
 import {
   listUsageCountedTranscriptSources,
+  resolveUsageCostTranscriptFilesInEventTimeRange,
   resolveUsageCostTranscriptSources,
   resolveUsageCostTranscriptFiles,
   resolveUsageCostTranscriptPaths,
@@ -43,6 +44,9 @@ import {
   usageRefreshInputs,
 } from "./session-cost-usage-refresh-inputs.worker.js";
 import {
+  boundedInventoryEventTimeRange,
+  boundedInventoryStartMs,
+  cachedRollupMayOverlapEventTimeRange,
   canUseUsageCostRollupForPartial,
   decodeUsageCostRollup,
   decodeUsageCostRollupEnvelope,
@@ -50,6 +54,7 @@ import {
   USAGE_COST_ROLLUP_VERSION,
   type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
+import { createUsageCostEventTimePreflight } from "./session-cost-usage-worker-event-time-access.js";
 import {
   createUsageCostWorkerPriceResolver,
   scanUsageCostRollupInWorker,
@@ -60,6 +65,7 @@ import {
 } from "./session-cost-usage-worker-report.js";
 import {
   UsageCostHostEffectError,
+  type CachedSummaryEventTimeLookup,
   type UsageCostWorkerDatabase,
   type UsageCostWorkerHostEffects,
   type UsageCostWorkerHostReply,
@@ -121,22 +127,38 @@ export async function executeUsageCostWorker(
   };
   const refreshInputs =
     operation.kind === "refresh" ? usageRefreshInputs(location.databasePath) : undefined;
+  let cachedSummaryEventTimeLookup: CachedSummaryEventTimeLookup | undefined;
   const { access, readFacts, inventory } = createUsageCostCollectionAccess({
     input,
     control,
     target,
     readStore,
+    preflightSqliteEventTime: createUsageCostEventTimePreflight({
+      input,
+      control,
+      target,
+      readStore,
+      cachedSummaryEventTimeLookup: () => cachedSummaryEventTimeLookup,
+    }),
   });
   if (operation.kind === "inventory") {
     const selected = operation.sessionFiles;
     const files = selected
-      ? (await resolveUsageCostTranscriptSources(selected, access)).filter(
-          (file) => file !== undefined,
-        )
+      ? (operation.eventTimeRange
+          ? await resolveUsageCostTranscriptFilesInEventTimeRange(
+              selected,
+              operation.eventTimeRange,
+              access,
+              true,
+            )
+          : await resolveUsageCostTranscriptSources(selected, access)
+        ).filter((file) => file !== undefined)
       : await listUsageCountedTranscriptSources(location.agentId, {
           ...access,
           storePath: location.storePath,
           minMtimeMs: operation.minMtimeMs,
+          eventTimeRange: operation.eventTimeRange,
+          requireEventTimeEvidence: true,
         });
     return {
       kind: "inventory",
@@ -306,6 +328,28 @@ export async function executeUsageCostWorker(
       entries: Map<string, ReturnType<typeof prepareUsageCostReportEntry>>,
     ): Promise<UsageCostWorkerResult> => {
       const byPath = new Map(rows.map((row) => [row.key, row]));
+      if (operation.kind === "summary") {
+        cachedSummaryEventTimeLookup = async (marker, range, file) => {
+          const prepared = entries.get(file.filePath);
+          const checkpoint = prepared?.envelope?.checkpoint;
+          if (
+            file.kind !== "sqlite" ||
+            file.sessionId !== marker.sessionId ||
+            checkpoint?.kind !== "sqlite" ||
+            (checkpoint.generation ?? null) !== (file.generation ?? null) ||
+            !isUsageCostRollupFresh({ checkpoint, file })
+          ) {
+            return undefined;
+          }
+          // Only already-captured bounded projection metadata can prove exclusion.
+          // Do not decode or reread cache bodies outside the main report allowance.
+          return cachedRollupMayOverlapEventTimeRange(
+            undefined,
+            range,
+            prepared?.envelope?.projection,
+          );
+        };
+      }
       // Uncached sessions remain pending; only cached reports need transcript freshness.
       const sessions =
         operation.kind === "sessions"
@@ -343,18 +387,23 @@ export async function executeUsageCostWorker(
           });
         }
       }
-      const reportFiles =
-        operation.kind === "summary"
-          ? await inventory()
-          : [
-              ...discovered,
-              ...(await resolveUsageCostTranscriptFiles(
-                sessions
-                  .filter((session) => !session.transcriptFile)
-                  .map((session) => session.sessionFile),
-                access,
-              )),
-            ];
+      let reportFiles;
+      try {
+        reportFiles =
+          operation.kind === "summary"
+            ? await inventory(boundedInventoryEventTimeRange(operation.startMs, operation.endMs))
+            : [
+                ...discovered,
+                ...(await resolveUsageCostTranscriptFiles(
+                  sessions
+                    .filter((session) => !session.transcriptFile)
+                    .map((session) => session.sessionFile),
+                  access,
+                )),
+              ];
+      } finally {
+        cachedSummaryEventTimeLookup = undefined;
+      }
       const filesByPath = new Map(
         reportFiles.flatMap((file) => (file ? [[file.filePath, file] as const] : [])),
       );
@@ -472,10 +521,19 @@ export async function executeUsageCostWorker(
   if (requestedFiles.length !== (operation.sessionFiles?.length ?? 0)) {
     throw new WorkerTaskError("A requested usage transcript is unavailable", "unavailable");
   }
-  const files = operation.sessionFiles ? requestedFiles : await inventory(operation.sessionsDir);
+  const inventoryStartMs = boundedInventoryStartMs(operation.startMs);
+  const incrementalForeground = inventoryStartMs !== undefined && operation.endMs === undefined;
+  const files = operation.sessionFiles
+    ? requestedFiles
+    : await inventory(
+        incrementalForeground
+          ? undefined
+          : boundedInventoryEventTimeRange(operation.startMs, operation.endMs),
+        operation.sessionsDir,
+      );
   const filesByPath = new Map(files.map((file) => [file.filePath, file]));
   let pruned = false;
-  if (!operation.sessionFiles) {
+  if (!operation.sessionFiles && inventoryStartMs === undefined) {
     let batch: UsageCostWorkerHostEffects["prune-rows"]["input"] = [];
     let batchBytes = 0;
     const sendBatch = async () => {
@@ -503,7 +561,8 @@ export async function executeUsageCostWorker(
       await host("prune", {});
     }
   }
-  const minMtimeMs = operation.sessionFiles ? undefined : operation.startMs;
+  const minMtimeMs =
+    !operation.sessionFiles && incrementalForeground ? inventoryStartMs : undefined;
   const rebuildByPath = new Map(operation.rebuildRows?.map((row) => [row.key, row]));
   const stale = [];
   for (const file of filesByPath.values()) {

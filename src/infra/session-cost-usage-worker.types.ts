@@ -1,5 +1,6 @@
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import type { SessionTranscriptEventTimeRange } from "../config/sessions/transcript-event-time.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import type {
@@ -28,6 +29,12 @@ export type SessionCostUsageWorkerScope = {
 
 export type UsageCostWorkerDatabase = { agentId: string; path: string };
 
+export type CachedSummaryEventTimeLookup = (
+  marker: SqliteSessionFileMarker,
+  range: SessionTranscriptEventTimeRange,
+  file: UsageCostTranscriptFile,
+) => Promise<boolean | undefined>;
+
 export type UsageCostWorkerLocation = {
   agentId: string;
   databasePath: string;
@@ -42,7 +49,12 @@ type UsageCostWorkerRange = {
 };
 
 export type UsageCostWorkerOperation =
-  | { kind: "inventory"; minMtimeMs?: number; sessionFiles?: string[] }
+  | {
+      kind: "inventory";
+      eventTimeRange?: SessionTranscriptEventTimeRange;
+      minMtimeMs?: number;
+      sessionFiles?: string[];
+    }
   | ({ kind: "summary"; pricingFingerprint: string } & UsageCostWorkerRange)
   | {
       kind: "sessions";
@@ -66,6 +78,7 @@ export type UsageCostWorkerOperation =
       sessionsDir?: string;
       sessionFiles?: string[];
       startMs?: number;
+      endMs?: number;
       rebuildRows?: SessionCostUsageRollupRow[];
     };
 

@@ -3460,6 +3460,8 @@ const workerModules = new Set([
   "src/channels/message/ingress-queue.kernel.ts",
 
   "src/config/sessions/session-accessor.sqlite-archive-selection.ts", // Archive worker read-page selection only.
+  "src/config/sessions/session-accessor.sqlite-event-time.ts", // Cold archive event-time inspection is imported only by usage-cost collection/access workers; the Gateway memory path now uses the existing transcript projection.
+  "src/config/sessions/session-accessor.sqlite-event-time.worker.ts", // SQL readers are imported only by usage-cost collection/access workers, both reached through session-cost-usage-worker.ts.
   "src/config/sessions/session-accessor.sqlite-mutation-worker.runtime.ts",
   "src/config/sessions/session-accessor.sqlite-summary.ts", // Only session-transcript.worker.ts dispatches the summary kernel at runtime.
   "src/config/sessions/session-accessor.sqlite-transcript-binding.ts", // History worker transcript-binding reader only.
@@ -3493,6 +3495,7 @@ const workerModules = new Set([
   "src/infra/promotions-feed.kernel.ts", // Promotion claims execute through promotions-feed.worker.
   "src/infra/push-apns-store-transaction.ts", // APNs worker cleanup and pairing worker clearApnsNodeIds only.
   "src/infra/push-apns-store.ts", // SQL read kernels are called only by the APNs worker dispatcher.
+  "src/infra/session-cost-usage-worker-event-time-access.ts", // Durable event-time evidence uses captured worker custody; actor memory stays with its acquired owner.
   "src/infra/session-cost-usage-worker.ts",
   "src/infra/telemetry-store.kernel.ts", // Telemetry SQL executes through the shared-state worker runtime.
   "src/infra/update-candidate-exec-approvals.ts", // Approval projections run in the update-candidate-state worker.
