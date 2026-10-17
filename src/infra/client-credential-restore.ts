@@ -165,22 +165,22 @@ export function rebindRehearsalClientCredentials(options: ClientCredentialRehear
   }
 }
 
-/** Only the verified archive owner may relocate a matched shared/local pair. */
-export function rebindRestoredClientCredentials(options: {
+/** Validate archive captures before their owner publishes the final shared/local pair. */
+export function prepareRestoredClientCredentials(options: {
   manifest: BackupManifest;
   targetPath: string;
-}): void {
+}): (() => void) | undefined {
   const { manifest, targetPath } = options;
   const state = manifest.assets.find((asset) => asset.kind === "state");
   const shared = manifest.sqliteSnapshots?.find((snapshot) => snapshot.role === "global");
   if (!state || !shared) {
-    return;
+    return undefined;
   }
   const stateDir = path.join(targetPath, state.archivePath);
   const env = { OPENCLAW_STATE_DIR: stateDir };
   const localPath = resolveClientCredentialStorePath(env);
   if (!fs.existsSync(localPath)) {
-    return;
+    return undefined;
   }
   const sharedPath = path.join(
     targetPath,
@@ -195,8 +195,9 @@ export function rebindRestoredClientCredentials(options: {
     postgresExportDirectory: `${sharedPath}.postgres`,
   });
   if (receipt) {
-    publishRestoredReceipt(receipt, sharedPath, env);
+    return () => publishRestoredReceipt(receipt, sharedPath, env);
   }
+  return undefined;
 }
 
 /** Validate captured bytes before replacement; publish only under the restore owner's custody. */

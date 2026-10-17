@@ -31,7 +31,7 @@ import {
   writeClientCredentialReceipt,
 } from "./client-credential-readiness.js";
 import type { ClientCredentialReceipt } from "./client-credential-receipt.js";
-import { rebindRestoredClientCredentials } from "./client-credential-restore.js";
+import { prepareRestoredClientCredentials } from "./client-credential-restore.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
 import {
   openClientCredentialCustody,
@@ -223,7 +223,7 @@ describe("whole-archive credential relocation", () => {
           assets: [{ kind: "state", sourcePath: state.stateDir, archivePath: stateArchivePath }],
           sqliteSnapshots: [{ role: "global", sourcePath: sharedPath }],
         };
-        rebindRestoredClientCredentials({ manifest, targetPath });
+        prepareRestoredClientCredentials({ manifest, targetPath })?.();
         const restoredEnv = { ...state.env, OPENCLAW_STATE_DIR: restoredStateDir };
         {
           using local = openClientCredentialCustody(restoredEnv, { migration: true })!;
