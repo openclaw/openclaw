@@ -25,8 +25,6 @@ import { clientVoiceSessionTesting } from "./client-voice-session.test-support.j
 
 type ForkSessionEntryFromParent =
   typeof import("../auto-reply/reply/session-fork.js").forkSessionEntryFromParent;
-type ForkSessionEntryFromParentParams = Parameters<ForkSessionEntryFromParent>[0];
-type ForkSessionEntryFromParentResult = Awaited<ReturnType<ForkSessionEntryFromParent>>;
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionEntryFromParent: vi.fn<ForkSessionEntryFromParent>(),
@@ -51,27 +49,7 @@ function testTempPath(name: string): string {
 }
 
 function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
-  const sessionStore: Record<
-    string,
-    {
-      sessionId?: string;
-      updatedAt?: number;
-      createdVia?: SessionEntry["createdVia"];
-      createdActor?: SessionEntry["createdActor"];
-      createdAt?: number;
-      sandbox?: SessionEntry["sandbox"];
-      archivedAt?: number;
-      sessionFile?: string;
-      spawnedBy?: string;
-      agentHarnessId?: string;
-      modelSelectionLocked?: boolean;
-      forkedFromParent?: boolean;
-      totalTokens?: number;
-      delivery?: SessionEntry["delivery"];
-      permissionMode?: SessionEntry["permissionMode"];
-      toolOverrides?: SessionEntry["toolOverrides"];
-    }
-  > = {};
+  const sessionStore: Record<string, Partial<SessionEntry>> = {};
   const runEmbeddedAgent = vi.fn(async (_params?: RunEmbeddedAgentParams) => ({
     payloads,
     meta: {},
@@ -124,7 +102,7 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
 }
 
 type ConsultParams = Parameters<typeof consultRealtimeVoiceAgent>[0];
-type RequiredConsultParams = "agentRuntime" | "sessionKey" | "runIdPrefix" | "args";
+type RequiredConsultParams = "agentRuntime";
 
 function runConsult(
   params: Pick<ConsultParams, RequiredConsultParams> &
@@ -138,22 +116,53 @@ function runConsult(
     transcript: [],
     surface: "a live phone call",
     userLabel: "Caller",
+    sessionKey: "voice:consult",
+    runIdPrefix: "voice-consult",
+    args: { question: "What should I say?" },
     ...params,
   });
 }
 
-function requireEmbeddedAgentCall(runEmbeddedAgent: {
-  mock: { calls: unknown[][] };
-}): RunEmbeddedAgentParams {
-  const [call] = runEmbeddedAgent.mock.calls;
-  if (!call) {
+function expectNoDispatch(runtime: ReturnType<typeof createAgentRuntime>["runtime"]) {
+  expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
+  expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
+  expect(runtime.runEmbeddedAgent).not.toHaveBeenCalled();
+}
+
+const requesterSessionKey = "agent:main:main";
+const forkSessionKey = "agent:main:subagent:google-meet:meet-1";
+const lockedEntry = {
+  sessionId: "locked-session",
+  updatedAt: 1,
+  agentHarnessId: "codex",
+  modelSelectionLocked: true,
+};
+const forkConsult = (
+  agentRuntime: ConsultParams["agentRuntime"],
+  params: Partial<ConsultParams> = {},
+) =>
+  runConsult({
+    agentRuntime,
+    agentId: "main",
+    sessionKey: forkSessionKey,
+    spawnedBy: requesterSessionKey,
+    contextMode: "fork",
+    messageProvider: "google-meet",
+    lane: "google-meet",
+    runIdPrefix: "google-meet:meet-1",
+    surface: "a private Google Meet",
+    userLabel: "Participant",
+    ...params,
+  });
+
+function requireEmbeddedAgentCall(
+  runEmbeddedAgent: ReturnType<typeof createAgentRuntime>["runEmbeddedAgent"],
+): RunEmbeddedAgentParams {
+  const params = runEmbeddedAgent.mock.calls[0]?.[0];
+  if (!params) {
     throw new Error("Expected embedded OpenClaw agent call");
   }
-  const [params] = call;
-  if (typeof params !== "object" || params === null || Array.isArray(params)) {
-    throw new Error("Expected embedded OpenClaw agent params to be an object");
-  }
-  return params as RunEmbeddedAgentParams;
+  return params;
 }
 
 function expectPositiveTimestamp(value: unknown) {
@@ -202,11 +211,6 @@ describe("realtime voice agent consult runtime", () => {
     await expect(
       runConsult({
         agentRuntime: runtime as never,
-        sessionKey: "voice:closed",
-        runIdPrefix: "voice-realtime-consult:closed",
-        args: { question: "Do work" },
-        surface: "a live voice session",
-        userLabel: "User",
         abortSignal: controller.signal,
       }),
     ).rejects.toThrow("voice session closed");
@@ -223,9 +227,6 @@ describe("realtime voice agent consult runtime", () => {
       const cleanup = vi.fn();
       const consult = runConsult({
         agentRuntime: runtime as never,
-        sessionKey: "voice:registration",
-        runIdPrefix: "voice-registration",
-        args: { question: "Do work" },
         abortSignal: controller.signal,
         onRunStarted: async () => {
           entered.resolve();
@@ -292,8 +293,6 @@ describe("realtime voice agent consult runtime", () => {
       lane: "talk",
       runIdPrefix: "talk-realtime-consult",
       args: { question: "Ship it" },
-      surface: "a browser Talk session",
-      userLabel: "User",
       onRunStarted: async (startedRun) => {
         runId = startedRun.runId;
         await registerClientVoiceConsultRun({
@@ -355,23 +354,25 @@ describe("realtime voice agent consult runtime", () => {
     expectNonEmptyString(voiceSession.sessionId);
     expectPositiveTimestamp(voiceSession.updatedAt);
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
-    expect(call.sessionId).toBe(voiceSession.sessionId);
-    expect(call.sessionKey).toBe("voice:15550001234");
-    expect(call.sandboxSessionKey).toBe("agent:operator:voice:15550001234");
-    expect(call.agentId).toBe("operator");
-    expect(call.senderId).toBe("+15550001234");
-    expect(call.senderIsOwner).toBe(true);
-    expect(call.messageProvider).toBe("voice");
-    expect(call.lane).toBe("voice");
+    expect(call).toMatchObject({
+      sessionId: voiceSession.sessionId,
+      sessionKey: "voice:15550001234",
+      sandboxSessionKey: "agent:operator:voice:15550001234",
+      agentId: "operator",
+      senderId: "+15550001234",
+      senderIsOwner: true,
+      messageProvider: "voice",
+      lane: "voice",
+      provider: "openai",
+      model: "gpt-5.4",
+      thinkLevel: "high",
+      fastMode: true,
+      timeoutMs: 10_000,
+    });
     expect(call.toolsAllow).toStrictEqual(["read"]);
     expect(call.toolBindings).toStrictEqual({
       voice_call: { kind: "active-call", callId: "call-1" },
     });
-    expect(call.provider).toBe("openai");
-    expect(call.model).toBe("gpt-5.4");
-    expect(call.thinkLevel).toBe("high");
-    expect(call.fastMode).toBe(true);
-    expect(call.timeoutMs).toBe(10_000);
     expect(call.prompt).toBe(
       [
         "Live voice request from the caller during a live phone call.",
@@ -400,9 +401,6 @@ describe("realtime voice agent consult runtime", () => {
       agentRuntime: runtime as never,
       agentId: "main",
       sessionKey: "agent:main:voice",
-      runIdPrefix: "voice-permissions",
-      args: { question: "Read the report" },
-      surface: "a phone call",
       senderIsOwner: true,
     });
     expect(requireEmbeddedAgentCall(runEmbeddedAgent)).toMatchObject({
@@ -413,84 +411,46 @@ describe("realtime voice agent consult runtime", () => {
   });
 
   it("fails closed before dispatching a model for a locked Codex consult session", async () => {
-    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
-    sessionStore["voice:locked"] = {
-      sessionId: "locked-session",
-      updatedAt: 1,
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-    };
+    const { runtime, sessionStore } = createAgentRuntime();
+    sessionStore["voice:locked"] = { ...lockedEntry };
 
     await expect(
       runConsult({
         agentRuntime: runtime as never,
         sessionKey: "voice:locked",
-        runIdPrefix: "voice-realtime-consult:locked",
-        args: { question: "Continue this session." },
         provider: "openai",
         model: "gpt-5.4",
       }),
     ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
-    expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
-    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expectNoDispatch(runtime);
   });
 
   it("fails closed before forking or dispatching from a locked requester session", async () => {
-    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
-    sessionStore["agent:main:main"] = {
-      sessionId: "locked-requester",
-      updatedAt: 1,
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-    };
+    const { runtime, sessionStore } = createAgentRuntime();
+    sessionStore[requesterSessionKey] = { ...lockedEntry, sessionId: "locked-requester" };
     const forkSessionEntryFromParent = sessionForkMocks.forkSessionEntryFromParent;
 
     await expect(
-      runConsult({
-        agentRuntime: runtime as never,
+      forkConsult(runtime as never, {
         sessionKey: "agent:main:subagent:google-meet:meet-locked",
-        spawnedBy: "agent:main:main",
-        contextMode: "fork",
-        messageProvider: "google-meet",
-        lane: "google-meet",
         runIdPrefix: "google-meet:meet-locked",
         args: { question: "Continue this session." },
-        surface: "a private Google Meet",
-        userLabel: "Participant",
       }),
     ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
     expect(forkSessionEntryFromParent).not.toHaveBeenCalled();
-    expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
-    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expectNoDispatch(runtime);
   });
 
   it("allows an independent consult when only the requester session is locked", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
-    sessionStore["agent:main:main"] = {
-      sessionId: "locked-requester",
-      updatedAt: 1,
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-    };
+    sessionStore[requesterSessionKey] = { ...lockedEntry, sessionId: "locked-requester" };
 
     await expect(
-      consultRealtimeVoiceAgent({
-        cfg: {} as never,
-        agentRuntime: runtime as never,
-        logger: { warn: vi.fn() },
+      forkConsult(runtime as never, {
         agentId: "meet-consult",
         sessionKey: "agent:meet-consult:subagent:google-meet:meet-independent",
-        spawnedBy: "agent:main:main",
-        contextMode: "fork",
-        messageProvider: "google-meet",
-        lane: "google-meet",
         runIdPrefix: "google-meet:meet-independent",
         args: { question: "Check the meeting." },
-        transcript: [],
-        surface: "a private Google Meet",
-        userLabel: "Participant",
       }),
     ).resolves.toEqual({ text: "Speak this." });
     expect(sessionForkMocks.forkSessionEntryFromParent).not.toHaveBeenCalled();
@@ -523,8 +483,6 @@ describe("realtime voice agent consult runtime", () => {
     const consult = runConsult({
       agentRuntime: runtime as never,
       sessionKey,
-      runIdPrefix: "voice-realtime-consult:archive-race",
-      args: { question: "What should I say?" },
     });
     await Promise.resolve();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
@@ -534,9 +492,7 @@ describe("realtime voice agent consult runtime", () => {
     await expect(consult).rejects.toThrow(
       'Session "voice:archive-race" is archived. Restore it before starting new work.',
     );
-    expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
-    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expectNoDispatch(runtime);
   });
 
   it.each([
@@ -559,11 +515,6 @@ describe("realtime voice agent consult runtime", () => {
     await expect(
       runConsult({
         agentRuntime: runtime as never,
-        sessionKey: "agent:main:voice-interruption",
-        runIdPrefix: "voice-interruption",
-        args: { question: "Read the project." },
-        surface: "a live voice session",
-        userLabel: "User",
         onRunStarted: () => ({ cleanup }),
       }),
     ).rejects.toMatchObject({ name: errorName });
@@ -580,13 +531,6 @@ describe("realtime voice agent consult runtime", () => {
     const result = await runConsult({
       agentRuntime: runtime as never,
       logger: { warn },
-      sessionKey: "google-meet:meet-1",
-      messageProvider: "google-meet",
-      lane: "google-meet",
-      runIdPrefix: "google-meet:meet-1",
-      args: { question: "What now?" },
-      surface: "a private Google Meet",
-      userLabel: "Participant",
       fallbackText: "Let me verify that first.",
     });
 
@@ -610,10 +554,6 @@ describe("realtime voice agent consult runtime", () => {
     const result = await runConsult({
       agentRuntime: runtime as never,
       logger: { warn },
-      sessionKey: "voice:yielded",
-      runIdPrefix: "voice:yielded",
-      args: { question: "Investigate this" },
-      surface: "a live voice session",
     });
 
     expect(result).toEqual({
@@ -625,66 +565,38 @@ describe("realtime voice agent consult runtime", () => {
 
   it("forks requester context and inherits its required creator isolation", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
-    sessionStore["agent:main:main"] = {
+    const parentEntry: SessionEntry = {
       sessionId: "parent-session",
       totalTokens: 100,
       createdActor: { type: "human", source: "profile", id: "profile-required" },
       sandbox: "required",
       updatedAt: 1,
     };
+    sessionStore[requesterSessionKey] = parentEntry;
     const forkSessionEntryFromParent = sessionForkMocks.forkSessionEntryFromParent;
-    forkSessionEntryFromParent.mockImplementation(
-      async (
-        params: ForkSessionEntryFromParentParams,
-      ): Promise<ForkSessionEntryFromParentResult> => {
-        const fork = {
-          sessionId: "forked-session",
-          sessionFile: testTempPath("forked.jsonl"),
-        };
-        const parentEntry = sessionStore["agent:main:main"];
-        if (!parentEntry?.sessionId) {
-          return { status: "missing-parent" };
-        }
-        const typedParentEntry: SessionEntry = {
-          ...parentEntry,
-          sessionId: parentEntry.sessionId,
-          updatedAt: parentEntry.updatedAt ?? Date.now(),
-        };
-        const decision = {
-          status: "fork" as const,
-          maxTokens: 100_000,
-        };
-        const entry = params.fallbackEntry ?? { sessionId: "", updatedAt: Date.now() };
-        const sessionEntry: SessionEntry = {
-          ...entry,
-          ...params.entryPatch?.forked,
-          sessionId: fork.sessionId,
-          forkedFromParent: true,
-        };
-        sessionStore[params.sessionKey] = sessionEntry;
-        return {
-          status: "forked" as const,
-          fork,
-          parentEntry: typedParentEntry,
-          sessionEntry,
-          decision,
-        };
-      },
-    );
-
-    await runConsult({
-      agentRuntime: runtime as never,
-      agentId: "main",
-      sessionKey: "agent:main:subagent:google-meet:meet-1",
-      spawnedBy: "agent:main:main",
-      contextMode: "fork",
-      messageProvider: "google-meet",
-      lane: "google-meet",
-      runIdPrefix: "google-meet:meet-1",
-      args: { question: "What should I say?" },
-      surface: "a private Google Meet",
-      userLabel: "Participant",
+    forkSessionEntryFromParent.mockImplementation(async (params) => {
+      const fork = {
+        sessionId: "forked-session",
+        sessionFile: testTempPath("forked.jsonl"),
+      };
+      const entry = params.fallbackEntry ?? { sessionId: "", updatedAt: Date.now() };
+      const sessionEntry: SessionEntry = {
+        ...entry,
+        ...params.entryPatch?.forked,
+        sessionId: fork.sessionId,
+        forkedFromParent: true,
+      };
+      sessionStore[params.sessionKey] = sessionEntry;
+      return {
+        status: "forked" as const,
+        fork,
+        parentEntry,
+        sessionEntry,
+        decision: { status: "fork", maxTokens: 100_000 },
+      };
     });
+
+    await forkConsult(runtime as never);
 
     expect(forkSessionEntryFromParent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -730,42 +642,25 @@ describe("realtime voice agent consult runtime", () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime();
     const warn = vi.fn();
     const forkSessionEntryFromParent = sessionForkMocks.forkSessionEntryFromParent;
-    forkSessionEntryFromParent.mockImplementation(
-      async (
-        params: ForkSessionEntryFromParentParams,
-      ): Promise<ForkSessionEntryFromParentResult> => ({
-        status: "skipped",
-        reason: "decision-skip",
-        sessionEntry: {
-          ...(params.fallbackEntry ?? { sessionId: "", updatedAt: Date.now() }),
-          sessionId: "",
-          updatedAt: Date.now(),
-        },
-        decision: {
-          status: "skip",
-          reason: "parent-too-large",
-          maxTokens: 100_000,
-          parentTokens: 150_000,
-          message:
-            "Parent context is too large to fork (150000/100000 tokens); starting with isolated context instead.",
-        },
-      }),
-    );
+    forkSessionEntryFromParent.mockImplementation(async (params) => ({
+      status: "skipped",
+      reason: "decision-skip",
+      sessionEntry: {
+        ...(params.fallbackEntry ?? { sessionId: "", updatedAt: Date.now() }),
+        sessionId: "",
+        updatedAt: Date.now(),
+      },
+      decision: {
+        status: "skip",
+        reason: "parent-too-large",
+        maxTokens: 100_000,
+        parentTokens: 150_000,
+        message:
+          "Parent context is too large to fork (150000/100000 tokens); starting with isolated context instead.",
+      },
+    }));
 
-    await runConsult({
-      agentRuntime: runtime as never,
-      logger: { warn },
-      agentId: "main",
-      sessionKey: "agent:main:subagent:google-meet:meet-1",
-      spawnedBy: "agent:main:main",
-      contextMode: "fork",
-      messageProvider: "google-meet",
-      lane: "google-meet",
-      runIdPrefix: "google-meet:meet-1",
-      args: { question: "What should I say?" },
-      surface: "a private Google Meet",
-      userLabel: "Participant",
-    });
+    await forkConsult(runtime as never, { logger: { warn } });
 
     expect(warn).toHaveBeenCalledWith(
       "[talk] Parent context is too large to fork (150000/100000 tokens); starting with isolated context instead.",
@@ -800,20 +695,19 @@ describe("realtime voice agent consult runtime", () => {
 
     await runConsult({
       agentRuntime: runtime as never,
-      agentId: "main",
       sessionKey: "voice:google-meet:meet-1",
-      runIdPrefix: "voice-realtime-consult:call-1",
-      args: { question: "Send this to the original chat." },
     });
 
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
-    expect(call.sessionId).toBe("call-session");
-    expect(call.sessionKey).toBe("voice:google-meet:meet-1");
-    expect(call.messageProvider).toBe("discord");
-    expect(call.agentAccountId).toBe("default");
-    expect(call.messageTo).toBe("channel:123");
-    expect(call.messageThreadId).toBe("thread-456");
-    expect(call.currentChannelId).toBe("channel:123");
-    expect(call.currentThreadTs).toBe("thread-456");
+    expect(call).toMatchObject({
+      sessionId: "call-session",
+      sessionKey: "voice:google-meet:meet-1",
+      messageProvider: "discord",
+      agentAccountId: "default",
+      messageTo: "channel:123",
+      messageThreadId: "thread-456",
+      currentChannelId: "channel:123",
+      currentThreadTs: "thread-456",
+    });
   });
 });
