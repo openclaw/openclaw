@@ -1,11 +1,9 @@
-import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { validateConnectParams, type ConnectParams } from "@openclaw/gateway-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Locator } from "playwright";
 import { expect, inject, it } from "vitest";
-import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -13,20 +11,29 @@ import {
 import { approveDevicePairing } from "../../../src/infra/device-pairing-approval.js";
 import {
   listDevicePairing,
-  requestDevicePairing,
   rejectDevicePairing,
   type PairedDevice,
 } from "../../../src/infra/device-pairing.js";
-import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
-import { getFreePort } from "../../../src/test-utils/ports.ts";
 import {
   startBuiltControlUiE2eServer,
   startProductionControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  approvePairing,
+  createDeviceGateway,
+  readUiBundle,
+} from "./device-gateway.test-support.ts";
 
 const readText = async (locator: Locator) =>
   expectDefined(await locator.textContent(), "UI text").trim();
+const readPaired = async (deviceId: string) =>
+  (await listDevicePairing()).paired.find((row) => row.deviceId === deviceId);
+
+async function waitConnected(row: Locator) {
+  await row.waitFor();
+  await expect.poll(() => readText(row.locator(".device-entry__status"))).toBe("connected");
+}
 
 const macUa = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15";
 const ipadUa = "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15";
@@ -80,33 +87,22 @@ const writeProof = (name: string, value: unknown) =>
 
 suite.define(() => {
   it("keeps signed browser identities while rendering fresh and legacy Mac and iPad labels", async (context) => {
-    const port = await getFreePort();
     const token = "synthetic-platform-gateway-token";
-    const state = await createOpenClawTestState({
-      label: "platform-family-proof",
-      layout: "home",
-      env: {
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
-      },
-    });
-    let gateway: GatewayServer | undefined;
+    // Keep identity proof independent of host installation discovery.
+    const gateway = await createDeviceGateway(
+      "platform-family-proof",
+      suite.server.baseUrl,
+      { mode: "token", token },
+      { update: { channel: "stable" } },
+    );
+    const { state, port } = gateway;
     const observations: {
       name: string;
       expectedFamily: string;
-      expectedLabel: string;
       legacy: boolean;
-      first: unknown;
       after: ReturnType<typeof pairedFacts>;
       meta: string;
       connects: ConnectParams[];
-      presence: unknown[];
       assetHash: string;
       sourceBuildMetadata: string;
       pendingCount: number;
@@ -114,20 +110,11 @@ suite.define(() => {
     await suite.runScenario(context, {
       retainedState: () => state.root,
       async run() {
-        await state.writeConfig({
-          // Device identity proof must not wait on host installation discovery.
-          update: { channel: "stable" },
-          gateway: {
-            auth: { mode: "token", token },
-            controlUi: { allowedOrigins: [new URL(suite.server.baseUrl).origin], enabled: false },
-            port,
-          },
-        });
-        state.applyEnv();
+        await gateway.configure();
         const orphan = loadOrCreateDeviceIdentity({
           path: path.join(state.stateDir, "legacy-device.sqlite"),
         });
-        const orphanRequest = await requestDevicePairing({
+        await approvePairing({
           deviceId: orphan.deviceId,
           publicKey: publicKeyRawBase64UrlFromPem(orphan.publicKeyPem),
           role: "operator",
@@ -137,36 +124,21 @@ suite.define(() => {
           platform: "MacIntel",
           displayName: "Disconnected legacy browser",
         });
-        await approveDevicePairing(orphanRequest.request.requestId, {
-          callerScopes: ["operator.admin"],
-        });
-        const { startGatewayServer } = await import("../../../src/gateway/server.js");
-        gateway = await startGatewayServer(port, {
-          auth: { mode: "token", token },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        });
+        await gateway.start();
         for (const item of cases) {
           await suite.withPage(
             { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
             async ({ page }) => {
               await page.addInitScript(({ touch, ua }) => {
-                Object.defineProperty(navigator, "platform", {
-                  configurable: true,
-                  get: () => "MacIntel",
-                });
-                Object.defineProperty(navigator, "maxTouchPoints", {
-                  configurable: true,
-                  get: () => touch,
-                });
-                Object.defineProperty(navigator, "userAgent", {
-                  configurable: true,
-                  get: () => ua,
-                });
+                for (const [key, value] of Object.entries({
+                  platform: "MacIntel",
+                  maxTouchPoints: touch,
+                  userAgent: ua,
+                })) {
+                  Object.defineProperty(navigator, key, { configurable: true, get: () => value });
+                }
               }, item);
               const connects: ConnectParams[] = [];
-              const presence: unknown[] = [];
               const outcomes: { ok: boolean; error?: { details?: { reason?: string } } }[] = [];
               const pendingApprovals: Promise<unknown>[] = [];
               let seeded: ReturnType<typeof pairedFacts>;
@@ -190,7 +162,7 @@ suite.define(() => {
                     deviceId = params.device.id;
                     connects.push({ ...params, auth: undefined });
                     if (item.legacy && !seeded) {
-                      const request = await requestDevicePairing({
+                      await approvePairing({
                         deviceId,
                         publicKey: params.device.publicKey,
                         role: params.role,
@@ -200,12 +172,7 @@ suite.define(() => {
                         platform: params.client.platform,
                         displayName: item.name,
                       });
-                      await approveDevicePairing(request.request.requestId, {
-                        callerScopes: ["operator.admin"],
-                      });
-                      seeded = pairedFacts(
-                        (await listDevicePairing()).paired.find((row) => row.deviceId === deviceId),
-                      );
+                      seeded = pairedFacts(await readPaired(deviceId));
                     }
                   }
                   server.send(message);
@@ -214,9 +181,6 @@ suite.define(() => {
                   const frame = JSON.parse(String(message));
                   if (frame.type === "res" && requestMethods.get(frame.id) === "connect") {
                     outcomes.push({ ok: frame.ok, error: frame.error });
-                  }
-                  if (frame.type === "res" && requestMethods.get(frame.id) === "system-presence") {
-                    presence.push(frame.payload);
                   }
                   if (
                     frame.type === "res" &&
@@ -251,40 +215,18 @@ suite.define(() => {
               const row = page.locator(".device-entry", {
                 has: page.locator(`dd[title="${deviceId}"]`),
               });
-              await row.waitFor();
-              await expect
-                .poll(() => readText(row.locator(".device-entry__status")))
-                .toBe("connected");
+              await waitConnected(row);
               await Promise.all(pendingApprovals);
-              const paired = (await listDevicePairing()).paired.find(
-                (entry) => entry.deviceId === deviceId,
-              );
-              const first = {
-                paired: pairedFacts(paired),
-                meta: await readText(row.locator(".device-entry__body > .settings-row__desc")),
-                connect: connects[0],
-                presence: [...presence],
-              };
+              const paired = await readPaired(deviceId);
               await row.screenshot({
                 path: path.join(suite.artifactDir, `${item.name}-before-reload.png`),
                 animations: "disabled",
               });
-              const script = expectDefined(
-                await page.locator('script[type="module"][src]').first().getAttribute("src"),
-                "production UI module",
-              );
-              const asset = await page.request.get(new URL(script, page.url()).href);
-              expect(asset.ok()).toBe(true);
-              const assetHash = createHash("sha256")
-                .update(await asset.body())
-                .digest("hex");
+              const { sha256: assetHash } = await readUiBundle(page);
               const beforeCount = connects.length;
               await page.reload();
               await expect.poll(() => connects.length).toBeGreaterThan(beforeCount);
-              await row.waitFor();
-              await expect
-                .poll(() => readText(row.locator(".device-entry__status")))
-                .toBe("connected");
+              await waitConnected(row);
               const afterList = await listDevicePairing();
               const after = afterList.paired.find((entry) => entry.deviceId === deviceId);
               const meta = await readText(row.locator(".device-entry__body > .settings-row__desc"));
@@ -315,12 +257,9 @@ suite.define(() => {
                 name: item.name,
                 legacy: item.legacy,
                 expectedFamily: item.family,
-                expectedLabel: item.label,
-                first,
                 after: pairedFacts(after),
                 meta,
                 connects,
-                presence,
                 assetHash,
                 sourceBuildMetadata,
                 pendingCount: afterList.pending.length,
@@ -353,7 +292,7 @@ suite.define(() => {
                   remaining: remaining.map(pairedFacts),
                 });
                 const current = expectDefined(after, "current paired browser");
-                const pinRequest = await requestDevicePairing({
+                await approvePairing({
                   deviceId,
                   publicKey: current.publicKey,
                   role: "operator",
@@ -363,12 +302,7 @@ suite.define(() => {
                   platform: "MacIntel",
                   deviceFamily: "Mac",
                 });
-                await approveDevicePairing(pinRequest.request.requestId, {
-                  callerScopes: ["operator.admin"],
-                });
-                const pinned = (await listDevicePairing()).paired.find(
-                  (entry) => entry.deviceId === deviceId,
-                );
+                const pinned = await readPaired(deviceId);
                 const outcomeStart = outcomes.length;
                 await page.reload();
                 await expect
@@ -413,7 +347,7 @@ suite.define(() => {
         }
       },
       close: async () => {
-        await gateway?.close({ reason: "platform family proof cleanup" });
+        await gateway.close();
       },
       release: async () => {
         await state.cleanup();

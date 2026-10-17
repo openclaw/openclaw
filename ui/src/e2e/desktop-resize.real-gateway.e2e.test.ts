@@ -22,6 +22,7 @@ import {
   createOpenClawTestInstance,
   type GatewayReadinessDiagnostic,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { installControlUiE2ePageDiagnosticRing } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
@@ -37,6 +38,7 @@ import {
   seedDesktopResizeSources,
   writeDesktopResizeProvider,
 } from "./desktop-resize-real.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway.test-support.ts";
 
 type DesktopProofPhase = Exclude<
   ReturnType<typeof desktopProofTestReport>["files"][number]["assertions"][number]["phase"],
@@ -51,6 +53,12 @@ declare module "vitest" {
     desktopProofPhase?: DesktopProofPhase;
     desktopViewerResizeFailure?: DesktopViewerResizeFailure;
     desktopGatewayReadiness?: GatewayReadinessDiagnostic[];
+  }
+}
+
+declare global {
+  interface Window {
+    desktopProofSockets: WebSocket[];
   }
 }
 
@@ -125,8 +133,7 @@ function openDesktop(page: Page, baseUrl: string, source: string, control = fals
 async function sendDesktopPacket(page: Page, targetUrl: string, packet: number[]) {
   await page.evaluate(
     ({ socketUrl, bytes }) => {
-      const sockets = (window as unknown as { desktopProofSockets: WebSocket[] })
-        .desktopProofSockets;
+      const sockets = window.desktopProofSockets;
       sockets.find((socket) => socket.url === socketUrl)!.send(Uint8Array.from(bytes));
     },
     { socketUrl: targetUrl, bytes: packet },
@@ -157,8 +164,9 @@ async function resizeWindow(page: Page, width: number, height: number) {
   try {
     const { windowId } = await cdp.send("Browser.getWindowForTarget");
     await cdp.send("Browser.setWindowBounds", { windowId, bounds: { width, height } });
-    await expect.poll(() => page.evaluate(() => window.outerWidth)).toBe(width);
-    await expect.poll(() => page.evaluate(() => window.outerHeight)).toBe(height);
+    await expect
+      .poll(() => page.evaluate(() => ({ width: window.outerWidth, height: window.outerHeight })))
+      .toEqual({ width, height });
   } finally {
     await cdp.detach();
   }
@@ -238,16 +246,10 @@ suite.define(() => {
         name: "desktop-resize-real-gateway",
         port: gatewayPort,
         env: {
+          ...deviceGatewayEnv,
           OPENCLAW_GATEWAY_PASSWORD: undefined,
           OPENCLAW_GATEWAY_TOKEN: undefined,
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-          VITEST: "1",
         },
       });
       const state = gateway.state;
@@ -377,42 +379,13 @@ suite.define(() => {
                 const observed = asNullableRecord(frame.payload);
                 observations.push({
                   ok: frame.ok,
-                  auth: observed?.auth ?? null,
                   passwordPresent: observed ? Object.hasOwn(observed, "vncPassword") : false,
-                  preauthenticated: observed?.preauthenticated === true,
-                  control: observed?.control,
-                  canResize: observed?.canResize,
                 });
               }
             });
           });
-          const pageEvents: NonNullable<
-            Parameters<typeof captureControlUiE2eFailureDiagnostics>[1]["pageEvents"]
-          > = [];
-          const recordEvent = (event: (typeof pageEvents)[number]) => {
-            pageEvents.push(event);
-            if (pageEvents.length > 200) {
-              pageEvents.shift();
-            }
-          };
+          const pageEvents = installControlUiE2ePageDiagnosticRing(page);
           page.on("pageerror", (error) => pageErrors.push(error.message));
-          page.on("console", (message) =>
-            recordEvent({
-              at: new Date().toISOString(),
-              source: "console",
-              details: { type: message.type(), text: message.text() },
-            }),
-          );
-          page.on("requestfailed", (request) =>
-            recordEvent({
-              at: new Date().toISOString(),
-              source: "requestfailed",
-              details: {
-                path: new URL(request.url()).pathname,
-                failure: request.failure(),
-              },
-            }),
-          );
           await captureDesktopSockets(page);
           const assets = new Map<string, string>();
           const assetReads: Promise<unknown>[] = [];
@@ -461,12 +434,10 @@ suite.define(() => {
                 })),
               })),
               sockets: await page.evaluate(() =>
-                (window as unknown as { desktopProofSockets: WebSocket[] }).desktopProofSockets.map(
-                  (socket) => ({
-                    path: new URL(socket.url).pathname,
-                    readyState: socket.readyState,
-                  }),
-                ),
+                window.desktopProofSockets.map((socket) => ({
+                  path: new URL(socket.url).pathname,
+                  readyState: socket.readyState,
+                })),
               ),
               pageErrors,
               pageEvents,
@@ -574,8 +545,7 @@ suite.define(() => {
           await expect.poll(() => framebuffer(observerCanvas)).toEqual(fitted);
           expect(await observerPanel.locator('option[value="match"]').count()).toBe(0);
           const resizeAttempt = await observer.evaluate(() => {
-            const sockets = (window as unknown as { desktopProofSockets: WebSocket[] })
-              .desktopProofSockets;
+            const sockets = window.desktopProofSockets;
             const packet = new Uint8Array(24);
             const view = new DataView(packet.buffer);
             packet[0] = 251;
@@ -720,15 +690,12 @@ suite.define(() => {
           await expect
             .poll(() =>
               page.evaluate(() => {
-                const sockets = (window as unknown as { desktopProofSockets: WebSocket[] })
-                  .desktopProofSockets;
-                return sockets.at(-1)?.readyState;
+                return window.desktopProofSockets.at(-1)?.readyState;
               }),
             )
             .toBe(1);
           const inputAttempt = await page.evaluate(() => {
-            const sockets = (window as unknown as { desktopProofSockets: WebSocket[] })
-              .desktopProofSockets;
+            const sockets = window.desktopProofSockets;
             const socket = sockets.at(-1)!;
             const keys = Array.from("printf observer > /tmp/openclaw-desktop-resize-input", (key) =>
               key.codePointAt(0)!,
@@ -778,21 +745,14 @@ suite.define(() => {
           if (node) {
             await openDesktop(page, baseUrl, resizeSources.dynamic, true);
             await expect.poll(() => framebuffer(canvas)).toEqual(await guest.geometry());
-            const socketUrl = await page.evaluate(
-              () =>
-                (window as unknown as { desktopProofSockets: WebSocket[] }).desktopProofSockets.at(
-                  -1,
-                )!.url,
-            );
+            const socketUrl = await page.evaluate(() => window.desktopProofSockets.at(-1)!.url);
             await node.stop();
             node = undefined;
             await expect
               .poll(() =>
                 page.evaluate(
                   (url) =>
-                    (
-                      window as unknown as { desktopProofSockets: WebSocket[] }
-                    ).desktopProofSockets.find((socket) => socket.url === url)?.readyState,
+                    window.desktopProofSockets.find((socket) => socket.url === url)?.readyState,
                   socketUrl,
                 ),
               )
@@ -811,23 +771,14 @@ suite.define(() => {
           await Promise.all(assetReads);
           expect(assets.size).toBeGreaterThan(0);
           await writeProof("resize-proof.json", {
-            provenance: fixture.provenance,
-            provisioning:
-              "fixture provider and durable worker records; production Gateway observation, worker carrier, registry, and RFB filter",
-            instrumentation:
-              "transparent real endpoint tap: same-connection framebuffer markers bracket each forbidden packet in one WebSocket message",
             gateway: { execution: "built-process", readiness: "readyz", minimal: false },
             carrier: fixture.carrier,
             node: nodeDeviceId
               ? {
-                  deviceId: nodeDeviceId,
-                  admission:
-                    "real device/node approval and connected paired session-host inventory",
                   passwordAbsentFromObserve: true,
                   disconnectClosedViewer: nodeDisconnectClosedViewer,
                 }
               : null,
-            viewports: "native desktop windows; viewport-emulated mobile, not a physical phone",
             observer: {
               evidence: "endpoint-marker-brackets",
               keyboardForwardedBytes: 0,
