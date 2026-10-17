@@ -1,22 +1,21 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
+import type { Context } from "../../llm/types.js";
 import { attachModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import {
   createCacheFetchMock,
-  createCapturingStreamFn,
   createReadyGooglePromptCacheEntry,
-  fetchUrl,
   makeGoogleModel,
   makeSessionManager,
   preparePromptCacheStream,
+  promptContext,
   setupPromptCache,
   type SessionCustomEntry,
-  streamContext,
 } from "./google-prompt-cache.test-support.js";
 
 const NOW = 1_000_000;
@@ -29,23 +28,14 @@ const TOOLS = [
   {
     name: "lookup",
     description: "Look up a value",
-    parameters: { type: "object" },
+    parameters: Type.Object({}),
   },
 ];
-
-const plainPromptContext = {
-  systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
-  messages: [],
-} as never;
 
 function invoke(
   wrapped: Awaited<ReturnType<typeof preparePromptCacheStream>>,
   model = makeGoogleModel(),
-  context = {
-    systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
-    messages: [],
-    tools: TOOLS,
-  } as never,
+  context: Context = promptContext({ tools: TOOLS }),
 ) {
   return Promise.resolve(wrapped?.(model, context, {} as never));
 }
@@ -98,21 +88,15 @@ describe("google prompt cache failure handling", () => {
       { name: "cachedContents/cache-id", expireTime: new Date(NOW).toISOString() },
     ],
   ])("rejects automatic cache creation with %s", async (_name, payload) => {
-    const entries: SessionCustomEntry[] = [];
     const fetchMock = vi.fn(async () => new Response(JSON.stringify(payload), { status: 200 }));
-    const { streamFn, getCapturedPayload } = createCapturingStreamFn("visible-output");
-    const wrapped = await preparePromptCacheStream({
+    const { wrapped, entries, streamFn, getCapturedPayload } = await setupPromptCache({
       fetchMock,
-      sessionManager: makeSessionManager(entries),
-      streamFn,
+      result: "visible-output",
     });
 
     await expect(invoke(wrapped)).resolves.toBe("visible-output");
     expect(streamFn).toHaveBeenCalledOnce();
-    expect(streamContext(streamFn)).toMatchObject({
-      systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`,
-      tools: TOOLS,
-    });
+    expect(streamFn.mock.calls[0]?.[1]).toMatchObject(promptContext({ tools: TOOLS }));
     expect(getCapturedPayload()).not.toHaveProperty("cachedContent");
     expect(entries.at(-1)?.data).toMatchObject({
       status: "failed",
@@ -206,8 +190,8 @@ describe("google prompt cache failure handling", () => {
   });
 
   it("continues when failure metadata persistence fails generically", async () => {
-    const innerStreamFn = vi.fn(() => "visible-output" as never);
-    const wrapped = await preparePromptCacheStream({
+    const { wrapped } = await setupPromptCache({
+      result: "visible-output",
       fetchMock: vi.fn(async () => new Response("denied", { status: 403 })),
       sessionManager: {
         appendCustomEntryAsync: vi.fn(async () => {
@@ -215,7 +199,6 @@ describe("google prompt cache failure handling", () => {
         }),
         getEntries: () => [],
       },
-      streamFn: innerStreamFn,
     });
 
     await expect(invoke(wrapped)).resolves.toBe("visible-output");
@@ -232,9 +215,9 @@ describe("google prompt cache failure handling", () => {
     const fetchMock = createCacheFetchMock("cachedContents/rebuilt", EXPIRE_TIME);
     const { wrapped, getCapturedPayload } = await setupPromptCache({ fetchMock, entries });
 
-    await invoke(wrapped, makeGoogleModel(), plainPromptContext);
+    await invoke(wrapped, makeGoogleModel(), promptContext());
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchUrl(fetchMock)).toBe(
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "https://generativelanguage.googleapis.com/v1beta/cachedContents",
     );
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/rebuilt");

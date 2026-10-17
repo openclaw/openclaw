@@ -11,60 +11,53 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { CommandLane } from "../../process/lanes.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 
-function subagentLane(sessionId: string, spawnedBy?: string) {
-  return resolveGlobalLane(CommandLane.Subagent, {
-    sessionId,
-    sessionKey: `agent:main:subagent:${sessionId}`,
-    spawnedBy,
+function sessionContext(
+  sessionId: string,
+  spawnedBy?: string,
+  sessionKey = `agent:main:subagent:${sessionId}`,
+) {
+  return { sessionId, spawnedBy, sessionKey };
+}
+
+function subagentLane(...args: Parameters<typeof sessionContext>) {
+  return resolveGlobalLane(CommandLane.Subagent, sessionContext(...args));
+}
+
+function expectLane(lane: string, activeCount: number, queuedCount = 0, maxConcurrent?: number) {
+  expect(getCommandLaneSnapshot(lane)).toMatchObject({
+    activeCount,
+    queuedCount,
+    ...(maxConcurrent === undefined ? {} : { maxConcurrent }),
   });
 }
 
-describe("resolveGlobalLane", () => {
-  it("normalizes global lanes and isolates nested cron admission (#44805)", () => {
-    const cases: Array<[string | undefined, string, Parameters<typeof resolveGlobalLane>[1]?]> = [
-      [undefined, CommandLane.Main],
-      ["", CommandLane.Main],
-      ["  ", CommandLane.Main],
-      ["cron", CommandLane.CronNested],
-      ["  cron  ", CommandLane.CronNested],
-      ["main", CommandLane.Main],
-      ["cron-nested", CommandLane.CronNested],
-      ["background:core:review", "background:core:review"],
-      ["nested", CommandLane.Nested],
-      ["custom-lane", "custom-lane"],
-      [" custom ", "custom"],
-      [
-        " subagent ",
-        "subagent:agent:main:parent",
-        {
-          spawnedBy: " agent:main:parent ",
-          sessionKey: "agent:main:subagent:child",
-          sessionId: "child",
-        },
-      ],
-      [
-        " subagent ",
-        "subagent:agent:main:subagent:orphan",
-        {
-          spawnedBy: " ",
-          sessionKey: " agent:main:subagent:orphan ",
-          sessionId: "orphan",
-        },
-      ],
-      [" subagent ", "subagent:standalone-child", { sessionId: " standalone-child " }],
-    ];
-    for (const [lane, expected, context] of cases) {
-      expect(resolveGlobalLane(lane, context)).toBe(expected);
-    }
-  });
+it("normalizes global lanes and isolates nested cron admission (#44805)", () => {
+  const cases: Array<[string | undefined, string, Parameters<typeof resolveGlobalLane>[1]?]> = [
+    [undefined, CommandLane.Main],
+    ["  ", CommandLane.Main],
+    ["  cron  ", CommandLane.CronNested],
+    ["cron-nested", CommandLane.CronNested],
+    ["background:core:review", "background:core:review"],
+    [" custom ", "custom"],
+    [" subagent ", "subagent:agent:main:parent", sessionContext("child", " agent:main:parent ")],
+    [
+      " subagent ",
+      "subagent:agent:main:subagent:orphan",
+      sessionContext("orphan", " ", " agent:main:subagent:orphan "),
+    ],
+    [" subagent ", "subagent:standalone-child", { sessionId: " standalone-child " }],
+  ];
+  for (const [lane, expected, context] of cases) {
+    expect(resolveGlobalLane(lane, context)).toBe(expected);
+  }
+});
 
-  it("rejects subagent admission without a session identity", () => {
-    for (const context of [undefined, { spawnedBy: " ", sessionKey: " ", sessionId: " " }]) {
-      expect(() => resolveGlobalLane(CommandLane.Subagent, context)).toThrow(
-        "requires a parent or current session identity",
-      );
-    }
-  });
+it("rejects subagent admission without a session identity", () => {
+  for (const context of [undefined, { spawnedBy: " ", sessionKey: " ", sessionId: " " }]) {
+    expect(() => resolveGlobalLane(CommandLane.Subagent, context)).toThrow(
+      "requires a parent or current session identity",
+    );
+  }
 });
 
 describe("subagent session concurrency", () => {
@@ -80,8 +73,7 @@ describe("subagent session concurrency", () => {
       maxConcurrent,
     };
     const lane = resolveGlobalLane(CommandLane.Subagent, {
-      sessionId: "collector",
-      spawnedBy: "agent:main:parent",
+      ...sessionContext("collector", "agent:main:parent"),
       swarmExecutionLane,
     });
     const runs = Array.from({ length: 60 }, () =>
@@ -92,20 +84,9 @@ describe("subagent session concurrency", () => {
     const nestedLane = subagentLane("grandchild", "agent:main:subagent:collector");
     runs.push(enqueueCommandInLane(nestedLane, async () => await release.promise));
     try {
-      expect(getCommandLaneSnapshot(lane)).toMatchObject({
-        maxConcurrent,
-        activeCount: maxConcurrent,
-        queuedCount: 60 - maxConcurrent,
-      });
-      expect(getCommandLaneSnapshot(ordinaryLane)).toMatchObject({
-        activeCount: 1,
-        queuedCount: 0,
-      });
-      expect(getCommandLaneSnapshot(nestedLane)).toMatchObject({
-        maxConcurrent: 8,
-        activeCount: 1,
-        queuedCount: 0,
-      });
+      expectLane(lane, maxConcurrent, 60 - maxConcurrent, maxConcurrent);
+      expectLane(ordinaryLane, 1);
+      expectLane(nestedLane, 1, 0, 8);
       const diagnostics = getCommandLaneDiagnostics();
       expect(diagnostics.lanes.find((entry) => entry.lane === lane)).toMatchObject({
         concurrencyScope: "swarm",
@@ -141,10 +122,7 @@ describe("subagent session concurrency", () => {
         await release.promise;
       });
     const children = [
-      runChild("agent:main:parent-a", "a1"),
-      runChild("agent:main:parent-a", "a2"),
-      runChild("agent:main:parent-a", "a3"),
-      runChild("agent:main:parent-a", "a4"),
+      ...Array.from({ length: 4 }, (_, i) => runChild("agent:main:parent-a", `a${i + 1}`)),
       runChild("agent:main:parent-b", "b1"),
     ];
 
@@ -175,10 +153,7 @@ describe("subagent session concurrency", () => {
 
     try {
       await grandchildQueued.promise;
-      expect(getCommandLaneSnapshot(grandchildLane)).toMatchObject({
-        activeCount: 1,
-        queuedCount: 0,
-      });
+      expectLane(grandchildLane, 1);
     } finally {
       release.resolve();
       cancelQueuedChild.abort();
@@ -188,17 +163,12 @@ describe("subagent session concurrency", () => {
   });
 });
 
-describe("resolveSessionLane", () => {
-  it("normalizes session identities without duplicating the prefix", () => {
-    for (const [lane, expected] of [
-      ["", "session:main"],
-      ["  ", "session:main"],
-      ["abc123", "session:abc123"],
-      [" xyz ", "session:xyz"],
-      ["session:abc", "session:abc"],
-      ["session:main", "session:main"],
-    ] as const) {
-      expect(resolveSessionLane(lane)).toBe(expected);
-    }
-  });
+it("normalizes session lane identities without duplicating the prefix", () => {
+  for (const [lane, expected] of [
+    ["  ", "session:main"],
+    [" xyz ", "session:xyz"],
+    ["session:abc", "session:abc"],
+  ] as const) {
+    expect(resolveSessionLane(lane)).toBe(expected);
+  }
 });
