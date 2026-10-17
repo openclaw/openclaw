@@ -17,12 +17,9 @@ const DELIVERY = "delivery-dispatch";
 const GROUP = "cron-hooks";
 
 type LaneGroupSpec = NonNullable<Parameters<typeof publishLaneConfiguration>[0]["groups"]>[string];
+type Reservations = LaneGroupSpec["reservations"];
 
-function configure(
-  budget: number,
-  reservations?: LaneGroupSpec["reservations"],
-  members = [CRON, HOOK],
-): void {
+function configure(budget: number, reservations?: Reservations, members = [CRON, HOOK]) {
   publishLaneConfiguration({ groups: { [GROUP]: { budget, members, reservations } } });
 }
 
@@ -68,15 +65,16 @@ describe("command lane capacity groups", () => {
       priority: "foreground",
       onQueued: () => waiting.push(CRON),
     });
-    expect(getCommandLaneSnapshot(CRON).activeCount).toBe(7);
-    expect(getCommandLaneSnapshot(CRON).blockedBy).toBe("sibling-reservation");
+    expect(getCommandLaneSnapshot(CRON)).toMatchObject({
+      activeCount: 7,
+      blockedBy: "sibling-reservation",
+    });
     const hookGate = createDeferred();
     const hookRun = enqueueCommandInLane(HOOK, async () => await hookGate.promise, {
       priority: "background",
       onQueued: () => waiting.push(HOOK),
     });
-    expect(getCommandLaneSnapshot(HOOK).activeCount).toBe(1);
-    expect(getCommandLaneSnapshot(HOOK).groupActive).toBe(8);
+    expect(getCommandLaneSnapshot(HOOK)).toMatchObject({ activeCount: 1, groupActive: 8 });
     expect(waiting).toEqual([CRON]);
     hookGate.resolve();
     await hookRun;
@@ -90,7 +88,6 @@ describe("command lane capacity groups", () => {
   test("a failing completion gives shared capacity to the older eligible sibling head", async () => {
     configure(2, { [HOOK]: 1 });
     const firstHookGate = createDeferred();
-    const secondHookGate = createDeferred();
     const firstHook = enqueueCommandInLane(
       HOOK,
       async () => {
@@ -99,26 +96,18 @@ describe("command lane capacity groups", () => {
       },
       { priority: "background" },
     );
-    const secondHook = enqueueCommandInLane(HOOK, async () => await secondHookGate.promise, {
-      priority: "background",
-    });
+    const [secondHook, secondHookGate] = park(HOOK, "background");
     expect(getCommandLaneSnapshot(HOOK).activeCount).toBe(2);
     // The completing HOOK lane must not reclaim the slot ahead of older CRON work.
-    const cronGate = createDeferred();
-    const cronRun = enqueueCommandInLane(CRON, async () => await cronGate.promise, {
-      priority: "background",
-    });
-    const thirdHookGate = createDeferred();
-    const thirdHook = enqueueCommandInLane(HOOK, async () => await thirdHookGate.promise, {
-      priority: "background",
-    });
+    const [cronRun, cronGate] = park(CRON, "background");
+    const [thirdHook, thirdHookGate] = park(HOOK, "background");
     firstHookGate.resolve();
     await expect(firstHook).rejects.toThrow("expected hook failure");
     expectCounts(CRON, 1, 0);
     expectCounts(HOOK, 1, 1);
-    cronGate.resolve();
-    secondHookGate.resolve();
-    thirdHookGate.resolve();
+    cronGate();
+    secondHookGate();
+    thirdHookGate();
     await Promise.all([cronRun, secondHook, thirdHook]);
   });
 

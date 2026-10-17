@@ -43,6 +43,21 @@ async function expectPending(promise: Promise<unknown>) {
   expect(settled).not.toHaveBeenCalled();
 }
 
+function pausedConsumer() {
+  const state = fixture();
+  const entered = createDeferred();
+  const release = state.gate();
+  const chunks: string[] = [];
+  const consumed = state.output.consume(async (chunk) => {
+    chunks.push(chunk);
+    if (chunks.length === 1) {
+      entered.resolve();
+      await release.promise;
+    }
+  });
+  return { ...state, entered, release, chunks, consumed };
+}
+
 describe("awaited decoded output", () => {
   it("retains stdout when the source resumes and ends before subscription", async () => {
     const { source, output } = fixture();
@@ -59,15 +74,11 @@ describe("awaited decoded output", () => {
   it.each([false, true])(
     "rejects closure before EOF (already closed: %s)",
     async (alreadyClosed) => {
-      const stopped = createDeferred<unknown>();
-      const { source, output } = fixture(
-        vi.fn((error) => stopped.resolve(error)),
-        alreadyClosed,
-      );
+      const { source, output, onFailure } = fixture(undefined, alreadyClosed);
       const consumed = output.consume(() => {});
       source.destroy();
       await expect(consumed).rejects.toThrow("Process stdout closed before EOF");
-      expect(await stopped.promise).toEqual(new Error("Process stdout closed before EOF"));
+      expect(onFailure.mock.calls[0]?.[0]).toEqual(new Error("Process stdout closed before EOF"));
     },
   );
 
@@ -100,17 +111,7 @@ describe("awaited decoded output", () => {
   });
 
   it("keeps native backpressure and ordered delivery while consumption waits", async () => {
-    const { source, output, gate } = fixture();
-    const entered = createDeferred();
-    const release = gate();
-    const chunks: string[] = [];
-    const consumed = output.consume(async (chunk) => {
-      chunks.push(chunk);
-      if (chunks.length === 1) {
-        entered.resolve();
-        await release.promise;
-      }
-    });
+    const { source, output, entered, release, chunks, consumed } = pausedConsumer();
     source.write("first");
     await entered.promise;
     const remaining = "x".repeat(source.writableHighWaterMark);
@@ -126,15 +127,7 @@ describe("awaited decoded output", () => {
   });
 
   it("joins the decoder tail consumer after source EOF", async () => {
-    const { source, output, gate } = fixture();
-    const entered = createDeferred();
-    const release = gate();
-    const chunks: string[] = [];
-    const consumed = output.consume(async (chunk) => {
-      chunks.push(chunk);
-      entered.resolve();
-      await release.promise;
-    });
+    const { source, entered, release, chunks, consumed } = pausedConsumer();
     source.write(Buffer.from([0xf0]));
     source.end(Buffer.from([0x9f]));
     await entered.promise;
@@ -163,13 +156,7 @@ describe("awaited decoded output", () => {
   });
 
   it("retains an accepted consumer after disposal until it settles", async () => {
-    const { source, output, onFailure, gate } = fixture();
-    const entered = createDeferred();
-    const release = gate();
-    const consumed = output.consume(async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const { source, output, onFailure, entered, release, consumed } = pausedConsumer();
     source.write("accepted");
     await entered.promise;
     output.close();

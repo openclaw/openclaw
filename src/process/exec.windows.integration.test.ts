@@ -163,7 +163,7 @@ describe.runIf(process.platform === "win32" || process.env.OPENCLAW_CLAUDE_CLI_S
   "ordinary Claude CLI executable launch",
   () => {
     const tempDirs = useAutoCleanupTempDirTracker(afterAll);
-    let nativeLauncher: string | undefined;
+    let nativeLauncher = "";
 
     beforeAll(async () => {
       if (process.platform === "win32") {
@@ -172,21 +172,10 @@ describe.runIf(process.platform === "win32" || process.env.OPENCLAW_CLAUDE_CLI_S
         );
       }
     }, 150_000);
-    const nativeLaunch = () => {
-      if (!nativeLauncher) {
-        throw new Error("The native Claude CLI launcher fixture was not compiled");
-      }
-      return { kind: "native" as const, launcher: nativeLauncher };
-    };
-
     beforeAll(async () => {
       const instance = await createOpenClawTestInstance({ name: "claude-cli-spawn-prepare" });
-      try {
-        // Reuse CI's built runtime; launcher cases do not own artifact publication.
-        await instance.entrypoint();
-      } finally {
-        await instance.cleanup();
-      }
+      // Reuse CI's built runtime; launcher cases do not own artifact publication.
+      await instance.entrypoint().finally(() => instance.cleanup());
     }, 240_000);
 
     it.each(
@@ -197,7 +186,7 @@ describe.runIf(process.platform === "win32" || process.env.OPENCLAW_CLAUDE_CLI_S
       "completes an ordinary agent turn through %s",
       async (kind) => {
         const proof = await runClaudeCliNativeSpawnProof(
-          kind === "native" ? nativeLaunch() : { kind },
+          kind === "native" ? { kind, launcher: nativeLauncher } : { kind },
         );
         console.log("[claude-cli-native-proof]", JSON.stringify(proof));
         expect(proof.code, proof.stderr).toBe(0);
