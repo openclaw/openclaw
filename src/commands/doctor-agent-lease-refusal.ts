@@ -199,14 +199,14 @@ export async function admitDoctorAgentLeases(params: {
       pollMs = Math.min(pollMs * 2, 2_000);
       let live: readonly number[];
       try {
-        live = [
+        live = withEngineStoreAdmission(() => [
           ...new Set(
             readActiveOpenClawAgentDatabaseLeasesReadOnly(
               { env: params.state.env },
               openDoctorStateSchemaReadAdmission,
             ).map((row) => row.owner_pid),
           ),
-        ];
+        ]);
       } catch (error) {
         if (hasCommandProcessCleanupError(error)) {
           throw error;
