@@ -1,27 +1,56 @@
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import type { WizardMultiSelectParams, WizardPrompter } from "./prompts.js";
 import { setupPluginConfig } from "./setup.plugin-config.js";
 
 const loadPluginManifestRegistryCore = vi.fn();
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: () => loadPluginManifestRegistryCore(),
+const readBundledDiscoveryModeMock = vi.fn<() => "compat" | "allowlist" | undefined>();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  readBundledDiscoveryModeMock.mockReset();
+});
+vi.mock("../plugins/bundled-discovery-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/bundled-discovery-state.js")>()),
+  readBundledDiscoveryModeMemoized: () => readBundledDiscoveryModeMock(),
+}));
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  loadPluginMetadataSnapshot: () => {
+    const { plugins } = loadPluginManifestRegistryCore();
+    return {
+      plugins,
+      manifestRegistry: { plugins, diagnostics: [] },
+      discovery: { candidates: [], diagnostics: [] },
+    };
+  },
 }));
 
 function makeManifestPlugin(
   id: string,
   uiHints?: Record<string, PluginConfigUiHint>,
   configSchema?: Record<string, unknown>,
-) {
+): PluginManifestRecord {
+  const rootDir = tempDirs.make("openclaw-plugin-config-");
   return {
     id,
     name: id,
     configUiHints: uiHints,
     configSchema,
-    enabled: true,
+    origin: "bundled",
+    rootDir,
+    source: path.join(rootDir, "index.ts"),
+    manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+    channels: [],
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
     enabledByDefault: true,
   };
 }
@@ -46,6 +75,148 @@ function manifest(hints: Record<string, PluginConfigUiHint>, schema?: Record<str
 }
 
 describe("plugin configuration discovery", () => {
+  it.each<{
+    name: string;
+    config: OpenClawConfig;
+    manifest: Partial<PluginManifestRecord>;
+    bundledDiscoveryMode?: "compat" | "allowlist";
+    offered: boolean;
+  }>([
+    {
+      name: "explicit disablement over a manifest default",
+      config: { plugins: { entries: { fixture: { enabled: false } } } },
+      manifest: { providers: ["fixture-provider"] },
+      bundledDiscoveryMode: "compat",
+      offered: false,
+    },
+    {
+      name: "global disablement",
+      config: { plugins: { enabled: false } },
+      manifest: { providers: ["fixture-provider"] },
+      bundledDiscoveryMode: "compat",
+      offered: false,
+    },
+    {
+      name: "deny policy",
+      config: { plugins: { deny: ["fixture"] } },
+      manifest: {},
+      offered: false,
+    },
+    {
+      name: "a restrictive allowlist",
+      config: { plugins: { allow: ["other"] } },
+      manifest: {},
+      offered: false,
+    },
+    {
+      name: "a bundled model provider in compatibility mode",
+      config: { plugins: { allow: ["other"] } },
+      manifest: { providers: ["fixture-provider"] },
+      bundledDiscoveryMode: "compat",
+      offered: true,
+    },
+    {
+      name: "a contract-only bundled provider in compatibility mode",
+      config: { plugins: { allow: ["other"] } },
+      manifest: { contracts: { speechProviders: ["fixture-provider"] } },
+      bundledDiscoveryMode: "compat",
+      offered: true,
+    },
+    {
+      name: "a contract-only bundled provider in strict allowlist mode",
+      config: { plugins: { allow: ["other"] } },
+      manifest: { contracts: { speechProviders: ["fixture-provider"] } },
+      bundledDiscoveryMode: "allowlist",
+      offered: false,
+    },
+    {
+      name: "untrusted workspace origin",
+      config: {},
+      manifest: { origin: "workspace" },
+      offered: false,
+    },
+    {
+      name: "workspace trust before bundled-provider compatibility",
+      config: { plugins: { allow: ["other"] } },
+      manifest: { origin: "workspace", providers: ["fixture-provider"] },
+      bundledDiscoveryMode: "compat",
+      offered: false,
+    },
+    {
+      name: "explicitly trusted workspace origin",
+      config: { plugins: { allow: ["fixture"] } },
+      manifest: { origin: "workspace", enabledByDefault: false },
+      offered: true,
+    },
+    {
+      name: "a host-platform default",
+      config: {},
+      manifest: { enabledByDefault: false, enabledByDefaultOnPlatforms: [process.platform] },
+      offered: true,
+    },
+    {
+      name: "an explicitly selected memory slot",
+      config: { plugins: { slots: { memory: "fixture" } } },
+      manifest: { enabledByDefault: false, kind: "memory" },
+      offered: true,
+    },
+    {
+      name: "an explicitly disabled owned channel",
+      config: {
+        plugins: { entries: { fixture: { enabled: true } } },
+        channels: { "fixture-room": { enabled: false } },
+      },
+      manifest: { channels: ["fixture-room"] },
+      offered: false,
+    },
+    {
+      name: "an explicitly enabled owned channel",
+      config: { channels: { "fixture-room": { enabled: true } } },
+      manifest: { enabledByDefault: false, channels: ["fixture-room"] },
+      offered: true,
+    },
+    {
+      name: "configured-provider auto activation",
+      config: { agents: { defaults: { model: { primary: "fixture-provider/synthetic-model" } } } },
+      manifest: {
+        enabledByDefault: false,
+        providers: ["fixture-provider"],
+        autoEnableWhenConfiguredProviders: ["fixture-provider"],
+      },
+      offered: true,
+    },
+    {
+      name: "workspace trust before configured-provider auto activation",
+      config: { agents: { defaults: { model: { primary: "fixture-provider/synthetic-model" } } } },
+      manifest: {
+        origin: "workspace",
+        enabledByDefault: false,
+        providers: ["fixture-provider"],
+        autoEnableWhenConfiguredProviders: ["fixture-provider"],
+      },
+      offered: false,
+    },
+  ])(
+    "uses effective activation for $name",
+    async ({ config, manifest: manifestOverrides, bundledDiscoveryMode, offered }) => {
+      readBundledDiscoveryModeMock.mockReturnValue(bundledDiscoveryMode);
+      loadPluginManifestRegistryCore.mockReturnValue({
+        plugins: [{ ...makeManifestPlugin("fixture", { mode: {} }), ...manifestOverrides }],
+      });
+      const original = structuredClone(config);
+      let options: unknown[] = [];
+      const prompts = prompter({
+        multiselect: async (params) => {
+          options = params.options.map(({ value }) => value);
+          return [];
+        },
+      });
+      expect(await setupPluginConfig({ config, prompter: prompts })).toBe(config);
+      expect(options.includes("fixture")).toBe(offered);
+      expect(config).toEqual(original);
+    },
+  );
+
   it("offers sorted plugins and prompts only for their non-advanced fields", async () => {
     loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [

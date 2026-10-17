@@ -8826,7 +8826,6 @@
 ["src/wizard/setup.model-auth.test.ts","../plugins/provider-setup-availability.js","982af560b1ce51403087e3591ca21378625449b9c01447af8a5c99885483f6a0",1]
 ["src/wizard/setup.model-auth.test.ts","../plugins/setup-registry.js","f72a0792ed36b37444e46dcdd8ae2d41e955a8193097ef7c057bf297dfc7a01e",1]
 ["src/wizard/setup.plugin-config.test.ts","../commands/onboarding-plugin-install.js","ffde68e94f825eee33a711f51020b2a7bcf6d26fa56b976d90279da9dffb6c09",1]
-["src/wizard/setup.plugin-config.test.ts","../plugins/plugin-metadata-snapshot.js","c3aa305a8aec0cf6fd2a59e08e75a87d10541fda061629a7ccb643c03cd6bf92",1]
 ["src/wizard/setup.post-install-migration.test.ts","../commands/migrate.js","76a4f1b83be4d726126a23986ebc94af82f7fd507ecb57ee750efd9473952354",1]
 ["src/wizard/setup.post-install-migration.test.ts","../commands/migrate/context.js","a39d73a5ecee5b5f28ec6ac97f6c54aeec9638c96cd7092f881a5f2c7623c48e",1]
 ["src/wizard/setup.post-install-migration.test.ts","../config/paths.js","486aee1ec962b91baa64b469b7d249383c1786d05fe1af776eb6adc349f3bdb4",1]
