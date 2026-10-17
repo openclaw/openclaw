@@ -1,9 +1,10 @@
 import type { StdioOptions } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { runLinuxMemoryCommand } from "../../scripts/lib/managed-memory.mts";
+import * as memory from "../../scripts/lib/managed-memory.mts";
 import { hasLinuxMemoryContainment } from "../../scripts/lib/process-memory.mts";
 import { createDeferred } from "../helpers/promise.js";
 
@@ -28,9 +29,20 @@ const command = {
 };
 const memoryScope = "openclaw-check-abcd.scope";
 const response = (stdout: string) => ({ stdout, stderr: "", status: 0 });
+beforeEach(() => mocks.control.mockReset().mockReturnValue(response("LoadState=not-found\n")));
+function probeCleanup(probe: unknown) {
+  let now = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => (now += 6_000));
+  mocks.control
+    .mockReset()
+    .mockReturnValue(probe)
+    .mockReturnValueOnce(response("LoadState=not-found\n"));
+}
+const cleanupFailure = { code: "EPROCESSGROUP_CLEANUP_FAILED", processTreeState: "indeterminate" };
+const linuxCommand = (options: Partial<Parameters<typeof runManagedCommand>[0]> = {}) =>
+  runManagedCommand({ ...command, platform: "linux", ...options });
 
-it("removes signal ownership even when resource receipt release fails", async () => {
-  const memory = await import("../../scripts/lib/managed-memory.mts");
+it("removes signal listeners when receipt release throws", async () => {
   vi.spyOn(memory, "runLinuxMemoryCommand").mockResolvedValue(0);
   const error = new Error("receipt release failed");
   mocks.resourceOwner.mockReturnValue({
@@ -39,7 +51,7 @@ it("removes signal ownership even when resource receipt release fails", async ()
     },
   });
   const previousListeners = new Set(process.listeners("SIGTERM"));
-  await expect(runManagedCommand({ ...command, platform: "linux" })).rejects.toBe(error);
+  await expect(linuxCommand()).rejects.toBe(error);
   expect(new Set(process.listeners("SIGTERM"))).toEqual(previousListeners);
 });
 
@@ -48,79 +60,65 @@ it.for([
   { kind: "signal", uncertain: false },
   { kind: "abort", uncertain: true },
   { kind: "signal", uncertain: true },
-])(
-  "owns $kind cancellation until cgroup cleanup settles (uncertain=$uncertain)",
-  async (params) => {
-    const enteredCleanup = createDeferred();
-    const cleanup = createDeferred<number>();
-    const memory = await import("../../scripts/lib/managed-memory.mts");
-    vi.spyOn(memory, "runLinuxMemoryCommand").mockImplementation(async () => {
-      enteredCleanup.resolve();
-      return await cleanup.promise;
+])("owns $kind through cleanup (uncertain=$uncertain)", async (params) => {
+  const enteredCleanup = createDeferred();
+  const cleanup = createDeferred<number>();
+  vi.spyOn(memory, "runLinuxMemoryCommand").mockImplementation(async () => {
+    enteredCleanup.resolve();
+    return await cleanup.promise;
+  });
+  const release = vi.fn();
+  mocks.resourceOwner.mockReturnValue({ claim: () => release });
+  const abort = new AbortController();
+  const previousListeners = new Set(process.listeners("SIGTERM"));
+  const onSignal = vi.fn();
+  const result = linuxCommand({ signal: abort.signal, onSignal });
+  let settled = false;
+  const markSettled = () => {
+    settled = true;
+  };
+  void result.then(markSettled, markSettled);
+  await enteredCleanup.promise;
+  if (params.kind === "abort") {
+    abort.abort();
+  } else {
+    // Invoke only this command's listener; never signal the shared test process.
+    const handler = process
+      .listeners("SIGTERM")
+      .find((listener) => !previousListeners.has(listener));
+    expect(handler).toBeTypeOf("function");
+    handler!("SIGTERM");
+    expect(onSignal).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+  }
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  expect(release).not.toHaveBeenCalled();
+  if (params.uncertain) {
+    const failure = Object.assign(new Error("scope still populated"), {
+      processTreeState: "live",
     });
-    const release = vi.fn();
-    mocks.resourceOwner.mockReturnValue({ claim: () => release });
-    const abort = new AbortController();
-    const previousListeners = new Set(process.listeners("SIGTERM"));
-    const onSignal = vi.fn();
-    const result = runManagedCommand({
-      ...command,
-      platform: "linux",
-      signal: abort.signal,
-      onSignal,
-    });
-    let settled = false;
-    void result.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    await enteredCleanup.promise;
-    if (params.kind === "abort") {
-      abort.abort();
-    } else {
-      // Invoke only this command's listener; never signal the shared test process.
-      const handler = process
-        .listeners("SIGTERM")
-        .find((listener) => !previousListeners.has(listener));
-      expect(handler).toBeTypeOf("function");
-      handler!("SIGTERM");
-      expect(onSignal).toHaveBeenCalledExactlyOnceWith("SIGTERM");
-    }
-    await Promise.resolve();
-    expect(settled).toBe(false);
+    cleanup.reject(failure);
+    await expect(result).rejects.toBe(failure);
     expect(release).not.toHaveBeenCalled();
-    if (params.uncertain) {
-      const failure = Object.assign(new Error("scope still populated"), {
-        processTreeState: "live",
-      });
-      cleanup.reject(failure);
-      await expect(result).rejects.toBe(failure);
-      expect(release).not.toHaveBeenCalled();
+  } else {
+    cleanup.resolve(0);
+    if (params.kind === "abort") {
+      await expect(result).rejects.toMatchObject({ code: "ABORT_ERR" });
     } else {
-      cleanup.resolve(0);
-      if (params.kind === "abort") {
-        await expect(result).rejects.toMatchObject({ code: "ABORT_ERR" });
-      } else {
-        await expect(result).resolves.toBe(143);
-      }
-      expect(release).toHaveBeenCalledOnce();
+      await expect(result).resolves.toBe(143);
     }
-    expect(new Set(process.listeners("SIGTERM"))).toEqual(previousListeners);
-  },
-);
+    expect(release).toHaveBeenCalledOnce();
+  }
+  expect(new Set(process.listeners("SIGTERM"))).toEqual(previousListeners);
+});
 
-it("snapshots Linux command inputs before loading containment", async () => {
-  const memory = await import("../../scripts/lib/managed-memory.mts");
+it("snapshots inputs before containment loads", async () => {
   const run = vi.spyOn(memory, "runLinuxMemoryCommand").mockResolvedValue(0);
   const args = ["original"];
   const env = { TMPDIR: process.cwd(), VALUE: "original" };
   const stdio: StdioOptions = ["ignore", "pipe", "pipe"];
   const cwd = process.cwd();
-  const result = runManagedCommand({ ...command, args, env, stdio, cwd: ".", platform: "linux" });
+  const result = linuxCommand({ args, env, stdio, cwd: "." });
   vi.spyOn(process, "cwd").mockReturnValue(path.dirname(cwd));
   args[0] = "mutated";
   env.VALUE = "mutated";
@@ -142,12 +140,11 @@ it.each<{ stdio: StdioOptions; supported: boolean }>([
   { stdio: ["ignore", "pipe", "ipc"], supported: false },
   { stdio: ["ignore", "pipe", "pipe", "pipe"], supported: false },
 ])("admits supported stdio only: $stdio", async ({ stdio, supported }) => {
-  const memory = await import("../../scripts/lib/managed-memory.mts");
   const run = vi.spyOn(memory, "runLinuxMemoryCommand");
   if (supported) {
     run.mockResolvedValue(0);
   }
-  const result = runManagedCommand({ ...command, stdio, platform: "linux" });
+  const result = linuxCommand({ stdio });
   if (supported) {
     await result;
     expect(run).toHaveBeenCalledWith(expect.objectContaining({ stdio }), expect.any(Function));
@@ -157,8 +154,7 @@ it.each<{ stdio: StdioOptions; supported: boolean }>([
   }
 });
 
-it("generates separate cleanup identities for concurrent invocations", async () => {
-  mocks.control.mockReset().mockReturnValue(response("LoadState=not-found\n"));
+it("isolates concurrent cleanup identities", async () => {
   mocks.uuid.mockReturnValueOnce("aaaa").mockReturnValueOnce("bbbb");
   const scopes: string[] = [];
   const run = vi.fn(async () => 0);
@@ -192,19 +188,17 @@ it.each([
   expect(mocks.control).toHaveBeenCalledTimes(1);
 });
 
-it.each(["darwin"] as const)(
-  "refuses an unqualified %s cap before starting a workload",
-  async (platform) => {
-    mocks.control.mockClear();
-    await expect(runManagedCommand({ ...command, platform })).rejects.toThrow("not qualified");
-    expect(mocks.control).not.toHaveBeenCalled();
-  },
-);
+it("rejects unqualified darwin containment before launch", async () => {
+  mocks.control.mockClear();
+  await expect(runManagedCommand({ ...command, platform: "darwin" })).rejects.toThrow(
+    "not qualified",
+  );
+  expect(mocks.control).not.toHaveBeenCalled();
+});
 
 it.each([false, true])(
   "preserves failure after cgroup extinction (unjoined=%s)",
   async (unjoined) => {
-    mocks.control.mockReturnValue(response("LoadState=not-found\n"));
     const original = unjoined
       ? Object.assign(new Error("detached descendant held output"), { processTreeState: "live" })
       : Object.assign(new Error("systemd-run missing"), { code: "ENOENT" });
@@ -224,73 +218,49 @@ it.each([false, true])(
   },
 );
 
-it.each([
-  ["1", false],
-  ["0", true],
+const failedScope = response(
+  "LoadState=loaded\nActiveState=failed\nControlGroup=/user.slice/openclaw-check-abcd.scope\n",
+);
+it.each<{ label: string; probe: unknown; populated?: string; original?: Error }>([
+  { label: "populated kernel group", probe: failedScope, populated: "1" },
+  { label: "empty kernel group", probe: failedScope, populated: "0" },
+  {
+    label: "missing group with failed workload",
+    probe: response("LoadState=loaded\nActiveState=failed\n"),
+    original: Object.assign(new Error("workload failed"), { code: "ENOENT" }),
+  },
+  {
+    label: "failed manager probe",
+    probe: {
+      error: Object.assign(new Error("spawn failed"), { code: "ENOMEM" }),
+      stdout: undefined,
+    },
+  },
 ])(
-  "requires kernel extinction before releasing a failed scope (populated=%s)",
-  async (populated, empty) => {
-    let now = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => (now += 6_000));
-    mocks.control
-      .mockReset()
-      .mockReturnValue(
-        response(
-          "LoadState=loaded\nActiveState=failed\nControlGroup=/user.slice/openclaw-check-abcd.scope\n",
-        ),
-      )
-      .mockReturnValueOnce(response("LoadState=not-found\n"));
-    vi.spyOn(fs, "readFileSync").mockReturnValue("populated " + populated + "\n");
-    const run = runLinuxMemoryCommand(command, async () => 137);
-    if (empty) {
-      await expect(run).resolves.toBe(137);
+  "releases admission only with verified extinction: $label",
+  async ({ probe, original, populated }) => {
+    probeCleanup(probe);
+    if (populated !== undefined) {
+      vi.spyOn(fs, "readFileSync").mockReturnValue(`populated ${populated}\n`);
+    }
+    const result = runLinuxMemoryCommand(command, async () => {
+      if (original) {
+        throw original;
+      }
+      return populated === undefined ? 0 : 137;
+    });
+    if (populated === "0") {
+      await expect(result).resolves.toBe(137);
     } else {
-      await expect(run).rejects.toMatchObject({
-        code: "EPROCESSGROUP_CLEANUP_FAILED",
-        processTreeState: "indeterminate",
+      await expect(result).rejects.toMatchObject({
+        ...cleanupFailure,
+        ...(populated === undefined ? { cause: original } : {}),
       });
     }
   },
 );
 
-it.each([
-  {
-    probe: response("LoadState=loaded\nActiveState=failed\n"),
-    original: Object.assign(new Error("workload failed"), { code: "ENOENT" }),
-  },
-  {
-    probe: {
-      error: Object.assign(new Error("spawn failed"), { code: "ENOMEM" }),
-      stdout: undefined,
-    },
-    original: undefined,
-  },
-])(
-  "retains admission and the original failure when cleanup is uncertain: %j",
-  async ({ probe, original }) => {
-    let now = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => (now += 6_000));
-    mocks.control
-      .mockReset()
-      .mockReturnValue(probe)
-      .mockReturnValueOnce(response("LoadState=not-found\n"));
-    await expect(
-      runLinuxMemoryCommand(command, async () => {
-        if (original) {
-          throw original;
-        }
-        return 0;
-      }),
-    ).rejects.toMatchObject({
-      code: "EPROCESSGROUP_CLEANUP_FAILED",
-      processTreeState: "indeterminate",
-      cause: original,
-    });
-  },
-);
-
-it("bounds literal arguments and preloads while the managed runner owns deadlines and cleanup", async () => {
-  mocks.control.mockReset().mockReturnValue(response("LoadState=not-found\n"));
+it("bounds arguments and preloads without owning deadlines", async () => {
   const run = vi.fn(async (_options: Parameters<typeof runLinuxMemoryCommand>[0]) => 0);
   await expect(
     runLinuxMemoryCommand(
@@ -352,22 +322,15 @@ it.each([
       "/sys/fs/cgroup/user.slice/memory.swap.max": "0",
       "/sys/fs/cgroup/user.slice/memory.oom.group": "1",
     };
-    expect(
-      hasLinuxMemoryContainment(
-        command.memoryLimitBytes,
-        {
-          platform: "linux",
-          fs: {
-            readFileSync(file) {
-              if (!(file in files)) {
-                throw Object.assign(new Error(file), { code: "ENOENT" });
-              }
-              return files[file]!;
-            },
-          },
-        },
-        memoryScope,
-      ),
-    ).toBe(expected);
+    const readFileSync = (file: string) => {
+      if (!(file in files)) {
+        throw Object.assign(new Error(file), { code: "ENOENT" });
+      }
+      return files[file]!;
+    };
+    const options = { platform: "linux", fs: { readFileSync } } as const;
+    expect(hasLinuxMemoryContainment(command.memoryLimitBytes, options, memoryScope)).toBe(
+      expected,
+    );
   },
 );
