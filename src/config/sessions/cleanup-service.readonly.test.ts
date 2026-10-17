@@ -18,6 +18,7 @@ import { replaceSessionEntrySync } from "./session-accessor.entry.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { commitMemory } from "./session-actor-memory-publication.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import type { SessionEntry } from "./types.js";
 
 const maintenance = vi.hoisted(() => ({
   mode: "enforce",
@@ -142,7 +143,11 @@ it.each([false, true])(
         const sessionKey = `agent:main:dashboard:incognito-${id}`;
         const actor = await owner.acquire({ database: owner.identity, sessionKey }, lifetime);
         try {
-          const entry = { sessionId: `incognito-${id}`, updatedAt: Date.now(), incognito: true };
+          const entry = {
+            sessionId: `incognito-${id}`,
+            updatedAt: Date.now(),
+            incognito: true,
+          } satisfies SessionEntry;
           const message = {
             type: "message",
             id: "incognito-message",

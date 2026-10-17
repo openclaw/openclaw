@@ -246,7 +246,7 @@ describe("qa suite summary helpers", () => {
     for (const [failed, expected] of [
       [0, 1],
       [3, 3],
-    ]) {
+    ] as const) {
       await expectCount(
         { counts: { failed }, scenarios: [{ status: "pass" }, { status: "fail" }] },
         expected,

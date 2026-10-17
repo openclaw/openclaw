@@ -67,7 +67,7 @@ type ListResult = Awaited<ReturnType<typeof listSessionFixture>>;
 const keys = (result: ListResult) => result.sessions.map((row) => row.key);
 const findRow = (result: ListResult, suffix: string) =>
   result.sessions.find((row) => row.key.endsWith(suffix));
-const actorIdentity = (actor: { type: string; id: string } | undefined) =>
+const actorIdentity = (actor: ListResult["sessions"][number]["createdActor"]) =>
   actor && { type: actor.type, id: actor.id };
 const profileParticipant = (id: string) => ({ identity: { type: "profile", id } }) as const;
 const researchParticipant = () => ({ identity: { type: "agent", id: "research" } }) as const;

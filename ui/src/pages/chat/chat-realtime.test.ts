@@ -417,7 +417,7 @@ it("does not change the remembered preference when the camera track ends", async
 });
 
 it("does not let a stale camera-off completion overwrite a newer camera stream", async () => {
-  const cameraOff = createDeferred<void>();
+  const cameraOff = createDeferred();
   const setVideoEnabled = vi
     .spyOn(RealtimeTalkSession.prototype, "setVideoEnabled")
     .mockImplementation((enabled) => (enabled ? Promise.resolve() : cameraOff.promise));
@@ -493,7 +493,7 @@ it("keeps the restored preview and reports a failed live camera switch", async (
 it.each(["before toggle", "during rejection", "during stream"] as const)(
   "keeps connection failure authoritative %s",
   async (timing) => {
-    const pending = createDeferred<void>();
+    const pending = createDeferred();
     const setVideoEnabled = mockVideo();
     if (timing === "during rejection") {
       setVideoEnabled.mockImplementation(() => pending.promise);

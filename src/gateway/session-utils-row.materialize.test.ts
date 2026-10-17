@@ -484,13 +484,13 @@ test("preserves complete base rows across time and caller presentation fixtures"
         expect(structuredClone(row).snapshotAt).toBe(TIMES[index]);
         expect(row).toMatchObject({
           snapshotAt: TIMES[index],
-          createdSurface: fixture.entry?.createdSurface,
           isDock: fixture.expectedIsDock ?? false,
           sessionModelRevision: expect.any(String),
           sidebarRoot: fixture.entry?.sidebarRoot === true,
-          communication: undefined,
           effectiveCommunication: { send: "always", receive: "always" },
         });
+        expect(row.createdSurface).toBe(fixture.entry?.createdSurface);
+        expect(row.communication).toBeUndefined();
         const {
           snapshotAt: _snapshotAt,
           createdSurface: _createdSurface,

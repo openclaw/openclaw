@@ -75,7 +75,7 @@ const selectedModelFields = (modelOverride: string) => ({
 
 function config(
   ids: string[],
-  session: OpenClawConfig["session"] = undefined,
+  session?: OpenClawConfig["session"],
   owner = "ops",
   defaults: NonNullable<OpenClawConfig["agents"]>["defaults"] = {},
 ): OpenClawConfig {

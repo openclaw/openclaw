@@ -144,10 +144,9 @@ async function nudgeFixture(
 ) {
   await store.upsertBoard({
     id: "planning",
-    automationJobId:
-      options.automationJobId === null
-        ? undefined
-        : (options.automationJobId ?? "job-categorize-planning"),
+    ...(options.automationJobId === null
+      ? {}
+      : { automationJobId: options.automationJobId ?? "job-categorize-planning" }),
   });
   const sessionKey = options.sessionKey ?? "agent:main:subagent:workboard-planning-card";
   const card = await createLinkedCard(store, { boardId: "planning", sessionKey });

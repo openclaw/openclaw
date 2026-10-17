@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   execution,
   lifecycleSession,
@@ -26,7 +26,7 @@ let dir: string;
 let stores: ReturnType<typeof createWorkboardSqliteStores>;
 let store: WorkboardStore;
 let service: ReturnType<typeof createWorkboardLifecycleService> | undefined;
-let removeIfLossless: ReturnType<typeof vi.fn>;
+let removeIfLossless: Mock<NonNullable<LifecycleParams["worktrees"]>["removeIfLossless"]>;
 
 function openStore() {
   stores = createWorkboardSqliteStores({

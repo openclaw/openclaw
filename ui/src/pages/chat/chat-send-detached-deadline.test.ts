@@ -30,7 +30,9 @@ beforeEach(() => {
   // Exercise the real browser protocol without unrelated device-signing setup.
   vi.stubGlobal("crypto", { randomUUID });
   wsInstances.length = 0;
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
 });
 
 type RequestFrame = { id: string; method: string; params: Record<string, unknown> };

@@ -154,8 +154,8 @@ function persistReasoning(
   return message;
 }
 
-function applyMessage<T extends { __openclaw: { id: string; seq: number } }>(
-  message: T,
+function applyMessage(
+  message: { __openclaw: { id: string; seq: number } },
   envelope: { runId?: string; clientRunId?: string; sessionKey?: string },
   active = true,
 ) {

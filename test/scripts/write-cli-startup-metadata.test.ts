@@ -60,7 +60,7 @@ const sourceHelpRenderers = {
   renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
   renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
   renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
-  renderSourceSubcommandHelpTextRecord: sourceSubcommandHelp,
+  renderSourceSubcommandHelpTextRecord: () => sourceSubcommandHelp(),
 };
 
 type WrittenMetadata = {

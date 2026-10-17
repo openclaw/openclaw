@@ -40,7 +40,7 @@ type Observation = {
   includeFile: string;
 };
 const generationDirectory = (generation: string) => fileURLToPath(new URL("../../", generation));
-const distinct = <T>(values: T[]) => new Set(values).size;
+const distinct = (values: readonly unknown[]) => new Set(values).size;
 
 function observationPaths(observation: Observation) {
   return [generationDirectory(observation.generation), path.dirname(observation.includeFile)];

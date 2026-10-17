@@ -531,7 +531,7 @@ it("lists current memory entries and owner changes alongside durable targets", a
         incognito: true,
         label: "first",
         skillsSnapshot: { prompt: "private snapshot", skills: [] },
-      };
+      } satisfies SessionEntry;
       await commitMemory(actor.storage!, "session.entry.create", { entry }, authority);
       const first = (await read()).store[key];
       expect(first).toMatchObject({ sessionId: "private", label: "first" });
