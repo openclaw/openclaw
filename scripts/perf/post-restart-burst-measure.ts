@@ -253,7 +253,8 @@ if (isMainThread) {
     MessagePort.prototype.postMessage = function(message, ...args) {
       const body = message?.type === 'post' ? message.value : message;
       if (elapsed() < windowMs && body?.type === 'execute' && body.input instanceof Uint8Array) {
-        const command = deserialize(body.input);
+        const request = deserialize(body.input);
+        const command = request.command ?? request;
         if (worktreeCommands.has(command.type)) commandCounts.set(command.type, (commandCounts.get(command.type) ?? 0) + 1);
       }
       return queueNativePost.call(this, message, ...args);

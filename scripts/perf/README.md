@@ -254,7 +254,8 @@ Compare service occupancy and request counts when investigating the blocker;
 service occupancy also includes transport and scheduling, not just SQLite CPU.
 `worktreeCommandDispatchCounts` splits the grouped `worktrees` class by a fixed
 allowlist of exact commands. This private probe decodes serialized dispatch
-inputs to count only command names; use it identically on both revisions.
+inputs, including nested state-read commands, to count only command names; use
+it identically on both revisions.
 
 Events carry wall-clock emission timestamps, while `observedMs` records
 monotonic receipt time from restart spawn. Integrals and the cutoff use emission
