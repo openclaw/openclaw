@@ -667,7 +667,6 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
               if (restoreAdmittedRecovery) {
                 pendingRecovery ??= await repairMainSessionRecoveryMutation({
                   mutation: restoreAdmittedRecovery,
-                  onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
                   onError: diagnostics.warning("failed to restore undispatched restart recovery"),
                 });
               }

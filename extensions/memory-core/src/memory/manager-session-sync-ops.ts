@@ -220,7 +220,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     const existingRows = await this.database.readSourceState({
       source: "sessions",
     });
-    const indexedPaths = new Set(existingRows.map((row) => row.path));
+    const indexedPaths = inspectSources ? new Set(existingRows.map((row) => row.path)) : undefined;
     const sqliteCorpusEntries = corpusEntries.filter(
       (entry) => entry.transcriptSource === "sqlite",
     );
@@ -245,10 +245,9 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
             if (stopped()) {
               return null;
             }
-            // Missing rows can be intentional: parsing applies provenance admission
-            // that corpus metadata cannot express. Recheck on every catch-up so a
-            // later user turn can make a previously excluded session eligible.
-            if (!indexedPaths.has(this.sessionPathForCorpusEntry(corpusEntry))) {
+            // Diagnostics count eligible sources; ordinary catch-up leaves content
+            // admission to the bounded indexing pass after the quiet period.
+            if (indexedPaths && !indexedPaths.has(this.sessionPathForCorpusEntry(corpusEntry))) {
               const entry = await buildSessionEntry(
                 corpusEntry.sessionFile,
                 this.buildSessionEntryOptions(corpusEntry),

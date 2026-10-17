@@ -72,12 +72,15 @@ export type SessionChangedEventInfo = {
 };
 
 export function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
-  const next = { ...row };
+  let next = row;
   for (const [key, value] of Object.entries(row)) {
     if (
       value === undefined ||
       (key === "totalTokensFresh" && value === false && row.totalTokens === undefined)
     ) {
+      if (next === row) {
+        next = { ...row };
+      }
       Reflect.deleteProperty(next, key);
     }
   }
@@ -85,8 +88,7 @@ export function sanitizeSessionRow(row: GatewaySessionRow): GatewaySessionRow {
 }
 
 export function isPersistedSessionRow(row: GatewaySessionRow): boolean {
-  const sessionId = typeof row.sessionId === "string" ? row.sessionId.trim() : "";
-  return Boolean(sessionId || typeof row.updatedAt === "number");
+  return Boolean(row.sessionId?.trim() || row.updatedAt != null);
 }
 
 export function preserveRosterPresentationMetadata(
@@ -108,9 +110,12 @@ export function preserveRosterPresentationMetadata(
   if (incomingAgentId && existingAgentId && incomingAgentId !== existingAgentId) {
     return incoming;
   }
-  const row = { ...incoming };
+  let row = incoming;
   for (const field of ["derivedTitle", "lastMessagePreview", "lastAssistantMessage"] as const) {
     if (incoming[field] === undefined && existing[field] !== undefined) {
+      if (row === incoming) {
+        row = { ...incoming };
+      }
       Object.assign(row, { [field]: existing[field] });
     }
   }
@@ -122,8 +127,8 @@ function isOlderSessionSnapshot(
   existing: GatewaySessionRow | undefined,
 ): boolean {
   return (
-    typeof incoming.updatedAt === "number" &&
-    typeof existing?.updatedAt === "number" &&
+    incoming.updatedAt != null &&
+    existing?.updatedAt != null &&
     incoming.updatedAt < existing.updatedAt
   );
 }
@@ -215,7 +220,7 @@ function sessionRunStatus(value: unknown): SessionRunStatus | null {
     : null;
 }
 
-type ParsedSessionChangedEvent = readonly [
+export type ParsedSessionChangedEvent = readonly [
   info: SessionChangedEventInfo,
   event: Record<string, unknown>,
   source: Record<string, unknown>,
@@ -522,6 +527,15 @@ export function reconcileSessionChangedRow(
   if (!parsed) {
     return { applied: false, row: existing };
   }
+  return reconcileParsedSessionChangedRow(existing, parsed, options, project);
+}
+
+export function reconcileParsedSessionChangedRow(
+  existing: GatewaySessionRow | undefined,
+  parsed: ParsedSessionChangedEvent,
+  options: SessionReconcileOptions & { admitSnapshot?: boolean } = {},
+  project?: SessionChangedRowProjection,
+): SessionChangedRowResult {
   const [info, event, source] = parsed;
   const { key, reason } = info;
   if (info.isAncestorReference) {

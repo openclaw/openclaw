@@ -7,7 +7,6 @@ type SourceEntry<T> = {
   readonly invalidateOnConnect: boolean;
   source: T | undefined;
   cleanup: Cleanup | undefined;
-  generation: number;
   frame: number | undefined;
 };
 
@@ -46,13 +45,8 @@ export class SubscriptionsController implements SolidController {
     return this.addEntry(
       getSource,
       (source, entry) => {
-        const generation = entry.generation;
         const notify = () => {
-          if (
-            !this.connected ||
-            entry.generation !== generation ||
-            !Object.is(entry.source, source)
-          ) {
+          if (!this.connected || !Object.is(entry.source, source)) {
             return;
           }
           synchronize?.(source);
@@ -65,11 +59,7 @@ export class SubscriptionsController implements SolidController {
           } else if (entry.frame === undefined) {
             entry.frame = globalThis.requestAnimationFrame(() => {
               entry.frame = undefined;
-              if (
-                !this.connected ||
-                entry.generation !== generation ||
-                !Object.is(entry.getSource(), source)
-              ) {
+              if (!this.connected || !Object.is(entry.getSource(), source)) {
                 return;
               }
               this.host.requestUpdate();
@@ -129,7 +119,6 @@ export class SubscriptionsController implements SolidController {
       invalidateOnConnect,
       source: undefined,
       cleanup: undefined,
-      generation: 0,
       frame: undefined,
     };
     this.entries.push(entry as SourceEntry<unknown>);
@@ -155,7 +144,6 @@ export class SubscriptionsController implements SolidController {
       return;
     }
     entry.source = source;
-    entry.generation += 1;
     try {
       entry.cleanup = entry.connect(source);
     } catch (error) {
@@ -168,7 +156,6 @@ export class SubscriptionsController implements SolidController {
   }
 
   private disconnectEntry<T>(entry: SourceEntry<T>): void {
-    entry.generation += 1;
     if (entry.frame !== undefined) {
       globalThis.cancelAnimationFrame(entry.frame);
       entry.frame = undefined;

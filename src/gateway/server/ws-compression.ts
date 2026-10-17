@@ -10,7 +10,7 @@ import type { WebSocket } from "ws";
 import { gatewayReceiver } from "./ws-receiver.js";
 
 /**
- * Peers that offer permessage-deflate (browsers, ws, Foundation, OkHttp) get
+ * Peers that negotiate permessage-deflate (browsers, ws, Foundation, OkHttp) get
  * frames from the threshold up compressed; others are unaffected. No context
  * takeover in either direction keeps every message independent, which the
  * per-connection codec below relies on.
