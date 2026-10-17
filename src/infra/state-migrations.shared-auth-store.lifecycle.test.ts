@@ -84,11 +84,11 @@ it.each([undefined, "full"] as const)(
           return statement;
         }
         const all = statement.all.bind(statement);
-        statement.all = (...args) => {
+        statement.all = () => {
           const checks = sourceChecks.get(this) ?? [];
           checks.push(sql);
           sourceChecks.set(this, checks);
-          return all(...args);
+          return all();
         };
         return statement;
       });
