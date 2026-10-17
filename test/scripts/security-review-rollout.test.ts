@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { stringify } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -13,6 +13,7 @@ const ancestor = "c".repeat(40);
 const mergedAt = "2026-09-19T12:00:00Z";
 const rolloutPath = `/repos/openclaw/openclaw/pulls/${rolloutNumber}`;
 const comparisonPath = `/repos/openclaw/openclaw/compare/${mergeCommit}...${head}?per_page=1&page=2`;
+const reads = [rolloutPath, comparisonPath];
 const rollout = {
   number: rolloutNumber,
   state: "closed",
@@ -27,6 +28,8 @@ const comparison = {
   merge_base_commit: { sha: ancestor },
   status: "diverged",
 };
+
+const rebased = { ...comparison, merge_base_commit: { sha: mergeCommit }, status: "ahead" };
 
 type Options = {
   policy?: object;
@@ -49,36 +52,21 @@ function evaluate(options: Options = {}) {
     stringify({
       rollout: { "pull-request": rolloutNumber },
       exclude: {},
-      categories: {
-        credentials: {
-          description: "Credential storage.",
-          review: "Check access.",
-          paths: ["src/credentials/**"],
-        },
-      },
-      dependencies: {
-        manifests: ["**/package.json"],
-        lockfiles: ["**/pnpm-lock.yaml"],
-        other: ["patches/**"],
-      },
+      categories: { test: { description: "Test", review: "Check", paths: ["test/**"] } },
+      dependencies: { manifests: ["package.json"], lockfiles: ["lock"], other: ["patch"] },
       ...options.policy,
     }),
   );
   symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
   writeFileSync(
-    path.join(root, "fixture.json"),
-    JSON.stringify({
+    path.join(root, "evaluate.mjs"),
+    `import { securityReviewRollout } from "./scripts/github/security-review-rollout.mjs";
+const fixture = ${JSON.stringify({
       rollout: options.rollout === undefined ? rollout : options.rollout,
       comparison: options.comparison === undefined ? comparison : options.comparison,
       pullRequest: options.pullRequest ?? pullRequest,
       apiError: options.apiError,
-    }),
-  );
-  writeFileSync(
-    path.join(root, "evaluate.mjs"),
-    `import { readFileSync } from "node:fs";
-import { securityReviewRollout } from "./scripts/github/security-review-rollout.mjs";
-const fixture = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
+    })};
 const requests = [];
 const api = {
   async request(path) {
@@ -110,91 +98,61 @@ try {
   };
 }
 
-describe("security review rollout", () => {
-  it.each<[string, Options, string, string[]]>([
-    ["removed configuration", { policy: { rollout: undefined } }, "enforced", []],
-    [
-      "unmerged rollout",
-      { rollout: { ...rollout, state: "open", merged: false, merged_at: null } },
-      "inactive",
-      [rolloutPath],
-    ],
-    [
-      "new PR",
-      { pullRequest: { ...pullRequest, created_at: mergedAt } },
-      "enforced",
-      [rolloutPath],
-    ],
-    [
-      "rollout head",
-      { pullRequest: { ...pullRequest, head: { sha: mergeCommit } } },
-      "enforced",
-      [rolloutPath],
-    ],
-    [
-      "older head",
-      { comparison: { ...comparison, status: "behind" } },
-      "grandfathered",
-      [rolloutPath, comparisonPath],
-    ],
-    [
-      "rebased head",
-      { comparison: { ...comparison, merge_base_commit: { sha: mergeCommit }, status: "ahead" } },
-      "enforced",
-      [rolloutPath, comparisonPath],
-    ],
-  ])("resolves %s rollout authority", (_name, options, mode, requests) => {
-    expect(evaluate(options)).toEqual({ status: 0, mode, requests });
-  });
+it.each<[Options, string, number]>([
+  [{ policy: { rollout: undefined } }, "enforced", 0],
+  [{ rollout: { ...rollout, state: "open", merged: false, merged_at: null } }, "inactive", 1],
+  [{ pullRequest: { ...pullRequest, created_at: mergedAt } }, "enforced", 1],
+  [{ pullRequest: { ...pullRequest, head: { sha: mergeCommit } } }, "enforced", 1],
+  [{ comparison: { ...comparison, status: "behind" } }, "grandfathered", 2],
+  [{ comparison: rebased }, "enforced", 2],
+])("resolves rollout %j", (options, mode, count) => {
+  expect(evaluate(options)).toEqual({ status: 0, mode, requests: reads.slice(0, count) });
+});
 
-  it.each([
+it.each([
+  null,
+  {},
+  { "pull-request": 0 },
+  { "pull-request": "152415" },
+  { "pull-request": 1.5 },
+  { "pull-request": Number.MAX_SAFE_INTEGER + 1 },
+  { "pull-request": rolloutNumber, unknown: true },
+])("rejects invalid rollout configuration (%j)", (value) => {
+  const result = evaluate({ policy: { rollout: value } });
+  expect(result).toMatchObject({ status: 1, requests: [] });
+  expect(result.error).toContain("Invalid security-review-policy.yml");
+});
+
+it.each<Options>([
+  ...[
     null,
-    {},
-    { "pull-request": 0 },
-    { "pull-request": "152415" },
-    { "pull-request": 1.5 },
-    { "pull-request": Number.MAX_SAFE_INTEGER + 1 },
-    { "pull-request": rolloutNumber, unknown: true },
-  ])("rejects invalid rollout configuration (%j)", (value) => {
-    const result = evaluate({ policy: { rollout: value } });
-    expect(result.status).toBe(1);
-    expect(result.error).toContain("Invalid security-review-policy.yml");
-    expect(result.requests).toEqual([]);
-  });
+    { ...rollout, number: 1 },
+    { ...rollout, base: { ref: "stable", repo: { full_name: "openclaw/openclaw" } } },
+    { ...rollout, base: { ref: "main", repo: { full_name: "contributor/fork" } } },
+    { ...rollout, merged: false },
+    { ...rollout, state: "open" },
+    { ...rollout, merged_at: null },
+    { ...rollout, merged_at: "2026-02-30T12:00:00Z" },
+  ].map((value) => ({ rollout: value })),
+  ...[
+    { ...pullRequest, created_at: undefined },
+    { ...pullRequest, created_at: "not a timestamp" },
+    { ...pullRequest, head: { sha: "main" } },
+  ].map((value) => ({ pullRequest: value })),
+  ...[
+    null,
+    { ...comparison, base_commit: { sha: ancestor } },
+    { ...comparison, merge_base_commit: {} },
+    { ...comparison, status: "ahead" },
+    { ...comparison, merge_base_commit: { sha: mergeCommit } },
+  ].map((value) => ({ comparison: value })),
+])("does not grant an exemption for invalid metadata (%j)", (options) => {
+  const result = evaluate(options);
+  expect([result.status, result.mode]).toEqual([1, undefined]);
+  expect(result.error).toContain("Cannot determine security review rollout");
+});
 
-  it.each<Options>([
-    ...[
-      null,
-      { ...rollout, number: 1 },
-      { ...rollout, base: { ref: "stable", repo: { full_name: "openclaw/openclaw" } } },
-      { ...rollout, base: { ref: "main", repo: { full_name: "contributor/fork" } } },
-      { ...rollout, merged: false },
-      { ...rollout, state: "open" },
-      { ...rollout, merged_at: null },
-      { ...rollout, merged_at: "2026-02-30T12:00:00Z" },
-    ].map((value) => ({ rollout: value })),
-    ...[
-      { ...pullRequest, created_at: undefined },
-      { ...pullRequest, created_at: "not a timestamp" },
-      { ...pullRequest, head: { sha: "main" } },
-    ].map((value) => ({ pullRequest: value })),
-    ...[
-      null,
-      { ...comparison, base_commit: { sha: ancestor } },
-      { ...comparison, merge_base_commit: {} },
-      { ...comparison, status: "ahead" },
-      { ...comparison, merge_base_commit: { sha: mergeCommit } },
-    ].map((value) => ({ comparison: value })),
-  ])("does not grant an exemption for invalid metadata (%j)", (options) => {
-    const result = evaluate(options);
-    expect(result.status).toBe(1);
-    expect(result.mode).toBeUndefined();
-    expect(result.error).toContain("Cannot determine security review rollout");
-  });
-
-  it("does not convert a GitHub comparison error into an exemption", () => {
-    const result = evaluate({ apiError: "comparison" });
-    expect(result.status).toBe(1);
-    expect(result.error).toBe("GitHub unavailable");
-  });
+it("does not convert a GitHub comparison error into an exemption", () => {
+  const result = evaluate({ apiError: "comparison" });
+  expect(result).toMatchObject({ status: 1, error: "GitHub unavailable" });
 });
