@@ -4,7 +4,6 @@ import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-se
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
   claimMainSessionRecoveryOwner,
-  releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
@@ -39,11 +38,10 @@ import {
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { CommandLane } from "../../process/lanes.js";
-import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   beginSessionWorkAdmission,
   getSessionWorkAdmissionOwnerRelease,
-  getSessionWorkAdmissionRelease,
 } from "../../sessions/session-lifecycle-admission.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
@@ -73,23 +71,15 @@ import {
 import { REPLY_WORK_ADMISSION_OWNER } from "./reply-turn-admission-owner.js";
 import type { ReplyTurnAdmission, ReplyTurnAdmissionParams } from "./reply-turn-admission.types.js";
 import { bindReplyOperationDatabaseAdmission } from "./reply-turn-database-admission.js";
-import { waitForRestartRecoveryProgress } from "./reply-turn-recovery-wait.js";
+import {
+  reconcileOrWaitForReplyRecovery,
+  releaseReplyRecoveryOwner,
+  waitForRestartRecoveryProgress,
+} from "./reply-turn-recovery.js";
 
 class QueuedFollowupLifecycleInvalidatedError extends Error {}
 
 const log = createSubsystemLogger("auto-reply/reply-turn-admission");
-
-async function releaseReplyRecoveryOwner(lease: MainSessionRecoveryOwnerLease | undefined) {
-  try {
-    return await releaseMainSessionRecoveryOwner(lease);
-  } catch (error) {
-    log.warn(`failed to release main-session recovery reply owner: ${formatErrorMessage(error)}`);
-    // The durable owner schedules exact-token retries. A completed reply must
-    // not keep its successor barrier and lifecycle admission until that
-    // background repair wins a contested SQLite write.
-    return undefined;
-  }
-}
 
 /** Runs owner work with its admission marked as the initiating lifecycle context. */
 export async function runWithReplyOperationLifecycleAdmission<T>(
@@ -482,27 +472,18 @@ export async function admitReplyTurn(
               if (
                 ownerClaim.reason === "recovery_pending" &&
                 !params.adoptOperation &&
-                gatewayContext &&
-                recoveryRuntime
+                gatewayContext?.recoveryRuntime
               ) {
-                // Retained recovery is busy work, not a replaced session. Release
-                // our admission so the recovery owner can reclaim an orphan.
+                // Release our admission so recovery can reclaim an orphan.
                 admission?.release();
-                const { reconcileOrphanedGatewaySessionRecovery } =
-                  await import("../../gateway/session-recovery-service.js");
-                const { resolveSessionWorkerPlacementContext } =
-                  await import("../../gateway/session-worker-placement-context.js");
-                const recovered = await reconcileOrphanedGatewaySessionRecovery({
-                  cfg: gatewayContext.getRuntimeConfig(),
+                await reconcileOrWaitForReplyRecovery({
+                  agentId: params.agentId,
+                  sessionKey: params.sessionKey,
+                  storePath,
                   entry: ownerClaim.entry,
-                  target: {
-                    agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
-                    storePath,
-                    canonicalKey: params.sessionKey,
-                    storeKeys: [params.sessionKey],
-                  },
-                  authorizedPluginId: getPluginRuntimeGatewayRequestScope()?.pluginId,
-                  commitGuard: () => {
+                  gatewayContext,
+                  signal: params.upstreamAbortSignal,
+                  assertCurrent: () => {
                     params.upstreamAbortSignal?.throwIfAborted();
                     params.assertRequestCurrent?.();
                     workspaceReadiness?.assertCurrent();
@@ -511,16 +492,7 @@ export async function admitReplyTurn(
                       rejectSessionChange();
                     }
                   },
-                  workerPlacementContext: resolveSessionWorkerPlacementContext(gatewayContext),
                 });
-                if (!recovered) {
-                  await waitForRecovery(
-                    getSessionWorkAdmissionRelease({
-                      scope: storePath,
-                      identities: [params.sessionKey, sessionId],
-                    }),
-                  );
-                }
                 continue;
               }
               rejectSessionChange();
